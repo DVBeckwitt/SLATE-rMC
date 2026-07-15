@@ -131,4 +131,4 @@ def finite_intensity_by_enumeration(
     if not np.isclose(total_probability, 1.0, rtol=0.0, atol=2e-12):
         raise ValueError("enumerated path probabilities do not sum to one")
     total = sum(probability * abs(amplitude) ** 2 for _, probability, amplitude in paths)
-    return FiniteIntensity(np.asarray(total), np.asarray(total / count))
+    return FiniteIntensity(total, total / count)

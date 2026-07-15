@@ -239,23 +239,27 @@ def finite_intensity_full(
         ],
         dtype=np.complex128,
     )
+    amplitude_intensity = np.abs(amplitudes) ** 2
+    conjugate_amplitudes = np.conj(amplitudes)
+    phase_value = complex(phase_array)
     transition = full_transition_matrix(law)
     population = np.array([initial.plus, 0.0, 0.0, initial.minus, 0.0, 0.0], dtype=np.float64)
     populations = [population]
     for _ in range(1, count):
         populations.append(populations[-1] @ transition)
     try:
-        self_terms = tuple(float(current @ np.abs(amplitudes) ** 2) for current in populations)
+        self_terms = tuple(float(current @ amplitude_intensity) for current in populations)
         pair_real_terms: list[float] = []
         pair_absolute_terms: list[float] = []
         transition_power = np.eye(6, dtype=np.float64)
         vertical_power = 1.0 + 0.0j
         for separation in range(1, count):
             transition_power = transition_power @ transition
-            vertical_power *= complex(phase_array)
+            vertical_power *= phase_value
             propagated = transition_power @ amplitudes
+            pair_kernel = conjugate_amplitudes * propagated
             separation_terms = tuple(
-                complex(vertical_power * (populations[start] @ (np.conj(amplitudes) * propagated)))
+                complex(vertical_power * (populations[start] @ pair_kernel))
                 for start in range(count - separation)
             )
             pair_real_terms.append(fsum(2.0 * term.real for term in separation_terms))
@@ -265,7 +269,7 @@ def finite_intensity_full(
     except (OverflowError, ValueError) as error:
         raise ValueError("full-state intensity must remain finite") from error
     total = _clip_cancellation_roundoff(summed_intensity, cancellation_scale)
-    return FiniteIntensity(np.asarray(total), np.asarray(total / count))
+    return FiniteIntensity(total, total / count)
 
 
 def stationary_intensity_reduced(
@@ -283,9 +287,10 @@ def stationary_intensity_reduced(
     decay = float(correlation_decay)
     if not np.isfinite(decay) or not 0.0 < decay <= 1.0:
         raise ValueError("correlation_decay must be finite, positive, and at most one")
+    population = stationary_population.as_array()
     if not np.allclose(
-        stationary_population.as_array() @ orientation_transition_matrix(law),
-        stationary_population.as_array(),
+        population @ orientation_transition_matrix(law),
+        population,
         rtol=0.0,
         atol=1e-12,
     ):
@@ -308,7 +313,6 @@ def stationary_intensity_reduced(
         )
     except np.linalg.LinAlgError as error:
         raise ValueError("stationary intensity is singular at this phase") from error
-    population = stationary_population.as_array()
     self_term = np.einsum("i,...i->...", population, np.abs(amplitudes) ** 2, optimize=True)
     pair_term = np.einsum(
         "i,...i->...", population, np.conj(amplitudes) * propagated, optimize=True
@@ -317,7 +321,8 @@ def stationary_intensity_reduced(
         self_term + 2.0 * pair_term.real,
         np.abs(self_term) + 2.0 * np.abs(pair_term) * np.maximum(1.0, 1.0 / minimum_singular_value),
     )
-    return _readonly_nonnegative(intensity, "stationary intensity")
+    intensity.setflags(write=False)
+    return intensity
 
 
 def _event_phases(
