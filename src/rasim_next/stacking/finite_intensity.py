@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import chain
+from math import fsum
 from numbers import Real
 
 import numpy as np
@@ -242,25 +244,27 @@ def finite_intensity_full(
     populations = [population]
     for _ in range(1, count):
         populations.append(populations[-1] @ transition)
-    self_total = sum(float(current @ np.abs(amplitudes) ** 2) for current in populations)
-    pair_total = 0.0 + 0.0j
-    pair_absolute_sum = 0.0
-    transition_power = np.eye(6, dtype=np.float64)
-    vertical_power = 1.0 + 0.0j
-    for separation in range(1, count):
-        transition_power = transition_power @ transition
-        vertical_power *= complex(phase_array)
-        propagated = transition_power @ amplitudes
-        for start in range(count - separation):
-            pair_contribution = vertical_power * (
-                populations[start] @ (np.conj(amplitudes) * propagated)
+    try:
+        self_terms = tuple(float(current @ np.abs(amplitudes) ** 2) for current in populations)
+        pair_real_terms: list[float] = []
+        pair_absolute_terms: list[float] = []
+        transition_power = np.eye(6, dtype=np.float64)
+        vertical_power = 1.0 + 0.0j
+        for separation in range(1, count):
+            transition_power = transition_power @ transition
+            vertical_power *= complex(phase_array)
+            propagated = transition_power @ amplitudes
+            separation_terms = tuple(
+                complex(vertical_power * (populations[start] @ (np.conj(amplitudes) * propagated)))
+                for start in range(count - separation)
             )
-            pair_total += pair_contribution
-            pair_absolute_sum += abs(pair_contribution)
-    total = _clip_cancellation_roundoff(
-        self_total + 2.0 * pair_total.real,
-        abs(self_total) + 2.0 * pair_absolute_sum,
-    )
+            pair_real_terms.append(fsum(2.0 * term.real for term in separation_terms))
+            pair_absolute_terms.append(fsum(2.0 * abs(term) for term in separation_terms))
+        summed_intensity = fsum(chain(self_terms, pair_real_terms))
+        cancellation_scale = fsum(chain(self_terms, pair_absolute_terms))
+    except (OverflowError, ValueError) as error:
+        raise ValueError("full-state intensity must remain finite") from error
+    total = _clip_cancellation_roundoff(summed_intensity, cancellation_scale)
     return FiniteIntensity(np.asarray(total), np.asarray(total / count))
 
 

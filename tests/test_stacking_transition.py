@@ -17,8 +17,10 @@ from rasim_next.stacking import (
     RegistryPhaseModel,
     RichEpsilonModel,
     StackingPopulation,
+    StackingState,
     TransitionLaw,
     finite_event_intensity,
+    finite_explicit_sequence_intensity,
     finite_intensity_by_enumeration,
     finite_intensity_full,
     finite_intensity_reduced,
@@ -56,6 +58,28 @@ def test_state_order_transition_convention_and_exact_reduction() -> None:
         registry_phase(0, 1, RegistryPhaseModel.LEGACY_2H_PLUS_K), omega_plus
     )
     reduced = reduced_transition_matrix(law, omega)
+    inverse = np.conj(omega)
+    expected_reduced = np.array(
+        [
+            [
+                law.a + law.b_plus * omega + law.b_minus * inverse,
+                law.d_plus * omega + law.d_minus * inverse,
+            ],
+            [
+                law.d_plus * inverse + law.d_minus * omega,
+                law.a + law.b_plus * omega + law.b_minus * inverse,
+            ],
+        ]
+    )
+    np.testing.assert_allclose(reduced, expected_reduced, rtol=0.0, atol=1e-15)
+    same_orientation = law.a + law.b_plus + law.b_minus
+    orientation_flip = law.d_plus + law.d_minus
+    np.testing.assert_allclose(
+        reduced_transition_matrix(law, 1.0 + 0.0j),
+        [[same_orientation, orientation_flip], [orientation_flip, same_orientation]],
+        rtol=0.0,
+        atol=1e-15,
+    )
     f_plus, f_minus = 1.1 + 0.4j, 0.7 - 0.2j
     xi = np.exp(0.37j)
     initial = InitialPopulation(0.63, 0.37)
@@ -81,6 +105,16 @@ def test_state_order_transition_convention_and_exact_reduction() -> None:
         TransitionLaw(np.nan, 0.25, 0.25, 0.25, 0.25)
     with pytest.raises(ValueError, match="sum to one"):
         InitialPopulation(0.6, 0.3)
+    with pytest.raises(ValueError, match="finite"):
+        finite_intensity_full(
+            3,
+            1e154 + 0.0j,
+            1e154 + 0.0j,
+            1.0 + 0.0j,
+            1.0 + 0.0j,
+            TransitionLaw.for_parent(Parent.TWO_H),
+            InitialPopulation.plus_only(),
+        )
 
     with pytest.raises(ValueError, match="singular"):
         stationary_intensity_reduced(
@@ -137,6 +171,111 @@ def test_direct_sequence_and_full_pair_oracles_include_start_and_end_effects() -
             enumerated.intensity_electron2,
             rtol=3e-14,
             atol=3e-14,
+        )
+
+
+def test_explicit_layer_sequence_is_direct_event_aligned_coherent_sum() -> None:
+    query = RodQueryBatch(
+        np.array([41, 42, 43]),
+        np.array([7, 8, 9]),
+        ("pbi2", "pbi2", "pbi2"),
+        np.array([0, 1, 0], dtype=np.int32),
+        np.array([0, 0, 1], dtype=np.int32),
+        np.array([-0.19, 0.43, 0.91]),
+        np.zeros(3),
+        np.ones(3),
+    )
+    amplitudes = LayerAmplitudeResult(
+        query.event_id,
+        np.array([1.2 + 0.3j, 0.8 - 0.4j, 1.1 + 0.2j]),
+        np.array([0.7 - 0.1j, 1.0 + 0.5j, 0.6 - 0.3j]),
+    )
+    repeat_A = 6.986
+    states = (
+        StackingState.REGISTRY_0_PLUS,
+        StackingState.REGISTRY_1_MINUS,
+        StackingState.REGISTRY_0_PLUS,
+        StackingState.REGISTRY_1_MINUS,
+    )
+    depths_A = 1.25 + repeat_A * np.arange(len(states))
+    explicit = finite_explicit_sequence_intensity(
+        query,
+        amplitudes,
+        states,
+        depths_A,
+        layers=len(states),
+        layer_repeat_A=repeat_A,
+    )
+
+    omega = registry_phase(query.h, query.k)
+    expected_amplitude = (
+        amplitudes.f_plus * np.exp(1j * query.qz_Ainv * depths_A[0])
+        + omega * amplitudes.f_minus * np.exp(1j * query.qz_Ainv * depths_A[1])
+        + amplitudes.f_plus * np.exp(1j * query.qz_Ainv * depths_A[2])
+        + omega * amplitudes.f_minus * np.exp(1j * query.qz_Ainv * depths_A[3])
+    )
+    np.testing.assert_allclose(
+        explicit.intensity_electron2,
+        np.abs(expected_amplitude) ** 2,
+        rtol=0.0,
+        atol=2e-14,
+    )
+    np.testing.assert_array_equal(
+        explicit.intensity_per_layer_electron2,
+        explicit.intensity_electron2 / len(states),
+    )
+    for event in range(query.event_id.size):
+        expected_transition = finite_intensity_reduced(
+            len(states),
+            amplitudes.f_plus[event],
+            amplitudes.f_minus[event],
+            omega[event],
+            np.exp(1j * query.qz_Ainv[event] * repeat_A),
+            TransitionLaw.for_parent(Parent.FOUR_H_PLUS),
+            InitialPopulation.plus_only(),
+        )
+        np.testing.assert_allclose(
+            explicit.intensity_electron2[event],
+            expected_transition.intensity_electron2,
+            rtol=2e-14,
+            atol=2e-14,
+        )
+
+    with pytest.raises(ValueError, match="event-aligned"):
+        finite_explicit_sequence_intensity(
+            query,
+            LayerAmplitudeResult(query.event_id[::-1], amplitudes.f_plus, amplitudes.f_minus),
+            states,
+            depths_A,
+            layers=len(states),
+            layer_repeat_A=repeat_A,
+        )
+    with pytest.raises(ValueError, match="states must contain"):
+        finite_explicit_sequence_intensity(
+            query,
+            amplitudes,
+            states[:-1],
+            depths_A,
+            layers=len(states),
+            layer_repeat_A=repeat_A,
+        )
+    with pytest.raises(ValueError, match="states must contain"):
+        finite_explicit_sequence_intensity(
+            query,
+            amplitudes,
+            (*states[:-1], "0F+"),
+            depths_A,
+            layers=len(states),
+            layer_repeat_A=repeat_A,
+        )
+    with pytest.raises(ValueError, match="advance by layer_repeat_A"):
+        finite_explicit_sequence_intensity(
+            query,
+            amplitudes,
+            states,
+            depths_A + np.array([0.0, 0.0, 0.1, 0.1]),
+            layers=len(states),
+            layer_repeat_A=repeat_A,
         )
 
 
@@ -216,6 +355,28 @@ def test_finite_normalization_parent_limits_and_laue_identity() -> None:
             InitialPopulation.plus_only(),
         )
         np.testing.assert_allclose(extinction.intensity_electron2, 0.0, rtol=0.0, atol=1e-24)
+
+    # T04 exact 2H motif amplitudes at h=k=0, qz=0.4 A^-1, wavelength=1 A, Uiso=0.
+    pbi2_f_plus_e = 150.17616504979657 + 8.935295728678174j
+    pbi2_f_minus_e = 150.17616504979657 + 8.935295728678163j
+    material_layers = 9
+    material_vertical_phase = np.exp(1j * 0.40000000000000036 * 6.986)
+    explicit_amplitude = sum(
+        pbi2_f_plus_e * material_vertical_phase**layer for layer in range(material_layers)
+    )
+    direct_material_intensity = abs(explicit_amplitude) ** 2
+    full_material_intensity = finite_intensity_full(
+        material_layers,
+        pbi2_f_plus_e,
+        pbi2_f_minus_e,
+        1.0 + 0.0j,
+        material_vertical_phase,
+        TransitionLaw.for_parent(Parent.SIX_H_PLUS),
+        InitialPopulation.plus_only(),
+    ).intensity_electron2
+    assert abs(full_material_intensity - direct_material_intensity) <= 1e-10 * max(
+        1.0, abs(direct_material_intensity)
+    )
 
 
 def test_typed_parent_models_and_event_boundary() -> None:

@@ -1,6 +1,9 @@
 """Finite transition-matrix stacking intensities."""
 
-from rasim_next.stacking.enumeration import finite_intensity_by_enumeration
+from rasim_next.stacking.enumeration import (
+    finite_explicit_sequence_intensity,
+    finite_intensity_by_enumeration,
+)
 from rasim_next.stacking.finite_intensity import (
     FiniteIntensity,
     FiniteNormalization,
@@ -44,6 +47,7 @@ __all__ = [
     "StackingState",
     "TransitionLaw",
     "finite_event_intensity",
+    "finite_explicit_sequence_intensity",
     "finite_intensity_by_enumeration",
     "finite_intensity_full",
     "finite_intensity_reduced",

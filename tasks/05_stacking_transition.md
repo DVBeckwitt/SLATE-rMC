@@ -136,24 +136,43 @@ Stop `BLOCKED` if the layer-amplitude, population, state-order, or event-intensi
 
 ## Execution plan
 
-State: READY
+State: READY_NUMERICS / MATERIAL_POLYTYPE_PARITY_PENDING
 
-1. Define immutable registry, transition-law, parent, and normalization types with
-   explicit row-current/column-next and positive Fourier-phase conventions.
-2. Implement direct short-sequence enumeration and a finite full-state self/pair sum as the
-   independent numerical authorities.
-3. Implement the exact two-state Fourier reduction, finite event-aligned intensity, deterministic
-   and parent-rich models, reduced `a,b,d`, and separately named stationary output.
-4. Prove analytic limits, full/reduced/enumerated agreement, immutable-pack parity, convergence,
-   bounded cancellation at extinction, gauge invariance, population-order invariance, and all
-   assigned stage-local error injections; measure equivalent work and peak memory.
-5. Retain one compact permanent proof module, remove temporary evidence, run all T05 gates, review
-   owned-path compliance, apply the approved core-v4 interface conventions, complete this handoff,
-   and make one coherent commit.
+1. [x] Audit the frozen equations and interfaces.
+   Files likely touched: `tests/test_stacking_transition.py`, this execution plan. Intended behavior:
+   preserve core-v4, raw electron amplitudes/intensities, exact event alignment, and match
+   `main.pdf` Eqs. (37)-(54) after the two-state reduction. Tests: exact `M(omega)` and `P=M(1)`
+   assertions. Dependencies: none. Acceptance: phase sign, row/column convention, matrix entries,
+   finite normalization, and layer repeat are explicit and unchanged.
+2. [x] Correct the revealed full-oracle cancellation error.
+   Files likely touched: `src/rasim_next/stacking/finite_intensity.py`,
+   `tests/test_stacking_transition.py`. Intended behavior: retain the six-state self/pair equation
+   while using accurate finite summation and linear peak scratch. Tests: exact 2H-derived
+   cancellation fixture, coherent extinction, overflow rejection. Dependencies: task 1.
+   Acceptance: frozen `1e-10*max(1,I_direct)` bound passes; nonfinite results fail clearly; no
+   transition/reduction equation changes.
+3. [x] Add the deterministic explicit-sequence oracle.
+   Files likely touched: `src/rasim_next/stacking/enumeration.py`, package `__init__.py`, compact
+   T05 test. Intended behavior: consume event-aligned amplitudes, typed orientation/registry states,
+   explicit physical depths/repeat, `h,k,qz`, and finite layer count; return direct raw
+   `abs(sum(F*registry_phase*vertical_phase))**2` and `/N`. Tests: direct formula, event alignment,
+   state count, depth spacing, and reduced 4H parity. Dependencies: task 1. Acceptance: no CIF,
+   atomic-factor, shared-contract, normalization, or downstream-weight logic.
+4. [x] Prove deterministic parent and handed sequences.
+   Files likely touched: `src/rasim_next/stacking/proof.py`. Intended behavior: compare explicit,
+   enumeration, full, and reduced results for 2H, both 4H hands, both 6H hands, one to three periods,
+   all `(2h+k) mod 3` sectors, and a physical `qz` grid. Test: stacking proof command. Dependencies:
+   tasks 2-3. Acceptance: 2,295 comparisons; maximum scaled error at most `1e-10`.
+5. [x] Run final gates, prune residue, and commit.
+   Files likely touched: this handoff only. Intended behavior: retain only unique permanent proof
+   coverage and report numerical/material states separately. Tests: compile, lint, compact T05 and
+   repository pytest, stacking/reference proofs, diff check, status check. Dependencies: tasks 1-4.
+   Acceptance: one owned-path commit, measured benchmark/memory, exact legacy classifications and
+   first divergences, no temporary files/dependencies, clean Git status.
 
 ## Handoff
 
-Status: READY
+Status: READY_NUMERICS / MATERIAL_POLYTYPE_PARITY_PENDING
 
 Commit SHA: branch HEAD; exact SHA is reported after the single final commit.
 
@@ -161,11 +180,12 @@ Public APIs: `STATE_ORDER`, `StackingState`, `TransitionLaw`, `InitialPopulation
 `RegistryPhaseModel`, `Parent`, `Handedness`, `RichEpsilonModel`, `ReducedABDModel`,
 `StackingPopulation`, `FiniteIntensity`, `PopulationIntensityResult`, `FiniteNormalization`,
 `registry_phase`, `full_transition_matrix`, `reduced_transition_matrix`,
-`finite_intensity_by_enumeration`, `finite_intensity_full`, `finite_intensity_reduced`,
+`finite_explicit_sequence_intensity`, `finite_intensity_by_enumeration`,
+`finite_intensity_full`, `finite_intensity_reduced`,
 `stationary_intensity_reduced`, `finite_event_intensity`, and
 `finite_population_event_intensity`.
 
-Proof summary: all twelve numerical checks pass. State order, both nontrivial registry roots,
+Proof summary: all thirteen proof checks pass. State order, both nontrivial registry roots,
 stochastic rows, and parent vectors are exact. Direct sequence enumeration, the full six-state
 pair sum, and the reduced recurrence agree for `N=1..6` and all three Miller sectors with maximum
 absolute error `5.862e-14`. Independent deterministic cycles, `N=1`, the `00L` Laue identity, and
@@ -174,8 +194,18 @@ tolerance ratio `0.6826`. Population components agree with direct enumeration to
 weighted result is exactly order invariant. A consistent amplitude/registry gauge transformation
 has pair-kernel error `2.220e-16` and total-intensity error `0`; the amplitude-only mutation differs
 by `0.5601` and first fails at `stacking.pair_kernel`. All eight isolated stage-local mutations fail
-at their expected first stage after identical prior trace stages. The T05 suite passes `6/6`; the
-compact repository suite passes `11/11`; the proof command reports `READY`.
+at their expected first stage after identical prior trace stages. The T05 suite passes `7/7`; the
+compact repository suite passes `12/12`. The proof command reports `READY` for the branch-local
+numerical gate and separately reports `READY_NUMERICS` and
+`MATERIAL_POLYTYPE_PARITY_PENDING`. `main.pdf` Eqs. (37)-(54) were checked directly: the selected
+Fourier channel, exact `[[A,B],[C,A]]` matrix, `P=M(1)` orientation probabilities, pair kernel,
+positive vertical phase, and total/per-layer distinction match the implementation. The permanent
+2,295-comparison deterministic sweep covers both hands, all three Miller sectors, physical `qz`,
+and one to three parent periods. Final enumeration/full/reduced scaled errors are `2.343e-14`,
+`2.207e-14`, and `2.243e-14`; the largest repeated review run was `2.60e-14`. A separate
+pre-integration challenge using exact 2H-derived amplitudes had zero tolerance failures and maximum
+enumeration/full/reduced scaled errors of `5.995e-13`,
+`5.944e-11`, and `4.614e-11`. Neither substitutes for final A/B/C material proof.
 
 Layer-amplitude convention: `f_plus` and `f_minus` are raw complex layer structure amplitudes in
 electrons, evaluated at exact event coordinates. Occupancy and atomic displacement are included.
@@ -201,6 +231,23 @@ weights must sum to one within `1e-12` and are never normalized silently. Compon
 unweighted for fitting; their explicitly weighted electron^2 total is an incoherent intensity sum.
 T05 applies stacking-population weights once. T07 must not reapply them.
 
+Material-polytype parity gate: pending. The expanded tracked structures establish, using labels
+anchored to the literal 2H motif, `2H=(O_plus,A)`, `4H=(O_minus,B),(O_plus,C)`, and
+`6H=(O_minus,A),(O_minus,C),(O_minus,B)`. T04's current motif labels are globally swapped relative
+to those names: T04 `f_plus=O_minus` and `f_minus=O_plus`. The corresponding T05 mappings are 2H
+with `TWO_H` and initial minus, supplied 4H with `FOUR_H_PLUS` and initial plus after one global
+registry-origin shift, and supplied 6H with `SIX_H_MINUS` and initial plus; the opposite hands use
+`FOUR_H_MINUS` and `SIX_H_PLUS`.
+
+Required frozen T04 inputs for integration are exact event-aligned 2H-derived `f_plus/f_minus`,
+direct full-CIF 4H/6H structure factors on the same physical events, symmetry-expanded target
+coordinates, target lattice/layer-repeat values, and target intralayer heights. Integration must
+compare A: an ideal direct atom sum assembled from the exact 2H motif, B: T05 deterministic
+transition intensity for the same states and depths, and C: the supplied target-CIF direct atom sum.
+A/B must meet the frozen numerical tolerance. C/A residuals are reported without separate curve
+normalization. A target-height-relaxed reconstruction must also match the target coordinates after
+one declared global origin transform and explicit periodic-image accounting.
+
 Legacy classifications: `stacking.transition_matrix_6`,
 `stacking.transition_matrix_reduced`, `stacking.synthetic_finite`,
 `stacking.reference_pack_intensity`, and `stacking.incoherent_population_mixture` are `MATCH`.
@@ -218,11 +265,12 @@ separately named stationary solve with errors
 `(2.99008,1.224736768,0.205476733,0.005783656)` at correlation decay `0.8`.
 
 Benchmark and peak memory: equivalent work is 48 events by 24 layers. Representative full pair
-oracle: `0.2723 s`, `33,548` peak traced bytes. Reduced recurrence: `0.00856 s`, `35,639` peak traced
-bytes, `31.83x` faster. Maximum optimized-versus-proof absolute error is `1.990e-13`.
+oracle: `0.13362 s`, `151,616` peak traced bytes. Reduced recurrence: `0.007118 s`, `35,639` peak
+traced bytes, `18.77x` faster. Maximum optimized-versus-proof absolute error is `4.263e-14`.
 
-Known limitations: homogeneous first-order transition law; one explicit layer repeat per event batch;
-direct enumeration limited to ten layers; singular undamped stationary phases are rejected.
+Known limitations: PbI2 A/B/C material-polytype parity remains pending frozen T04 outputs;
+homogeneous first-order transition law; one explicit layer repeat per event batch; direct
+enumeration limited to ten layers; singular undamped stationary phases are rejected.
 Generalized phase expressions, fitting, integration, resolution convolution, and backend
 frameworks are intentionally absent.
 

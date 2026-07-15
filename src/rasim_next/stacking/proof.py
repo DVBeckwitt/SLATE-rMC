@@ -22,7 +22,10 @@ from rasim_next.core.contracts import (
     RodQueryBatch,
 )
 from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
-from rasim_next.stacking.enumeration import finite_intensity_by_enumeration
+from rasim_next.stacking.enumeration import (
+    finite_explicit_sequence_intensity,
+    finite_intensity_by_enumeration,
+)
 from rasim_next.stacking.finite_intensity import (
     FiniteNormalization,
     finite_event_intensity,
@@ -40,6 +43,7 @@ from rasim_next.stacking.transition import (
     STATE_ORDER,
     InitialPopulation,
     Parent,
+    StackingState,
     TransitionLaw,
     full_transition_matrix,
     reduced_transition_matrix,
@@ -398,6 +402,105 @@ def _oracle_error() -> tuple[float, float]:
             maximum_full = max(maximum_full, float(abs(full - enumerated)))
             maximum_reduced = max(maximum_reduced, float(abs(reduced - enumerated)))
     return maximum_full, maximum_reduced
+
+
+def _explicit_parent_sequence_sweep() -> dict[str, object]:
+    sectors = ((0, 0), (0, 1), (1, 0))
+    qz_grid_Ainv = np.linspace(0.08, 1.28, 17)
+    h = np.repeat(np.array([item[0] for item in sectors], dtype=np.int32), qz_grid_Ainv.size)
+    k = np.repeat(np.array([item[1] for item in sectors], dtype=np.int32), qz_grid_Ainv.size)
+    qz_Ainv = np.tile(qz_grid_Ainv, len(sectors))
+    event_id = np.arange(1, qz_Ainv.size + 1, dtype=np.int64)
+    query = RodQueryBatch(
+        event_id,
+        event_id,
+        ("pbi2",) * event_id.size,
+        h,
+        k,
+        qz_Ainv,
+        np.zeros(event_id.size),
+        np.ones(event_id.size),
+    )
+    amplitudes = LayerAmplitudeResult(
+        event_id,
+        1.2 + 0.04 * h - 0.03 * k + 0.05 * qz_Ainv + 1j * (0.3 + 0.02 * qz_Ainv),
+        0.8 - 0.02 * h + 0.05 * k - 0.03 * qz_Ainv + 1j * (-0.4 + 0.04 * qz_Ainv),
+    )
+    cycles = {
+        Parent.TWO_H: (StackingState.REGISTRY_0_PLUS,),
+        Parent.FOUR_H_PLUS: (
+            StackingState.REGISTRY_0_PLUS,
+            StackingState.REGISTRY_1_MINUS,
+        ),
+        Parent.FOUR_H_MINUS: (
+            StackingState.REGISTRY_0_PLUS,
+            StackingState.REGISTRY_2_MINUS,
+        ),
+        Parent.SIX_H_PLUS: (
+            StackingState.REGISTRY_0_PLUS,
+            StackingState.REGISTRY_1_PLUS,
+            StackingState.REGISTRY_2_PLUS,
+        ),
+        Parent.SIX_H_MINUS: (
+            StackingState.REGISTRY_0_PLUS,
+            StackingState.REGISTRY_2_PLUS,
+            StackingState.REGISTRY_1_PLUS,
+        ),
+    }
+    layer_repeat_A = 6.986
+    omega = np.asarray(registry_phase(h, k), dtype=np.complex128)
+    vertical_phase = np.exp(1j * qz_Ainv * layer_repeat_A)
+    maximum_absolute_error = {name: 0.0 for name in ("enumeration", "full", "reduced")}
+    maximum_scaled_error = {name: 0.0 for name in maximum_absolute_error}
+    comparison_count = 0
+    for parent, cycle in cycles.items():
+        law = TransitionLaw.for_parent(parent)
+        for period_multiple in (1, 2, 3):
+            states = cycle * period_multiple
+            layers = len(states)
+            depths_A = 0.37 + layer_repeat_A * np.arange(layers)
+            direct = finite_explicit_sequence_intensity(
+                query,
+                amplitudes,
+                states,
+                depths_A,
+                layers=layers,
+                layer_repeat_A=layer_repeat_A,
+            ).intensity_electron2
+            for event in range(event_id.size):
+                arguments = (
+                    layers,
+                    amplitudes.f_plus[event],
+                    amplitudes.f_minus[event],
+                    omega[event],
+                    vertical_phase[event],
+                    law,
+                    InitialPopulation.plus_only(),
+                )
+                observed = {
+                    "enumeration": finite_intensity_by_enumeration(*arguments).intensity_electron2,
+                    "full": finite_intensity_full(*arguments).intensity_electron2,
+                    "reduced": finite_intensity_reduced(*arguments).intensity_electron2,
+                }
+                scale = max(1.0, abs(float(direct[event])))
+                for name, value in observed.items():
+                    absolute_error = abs(float(value) - float(direct[event]))
+                    maximum_absolute_error[name] = max(maximum_absolute_error[name], absolute_error)
+                    maximum_scaled_error[name] = max(
+                        maximum_scaled_error[name], absolute_error / scale
+                    )
+                    comparison_count += 1
+    return {
+        "comparison_count": comparison_count,
+        "parents": tuple(parent.value for parent in cycles),
+        "period_multiples": (1, 2, 3),
+        "miller_sectors_2h_plus_k_mod3": tuple(
+            (2 * h_value + k_value) % 3 for h_value, k_value in sectors
+        ),
+        "qz_grid_Ainv": (float(qz_grid_Ainv[0]), float(qz_grid_Ainv[-1]), qz_grid_Ainv.size),
+        "maximum_absolute_error": maximum_absolute_error,
+        "maximum_scaled_error": maximum_scaled_error,
+    }
 
 
 def _limits() -> tuple[float, float, float, float, float]:
@@ -826,6 +929,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     pack_path = root / "reference" / "rasim_reference_v1.npz"
     probability_error, pack_error, pack_scaled_error = _pack_comparison(pack_path)
     full_error, reduced_error = _oracle_error()
+    explicit_sequence = _explicit_parent_sequence_sweep()
     (
         laue_error,
         single_error,
@@ -892,6 +996,13 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
             f"six-state/enumerated parity; maximum absolute error {reduced_error:.3e}",
         ),
         _check(
+            "explicit_polytype_sequences",
+            int(explicit_sequence["comparison_count"]) == 2295
+            and max(explicit_sequence["maximum_scaled_error"].values()) <= 1e-10,
+            "direct layer sum versus enumeration/full/reduced over both hands, all three sectors, physical qz, and one to three periods; "
+            f"maximum scaled error {max(explicit_sequence['maximum_scaled_error'].values()):.3e}",
+        ),
+        _check(
             "analytic_limits",
             laue_error <= _ORACLE_ATOL
             and single_error <= _ORACLE_ATOL
@@ -956,6 +1067,8 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         "schema_version": 1,
         "task_id": "T05",
         "status": "READY" if local_pass else "FAIL",
+        "numerical_status": "READY_NUMERICS" if local_pass else "FAIL",
+        "material_status": "MATERIAL_POLYTYPE_PARITY_PENDING",
         "base_sha": _git(root, "merge-base", "HEAD", "main"),
         "commit_sha": _git(root, "rev-parse", "HEAD"),
         "contract_version": CONTRACT_API_VERSION,
@@ -970,15 +1083,18 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
             "total_error": gauge_total_error,
             "one_sided_difference": gauge_one_sided_difference,
         },
+        "explicit_sequence": explicit_sequence,
         "benchmark": benchmark,
         "mutations": mutations,
         "limitations": [
             "homogeneous first-order transition law and one explicit layer repeat per event batch",
             "direct sequence oracle intentionally limited to ten layers",
             "stationary result requires an explicit invariant population; singular undamped phases are rejected",
+            "PbI2 A/B/C material-polytype parity awaits frozen T04 structure outputs",
         ],
         "coordination_notes": [
             "T04 supplies raw event-aligned f_plus/f_minus in electrons with the shared Pb-site/layer-center gauge and no registry phase or downstream weight",
             "T05 returns raw finite-stack electron2 and applies stacking-population fractions once; T07 must not reapply them",
+            "material integration requires T04 2H motif amplitudes, full 4H/6H amplitudes, expanded coordinates, lattice/repeat values, and target intralayer heights",
         ],
     }
