@@ -136,26 +136,104 @@ Stop `BLOCKED` if the layer-amplitude, population, state-order, or event-intensi
 
 ## Execution plan
 
-State: NS
+State: READY
+
+1. Define immutable registry, transition-law, parent, and normalization types with
+   explicit row-current/column-next and positive Fourier-phase conventions.
+2. Implement direct short-sequence enumeration and a finite full-state self/pair sum as the
+   independent numerical authorities.
+3. Implement the exact two-state Fourier reduction, finite event-aligned intensity, deterministic
+   and parent-rich models, reduced `a,b,d`, and separately named stationary output.
+4. Prove analytic limits, full/reduced/enumerated agreement, immutable-pack parity, convergence,
+   bounded cancellation at extinction, gauge invariance, population-order invariance, and all
+   assigned stage-local error injections; measure equivalent work and peak memory.
+5. Retain one compact permanent proof module, remove temporary evidence, run all T05 gates, review
+   owned-path compliance, apply the approved core-v4 interface conventions, complete this handoff,
+   and make one coherent commit.
 
 ## Handoff
 
-Status:
+Status: READY
 
-Commit SHA:
+Commit SHA: branch HEAD; exact SHA is reported after the single final commit.
 
-Public APIs:
+Public APIs: `STATE_ORDER`, `StackingState`, `TransitionLaw`, `InitialPopulation`,
+`RegistryPhaseModel`, `Parent`, `Handedness`, `RichEpsilonModel`, `ReducedABDModel`,
+`StackingPopulation`, `FiniteIntensity`, `PopulationIntensityResult`, `FiniteNormalization`,
+`registry_phase`, `full_transition_matrix`, `reduced_transition_matrix`,
+`finite_intensity_by_enumeration`, `finite_intensity_full`, `finite_intensity_reduced`,
+`stationary_intensity_reduced`, `finite_event_intensity`, and
+`finite_population_event_intensity`.
 
-Proof summary:
+Proof summary: all twelve numerical checks pass. State order, both nontrivial registry roots,
+stochastic rows, and parent vectors are exact. Direct sequence enumeration, the full six-state
+pair sum, and the reduced recurrence agree for `N=1..6` and all three Miller sectors with maximum
+absolute error `5.862e-14`. Independent deterministic cycles, `N=1`, the `00L` Laue identity, and
+the `N=512` coherent extinction pass; the extinction residue is `0`. The immutable pack passes with
+tolerance ratio `0.6826`. Population components agree with direct enumeration to `5.773e-15`; the
+weighted result is exactly order invariant. A consistent amplitude/registry gauge transformation
+has pair-kernel error `2.220e-16` and total-intensity error `0`; the amplitude-only mutation differs
+by `0.5601` and first fails at `stacking.pair_kernel`. All eight isolated stage-local mutations fail
+at their expected first stage after identical prior trace stages. The T05 suite passes `6/6`; the
+compact repository suite passes `11/11`; the proof command reports `READY`.
 
-Legacy classifications:
+Layer-amplitude convention: `f_plus` and `f_minus` are raw complex layer structure amplitudes in
+electrons, evaluated at exact event coordinates. Occupancy and atomic displacement are included.
+No intensity normalization, rounding, registry-translation phase, source/mosaic/optical/detector
+factor, or population weight is included. PbI2 uses one motif gauge: in-plane origin at Pb,
+layer-center `z=0`, plus/minus motifs share the origin, and the positive structure-factor phase is
+retained. T05 applies every interlayer registry phase. Alignment is exclusively exact ordered
+`event_id` equality; duplicates, missing/reordered IDs, nonfinite amplitudes, and nonfinite `qz`
+are rejected.
 
-First divergences:
+Output convention: `FiniteIntensity.intensity_electron2` is raw finite-stack
+`|A_stack|^2` in electron^2. `intensity_per_layer_electron2` is exactly that total divided by `N`.
+The shared `EventIntensityResult.intensity_per_sr` payload carries this raw model electron^2 value
+when total is selected, or the explicitly named per-layer quotient when that normalization is
+selected; despite the shared field name, no per-steradian factor is applied here. T05 applies no
+`r_e^2`, source, wavelength, mosaic, Jacobian, Fresnel, attenuation, polarization, solid-angle, or deposition factor.
+Integration applies those factors once. The layer repeat is the explicit positive `layer_repeat_A`
+input and is never inferred.
 
-Convergence:
+Population convention: `StackingPopulation` contains only `population_id`, a compiled
+`TransitionLaw` model, and an explicit finite nonnegative weight. Population IDs are unique;
+weights must sum to one within `1e-12` and are never normalized silently. Components are returned
+unweighted for fitting; their explicitly weighted electron^2 total is an incoherent intensity sum.
+T05 applies stacking-population weights once. T07 must not reapply them.
 
-Benchmark and peak memory:
+Legacy classifications: `stacking.transition_matrix_6`,
+`stacking.transition_matrix_reduced`, `stacking.synthetic_finite`,
+`stacking.reference_pack_intensity`, and `stacking.incoherent_population_mixture` are `MATCH`.
+Explicit initial population, normalization, fixed typed phase models, explicit layer repeat,
+epsilon bounds, and raw `a,b,d` validation are `CORRECTED`. No case is `NO_ORACLE`; population
+mixing has direct numerical authority.
 
-Known limitations:
+First divergences: initial population at `stacking.pair_kernel`; total versus per-layer and hidden
+legacy area scale at `stacking.finite_intensity`; arbitrary legacy phase expressions at
+`stacking.registry_phase`; implicit legacy layer repeat at `stacking.finite_intensity`; epsilon
+clipping and hidden `a,b,d` normalization at `stacking.transition_matrix_6`.
 
-Contract requests:
+Convergence: direct damped lag sums at cutoffs `(4,8,16,32)` converge monotonically to the
+separately named stationary solve with errors
+`(2.99008,1.224736768,0.205476733,0.005783656)` at correlation decay `0.8`.
+
+Benchmark and peak memory: equivalent work is 48 events by 24 layers. Representative full pair
+oracle: `0.2723 s`, `33,548` peak traced bytes. Reduced recurrence: `0.00856 s`, `35,639` peak traced
+bytes, `31.83x` faster. Maximum optimized-versus-proof absolute error is `1.990e-13`.
+
+Known limitations: homogeneous first-order transition law; one explicit layer repeat per event batch;
+direct enumeration limited to ten layers; singular undamped stationary phases are rejected.
+Generalized phase expressions, fitting, integration, resolution convolution, and backend
+frameworks are intentionally absent.
+
+Permanent test retained: `tests/test_stacking_transition.py` protects six distinct long-term
+boundaries: conventions and validation, direct oracles, analytic/deterministic limits and
+cancellation, typed parent/event behavior, immutable-pack parity, and incoherent population
+components/order. Benchmark, convergence, gauge sweeps, and mutations remain in the explicit proof
+command rather than duplicate permanent pytest.
+
+Coordination: the approved amplitude/electron^2 convention was sent to the active T04 task for its
+handoff. T04 owns amplitude construction; T05 owns registry phases and stacking populations; T07
+owns downstream source, optical, geometric, and detector factors. Core-v4 was not modified. No
+serializer or per-array metadata was added. T05 consumes upstream-valid event queries; T03 and T07
+retain validity ownership.
