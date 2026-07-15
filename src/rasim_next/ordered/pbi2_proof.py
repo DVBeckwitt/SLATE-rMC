@@ -457,7 +457,14 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
         float(np.max(np.abs(layer.f_minus - direct_minus))),
     )
 
-    ideal_cases: dict[tuple[str, int], dict[str, object]] = {}
+    ideal_direct_amplitudes: dict[tuple[str, int], NDArray[np.complex128]] = {}
+    ideal_hands: dict[str, object] = {}
+    ideal_hand_names = {
+        "4H+": "4H_plus",
+        "4H-": "4H_minus",
+        "6H+": "6H_plus",
+        "6H-": "6H_minus",
+    }
     ideal_error = 0.0
     for parent, period_topology in _IDEAL_PARENT_TOPOLOGIES:
         for period_multiple in _PERIOD_MULTIPLES:
@@ -475,29 +482,16 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
             )
             error = float(np.max(np.abs(direct - coherent)))
             ideal_error = max(ideal_error, error)
-            ideal_cases[(parent, period_multiple)] = {
-                "direct": direct,
-                "coherent": coherent,
-                "error": error,
-                "coordinates": coordinates,
-            }
-
-    ideal_hands: dict[str, object] = {}
-    for output_name, parent in (
-        ("4H_plus", "4H+"),
-        ("4H_minus", "4H-"),
-        ("6H_plus", "6H+"),
-        ("6H_minus", "6H-"),
-    ):
-        case = ideal_cases[(parent, 1)]
-        topology = dict(_IDEAL_PARENT_TOPOLOGIES)[parent]
-        ideal_hands[output_name] = {
-            "topology_t04": [list(value) for value in topology],
-            "direct_amplitude_e": _complex_pairs(case["direct"]),
-            "coherent_f_layer_amplitude_e": _complex_pairs(case["coherent"]),
-            "maximum_factorization_error_e": case["error"],
-            "explicit_coordinates": case["coordinates"],
-        }
+            ideal_direct_amplitudes[(parent, period_multiple)] = direct
+            output_name = ideal_hand_names.get(parent)
+            if output_name is not None and period_multiple == 1:
+                ideal_hands[output_name] = {
+                    "topology_t04": [list(value) for value in period_topology],
+                    "direct_amplitude_e": _complex_pairs(direct),
+                    "coherent_f_layer_amplitude_e": _complex_pairs(coherent),
+                    "maximum_factorization_error_e": error,
+                    "explicit_coordinates": coordinates,
+                }
 
     required_topologies = {
         "2H": (("+", "A"),),
@@ -690,10 +684,7 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
                 "topology_t04": [list(value) for value in topology],
                 "direct_ideal_amplitude_e_by_period_multiple": {
                     str(period_multiple): _complex_pairs(
-                        np.asarray(
-                            ideal_cases[(parent, period_multiple)]["direct"],
-                            dtype=np.complex128,
-                        )
+                        ideal_direct_amplitudes[(parent, period_multiple)]
                     )
                     for period_multiple in _PERIOD_MULTIPLES
                 },

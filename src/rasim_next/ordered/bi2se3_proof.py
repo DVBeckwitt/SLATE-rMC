@@ -55,6 +55,10 @@ class _Atom:
     u_iso_A2: float
 
 
+def _atom_property_key(atom: _Atom) -> tuple[str, str, int, float, float]:
+    return atom.species, atom.element, atom.charge, atom.occupancy, atom.u_iso_A2
+
+
 @dataclass(frozen=True, slots=True)
 class _VestaTable:
     hkl: NDArray[np.int64]
@@ -241,16 +245,10 @@ def _extract_quintuple_layers(
     canonical_index = min(range(ql_count), key=lambda index: centers[index])
     canonical = motif_blocks[canonical_index]
     maximum_spread = 0.0
-    reference_signature = tuple(
-        (atom.species, atom.element, atom.charge, atom.occupancy, atom.u_iso_A2)
-        for atom in canonical
-    )
+    reference_signature = tuple(_atom_property_key(atom) for atom in canonical)
     reference_coordinates = np.asarray([atom.fractional for atom in canonical])
     for motif in motif_blocks:
-        signature = tuple(
-            (atom.species, atom.element, atom.charge, atom.occupancy, atom.u_iso_A2)
-            for atom in motif
-        )
+        signature = tuple(_atom_property_key(atom) for atom in motif)
         if signature != reference_signature:
             raise ValueError("all extracted quintuple layers must preserve atom properties")
         maximum_spread = max(
@@ -470,19 +468,7 @@ def _periodic_coordinate_error(first: tuple[_Atom, ...], second: tuple[_Atom, ..
         candidates: list[tuple[float, int]] = []
         for index in available:
             other = second[index]
-            if (
-                other.species,
-                other.element,
-                other.charge,
-                other.occupancy,
-                other.u_iso_A2,
-            ) != (
-                atom.species,
-                atom.element,
-                atom.charge,
-                atom.occupancy,
-                atom.u_iso_A2,
-            ):
+            if _atom_property_key(other) != _atom_property_key(atom):
                 continue
             difference = np.asarray(atom.fractional) - np.asarray(other.fractional)
             difference -= np.rint(difference)
@@ -532,19 +518,7 @@ def _image_shifts(
         candidates: list[tuple[float, int, NDArray[np.float64]]] = []
         for index in available:
             source = wrapped[index]
-            if (
-                source.species,
-                source.element,
-                source.charge,
-                source.occupancy,
-                source.u_iso_A2,
-            ) != (
-                atom.species,
-                atom.element,
-                atom.charge,
-                atom.occupancy,
-                atom.u_iso_A2,
-            ):
+            if _atom_property_key(source) != _atom_property_key(atom):
                 continue
             difference = np.asarray(atom.fractional) - np.asarray(source.fractional)
             residual = difference - np.rint(difference)
@@ -994,13 +968,7 @@ def run_bi2se3_ql_proof(
         and image_shift_phase_sensitivity > direct_tolerance["atol"]
         and mutations_passed
     )
-    passed = (
-        single_ql_passed
-        and reconstruction_passed
-        and p1_serialization_passed
-        and table_passed
-        and mutations_passed
-    )
+    passed = single_ql_passed and reconstruction_passed and p1_serialization_passed and table_passed
 
     return {
         "status": "PASS" if passed else "FAIL",

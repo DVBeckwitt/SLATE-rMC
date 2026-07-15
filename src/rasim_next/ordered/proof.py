@@ -85,6 +85,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_json_sha256(payload: Any, *, allow_nan: bool = True) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=allow_nan,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _git(*arguments: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(ROOT), *arguments],
@@ -113,9 +123,7 @@ def _environment_sha256() -> str:
             )
         },
     }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return _canonical_json_sha256(payload)
 
 
 def _stats(
@@ -1167,16 +1175,10 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     checks = _foundation_checks(crystal)
     pbi2_polytype = run_pbi2_polytype_proof(str(ROOT))
     deterministic_material_payload = pbi2_polytype["deterministic_material_payload"]
-    deterministic_material_json = json.dumps(
-        deterministic_material_payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
+    deterministic_material_payload_sha256 = _canonical_json_sha256(
+        deterministic_material_payload, allow_nan=False
     )
-    deterministic_material_payload_sha256 = hashlib.sha256(
-        deterministic_material_json.encode("utf-8")
-    ).hexdigest()
-    pbi2_errors = [float(value) for value in pbi2_polytype["maximum_errors_e"].values()]
+    pbi2_maximum_error = max(float(value) for value in pbi2_polytype["maximum_errors_e"].values())
     checks.append(
         _check(
             "pbi2_polytype_direct_atom_sum",
@@ -1187,7 +1189,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
                     name: payload["actual_coordination_topology"]
                     for name, payload in pbi2_polytype["polytypes"].items()
                 },
-                "deterministic_material_payload_sha256": (deterministic_material_payload_sha256),
+                "deterministic_material_payload_sha256": deterministic_material_payload_sha256,
                 "deterministic_parent_period_multiples": [1, 2, 5],
             },
             [
@@ -1195,7 +1197,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
                 "ordered.finite_stack_amplitude",
                 "ordered.unit_cell_amplitude",
             ],
-            maximum_error=max(pbi2_errors),
+            maximum_error=pbi2_maximum_error,
             tolerance=TOLERANCES["direct_atom_e"],
         )
     )
@@ -1296,7 +1298,6 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         }
         for item in reference_comparisons
     ]
-    tolerance_json = json.dumps(TOLERANCES, sort_keys=True, separators=(",", ":"))
     passed = all(check["status"] == "PASS" for check in checks)
     return {
         "schema_version": "rasim-ordered-reflectivity-proof-v1",
@@ -1318,7 +1319,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
             "tasks/04_ordered_reflectivity.md#handoff",
         ],
         "tolerance_version": TOLERANCE_VERSION,
-        "tolerance_policy_sha256": hashlib.sha256(tolerance_json.encode()).hexdigest(),
+        "tolerance_policy_sha256": _canonical_json_sha256(TOLERANCES),
         "tolerances": TOLERANCES,
         "checks": checks,
         "classifications": classifications,
