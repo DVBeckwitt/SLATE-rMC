@@ -6,14 +6,74 @@ Build the smallest cohesive numerical core that produces scientifically correct 
 results and supports staged geometry, mosaic, ordered-intensity, and stacking-disorder fitting
 without duplicating physics.
 
-Correct declared outputs outrank legacy parity, implementation style, language, or processor.
+Correct declared outputs come first. Subject to correctness, the code must be Pythonic,
+lightweight, optimized, and free of development residue.
+
+## Non-negotiable code qualities
+
+### 1. Pythonic
+
+- Write clear, conventional Python that another scientist can read without reverse engineering.
+- Prefer small pure functions, explicit data flow, typed dataclasses, narrow protocols, `pathlib`,
+  context managers, and informative exceptions.
+- Use NumPy idioms for array work. Keep scalar equations readable and batch them without changing
+  their meaning.
+- Prefer composition over inheritance. Avoid metaprogramming, dynamic registries, magic dispatch,
+  clever decorators, hidden mutation, and unnecessary class hierarchies.
+- Use explicit names that include frame, unit, measure, or ordering where ambiguity is possible.
+- Do not hide scientific state in closures, singletons, module globals, or implicit object mutation.
+
+### 2. Lightweight
+
+- Implement the smallest API and the fewest modules needed for the accepted result.
+- Add a dependency only when it removes more code and risk than it introduces. Record why it is
+  needed. Do not add frameworks for one feature.
+- Do not add plugin systems, generic backend layers, service containers, registries, compatibility
+  facades, serialization frameworks, or abstraction layers without a demonstrated repeated need.
+- Avoid one-line wrapper functions and classes that only rename another object.
+- Keep optional functionality out of the import path and out of the core dependency set.
+- One equation, convention, or transformation has one authoritative implementation.
+
+### 3. Optimized
+
+- Optimize the mathematical work before optimizing syntax or choosing a processor.
+- Avoid unnecessary searches, repeated transforms, repeated structure calculations, redundant
+  interpolation, and materialization of large Cartesian products.
+- Batch and vectorize regular work, minimize allocations and copies, use contiguous arrays where
+  useful, and reuse immutable compiled state.
+- Keep a transparent proof path. An optimized path must reproduce the accepted observable within
+  the frozen tolerance and must be benchmarked against equivalent work.
+- Profile before adding specialized acceleration. Optimize measured bottlenecks, not presumed ones.
+- Do not sacrifice deterministic proof, numerical stability, or debuggability for an unmeasured
+  micro-optimization.
+
+### 4. No bloat or leftovers
+
+- Production modules contain no embedded tests, `__main__` demos, scratch harnesses, debug prints,
+  diagnostic writers, commented-out alternatives, abandoned implementations, or generated output.
+- Before handoff, delete temporary scripts, exploratory notebooks, one-off fixtures, duplicate
+  helpers, obsolete adapters, benchmark dumps, and tests that no longer protect a unique behavior.
+- Permanent tests are retained only when they protect a distinct scientific invariant, public
+  contract, accepted legacy comparison, or end-to-end integration boundary.
+- Do not keep tests of private implementation details, duplicate parameterizations of the same
+  equation, or large snapshot collections. Replace obsolete tests when behavior is replaced.
+- Temporary tests may be used while developing, but they must be removed before the branch moves on
+  unless they meet the permanent-test rule above.
+- Every committed file must be required by the production package, the compact permanent proof
+  suite, the tracked examples, or the project documentation.
+- No unresolved `TODO`, `FIXME`, temporary feature flag, dead branch, or unused dependency may
+  remain in touched code at handoff.
+
+"No leftover tests" does not mean removing the minimum permanent regression suite. It means removing
+exploratory, redundant, obsolete, and implementation-detail tests once their purpose is complete.
 
 ## Read before editing
 
 Read `docs/SCOPE_AND_PHASES.md`, `docs/CONVENTIONS.md`, `docs/OSC_COORDINATES.md`,
 `docs/RESULT_MEASURE.md`, `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`,
 `docs/DOVETAIL_MATRIX.md`, the assigned task, its referenced rows in `docs/PHYSICS_LEDGER.md`,
-`docs/TRACE_SCHEMA.md`, `docs/VALIDATION.md`, `docs/ERROR_INJECTION.md`, `docs/EXAMPLES.md`, and `reference/README.md`.
+`docs/TRACE_SCHEMA.md`, `docs/VALIDATION.md`, `docs/ERROR_INJECTION.md`, `docs/EXAMPLES.md`, and
+`reference/README.md`.
 
 For Codex worktrees, also read `WORKTREE_LAUNCH.md`, `docs/CODEX_EXECUTION.md`,
 `tasks/OVERNIGHT_RUNBOOK.md`, and the assigned prompt.
@@ -42,11 +102,10 @@ sufficient proof.
 - No mutable globals, hidden caches, import-time computation, or import-time device setup.
 - No hidden normalization, reflection pruning, fabricated reflections, sentinel overloading, or
   silent fallbacks.
-- Never import or execute the tracked original-RASIM snapshot from production code or permanent tests.
+- Never import or execute the tracked original-RASIM snapshot from production code or permanent
+  tests.
 - Never copy legacy modules wholesale. Reimplement the selected equations behind the new contracts.
-- Do not add backend, plugin, registry, compatibility, or abstraction frameworks without a
-  measured need.
-- Production modules contain no embedded tests, demo harnesses, or debug output.
+- Prefer deleting unnecessary code over maintaining it.
 
 ## Coordinates and OSC data
 
@@ -93,10 +152,13 @@ insufficient rather than editing protected files or weakening proof.
 
 ## Proof budget
 
-Every branch provides analytic/invariant proof, an independent oracle where specified, tracked
+Every branch provides analytic or invariant proof, an independent oracle where specified, tracked
 reference comparison, first-divergence evidence for corrections, convergence, wall time, peak
-memory, and assigned error-injection detection. Keep the permanent suite compact. Large sweeps,
-images, profiling, and legacy traces are not permanent tests.
+memory, and assigned error-injection detection.
+
+Keep the permanent suite compact. Large sweeps, full images, profiling runs, generated diagnostics,
+and legacy traces are proof artifacts, not permanent tests. Before handoff, review every test added
+by the branch and retain only those that protect a unique long-term failure mode.
 
 ## Diagnostics
 
@@ -104,8 +166,20 @@ Diagnostics are disabled by default. No diagnostic output may be written under t
 root. A retained diagnostic is exactly one external `.ra_diag.npz` containing numeric arrays and
 one JSON manifest. No sidecars or diagnostic directories.
 
-## Handoff
+## Handoff gate
 
-End a branch with one coherent commit and a handoff containing commit SHA, proof state, public
-APIs, legacy classifications, first divergences, convergence, benchmark, peak memory, limitations,
-and minimum integration requests. End the Codex response with exactly `READY` or `BLOCKED`.
+Before committing the branch result:
+
+- Remove temporary tests, scratch files, debug output, dead code, commented alternatives, unused
+  imports, unused dependencies, and generated files.
+- Confirm every retained test protects a unique long-term invariant or interface.
+- Run formatting, linting, type checks where configured, the compact permanent test suite, assigned
+  proof commands, and the branch benchmark.
+- Confirm the optimized and proof paths agree within the frozen tolerance.
+- Confirm `git status --short` contains only the intended branch changes before the final commit and
+  is clean afterward.
+
+End a branch with one coherent commit and a handoff containing commit SHA, proof state, public APIs,
+legacy classifications, first divergences, convergence, benchmark, peak memory, limitations, the
+permanent tests retained and why, and minimum integration requests. End the Codex response with
+exactly `READY` or `BLOCKED`.
