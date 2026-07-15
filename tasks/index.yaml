@@ -5,12 +5,12 @@ tasks:
   - id: T00
     file: tasks/00_bootstrap.md
     branch: chore/bootstrap
-    status: NS
+    status: READY
     depends_on: []
   - id: T01
     file: tasks/01_reference_verification.md
     branch: chore/original-characterization
-    status: NS
+    status: READY
     depends_on: [T00]
   - id: T02
     file: tasks/02_geometry_optics.md

@@ -9,12 +9,36 @@ Implement T04 completely in this worktree. Produce raw complex structure amplitu
 
 Before editing:
 
-```bash
+```powershell
+$ErrorActionPreference = "Stop"
+$expectedBranch = "feat/ordered-reflectivity"
+
+if ([string]::IsNullOrWhiteSpace($env:PROOF_BASE_SHA)) {
+    throw "PROOF_BASE_SHA must name the verified proof-base commit."
+}
+$expectedSha = $env:PROOF_BASE_SHA.Trim()
+$actualBranch = (git branch --show-current).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Unable to read the current branch." }
+if ($actualBranch -ne $expectedBranch) {
+    throw "Expected branch $expectedBranch; found $actualBranch."
+}
+$actualSha = (git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Unable to read HEAD." }
+if ($actualSha -ne $expectedSha) {
+    throw "Expected HEAD $expectedSha; found $actualSha."
+}
+$status = @(git status --porcelain)
+if ($LASTEXITCODE -ne 0) { throw "Unable to read Git status." }
+if ($status.Count -ne 0) { throw "Worktree must be clean before setup." }
+
 uv sync --frozen --group dev
-python scripts/verify_seed.py
-python -m rasim_next.proof references --json
-test -z "$(git status --porcelain)"
-if test -z "$(git branch --show-current)"; then git switch -c feat/ordered-reflectivity; fi
+if ($LASTEXITCODE -ne 0) { throw "uv sync failed." }
+uv run --frozen --group dev python scripts/verify_seed.py
+if ($LASTEXITCODE -ne 0) { throw "Seed verification failed." }
+uv run --frozen --group dev python -m rasim_next.proof core --json
+if ($LASTEXITCODE -ne 0) { throw "Core proof failed." }
+uv run --frozen --group dev python -m rasim_next.proof references --json
+if ($LASTEXITCODE -ne 0) { throw "Reference proof failed." }
 ```
 
 Record the starting `HEAD` as the branch proof-base SHA. It must be identical across all four worktrees.

@@ -4,3 +4,11 @@
 *.osc.gz binary
 *.cif text eol=lf
 *.poni text eol=lf
+
+reference/legacy_source/** -text -diff
+reference/manuscript/** -text -diff
+examples/bi2se3/structures/** -text -diff
+examples/bi2se3/reference/** -text -diff
+examples/bi2se3/observations/** -text -diff
+examples/calibration/hbn/*.poni -text -diff
+examples/pbi2/structures/** -text -diff
