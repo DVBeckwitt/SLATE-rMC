@@ -88,22 +88,70 @@ Stop `BLOCKED` if one shared contract cannot represent the synthetic full path w
 
 ## Execution plan
 
-State: NS
+State: READY
+
+Evidence:
+
+- Owned paths are those listed above; all physics domains, `measurement/`, `render/`, `pipeline/`,
+  tracked evidence, schemas, root contracts, and other tasks are forbidden.
+- Cover PHY-IO-003 through PHY-IO-005, PHY-SRC-005, PHY-REC-009, PHY-MEA-001, and PHY-PHA-002.
+  Inspect only the tracked OSC source location and `osc.synthetic.non_square`; implement no physics.
+- Retain one implementation each of the rigid transform, complex normal branch, scalar interface
+  amplitude, clockwise OSC mapping, T02--T05 boundary dataclasses, trace comparator, external
+  diagnostic writer, proof dispatcher, and one no-physics event flow.
+- Prove transform identities, direct clockwise enumeration, dispersion/decay signs, equal-medium
+  amplitude, event-ID/factor conservation, and first-stage detection for the assigned mutations.
+- Done requires the frozen environment and every T00 command to pass, one compact permanent test
+  module, no subsystem code or unused scaffolding, and a clean coherent commit.
+
+Commands run:
+
+- `uv sync --frozen --group dev`
+- `uv run --frozen --group dev python -m compileall -q src tests tools`
+- `uv run --frozen --group dev ruff check src tests tools`
+- `uv run --frozen --group dev pytest -q tests/test_core_coordinates.py`
+- `uv run --frozen --group dev python -m rasim_next.proof core --json`
+- `uv run --frozen --group dev python -m rasim_next.proof references --json --allow-missing-pack`
+- `uv run --frozen --group dev python tools/check_docs.py`
+- `git diff --check`
+
+Remaining work:
+
+- None for T00.
+
+Contract or dependency issue:
+
+- None. The lock resolves from public package indexes; SciPy is transitive through XrayDB, not a
+  direct runtime dependency.
 
 ## Handoff
 
-Status:
+Status: READY
 
-Commit SHA:
+Commit SHA: this handoff is committed with the T00 implementation; the immutable proof-base SHA is
+recorded after T01.
 
-Contract API version:
+Contract API version: 4
 
-Trace schema version:
+Trace schema version: 4
 
 Proof summary:
 
-Dependencies and lock hash:
+- Four focused tests pass for the coordinate, transform, shared-wave, contract-flow, trace, and
+  external diagnostic requirements.
+- The synthetic one-event flow preserves its stable event ID and applies each of eight declared
+  factors exactly once. It includes no subsystem physics.
+- All seven assigned T00 mutations are detected at their named first divergent stage.
+- Five proof runs took 0.290408 s total (58.082 ms mean); traced peak memory was 2,426,246 bytes.
+
+Dependencies and lock hash: NumPy, Gemmi, and XrayDB at runtime; pytest and Ruff for development;
+`uv.lock` SHA-256 `71ae0bfcd7b8c59006191d45f84521497a8866f003fe05a078ce7f3fff8e4394`.
 
 Known limitations:
 
-Contract requests:
+- No geometry, Ewald, structure, reflectivity, stacking, rendering, or fitting implementation is
+  present.
+- Per the launch-scope correction, deposition remains proof-local; no speculative T07 public
+  contract is part of the four-worktree interface.
+
+Contract requests: none.
