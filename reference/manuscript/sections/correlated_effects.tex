@@ -1,0 +1,229 @@
+\subsection{Bandwidth-Related Effects}
+\label{sec:correlated_effects}
+\label{sec:refraction}
+\label{sec:bandwidth_mosaic_cap}
+
+The anomalous intensity along \(2\theta\) for the \(m=0\), \(L=3\) feature in Fig.~\ref{fig:hk0_low_l_star} can be explained by the bandwidth forming an Ewald shell on a much smaller Bragg sphere. In this
+regime the measured intensity is not set by an external Ewald-sphere
+intersection alone. 
+
+For each sampled wavelength
+\(\lambda_j\), with spectral weight \(w_j\), the model evaluates
+\begin{equation}
+  k_0(\lambda_j)=\frac{2\pi}{\lambda_j},
+  \qquad
+  \tilde n(\lambda_j)
+  =
+  1-\delta_n(\lambda_j)+i\beta_n(\lambda_j).
+  \label{eq:n_complex_lambda_main}
+\end{equation}
+Here \(\delta_n\) is the refractive decrement that shifts the internal phase
+velocity, and \(\beta_n\) is the absorptive correction that gives the finite
+penetration depth. The real decrement may be estimated from the electron
+density \(\rho_e\) and classical electron radius \(r_e\), while the imaginary
+term is the wavelength-dependent optical input used directly by the complex
+wavevector calculation:
+\begin{equation}
+  \delta_n(\lambda_j)
+  =
+  \frac{r_e\lambda_j^2\rho_e}{2\pi},
+  \qquad
+  \beta_n(\lambda_j)
+  =
+  \operatorname{Im}\{\tilde n(\lambda_j)\}.
+  \label{eq:delta_beta_lambda_main}
+\end{equation}
+Thus bandwidth changes both the Ewald-sphere radius and the optical constants
+that determine refraction and attenuation.
+For an incident wavevector in air, the grazing angle and azimuth are
+\begin{equation}
+  \sin\theta_i
+  =
+  \frac{k_{i,z}}{k_0(\lambda_j)},
+  \qquad
+  \tan\varphi_i
+  =
+  \frac{k_{i,x}}{k_{i,y}}.
+  \label{eq:incident_angles_lambda_main}
+\end{equation}
+
+The transmitted angle and internal wavevector scale are
+\begin{align}
+  \theta_t(\lambda_j)
+  &=
+  \cos^{-1}\!\left[
+  \frac{\cos\theta_i}{\operatorname{Re}\{\tilde n(\lambda_j)\}}
+  \right],\\
+  k'(\lambda_j)
+  &=
+  k_0(\lambda_j)
+  \left[\operatorname{Re}\{\tilde n(\lambda_j)^2\}\right]^{1/2}.
+  \label{eq:theta_kprime_lambda_main}
+\end{align}
+The in-plane internal components are fixed by \(\theta_t\) and \(\varphi_i\).
+The remaining surface-normal component is complex. Using the closed-form
+solution of the \(a+i b\) decomposition, define
+\begin{align}
+  a_t(\lambda_j)
+  &=
+  k'(\lambda_j)^2\sin^2\theta_t(\lambda_j),\\
+  b(\lambda_j)
+  &=
+  k_0(\lambda_j)^2
+  \operatorname{Im}\{\tilde n(\lambda_j)^2\}.
+  \label{eq:at_b_lambda_main}
+\end{align}
+Then
+\begin{align}
+  \operatorname{Re}\{k_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_t(\lambda_j)^2+b(\lambda_j)^2}+a_t(\lambda_j)}{2}
+  \right]^{1/2},\\
+  \operatorname{Im}\{k_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_t(\lambda_j)^2+b(\lambda_j)^2}-a_t(\lambda_j)}{2}
+  \right]^{1/2}.
+  \label{eq:ktz_solution_lambda_main}
+\end{align}
+The branch is chosen so that \(\operatorname{Im}\{k_{t,z}\}\ge 0\), giving a
+decaying wave inside the film. The same result is applied to the outgoing
+internal wavevector using the scattered internal angle. Optical reversibility
+then refracts the scattered ray back into air. The algebraic derivation and the
+interface transmission factors are given in the Supporting Information.
+
+The imaginary normal components set the propagation loss. For each accepted
+candidate, define
+\begin{equation}
+  \kappa_i(\lambda_j)
+  =
+  \operatorname{Im}\{k_{t,z}(\lambda_j)\},
+  \qquad
+  \kappa_f(\lambda_j)
+  =
+  \operatorname{Im}\{k'_{t,z}(\lambda_j)\} .
+  \label{eq:kappa_if_lambda_main}
+\end{equation}
+If \(L_{\mathrm{in}}\) and \(L_{\mathrm{out}}\) are the entry and exit
+propagation lengths used for that candidate, the absorption/evanescence weight
+is
+\begin{equation}
+  A_{\mathrm{prop}}(\lambda_j)
+  =
+  \exp\!\left[
+  -2\kappa_i(\lambda_j)L_{\mathrm{in}}(\lambda_j)
+  -2\kappa_f(\lambda_j)L_{\mathrm{out}}(\lambda_j)
+  \right].
+  \label{eq:imkz_pathlength_weight_main}
+\end{equation}
+This is the form used by the simulation: the path lengths set how far the wave
+propagates in the film, and the imaginary parts of the internal normal
+wavevectors set the damping per unit length. For a uniformly scattering film of thickness \(t\),
+this may be written as a depth average,
+\begin{equation}
+  \bar A_{\mathrm{prop}}(\lambda_j)
+  =
+  \frac{1}{t}\int_0^t
+  \exp\!\left[-2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)\zeta\right]
+  d\zeta
+  =
+  \frac{
+  1-
+  \exp\!\left[-2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)t\right]}
+  {2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)t}.
+  \label{eq:absorption_lambda_main}
+\end{equation}
+This attenuation is multiplied by the entrance and exit transmission factors and
+the structure-factor intensity.
+
+The detector image is therefore an incoherent sum over wavelength samples,
+\begin{equation}
+  I_{\mathrm{det}}(x,y)
+  =
+  \sum_j
+  w_j\,
+  I_{\mathrm{det}}
+  \!\left[
+  x,y;
+  \lambda_j,
+  \tilde n(\lambda_j)
+  \right].
+  \label{eq:detector_sum_lambda_main}
+\end{equation}
+The bandwidth has two roles: it thickens the reciprocal-space intersection
+through \(k_0(\lambda_j)\), and it changes the refracted wave through
+\(\tilde n(\lambda_j)\). 
+
+For the \(00L\) family, \(G_{00L}=2\pi L/c\). A fixed wavelength spread gives
+an effective Ewald-shell thickness, and its angular overlap with the
+mosaic-populated Bragg cap scales approximately as \(1/L\). Low-\(L\) Bragg
+spheres therefore retain overlap with the mosaic cap over a broader range of
+incident-angle detuning than high-\(L\) Bragg spheres. The long mosaic tail
+supplies the tilted crystallites, while wavelength-dependent refraction and
+attenuation determine how much of that intensity reaches the detector.
+
+\begin{figure}[H]
+  \centering
+
+  \begin{minipage}[t]{0.48\linewidth}
+    \centering
+    \draftfigureplaceholder{figures/mosaic/special_cause_reciprocal_matrix_ratio_scaled.png}{%
+      Bragg-sphere size comparison for \(L=3,6,9\), showing how a fixed
+      wavelength bandwidth maps to a larger angular band for smaller \(L\).
+    }
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.48\linewidth}
+    \centering
+    \draftfigureplaceholder{figures/mosaic/with_ewald.png}{%
+      Ewald sphere with finite bandwidth thickness intersecting the mosaic cap
+      of a low-\(L\) \(00L\) Bragg sphere.
+    }
+  \end{minipage}
+
+  \caption[Bandwidth-related effects for the low-L feature]{Bandwidth-related effects for the low-\(L\)
+  \(m=0\) feature. The wavelength distribution changes both the Ewald-sphere
+  radius and the refractive index used to calculate the internal wavevector.
+  Because \(G_{00L}\propto L\), a fixed bandwidth samples a larger angular
+  fraction of low-\(L\) Bragg spheres than high-\(L\) Bragg spheres.}
+  \label{fig:correlated_bragg_sphere_size_series}
+\end{figure}
+
+\subsection{Reflectivity}
+\label{sec:reflectivity}
+
+The bright near-origin \(m=0\) intensity in Fig.~\ref{fig:hk0_low_l_star} lies in the near-critical specular region.
+
+The specular-family profiles in this near-critical region are calculated with an
+optical-to-kinematic handoff. The low-\(Q_z\) branch is calculated with a Parratt
+multilayer reflectivity recursion, which retains refraction, evanescence, and
+multiple reflection at the film interfaces.\cite{Parratt1954} At larger
+\(Q_z/Q_c\), where critical-angle corrections become small, this optical branch
+is matched to a normalized finite-stack kinematic term. In the calculation, the
+two limits are joined with a smooth log-intensity blend over the region where
+they agree. Figure~\ref{fig:parratt_handoff} overlays the measured near-critical
+\(m=0\) profile with the Parratt and kinematic limiting calculations on the same
+axes, while omitting the internal blended curve. The direct overlay shows which
+limit describes each part of the measured profile and where the two calculated
+branches converge. This construction prevents near-critical specular intensity
+from being treated as ordinary high-\(Q_z\) kinematic scattering while
+preserving the finite-stack modulation that controls the higher-\(L\) rod
+profile. Details of the recursion, scale estimate, and blend criterion are
+provided in the Supporting Information.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\linewidth]{figures/correlated_effects/fig_reflectivity_data_parratt_kinematic.png}
+  \caption[Measured profile overlaid with Parratt and kinematic calculations]{Measured
+  near-critical Bi$_2$Se$_3$ \(m=0\) profile overlaid with the two limiting
+  calculations used by the optical-to-kinematic handoff. The solid black curve
+  is the background-subtracted detector-derived data, the dotted curve is the
+  Parratt reflectivity calculation, and the dashed curve is the finite-stack
+  kinematic calculation. All three are shown on the same normalized-intensity
+  axis over \(0.2\leq L\leq 1.05\), before the \(003\) peak. The common overlay
+  makes the low-\(L\) optical regime and the convergence of the calculated
+  branches toward the measured high-\(L\) tail directly visible. The smoothly
+  blended curve used internally by the model is omitted.}
+  \label{fig:parratt_handoff}
+\end{figure}

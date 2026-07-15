@@ -1,0 +1,55 @@
+schema_version = "rasim-example-bi2se3-v1"
+description = "Sanitized Bi2Se3 detector-native example derived from supplied legacy settings."
+
+[source]
+wavelength_angstrom = 1.540592925
+bandwidth_fraction = 0.007
+divergence_fwhm_rad = 0.0008726646259971648
+
+[detector]
+rows = 3000
+columns = 3000
+pixel_pitch_row_m = 1.0e-4
+pixel_pitch_column_m = 1.0e-4
+distance_m = 0.075
+center_column_px = 1453.12
+center_row_px = 1596.422
+
+[sample]
+theta_initial_rad = 0.20943951023931953
+cor_angle_rad = 0.0
+chi_rad = 0.0
+psi_rad = 0.0
+psi_z_rad = 0.0
+surface_offset_m = 0.0
+beam_offset_m = 0.0
+width_m = 0.0
+length_m = 0.0
+optical_thickness_angstrom = 500.0
+
+[crystal]
+cif = "../structures/Bi2Se3_legacy.cif"
+a_angstrom = 4.143
+c_angstrom = 28.636
+
+[mosaic]
+gaussian_fwhm_rad = 0.017453292519943295
+lorentzian_fwhm_rad = 0.008726646259971648
+lorentzian_fraction = 0.0
+
+[measurements]
+osc_files = [
+  "../osc/Bi2Se3_5m_5d.osc.gz",
+  "../osc/Bi2Se3_10d_5m.osc.gz",
+  "../osc/Bi2Se3_15d_5m.osc.gz",
+]
+incidence_angles_rad = [
+  0.08726646259971647,
+  0.17453292519943295,
+  0.20943951023931953,
+]
+
+[legacy_provenance]
+background_backend_rotation_k = 3
+legacy_center_x_meant_native_row_px = 1596.422
+legacy_center_y_meant_native_column_px = 1453.12

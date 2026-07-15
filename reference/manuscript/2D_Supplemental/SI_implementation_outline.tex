@@ -1,0 +1,127 @@
+% Supporting-information outline for implementation details moved out of the main text.
+% This file is not yet assembled into the SI PDF. It records the intended SI content
+% so that the main manuscript can remain physics-first.
+
+\section{Implementation details for the detector-space calculation}
+
+The main text describes the calculation in reciprocal-space and detector-space language. The numerical implementation uses $2\theta$--$\phi$ remapping and caked intensity fields for efficiency, but those coordinates do not change the physical comparison. The same reciprocal-space trajectories and projection regions are applied to the measured and calculated images.
+
+\subsection{Mosaic surface density}
+
+The out-of-plane mosaic line density $\omega(\Delta\theta)$ is evaluated as a wrapped Gaussian-plus-Lorentzian distribution. After random in-plane rotation about the film normal, the line density becomes an axially symmetric density on the Bragg sphere. For a reflection with $G=|\mathbf G|$, polar angle $\vartheta$, and Bragg position $\vartheta_B$, the normalized surface density used for ray weights is
+\begin{equation}
+\rho(\vartheta)=\frac{I_0}{2\pi G^2\sin\vartheta}\,\omega(\vartheta-\vartheta_B),\qquad 0<\vartheta<\pi.
+\end{equation}
+The $1/\sin\vartheta$ term is the Jacobian for converting the one-dimensional tilt density into a surface density.
+
+
+
+\subsection{Coordinate remapping, projected profiles, and uncertainty propagation}
+
+The detector image remains the primary data object. The $2\theta$--$\phi$ representation is an overlap-weighted remapping used to evaluate fixed-$m$ or fixed-$Q_r$ trajectory masks and projected $Q_z$ or $L$ profiles. It is not treated as an independent measurement. The same remapping, masks, and profile extraction are applied to measured and calculated detector images.
+
+The caked image is constructed with a sparse detector-to-cake operator
+\begin{equation}
+M\in \mathbb{R}^{B\times P},
+\end{equation}
+where $P$ is the number of detector pixels, $B$ is the number of caked bins, and $M_{bk}$ is the fractional overlap weight from detector pixel $k$ into caked bin $b$. For detector signal $s_k$ and normalization $n_k$,
+\begin{equation}
+S_b=\sum_k M_{bk}s_k,
+\qquad
+N_b=\sum_k M_{bk}n_k,
+\qquad
+I_b=\frac{S_b}{N_b},
+\end{equation}
+for bins with $N_b>0$. Signal and normalization are therefore accumulated before division. This prevents a projected profile from becoming a sum of already normalized pixels and keeps the observable tied to the detector-space calibration.
+
+For each remapped bin, the calibrated detector and sample geometry define a scattering vector $\mathbf Q$. The coordinates used to label selected trajectories are
+\begin{equation}
+Q_r=|\mathbf Q_{\parallel}|,
+\qquad
+Q_z=\mathbf Q\cdot \hat{\mathbf n},
+\qquad
+L=\frac{Q_z}{|\mathbf c^{*}|}=\frac{Q_z c}{2\pi},
+\end{equation}
+where $\hat{\mathbf n}$ is the film normal. A selected fixed-$Q_r$ or fixed-$m$ family is retained when
+\begin{equation}
+|Q_r-Q_{r,0}|\le \Delta Q_r,
+\qquad
+Q_{z,\min}\le Q_z\le Q_{z,\max}.
+\end{equation}
+This region is simple in the physical $Q_r$--$Q_z$ description but appears curved in the displayed $2\theta$--$\phi$ map because the coordinate transformation is nonlinear. The curved shape is therefore a consequence of the projection, not an additional physical model.
+
+For a selected profile coordinate $\ell$, let $r_{\ell b}$ be the mask or interpolation weight that assigns caked bin $b$ to that profile point. The profile is
+\begin{equation}
+I_{\ell}^{\mathrm{ROI}}=
+\frac{\sum_b r_{\ell b}S_b}
+     {\sum_b r_{\ell b}N_b}
+=
+\frac{\sum_k a_{\ell k}s_k}
+     {\sum_k a_{\ell k}n_k},
+\qquad
+ a_{\ell k}=\sum_b r_{\ell b}M_{bk}.
+\end{equation}
+Each point in the plotted profile is therefore an average over a finite detector-space band. Its coordinate may be labeled by $Q_z$ or $L$, but the point represents a resolution-limited projection rather than the intensity at one exact reciprocal-space coordinate.
+
+The transformed-coordinate uncertainty has two parts: uncertainty in the coordinate label and uncertainty in the rebinned intensity. The coordinate-label uncertainty follows from the finite detector-pixel footprint and from uncertainty in the detector calibration. For square detector pixels with pitch $p$, detector distance $d$, and $t=2\theta$, the leading flat-detector terms are
+\begin{equation}
+\sigma_{2\theta,\mathrm{pix}}(t)=
+\frac{p\cos^{2}t}{\sqrt{12}\,d},
+\qquad
+\sigma_{\phi,\mathrm{pix}}(t)=
+\frac{p}{\sqrt{12}\,d\tan t}.
+\end{equation}
+The radial term is finite and largest near the direct beam. The azimuthal term scales as $1/\tan(2\theta)$, so the problematic regime is confined to the near-specular, low-$2\theta$ region where azimuth is poorly conditioned.
+
+For the $d=75$ mm and $p=300\,\mu\mathrm{m}$ geometry used in the uncertainty calculation, the maximum radial coordinate uncertainty is approximately $0.066^{\circ}$. The azimuthal coordinate uncertainty falls below $1^{\circ}$ above $2\theta\approx3.8^{\circ}$, below $0.5^{\circ}$ above $2\theta\approx7.5^{\circ}$, and below $0.25^{\circ}$ above $2\theta\approx14.9^{\circ}$. More generally, the threshold for a target azimuthal width $w_{\phi}$ is
+\begin{equation}
+2\theta_{\mathrm{crit}}=\arctan\!\left(\frac{p}{\sqrt{12}\,d\,w_{\phi}}\right),
+\end{equation}
+with $w_{\phi}$ expressed in radians.
+
+Additional calibration uncertainty can be propagated with the usual Jacobian form. If the uncertain geometry parameters are collected in $\mathbf g$ with covariance matrix $\Sigma_g$, then
+\begin{equation}
+\sigma^2_{2\theta,\mathrm{cal}}=
+J_{2\theta}\Sigma_gJ_{2\theta}^{\mathsf T},
+\qquad
+\sigma^2_{\phi,\mathrm{cal}}=
+J_{\phi}\Sigma_gJ_{\phi}^{\mathsf T}.
+\end{equation}
+If the displayed bin-center label is also treated as uncertain, the finite bin width contributes
+\begin{equation}
+\sigma^2_{2\theta,\mathrm{bin}}=\frac{\Delta(2\theta)^2}{12},
+\qquad
+\sigma^2_{\phi,\mathrm{bin}}=\frac{\Delta\phi^2}{12}.
+\end{equation}
+These coordinate terms describe the uncertainty of the transformed axis value. They are separate from intensity uncertainty.
+
+The intensity uncertainty is inherited from the detector through the same overlap weights used to construct the caked image and the projected profile. If $v_k$ is the detector-pixel variance and the detector-pixel variances are independent, then
+\begin{equation}
+\mathrm{Var}\!\left(I_{\ell}^{\mathrm{ROI}}\right)=
+\frac{\sum_k a_{\ell k}^{2}v_k}
+     {\left(\sum_k a_{\ell k}n_k\right)^2}.
+\end{equation}
+If overlapping interpolation weights are used, neighboring profile points can be statistically correlated. The corresponding covariance is
+\begin{equation}
+\mathrm{Cov}\!\left(I_{\ell}^{\mathrm{ROI}},I_{q}^{\mathrm{ROI}}\right)=
+\frac{\sum_k a_{\ell k}a_{qk}v_k}
+     {\left(\sum_k a_{\ell k}n_k\right)
+      \left(\sum_k a_{qk}n_k\right)}.
+\end{equation}
+Thus the same weights that define the projected profile also propagate the detector-pixel variance. The covariance between neighboring projected points is neglected in the present line-shape comparison unless formal profile error bars are required.
+
+The displayed coordinate for a projected point can be represented by the same finite-band weighting. For example,
+\begin{equation}
+\bar L_{\ell}=\frac{\sum_b r_{\ell b}N_bL_b}{\sum_b r_{\ell b}N_b},
+\qquad
+\sigma^2_{L,\ell}=\frac{\sum_b r_{\ell b}N_b(L_b-\bar L_{\ell})^2}{\sum_b r_{\ell b}N_b},
+\end{equation}
+before adding calibration, incidence-angle, wavelength, divergence, and mosaic contributions. This width is a projection and resolution effect. It is not a counting-statistical error bar.
+
+These projection uncertainties are coupled to model-parameter correlations. Peak positions are sensitive to detector distance, beam center, detector tilt, sample height, and incidence angle. Profile widths are sensitive to both beam divergence and the Gaussian mosaic core. Weak off-condition and low-$L$ intensities are sensitive to wavelength bandwidth, background, and the Lorentzian mosaic tail. Relative integrated intensities are sensitive to scale, footprint, absorption, thickness, and structure-factor parameters. The staged workflow separates these effects by fixing or constraining the parameters tied to peak position before fitting profile widths, and by fixing the geometry and mosaic state before interpreting ordered intensities.
+
+The practical consequences are: (i) the $2\theta$--$\phi$ and $Q_r/Q_z$ profiles are controlled projections of the detector image, not independent ideal reciprocal-space scans; (ii) transformed-coordinate uncertainty is concentrated near the low-angle/specular region; (iii) intensity variance is propagated through the same overlap weights used for caking and profile extraction; and (iv) the strongest remaining systematic coupling occurs near low $L$, where direct-beam background, bandwidth, divergence, incidence angle, and the Lorentzian mosaic tail contribute to the same detector-space feature.
+
+\subsection{Monte Carlo sampling}
+
+Beam position, divergence, wavelength spread, and mosaic events are sampled probabilistically for computational efficiency. This replaces a dense grid over the same phase space without changing the physical model used to generate the detector image. Monte Carlo sampling introduces numerical integration uncertainty separate from detector counting uncertainty. That contribution can be estimated by repeating the calculation with different random seeds or by increasing the event count until changes in the projected profiles are small compared with the measured residuals. In the present comparison it is treated as a numerical approximation to the same forward model, not as an additional physical broadening term.

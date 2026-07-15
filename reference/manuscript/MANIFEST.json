@@ -1,0 +1,51 @@
+{
+  "files": [
+    {
+      "path": "2D_Supplemental/SI_failure_modes.tex",
+      "sha256": "3fecd6b2b9b38096e2b617e76a32780298d380df9043a05ff1690646653091f7",
+      "size_bytes": 50200
+    },
+    {
+      "path": "2D_Supplemental/SI_implementation_outline.tex",
+      "sha256": "4731547873aedb4f14719654db2df7d9738488056bc94365bb861573f325dd60",
+      "size_bytes": 9842
+    },
+    {
+      "path": "2D_Supplemental/SI_ordered_structure_parameters.tex",
+      "sha256": "a497d8d0b103c8d7a64ac6f7485866bdaed3b317c4f63f06be70862b24ace6a8",
+      "size_bytes": 2258
+    },
+    {
+      "path": "sections/correlated_effects.tex",
+      "sha256": "d0a6bbcc4c955cd02842b00a60894414fabcb7245a7ad52e0480e01395dd9ab7",
+      "size_bytes": 9042
+    },
+    {
+      "path": "sections/modelling_methods.tex",
+      "sha256": "cb03b383046f6a675b0d401c45f11d7c27ca9e7dc0a3418de650329b521c3165",
+      "size_bytes": 6190
+    },
+    {
+      "path": "sections/mosaicity_texture.tex",
+      "sha256": "d1303849738968f8eda30449f15a35e3bce6947fb3ec74d504b1620359c202fc",
+      "size_bytes": 6218
+    },
+    {
+      "path": "sections/refinement_workflow.tex",
+      "sha256": "c407a9c8477d15a0c0a49782cae2b9c1f8b715c9a71ff9f68d4195a7fdc190b7",
+      "size_bytes": 6579
+    },
+    {
+      "path": "sections/results_diffuse_pbi2.tex",
+      "sha256": "fe5aff2dc873b8414d5f1a8f2b3e7d5ffeeb4e19e91ca32d0fc082a73035ff2b",
+      "size_bytes": 17994
+    },
+    {
+      "path": "sections/results_ordered.tex",
+      "sha256": "a0e5fc42276bce05020c97f093664ca65b132e25c9370d7f8d543bd401e24b7d",
+      "size_bytes": 6979
+    }
+  ],
+  "manuscript_archive_sha256": "e9e1a51c6f5178b99af9a7d288fc74b05c781441bb61bad7f49ba30610b675ab",
+  "schema_version": "rasim-manuscript-snapshot-v1"
+}

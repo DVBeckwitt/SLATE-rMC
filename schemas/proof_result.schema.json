@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rasim-next.local/schemas/proof_result.schema.json",
+  "title": "RASIM Next task proof result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "status",
+    "base_sha",
+    "contract_version",
+    "trace_schema_version",
+    "reference_pack_sha256s",
+    "environment_sha256",
+    "checks",
+    "classifications",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "READY",
+        "BLOCKED",
+        "PASS",
+        "FAIL"
+      ]
+    },
+    "base_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "contract_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "trace_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "environment_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "owned_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "check_id",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "check_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "SKIP"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "classifications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "case_id",
+          "classification",
+          "ledger_ids"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "classification": {
+            "enum": [
+              "MATCH",
+              "CORRECTED",
+              "NO_ORACLE",
+              "UNRESOLVED"
+            ]
+          },
+          "ledger_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "first_divergence_stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "classification": {
+                  "const": "CORRECTED"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "first_divergence_stage"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": true
+      }
+    },
+    "convergence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "benchmark": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "contract_requests": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "reference_pack_sha256s": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rasim-selection-manifest-v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "geometry_hash",
+    "candidate_catalog_hash",
+    "associations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "rasim-selection-manifest-v1"
+    },
+    "geometry_hash": {
+      "type": "string"
+    },
+    "candidate_catalog_hash": {
+      "type": "string"
+    },
+    "associations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "observation_id",
+          "rod_id",
+          "h",
+          "k",
+          "l",
+          "qr_family_m",
+          "branch_id"
+        ],
+        "properties": {
+          "observation_id": {
+            "type": "string"
+          },
+          "rod_id": {
+            "type": "integer"
+          },
+          "h": {
+            "type": "integer"
+          },
+          "k": {
+            "type": "integer"
+          },
+          "l": {
+            "type": "integer"
+          },
+          "qr_family_m": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "branch_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

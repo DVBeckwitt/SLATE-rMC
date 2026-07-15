@@ -1,0 +1,84 @@
+schema_version: rasim-task-index-v3
+current_phase: forward_proof
+
+tasks:
+  - id: T00
+    file: tasks/00_bootstrap.md
+    branch: chore/bootstrap
+    status: NS
+    depends_on: []
+  - id: T01
+    file: tasks/01_reference_verification.md
+    branch: chore/original-characterization
+    status: NS
+    depends_on: [T00]
+  - id: T02
+    file: tasks/02_geometry_optics.md
+    branch: feat/geometry-optics
+    status: NS
+    depends_on: [T01]
+  - id: T03
+    file: tasks/03_mosaic_ewald.md
+    branch: feat/mosaic-ewald
+    status: NS
+    depends_on: [T01]
+  - id: T04
+    file: tasks/04_ordered_reflectivity.md
+    branch: feat/ordered-reflectivity
+    status: NS
+    depends_on: [T01]
+  - id: T05
+    file: tasks/05_stacking_transition.md
+    branch: feat/stacking-transition
+    status: NS
+    depends_on: [T01]
+  - id: T06
+    file: tasks/06_parallel_review.md
+    branch: review/parallel-proof
+    status: NS
+    depends_on: [T02, T03, T04, T05]
+  - id: T07
+    file: tasks/07_integration.md
+    branch: feat/integration
+    status: NS
+    depends_on: [T06]
+  - id: T08
+    file: tasks/08_selection_indexing.md
+    branch: feat/selection-indexing
+    status: FUTURE
+    depends_on: [T07]
+  - id: T09
+    file: tasks/09_fit_foundation.md
+    branch: feat/fit-foundation
+    status: FUTURE
+    depends_on: [T07]
+  - id: T10
+    file: tasks/10_instrument_calibration.md
+    branch: feat/instrument-calibration
+    status: FUTURE
+    depends_on: [T09]
+  - id: T11
+    file: tasks/11_sample_geometry_fit.md
+    branch: feat/sample-geometry-fit
+    status: FUTURE
+    depends_on: [T08, T10]
+  - id: T12
+    file: tasks/12_mosaic_fit.md
+    branch: feat/mosaic-fit
+    status: FUTURE
+    depends_on: [T11]
+  - id: T13
+    file: tasks/13_ordered_intensity_fit.md
+    branch: feat/ordered-intensity-fit
+    status: FUTURE
+    depends_on: [T12]
+  - id: T14
+    file: tasks/14_stacking_intensity_fit.md
+    branch: feat/stacking-intensity-fit
+    status: FUTURE
+    depends_on: [T13]
+  - id: T15
+    file: tasks/15_caking_qspace.md
+    branch: feat/caking-qspace
+    status: DEFERRED
+    depends_on: [T14]

@@ -1,0 +1,25 @@
+{
+  "fixture_role": "VESTA parity reference, not absolute physical truth",
+  "source_txt": "Bi2Se3_vesta_cu_ka1_dmin_0p7.txt",
+  "source_cif": "Bi2Se3.cif",
+  "vesta_version": "unknown_not_visible_in_export",
+  "radiation": "X-ray",
+  "line": "Cu Kalpha1",
+  "factor_convention": "VESTA Cu Kalpha1 legacy mode",
+  "inferred_lambda_angstrom": 1.540592925,
+  "lambda_inferred_from_txt_angstrom": 1.5405929254021151,
+  "lambda_rounding_balanced_for_twotheta_angstrom": 1.540592865402115,
+  "dmin_angstrom": 0.7,
+  "anomalous_dispersion_setting": "unknown_not_visible_in_export",
+  "thermal_factor_setting": "unknown_not_visible_in_export",
+  "parity_resolution": "Use the corrected VESTA-exported CIF with Se1 occupancy 1.0000 plus Waasmaier-Kirfel f0 and legacy Cu Kalpha1 anomalous terms; this is VESTA parity, not absolute physics.",
+  "done_investigating_rule": "If VESTA-like factors stay below regression target, use them; if future table residual is irreducible, set tolerance from measured residuals and update this metadata.",
+  "cif_sha256": "2a02dfceb6b302810229076479c54515382b3adcd558e3d9f874192dcd6b539f",
+  "txt_sha256": "b2f7e2de27db6bfee7497ad2c8e0ebf622d5db14c5da4240b7f334d6de89d379",
+  "row_count": 206,
+  "finite_two_theta_count": 161,
+  "nan_two_theta_count": 45,
+  "site_occupancy": {
+    "Se1": 1.0
+  }
+}

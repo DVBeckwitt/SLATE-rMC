@@ -1,0 +1,41 @@
+schema_version = "rasim-example-pbi2-stacking-v1"
+wavelength_angstrom = 1.5406
+finite_layers = 50
+phase_delta_expression = "2*pi*((2*h + k)/3)"
+phi_l_divisor = 1.0
+
+[rich_phase.2H]
+epsilon = 0.0
+weight = 1.0
+
+[rich_phase.4H]
+epsilon = 0.99
+weight = 0.0
+
+[rich_phase.6H]
+epsilon = 0.5
+weight = 0.0
+
+[reduced.mix]
+a = 0.56
+b = 0.26
+d = 0.18
+weight = 0.15
+
+[reduced.2H]
+a = 1.0
+b = 0.0
+d = 0.0
+weight = 0.70
+
+[reduced.4H]
+a = 0.0
+b = 0.0
+d = 1.0
+weight = 0.05
+
+[reduced.6H]
+a = 0.0
+b = 1.0
+d = 0.0
+weight = 0.10

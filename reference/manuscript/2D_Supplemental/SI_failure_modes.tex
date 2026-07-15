@@ -1,0 +1,1044 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{siunitx}      % for \si{\angstrom}
+\usepackage{physics}      % for \dyad{}{}
+\ExplSyntaxOn
+\msg_redirect_name:nnn { siunitx } { physics-pkg } { none }
+\ExplSyntaxOff
+\AtBeginDocument{\RenewCommandCopy\qty\SI}
+\usepackage{graphicx}
+\graphicspath{{figures/}{../figures/}{./}}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage[numbers,sort&compress]{natbib}
+\setcitestyle{super,comma,numbers,sort&compress}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+% Supporting-information numbering (S1, S2, ...; Fig. S1, Eq. (S1), ...).
+\renewcommand{\thesection}{S\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\theequation}{S\arabic{equation}}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\renewcommand{\thetable}{S\arabic{table}}
+
+\title{Supporting information for:\\
+Two-dimensional powder diffraction in layered van der Waals films:\\
+quantitative X-ray area-detector modeling}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+This supporting information accompanies the manuscript titled
+\emph{Two-dimensional powder diffraction in layered van der Waals films: quantitative X-ray area-detector modeling}
+and provides expanded workflow notes and supplemental derivations.
+
+
+\section{Bandwidth scaling for the specular Bragg-sphere cap overlap}
+\label{sec:si_bandwidth_mosaic_scaling}
+
+This section gives the short reciprocal-space derivation behind the statement that a fixed Ewald-shell thickness samples a larger angular fraction of a low-order $00L$ Bragg sphere than of a high-order one.
+
+For the specular family, $m=0$ and $G_R=0$, so
+\begin{equation}
+G_L \equiv G_{00L}=\frac{2\pi L}{c}.
+\end{equation}
+Thus the Bragg-sphere radius grows linearly with $L$.
+
+In the fixed-center Ewald-shell construction used for the geometric interpretation, the central wavevector is
+\begin{equation}
+K_0=\frac{2\pi}{\lambda_0}.
+\end{equation}
+A small fractional bandwidth $b=\Delta\lambda/\lambda_0$ gives a reciprocal-space shell thickness
+\begin{equation}
+\Delta K \simeq K_0 b.
+\end{equation}
+This thickness is set by the instrument and is independent of $L$.
+
+Let $\psi$ be the angular position of the Ewald-shell intersection band on the Bragg sphere. For an Ewald radius $K$, with the shell center held fixed at the central $K_0$ position, the intersection satisfies
+\begin{equation}
+\sin\psi(K;G_L)=\frac{K_0^2-K^2+G_L^2}{2K_0G_L}.
+\end{equation}
+At the central wavelength, $K=K_0$, this reduces to
+\begin{equation}
+\sin\psi_0=\frac{G_L}{2K_0}.
+\end{equation}
+Differentiating the fixed-center relation at $K=K_0$ gives
+\begin{equation}
+\cos\psi_0\,d\psi \simeq -\frac{dK}{G_L}.
+\end{equation}
+Therefore the full angular width of the Ewald intersection band is approximately
+\begin{equation}
+\Delta\psi \simeq \frac{\Delta K}{G_L\cos\psi_0}
+             \simeq \frac{K_0 b}{G_L\cos\psi_0}.
+\end{equation}
+Substituting $G_L=2\pi L/c$ and $K_0=2\pi/\lambda_0$ gives
+\begin{equation}
+\Delta\psi(L) \simeq \frac{bc}{\lambda_0 L\cos\psi_0}.
+\end{equation}
+For low and moderate $L$, $\cos\psi_0$ varies more slowly than $G_L$, so the leading scaling is
+\begin{equation}
+\Delta\psi(L)\propto \frac{1}{L}.
+\end{equation}
+
+The mosaic cap clips this band. If the cap has angular half-width $\eta$ and is displaced by the nominal incident angle $\theta_i$, a one-dimensional angular measure of the accessible overlap is
+\begin{equation}
+\ell(L)=\max\left[0,
+\min\left(\psi_0+\frac{\Delta\psi}{2},\theta_i+\eta\right)-
+\max\left(\psi_0-\frac{\Delta\psi}{2},\theta_i-\eta\right)
+\right].
+\end{equation}
+When the Ewald band is narrower than the mosaic cap and limits the overlap, $\ell(L)\simeq\Delta\psi(L)$, so the bandwidth-controlled accessible overlap inherits the same approximate $1/L$ scaling. If the cap is fully inside the band, the overlap is mosaic-limited instead. If the band and cap do not intersect, the overlap is zero.
+
+This scaling describes the fixed-center reciprocal-space shell overlap used to interpret the Bragg-sphere schematics. It is not the raw Bragg-sphere surface area, and it is distinct from the strict moving-center Bragg-law derivative $\Delta\theta_B\simeq b\tan\theta_B$.
+
+\section{Staged refinement workflow (expanded)}
+\label{sec:si_workflow}
+
+\begin{enumerate}
+  \item \textbf{Beam characterization (direct beam).}
+  Acquire direct-beam images at several detector distances. Fit the spot position and shape versus distance to determine the incident-beam widths $(w_x,w_z)$ and Gaussian divergences $(\Delta\theta_x,\Delta\theta_z)$ that set the instrument-limited broadening.
+
+  \item \textbf{Detector geometry calibration (3D powder standard).}
+  Measure a polycrystalline hBN calibrant and subtract the detector dark frame. Fit multiple Debye--Scherrer rings in detector coordinates and refine detector distance, detector tilts $(\beta,\gamma)$, in-plane detector rotation $\chi$, and beam center $(x_0,y_0)$.
+
+  \item \textbf{Sample alignment and goniometer misalignment.}
+  For each dark-subtracted sample image, use indexed Bragg-peak centers rather than full-image intensity. With detector parameters fixed, refine sample alignment by minimizing detector-space residuals between measured and calculated peak positions spanning both specular and off-specular regions. Refine $(\theta_i,\delta,z_B,z_S)$ and the goniometer-axis misalignment rotations $(\alpha,\psi)$; include film dimensions $(W,H)$ and thickness $t$ to weight footprint and absorption.
+
+  \item \textbf{Mosaicity/profile refinement.}
+  With geometry fixed, compare selected local detector ROIs or local $I(\phi)$ profiles after center alignment. The shared profile model is a wrapped Gaussian-plus-Lorentzian angular distribution, not a pseudo-Voigt common-width peak approximation. Off-specular arcs mainly constrain the Gaussian core, while off-condition specular intensity constrains the Lorentzian tail. Report Lorentzian FWHM, Gaussian FWHM, and the relative Lorentzian weight.
+
+  \item \textbf{Ordered-structure refinement.}
+  With geometry and mosaicity fixed, refine the ordered intensity model against background-subtracted integrated counts in selected detector-space Bragg regions of interest (ROIs) from multiple dark-subtracted images. The corresponding prediction is the calculated detector intensity deposited in those same ROIs. Use one nuisance scale per image and physically constrained ordered-structure parameters.
+
+  \item \textbf{Disorder refinement.}
+  After the ordered model converges, introduce stacking-disorder parameters only through fixed-$Q_r$ rod profiles reported versus $Q_z$. The measured profile is formed from caked signal and normalization fields by summing signal and normalization over the selected rod mask before division. Geometry, detector calibration, beam terms, mosaicity, lattice constants, and the ordered baseline remain fixed; only stacking-disorder parameters and declared scale/background terms are refined.
+\end{enumerate}
+
+All detector images are dark-subtracted before fitting. Any additional preprocessing (flat-field, polarization, solid-angle, or detector-efficiency corrections) should either be applied consistently to all images before refinement or stated explicitly if omitted. We recommend stage-specific uncertainty estimation by repeated constrained refits: resample the calibrant points for detector geometry, indexed peak lists for sample alignment, local reflection regions for mosaicity, accepted Bragg ROIs for ordered intensity, and selected rod bins for disorder. Report the standard deviation of the accepted solutions and propagate parameters to the next stage only after the preceding stage is stable.
+
+
+\subsection{Coordinate remapping, projected profiles, and uncertainty propagation}
+\label{subsec:si_projection_uncertainty}
+
+The detector image remains the primary data object. The $2\theta$--$\phi$ representation is an overlap-weighted remapping used to evaluate fixed-$m$ or fixed-$Q_r$ trajectory masks and projected $Q_z$ or $L$ profiles. It is not treated as an independent measurement. The same remapping, masks, and profile extraction are applied to measured and calculated detector images.
+
+The caked image is constructed with a sparse detector-to-cake operator
+\begin{equation}
+M\in \mathbb{R}^{B\times P},
+\end{equation}
+where $P$ is the number of detector pixels, $B$ is the number of caked bins, and $M_{bk}$ is the fractional overlap weight from detector pixel $k$ into caked bin $b$. For detector signal $s_k$ and normalization $n_k$,
+\begin{equation}
+S_b=\sum_k M_{bk}s_k,
+\qquad
+N_b=\sum_k M_{bk}n_k,
+\qquad
+I_b=\frac{S_b}{N_b},
+\end{equation}
+for bins with $N_b>0$. Signal and normalization are therefore accumulated before division. This prevents a projected profile from becoming a sum of already normalized pixels and keeps the observable tied to the detector-space calibration.
+
+For each remapped bin, the calibrated detector and sample geometry define a scattering vector $\mathbf Q$. The coordinates used to label selected trajectories are
+\begin{equation}
+Q_r=|\mathbf Q_{\parallel}|,
+\qquad
+Q_z=\mathbf Q\cdot \hat{\mathbf n},
+\qquad
+L=\frac{Q_z}{|\mathbf c^{*}|}=\frac{Q_z c}{2\pi},
+\end{equation}
+where $\hat{\mathbf n}$ is the film normal. A selected fixed-$Q_r$ or fixed-$m$ family is retained when
+\begin{equation}
+|Q_r-Q_{r,0}|\le \Delta Q_r,
+\qquad
+Q_{z,\min}\le Q_z\le Q_{z,\max}.
+\end{equation}
+This region is simple in the physical $Q_r$--$Q_z$ description but appears curved in the displayed $2\theta$--$\phi$ map because the coordinate transformation is nonlinear. The curved shape is therefore a consequence of the projection, not an additional physical model.
+
+For a selected profile coordinate $\ell$, let $r_{\ell b}$ be the mask or interpolation weight that assigns caked bin $b$ to that profile point. The profile is
+\begin{equation}
+I_{\ell}^{\mathrm{ROI}}=
+\frac{\sum_b r_{\ell b}S_b}
+     {\sum_b r_{\ell b}N_b}
+=
+\frac{\sum_k a_{\ell k}s_k}
+     {\sum_k a_{\ell k}n_k},
+\qquad
+ a_{\ell k}=\sum_b r_{\ell b}M_{bk}.
+\end{equation}
+Each point in the plotted profile is therefore an average over a finite detector-space band. Its coordinate may be labeled by $Q_z$ or $L$, but the point represents a resolution-limited projection rather than the intensity at one exact reciprocal-space coordinate.
+
+The transformed-coordinate uncertainty has two parts: uncertainty in the coordinate label and uncertainty in the rebinned intensity. The coordinate-label uncertainty follows from the finite detector-pixel footprint and from uncertainty in the detector calibration. For square detector pixels with pitch $p$, detector distance $d$, and $t=2\theta$, the leading flat-detector terms are
+\begin{equation}
+\sigma_{2\theta,\mathrm{pix}}(t)=
+\frac{p\cos^{2}t}{\sqrt{12}\,d},
+\qquad
+\sigma_{\phi,\mathrm{pix}}(t)=
+\frac{p}{\sqrt{12}\,d\tan t}.
+\end{equation}
+The radial term is finite and largest near the direct beam. The azimuthal term scales as $1/\tan(2\theta)$, so the problematic regime is confined to the near-specular, low-$2\theta$ region where azimuth is poorly conditioned.
+
+For the $d=75$ mm and $p=300\,\mu\mathrm{m}$ geometry used in the uncertainty calculation, the maximum radial coordinate uncertainty is approximately $0.066^{\circ}$. The azimuthal coordinate uncertainty falls below $1^{\circ}$ above $2\theta\approx3.8^{\circ}$, below $0.5^{\circ}$ above $2\theta\approx7.5^{\circ}$, and below $0.25^{\circ}$ above $2\theta\approx14.9^{\circ}$. More generally, the threshold for a target azimuthal width $w_{\phi}$ is
+\begin{equation}
+2\theta_{\mathrm{crit}}=\arctan\!\left(\frac{p}{\sqrt{12}\,d\,w_{\phi}}\right),
+\end{equation}
+with $w_{\phi}$ expressed in radians.
+
+Additional calibration uncertainty can be propagated with the usual Jacobian form. If the uncertain geometry parameters are collected in $\mathbf g$ with covariance matrix $\Sigma_g$, then
+\begin{equation}
+\sigma^2_{2\theta,\mathrm{cal}}=
+J_{2\theta}\Sigma_gJ_{2\theta}^{\mathsf T},
+\qquad
+\sigma^2_{\phi,\mathrm{cal}}=
+J_{\phi}\Sigma_gJ_{\phi}^{\mathsf T}.
+\end{equation}
+If the displayed bin-center label is also treated as uncertain, the finite bin width contributes
+\begin{equation}
+\sigma^2_{2\theta,\mathrm{bin}}=\frac{\Delta(2\theta)^2}{12},
+\qquad
+\sigma^2_{\phi,\mathrm{bin}}=\frac{\Delta\phi^2}{12}.
+\end{equation}
+These coordinate terms describe the uncertainty of the transformed axis value. They are separate from intensity uncertainty.
+
+The intensity uncertainty is inherited from the detector through the same overlap weights used to construct the caked image and the projected profile. If $v_k$ is the detector-pixel variance and the detector-pixel variances are independent, then
+\begin{equation}
+\mathrm{Var}\!\left(I_{\ell}^{\mathrm{ROI}}\right)=
+\frac{\sum_k a_{\ell k}^{2}v_k}
+     {\left(\sum_k a_{\ell k}n_k\right)^2}.
+\end{equation}
+If overlapping interpolation weights are used, neighboring profile points can be statistically correlated. The corresponding covariance is
+\begin{equation}
+\mathrm{Cov}\!\left(I_{\ell}^{\mathrm{ROI}},I_{q}^{\mathrm{ROI}}\right)=
+\frac{\sum_k a_{\ell k}a_{qk}v_k}
+     {\left(\sum_k a_{\ell k}n_k\right)
+      \left(\sum_k a_{qk}n_k\right)}.
+\end{equation}
+Thus the same weights that define the projected profile also propagate the detector-pixel variance. The covariance between neighboring projected points is neglected in the present line-shape comparison unless formal profile error bars are required.
+
+The displayed coordinate for a projected point can be represented by the same finite-band weighting. For example,
+\begin{equation}
+\bar L_{\ell}=\frac{\sum_b r_{\ell b}N_bL_b}{\sum_b r_{\ell b}N_b},
+\qquad
+\sigma^2_{L,\ell}=\frac{\sum_b r_{\ell b}N_b(L_b-\bar L_{\ell})^2}{\sum_b r_{\ell b}N_b},
+\end{equation}
+before adding calibration, incidence-angle, wavelength, divergence, and mosaic contributions. This width is a projection and resolution effect. It is not a counting-statistical error bar.
+
+These projection uncertainties are coupled to model-parameter correlations. Peak positions are sensitive to detector distance, beam center, detector tilt, sample height, and incidence angle. Profile widths are sensitive to both beam divergence and the Gaussian mosaic core. Weak off-condition and low-$L$ intensities are sensitive to wavelength bandwidth, background, and the Lorentzian mosaic tail. Relative integrated intensities are sensitive to scale, footprint, absorption, thickness, and structure-factor parameters. The staged workflow separates these effects by fixing or constraining the parameters tied to peak position before fitting profile widths, and by fixing the geometry and mosaic state before interpreting ordered intensities.
+
+The practical consequences are: (i) the $2\theta$--$\phi$ and $Q_r/Q_z$ profiles are controlled projections of the detector image, not independent ideal reciprocal-space scans; (ii) transformed-coordinate uncertainty is concentrated near the low-angle/specular region; (iii) intensity variance is propagated through the same overlap weights used for caking and profile extraction; and (iv) the strongest remaining systematic coupling occurs near low $L$, where direct-beam background, bandwidth, divergence, incidence angle, and the Lorentzian mosaic tail contribute to the same detector-space feature.
+
+\subsection{Wrapped mosaic distribution}
+\label{subsec:si_wrapped_mosaic}
+
+In the main text we describe out-of-plane mosaicity by a misorientation density $\omega(\Delta\theta)$ in the crystallite tilt angle $\Delta\theta$ relative to the substrate normal. Since $\Delta\theta$ is an orientation angle, $\Delta\theta$ and $\Delta\theta+2\pi$ represent the same physical state. Accordingly, $\omega$ is treated as a $2\pi$-periodic probability density on $\Delta\theta\in(-\pi,\pi]$.
+
+The implemented profile is a wrapped Gaussian plus a wrapped Lorentzian,
+\[
+  \omega_{\mathrm w}(\Delta\theta;\eta,\Gamma,\sigma)
+  =\eta\,L_{\mathrm w}(\Delta\theta;\Gamma)+(1-\eta)\,G_{\mathrm w}(\Delta\theta;\sigma),
+  \qquad 0\le \eta \le 1.
+\]
+This is not a pseudo-Voigt constraint: the Lorentzian half-width $\Gamma$ and Gaussian standard deviation $\sigma$ are independent. The wrapped Lorentzian and wrapped Gaussian are
+\[
+  L_{\mathrm w}(\Delta\theta;\Gamma)=
+  \sum_{m=-\infty}^{\infty}\frac{1}{\pi}\frac{\Gamma}{(\Delta\theta+2\pi m)^2+\Gamma^2}
+  =\frac{1}{2\pi}\,\frac{\sinh\Gamma}{\cosh\Gamma-\cos\Delta\theta},
+\]
+\[
+  \begin{aligned}
+    G_{\mathrm w}(\Delta\theta;\sigma)
+    &= \sum_{m=-\infty}^{\infty}\frac{1}{\sqrt{2\pi}\sigma}
+       \exp\!\left[-\frac{(\Delta\theta+2\pi m)^2}{2\sigma^2}\right] \\
+    &= \frac{1}{2\pi}\!\left[
+         1+2\sum_{n=1}^{\infty}e^{-n^2\sigma^2/2}\cos(n\Delta\theta)
+       \right].
+  \end{aligned}
+\]
+Both components integrate to unity over $(-\pi,\pi]$, so $\omega_{\mathrm w}$ is normalized. The reported Lorentzian FWHM is $2\Gamma$, and the reported Gaussian FWHM is $2\sqrt{2\ln 2}\,\sigma$. The local small-width limit recovers the usual line-shape widths, but the refinement and normalization are defined by the wrapped functions above.
+
+For a reflection with Bragg-sphere radius $G \equiv |\mathbf G|$, mosaicity redistributes intensity in polar angle $\vartheta$ with line density $I_0\,\omega_{\mathrm w}(\vartheta-\vartheta_B)\,d\vartheta$, where $\vartheta_B$ is the Bragg position for that reflection. Random in-plane rotations about the film normal revolve this line density about the $G_z$ axis, yielding an axially symmetric surface density $\rho(\vartheta)$. With area element $dA=2\pi G^2\sin\vartheta\,d\vartheta$, conservation of intensity gives
+\[
+  \rho(\vartheta)=\frac{I_0}{2\pi G^2\sin\vartheta}\,\omega_{\mathrm w}(\vartheta-\vartheta_B),
+  \qquad 0<\vartheta<\pi,
+\]
+as used in the main text.
+
+\subsection{Wave propagation, refraction, and absorption}
+\label{subsec:si_refraction_absorption}
+
+Wave attenuation occurs both at the interfaces and as the wave propagates through the film. In the
+forward model we therefore (i) evaluate the complex refractive index for each sampled wavelength
+in the source bandwidth, (ii) refract each ray into and out of the film, (iii) determine the complex
+surface-normal component of the internal wavevector from the boundary condition at the interface,
+and (iv) weight scattering from a finite thickness $t$ by the corresponding transmission and
+propagation attenuation. This subsection records the explicit equations used.
+
+\paragraph{Complex refractive index over the source bandwidth.}
+For a wavelength sample $\lambda_j$ with spectral weight $w_j$, the vacuum wavevector magnitude is
+\begin{equation}
+  k_0(\lambda_j)=\frac{2\pi}{\lambda_j}.
+\end{equation}
+The material optical response is represented by the wavelength-dependent complex refractive index
+\begin{equation}
+  \tilde{n}(\lambda_j)=1-\delta_n(\lambda_j)+i\beta_n(\lambda_j),
+  \label{eq:si_complex_n_lambda}
+\end{equation}
+where the subscript $n$ avoids confusion with geometric angles used elsewhere. The real correction
+$\delta_n$ is the refractive decrement that shifts the phase velocity and bends the ray inside the
+film. The imaginary correction $\beta_n$ gives absorption and sets the finite penetration depth. The
+real decrement may be estimated from electron density $\rho_e$ and classical electron radius $r_e$,
+while the imaginary correction is the wavelength-dependent optical input used directly by the
+complex-wavevector calculation:
+\begin{equation}
+  \delta_n(\lambda_j)=\frac{r_e\lambda_j^2\rho_e}{2\pi},
+  \qquad
+  \beta_n(\lambda_j)=\operatorname{Im}\{\tilde n(\lambda_j)\}.
+  \label{eq:si_delta_beta_lambda}
+\end{equation}
+The bandwidth therefore changes both the Ewald-sphere radius through $k_0(\lambda_j)$ and the
+optical constants that determine refraction, transmission, and attenuation. The attenuation factor
+below is not applied through a separate scalar absorption coefficient; it is computed from the
+imaginary parts of the refracted internal wavevectors.
+
+\paragraph{Angles and refraction.}
+Let $\hat{z}$ be the sample normal. For an incident ray in air with wavevector
+$\mathbf{k}_i(\lambda_j)$, the grazing-incidence angle $\theta_i$ and in-plane azimuth $\varphi_i$ are
+\begin{align}
+  \sin\theta_i(\lambda_j) &= \frac{k_{i,z}(\lambda_j)}{k_0(\lambda_j)},\\
+  \tan\varphi_i &= \frac{k_{i,x}(\lambda_j)}{k_{i,y}(\lambda_j)}.
+  \label{eq:si_incident_angles_lambda}
+\end{align}
+Upon refraction into the film, the transmitted grazing angle is written in the same form used in the
+dissertation wave-propagation construction,
+\begin{equation}
+  \theta_t(\lambda_j)
+  =
+  \cos^{-1}\!\left[
+  \frac{\cos\theta_i(\lambda_j)}{\operatorname{Re}\{\tilde{n}(\lambda_j)\}}
+  \right].
+  \label{eq:si_theta_t_lambda}
+\end{equation}
+The internal wavevector scale used for the in-plane components is
+\begin{equation}
+  k'(\lambda_j)
+  =
+  k_0(\lambda_j)
+  \left[\operatorname{Re}\{\tilde{n}(\lambda_j)^2\}\right]^{1/2}.
+  \label{eq:si_kprime_lambda}
+\end{equation}
+The in-plane internal components are therefore
+\begin{align}
+  k_{t,x}(\lambda_j)
+  &= k'(\lambda_j)\cos\theta_t(\lambda_j)\sin\varphi_i,\\
+  k_{t,y}(\lambda_j)
+  &= k'(\lambda_j)\cos\theta_t(\lambda_j)\cos\varphi_i.
+  \label{eq:si_ktxy_lambda}
+\end{align}
+The tangential components are fixed at the boundary. The remaining surface-normal component is
+complex and carries the attenuation of the internal field.
+
+\paragraph{Complex normal component.}
+To isolate the real and imaginary parts of the normal component, write
+\begin{equation}
+  k_{t,z}(\lambda_j)^2=a(\lambda_j)+i b(\lambda_j),
+  \qquad
+  k_{t,z}(\lambda_j)=u(\lambda_j)+i v(\lambda_j).
+  \label{eq:si_ktz_ab_lambda}
+\end{equation}
+Expanding $(u+i v)^2$ gives
+\begin{equation}
+  (u+i v)^2=u^2-v^2+2iuv=a+i b.
+\end{equation}
+Thus
+\begin{equation}
+  a=u^2-v^2,
+  \qquad
+  b=2uv,
+  \qquad
+  |k_{t,z}|^2=u^2+v^2=\sqrt{a^2+b^2}.
+\end{equation}
+Solving for $u^2$ and $v^2$ gives
+\begin{equation}
+  u^2=\frac{\sqrt{a^2+b^2}+a}{2},
+  \qquad
+  v^2=\frac{\sqrt{a^2+b^2}-a}{2}.
+  \label{eq:si_uv_solution_lambda}
+\end{equation}
+For the incident internal wavevector,
+\begin{align}
+  \operatorname{Re}\{k_{t,z}(\lambda_j)^2\}
+  &= k'(\lambda_j)^2\sin^2\theta_t(\lambda_j)
+  \equiv a_t(\lambda_j),\\
+  \operatorname{Im}\{k_{t,z}(\lambda_j)^2\}
+  &= k_0(\lambda_j)^2\operatorname{Im}\{\tilde{n}(\lambda_j)^2\}
+  \equiv b(\lambda_j).
+  \label{eq:si_at_b_lambda}
+\end{align}
+The normal component used for propagation inside the film is therefore
+\begin{align}
+  \operatorname{Re}\{k_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_t(\lambda_j)^2+b(\lambda_j)^2}+a_t(\lambda_j)}{2}
+  \right]^{1/2},\\
+  \operatorname{Im}\{k_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_t(\lambda_j)^2+b(\lambda_j)^2}-a_t(\lambda_j)}{2}
+  \right]^{1/2}.
+  \label{eq:si_ktz_solution_lambda}
+\end{align}
+The physical branch is chosen so that $\operatorname{Im}\{k_{t,z}\}\ge 0$, giving a decaying wave
+inside the film. Equivalently, the same construction can be read as the boundary-condition statement
+\begin{equation}
+  k_{t,z}(\lambda_j)^2
+  =
+  \left[k_0(\lambda_j)\tilde{n}(\lambda_j)\right]^2
+  -k_{t,x}(\lambda_j)^2-k_{t,y}(\lambda_j)^2.
+  \label{eq:si_boundary_ktz_lambda}
+\end{equation}
+This is the implementation form of the $a+i b$ decomposition above.
+
+\paragraph{Exit path and refraction out of the film.}
+The same construction is applied to the outgoing internal wavevector. For the scattered internal
+angles $(\theta_t',\varphi_f)$,
+\begin{align}
+  k'_{t,x}(\lambda_j)
+  &= k'(\lambda_j)\cos\theta_t'(\lambda_j)\sin\varphi_f,\\
+  k'_{t,y}(\lambda_j)
+  &= k'(\lambda_j)\cos\theta_t'(\lambda_j)\cos\varphi_f,\\
+  a_f(\lambda_j)
+  &= k'(\lambda_j)^2\sin^2\theta_t'(\lambda_j),
+  \qquad
+  b_f(\lambda_j)=b(\lambda_j).
+  \label{eq:si_exit_af_lambda}
+\end{align}
+Hence
+\begin{align}
+  \operatorname{Re}\{k'_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_f(\lambda_j)^2+b(\lambda_j)^2}+a_f(\lambda_j)}{2}
+  \right]^{1/2},\\
+  \operatorname{Im}\{k'_{t,z}(\lambda_j)\}
+  &=
+  \left[
+  \frac{\sqrt{a_f(\lambda_j)^2+b(\lambda_j)^2}-a_f(\lambda_j)}{2}
+  \right]^{1/2}.
+  \label{eq:si_exit_ktz_solution_lambda}
+\end{align}
+Once the internal scattered wavevector is known, the ray is refracted back into air by optical
+reversibility. In the angle form, inversion of Eq.~\eqref{eq:si_theta_t_lambda} gives
+\begin{equation}
+  \theta_f(\lambda_j)
+  =
+  \cos^{-1}\!\left[
+  \operatorname{Re}\{\tilde{n}(\lambda_j)\}\cos\theta_t'(\lambda_j)
+  \right].
+  \label{eq:si_exit_angle_lambda}
+\end{equation}
+
+\paragraph{Fresnel transmission factors.}
+Each ray is weighted by transmission at the entrance and exit interfaces. For the scalar field used
+in the forward model, the amplitude transmission coefficient between media 1 and 2 is written in
+terms of normal wavevector components as
+\begin{equation}
+  T_{12}=\frac{2k_{1z}}{k_{1z}+k_{2z}}.
+  \label{eq:si_scalar_transmission}
+\end{equation}
+Thus, for air-to-film transmission and film-to-air exit,
+\begin{equation}
+  T_{\mathrm{in}}(\lambda_j)
+  =
+  \frac{2k_{i,z}^{(0)}(\lambda_j)}{k_{i,z}^{(0)}(\lambda_j)+k_{t,z}(\lambda_j)},
+  \qquad
+  T_{\mathrm{out}}(\lambda_j)
+  =
+  \frac{2k'_{t,z}(\lambda_j)}{k'_{t,z}(\lambda_j)+k_{f,z}^{(0)}(\lambda_j)}.
+  \label{eq:si_entry_exit_transmission}
+\end{equation}
+The corresponding intensity factor is
+\begin{equation}
+  W_T(\lambda_j)=|T_{\mathrm{in}}(\lambda_j)|^2 |T_{\mathrm{out}}(\lambda_j)|^2.
+  \label{eq:si_transmission_intensity}
+\end{equation}
+Polarization-resolved Fresnel factors can be substituted in the same location if needed. The scalar
+form is the approximation used for the detector-space weighting here.
+
+\paragraph{Absorption weight from the imaginary normal wavevector.}
+The imaginary parts of the incident and exit normal components determine the propagation damping.
+For a candidate with entry and exit propagation lengths $L_{\mathrm{in}}$ and $L_{\mathrm{out}}$,
+define
+\begin{equation}
+  \kappa_i(\lambda_j)=\operatorname{Im}\{k_{t,z}(\lambda_j)\},
+  \qquad
+  \kappa_f(\lambda_j)=\operatorname{Im}\{k'_{t,z}(\lambda_j)\}.
+  \label{eq:si_kappa_if_lambda}
+\end{equation}
+The propagation factor is then
+\begin{equation}
+  W_{\mathrm{prop}}(\lambda_j)
+  =
+  \exp\!\left[
+  -2\kappa_i(\lambda_j)L_{\mathrm{in}}(\lambda_j)
+  -2\kappa_f(\lambda_j)L_{\mathrm{out}}(\lambda_j)
+  \right].
+  \label{eq:si_imkz_pathlength_weight}
+\end{equation}
+This is the absorption/evanescence form used by the simulation. The factor of two converts field
+amplitude damping into intensity damping. The exponent is dimensionless, so the path lengths must
+be expressed in the reciprocal units of the wavevectors. If a finite film thickness is supplied,
+$L_{\mathrm{in}}$ and $L_{\mathrm{out}}$ are the corresponding slab propagation lengths; otherwise the
+attenuation is controlled by the penetration depths set by $1/(2\kappa_i)$ and $1/(2\kappa_f)$.
+
+For a uniformly scattering film of thickness $t$, the same normal-component damping can be written
+as a depth average,
+\begin{align}
+  \overline W_{\mathrm{prop}}(\lambda_j)
+  &=
+  \frac{1}{t}\int_0^t
+  \exp\!\left[-2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)z\right] dz\\
+  &=
+  \frac{
+  1-\exp\!\left[-2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)t\right]
+  }
+  {2\left(\kappa_i(\lambda_j)+\kappa_f(\lambda_j)\right)t}.
+  \label{eq:si_abs_complex_kz}
+\end{align}
+The total optical weight multiplying the structure-factor and mosaic weights is
+\begin{equation}
+  W_{\mathrm{opt}}(\lambda_j)=W_T(\lambda_j)W_{\mathrm{prop}}(\lambda_j),
+  \label{eq:si_full_optical_weight_lambda}
+\end{equation}
+or $W_T\overline W_{\mathrm{prop}}$ when the depth-averaged form is used. Near the critical-angle
+region this complex-$k_z$ form is the relevant statement because refraction, evanescence, and
+finite penetration depth are all carried by the same wavelength-dependent optical constants.
+
+\paragraph{Detector accumulation over the bandwidth.}
+For each accepted scattering event, the detector contribution at wavelength $\lambda_j$ is weighted
+by transmission, absorption, structure factor, mosaic probability, beam divergence, footprint, and
+solid-angle terms before detector deposition. The wavelength-resolved images are then added
+incoherently,
+\begin{equation}
+  I_{\mathrm{det}}(x,y)
+  =
+  \sum_j
+  w_j\,
+  I_{\mathrm{det}}\!\left[x,y;\lambda_j,\tilde{n}(\lambda_j)\right].
+  \label{eq:si_detector_bandwidth_sum}
+\end{equation}
+This is why finite bandwidth is coupled to refraction rather than only to the Ewald-sphere thickness:
+changing $\lambda_j$ changes $k_0$, $\tilde{n}$, the transmitted angle, the complex normal
+wavevector, the transmission factors, and the attenuation length.
+
+
+\subsection{Specular-family Parratt-to-kinematic handoff}
+\label{subsec:si_parratt_structure_handoff}
+
+The main-text handoff figure summarizes the optical-to-kinematic construction
+used for the near-critical specular-family profile. Here we give the explicit
+calculation. The low-$Q_z$ branch is the specular Parratt reflectivity, which
+retains refraction, evanescence, interface reflection, and finite-film multiple
+scattering. The high-$Q_z$ branch is a normalized finite-stack kinematic term
+divided by $Q_z^2$ and scaled to the Parratt intensity in an overlap region. A
+smooth log-domain blend is then applied across the contiguous range of $Q_z/Q_c$
+for which the two branches agree. This handoff is a controlled transition
+between limits, not a new independent scattering formalism.
+
+The plotted coordinate is
+\begin{equation}
+  x=\frac{Q_z}{Q_c},
+  \qquad
+  L=\frac{Q_z c}{2\pi}=x\frac{Q_c c}{2\pi}.
+  \label{eq:si_handoff_x_l}
+\end{equation}
+Here $Q_c$ is the film critical wavevector and $c$ is the out-of-plane lattice
+constant. The main-text handoff figure uses $Q_z/Q_c$ as the bottom axis and the
+corresponding $L$ value as the top axis.
+
+The low-$Q_z$ branch is the Parratt reflectivity.\cite{Parratt1954} For a layer
+$j$ with complex refractive index $n_j=1-\delta_j+i\beta_j$, the conserved
+in-plane wavevector fixes the layer-normal component
+\begin{equation}
+  k_{z,j}=\sqrt{(n_j k_0)^2-k_x^2},
+  \qquad
+  k_0=\frac{2\pi}{\lambda}.
+  \label{eq:si_parratt_kz}
+\end{equation}
+The Fresnel amplitude at the interface between layers $j$ and $j+1$ is
+\begin{equation}
+  r_j^{(0)}=\frac{k_{z,j}-k_{z,j+1}}{k_{z,j}+k_{z,j+1}}.
+  \label{eq:si_parratt_interface}
+\end{equation}
+If the lower interface has RMS roughness $\sigma_j$, this coefficient is damped
+by
+\begin{equation}
+  r_j=r_j^{(0)}\exp\!\left[-2k_{z,j}k_{z,j+1}\sigma_j^2\right].
+  \label{eq:si_parratt_roughness}
+\end{equation}
+For a finite layer of thickness $d_{j+1}$ below the interface, the round-trip
+phase factor is
+\begin{equation}
+  \phi_{j+1}=\exp\!\left(2ik_{z,j+1}d_{j+1}\right).
+  \label{eq:si_parratt_phase}
+\end{equation}
+Starting from the semi-infinite substrate and recursing upward, the effective
+reflection amplitude is
+\begin{equation}
+  R_j^{\mathrm{amp}}
+  =
+  \frac{r_j+R_{j+1}^{\mathrm{amp}}\phi_{j+1}}
+       {1+r_jR_{j+1}^{\mathrm{amp}}\phi_{j+1}}.
+  \label{eq:si_parratt_recursion}
+\end{equation}
+The optical branch used in the handoff is
+\begin{equation}
+  R_{\mathrm P}(Q_z)=\left|R_0^{\mathrm{amp}}(Q_z)\right|^2.
+  \label{eq:si_parratt_reflectivity}
+\end{equation}
+This branch retains total-reflection behavior, refraction, evanescence, finite
+penetration depth, roughness damping, and multiple reflection between the film
+interfaces.
+
+The high-$Q_z$ branch is built from the normalized finite-stack kinematic term
+\begin{equation}
+  S_{\mathrm{HT},0}(L)=
+  \frac{I_{\mathrm{HT}}(L;p=0)}{I_{\mathrm{HT}}(0;p=0)}.
+  \label{eq:si_ht_normalized_structure}
+\end{equation}
+The phase coordinate for this structure term is not the external $Q_z$ near the
+critical edge. To match the Parratt film phase, the finite-stack coordinate is
+computed from the real propagating part of the film wavevector,
+\begin{equation}
+  Q_{z,\phi}=\operatorname{Re}\!\left(2k_{z,\mathrm{film}}\right),
+  \qquad
+  L_{\phi}=\frac{Q_{z,\phi}c}{2\pi}.
+  \label{eq:si_internal_phase_coordinate}
+\end{equation}
+Below the critical edge this real oscillatory coordinate is zero because the
+internal wave is evanescent. The unscaled kinematic branch is then
+\begin{equation}
+  M(Q_z)=\frac{S_{\mathrm{HT},0}(L_\phi)}{Q_z^2}.
+  \label{eq:si_handoff_unscaled_structure}
+\end{equation}
+The $Q_z^{-2}$ factor gives the high-$Q_z$ structural envelope, while the
+internal coordinate $L_\phi$ keeps the finite-stack fringe phase consistent with
+the optical film phase.
+
+A multiplicative scale places this kinematic branch on the Parratt intensity
+scale. The scale is fit in a high-$Q_z$ overlap window, excluding the selected
+$00L$ neighborhoods used in the diagnostic. With fit set $\mathcal F$, the
+log-median estimate is
+\begin{equation}
+  A=
+  \exp\!\left[
+  \operatorname{median}_{i\in\mathcal F}
+  \left(
+  \ln R_{\mathrm P}(Q_{z,i})-
+  \ln M(Q_{z,i})
+  \right)
+  \right],
+  \label{eq:si_handoff_scale}
+\end{equation}
+with the default overlap window $5<Q_z/Q_c<10$. The scaled kinematic branch is
+\begin{equation}
+  R_{\mathrm H}(Q_z)=A M(Q_z).
+  \label{eq:si_handoff_scaled_structure}
+\end{equation}
+
+The handoff window is selected by comparing the two positive finite branches in
+log intensity,
+\begin{equation}
+  r(x)=\log_{10}\!\left[\frac{R_{\mathrm H}(x)}{R_{\mathrm P}(x)}\right].
+  \label{eq:si_handoff_log_ratio}
+\end{equation}
+Candidate points must lie in the search range $3\le x\le10$ and satisfy
+$|r(x)|\le0.10$. The selected window $[x_1,x_2]$ is the widest contiguous
+eligible region with width at least $1.0$ in $Q_z/Q_c$; ties are broken by the
+smaller median $|r|$. If no acceptable region is found, the fallback window
+is $x_1=3$ and $x_2=6$.
+
+Inside the selected window, the interpolation coordinate and weight are
+\begin{equation}
+  t=\frac{x-x_1}{x_2-x_1},
+  \qquad
+  w(t)=6t^5-15t^4+10t^3,
+  \label{eq:si_handoff_smoothstep}
+\end{equation}
+with $t$ clipped to the interval $[0,1]$. The final branch is blended in log
+reflectivity,
+\begin{equation}
+R_{\mathrm{blend}}(x)=
+\begin{cases}
+R_{\mathrm P}(x), & x\le x_1,\\[3pt]
+10^{(1-w)\log_{10}R_{\mathrm P}(x)+w\log_{10}R_{\mathrm H}(x)},
+  & x_1<x<x_2,\\[3pt]
+R_{\mathrm H}(x), & x\ge x_2.
+\end{cases}
+\label{eq:si_handoff_blend}
+\end{equation}
+A small positive numerical floor is used only to avoid logarithms of nonpositive
+roundoff values inside the blend window. The resulting curve is exactly
+Parratt below the selected window, exactly the scaled structure branch above the
+window, and smooth through the handoff.
+
+\subsection{Detector-derived ordered and disorder observables}
+\label{subsec:si_detector_derived_objectives}
+
+The detector-space forward model predicts full images, but the inverse problems use stage-specific observables. In the ordered-structure stage, the measured quantity for ROI $i$ in image $m$ is the background-subtracted detector count
+\[
+  y_{mi}=\sum_{(u,v)\in\Omega_{mi}}\left[I_m^{\mathrm{meas}}(u,v)-b_{mi}(u,v)\right],
+\]
+where $\Omega_{mi}$ is the selected detector-space Bragg ROI and $b_{mi}$ is the local background model. The corresponding prediction is the calculated detector intensity deposited in the same ROI,
+\[
+  \mu_{mi}=\sum_{j\in\mathcal{R}_{mi}} w_j,
+\]
+with geometry, beam terms, and mosaicity fixed. One nuisance scale per image accounts for exposure and flux differences. This makes the ordered stage a multi-image ROI-integrated Bragg-intensity refinement, not a full-image pixel objective.
+
+The PbI$_2$ disorder refinement is a final-stage selected-profile fit, not a second global image refinement. The upstream beam, detector, sample alignment, mosaic/profile parameters, lattice constants, and ordered PbI$_2$ baseline are fixed before this stage starts. The detector image is first caked into a signal field $S(\phi,2\theta)$ and a normalization field $N(\phi,2\theta)$ using the calibrated detector geometry. For the selected-rod conversion, let $\eta$ denote the polar angle of the scattering vector relative to the film normal. For each caked bin,
+\[
+  Q=\frac{4\pi}{\lambda}\sin\!\left(\frac{2\theta}{2}\right),
+  \qquad
+  Q_r=|\sin\eta|Q,
+  \qquad
+  Q_z=\cos\eta\,Q.
+\]
+A selected rod with in-plane radius $Q_{r,0}$ is retained when
+\[
+  |Q_r-Q_{r,0}|\le \Delta Q_r,
+  \qquad
+  Q_{z,\min}\le Q_z\le Q_{z,\max}.
+\]
+A branch selector may be applied after this reciprocal-space mask so that one branch is used for the default fit and the symmetry-related branch is retained for validation.
+
+Let $S_{ij}$ and $N_{ij}$ denote the caked signal and normalization fields, and let $w_{ij}$ denote the selected-rod mask. The measured profile is
+\[
+  I_j^{\mathrm{rod}}=\frac{\sum_i w_{ij}S_{ij}}{\sum_i w_{ij}N_{ij}},
+\]
+for bins with positive selected normalization. Signal and normalization are therefore summed before division. This prevents the final trace from becoming a sum of already normalized pixels and keeps the observable tied to the detector-space calibration.
+
+The model profile is evaluated along the same selected branch. In compact notation,
+\[
+  M_j(\boldsymbol{\Theta}_{\mathrm{dis}})
+  =B(x_j)+s\left[K*\sum_{p\in\{2H,4H,6H\}}
+  w_p I_p(L;\epsilon_p,N)\right]_j,
+\]
+where $x_j$ is the profile coordinate, $L$ is the corresponding stacking
+coordinate, $B$ is a low-order background, $s$ is a global scale, $K$ is the
+fixed detector/profile broadening kernel, and $I_p$ is the finite-stack
+transition-matrix intensity derived in
+Sec.~\ref{sec:si_pbi2_transition}.  When an explicit closed-form broadening
+kernel is used, its widths are fixed by the upstream resolution and
+mosaic/profile state or declared before the disorder fit.  It is not used to
+release independent peak areas.
+
+The disorder objective is evaluated only over the retained profile bins,
+\[
+  \chi^2_{\mathrm{dis}}(\boldsymbol{\Theta}_{\mathrm{dis}},s,B)
+  =\sum_{j\in\mathcal J}\rho\!\left(
+  \frac{I_j^{\mathrm{rod}}-M_j(\boldsymbol{\Theta}_{\mathrm{dis}})}{\sigma_j}
+  \right),
+\]
+where $\rho$ may be a least-squares or robust loss and $\mathcal J$ is the retained $Q_z$ interval. The known Bragg locations on the selected branch are inherited from the fixed detector geometry and ordered model. Peak amplitudes are not fit independently before the stacking model is applied; otherwise the diffuse between-peak intensity would already have been absorbed by the preprocessing.
+
+% BEGIN PBI2_TRANSITION_MATRIX_DERIVATION
+\section{Transition-matrix derivation for PbI\texorpdfstring{$_2$}{2} stacking disorder}
+\label{sec:si_pbi2_transition}
+
+This section gives the PbI$_2$-specific state construction and the finite-stack
+intensity used in the main text.  The general strategy--propagating layer-pair
+probabilities with a transition matrix--follows the established theory of
+one-dimensionally disordered crystals.\cite{HendricksTeller1942,KakinokiKomura1954,KakinokiKomura1965,Hart2018}
+The particular six states, allowed interface events, and fault templates below
+are the model assumptions introduced for the present PbI$_2$ analysis.
+
+\subsection{Trilayer amplitudes and six-state basis}
+
+The basal registries are
+\begin{equation}
+  0=(0,0),\qquad
+  1=\left(\frac13,\frac23\right),\qquad
+  2=\left(\frac23,\frac13\right).
+  \label{eq:si_pbi2_registries}
+\end{equation}
+Taking the Pb plane as the local origin and writing the Pb--I vertical offset
+as $\eta=\Delta z_{\mathrm{I-Pb}}/c$, the two orientation-dependent trilayer
+amplitudes are
+\begin{align}
+ F_+(h,k,L)={}&f_{\mathrm{Pb}}+
+ f_{\mathrm I}\exp\!\left\{2\pi i\left[\frac{2h+k}{3}+L\eta\right]\right\}
+ +f_{\mathrm I}\exp\!\left\{2\pi i\left[\frac{h+2k}{3}-L\eta\right]\right\},
+ \label{eq:si_pbi2_Fplus}\\
+ F_-(h,k,L)={}&f_{\mathrm{Pb}}+
+ f_{\mathrm I}\exp\!\left\{2\pi i\left[\frac{2h+k}{3}-L\eta\right]\right\}
+ +f_{\mathrm I}\exp\!\left\{2\pi i\left[\frac{h+2k}{3}+L\eta\right]\right\}.
+ \label{eq:si_pbi2_Fminus}
+\end{align}
+Atomic form factors retain their usual $Q$ dependence.  The two amplitudes
+satisfy $F_-(h,k,L)=F_+(h,k,-L)$.
+
+For the forward registry step $\mathbf{s}=(1/3,2/3)$, define
+\begin{equation}
+  \omega=\exp\!\left[2\pi i(hs_x+ks_y)\right]
+  =\exp\!\left[\frac{2\pi i}{3}(h+2k)\right].
+  \label{eq:si_pbi2_omega}
+\end{equation}
+The ordered state basis and its scattering-amplitude vector are
+\begin{equation}
+ \mathcal{S}=[0F_+,1F_+,2F_+,0F_-,1F_-,2F_-],\qquad
+ \mathbf{g}=\begin{pmatrix}
+ F_+&\omega F_+&\omega^2F_+&F_-&\omega F_-&\omega^2F_-
+ \end{pmatrix}^{\mathsf T}.
+ \label{eq:si_pbi2_state_amplitudes}
+\end{equation}
+Because $\omega^3=1$, registry 2 is also one backward step from registry 0.
+
+\subsection{Direction-resolved interface law}
+
+The five mutually exclusive interface events are
+\begin{equation}
+ \boldsymbol{\theta}=(a,b_+,b_-,d_+,d_-),\qquad
+ a+b_++b_-+d_++d_-=1.
+ \label{eq:si_pbi2_interface_law}
+\end{equation}
+The $a$ event preserves registry and orientation; $b_+$ and $b_-$ shift the
+registry by $+1$ and $-1$ without changing orientation; and $d_+$ and $d_-$
+combine an orientation change with the two handed shift rules.  A flip without
+a registry shift is excluded.  For a $d_+$ event, an $F_+\rightarrow F_-$ step
+advances the registry and the corresponding $F_-\rightarrow F_+$ step returns
+it.  The directions are interchanged for $d_-$.  This reversal is what makes a
+pure $d_+$ or $d_-$ process a two-layer 4H repeat rather than a registry random
+walk.
+
+Let
+\begin{equation}
+ S_+=\begin{pmatrix}0&1&0\\0&0&1\\1&0&0\end{pmatrix},\qquad
+ S_-=S_+^{-1}=S_+^{\mathsf T}.
+ \label{eq:si_pbi2_shift_matrices}
+\end{equation}
+With rows denoting the current state and columns the next state, define
+\begin{align}
+ A&=aI_3+b_+S_+ +b_-S_-,\\
+ B&=d_+S_+ +d_-S_-,\\
+ C&=d_+S_- +d_-S_+.
+\end{align}
+The full six-state transition matrix is
+\begin{equation}
+ T_6=\begin{pmatrix}A&B\\C&A\end{pmatrix}.
+ \label{eq:si_pbi2_T6}
+\end{equation}
+For example, the row for the state $0F_+$ is
+$(a,b_+,b_-,0,d_+,d_-)$.  Every row of $T_6$ sums to one.
+
+The deterministic parent-event vectors, in the order
+$(a,b_+,b_-,d_+,d_-)$, are
+\begin{equation}
+ \mathbf e_{2H}=(1,0,0,0,0),\qquad
+ \mathbf e_{4H}=(0,0,0,1,0),\qquad
+ \mathbf e_{6H}=(0,1,0,0,0).
+ \label{eq:si_pbi2_parent_vectors}
+\end{equation}
+The opposite-handed 4H and 6H parents are obtained by selecting $d_-$ and
+$b_-$ instead.
+
+\subsection{Exact rod-dependent reduction}
+
+The three registry-shift matrices are diagonal in the discrete Fourier basis.
+In the sector selected by the scattering phase $\omega$, the $6\times6$
+transition reduces exactly to
+\begin{equation}
+ M(\omega)=
+ \begin{pmatrix}
+ a+b_+\omega+b_-\omega^{-1} & d_+\omega+d_-\omega^{-1}\\
+ d_+\omega^{-1}+d_-\omega & a+b_+\omega+b_-\omega^{-1}
+ \end{pmatrix}.
+ \label{eq:si_pbi2_Momega}
+\end{equation}
+No registry states are discarded; Eq.~\eqref{eq:si_pbi2_Momega} is one Fourier
+block of Eq.~\eqref{eq:si_pbi2_T6}.  Setting the registry phase to unity gives
+the orientation-population matrix
+\begin{equation}
+ P=M(1)=
+ \begin{pmatrix}
+ a+b_++b_- & d_++d_-\\
+ d_++d_- & a+b_++b_-
+ \end{pmatrix}.
+ \label{eq:si_pbi2_P}
+\end{equation}
+Unlike $M(\omega)$, which carries complex scattering phases, $P$ is a
+row-stochastic probability matrix.
+
+\subsection{Finite-stack intensity}
+
+Let $d$ be the separation between neighboring trilayer centers and
+$\xi=\exp(iq_zd)$ the corresponding vertical phase.  Define
+\begin{equation}
+ \mathbf f=\begin{pmatrix}F_+\\F_-\end{pmatrix},\qquad
+ D_{F^*}=\operatorname{diag}(F_+^*,F_-^*).
+ \label{eq:si_pbi2_form_vector}
+\end{equation}
+If $\boldsymbol{\pi}^{\mathrm{ori}}_0$ is the initial orientation row vector,
+then
+\begin{equation}
+ \boldsymbol{\pi}^{\mathrm{ori}}_m
+ =\boldsymbol{\pi}^{\mathrm{ori}}_0P^m.
+ \label{eq:si_pbi2_orientation_population}
+\end{equation}
+The phase-weighted correlation between trilayers $m$ and $m+\Delta$ is
+\begin{equation}
+ K_{m,\Delta}=\boldsymbol{\pi}^{\mathrm{ori}}_m
+ D_{F^*}M(\omega)^\Delta\mathbf f.
+ \label{eq:si_pbi2_pair_kernel}
+\end{equation}
+The ensemble-averaged intensity per trilayer for a finite stack of $N$
+trilayers is therefore
+\begin{align}
+ \frac{\langle I_N\rangle}{N}={}&
+ \frac{1}{N}\sum_{m=0}^{N-1}
+ \boldsymbol{\pi}^{\mathrm{ori}}_m
+ \begin{pmatrix}|F_+|^2\\|F_-|^2\end{pmatrix}
+ \nonumber\\
+ &+\frac{2}{N}\operatorname{Re}\!\left[
+ \sum_{\Delta=1}^{N-1}\xi^\Delta
+ \sum_{m=0}^{N-1-\Delta}K_{m,\Delta}\right].
+ \label{eq:si_pbi2_finite_intensity}
+\end{align}
+The first term contains the $N$ self contributions and the second contains all
+distinct trilayer pairs.  The calculation evaluates these finite sums
+directly, retaining end effects and avoiding singular closed forms when an
+eigenvalue approaches unity.  Equivalent matrix-power and recursive
+formulations are standard for planar-fault diffraction.\cite{Treacy1991}
+
+\subsection{Polytype-rich fault templates and population mixture}
+
+For each parent-rich population,
+\begin{equation}
+ \boldsymbol{\theta}_j(\epsilon_j)
+ =(1-\epsilon_j)\mathbf e_j+\epsilon_j\mathbf q_j,
+ \qquad j\in\{2H,4H,6H\}.
+ \label{eq:si_pbi2_fault_parameterization}
+\end{equation}
+The equal-alternative templates used in the present implementation are
+\begin{align}
+ \mathbf q_{2H}&=\left(0,\frac14,\frac14,\frac14,\frac14\right),\\
+ \mathbf q_{4H}&=\left(\frac14,\frac14,\frac14,0,\frac14\right),\\
+ \mathbf q_{6H}&=\left(\frac14,0,\frac14,\frac14,\frac14\right).
+ \label{eq:si_pbi2_fault_templates}
+\end{align}
+Consequently, $\epsilon_j$ is exactly the probability that an interface in
+population $j$ does not follow its selected parent event.  Its numerical value
+is conditional on the chosen $\mathbf q_j$ and must not be interpreted without
+that template.
+
+Separate parent-rich populations are not taken to be mutually phase coherent,
+so their calculated intensities are added:
+\begin{equation}
+ I_{\mathrm{calc}}(L)=S\left\{\left[
+ w_{2H}I_{2H}(L)+w_{4H}I_{4H}(L)+w_{6H}I_{6H}(L)
+ \right]\otimes R(L)\right\},\qquad
+ w_{2H}+w_{4H}+w_{6H}=1.
+ \label{eq:si_pbi2_total_intensity}
+\end{equation}
+The core parameterization has three disorder magnitudes and two independent
+population weights.  The stack length $N$, scale, and any fixed or refined
+resolution terms are separate.  If the data do not support three
+independent disorder magnitudes, the constrained starting model is
+$\epsilon_{2H}=\epsilon_{4H}=\epsilon_{6H}$.
+
+\begin{figure}[htbp]
+ \centering
+ \begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{../figures/results_pbi2/transition_matrix/fig03_reduction_validation.png}
+  \caption{Agreement between the full and reduced calculations.}
+ \end{subfigure}
+ \hfill
+ \begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{../figures/results_pbi2/transition_matrix/fig04_pure_validation.png}
+  \caption{Recovery of the deterministic parent limits.}
+ \end{subfigure}
+ \caption{Calculation-only validation of the transition construction.  The
+ $6\times6$ and $2\times2$ expressions agree to numerical precision, and the
+ zero-disorder 2H, 4H, and 6H limits reproduce independently evaluated
+ periodic-parent intensities.  These panels validate the implementation; they
+ are not fits to experimental data.}
+ \label{fig:si_pbi2_transition_validation}
+\end{figure}
+
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=0.88\linewidth]{../figures/results_pbi2/transition_matrix/fig05_three_population_sum.png}
+ \caption{Illustrative incoherent sum of 2H-, 4H-, and 6H-rich intensities.
+ Each population has its own disorder magnitude and one normalized population
+ weight.  The numerical values in this calculation-only example are not the
+ experimental fit values.}
+ \label{fig:si_pbi2_population_sum}
+\end{figure}
+
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=0.90\linewidth]{../figures/results_pbi2/transition_matrix/fig06_4H_oscillations.png}
+ \caption{Illustrative sensitivity of common and 4H-specific positions to
+ $\epsilon_{4H}$.  Positions shared with the 2H parent retain stronger
+ finite-thickness coherence than positions that require the alternating
+ shift-plus-orientation-change rule.}
+ \label{fig:si_pbi2_4h_sensitivity}
+\end{figure}
+
+\subsection{Deterministic and phase-insensitive checks}
+
+The zero-disorder cycles are
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Parent & Nonzero event & State cycle from $0F_+$ & Reduced matrix\\
+\midrule
+2H & $a=1$ & $0F_+\rightarrow0F_+$ & $I_2$\\
+4H & $d_+=1$ & $0F_+\rightarrow1F_-\rightarrow0F_+$ &
+$\left(\begin{smallmatrix}0&\omega\\\omega^{-1}&0\end{smallmatrix}\right)$\\
+6H & $b_+=1$ & $0F_+\rightarrow1F_+\rightarrow2F_+\rightarrow0F_+$ &
+$\omega I_2$\\
+\bottomrule
+\end{tabular}
+\end{center}
+For 4H, $M(\omega)^2=I_2$; for 6H, $M(\omega)^3=I_2$ because
+$\omega^3=1$.  The $d_-=1$ and $b_-=1$ limits generate the opposite-handed
+cycles.
+
+For $h=k=0$, $\omega=1$ and $F_+=F_-=F$.  Because $P^\Delta\mathbf 1=\mathbf
+1$, Eq.~\eqref{eq:si_pbi2_pair_kernel} becomes
+$K_{m,\Delta}=|F|^2$ for every allowed transition law.  Equation
+\eqref{eq:si_pbi2_finite_intensity} then reduces to the normalized Laue factor
+\begin{equation}
+ \frac{\langle I_N\rangle}{N}
+ =\frac{|F|^2}{N}\left|\sum_{n=0}^{N-1}\xi^n\right|^2
+ =\frac{|F|^2}{N}\frac{\sin^2(N\vartheta/2)}{\sin^2(\vartheta/2)},
+ \qquad \xi=e^{i\vartheta}.
+ \label{eq:si_pbi2_m0_laue}
+\end{equation}
+Thus the strong $m=0$ oscillations are finite-thickness fringes, not diffuse
+stacking-fault contrast.  Faults can still be present; this rod does not
+distinguish their registry or orientation path.
+
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=0.88\linewidth]{../figures/results_pbi2/transition_matrix/fig07_m0_fringes.png}
+ \caption{Calculation-only check of the phase-insensitive $m=0$ condition.
+ Different parent-rich transition laws coincide because registry and
+ orientation changes do not alter the local $00L$ amplitude; the remaining
+ oscillations are controlled by finite stack length.}
+ \label{fig:si_pbi2_m0_fringes}
+\end{figure}
+% END PBI2_TRANSITION_MATRIX_DERIVATION
+
+\bibliographystyle{apsrev4-2}
+\bibliography{../bibliography/references}
+
+\end{document}

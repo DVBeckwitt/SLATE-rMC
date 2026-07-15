@@ -1,0 +1,93 @@
+\section{Diffraction Model}
+\label{sec:diffraction_model}
+The detector-space intensity model begins from the same geometric object used for detector-space indexing: the allowed reciprocal-lattice intersections and their detector coordinates.\cite{SmilgiesLi2026IndexGIXS} It then goes beyond predicted spot centers by redistributing the structure-factor intensity of the contributing reflections over mosaic distributions. By Monte Carlo sampling the incident beam profile across those orientations, weighting each ray by transmission and optical attenuation, and mapping the summed intensity to detector pixels, the calculated and measured images can be compared using the same peak positions, line shapes, relative Bragg intensities, and projected $L$-integrated profiles.
+\subsection{Diffraction Geometry}
+
+We first consider a single incident ray striking a perfectly aligned crystallite, with no beam divergence, no refraction, and no absorption. Elastic scattering requires
+\[
+|\mathbf{k}_i| = |\mathbf{k}_f| = \frac{2\pi}{\lambda},
+\qquad
+\mathbf{Q} = \mathbf{k}_f - \mathbf{k}_i.
+\]
+Diffraction occurs when the momentum transfer matches a reciprocal-lattice vector, $\mathbf{Q}=\mathbf{G}$ as seen in Fig. \ref{fig:intro_2x3}d. In the Ewald construction, this means that the reciprocal-space point for that reflection lies on the Ewald sphere of radius $|\mathbf{k}_i|$, and the simplest diffracted ray is obtained from
+\[
+\mathbf{k}_f = \mathbf{k}_i + \mathbf{G}.
+\]
+For a fixed $|\mathbf{G}|$, the set of possible reflection orientations forms a Bragg sphere of radius $|\mathbf{G}|$ about the reciprocal-space origin. The allowed exit vectors are found by intersecting that Bragg sphere with the Ewald sphere and then propagating the resulting exit ray to the detector.
+
+For each trial incident ray, the model computes the sample intersection, applies the incidence geometry and optical corrections, finds the reciprocal-space intersections that satisfy elastic scattering, and propagates the resulting exit rays to the detector. Rays are Monte Carlo sampled from the probability distribution formed by the shape, bandwidth, and divergence of the beam. From every Bragg peak's structure factor spread upon the mosaic, a second Monte Carlo sampling occurs for each ray to choose an intersection point. Footprint, detector tilt, refraction, and absorption enter as experimental resolution and intensity terms. The coordinate conventions for the lab frame, detector plane, sample rotation, and illuminated footprint are summarized in Figs.~\ref{fig:waxs_geometry_system} and~\ref{fig:waxs_geometry_sample_triptych}.
+
+%------------------------------
+% Figure 1: System only
+%------------------------------
+\begin{figure}[H]
+  \centering
+  \resizebox{0.6\linewidth}{!}{\input{figures/geometry/system_geometry}}
+  \caption{
+  Overall lab-frame geometry.
+  The incident wavevector $\mathbf{k}_i$ strikes the sample, and a representative exit wavevector $\mathbf{k}_f$ reaches the detector at scattering angle $2\theta$ and detector-plane azimuth $\phi$.
+  The detector at distance $D$ is tilted by $\beta$ and $\gamma$.
+  }
+  \label{fig:waxs_geometry_system}
+\end{figure}
+
+%------------------------------
+% Figure 2: Two-stage sample progression (side by side)
+%------------------------------
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \resizebox{\linewidth}{!}{\input{figures/geometry/sample_geometry_rotation}}
+    \caption{}
+    \label{fig:waxs_geometry_sample_rot}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \resizebox{\linewidth}{!}{\input{figures/geometry/sample_geometry_alignment}}
+    \caption{}
+    \label{fig:waxs_geometry_sample_full}
+  \end{subfigure}
+\caption{
+Two-stage sample geometry.
+Left: rotation about the goniometer center with sample offset $z_S$ and beam offset $z_B$. $\theta_i$ is the incidence angle.
+Right: full alignment adds tilt $\delta$ and footprint length $X_s$ within an illuminated window $(W,H)$ on a film of thickness $t$.
+$\vec{g}$ is the goniometer arm (normal to $\hat{y}$), and $\vec{g}'$ is the misaligned arm obtained by rotations $\alpha$ and $\psi$.}
+
+  \label{fig:waxs_geometry_sample_triptych}
+\end{figure}
+
+\subsection{Structure Factor}
+\label{sec:structure_factor}
+
+We enumerate integer in-plane Miller pairs $(H,K)$, construct the reciprocal-space rod along $G_z$ for each pair, and evaluate its detector intersections. For labels and profile extraction, the in-plane pair is represented by the scalar family index $m$, defined by the in-plane sum
+\[
+m(H,K)
+=
+\begin{bmatrix}
+H & K
+\end{bmatrix}
+\mathbf M_{\parallel}
+\begin{bmatrix}
+H \\
+K
+\end{bmatrix}
+.
+\]
+Here \(\mathbf M_{\parallel}\) is the in-plane reciprocal-lattice metric, with any lattice-dependent normalization absorbed into the definition of $m$. For the hexagonal bismuth chalcogenides, this scalar is proportional to $H^2+H\,K+K^2$. Thus, $m$ labels an in-plane reciprocal-space rod family. In 2D-powder calculations, all integer \((H,K)\) rods with the same $m$, and therefore the same \(Q_r\), are evaluated individually and then summed after projection. Multiplicity and orientation effects therefore emerge within the forward model.
+
+For each reflection with reciprocal-lattice vector
+\[
+\mathbf G = h\mathbf a^{*} + k\mathbf b^{*} + l\mathbf c^{*},
+\]
+we compute the structure factor as
+\begin{equation}
+F_{\mathbf G} =
+\sum_{a}
+o_a\, f_a(Q)\,
+\exp\!\left[2\pi i\, \mathbf G \cdot \mathbf r_a\right]\,
+\exp\!\left[-2\pi^{2}\,\mathbf G\cdot\mathbf U_a\cdot\mathbf G\right],
+\label{eq:structure_factor}
+\end{equation}
+where the sum runs over atoms $a$ in the unit cell. Here $o_a$, $f_a(Q)$, $\mathbf r_a$, and $\mathbf U_a$ are the occupancy, atomic form factor, fractional position, and anisotropic displacement tensor for atom $a$. Symmetry constraints are retained during refinement, so only the independent crystallographic parameters are varied. The detector weight for each allowed ray is multiplied by $|F_{\mathbf G}|^2$ before mosaic and experimental broadening are applied.

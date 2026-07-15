@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rasim-next"
+version = "0.0.0"
+description = "Greenfield native-detector X-ray scattering and staged refinement core"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "gemmi>=0.7,<0.8",
+  "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
+  "xraydb>=4.5,<5",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rasim_next"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]

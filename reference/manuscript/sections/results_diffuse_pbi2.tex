@@ -1,0 +1,348 @@
+\section{Results: diffuse scattering and stacking disorder in PbI\texorpdfstring{$_2$}{2}}
+\label{sec:results_pbi2}
+
+Figure~\ref{fig:pbi2_diffuse_cylinders} shows a CVD-grown PbI$_2$ film and a
+crop spanning the $m=0$ and $m=1$ Bragg rods.  The $m=1$ rod contains
+measurable intensity between the integer Bragg maxima, whereas the $m=0$ rod
+is dominated by sharp peaks and finite-thickness oscillations.  This
+rod-dependent redistribution of intensity is the experimental motivation for
+the stacking-disorder model.  In a two-dimensional powder, random in-plane
+rotation maps each in-plane reflection family onto a reciprocal-space cylinder
+at fixed $Q_R$.  Perfect stacking concentrates intensity at discrete $Q_z$
+values on a cylinder; loss of stacking coherence redistributes part of that
+intensity along the same cylinder.
+
+\begin{figure}[H]
+  \centering
+  \begin{minipage}{0.78\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/results_pbi2/PbI2_detector.png}
+  \end{minipage}
+  \caption{Measured PbI$_2$ diffraction image (right) and an enlarged region
+  of interest (left).  The direct-beam position defines the vertical
+  $m=0$ trajectory.  Diffuse intensity is visible between the ordered maxima
+  on the neighboring $m=1$ rod, while the $m=0$ profile remains insensitive
+  to the lateral registry shifts that generate stacking contrast on other
+  rods.}
+  \label{fig:pbi2_diffuse_cylinders}
+\end{figure}
+
+\subsection{Direction-resolved transition-matrix model}
+\label{sec:pbi2_transition_model}
+
+The structural unit is one I--Pb--I trilayer.  Its state is written
+$\alpha=(r,\sigma)$, where $r\in\{0,1,2\}$ denotes one of three basal
+registries and $\sigma\in\{+,-\}$ denotes the two trilayer orientations.  The
+six states are therefore
+\begin{equation}
+  \mathcal{S}=\left[0F_+,1F_+,2F_+,0F_-,1F_-,2F_-\right].
+  \label{eq:pbi2_six_states}
+\end{equation}
+For a fixed $m$ rod, a forward registry step
+$\mathbf{s}=(1/3,2/3)$ contributes
+\begin{equation}
+  \omega_{hk}=\exp\!\left[2\pi i(hs_x+ks_y)\right]
+  =\exp\!\left[\frac{2\pi i}{3}(h+2k)\right],
+  \label{eq:pbi2_registry_phase}
+\end{equation}
+while the two local orientations carry form factors $F_+(h,k,L)$ and
+$F_-(h,k,L)$.
+
+Adjacent trilayers obey the first-order interface law
+\begin{equation}
+  \boldsymbol{\theta}=(a,b_+,b_-,d_+,d_-),\qquad
+  a+b_++b_-+d_++d_-=1.
+  \label{eq:pbi2_transition_probabilities}
+\end{equation}
+Here $a$ denotes no registry or orientation change. $b_+$ and $b_-$ are
+forward and backward registry shifts without an orientation change.
+$d_+$ and $d_-$ are the two handed shift-plus-orientation-change events.  A
+change of orientation without a registry shift is excluded.  The selected
+deterministic limits are $a=1$ for 2H, $d_+=1$ for 4H, and $b_+=1$ for 6H.
+The opposite registry directions generate their symmetry-related handed
+counterparts.  Figure~\ref{fig:pbi2_transition_states} renders these cycles as
+projected I--Pb--I stacks. The sequences are read from bottom to top: $0F_+\rightarrow0F_+$ for 2H,
+$0F_+\rightarrow1F_-\rightarrow0F_+$ for 4H, and
+$0F_+\rightarrow1F_+\rightarrow2F_+\rightarrow0F_+$ for 6H.  These parent
+structures and PbI$_2$ polytypism are established experimentally.\cite{Minagawa1975,Palosz1990}
+
+\begin{figure}[H]
+	\centering
+	\resizebox{0.88\linewidth}{!}{%
+		\input{figures/results_pbi2/transition_matrix/pbi2_polytype_stacks.tex}%
+	}
+	\caption{Projected I--Pb--I trilayers for the deterministic PbI$_2$ parent
+		cycles used in the transition model. (a) 2H repeats $0F_+$ under $a=1$.
+		(b) An isolated $F_+$ trilayer shows the Pb and I atomic planes used to
+		define the local orientation. (c) 4H alternates $0F_+$ and $1F_-$ under
+		$d_+=1$. (d) 6H advances
+		$0F_+\rightarrow1F_+\rightarrow2F_+\rightarrow0F_+$ under $b_+=1$.
+		The $c$ axis points upward, so each stack is read from bottom to top. In a
+		state label $rF_\sigma$, $r\in\{0,1,2\}$ is the basal registry and
+		$\sigma\in\{+,-\}$ is the trilayer orientation. Violet and gray spheres
+		denote I and Pb, green vertical guides mark lateral registry, blue
+		horizontal guides mark atomic planes, and brackets group each I--Pb--I
+		trilayer. Signs are shown on the reference $F_+$ trilayer.}
+	\label{fig:pbi2_transition_states}
+\end{figure}
+
+The general layer-correlation treatment follows the established
+transition-matrix theory of one-dimensionally disordered crystals, whereas the
+six states and allowed PbI$_2$ interface events above are the material-specific
+construction used here.\cite{HendricksTeller1942,KakinokiKomura1954,KakinokiKomura1965,Hart2018}
+Because the registry labels enter a given rod only through
+$1$, $\omega_{hk}$, and $\omega_{hk}^{-1}$, the full six-state matrix reduces
+exactly to the following phase-weighted matrix in the orientation basis:
+\begin{equation}
+  M(\omega)=
+  \begin{pmatrix}
+    a+b_+\omega+b_-\omega^{-1} & d_+\omega+d_-\omega^{-1}\\
+    d_+\omega^{-1}+d_-\omega & a+b_+\omega+b_-\omega^{-1}
+  \end{pmatrix}.
+  \label{eq:pbi2_reduced_transition}
+\end{equation}
+The probability matrix $P=M(1)$ propagates the orientation populations, while
+$M(\omega)^\Delta$ sums the probabilities and registry phases of all paths
+connecting two trilayers separated by $\Delta$ interfaces.  The complete construction and its  reduction are given in Supplementary
+Note S3..
+
+For each parent-rich population $j\in\{2H,4H,6H\}$, the disorder parameter has
+a direct probabilistic meaning:
+\begin{equation}
+  p_j(\text{parent event})=1-\epsilon_j,
+  \qquad
+  p_j(\text{each of the four alternative events})=\frac{\epsilon_j}{4}.
+  \label{eq:pbi2_fault_parameterization}
+\end{equation}
+For 2H, 4H, and 6H the parent event is $a$, $d_+$, and $b_+$,
+respectively.  Written in the order
+$(a,b_+,b_-,d_+,d_-)$, the five probabilities in
+Eq.~\eqref{eq:pbi2_fault_parameterization} form
+$\boldsymbol{\theta}_j$ and are inserted directly into $M_j(\omega)$ and
+$P_j=M_j(1)$.  Thus $\epsilon_j$ changes the matrix powers that determine how much phase coherence remains
+between increasingly distant trilayers.
+
+For one definite sequence $s_n=(r_n,\sigma_n)$, the layer amplitude is
+$g_{s_n}=\omega^{r_n}F_{\sigma_n}$ and the coherent stack amplitude is
+$A_N(L)=\sum_{n=0}^{N-1}\xi(L)^n g_{s_n}$, where
+$\xi(L)=\exp(iq_zd)$ is the vertical phase between neighboring trilayer
+centers.  Expanding $\langle|A_N|^2\rangle$ leaves two familiar
+contributions: the intensity scattered by each trilayer individually and the
+interference between distinct trilayer pairs.
+
+For population $j$, define the orientation population of trilayer $m$ as
+\begin{equation}
+  \boldsymbol{\pi}_{j,m}
+  =\left(p_{j,m}^{+},p_{j,m}^{-}\right)
+  =\boldsymbol{\pi}_{j,0}P_j^m,
+  \qquad p_{j,m}^{+}+p_{j,m}^{-}=1.
+  \label{eq:pbi2_orientation_population}
+\end{equation}
+Here $j$ identifies the 2H-, 4H-, or 6H-rich population and $m$ identifies a
+trilayer within the finite stack.  The quantities $p_{j,m}^{+}$ and
+$p_{j,m}^{-}$ are ordinary probabilities that trilayer $m$ has orientation
+$F_+$ or $F_-$, respectively; they are neither scattering amplitudes nor the
+sample weights $w_j$ used below.
+
+The disorder-averaged interference amplitude for trilayers $m$ and
+$m+\Delta$ is
+\begin{equation}
+  K_{m,\Delta}^{(j)}=
+  \begin{pmatrix}p_{j,m}^{+} & p_{j,m}^{-}\end{pmatrix}
+  \begin{pmatrix}F_+^* & 0\\0 & F_-^*\end{pmatrix}
+  M_j(\omega)^\Delta
+  \begin{pmatrix}F_+\\F_-\end{pmatrix}.
+  \label{eq:pbi2_pair_kernel}
+\end{equation}
+The finite-stack intensity is then written as ``self scattering plus pair
+interference'':
+\begin{subequations}
+\label{eq:pbi2_finite_intensity}
+\begin{align}
+  I_j(L)
+  &=I_{j,\mathrm{self}}(L)+I_{j,\mathrm{pair}}(L),
+  \label{eq:pbi2_intensity_split}\\
+  I_{j,\mathrm{self}}(L)
+  &=\frac{1}{N}\sum_{m=0}^{N-1}
+  \left[p_{j,m}^{+}|F_+|^2+p_{j,m}^{-}|F_-|^2\right],
+  \label{eq:pbi2_self_intensity}\\
+  I_{j,\mathrm{pair}}(L)
+  &=\frac{2}{N}\operatorname{Re}
+  \sum_{\Delta=1}^{N-1}\xi(L)^\Delta
+  \sum_{m=0}^{N-1-\Delta}K_{m,\Delta}^{(j)}.
+  \label{eq:pbi2_pair_intensity}
+\end{align}
+\end{subequations}
+The self term averages the isolated-trilayer intensity over the two possible
+orientations.  The pair term groups all trilayer pairs by their separation
+$\Delta$: there are $N-\Delta$ pairs at that separation, and each carries the
+same vertical phase $\xi(L)^\Delta$.  In
+Eq.~\eqref{eq:pbi2_pair_kernel}, the expression can be read from right to
+left.  The final column supplies the scattering amplitude of the later
+trilayer, $M_j(\omega)^\Delta$ sums all allowed stacking paths and registry
+phases between the two layers, the diagonal matrix supplies the conjugated
+amplitude of the earlier trilayer, and $\boldsymbol{\pi}_{j,m}$ averages over
+whether that earlier trilayer is in the $F_+$ or $F_-$ orientation.  The
+factor $2\operatorname{Re}$ in Eq.~\eqref{eq:pbi2_pair_intensity} includes the
+reverse-ordered conjugate pair without writing it separately.  The complete
+derivation is given in Supplementary Note S3.
+
+The 2H-, 4H-, and 6H-rich domains are taken to be mutually incoherent, so the
+three calculated intensities (not their amplitudes) are combined as
+\begin{equation}
+  I_{\mathrm{calc}}(L)=S\left\{\left[
+  w_{2H}I_{2H}(L)+w_{4H}I_{4H}(L)+w_{6H}I_{6H}(L)
+  \right]\!\otimes R(L)\right\},
+  \qquad w_{2H}+w_{4H}+w_{6H}=1.
+  \label{eq:pbi2_population_sum}
+\end{equation}
+Each $I_j(L)$ is first evaluated from
+Eq.~\eqref{eq:pbi2_finite_intensity} using its own $\epsilon_j$.  The weights
+then specify the fraction of the total calculated intensity assigned to each
+parent-rich population, the shared resolution function $R(L)$ broadens the
+combined profile, and $S$ converts the normalized calculation to the measured
+intensity scale.  Accordingly, $\epsilon_j$ is an effective per-interface
+disorder probability under the stated equal-alternative template, whereas
+$w_j$ is an effective population weight.
+
+For $h=k=0$, $\omega_{hk}=1$ and $F_+=F_-$.  Registry shifts and orientation
+changes then leave the scattering amplitude unchanged, so stacking faults are
+contrast-matched rather than absent.  The oscillations on the $m=0$ rod are
+therefore finite-thickness fringes.  The same criterion applies to any other
+rod for which both the registry phase and the orientation form factors are
+indistinguishable.
+
+\subsection{Refinement}
+
+The disorder stage is applied only after the detector geometry, sample
+alignment, mosaic distribution, lattice constants, ordered PbI$_2$ structure
+factor, and profile resolution have been fixed by the upstream refinement.
+Measured and calculated detector images are projected through the same
+constant-$Q_R$ rod masks and reported versus $Q_z$ or the corresponding
+stacking coordinate $L$.  No independent peak areas are introduced before the
+stacking model is evaluated, because doing so would absorb the diffuse
+between-peak intensity that the transition law is intended to explain.
+
+The core disorder parameters are
+\begin{equation}
+  \boldsymbol{\Theta}_{\mathrm{dis}}=
+  (\epsilon_{2H},\epsilon_{4H},\epsilon_{6H},
+  w_{2H},w_{4H},w_{6H},N),
+  \qquad w_{2H}+w_{4H}+w_{6H}=1,
+  \label{eq:pbi2_disorder_parameter_vector}
+\end{equation}
+so the three weights contain only two independent degrees of freedom.  A
+stable refinement can first impose a shared disorder magnitude
+$\epsilon_{2H}=\epsilon_{4H}=\epsilon_{6H}$ and release the three values only
+when the retained fault-sensitive rods support phase-dependent broadening.
+The selected-profile residual is
+\begin{equation}
+  r_j=\frac{I_j^{\mathrm{meas}}-
+  I_j^{\mathrm{model}}(\boldsymbol{\Theta}_{\mathrm{dis}})}{\sigma_j},
+  \label{eq:pbi2_disorder_profile_residual}
+\end{equation}
+with any allowed global scale or low-order background terms declared
+separately.  The fit is accepted only when it improves the selected diffuse
+profiles without degrading the ordered detector-space agreement established
+in the preceding stages.
+
+\begin{figure}[H]
+  \centering
+  {\large\bfseries Disorder Series Fitting\par}
+  \vspace{0.8em}
+  \begin{minipage}[t]{0.32\linewidth}
+    \centering
+    \paneltagged{(a)}{\includegraphics[width=\linewidth]{figures/results_pbi2/low_disorder/Y2_5d_10m.png}}
+
+    \vspace{0.6em}
+
+    \paneltagged{(b)}{\includegraphics[width=\linewidth]{figures/results_pbi2/low_disorder/figure7_pbi2_qr_rod_qz_profiles.png}}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.32\linewidth}
+    \centering
+    \paneltagged{(c)}{\includegraphics[width=\linewidth]{figures/results_pbi2/med_disorder/mid_disorder_detector_selected_q_regions_4deg.png}}
+
+    \vspace{0.6em}
+
+    \paneltagged{(d)}{\includegraphics[width=\linewidth]{figures/results_pbi2/med_disorder/figure7_pbi2_qr_rod_qz_profiles.png}}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{0.32\linewidth}
+    \centering
+    \paneltagged{(e)}{\includegraphics[width=\linewidth]{figures/results_pbi2/high_disorder/Clean2_4d_2m.png}}
+
+    \vspace{0.6em}
+
+    \paneltagged{(f)}{\includegraphics[width=\linewidth]{figures/results_pbi2/high_disorder/figure7_pbi2_qr_rod_qz_profiles.png}}
+  \end{minipage}
+
+  \caption[PbI$_2$ diffuse-rod validation across disorder]{
+  PbI$_2$ diffuse-rod comparison at $\theta_i=4^\circ$ for samples spanning
+  increasing stacking disorder.  The top row shows measured detector images
+  and the constant-$Q_R$ extraction regions.  Solid curves mark the projected
+  rod centerlines, shaded bands mark the integrated detector pixels, and
+  dashed outlines mark the integration boundaries.  The bottom row compares
+  profiles obtained by applying the same projection to data and calculation;
+  black solid curves are measured and orange dashed curves are calculated.
+  The series tests whether one detector-space geometry and ordered baseline,
+  augmented by the transition-matrix stacking model, reproduce the progressive
+  transfer of intensity from ordered maxima into the diffuse rod signal.}
+  \label{fig:pbi2_diffuse_rod_validation_disorder_series}
+\end{figure}
+
+Figure~\ref{fig:pbi2_diffuse_rod_validation_disorder_series} shows the visible
+progression from sharp ordered maxima to stronger between-peak intensity.  The
+absence of comparable diffuse contrast on $m=0$ does not imply that those
+scattering volumes contain no faults; it follows from the phase-insensitive
+condition described above.  Likewise, changes in the visibility of higher
+order $m=0$ peaks are assigned to the growth-dependent mosaic and resolution
+state rather than to lateral-registry disorder.
+
+The ordered baseline and the transition-model parameterization are summarized
+in Table~\ref{tab:pbi2_sf_parameters}.  Numerical values from the superseded
+scalar two-population fit are not carried into the new model because they do
+not map uniquely onto three population-specific $\epsilon_j$ values and three
+normalized weights.
+
+\begin{table}[H]
+  \centering
+  \caption{PbI$_2$ ordered-baseline parameters and stacking-disorder
+  parameterization for the selected-rod comparison.  Numerical
+  transition-matrix parameters must be reported from a refit using
+  Eqs.~\eqref{eq:pbi2_fault_parameterization}--\eqref{eq:pbi2_population_sum};
+  values from the superseded scalar model are not reused.}
+  \label{tab:pbi2_sf_parameters}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.12}
+  \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.1cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}X@{}}
+    \toprule
+    Parameter class & Fitted value or model quantity & Literature comparison & Role in the selected-rod model \\
+    \midrule
+    Lattice and coordinates &
+    $a=4.5583\,\text{\AA}$, $c=6.985\,\text{\AA}$; Pb at $(0,0,0)$; I1 at $(1/3,2/3,0.2677)$ and I2 at $(2/3,1/3,0.7323)$. &
+    Lattice constants remain within the 2H single-crystal structural spread, and the iodine coordinate follows the corrected $z\simeq0.268$ value.\cite{Minagawa1975,Palosz1990} &
+    Fixes the ordered Bragg positions and the $|F_{hk}(L)|^2$ envelope before stacking disorder is introduced. \\
+    Occupancies &
+    A weakly floating test returned $o_{\mathrm{Pb}}=0.999$, $o_{\mathrm{I1}}=1.001$, and $o_{\mathrm{I2}}=1.000$; the ordered baseline was then evaluated with full occupancies. &
+    The clean ordered model uses full occupancies; the density-deficient occupancy reported for a Palosz-type sample is sample-specific and was not used as the default model.\cite{Palosz1990,Lin2019} &
+    Keeps the PbI$_2$ average structure stoichiometric while the diffuse rod intensity is assigned to stacking correlations. \\
+    Directional ADPs &
+    $U_R/U_z=0.0105/0.0185$ for Pb and $0.016/0.024\,\text{\AA}^2$ for I1 and I2. &
+    Site-resolved Pb and I ADPs are not widely or consistently reported for direct transfer; the qualitative inequality $U_z(\mathrm{Pb})>U_R(\mathrm{Pb})$ is retained.\cite{Minagawa1975,Trueblood1996} &
+    Moderates relative ordered intensities and is interpreted as a sample-specific displacement refinement rather than a universal PbI$_2$ displacement constant. \\
+    Transition-matrix stacking disorder &
+    $\epsilon_{2H}$, $\epsilon_{4H}$, $\epsilon_{6H}$; normalized weights $w_{2H}$, $w_{4H}$, $w_{6H}$; and finite stack length $N$.  Final numerical values are pending the transition-matrix refit. &
+    These are effective selected-rod descriptors under the stated parent rules and equal-alternative fault templates, not universal PbI$_2$ constants. &
+    Controls the redistribution of the ordered rod envelope into broadened maxima, finite-thickness fringes, and diffuse between-peak intensity. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The physical interpretation is therefore deliberately conditional on the
+model.  Each $\epsilon_j$ measures the probability of departing from the
+selected parent event within population $j$, the $w_j$ describe the incoherent
+population mixture, and $N$ controls the finite-stack interference.  Numerical
+values should be inserted only after the experimental profiles have been
+refit with this parameterization.

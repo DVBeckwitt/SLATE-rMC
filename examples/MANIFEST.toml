@@ -1,0 +1,106 @@
+schema_version = "rasim-examples-manifest-v1"
+
+[[file]]
+path = "examples/common/osc/non_square_big_endian.osc"
+size_bytes = 6154
+sha256 = "de8a9ef2fcb4fb254559424f3cf413c2aff68c46dd61cd2a02ea9f84be9cbd0e"
+
+[[file]]
+path = "examples/common/osc/non_square_little_endian.osc"
+size_bytes = 6154
+sha256 = "da0a7d85e8be6461ae3985b9514e5cbaf75d7f3d499d342c80b6841f7e118a63"
+
+[[file]]
+path = "examples/bi2se3/structures/Bi2Se3_legacy.cif"
+size_bytes = 2055
+sha256 = "a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888"
+
+[[file]]
+path = "examples/bi2se3/structures/Bi2Se3_vesta.cif"
+size_bytes = 2057
+sha256 = "2a02dfceb6b302810229076479c54515382b3adcd558e3d9f874192dcd6b539f"
+
+[[file]]
+path = "examples/bi2se3/structures/Bi2Se3_expanded_P1.cif"
+size_bytes = 1563
+sha256 = "e7712e7feb82cefdc8230f00352904a8ce46026855a7a8c413a7a1b4376044bc"
+
+[[file]]
+path = "examples/bi2se3/osc/Bi2Se3_5m_5d.osc.gz"
+size_bytes = 5008085
+sha256 = "cba9d38d9cae1e8e3be3c2ad58ad130e04ce1958f0d2d986a947ab3a90818e36"
+
+[[file]]
+path = "examples/bi2se3/osc/Bi2Se3_10d_5m.osc.gz"
+size_bytes = 5133079
+sha256 = "faaa8f77785ddcd51c741d3b53c3ab7694fb8dacb961cd414d20daa5c21ccd67"
+
+[[file]]
+path = "examples/bi2se3/osc/Bi2Se3_15d_5m.osc.gz"
+size_bytes = 4816096
+sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
+
+[[file]]
+path = "examples/bi2se3/experiment/forward_case.toml"
+size_bytes = 1229
+sha256 = "1d01c18580886bbbceaeb0eb3d030de98909a93cbe4fd609fb592b948141af81"
+
+[[file]]
+path = "examples/bi2se3/observations/legacy_peak_selections.csv"
+size_bytes = 15895
+sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"
+
+[[file]]
+path = "examples/bi2se3/reference/Bi2Se3_vesta_cu_ka1_dmin_0p7.txt"
+size_bytes = 19253
+sha256 = "b2f7e2de27db6bfee7497ad2c8e0ebf622d5db14c5da4240b7f334d6de89d379"
+
+[[file]]
+path = "examples/bi2se3/reference/Bi2Se3_vesta_cu_ka1_dmin_0p7.metadata.json"
+size_bytes = 1326
+sha256 = "17ac72a9f02f0a62d1ef9463e2068b65bde2e7416ab23214687dac0b45ef7282"
+
+[[file]]
+path = "examples/bi2se3/reference/bi2se3_reference_comparison_baseline.csv"
+size_bytes = 55399
+sha256 = "64cfe9803aca28a16d8d3521648e0e1aa6fa16d956e279da41e943777168f159"
+
+[[file]]
+path = "examples/calibration/hbn/hBN_calibrant_5m.osc.gz"
+size_bytes = 5552815
+sha256 = "0cc42c3bd6f9db4e64553c5b325133f4e924086d155a9f3cca93cc413e545fb5"
+
+[[file]]
+path = "examples/calibration/hbn/darkImg.osc.gz"
+size_bytes = 1972826
+sha256 = "7aebcef1dd1acf5bc9c7bfef4bdab88179952a9ebfc58360f7d7128b4b418e70"
+
+[[file]]
+path = "examples/calibration/hbn/hbn_fit_reference.npz"
+size_bytes = 4466
+sha256 = "26482349cc01d001a5d5d704b0a1bd8b854803f9feb771380473144ac89353c6"
+
+[[file]]
+path = "examples/calibration/hbn/legacy_geometry.poni"
+size_bytes = 350
+sha256 = "7bb068222994599d3768c91b898dcf862e6302d5824436e790356678799f4373"
+
+[[file]]
+path = "examples/pbi2/structures/PbI2_2H.cif"
+size_bytes = 1272
+sha256 = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"
+
+[[file]]
+path = "examples/pbi2/structures/PbI2_4H.cif"
+size_bytes = 1362
+sha256 = "4ca2a4c3f973240842bf0e9c5bf62b7371e72d83f3b8735aebfcc134ad1df042"
+
+[[file]]
+path = "examples/pbi2/structures/PbI2_6H.cif"
+size_bytes = 1963
+sha256 = "85c7727d74aca6eb30e1abc7bdcc6e9c5738c9f24f6350f4fa322940f05d45ca"
+
+[[file]]
+path = "examples/pbi2/experiment/stacking_truth.toml"
+size_bytes = 509
+sha256 = "3198cfacaba81eece48ed5b049f17fc5deab03e4dbb7204d4f2c6c4846bfefc8"

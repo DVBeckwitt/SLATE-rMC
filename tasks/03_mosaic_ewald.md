@@ -1,0 +1,152 @@
+# T03: mosaic and Ewald events
+
+Branch: `feat/mosaic-ewald`
+
+Start from `PROOF_BASE_SHA`.
+
+## Goal
+
+Produce deterministic source/orientation sampling and correct reciprocal-space scattering events with explicit probability mass, event Jacobian, and elastic residual.
+
+## Owned paths
+
+```text
+src/rasim_next/sampling/
+src/rasim_next/reciprocal/ewald.py
+src/rasim_next/reciprocal/events.py
+tests/test_mosaic_ewald.py
+this task's execution-plan and handoff sections
+```
+
+## Read-only inputs
+
+- `IncidentSampleBatch`, `IncidentStateBatch`, `RodCatalog`, and `ScatteringEventBatch`
+- immutable tracked reference pack and examples
+- in-repository source/equation ledger
+
+## Forbidden
+
+- reciprocal-lattice or rod-catalog construction
+- detector geometry or pixels
+- CIF parsing, structure intensity, Parratt, or stacking
+- interface optics
+- branch and `Qr` selection
+- fitting or acceleration frameworks
+- shared contract or dependency edits
+
+## Source and equation map
+
+Tracked locations:
+
+```text
+Original paths resolve under reference/legacy_source/.
+Manuscript equation labels resolve under reference/manuscript/.
+```
+
+
+Inventory: `PHY-SRC-*`, `PHY-MOS-*`, `PHY-REC-002` through `PHY-REC-009`.
+
+Original:
+
+```text
+ra_sim/simulation/mosaic_profiles.py:15-63
+ra_sim/simulation/diffraction.py:206-273, 565-1668,
+2019-2600, 3113-3293
+```
+
+Manuscript:
+
+```text
+eq:mosaic_two_component_maintext
+mosaic orientation-density equations in the supplement
+modelling-methods Bragg-sphere and Ewald-sphere construction
+detector bandwidth sum and wavelength-dependent geometry
+```
+
+## Mandatory tasks
+
+### MOS-01: source samples
+
+Implement deterministic spatial, directional, wavelength, and declared polarization-state samples with explicit joint or independent correlation semantics and integrated probability mass. A unity polarization assumption must be explicit metadata, not absence of data.
+
+### MOS-02: orientation distribution
+
+Implement independent Gaussian-like core width, Lorentzian-like tail width, and mixture weight. Normalize probability under the declared spherical measure without evaluating a singular point density at the pole.
+
+### MOS-03: dense independent oracle
+
+Implement a transparent dense support calculation using direct equations. It must not call the public localized solver.
+
+### MOS-04: Ewald support
+
+Construct the valid support for each incident state and rod. The overnight public reference may use the dense deterministic construction when it is converged; a localized/adaptive production solver is an extension unless completed and proved. Handle two-root, tangent, no-root, and specular-family cases. Use real phase wavevectors.
+
+### MOS-05: deterministic quadrature
+
+Integrate orientation probability and any required geometric Jacobian into `reciprocal_weight`. Do not use secondary random or quantile resampling in proof mode.
+
+### MOS-06: event contract
+
+Emit event-aligned internal `Q`, `Qz`, `L`, outgoing film phase wavevector, weight, residual, IDs, and validity. Do not include source weight, structure intensity, optics, solid angle, or deposition.
+
+### MOS-07: convergence and benchmark
+
+Compare the public method to the dense oracle across narrow, broad, tail, tangent, and bandwidth cases. When the public method is the dense reference, record its convergence and baseline timing. Any localized/adaptive method must agree before it replaces the reference path.
+
+## Required proof
+
+- source and spectrum weight normalization
+- preservation of declared source correlations and polarization-state IDs
+- orientation normalization and azimuthal periodicity
+- zero-width limit and finite pole behavior
+- exact elastic residual
+- tangent and no-root status
+- dense versus public integrated event mass
+- no quantile-resampling bias
+- legacy support and event cases with classifications
+- convergence of total mass, event centroid, and selected quantiles
+
+## Overnight completion rule
+
+`READY` means the mandatory manuscript/reference slice, analytic proof, immutable-pack comparison, convergence, and public contracts all pass. Record unimplemented generalization and acceleration as an explicit extension backlog. Do not mark a scientifically required reference case as optional merely to finish.
+
+## Commands
+
+```bash
+python -m compileall -q src
+ruff check src/rasim_next/sampling src/rasim_next/reciprocal/ewald.py src/rasim_next/reciprocal/events.py tests/test_mosaic_ewald.py
+pytest -q tests/test_mosaic_ewald.py
+python -m rasim_next.proof mosaic-ewald --json
+python -m rasim_next.proof references --json
+git diff --check
+```
+
+## Stop conditions
+
+Stop `BLOCKED` if the common incident-state, rod-catalog, event, or probability-measure contract is insufficient. Do not construct rods or detector pixels in this branch.
+
+## Execution plan
+
+State: NS
+
+## Handoff
+
+Status:
+
+Commit SHA:
+
+Public APIs:
+
+Proof summary:
+
+Legacy classifications:
+
+First divergences:
+
+Convergence:
+
+Benchmark and peak memory:
+
+Known limitations:
+
+Contract requests:
