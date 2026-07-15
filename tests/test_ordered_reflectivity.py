@@ -17,8 +17,10 @@ from rasim_next.materials import (
     read_crystal,
 )
 from rasim_next.ordered.amplitudes import ordered_event_result, unit_cell_amplitude
+from rasim_next.ordered.bi2se3_proof import run_bi2se3_ql_proof
 from rasim_next.ordered.finite_stack import coherent_finite_stack, uniform_finite_stack
 from rasim_next.ordered.motifs import extract_pbi2_motifs, pbi2_layer_amplitudes
+from rasim_next.ordered.proof import TOLERANCES, _direct_atom_amplitudes
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity.parratt import ParrattResult, parratt_reflectivity
@@ -176,6 +178,38 @@ X1
     )
     with pytest.raises(ValueError, match="space-group"):
         read_crystal(conflicting)
+
+
+def test_bi2se3_single_ql_reconstructs_structure_and_amplitude() -> None:
+    result = run_bi2se3_ql_proof(
+        str(ROOT), TOLERANCES, direct_atom_amplitudes=_direct_atom_amplitudes
+    )
+    reconstruction = result["single_ql_reconstruction"]
+
+    assert reconstruction["status"] == "PASS"
+    assert reconstruction["ql_count"] == 3
+    assert reconstruction["atoms_per_ql"] == 5
+    assert reconstruction["stoichiometry"] == {"Bi": 2, "Se": 3}
+    assert reconstruction["source_label_roles"] == {
+        "center": "Se1",
+        "outer": "Se2",
+    }
+    assert reconstruction["site_coverage_exact"] is True
+    assert reconstruction["periodic_boundary_unique"] is True
+    assert reconstruction["ql_property_identity_exact"] is True
+    assert reconstruction["centering_translations"] == [
+        [0.0, 0.0, 0.0],
+        [2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
+        [1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0],
+    ]
+    assert reconstruction["maximum_coordinate_residual_fractional"] <= 1e-12
+    assert reconstruction["legacy_maximum_coordinate_residual_fractional"] <= 1e-12
+    assert reconstruction["p1_maximum_coordinate_residual_fractional"] <= 1e-12
+    assert np.allclose(
+        reconstruction["F003_ql_e"],
+        reconstruction["F003_production_e"],
+        **TOLERANCES["direct_atom_e"],
+    )
 
 
 def test_general_reciprocal_basis_and_layer_coordinate() -> None:

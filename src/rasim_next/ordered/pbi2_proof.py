@@ -34,6 +34,14 @@ _EVENT_H = (0, 1, 0, 2)
 _EVENT_K = (0, 0, 1, -1)
 _EVENT_QZ_AINV = (0.37, 0.113, 0.251, 0.509)
 _EVENT_WAVELENGTH_A = (1.540592925, 1.1, 1.8, 1.3)
+_IDEAL_PARENT_TOPOLOGIES = (
+    ("2H", (("plus", "A"),)),
+    ("4H+", (("plus", "A"), ("minus", "B"))),
+    ("4H-", (("plus", "A"), ("minus", "C"))),
+    ("6H+", (("plus", "A"), ("plus", "B"), ("plus", "C"))),
+    ("6H-", (("plus", "A"), ("plus", "C"), ("plus", "B"))),
+)
+_PERIOD_MULTIPLES = (1, 2, 5)
 
 
 def _registry(registry_name: str) -> tuple[float, float]:
@@ -449,34 +457,46 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
         float(np.max(np.abs(layer.f_minus - direct_minus))),
     )
 
-    canonical_hands = {
-        "4H_plus": (("plus", "A"), ("minus", "B")),
-        "4H_minus": (("plus", "A"), ("minus", "C")),
-        "6H_plus": (("plus", "A"), ("plus", "B"), ("plus", "C")),
-        "6H_minus": (("plus", "A"), ("plus", "C"), ("plus", "B")),
-    }
-    ideal_hands: dict[str, object] = {}
+    ideal_cases: dict[tuple[str, int], dict[str, object]] = {}
     ideal_error = 0.0
-    for name, topology in canonical_hands.items():
-        atoms, coordinates = _ideal_atoms(source, orientations, topology, source_repeat_A)
-        direct = _direct_atom_sum(atoms, q_vectors, event_wavelength_A, unknown_u_iso_A2=0.0)
-        coherent = _coherent_layers(
-            layer.f_plus,
-            layer.f_minus,
-            topology,
-            source_repeat_A,
-            event_h,
-            event_k,
-            event_qz_Ainv,
-        )
-        error = float(np.max(np.abs(direct - coherent)))
-        ideal_error = max(ideal_error, error)
-        ideal_hands[name] = {
+    for parent, period_topology in _IDEAL_PARENT_TOPOLOGIES:
+        for period_multiple in _PERIOD_MULTIPLES:
+            topology = period_topology * period_multiple
+            atoms, coordinates = _ideal_atoms(source, orientations, topology, source_repeat_A)
+            direct = _direct_atom_sum(atoms, q_vectors, event_wavelength_A, unknown_u_iso_A2=0.0)
+            coherent = _coherent_layers(
+                layer.f_plus,
+                layer.f_minus,
+                topology,
+                source_repeat_A,
+                event_h,
+                event_k,
+                event_qz_Ainv,
+            )
+            error = float(np.max(np.abs(direct - coherent)))
+            ideal_error = max(ideal_error, error)
+            ideal_cases[(parent, period_multiple)] = {
+                "direct": direct,
+                "coherent": coherent,
+                "error": error,
+                "coordinates": coordinates,
+            }
+
+    ideal_hands: dict[str, object] = {}
+    for output_name, parent in (
+        ("4H_plus", "4H+"),
+        ("4H_minus", "4H-"),
+        ("6H_plus", "6H+"),
+        ("6H_minus", "6H-"),
+    ):
+        case = ideal_cases[(parent, 1)]
+        topology = dict(_IDEAL_PARENT_TOPOLOGIES)[parent]
+        ideal_hands[output_name] = {
             "topology_t04": [list(value) for value in topology],
-            "direct_amplitude_e": _complex_pairs(direct),
-            "coherent_f_layer_amplitude_e": _complex_pairs(coherent),
-            "maximum_factorization_error_e": error,
-            "explicit_coordinates": coordinates,
+            "direct_amplitude_e": _complex_pairs(case["direct"]),
+            "coherent_f_layer_amplitude_e": _complex_pairs(case["coherent"]),
+            "maximum_factorization_error_e": case["error"],
+            "explicit_coordinates": case["coordinates"],
         }
 
     required_topologies = {
@@ -623,6 +643,64 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
             ),
         }
 
+    orientation_label_mapping = {
+        "LayerAmplitudeResult.f_plus": "T04 manuscript F_plus",
+        "LayerAmplitudeResult.f_minus": "T04 manuscript F_minus; exact expanded 2H orientation",
+        "coordination_plus": "T04 manuscript F_minus",
+        "coordination_minus": "T04 manuscript F_plus",
+    }
+    events_payload = [
+        {
+            "event_id": int(event_id_value),
+            "h": int(h),
+            "k": int(k),
+            "qz_Ainv": float(qz),
+            "wavelength_A": float(wavelength),
+        }
+        for event_id_value, h, k, qz, wavelength in zip(
+            event_id,
+            event_h,
+            event_k,
+            event_qz_Ainv,
+            event_wavelength_A,
+            strict=True,
+        )
+    ]
+    deterministic_material_payload = {
+        "schema_version": 1,
+        "events": events_payload,
+        "layer": {
+            "f_plus_e": _complex_pairs(layer.f_plus),
+            "f_minus_e": _complex_pairs(layer.f_minus),
+            "layer_repeat_A": source_repeat_A,
+        },
+        "conventions": {
+            "complex_encoding": "[real,imag] float64 electron amplitude",
+            "normalization": "raw complex electron amplitude; no scaling",
+            "phase_sign": "positive",
+            "orientation_label_mapping": orientation_label_mapping,
+            "registry_offsets_fractional": {
+                name: [float(value) for value in offset] for name, offset in _REGISTRIES
+            },
+            "registry_phase_model": "exp[2pi*i*(h*x+k*y)]; B gives exp[2pi*i*(h+2k)/3]",
+            "unknown_u_iso_A2": 0.0,
+        },
+        "parents": {
+            parent: {
+                "topology_t04": [list(value) for value in topology],
+                "direct_ideal_amplitude_e_by_period_multiple": {
+                    str(period_multiple): _complex_pairs(
+                        np.asarray(
+                            ideal_cases[(parent, period_multiple)]["direct"],
+                            dtype=np.complex128,
+                        )
+                    )
+                    for period_multiple in _PERIOD_MULTIPLES
+                },
+            }
+            for parent, topology in _IDEAL_PARENT_TOPOLOGIES
+        },
+    }
     maximum_error = max(layer_error, ideal_error, target_crosscheck_error, integer_gauge_error)
     return {
         "status": "PASS"
@@ -634,29 +712,8 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
         "normalization": "raw complex electron amplitude; no strongest-reflection normalization",
         "registry_phase_in_f_values": False,
         "unknown_u_iso_A2": 0.0,
-        "events": [
-            {
-                "event_id": int(event_id),
-                "h": int(h),
-                "k": int(k),
-                "qz_Ainv": float(qz),
-                "wavelength_A": float(wavelength),
-            }
-            for event_id, h, k, qz, wavelength in zip(
-                event_id,
-                event_h,
-                event_k,
-                event_qz_Ainv,
-                event_wavelength_A,
-                strict=True,
-            )
-        ],
-        "orientation_label_mapping": {
-            "LayerAmplitudeResult.f_plus": "T04 manuscript F_plus",
-            "LayerAmplitudeResult.f_minus": "T04 manuscript F_minus; exact expanded 2H orientation",
-            "coordination_plus": "T04 manuscript F_minus",
-            "coordination_minus": "T04 manuscript F_plus",
-        },
+        "events": events_payload,
+        "orientation_label_mapping": orientation_label_mapping,
         "source_2h": {
             "expanded_orientation_t04": source_motif.orientation,
             "registry": _registry_name(
@@ -684,6 +741,7 @@ def run_pbi2_polytype_proof(root: str) -> dict[str, object]:
             "expanded_coordinates": _canonical_target_atoms(source)[1],
         },
         "canonical_ideal_hands": ideal_hands,
+        "deterministic_material_payload": deterministic_material_payload,
         "polytypes": targets,
         "maximum_errors_e": {
             "layer_amplitude_vs_direct": layer_error,

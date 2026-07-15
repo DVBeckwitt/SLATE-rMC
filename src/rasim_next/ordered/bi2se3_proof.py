@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-import gc
 import json
 import math
-import time
-import tracemalloc
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from statistics import median
-from typing import Literal
 
 import gemmi
 import numpy as np
 from numpy.typing import NDArray
 
-from rasim_next.materials import CrystalStructure, read_crystal
+from rasim_next.materials import CrystalSite, CrystalStructure, read_crystal
 from rasim_next.ordered.amplitudes import unit_cell_amplitude
 from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
 
@@ -37,16 +32,11 @@ _ABSENT_HKL = (
     (2, 0, 0),
 )
 _REQUIRED_MUTATION_STAGES = (
-    ("omitted_R_centering_translation", "ordered.unit_cell_amplitude"),
-    ("duplicated_QL", "ordered.unit_cell_amplitude"),
-    ("wrong_centering_translation", "ordered.unit_cell_amplitude"),
-    ("row_vector_reciprocal_convention", "ordered.atomic_amplitude"),
-    ("negative_phase_sign", "ordered.atomic_amplitude"),
-    ("Se1_occupancy_changed_from_1", "ordered.atomic_amplitude"),
-    ("displacement_factor_applied_twice", "ordered.atomic_amplitude"),
-    ("anomalous_imaginary_sign_reversed", "ordered.atomic_amplitude"),
-    ("premature_amplitude_normalization", "ordered.unit_cell_amplitude"),
-    ("special_position_duplicate_retained", "ordered.unit_cell_amplitude"),
+    ("omit_outer_Se", "ordered.unit_cell_amplitude"),
+    ("wrong_R_centering_translation", "ordered.unit_cell_amplitude"),
+    ("dropped_centering_phase", "ordered.unit_cell_amplitude"),
+    ("ignored_integer_image_shift_phase", "ordered.unit_cell_amplitude"),
+    ("duplicated_periodic_boundary_atom", "ordered.unit_cell_amplitude"),
 )
 _VESTA_CORRECTIONS_E = (
     ("Bi", -4.23706, 8.83640, -0.018084),
@@ -57,7 +47,9 @@ _VESTA_CORRECTIONS_E = (
 @dataclass(frozen=True, slots=True)
 class _Atom:
     source_label: str
+    species: str
     element: str
+    charge: int
     occupancy: float
     fractional: tuple[float, float, float]
     u_iso_A2: float
@@ -82,7 +74,9 @@ def _atoms_from_crystal(crystal: CrystalStructure) -> tuple[_Atom, ...]:
         atoms.append(
             _Atom(
                 source_label=site.source_label,
+                species=site.species,
                 element=site.element,
+                charge=site.charge,
                 occupancy=site.occupancy,
                 fractional=site.fractional,
                 u_iso_A2=site.u_iso_A2,
@@ -147,17 +141,21 @@ def _read_explicit_p1(path: Path) -> tuple[NDArray[np.float64], tuple[_Atom, ...
     ]
     if len({len(column) for column in columns}) != 1:
         raise ValueError("explicit P1 atom columns do not align")
-    atoms = tuple(
-        _Atom(
-            source_label=gemmi.cif.as_string(label),
-            element=gemmi.Element(gemmi.cif.as_string(symbol)).name,
-            occupancy=float(occupancy),
-            fractional=(float(x), float(y), float(z)),
-            u_iso_A2=float(u_iso),
+    atoms: list[_Atom] = []
+    for label, occupancy, x, y, z, u_iso, symbol in zip(*columns, strict=True):
+        species = gemmi.cif.as_string(symbol)
+        atoms.append(
+            _Atom(
+                source_label=gemmi.cif.as_string(label),
+                species=species,
+                element=gemmi.Element(species).name,
+                charge=0,
+                occupancy=float(occupancy),
+                fractional=(float(x), float(y), float(z)),
+                u_iso_A2=float(u_iso),
+            )
         )
-        for label, occupancy, x, y, z, u_iso, symbol in zip(*columns, strict=True)
-    )
-    return _basis_from_block(block), atoms
+    return _basis_from_block(block), tuple(atoms)
 
 
 def _canonical_xy(values: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -168,6 +166,8 @@ def _canonical_xy(values: NDArray[np.float64]) -> NDArray[np.float64]:
 
 def _extract_quintuple_layers(
     atoms: tuple[_Atom, ...],
+    *,
+    center_source_label: str | None = None,
 ) -> tuple[tuple[_Atom, ...], tuple[_Atom, ...], tuple[tuple[float, float, float], ...], float]:
     bi_count = sum(atom.element == "Bi" for atom in atoms)
     se_count = sum(atom.element == "Se" for atom in atoms)
@@ -177,61 +177,53 @@ def _extract_quintuple_layers(
     if len(atoms) != 5 * ql_count:
         raise ValueError("Bi2Se3 proof accepts only Bi and Se sites")
 
-    ordered = sorted(enumerate(atoms), key=lambda item: item[1].fractional[2])
-    z = np.asarray([atom.fractional[2] for _, atom in ordered], dtype=np.float64)
-    gaps = np.diff(np.r_[z, z[0] + 1.0])
-    gap_order = np.argsort(gaps)
-    cuts = set(int(value) for value in gap_order[-ql_count:])
-    largest_unselected = float(gaps[gap_order[-ql_count - 1]])
-    smallest_selected = float(min(gaps[index] for index in cuts))
-    if smallest_selected <= largest_unselected + 1e-8:
-        raise ValueError("van der Waals gap selection is ambiguous")
-    if any(
-        ordered[index][1].element != "Se" or ordered[(index + 1) % len(ordered)][1].element != "Se"
-        for index in cuts
-    ):
-        raise ValueError("every Bi2Se3 quintuple-layer boundary must be a Se-Se gap")
-
     motif_blocks: list[tuple[_Atom, ...]] = []
     complete_blocks: list[tuple[_Atom, ...]] = []
     centers: list[tuple[float, float, float]] = []
     covered: list[int] = []
-    for cut in sorted(cuts):
-        positions: list[int] = []
-        position = (cut + 1) % len(ordered)
-        while True:
-            positions.append(position)
-            if position in cuts:
-                break
-            position = (position + 1) % len(ordered)
-        if len(positions) != 5:
-            raise ValueError("each van der Waals interval must contain five sites")
-        block = [ordered[position] for position in positions]
-        if tuple(atom.element for _, atom in block) != ("Se", "Bi", "Se", "Bi", "Se"):
-            raise ValueError("quintuple-layer order must be Se-Bi-Se-Bi-Se")
-        covered.extend(index for index, _ in block)
+    center_candidates = [
+        (index, atom)
+        for index, atom in enumerate(atoms)
+        if atom.element == "Se"
+        and (center_source_label is None or atom.source_label == center_source_label)
+    ]
+    for center_index, center_atom in center_candidates:
+        neighboring_images: list[tuple[float, int, _Atom]] = []
+        for atom_index, atom in enumerate(atoms):
+            if atom_index == center_index:
+                continue
+            delta_z = atom.fractional[2] - center_atom.fractional[2]
+            relative_z = delta_z - math.floor(delta_z + 0.5)
+            neighboring_images.append((relative_z, atom_index, atom))
+        lower = sorted((row for row in neighboring_images if row[0] < 0.0), reverse=True)[:2]
+        upper = sorted(row for row in neighboring_images if row[0] > 0.0)[:2]
+        if len(lower) != 2 or len(upper) != 2:
+            raise ValueError("each Se1 center must have two lower and two upper QL sites")
+        block = [*sorted(lower), (0.0, center_index, center_atom), *upper]
+        if tuple(atom.element for _, _, atom in block) != ("Se", "Bi", "Se", "Bi", "Se"):
+            if center_source_label is not None:
+                raise ValueError("Se1-centered quintuple-layer order must be Se-Bi-Se-Bi-Se")
+            continue
+        if center_source_label is not None and (
+            block[0][2].source_label != "Se2" or block[-1][2].source_label != "Se2"
+        ):
+            raise ValueError("Se1-centered quintuple-layer outer sites must be source-labelled Se2")
+        covered.extend(index for _, index, _ in block)
 
-        unwrapped_z: list[float] = []
-        for _, atom in block:
-            candidate = atom.fractional[2]
-            if unwrapped_z and candidate < unwrapped_z[-1] - 1e-12:
-                candidate += 1.0
-            unwrapped_z.append(candidate)
-        center_atom = block[2][1]
         center = np.asarray(
             [
                 center_atom.fractional[0],
                 center_atom.fractional[1],
-                np.mod(unwrapped_z[2], 1.0),
+                np.mod(center_atom.fractional[2], 1.0),
             ],
             dtype=np.float64,
         )
         center[np.isclose(center, 1.0, rtol=0.0, atol=1e-12)] = 0.0
         motif: list[_Atom] = []
         complete: list[_Atom] = []
-        for (_, atom), atom_z in zip(block, unwrapped_z, strict=True):
+        for relative_z, _, atom in block:
             offset_xy = _canonical_xy(np.asarray(atom.fractional[:2]) - center[:2])
-            offset = (float(offset_xy[0]), float(offset_xy[1]), float(atom_z - unwrapped_z[2]))
+            offset = (float(offset_xy[0]), float(offset_xy[1]), float(relative_z))
             motif_atom = replace(atom, fractional=offset)
             motif.append(motif_atom)
             complete.append(
@@ -244,15 +236,21 @@ def _extract_quintuple_layers(
         complete_blocks.append(tuple(complete))
         centers.append(tuple(float(value) for value in center))
 
-    if sorted(covered) != list(range(len(atoms))):
+    if len(motif_blocks) != ql_count or sorted(covered) != list(range(len(atoms))):
         raise ValueError("quintuple-layer extraction must cover every site exactly once")
     canonical_index = min(range(ql_count), key=lambda index: centers[index])
     canonical = motif_blocks[canonical_index]
     maximum_spread = 0.0
-    reference_signature = tuple((atom.element, atom.occupancy, atom.u_iso_A2) for atom in canonical)
+    reference_signature = tuple(
+        (atom.species, atom.element, atom.charge, atom.occupancy, atom.u_iso_A2)
+        for atom in canonical
+    )
     reference_coordinates = np.asarray([atom.fractional for atom in canonical])
     for motif in motif_blocks:
-        signature = tuple((atom.element, atom.occupancy, atom.u_iso_A2) for atom in motif)
+        signature = tuple(
+            (atom.species, atom.element, atom.charge, atom.occupancy, atom.u_iso_A2)
+            for atom in motif
+        )
         if signature != reference_signature:
             raise ValueError("all extracted quintuple layers must preserve atom properties")
         maximum_spread = max(
@@ -286,6 +284,32 @@ def _translated_atoms(
     )
 
 
+def _crystal_from_atoms(
+    template: CrystalStructure, atoms: tuple[_Atom, ...], *, phase_id: str
+) -> CrystalStructure:
+    return CrystalStructure(
+        phase_id=phase_id,
+        spacegroup_hm="P 1",
+        direct_basis_A=template.direct_basis_A,
+        volume_A3=template.volume_A3,
+        sites=tuple(
+            CrystalSite(
+                source_label=atom.source_label,
+                species=atom.species,
+                element=atom.element,
+                charge=atom.charge,
+                occupancy=atom.occupancy,
+                fractional=atom.fractional,
+                u_iso_A2=atom.u_iso_A2,
+                source_multiplicity=1,
+            )
+            for atom in atoms
+        ),
+        source_path=template.source_path,
+        provenance=f"single-QL proof reconstruction from {template.source_path.name}",
+    )
+
+
 def _waasmaier_kirfel_f0(element: str, s_Ainv: NDArray[np.float64]) -> NDArray[np.float64]:
     if element == "Bi":
         a = (16.282274, 32.725136, 6.678302, 2.694750, 20.576559)
@@ -307,18 +331,13 @@ def _waasmaier_kirfel_f0(element: str, s_Ainv: NDArray[np.float64]) -> NDArray[n
     )
 
 
-def _vesta_factor(
-    element: str, s_Ainv: NDArray[np.float64], imag_sign: int
-) -> NDArray[np.complex128]:
+def _vesta_factor(element: str, s_Ainv: NDArray[np.float64]) -> NDArray[np.complex128]:
     correction = next((values for values in _VESTA_CORRECTIONS_E if values[0] == element), None)
     if correction is None:
         raise ValueError(f"VESTA Bi2Se3 proof has no factor for {element}")
     _, f_prime, f_double_prime, nuclear_thomson = correction
     return np.asarray(
-        _waasmaier_kirfel_f0(element, s_Ainv)
-        + f_prime
-        + nuclear_thomson
-        + 1.0j * imag_sign * f_double_prime,
+        _waasmaier_kirfel_f0(element, s_Ainv) + f_prime + nuclear_thomson + 1.0j * f_double_prime,
         dtype=np.complex128,
     )
 
@@ -327,21 +346,13 @@ def _direct_amplitudes(
     atoms: tuple[_Atom, ...],
     direct_basis_A: NDArray[np.float64],
     hkl: NDArray[np.float64],
-    *,
-    reciprocal_convention: Literal["column", "row"] = "column",
-    phase_sign: int = 1,
-    displacement_applications: int = 1,
-    anomalous_imag_sign: int = 1,
-    normalize_to_100: bool = False,
 ) -> NDArray[np.complex128]:
     indices = np.asarray(hkl, dtype=np.float64)
-    reciprocal = 2.0 * np.pi * np.linalg.inv(direct_basis_A)
-    if reciprocal_convention == "column":
-        reciprocal = reciprocal.T
+    reciprocal = 2.0 * np.pi * np.linalg.inv(direct_basis_A).T
     q_magnitude = np.linalg.norm(indices @ reciprocal.T, axis=1)
     s_Ainv = q_magnitude / (4.0 * np.pi)
     fractional = np.asarray([atom.fractional for atom in atoms], dtype=np.float64)
-    phase = np.exp(phase_sign * 2.0j * np.pi * (indices @ fractional.T))
+    phase = np.exp(2.0j * np.pi * (indices @ fractional.T))
     amplitude = np.zeros(indices.shape[0], dtype=np.complex128)
     for element in ("Bi", "Se"):
         mask = np.fromiter(
@@ -351,14 +362,10 @@ def _direct_amplitudes(
             continue
         occupancy = np.asarray([atom.occupancy for atom in atoms], dtype=np.float64)[mask]
         u_iso = np.asarray([atom.u_iso_A2 for atom in atoms], dtype=np.float64)[mask]
-        damping = np.exp(
-            -0.5 * displacement_applications * q_magnitude[:, None] ** 2 * u_iso[None, :]
-        )
-        amplitude += _vesta_factor(element, s_Ainv, anomalous_imag_sign) * np.sum(
+        damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
+        amplitude += _vesta_factor(element, s_Ainv) * np.sum(
             phase[:, mask] * damping * occupancy[None, :], axis=1
         )
-    if normalize_to_100:
-        amplitude = 100.0 * amplitude / float(np.max(np.abs(amplitude)))
     return amplitude
 
 
@@ -445,7 +452,9 @@ def _coordinate_payload(atoms: tuple[_Atom, ...]) -> list[dict[str, object]]:
     return [
         {
             "source_label": atom.source_label,
+            "species": atom.species,
             "element": atom.element,
+            "charge": atom.charge,
             "occupancy": atom.occupancy,
             "u_iso_A2": atom.u_iso_A2,
             "fractional": list(atom.fractional),
@@ -461,7 +470,19 @@ def _periodic_coordinate_error(first: tuple[_Atom, ...], second: tuple[_Atom, ..
         candidates: list[tuple[float, int]] = []
         for index in available:
             other = second[index]
-            if other.element != atom.element:
+            if (
+                other.species,
+                other.element,
+                other.charge,
+                other.occupancy,
+                other.u_iso_A2,
+            ) != (
+                atom.species,
+                atom.element,
+                atom.charge,
+                atom.occupancy,
+                atom.u_iso_A2,
+            ):
                 continue
             difference = np.asarray(atom.fractional) - np.asarray(other.fractional)
             difference -= np.rint(difference)
@@ -491,7 +512,7 @@ def _coordinate_serialization_bound_e(
     coefficient_sum = np.zeros(indices.shape[0], dtype=np.float64)
     for atom in atoms:
         damping = np.exp(-0.5 * atom.u_iso_A2 * q_magnitude**2)
-        coefficient_sum += atom.occupancy * np.abs(_vesta_factor(atom.element, s_Ainv, 1)) * damping
+        coefficient_sum += atom.occupancy * np.abs(_vesta_factor(atom.element, s_Ainv)) * damping
     phase_bound = np.minimum(
         2.0,
         2.0 * np.pi * maximum_fractional_error * np.sum(np.abs(indices), axis=1),
@@ -502,143 +523,136 @@ def _coordinate_serialization_bound_e(
 
 def _image_shifts(
     wrapped: tuple[_Atom, ...], complete: tuple[_Atom, ...]
-) -> tuple[list[dict[str, object]], float]:
+) -> tuple[list[dict[str, object]], tuple[tuple[int, int, int], ...], float]:
     available = set(range(len(wrapped)))
     payload: list[dict[str, object]] = []
+    shifts: list[tuple[int, int, int]] = []
     maximum_error = 0.0
     for atom in complete:
         candidates: list[tuple[float, int, NDArray[np.float64]]] = []
         for index in available:
             source = wrapped[index]
-            if source.element != atom.element:
+            if (
+                source.species,
+                source.element,
+                source.charge,
+                source.occupancy,
+                source.u_iso_A2,
+            ) != (
+                atom.species,
+                atom.element,
+                atom.charge,
+                atom.occupancy,
+                atom.u_iso_A2,
+            ):
                 continue
             difference = np.asarray(atom.fractional) - np.asarray(source.fractional)
             residual = difference - np.rint(difference)
             candidates.append((float(np.max(np.abs(residual))), index, difference))
+        if not candidates:
+            raise ValueError("complete QL atom has no identity-preserving wrapped-cell match")
         error, matched, difference = min(candidates, key=lambda item: item[0])
         available.remove(matched)
         maximum_error = max(maximum_error, error)
+        image_shift = tuple(int(value) for value in np.rint(difference))
+        shifts.append(image_shift)
         payload.append(
             {
                 "source_label": wrapped[matched].source_label,
                 "element": atom.element,
                 "wrapped_fractional": list(wrapped[matched].fractional),
                 "complete_fractional": list(atom.fractional),
-                "integer_image_shift": [int(value) for value in np.rint(difference)],
+                "integer_image_shift": list(image_shift),
             }
         )
-    return payload, maximum_error
+    if available:
+        raise ValueError("complete QL reconstruction must match every wrapped site exactly once")
+    return payload, tuple(shifts), maximum_error
 
 
 def _mutation_results(
     canonical: tuple[_Atom, ...],
     direct_basis_A: NDArray[np.float64],
-    hkl: NDArray[np.float64],
+    integer_hkl: NDArray[np.float64],
+    noninteger_hkl: NDArray[np.float64],
+    noninteger_wk_correct: NDArray[np.complex128],
+    noninteger_wk_without_image_phase: NDArray[np.complex128],
 ) -> list[dict[str, object]]:
     correct_atoms = _translated_atoms(canonical, _CENTERING_TRANSLATIONS)
-    correct = _direct_amplitudes(correct_atoms, direct_basis_A, hkl)
-    prior_atomic_amplitude = _direct_amplitudes(canonical, direct_basis_A, hkl)
-    changed_se1 = tuple(
-        replace(atom, occupancy=0.95) if atom.source_label == "Se1" else atom
-        for atom in correct_atoms
+    correct_integer = _direct_amplitudes(correct_atoms, direct_basis_A, integer_hkl)
+    integer_ql_amplitude = _direct_amplitudes(canonical, direct_basis_A, integer_hkl)
+    noninteger_ql_amplitude = _direct_amplitudes(canonical, direct_basis_A, noninteger_hkl)
+    phase_by_translation = np.exp(
+        2.0j * np.pi * (integer_hkl @ np.asarray(_CENTERING_TRANSLATIONS).T)
     )
-    special_position = next(
-        atom
-        for atom in correct_atoms
-        if atom.source_label == "Se1"
-        and np.allclose(atom.fractional, (0.0, 0.0, 0.0), rtol=0.0, atol=1e-12)
-    )
+    boundary_duplicate = replace(canonical[2], fractional=(0.0, 0.0, 1.0))
     cases = (
         (
-            "omitted_R_centering_translation",
+            "omit_outer_Se",
+            integer_ql_amplitude,
+            correct_integer,
             _direct_amplitudes(
-                _translated_atoms(canonical, _CENTERING_TRANSLATIONS[:2]), direct_basis_A, hkl
-            ),
-            "ordered.unit_cell_amplitude",
-        ),
-        (
-            "duplicated_QL",
-            _direct_amplitudes(
-                _translated_atoms(
-                    canonical, (*_CENTERING_TRANSLATIONS, _CENTERING_TRANSLATIONS[2])
-                ),
+                _translated_atoms(canonical[1:], _CENTERING_TRANSLATIONS),
                 direct_basis_A,
-                hkl,
+                integer_hkl,
             ),
-            "ordered.unit_cell_amplitude",
         ),
         (
-            "wrong_centering_translation",
+            "wrong_R_centering_translation",
+            integer_ql_amplitude,
+            correct_integer,
             _direct_amplitudes(
                 _translated_atoms(
                     canonical,
                     (
                         _CENTERING_TRANSLATIONS[0],
-                        (1.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0),
+                        (2.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0),
                         _CENTERING_TRANSLATIONS[2],
                     ),
                 ),
                 direct_basis_A,
-                hkl,
+                integer_hkl,
             ),
-            "ordered.unit_cell_amplitude",
         ),
         (
-            "row_vector_reciprocal_convention",
-            _direct_amplitudes(correct_atoms, direct_basis_A, hkl, reciprocal_convention="row"),
-            "ordered.atomic_amplitude",
+            "dropped_centering_phase",
+            integer_ql_amplitude,
+            integer_ql_amplitude * np.sum(phase_by_translation, axis=1),
+            integer_ql_amplitude * np.sum(phase_by_translation[:, :2], axis=1),
         ),
         (
-            "negative_phase_sign",
-            _direct_amplitudes(correct_atoms, direct_basis_A, hkl, phase_sign=-1),
-            "ordered.atomic_amplitude",
+            "ignored_integer_image_shift_phase",
+            noninteger_ql_amplitude,
+            noninteger_wk_correct,
+            noninteger_wk_without_image_phase,
         ),
         (
-            "Se1_occupancy_changed_from_1",
-            _direct_amplitudes(changed_se1, direct_basis_A, hkl),
-            "ordered.atomic_amplitude",
-        ),
-        (
-            "displacement_factor_applied_twice",
-            _direct_amplitudes(correct_atoms, direct_basis_A, hkl, displacement_applications=2),
-            "ordered.atomic_amplitude",
-        ),
-        (
-            "anomalous_imaginary_sign_reversed",
-            _direct_amplitudes(correct_atoms, direct_basis_A, hkl, anomalous_imag_sign=-1),
-            "ordered.atomic_amplitude",
-        ),
-        (
-            "premature_amplitude_normalization",
-            _direct_amplitudes(correct_atoms, direct_basis_A, hkl, normalize_to_100=True),
-            "ordered.unit_cell_amplitude",
-        ),
-        (
-            "special_position_duplicate_retained",
-            _direct_amplitudes((*correct_atoms, special_position), direct_basis_A, hkl),
-            "ordered.unit_cell_amplitude",
+            "duplicated_periodic_boundary_atom",
+            integer_ql_amplitude,
+            correct_integer,
+            _direct_amplitudes((*correct_atoms, boundary_duplicate), direct_basis_A, integer_hkl),
         ),
     )
     results: list[dict[str, object]] = []
-    for mutation_id, mutated, first_stage in cases:
+    first_stage = "ordered.unit_cell_amplitude"
+    for mutation_id, prior_atomic_amplitude, correct, mutated in cases:
         fixture_id = f"ordered.bi2se3_ql.{mutation_id}"
         reference_records: list[TraceRecord] = []
         candidate_records: list[TraceRecord] = []
-        if first_stage == "ordered.unit_cell_amplitude":
-            for records in (reference_records, candidate_records):
-                records.append(
-                    TraceRecord(
-                        fixture_id,
-                        "ordered.atomic_amplitude",
-                        prior_atomic_amplitude,
-                        "e",
-                        "crystal",
-                        Measure.NONE,
-                        QuantityKind.AMPLITUDE,
-                        "t04-bi2se3-proof-v1",
-                        "unchanged one-QL motif amplitude",
-                    )
+        for records in (reference_records, candidate_records):
+            records.append(
+                TraceRecord(
+                    fixture_id,
+                    "ordered.atomic_amplitude",
+                    prior_atomic_amplitude,
+                    "e",
+                    "crystal",
+                    Measure.NONE,
+                    QuantityKind.AMPLITUDE,
+                    "t04-bi2se3-proof-v1",
+                    "unchanged single-QL atomic amplitude",
                 )
+            )
         for records, value in ((reference_records, correct), (candidate_records, mutated)):
             records.append(
                 TraceRecord(
@@ -667,6 +681,7 @@ def _mutation_results(
                 "detected": bool(
                     comparison.first_failing_stage == first_stage
                     and comparison.failure_metric == "numeric_value"
+                    and error > 1e-10
                 ),
                 "maximum_error_e": error,
             }
@@ -674,51 +689,22 @@ def _mutation_results(
     return results
 
 
-def _benchmark(routes: dict[str, Callable[[], NDArray[np.complex128]]]) -> dict[str, object]:
-    timings: dict[str, list[float]] = {}
-    peak_bytes: dict[str, int] = {}
-    for name, route in routes.items():
-        route()
-        samples: list[float] = []
-        for _ in range(3):
-            start = time.perf_counter()
-            route()
-            samples.append(time.perf_counter() - start)
-        timings[name] = samples
-        gc.collect()
-        tracemalloc.start()
-        route()
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        peak_bytes[name] = peak
-    passed = all(
-        np.all(np.isfinite(values)) and all(value > 0.0 for value in values)
-        for values in timings.values()
-    ) and all(value > 0 for value in peak_bytes.values())
-    return {
-        "passed": bool(passed),
-        "work_shape": "6592 events x 15 atoms (206 reflections tiled 32 times)",
-        "route_factor_conventions": {
-            "direct_R3m": "VESTA parity",
-            "expanded_P1": "VESTA parity",
-            "QL_reconstructed_cell": "VESTA parity",
-            "production_xraydb": "production XrayDB",
-        },
-        "warmup_runs": 1,
-        "timed_runs": 3,
-        "median_seconds": {name: float(median(values)) for name, values in timings.items()},
-        "samples_seconds": timings,
-        "peak_traced_bytes": peak_bytes,
-    }
-
-
-def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> dict[str, object]:
+def run_bi2se3_ql_proof(
+    root: str,
+    tolerances: dict[str, dict[str, float]],
+    *,
+    direct_atom_amplitudes: Callable[
+        [CrystalStructure, NDArray[np.float64], NDArray[np.float64]],
+        NDArray[np.complex128],
+    ],
+) -> dict[str, object]:
     """Prove direct R-3m, explicit P1, one-QL, and VESTA routes independently."""
 
     repository = Path(root)
     structure_root = repository / "examples" / "bi2se3" / "structures"
     reference_root = repository / "examples" / "bi2se3" / "reference"
     r3m_path = structure_root / "Bi2Se3_vesta.cif"
+    legacy_path = structure_root / "Bi2Se3_legacy.cif"
     p1_path = structure_root / "Bi2Se3_expanded_P1.cif"
     table_path = reference_root / "Bi2Se3_vesta_cu_ka1_dmin_0p7.txt"
     metadata = json.loads(
@@ -727,14 +713,44 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
 
     r3m = read_crystal(r3m_path, phase_id="bi2se3-vesta-r3m")
     r3m_atoms = _atoms_from_crystal(r3m)
+    legacy = read_crystal(legacy_path, phase_id="bi2se3-legacy-r3m")
+    legacy_atoms = _atoms_from_crystal(legacy)
     p1_basis, p1_atoms = _read_explicit_p1(p1_path)
-    canonical, complete_r3m, centers, r3m_motif_spread = _extract_quintuple_layers(r3m_atoms)
+    canonical, complete_r3m, centers, r3m_motif_spread = _extract_quintuple_layers(
+        r3m_atoms, center_source_label="Se1"
+    )
+    legacy_canonical, _, _, legacy_motif_spread = _extract_quintuple_layers(
+        legacy_atoms, center_source_label="Se1"
+    )
     _, complete_p1, _, p1_motif_spread = _extract_quintuple_layers(p1_atoms)
     reconstructed = _translated_atoms(canonical, _CENTERING_TRANSLATIONS)
-    image_shift_payload, image_integrality_error = _image_shifts(r3m_atoms, reconstructed)
+    image_shift_payload, image_shifts, image_integrality_error = _image_shifts(
+        r3m_atoms, reconstructed
+    )
+    wrapped_reconstructed = tuple(
+        replace(
+            atom,
+            fractional=tuple(
+                float(value) for value in np.asarray(atom.fractional) - np.asarray(image_shift)
+            ),
+        )
+        for atom, image_shift in zip(reconstructed, image_shifts, strict=True)
+    )
+    ql_crystal = _crystal_from_atoms(r3m, canonical, phase_id="bi2se3-single-ql")
+    wrapped_ql_crystal = _crystal_from_atoms(
+        r3m, wrapped_reconstructed, phase_id="bi2se3-single-ql-wrapped-cell"
+    )
+    unwrapped_ql_crystal = _crystal_from_atoms(
+        r3m, reconstructed, phase_id="bi2se3-single-ql-complete-images"
+    )
     coordinate_error = _periodic_coordinate_error(r3m_atoms, p1_atoms)
+    legacy_coordinate_error = _periodic_coordinate_error(r3m_atoms, legacy_atoms)
+    legacy_ql_coordinate_error = _periodic_coordinate_error(canonical, legacy_canonical)
     reconstruction_coordinate_error = _periodic_coordinate_error(r3m_atoms, reconstructed)
+    p1_reconstruction_coordinate_error = _periodic_coordinate_error(reconstructed, p1_atoms)
+    legacy_reconstruction_coordinate_error = _periodic_coordinate_error(reconstructed, legacy_atoms)
     basis_error = _maximum(r3m.direct_basis_A - p1_basis)
+    legacy_basis_error = _maximum(r3m.direct_basis_A - legacy.direct_basis_A)
 
     expected_centers = np.asarray(_CENTERING_TRANSLATIONS)
     observed_centers = np.asarray(sorted(centers, key=lambda value: value[2]))
@@ -743,6 +759,21 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
     hkl = np.asarray(table.hkl, dtype=np.float64)
     absent_hkl = np.asarray(_ABSENT_HKL, dtype=np.float64)
     proof_hkl = np.vstack((hkl, absent_hkl))
+
+    integer_wavelength_A = np.resize(
+        np.asarray((_WAVELENGTH_A, 1.1, 1.8, 1.3), dtype=np.float64), proof_hkl.shape[0]
+    )
+    integer_ql_amplitude = unit_cell_amplitude(
+        ql_crystal, proof_hkl, integer_wavelength_A
+    ).amplitude_e * _centering_factor(proof_hkl)
+    integer_direct_amplitude = direct_atom_amplitudes(r3m, proof_hkl, integer_wavelength_A)
+    integer_production_amplitude = unit_cell_amplitude(
+        r3m, proof_hkl, integer_wavelength_A
+    ).amplitude_e
+    maximum_direct_amplitude_residual = _maximum(integer_ql_amplitude - integer_direct_amplitude)
+    maximum_production_amplitude_residual = _maximum(
+        integer_ql_amplitude - integer_production_amplitude
+    )
 
     direct_r3m = _direct_amplitudes(r3m_atoms, r3m.direct_basis_A, proof_hkl)
     direct_p1 = _direct_amplitudes(p1_atoms, p1_basis, proof_hkl)
@@ -774,6 +805,26 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
     continuous_reconstruction_error = max(
         _maximum(continuous_a - continuous_c),
         _maximum(continuous_c - continuous_analytic),
+    )
+    continuous_wavelength_A = np.asarray((_WAVELENGTH_A, 1.1, 1.8), dtype=np.float64)
+    continuous_image_phase_amplitude = direct_atom_amplitudes(
+        wrapped_ql_crystal, continuous_hkl, continuous_wavelength_A
+    )
+    continuous_ql_production = unit_cell_amplitude(
+        wrapped_ql_crystal, continuous_hkl, continuous_wavelength_A
+    ).amplitude_e
+    continuous_production = unit_cell_amplitude(
+        r3m, continuous_hkl, continuous_wavelength_A
+    ).amplitude_e
+    continuous_without_image_phase = direct_atom_amplitudes(
+        unwrapped_ql_crystal, continuous_hkl, continuous_wavelength_A
+    )
+    maximum_noninteger_image_shift_residual = max(
+        _maximum(continuous_image_phase_amplitude - continuous_production),
+        _maximum(continuous_ql_production - continuous_production),
+    )
+    image_shift_phase_sensitivity = _maximum(
+        continuous_without_image_phase - continuous_image_phase_amplitude
     )
     p1_absence_bound = _coordinate_serialization_bound_e(
         r3m_atoms, r3m.direct_basis_A, absent_hkl, coordinate_error
@@ -821,6 +872,14 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
 
     row_003 = int(np.flatnonzero(np.all(table.hkl == (0, 0, 3), axis=1))[0])
     target_003 = 104.983515 + 14.466758j
+    hkl_003 = np.asarray(((0.0, 0.0, 3.0),), dtype=np.float64)
+    wavelength_003_A = np.asarray((_WAVELENGTH_A,), dtype=np.float64)
+    f003_ql = (
+        unit_cell_amplitude(ql_crystal, hkl_003, wavelength_003_A).amplitude_e[0]
+        * _centering_factor(hkl_003)[0]
+    )
+    f003_direct = direct_atom_amplitudes(r3m, hkl_003, wavelength_003_A)[0]
+    f003_production = unit_cell_amplitude(r3m, hkl_003, wavelength_003_A).amplitude_e[0]
     p1_003 = direct_p1[row_003]
     ql_003 = direct_ql[row_003]
     production_result = unit_cell_amplitude(
@@ -839,6 +898,19 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
             (direct_ql, analytic),
             (continuous_a, continuous_c),
             (continuous_c, continuous_analytic),
+        )
+    )
+    direct_tolerance = tolerances["direct_atom_e"]
+    amplitude_reconstruction_passed = all(
+        np.allclose(first, second, **direct_tolerance)
+        for first, second in (
+            (integer_ql_amplitude, integer_direct_amplitude),
+            (integer_ql_amplitude, integer_production_amplitude),
+            (integer_direct_amplitude, integer_production_amplitude),
+            (continuous_image_phase_amplitude, continuous_production),
+            (continuous_ql_production, continuous_production),
+            (np.asarray((f003_ql,)), np.asarray((f003_direct,))),
+            (np.asarray((f003_ql,)), np.asarray((f003_production,))),
         )
     )
     relative_magnitude_error = np.abs(magnitude_error) / np.maximum(table.magnitude_e, 1.0)
@@ -870,30 +942,19 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
         <= tolerances["vesta_003_component_e"]["atol"]
     )
 
-    mutation_hkl = np.vstack((proof_hkl, continuous_hkl))
-    mutations = _mutation_results(canonical, r3m.direct_basis_A, mutation_hkl)
+    mutations = _mutation_results(
+        canonical,
+        r3m.direct_basis_A,
+        proof_hkl,
+        continuous_hkl,
+        continuous_wrapped,
+        continuous_c,
+    )
     mutation_signature = tuple(
         (str(item["mutation_id"]), str(item["expected_first_stage"])) for item in mutations
     )
     mutations_passed = mutation_signature == _REQUIRED_MUTATION_STAGES and all(
         bool(item["detected"]) for item in mutations
-    )
-    benchmark_hkl = np.tile(hkl, (32, 1))
-    benchmark = _benchmark(
-        {
-            "direct_R3m": lambda: _direct_amplitudes(r3m_atoms, r3m.direct_basis_A, benchmark_hkl),
-            "expanded_P1": lambda: _direct_amplitudes(p1_atoms, p1_basis, benchmark_hkl),
-            "QL_reconstructed_cell": lambda: _direct_amplitudes(
-                reconstructed, r3m.direct_basis_A, benchmark_hkl
-            ),
-            "production_xraydb": lambda: (
-                unit_cell_amplitude(
-                    r3m,
-                    benchmark_hkl,
-                    np.full(benchmark_hkl.shape[0], _WAVELENGTH_A),
-                ).amplitude_e
-            ),
-        }
     )
     weak_row = int(np.argmin(np.abs(calculated)))
     strong_row = int(np.argmax(np.abs(calculated)))
@@ -906,25 +967,39 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
         label: sum(atom.source_label == label for atom in r3m_atoms)
         for label in sorted({atom.source_label for atom in r3m_atoms})
     }
+    p1_motif_passed = bool(p1_motif_spread <= 1e-12 + 4.0 * np.finfo(np.float64).eps)
     structural_passed = (
         r3m.spacegroup_hm == "R -3 m:H"
         and atom_counts == {"Bi": 6, "Se": 9, "total": 15}
         and source_multiplicities == {"Bi": 6, "Se1": 3, "Se2": 6}
+        and canonical[2].source_label == "Se1"
+        and canonical[0].source_label == canonical[-1].source_label == "Se2"
         and coordinate_error <= 1e-12
+        and legacy_coordinate_error <= 1e-12
+        and legacy_ql_coordinate_error <= 1e-12
+        and legacy_reconstruction_coordinate_error <= 1e-12
         and reconstruction_coordinate_error <= 1e-12
+        and p1_reconstruction_coordinate_error <= 1e-12
         and basis_error <= 1e-12
+        and legacy_basis_error <= 1e-12
         and center_error <= 1e-12
         and image_integrality_error <= 1e-12
         and r3m_motif_spread <= 1e-12
-        and p1_motif_spread <= 2e-12
+        and legacy_motif_spread <= 1e-12
+        and p1_motif_passed
+    )
+    single_ql_passed = (
+        structural_passed
+        and amplitude_reconstruction_passed
+        and image_shift_phase_sensitivity > direct_tolerance["atol"]
+        and mutations_passed
     )
     passed = (
-        structural_passed
+        single_ql_passed
         and reconstruction_passed
         and p1_serialization_passed
         and table_passed
         and mutations_passed
-        and bool(benchmark["passed"])
     )
 
     return {
@@ -933,6 +1008,52 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
         "normalization": "raw complex electron amplitude; no scaling, rounding, pruning, or r_e^2",
         "wavelength_A": _WAVELENGTH_A,
         "d_min_A": _D_MIN_A,
+        "single_ql_reconstruction": {
+            "status": "PASS" if single_ql_passed else "FAIL",
+            "ql_count": len(_CENTERING_TRANSLATIONS),
+            "atoms_per_ql": len(canonical),
+            "stoichiometry": {
+                element: sum(atom.element == element for atom in canonical)
+                for element in ("Bi", "Se")
+            },
+            "source_label_roles": {
+                "center": canonical[2].source_label,
+                "outer": canonical[0].source_label,
+            },
+            "site_coverage_exact": (
+                len(reconstructed) == len(r3m_atoms) and reconstruction_coordinate_error <= 1e-12
+            ),
+            "periodic_boundary_unique": (
+                len(image_shift_payload) == len(r3m_atoms) == len(reconstructed)
+                and image_integrality_error <= 1e-12
+            ),
+            "ql_property_identity_exact": (
+                r3m_motif_spread <= 1e-12 and legacy_motif_spread <= 1e-12 and p1_motif_passed
+            ),
+            "centering_translations": [list(value) for value in _CENTERING_TRANSLATIONS],
+            "maximum_coordinate_residual_fractional": reconstruction_coordinate_error,
+            "legacy_maximum_coordinate_residual_fractional": max(
+                legacy_coordinate_error,
+                legacy_ql_coordinate_error,
+                legacy_reconstruction_coordinate_error,
+            ),
+            "p1_maximum_coordinate_residual_fractional": max(
+                coordinate_error, p1_reconstruction_coordinate_error
+            ),
+            "integer_reflection_events": int(proof_hkl.shape[0]),
+            "wavelengths_A": sorted({float(value) for value in integer_wavelength_A}),
+            "maximum_direct_amplitude_residual_e": maximum_direct_amplitude_residual,
+            "maximum_production_amplitude_residual_e": maximum_production_amplitude_residual,
+            "F003_ql_e": _complex_pair(f003_ql),
+            "F003_direct_e": _complex_pair(f003_direct),
+            "F003_production_e": _complex_pair(f003_production),
+            "maximum_noninteger_L_image_shift_residual_e": (
+                maximum_noninteger_image_shift_residual
+            ),
+            "noninteger_image_phase": "u=w+n; exp(2pi*i*H.u)*exp(-2pi*i*H.n)",
+            "ignored_image_shift_phase_difference_e": image_shift_phase_sensitivity,
+            "mutations": mutations,
+        },
         "canonical_QL": {
             "gauge": "central Se at (0,0,0); bottom-to-top; xy offsets modulo one; signed z; positive phase",
             "atoms": [
@@ -959,10 +1080,20 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
             "integer_image_shifts": image_shift_payload,
             "maximum_image_integrality_error_fractional": image_integrality_error,
             "R3m_vs_P1_coordinate_error_fractional": coordinate_error,
+            "R3m_vs_legacy_coordinate_error_fractional": legacy_coordinate_error,
+            "QL_vs_legacy_QL_coordinate_error_fractional": legacy_ql_coordinate_error,
             "R3m_vs_reconstruction_coordinate_error_fractional": reconstruction_coordinate_error,
+            "reconstruction_vs_P1_coordinate_error_fractional": (
+                p1_reconstruction_coordinate_error
+            ),
+            "reconstruction_vs_legacy_coordinate_error_fractional": (
+                legacy_reconstruction_coordinate_error
+            ),
             "R3m_vs_P1_basis_error_A": basis_error,
+            "R3m_vs_legacy_basis_error_A": legacy_basis_error,
             "center_translation_error_fractional": center_error,
             "R3m_motif_spread_fractional": r3m_motif_spread,
+            "legacy_motif_spread_fractional": legacy_motif_spread,
             "P1_motif_spread_fractional": p1_motif_spread,
         },
         "reconstruction": {
@@ -1081,9 +1212,8 @@ def run_bi2se3_ql_proof(root: str, tolerances: dict[str, dict[str, float]]) -> d
             "exact_id_stage_set": mutation_signature == _REQUIRED_MUTATION_STAGES,
         },
         "mutations": mutations,
-        "benchmark": benchmark,
         "limitations": [
-            "wrapped conventional-cell coordinates are not a continuous-L QL gauge; only explicit complete-image coordinates are used for continuous factorization",
+            "noninteger-L QL reconstruction explicitly applies each complete-image integer shift before comparison with the wrapped production cell",
             "the P1 file serializes fractional coordinates to 12 decimals; forbidden and continuous residuals are gated against the analytic coordinate-serialization bound",
             "VESTA intensity values are NO_ORACLE because all 206 exported entries are NaN",
         ],

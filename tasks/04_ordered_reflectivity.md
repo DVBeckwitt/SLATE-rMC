@@ -150,18 +150,25 @@ State: READY
   Independent scalar XrayDB atom sums agree with production to `2.0920868753727402e-12 e`.
 - The mandatory 2H-derived/target-CIF PbI2 polytype oracle passes at arbitrary event coordinates,
   including exact topology, explicit image unwrapping, both hands, and registry-free `F_plus` and
-  `F_minus`; its maximum complex-amplitude discrepancy is `1.596746205780465e-13 e`.
+  `F_minus`. Its deterministic five-parent, repeats `1/2/5` payload hashes to
+  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`.
 - The mandatory Bi2Se3 R-3m proof expands and deduplicates the corrected CIF, independently parses
-  all 15 P1 atoms, derives one complete Se-Bi-Se-Bi-Se quintuple layer (QL), and reconstructs the
-  cell only with exact R-centering translations. Direct R-3m/P1, R-3m/QL, and QL/analytic maxima
-  are `1.8085231965793619e-12`, `2.5301707487933607e-12`, and
-  `1.5023400790586468e-12 e`, respectively.
+  all 15 P1 atoms, derives one Se1-centered five-atom quintuple layer (QL), and reconstructs the
+  cell only with exact R-centering translations. The QL/direct, QL/production, and noninteger-L
+  image-phase maxima are `2.0896360001747303e-12`, `3.911084367804814e-12`, and
+  `1.7053025658242404e-13 e`.
+- A disposable combined worktree proves T04/T05 parity for `2H`, `4H+`, `4H-`, `6H+`, and `6H-`
+  across all four events and repeats `1/2/5`: `60/60` comparisons pass, with worst error
+  `0.0006061411995276331` of the frozen scale-aware bound. All 20 reduced/full/enumeration fixtures
+  and four integration mutations pass. T05 remains unchanged at
+  `7b20cee7eb80c48523655572bbf318a79e2e7b86`.
 - All 206 VESTA rows now pass proof-only Waasmaier-Kirfel/Cu Kalpha1 parity, including the nuclear
   Thomson term, while production XrayDB remains separate. Maximum real/imaginary residuals are
   `1.5103053726761573e-5/6.354053656565384e-5 e`; RMS complex residual is
   `2.1300349223246674e-5 e`.
 - Pure Parratt remains `MATCH`; the named manuscript composite is `NO_ORACLE` and passes nested-grid
-  convergence. All 15 proof checks, 13 original injections, and 10 mandatory Bi2Se3 mutations pass.
+  convergence. All 15 proof checks, 13 original injections, and five mandatory Bi2Se3 mutations
+  pass.
 
 ### Scope and file policy
 
@@ -638,6 +645,18 @@ one coherent commit, then confirm a clean tree.
 
 Status: READY. Final branch-tip SHA is reported externally because a commit cannot embed itself.
 
+Readiness baseline:
+
+- T04 started at `34a9c04b5b4c2777dedf0a97f5cd3e2e7320b08c`; frozen T05 is
+  `7b20cee7eb80c48523655572bbf318a79e2e7b86`; common `PROOF_BASE_SHA` is
+  `812f896fde5b8365ff5c218fc606df674ad7dcad`.
+- The reference-pack SHA-256 is
+  `e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06`; contract and trace
+  versions are `4/4`.
+- T04/T05 tolerance-policy hashes are
+  `1a669aa24fbfd26c7dee36091b6a715d318d34c64db8d2f20b6134eb875d7ddf` and
+  `66eea64363bc9ad957ed72198890e1279270a45dac09fcbd5d35f0624c850fff`.
+
 Frozen T04/T05 boundary:
 
 - `LayerAmplitudeResult.f_plus` and `f_minus` are raw complex layer structure amplitudes in
@@ -653,6 +672,13 @@ Frozen T04/T05 boundary:
   not duplicate rod metadata.
 - T04 manuscript field labels remain literal: expanded 2H is `f_minus`. For coordination wording,
   coordination `+` maps to T04 `minus`, and coordination `-` maps to T04 `plus`.
+- Registry offsets are `A=(0,0)`, `B=(1/3,2/3)`, and `C=(2/3,1/3)` with positive phase;
+  therefore T05 uses `FORWARD_H_PLUS_2K`. The frozen mappings are repeated `plus/A -> 2H`,
+  `plus/A,minus/B -> 4H+`, `plus/A,minus/C -> 4H-`, `plus/A,plus/B,plus/C -> 6H+`, and
+  `plus/A,plus/C,plus/B -> 6H-`.
+- The JSON-native material payload uses sorted compact JSON with finite values only. Its SHA-256 is
+  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`; benchmark, environment,
+  commit, and relaxed-target evidence are excluded from the hash.
 
 Public APIs:
 
@@ -666,6 +692,10 @@ Public APIs:
 
 Exact files changed:
 
+- The readiness-completion commit modifies only `ordered/bi2se3_proof.py`,
+  `ordered/pbi2_proof.py`, `ordered/proof.py`, the existing ordered test module, and this handoff;
+  it adds no file, dependency, fixture, snapshot, production API, or T05 change.
+
 - `src/rasim_next/materials/__init__.py`, `crystal.py`, and `optics.py`.
 - `src/rasim_next/reciprocal/lattice.py` and `rods.py`.
 - `src/rasim_next/ordered/__init__.py`, `amplitudes.py`, `bi2se3_proof.py`, `finite_stack.py`,
@@ -675,10 +705,11 @@ Exact files changed:
 
 Final command results:
 
+- Frozen-base pre-edit seed verification: PASS.
 - `python -m compileall -q src`: PASS.
 - Ruff lint and format checks over all owned Python paths: PASS (`16` files formatted).
-- Focused permanent suite: PASS (`10 passed`); full suite: PASS (`15 passed`).
-- Ordered proof: READY (`15/15` checks; `13/13` original and `10/10` Bi2Se3 injections); core proof: PASS (`5/5`);
+- Focused permanent suite: PASS (`11 passed`); full suite: PASS (`16 passed`).
+- Ordered proof: READY (`15/15` checks; `13/13` original and `5/5` Bi2Se3 injections, `18/18` total); core proof: PASS (`5/5`);
   reference proof: PASS (`7/7`).
 - `git diff --check`: PASS. Post-commit `git status --short`: empty.
 
@@ -690,36 +721,48 @@ Permanent proof coverage:
   component and `5e-5 e` RMS gates cover source-rounded VESTA coefficients; `6e-4 e` magnitude and
   `5e-6` relative gates cover the export's six-significant-digit `|F|`; `6e-7 A` covers six-decimal
   d spacing; and `1.2e-4 deg` retains the required fixed wavelength near backscatter.
-- Ten focused tests retain one distinct contract/invariant each: CIF expansion/ADP rejection,
+- Eleven focused tests retain one distinct contract/invariant each: CIF expansion/ADP rejection,
   reciprocal/rod identity, raw atom sums and optics, event alignment/raw scale, PbI2 motif gauge,
-  finite-stack limits and registry phase, Parratt analytic limits, and named specular separation.
+  finite-stack limits and registry phase, Parratt analytic limits, named specular separation, and
+  the Se1-centered single-QL structural/complex-amplitude boundary.
 - `python -m rasim_next.proof ordered-reflectivity --json` returns all integration payloads and
-  passes 15 checks plus 23/23 total mutations. The immutable reference-pack hash remains
+  passes 15 checks plus 18/18 total mutations. The immutable reference-pack hash remains
   `e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06`.
 - Production/direct atom sums differ by at most `2.0920868753727402e-12 e`. Raw intensity differs
   by at most `4.5838532969355583e-10 electron2` in the equivalent-work benchmark.
 - PbI2 proof expands exact tracked 2H/4H/6H CIFs, returns event `h,k,qz,wavelength`, raw `F_plus` and
-  `F_minus`, explicit ideal 2H-derived amplitudes for both 4H/6H hands, direct target-CIF amplitudes,
-  both canonical and complete-layer coordinates, lattices, repeats, relaxed intralayer heights, and
-  integer image shifts. Topologies are 2H `(+ A)`, 4H `(- B),(+ C)`, and 6H
-  `(- A),(- C),(- B)` in coordination labels. Maximum oracle error is
+  `F_minus`, direct ideal-atom amplitudes for all five T05 parents at repeats `1/2/5`, direct
+  target-CIF amplitudes, canonical/complete coordinates, lattices, relaxed heights, and integer
+  image shifts. Layer/direct error is `2.4457182613372133e-14 e`; the largest repeated ideal
+  factorization error is `1.2987197418164968e-12 e`; target production cross-check error is
   `1.596746205780465e-13 e`; complete-layer image integrality error is
   `2.220446049250313e-16` fractional coordinate.
-- Bi2Se3 proof returns the derived QL gauge and coordinates, all expanded R-3m and reconstructed
-  coordinates, integer image shifts, `6 Bi + 9 Se` counts, exact R-centering extinctions, explicit
-  P1 and continuous-complete-gauge comparisons, four handoff relations, and 10/10 traced mutation
-  stages. Its gauge is central Se at `(0,0,0)`, bottom-to-top, xy modulo one, signed z, and positive
-  phase. The QL sites are Se2 `(1/3,2/3,-0.12163333333333337)`, Bi
+- In the disposable combined worktree, T05 consumes only reconstructed `RodQueryBatch` and
+  `LayerAmplitudeResult` values. All `5 parents x 3 repeats x 4 events = 60` total-intensity
+  comparisons pass the predeclared `2|A|*epsilon_A + epsilon_A^2 + epsilon_T05` bound; maximum
+  absolute error is `3.583409124985337e-10 electron2`, only `0.0006061411995276331` of its bound.
+  Twenty one-period reduced/full-six-state/direct-enumeration fixtures pass. Wrong hand, wrong
+  registry convention, swapped `F_plus/F_minus`, and wrong repeat are detected at
+  `stacking.pair_kernel`, `stacking.registry_phase`, `stacking.pair_kernel`, and
+  `stacking.finite_intensity`. The relaxed-target-CIF residual is separately descriptive at
+  `0.9174331892538831 e`; it is neither normalized away nor required to vanish.
+- Bi2Se3 proof constructs each QL around a source-labelled Se1 periodic image. Three identical
+  five-atom QLs cover all 15 VESTA, legacy, and expanded-P1 sites exactly once; the conventional
+  cell is generated only by `(0,0,0)`, `(2/3,1/3,1/3)`, and `(1/3,2/3,2/3)`. Species, charge,
+  occupancy, Uiso, coordinates, and integer image shifts are retained. Its gauge is central Se at
+  `(0,0,0)`, bottom-to-top, xy modulo one, signed z, and positive phase. The QL sites are Se2
+  `(1/3,2/3,-0.12163333333333337)`, Bi
   `(2/3,1/3,-0.06746666666666667)`, Se1 `(0,0,0)`, Bi
   `(1/3,2/3,0.06746666666666656)`, and Se2 `(2/3,1/3,0.12163333333333326)`, all with occupancy
-  `1` and `Uiso=0.019 A^2`. The P1 file's 12-decimal coordinates leave its largest cancellation floor,
-  `1.617802490138405e-9 e`, at exact absences and a `2.76380278402231e-10 e` continuous-gauge
-  discrepancy; both pass analytic coordinate-serialization bounds. Allowed table rows meet the
-  frozen A/B gate, while QL/analytic absences are below `2.004728598894011e-13 e`.
+  `1` and `Uiso=0.019 A^2`. QL/direct scalar and QL/production maxima are
+  `2.0896360001747303e-12/3.911084367804814e-12 e`; explicit noninteger-L image shifts reproduce
+  production within `1.7053025658242404e-13 e`, while omitting their phase changes the fixture by
+  `205.41156204335115 e`. The P1 file's 12-decimal coordinates leave a
+  `1.617802490138405e-9 e` exact-absence floor inside its analytic serialization bound.
 - VESTA F(003): direct R-3m `104.9835149797381+14.466756284510423i e`, explicit P1
   `104.98351497973798+14.46675628451043i e`, canonical five-atom QL motif
-  `34.9945049932462+4.822252094836864i e`, QL-reconstructed conventional cell
-  `104.98351497973862+14.466756284510563i e`, and target
+  `34.99450499324617+4.822252094836833i e`, QL-reconstructed conventional cell
+  `104.98351497973846+14.466756284510415i e`, and target
   `104.983515+14.466758i e`. Full-table max real/imaginary/RMS complex residuals are
   `1.5103053726761573e-5/6.354053656565384e-5/2.1300349223246674e-5 e`; maximum relative
   magnitude residual above `1 e` is `4.562285315313092e-6`; d-spacing and finite two-theta maxima
@@ -727,11 +770,11 @@ Permanent proof coverage:
   disagreements are zero.
 - Production XrayDB F(003) is `104.98607302019832+14.464100145008656i e`; its full-table
   maximum/RMS complex difference from VESTA is `0.12640464181321473/0.04375278114665144 e`.
-- Required Bi2Se3 mutations all fail at their traced first observable stage: omitted R translation,
-  duplicated QL, wrong centering translation, premature normalization, and retained special-site
-  duplicate at `ordered.unit_cell_amplitude`; wrong reciprocal convention, negative phase, changed
-  Se1 occupancy, doubled displacement, and reversed anomalous-imaginary sign at
-  `ordered.atomic_amplitude`.
+- Required Bi2Se3 mutations all fail at `ordered.unit_cell_amplitude`: omitted outer Se, wrong
+  R-centering translation, dropped centering phase, ignored noninteger-L image-shift phase, and a
+  duplicated periodic-boundary atom. Their maximum errors are respectively
+  `96.92029147173584`, `389.43777182910827`, `224.84200239814376`, `205.44156093904638`, and
+  `33.11027177492916 e`.
 - Parratt direct scalar stage error is `3.036534414019566e-16`; pack reflectivity max/RMS/p95 is
   `2.567342172188347e-12/2.032218994038676e-13/3.3277200439662807e-14`. Zero-thickness collapse is
   `2.0835655249829126e-16`.
@@ -760,21 +803,15 @@ Convergence and benchmark:
   `1.2141353628603306e-7` then `5.442864600864461e-10`; blend bounds remain `[3,6]`, and final scale
   relative delta is `9.818399835936908e-6`.
 - Equivalent work is 10,000 event-aligned amplitudes plus 4,096 three-layer Parratt points. Current
-  production/oracle medians are `0.0154786999919452/0.254853499995079 s` (`16.4648x`). Peak
-  traced memory is `9,098,844/3,502,446 bytes`. Thread counts are pinned to one.
-- For the separately labeled 6,592-event by 15-atom Bi2Se3 work shape, direct R-3m/P1/
-  QL-reconstructed-cell/production-XrayDB medians are
-  `0.00427030000719242/0.00423980000778101/0.00443329999689013/0.00847460000659339 s`;
-  traced allocation peaks are `4,537,879/4,537,879/4,537,879/5,937,954 bytes`. The first three
-  use the VESTA-parity factor convention; production XrayDB is reported separately, not as the same
-  observable.
+  production/oracle medians are `0.03161740000359714/0.5999908999947365 s` (`18.9766x`). Peak
+  traced memory is `9,099,504/3,502,395 bytes`. Thread counts are pinned to one.
 
 Known limitations and integration requests:
 
 - Layered `L/qz` validation is limited to the declared c-axis-normal crystallographic slice.
   Unknown isotropic displacement requires an explicit calculation value; nonzero anisotropic
   displacement is rejected. VESTA's intensity column is `NO_ORACLE` because all 206 values are
-  NaN. Bi2Se3 continuous-L factorization uses explicit complete-image QL coordinates; wrapped
-  production unit-cell coordinates differ by up to `205.44156093904647 e` and are not claimed as a
-  continuous-L QL oracle. The named composite is specular-only.
-- No shared contract change, unresolved interface question, or minimum integration request remains.
+  NaN. Bi2Se3 noninteger-L reconstruction records and applies explicit per-atom integer image
+  phases before comparing with the wrapped production cell. The named composite is specular-only.
+- No shared contract, T05 interface, T05 commit, unresolved interface question, or minimum
+  integration request remains.

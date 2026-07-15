@@ -1166,6 +1166,16 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     )
     checks = _foundation_checks(crystal)
     pbi2_polytype = run_pbi2_polytype_proof(str(ROOT))
+    deterministic_material_payload = pbi2_polytype["deterministic_material_payload"]
+    deterministic_material_json = json.dumps(
+        deterministic_material_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    deterministic_material_payload_sha256 = hashlib.sha256(
+        deterministic_material_json.encode("utf-8")
+    ).hexdigest()
     pbi2_errors = [float(value) for value in pbi2_polytype["maximum_errors_e"].values()]
     checks.append(
         _check(
@@ -1177,6 +1187,8 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
                     name: payload["actual_coordination_topology"]
                     for name, payload in pbi2_polytype["polytypes"].items()
                 },
+                "deterministic_material_payload_sha256": (deterministic_material_payload_sha256),
+                "deterministic_parent_period_multiples": [1, 2, 5],
             },
             [
                 "ordered.layer_amplitude",
@@ -1187,37 +1199,22 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
             tolerance=TOLERANCES["direct_atom_e"],
         )
     )
-    bi2se3_ql = run_bi2se3_ql_proof(str(ROOT), TOLERANCES)
-    bi2se3_reconstruction = bi2se3_ql["reconstruction"]
-    bi2se3_vesta = bi2se3_ql["vesta_parity"]
+    bi2se3_ql = run_bi2se3_ql_proof(
+        str(ROOT), TOLERANCES, direct_atom_amplitudes=_direct_atom_amplitudes
+    )
+    bi2se3_single_ql = bi2se3_ql["single_ql_reconstruction"]
     checks.append(
         _check(
-            "bi2se3_ql_reconstruction_and_vesta_parity",
-            bi2se3_ql["status"] == "PASS",
-            {
-                "maximum_A_vs_B_error_e": bi2se3_reconstruction["maximum_A_vs_B_error_e"],
-                "maximum_A_vs_C_error_e": bi2se3_reconstruction["maximum_A_vs_C_error_e"],
-                "maximum_C_vs_analytic_error_e": bi2se3_reconstruction[
-                    "maximum_C_vs_analytic_error_e"
-                ],
-                "vesta_maximum_real_residual_e": bi2se3_vesta["maximum_real_residual_e"],
-                "vesta_maximum_imaginary_residual_e": bi2se3_vesta["maximum_imaginary_residual_e"],
-                "vesta_RMS_complex_residual_e": bi2se3_vesta["RMS_complex_residual_e"],
-                "mutations_detected": sum(
-                    bool(item["detected"]) for item in bi2se3_ql["mutations"]
-                ),
-                "mutations_total": len(bi2se3_ql["mutations"]),
-            },
-            [
-                "ordered.atomic_amplitude",
-                "ordered.unit_cell_amplitude",
-            ],
+            "bi2se3_single_ql_reconstruction",
+            bi2se3_ql["status"] == "PASS" and bi2se3_single_ql["status"] == "PASS",
+            bi2se3_single_ql,
+            ["ordered.unit_cell_amplitude"],
             maximum_error=max(
-                float(bi2se3_reconstruction["maximum_A_vs_B_error_e"]),
-                float(bi2se3_reconstruction["maximum_A_vs_C_error_e"]),
-                float(bi2se3_reconstruction["maximum_C_vs_analytic_error_e"]),
+                float(bi2se3_single_ql["maximum_direct_amplitude_residual_e"]),
+                float(bi2se3_single_ql["maximum_production_amplitude_residual_e"]),
+                float(bi2se3_single_ql["maximum_noninteger_L_image_shift_residual_e"]),
             ),
-            tolerance=TOLERANCES["bi2se3_reconstruction_e"],
+            tolerance=TOLERANCES["direct_atom_e"],
         )
     )
     reference_checks, reference_comparisons = _reference_checks(crystal, pack)
@@ -1329,12 +1326,15 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         "convergence": convergence,
         "benchmark": benchmark,
         "mutations": mutations,
+        "deterministic_material_payload": deterministic_material_payload,
+        "deterministic_material_payload_sha256": deterministic_material_payload_sha256,
         "pbi2_polytype_proof": pbi2_polytype,
+        "bi2se3_single_ql_reconstruction": bi2se3_single_ql,
         "bi2se3_ql_proof": bi2se3_ql,
         "limitations": [
             "layered L/Qz validation is limited to the declared c-axis-normal crystallographic slice",
             "only isotropic displacement is supported; unknown Uiso requires an explicit calculation value",
-            "Bi2Se3 continuous-L QL factorization uses explicit complete-image coordinates, not the wrapped production unit-cell gauge",
+            "Bi2Se3 continuous-L QL reconstruction applies explicit per-atom integer image phases before comparison with the wrapped production cell",
             "the VESTA intensity column is NO_ORACLE because every exported value is NaN",
             "the named composite is specular-only and is not an off-specular optical model",
         ],
