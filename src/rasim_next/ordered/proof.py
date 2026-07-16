@@ -19,13 +19,14 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-for _thread_variable in (
+_THREAD_VARIABLES = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
     "NUMEXPR_NUM_THREADS",
-):
+)
+for _thread_variable in _THREAD_VARIABLES:
     os.environ[_thread_variable] = "1"
 
 import gemmi
@@ -112,16 +113,7 @@ def _environment_sha256() -> str:
         "xraydb": xraydb.__version__,
         "xraydb_database": xraydb.get_xraydb().get_version(),
         "gemmi": gemmi.__version__,
-        "threads": {
-            name: os.environ[name]
-            for name in (
-                "OMP_NUM_THREADS",
-                "OPENBLAS_NUM_THREADS",
-                "MKL_NUM_THREADS",
-                "VECLIB_MAXIMUM_THREADS",
-                "NUMEXPR_NUM_THREADS",
-            )
-        },
+        "threads": {name: os.environ[name] for name in _THREAD_VARIABLES},
     }
     return _canonical_json_sha256(payload)
 
@@ -177,6 +169,8 @@ def _direct_atom_amplitudes(
     q_vectors = indices @ reciprocal_basis.T
     q_magnitude = np.linalg.norm(q_vectors, axis=1)
     energy = HC_EV_A / wavelength
+    if include_anomalous:
+        unique_energy, inverse = np.unique(energy, return_inverse=True)
     factors: list[NDArray[np.complex128]] = []
     for site in crystal.sites:
         requested = site.element
@@ -187,7 +181,6 @@ def _direct_atom_amplitudes(
                 requested = ionic
         f0 = np.asarray(xraydb.f0(requested, q_magnitude / (4.0 * np.pi)), dtype=np.float64)
         if include_anomalous:
-            unique_energy, inverse = np.unique(energy, return_inverse=True)
             f1 = np.asarray(
                 [xraydb.f1_chantler(site.element, float(value)) for value in unique_energy]
             )[inverse]
@@ -453,13 +446,14 @@ def _foundation_checks(crystal: CrystalStructure) -> list[dict[str, object]]:
             phase_id=filename.removesuffix(".cif"),
         )
         motifs = extract_pbi2_motifs(pbi2)
+        orientations = tuple(motif.orientation for motif in motifs)
         motif_evidence[filename] = {
-            "orientations": [motif.orientation for motif in motifs],
+            "orientations": list(orientations),
             "covered_site_count": len(
                 {atom.site_index for motif in motifs for atom in motif.atoms}
             ),
         }
-        if tuple(motif.orientation for motif in motifs) != expected:
+        if orientations != expected:
             motif_evidence[filename]["mismatch"] = True
 
     pbi2 = read_crystal(ROOT / "examples" / "pbi2" / "structures" / "PbI2_4H.cif", phase_id="pbi2")
@@ -834,16 +828,7 @@ def _benchmark(crystal: CrystalStructure, pack: dict[str, NDArray[Any]]) -> dict
             "three_layer_parratt_points": parratt_count,
             "parratt_distribution": "tracked 257-point qz case repeated to equivalent work count",
         },
-        "thread_environment": {
-            name: os.environ[name]
-            for name in (
-                "OMP_NUM_THREADS",
-                "OPENBLAS_NUM_THREADS",
-                "MKL_NUM_THREADS",
-                "VECLIB_MAXIMUM_THREADS",
-                "NUMEXPR_NUM_THREADS",
-            )
-        },
+        "thread_environment": {name: os.environ[name] for name in _THREAD_VARIABLES},
         "warmup_runs": 1,
         "timed_repeats": 3,
         "production_seconds_samples": production_samples,

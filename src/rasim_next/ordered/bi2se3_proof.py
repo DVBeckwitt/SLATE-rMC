@@ -351,6 +351,8 @@ def _direct_amplitudes(
     s_Ainv = q_magnitude / (4.0 * np.pi)
     fractional = np.asarray([atom.fractional for atom in atoms], dtype=np.float64)
     phase = np.exp(2.0j * np.pi * (indices @ fractional.T))
+    occupancy = np.asarray([atom.occupancy for atom in atoms], dtype=np.float64)
+    u_iso_A2 = np.asarray([atom.u_iso_A2 for atom in atoms], dtype=np.float64)
     amplitude = np.zeros(indices.shape[0], dtype=np.complex128)
     for element in ("Bi", "Se"):
         mask = np.fromiter(
@@ -358,11 +360,9 @@ def _direct_amplitudes(
         )
         if not np.any(mask):
             continue
-        occupancy = np.asarray([atom.occupancy for atom in atoms], dtype=np.float64)[mask]
-        u_iso = np.asarray([atom.u_iso_A2 for atom in atoms], dtype=np.float64)[mask]
-        damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
+        damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso_A2[None, mask])
         amplitude += _vesta_factor(element, s_Ainv) * np.sum(
-            phase[:, mask] * damping * occupancy[None, :], axis=1
+            phase[:, mask] * damping * occupancy[None, mask], axis=1
         )
     return amplitude
 
@@ -811,7 +811,7 @@ def run_bi2se3_ql_proof(
         and np.all(np.abs(continuous_a - continuous_b) <= p1_continuous_bound)
     )
 
-    calculated = direct_r3m[: table.hkl.shape[0]]
+    calculated = direct_r3m[:table_rows]
     amplitude_error = calculated - table.amplitude_e
     magnitude_error = np.abs(calculated) - table.magnitude_e
     reciprocal = 2.0 * np.pi * np.linalg.inv(r3m.direct_basis_A).T
@@ -856,9 +856,7 @@ def run_bi2se3_ql_proof(
     f003_production = unit_cell_amplitude(r3m, hkl_003, wavelength_003_A).amplitude_e[0]
     p1_003 = direct_p1[row_003]
     ql_003 = direct_ql[row_003]
-    production_result = unit_cell_amplitude(
-        r3m, table.hkl, np.full(table.hkl.shape[0], _WAVELENGTH_A)
-    )
+    production_result = unit_cell_amplitude(r3m, table.hkl, np.full(table_rows, _WAVELENGTH_A))
     production = production_result.amplitude_e
     production_error = production - table.amplitude_e
     production_003 = production[row_003]
@@ -890,7 +888,7 @@ def run_bi2se3_ql_proof(
     relative_magnitude_error = np.abs(magnitude_error) / np.maximum(table.magnitude_e, 1.0)
     rms_complex_error = float(np.sqrt(np.mean(np.abs(amplitude_error) ** 2)))
     table_passed = (
-        table.hkl.shape[0] == int(metadata["row_count"]) == 206
+        table_rows == int(metadata["row_count"]) == 206
         and np.isclose(
             float(metadata["inferred_lambda_angstrom"]), _WAVELENGTH_A, rtol=0.0, atol=0.0
         )
@@ -1102,7 +1100,7 @@ def run_bi2se3_ql_proof(
                 "VESTA_formula": "https://jp-minerals.org/vesta/en/doc/VESTAch14.html",
                 "Waasmaier_Kirfel": "https://doi.org/10.1107/S0108767394013292",
             },
-            "row_count": int(table.hkl.shape[0]),
+            "row_count": int(table_rows),
             "generated_reflection_count": len(generated_reflections),
             "geometric_candidate_count": geometric_candidate_count,
             "systematically_absent_candidate_count": (

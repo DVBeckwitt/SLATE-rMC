@@ -76,20 +76,17 @@ def build_rod_catalog(
     family_ids: list[str] = []
     metadata: list[str] = []
     for h_value, k_value in hk.tolist():
+        orbit = _inplane_orbit(crystal.spacegroup_hm, h_value, k_value)
+        orbit_text = ";".join(f"{h},{k}" for h, k in orbit)
         if hexagonal:
             family_number = h_value * h_value + h_value * k_value + k_value * k_value
             key = f"hex:m={family_number}"
-            orbit = _inplane_orbit(crystal.spacegroup_hm, h_value, k_value)
         else:
-            orbit = _inplane_orbit(crystal.spacegroup_hm, h_value, k_value)
-            key = f"cell:{_reciprocal_cell_key(lattice.basis_Ainv)}|orbit:" + ";".join(
-                f"{h},{k}" for h, k in orbit
-            )
+            key = f"cell:{_reciprocal_cell_key(lattice.basis_Ainv)}|orbit:{orbit_text}"
         family_keys.append(key)
         family_ids.append(f"{crystal.phase_id}:{key}")
         metadata.append(
-            "crystal-frame; Qr-metadata-only; "
-            f"multiplicity={len(orbit)}; orbit=" + ";".join(f"{h},{k}" for h, k in orbit)
+            f"crystal-frame; Qr-metadata-only; multiplicity={len(orbit)}; orbit={orbit_text}"
         )
     size = hk.shape[0]
     return RodCatalog(
