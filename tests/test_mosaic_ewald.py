@@ -140,6 +140,58 @@ def test_axisymmetric_mosaic_integrates_direct_alpha_probability_mass() -> None:
         atol=1.0e-12,
     )
 
+    quadrature_arguments = {
+        "parameters": direct_parameters,
+        "reciprocal_basis_Ainv": basis,
+        "alpha_cell_count": 1,
+    }
+    nested_4, nested_8 = (
+        manuscript_axisymmetric_v1_orientation_quadrature(
+            **quadrature_arguments, azimuth_cell_count=count
+        )
+        for count in (4, 8)
+    )
+    azimuth_4 = nested_4.azimuth_rad.reshape(-1, 4)
+    azimuth_8 = nested_8.azimuth_rad.reshape(-1, 8)
+    np.testing.assert_array_equal(azimuth_8[:, :4], azimuth_4)
+    np.testing.assert_array_equal(azimuth_4[0], [np.pi, 0.0, 1.5 * np.pi, 0.5 * np.pi])
+    np.testing.assert_array_equal(nested_4.alpha_rad[::4], direct.alpha_rad)
+    np.testing.assert_allclose(
+        nested_4.probability_mass.reshape(-1, 4).sum(axis=1),
+        direct.probability_mass,
+        rtol=0.0,
+        atol=1.0e-18,
+    )
+    phase_shifted = manuscript_axisymmetric_v1_orientation_quadrature(
+        **quadrature_arguments,
+        azimuth_cell_count=8,
+        azimuth_phase_rad=np.pi + np.pi / 8.0,
+    )
+    np.testing.assert_array_equal(
+        np.column_stack((phase_shifted.alpha_rad, phase_shifted.probability_mass)),
+        np.column_stack((nested_8.alpha_rad, nested_8.probability_mass)),
+    )
+    np.testing.assert_allclose(
+        phase_shifted.azimuth_rad,
+        np.remainder(nested_8.azimuth_rad + np.pi / 8.0, 2.0 * np.pi),
+        rtol=0.0,
+        atol=1.0e-15,
+    )
+    phase_delta = np.pi / 8.0
+    phase_rotation = np.array(
+        [
+            [np.cos(phase_delta), -np.sin(phase_delta), 0.0],
+            [np.sin(phase_delta), np.cos(phase_delta), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    np.testing.assert_allclose(
+        phase_shifted.rotation_crystal,
+        np.einsum("ij,njk->nik", phase_rotation, nested_8.rotation_crystal),
+        rtol=0.0,
+        atol=1.0e-15,
+    )
+
     mixed = manuscript_axisymmetric_v1_orientation_quadrature(
         WrappedMosaicParameters(0.0, 0.3, 0.25),
         reciprocal_basis_Ainv=basis,
@@ -155,6 +207,14 @@ def test_axisymmetric_mosaic_integrates_direct_alpha_probability_mass() -> None:
             reciprocal_basis_Ainv=basis.astype(np.complex128),
             alpha_cell_count=4,
             azimuth_cell_count=4,
+        )
+    with pytest.raises(ValueError, match="finite scalar"):
+        manuscript_axisymmetric_v1_orientation_quadrature(
+            parameters,
+            reciprocal_basis_Ainv=basis,
+            alpha_cell_count=4,
+            azimuth_cell_count=4,
+            azimuth_phase_rad=np.inf,
         )
 
 
