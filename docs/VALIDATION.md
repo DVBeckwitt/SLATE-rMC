@@ -10,6 +10,75 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
+## Completed cross-repository audits
+
+The 2026-07-16 audits below started from SLATE-rMC baseline
+`caf7acd649a27dc66c6c0b73a2f66dcd520389f9`. External repositories were consulted read-only;
+`ra_sim` execution was isolated in a separate process, while the `2D_Mosaic_Sim` peak-shape
+equation was evaluated independently in a proof-only harness. Neither production code nor
+permanent tests import either repository. These conclusions apply to the named observable and
+declared measure or atomic-factor model, not to display-normalized arrays or unrelated downstream
+physics.
+
+### Mosaic cap/ring shape and probability measure
+
+The existing wrapped, probability-normalized mosaic density was evaluated without changing the
+production model. The audit used `(0,0,3)` (`m=0`) for the cap and `(1,0,0)` and `(1,0,3)`
+(`m!=0`) for rings, with pure Gaussian, mixed, and pure Lorentzian profiles. After recentering by
+the reciprocal-metric Bragg polar angle, the largest cap/ring line-shape difference was
+`1.9206858326015208e-14`. Profiles were scaled to unit peak only for this shape comparison;
+conservation used the raw probability-normalized density. Integrating that density with the
+declared spherical measure `G^2 sin(theta) dtheta dphi` returned both test intensities, `I0=1`
+and `I0=7.25`, with maximum error `1.7763568394002505e-15`. The nonzero-`m` peak locus closed
+through `2*pi`; the `m=0` locus remained a cap.
+
+Four targeted mutations changed the cap/ring width, omitted the spherical measure, summed raw
+surface density, or reversed the family-topology dispatch. Each failed at its intended density,
+quadrature, or event-weight stage. Together with the seven existing T03 controls, all eleven
+mutations were detected in the one-shot audit. Main retains the seven T03 controls after the four
+temporary cap/ring controls are retired. This audit did not newly compare Ewald/Bragg intersection
+loci or detector projection with `2D_Mosaic_Sim`; Ewald correctness remains supported by the
+existing tracked-legacy `MATCH`, independent dense oracle, and elastic-residual proofs. Those
+proofs cover narrow, broad, tail, tangent/no-root, bandwidth, and specular cases; the largest
+regular-case elastic residual was `8.881784197001252e-16 A^-1`. The audit does not create a second
+Ewald or mosaic implementation.
+
+Against `2D_Mosaic_Sim` commit `5efb3233d60843f3fd4e0e3b5b73536f05c035e8`, the pure-Gaussian
+peak-normalized shape is `MATCH`. Mixed and Lorentzian shapes are `CORRECTED` first at
+`mosaic.wrapped_line_density`: that program mixes unit-peak components and uses an unwrapped
+Lorentzian tail, whereas SLATE-rMC mixes probability mass in a wrapped density. The external
+program therefore is not an oracle for absolute orientation probability. The accepted conclusion
+is that the original SLATE-rMC mosaic model correctly shares one recentered shape between caps and
+rings and conserves intensity under the project's declared measure; no production change is
+required.
+
+### Raw complex ordered structure factor
+
+The structure-factor audit ran the clean `ra_sim` commit
+`8fb1415e8e4695aa2ce8ec7f576b575264d4b328` in a separate Python process and compared raw complex
+amplitudes in electron units before squaring, rounding, pruning, or normalization. The first
+default-to-default divergence was the atomic-factor data source: SLATE-rMC uses Waasmaier--Kirfel
+`f0` with XrayDB/Chantler anomalous terms, while that `ra_sim` revision uses ITC-1992 `f0` with
+Henke anomalous terms. Phase sign, reciprocal coordinates, site expansion, occupancy, and
+displacement factors agreed.
+
+Holding the atomic-factor table equal to the legacy oracle produced `MATCH` for the PbI2 2H and
+Bi2Se3 whole-cell amplitudes and for both physical PbI2 layer orientations. An independent audit
+exercised 51,200 atomic factors and 70,400 whole-cell and layer amplitudes across
+`7.92068--8.17898 keV`; the atomic factors matched exactly and the largest complex-amplitude error
+was `7.7276e-13 e`, below the audit's declared `2e-12 e` absolute acceptance bound. The matched
+legacy table was the `ra_sim` package default supplied by Dans_Diffraction 3.3.3. PbI2's absent
+isotropic displacement value was supplied explicitly as `unknown_u_iso_A2=0.0`. The two
+repositories' plus/minus layer labels are reversed, so layer results were aligned by physical
+orientation rather than label.
+
+This isolates the legacy numerical mismatch to the declared atomic-factor choice and proves the
+ordered structure-factor equation and conventions. The accepted scientific default remains the
+existing XrayDB/Chantler path, so no legacy atomic-factor compatibility mode or production change
+is required; the temporary matched-table comparison path is not retained. This result covers
+ordered PbI2/Bi2Se3 structure factors only; it does not claim stacking-disorder, 4H/6H transition,
+or phase-mixture parity.
+
 ## Permanent suite
 
 Keep a small permanent suite:
