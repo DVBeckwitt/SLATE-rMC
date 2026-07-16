@@ -18,7 +18,6 @@ from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.reciprocal.ewald import EwaldRootStatus, solve_continuous_rod_ewald
 from rasim_next.sampling.mosaic import MosaicOrientationBatch
-from rasim_next.sampling.source import UNITY_SCALAR_POLARIZATION
 
 IntArray = NDArray[np.int64]
 ByteArray = NDArray[np.int8]
@@ -241,10 +240,6 @@ def build_scattering_events(
         or sample_from_crystal.target_frame is not FrameId.SAMPLE
     ):
         raise ValueError("sample_from_crystal must map CRYSTAL to SAMPLE")
-    if any(
-        state_id != UNITY_SCALAR_POLARIZATION for state_id in incident_samples.polarization_state_id
-    ):
-        raise ValueError('incident samples must declare polarization_state_id="unity_scalar"')
     if not np.array_equal(orientations.reciprocal_basis_Ainv, rods.reciprocal_basis_Ainv):
         raise ValueError("orientations and rods must use the same reciprocal basis")
 

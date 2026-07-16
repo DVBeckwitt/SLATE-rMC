@@ -32,14 +32,16 @@ def test_source_sampling_preserves_mass_correlation_and_allocation_budget() -> N
         direction_lab=directions,
         wavelength_A=wavelengths,
         probability_mass=masses,
-        polarization_state_id=("unity_scalar", "unity_scalar"),
+        polarization_state_id=("linear_s", "circular_plus"),
+        correlation_model="measured_joint_phase_space",
     )
     np.testing.assert_array_equal(joint.incident_sample_id, [0, 1])
     np.testing.assert_array_equal(joint.origin_lab_m, origins)
     np.testing.assert_array_equal(joint.direction_lab, directions)
     np.testing.assert_array_equal(joint.wavelength_A, wavelengths)
     np.testing.assert_array_equal(joint.source_weight, masses)
-    assert joint.correlation_model == "explicit_joint"
+    assert joint.polarization_state_id == ("linear_s", "circular_plus")
+    assert joint.correlation_model == "measured_joint_phase_space"
 
     origin_mass = np.array([0.4, 0.6])
     direction_mass = np.array([0.25, 0.75])
@@ -51,7 +53,8 @@ def test_source_sampling_preserves_mass_correlation_and_allocation_budget() -> N
         direction_probability_mass=direction_mass,
         wavelength_A=wavelengths,
         wavelength_probability_mass=wavelength_mass,
-        polarization_state_id="unity_scalar",
+        polarization_state_id="calibrated_unpolarized",
+        correlation_model="declared_independent_product",
     )
     expected = [
         (origin, direction, wavelength, origin_weight * direction_weight * wavelength_weight)
@@ -65,8 +68,20 @@ def test_source_sampling_preserves_mass_correlation_and_allocation_budget() -> N
     np.testing.assert_allclose(
         independent.source_weight, [row[3] for row in expected], rtol=0.0, atol=1.0e-16
     )
-    assert independent.correlation_model == "independent_product"
+    assert independent.correlation_model == "declared_independent_product"
+    assert independent.polarization_state_id == ("calibrated_unpolarized",) * len(expected)
     assert independent.source_weight.sum() == pytest.approx(1.0, abs=1.0e-12)
+    with pytest.raises(ValueError, match="nonempty string"):
+        compile_independent_source_samples(
+            origin_lab_m=origins[:1],
+            origin_probability_mass=np.ones(1),
+            direction_lab=directions[:1],
+            direction_probability_mass=np.ones(1),
+            wavelength_A=wavelengths[:1],
+            wavelength_probability_mass=np.ones(1),
+            polarization_state_id="valid_state",
+            correlation_model=7,  # type: ignore[arg-type]
+        )
 
     gaussian = compile_independent_gaussian_source_samples(
         mean_origin_lab_m=np.array([0.1, -0.2, 0.3]),
@@ -79,9 +94,12 @@ def test_source_sampling_preserves_mass_correlation_and_allocation_budget() -> N
         spatial_order=3,
         direction_order=3,
         wavelength_order=3,
-        polarization_state_id="unity_scalar",
+        polarization_state_id="tabulated_state_7",
+        correlation_model="gaussian_independent_product",
     )
     assert gaussian.incident_sample_id.size == 3**5
+    assert gaussian.polarization_state_id == ("tabulated_state_7",) * 3**5
+    assert gaussian.correlation_model == "gaussian_independent_product"
     assert gaussian.source_weight.sum() == pytest.approx(1.0, abs=1.0e-12)
     np.testing.assert_allclose(
         np.average(gaussian.origin_lab_m, axis=0, weights=gaussian.source_weight),
@@ -269,7 +287,7 @@ def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> No
         direction_lab=np.tile([0.0, 0.0, 1.0], (2, 1)),
         wavelength_A=np.array([1.1, 1.3]),
         source_weight=np.array([0.7, 0.3]),
-        polarization_state_id=("unity_scalar", "unity_scalar"),
+        polarization_state_id=("linear_s", "circular_plus"),
         correlation_model="explicit_joint",
     )
     states = IncidentStateBatch(
@@ -338,12 +356,21 @@ def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> No
     np.testing.assert_array_equal(result.status.rod_id, np.tile(rods.rod_id, 2))
     np.testing.assert_array_equal(result.status.orientation_id, np.full(16, 40))
     np.testing.assert_array_equal(result.status.emitted_root_count, np.tile([2, 0, 0, 0, 0, 0, 0, 0], 2))
+    np.testing.assert_array_equal(result.status.direct_beam_root_count, np.zeros(16, dtype=np.int8))
 
     q_crystal = events.q_internal_sample_Ainv @ sample_rotation @ mosaic_rotation
     reconstructed = np.column_stack(
         (np.ones(events.event_id.size), np.zeros(events.event_id.size), events.l_coordinate)
     ) @ basis.T
     np.testing.assert_allclose(q_crystal, reconstructed, atol=2.0e-15)
+    np.testing.assert_array_equal(events.qz_Ainv, events.q_internal_sample_Ainv[:, 2])
+    incident_by_state = {101: states.k_film_phase_sample_Ainv[0], 100: states.k_film_phase_sample_Ainv[1]}
+    expected_kf = np.stack(
+        [incident_by_state[int(state_id)] + q for state_id, q in zip(
+            events.incident_state_id, events.q_internal_sample_Ainv, strict=True
+        )]
+    )
+    np.testing.assert_allclose(events.kf_film_phase_sample_Ainv, expected_kf, atol=2.0e-15)
     direction_sample = sample_rotation @ (mosaic_rotation @ np.array([0.0, 0.0, 1.0]))
     expected_weight = 1.0 / np.abs(
         (events.kf_film_phase_sample_Ainv / np.linalg.norm(
@@ -354,6 +381,11 @@ def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> No
     np.testing.assert_allclose(events.reciprocal_weight, expected_weight, rtol=1.0e-14)
     np.testing.assert_allclose(
         np.linalg.norm(events.kf_film_phase_sample_Ainv, axis=1), 4.0, atol=4.0e-15
+    )
+    np.testing.assert_allclose(
+        events.ewald_residual_Ainv,
+        np.abs(np.linalg.norm(events.kf_film_phase_sample_Ainv, axis=1) - 4.0),
+        atol=0.0,
     )
     np.testing.assert_array_equal(events.valid, np.ones(4, dtype=np.bool_))
     with pytest.raises(ValueError, match="CRYSTAL to SAMPLE"):

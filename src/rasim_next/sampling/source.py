@@ -20,6 +20,11 @@ def _reject_complex(value: ArrayLike, name: str) -> None:
         raise ValueError(f"{name} must be real")
 
 
+def _validate_correlation_model(value: object) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError("correlation_model must be a nonempty string")
+
+
 def _finite_array(value: ArrayLike, shape: tuple[int, ...], name: str) -> np.ndarray:
     _reject_complex(value, name)
     array = np.array(value, dtype=np.float64, copy=True)
@@ -58,14 +63,12 @@ def compile_joint_source_samples(
     wavelength_A: ArrayLike,
     probability_mass: ArrayLike,
     polarization_state_id: tuple[str, ...],
+    correlation_model: str = "explicit_joint",
 ) -> IncidentSampleBatch:
     """Preserve explicitly correlated source rows as one immutable batch."""
 
+    _validate_correlation_model(correlation_model)
     polarization_ids = tuple(polarization_state_id)
-    if not polarization_ids or any(
-        state_id != UNITY_SCALAR_POLARIZATION for state_id in polarization_ids
-    ):
-        raise ValueError('polarization_state_id must explicitly contain only "unity_scalar"')
     for name, value in (
         ("origin_lab_m", origin_lab_m),
         ("direction_lab", direction_lab),
@@ -80,7 +83,7 @@ def compile_joint_source_samples(
         wavelength_A=wavelength_A,
         source_weight=probability_mass,
         polarization_state_id=polarization_ids,
-        correlation_model="explicit_joint",
+        correlation_model=correlation_model,
     )
 
 
@@ -103,9 +106,11 @@ def compile_independent_source_samples(
     wavelength_A: ArrayLike,
     wavelength_probability_mass: ArrayLike,
     polarization_state_id: str,
+    correlation_model: str = "independent_product",
 ) -> IncidentSampleBatch:
     """Form the declared independent source product in lexicographic order."""
 
+    _validate_correlation_model(correlation_model)
     _reject_complex(origin_lab_m, "origin_lab_m")
     _reject_complex(direction_lab, "direction_lab")
     _reject_complex(wavelength_A, "wavelength_A")
@@ -118,8 +123,6 @@ def compile_independent_source_samples(
         raise ValueError("direction_lab must be a finite array with shape (N, 3)")
     if wavelengths.ndim != 1 or not np.all(np.isfinite(wavelengths)):
         raise ValueError("wavelength_A must be a finite one-dimensional array")
-    if polarization_state_id != UNITY_SCALAR_POLARIZATION:
-        raise ValueError('polarization_state_id must be "unity_scalar"')
     origin_mass = _component_mass(
         origin_probability_mass, origins.shape[0], "origin_probability_mass"
     )
@@ -150,8 +153,8 @@ def compile_independent_source_samples(
         direction_lab=np.tile(np.repeat(directions, wavelength_size, axis=0), (origin_size, 1)),
         wavelength_A=np.tile(wavelengths, origin_size * direction_size),
         source_weight=probability_mass,
-        polarization_state_id=(UNITY_SCALAR_POLARIZATION,) * size,
-        correlation_model="independent_product",
+        polarization_state_id=(polarization_state_id,) * size,
+        correlation_model=correlation_model,
     )
 
 
@@ -168,6 +171,7 @@ def compile_independent_gaussian_source_samples(
     direction_order: int,
     wavelength_order: int,
     polarization_state_id: str,
+    correlation_model: str = "independent_product",
 ) -> IncidentSampleBatch:
     """Compile an explicitly independent deterministic Gaussian source product."""
 
@@ -186,8 +190,6 @@ def compile_independent_gaussian_source_samples(
         raise ValueError(
             "transverse_axes_lab must be orthonormal and tangent to mean_direction_lab"
         )
-    if polarization_state_id != UNITY_SCALAR_POLARIZATION:
-        raise ValueError('polarization_state_id must be "unity_scalar"')
     _reject_complex(mean_wavelength_A, "mean_wavelength_A")
     mean_wavelength = float(mean_wavelength_A)
     if not np.isfinite(mean_wavelength) or mean_wavelength <= 0.0:
@@ -222,4 +224,5 @@ def compile_independent_gaussian_source_samples(
         wavelength_A=wavelength_nodes,
         wavelength_probability_mass=wavelength_mass,
         polarization_state_id=polarization_state_id,
+        correlation_model=correlation_model,
     )
