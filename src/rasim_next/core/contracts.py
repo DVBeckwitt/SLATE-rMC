@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-CONTRACT_API_VERSION = 4
+from rasim_next.core.validity import ValidityCode
+
+CONTRACT_API_VERSION = 5
 _ArraySpec = tuple[str, np.dtype[Any] | type[np.generic], tuple[int, ...], bool]
+
+
+class LayerAmplitudeNormalization(StrEnum):
+    ONE_REGISTRY_FREE_LAYER = "ONE_REGISTRY_FREE_LAYER"
+
+
+class LayerPhaseSign(StrEnum):
+    POSITIVE_Q_DOT_R = "POSITIVE_Q_DOT_R"
+
+
+class EventIntensityNormalization(StrEnum):
+    UNIT_CELL = "UNIT_CELL"
+    FINITE_TOTAL = "FINITE_TOTAL"
+    FINITE_PER_LAYER = "FINITE_PER_LAYER"
 
 
 def _array(
@@ -45,6 +63,15 @@ def _texts(value: tuple[str, ...], size: int, name: str) -> tuple[str, ...]:
     return result
 
 
+def _versioned_id(value: str, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9._-]*\.v[1-9][0-9]*", value) is None
+    ):
+        raise ValueError(f"{name} must be a nonempty versioned identifier ending in .vN")
+    return value
+
+
 def _batch(
     instance: object,
     identity_name: str,
@@ -77,7 +104,7 @@ class IncidentSampleBatch:
     correlation_model: str
 
     def __post_init__(self) -> None:
-        _batch(
+        size = _batch(
             self,
             "incident_sample_id",
             (
@@ -92,8 +119,8 @@ class IncidentSampleBatch:
             np.linalg.norm(self.direction_lab, axis=1), 1.0, rtol=0.0, atol=1e-12
         ):
             raise ValueError("wavelengths must be positive and directions unit length")
-        if not np.isclose(self.source_weight.sum(), 1.0, rtol=0.0, atol=1e-12):
-            raise ValueError("source_weight must sum to one")
+        if size == 0 or not np.all(self.source_weight == 1.0 / size):
+            raise ValueError("source_weight must be uniform empirical mass 1/N")
         if not self.correlation_model:
             raise ValueError("correlation_model is required")
 
@@ -139,7 +166,7 @@ class IncidentStateBatch:
     valid: NDArray[np.bool_]
 
     def __post_init__(self) -> None:
-        _batch(
+        size = _batch(
             self,
             "incident_state_id",
             (
@@ -155,6 +182,8 @@ class IncidentStateBatch:
                 ("valid", np.bool_, (), False),
             ),
         )
+        if size == 0 or not np.all(self.source_weight == 1.0 / size):
+            raise ValueError("source_weight must be uniform empirical mass 1/N")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,26 +215,29 @@ class RodCatalog:
 class ScatteringEventBatch:
     event_id: NDArray[np.int64]
     incident_state_id: NDArray[np.int64]
+    orientation_id: NDArray[np.int64]
     rod_id: NDArray[np.int64]
     wavelength_A: NDArray[np.float64]
     q_internal_sample_Ainv: NDArray[np.float64]
-    qz_Ainv: NDArray[np.float64]
+    q_sample_normal_Ainv: NDArray[np.float64]
     l_coordinate: NDArray[np.float64]
     kf_film_phase_sample_Ainv: NDArray[np.float64]
     reciprocal_weight: NDArray[np.float64]
     ewald_residual_Ainv: NDArray[np.float64]
+    status: tuple[ValidityCode, ...]
     valid: NDArray[np.bool_]
 
     def __post_init__(self) -> None:
-        _batch(
+        size = _batch(
             self,
             "event_id",
             (
                 ("incident_state_id", np.int64, (), True),
+                ("orientation_id", np.int64, (), True),
                 ("rod_id", np.int64, (), True),
                 ("wavelength_A", np.float64, (), True),
                 ("q_internal_sample_Ainv", np.float64, (3,), False),
-                ("qz_Ainv", np.float64, (), False),
+                ("q_sample_normal_Ainv", np.float64, (), False),
                 ("l_coordinate", np.float64, (), False),
                 ("kf_film_phase_sample_Ainv", np.float64, (3,), False),
                 ("reciprocal_weight", np.float64, (), True),
@@ -213,6 +245,19 @@ class ScatteringEventBatch:
                 ("valid", np.bool_, (), False),
             ),
         )
+        status = tuple(ValidityCode(item) for item in self.status)
+        if len(status) != size:
+            raise ValueError(f"status must contain {size} ValidityCode values")
+        object.__setattr__(self, "status", status)
+        status_valid = np.fromiter(
+            (item is ValidityCode.VALID for item in status), dtype=np.bool_, count=size
+        )
+        if not np.array_equal(self.valid, status_valid):
+            raise ValueError("valid must agree exactly with status == ValidityCode.VALID")
+        if not np.array_equal(self.q_sample_normal_Ainv, self.q_internal_sample_Ainv[:, 2]):
+            raise ValueError(
+                "q_sample_normal_Ainv must equal the sample-normal component of event Q"
+            )
         if np.any(self.wavelength_A == 0):
             raise ValueError("wavelength_A must be positive")
 
@@ -224,7 +269,7 @@ class RodQueryBatch:
     phase_id: tuple[str, ...]
     h: NDArray[np.int32]
     k: NDArray[np.int32]
-    qz_Ainv: NDArray[np.float64]
+    q_sample_normal_Ainv: NDArray[np.float64]
     l_coordinate: NDArray[np.float64]
     wavelength_A: NDArray[np.float64]
 
@@ -236,7 +281,7 @@ class RodQueryBatch:
                 ("rod_id", np.int64, (), True),
                 ("h", np.int32, (), False),
                 ("k", np.int32, (), False),
-                ("qz_Ainv", np.float64, (), False),
+                ("q_sample_normal_Ainv", np.float64, (), False),
                 ("l_coordinate", np.float64, (), False),
                 ("wavelength_A", np.float64, (), True),
             ),
@@ -246,33 +291,86 @@ class RodQueryBatch:
             raise ValueError("wavelength_A must be positive")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LayerAmplitudeResult:
     event_id: NDArray[np.int64]
-    f_plus: NDArray[np.complex128]
-    f_minus: NDArray[np.complex128] | None
+    rod_id: NDArray[np.int64]
+    phase_id: tuple[str, ...]
+    f_plus_e: NDArray[np.complex128]
+    f_minus_e: NDArray[np.complex128] | None
+    normalization: LayerAmplitudeNormalization
+    phase_sign: LayerPhaseSign
+    gauge_id: str
+    layer_normal_crystal: NDArray[np.float64]
+    layer_repeat_A: float
 
     def __post_init__(self) -> None:
-        size = _batch(self, "event_id", (("f_plus", np.complex128, (), False),))
-        if self.f_minus is not None:
+        size = _batch(
+            self,
+            "event_id",
+            (("rod_id", np.int64, (), True), ("f_plus_e", np.complex128, (), False)),
+            ("phase_id",),
+        )
+        if self.f_minus_e is not None:
             object.__setattr__(
-                self, "f_minus", _array(self.f_minus, np.complex128, (size,), "f_minus")
+                self,
+                "f_minus_e",
+                _array(self.f_minus_e, np.complex128, (size,), "f_minus_e"),
             )
+        normalization = LayerAmplitudeNormalization(self.normalization)
+        phase_sign = LayerPhaseSign(self.phase_sign)
+        normal = _array(self.layer_normal_crystal, np.float64, (3,), "layer_normal_crystal")
+        if not np.isclose(np.linalg.norm(normal), 1.0, rtol=0.0, atol=1e-12):
+            raise ValueError("layer_normal_crystal must be a unit vector")
+        repeat = float(self.layer_repeat_A)
+        if not np.isfinite(repeat) or repeat <= 0.0:
+            raise ValueError("layer_repeat_A must be finite and positive")
+        object.__setattr__(self, "normalization", normalization)
+        object.__setattr__(self, "phase_sign", phase_sign)
+        object.__setattr__(self, "gauge_id", _versioned_id(self.gauge_id, "gauge_id"))
+        object.__setattr__(self, "layer_normal_crystal", normal)
+        object.__setattr__(self, "layer_repeat_A", repeat)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LayerNormalQBatch:
+    event_id: NDArray[np.int64]
+    rod_id: NDArray[np.int64]
+    phase_id: tuple[str, ...]
+    layer_normal_q_Ainv: NDArray[np.float64]
+    gauge_id: str
+
+    def __post_init__(self) -> None:
+        _batch(
+            self,
+            "event_id",
+            (
+                ("rod_id", np.int64, (), True),
+                ("layer_normal_q_Ainv", np.float64, (), False),
+            ),
+            ("phase_id",),
+        )
+        object.__setattr__(self, "gauge_id", _versioned_id(self.gauge_id, "gauge_id"))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class EventIntensityResult:
     event_id: NDArray[np.int64]
-    intensity_per_sr: NDArray[np.float64]
+    scattering_strength_A2: NDArray[np.float64]
     model_id: str
     model_component_id: str
     population_group_id: str | None
-    normalization: str
+    normalization: EventIntensityNormalization
 
     def __post_init__(self) -> None:
-        _batch(self, "event_id", (("intensity_per_sr", np.float64, (), True),))
-        if not self.model_id or not self.model_component_id or not self.normalization:
-            raise ValueError("model identity and normalization are required")
+        _batch(self, "event_id", (("scattering_strength_A2", np.float64, (), True),))
+        if (
+            not self.model_id
+            or not self.model_component_id
+            or (self.population_group_id is not None and not self.population_group_id)
+        ):
+            raise ValueError("model identity and population group are required")
+        object.__setattr__(self, "normalization", EventIntensityNormalization(self.normalization))
 
 
 @dataclass(frozen=True, slots=True)

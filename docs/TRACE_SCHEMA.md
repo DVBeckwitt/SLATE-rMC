@@ -1,6 +1,7 @@
 # Stage-trace schema
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not invent branch-specific names for shared quantities.
+The frozen trace schema remains v4; contract API v5 does not renumber it.
 
 ## Stage IDs
 
@@ -36,6 +37,8 @@ reciprocal.event_q_internal
 reciprocal.ewald_residual
 reciprocal.event_weight
 
+mosaic.wrapped_line_density
+
 ordered.atomic_amplitude
 ordered.unit_cell_amplitude
 ordered.layer_amplitude
@@ -60,18 +63,24 @@ geometry.kf_air_lab
 geometry.detector_intersection
 geometry.detector_column_px
 geometry.detector_row_px
+geometry.detector_pixel_solid_angle
 
-measurement.source_weight
+sampling.source_empirical_mass
 measurement.reciprocal_weight
-measurement.model_intensity
+measurement.scattering_strength
 measurement.population_weight
 measurement.optical_weight
 measurement.footprint_weight
 measurement.polarization_weight
-measurement.pixel_solid_angle
 measurement.deposition_indices
 measurement.deposition_weights
 measurement.total_detector_mass
+
+render.candidate_mass
+render.selection_probability
+render.selected_event_mass
+render.raw_detector_image
+render.clipped_mass
 
 selection.radial_family_key
 selection.reflection_group_key
@@ -121,3 +130,4 @@ The common comparator:
 5. accepts downstream disagreement only for a declared `CORRECTED` case with an independent proof record
 
 The comparator must not hide missing stages by comparing only final outputs.
+`mosaic.wrapped_line_density` has unit `rad^-1`, no coordinate frame, and `PROBABILITY_DENSITY` measure.

@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.io.orientation import (
     DetectorIndex,
     OscRawIndex,
@@ -26,7 +27,7 @@ from rasim_next.io.orientation import (
     raw_to_detector_index,
     raw_to_detector_native,
 )
-from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
+from rasim_next.proof.traces import compare_traces
 
 _HEADER_BYTES = 6000
 

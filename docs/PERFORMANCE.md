@@ -7,14 +7,14 @@ Do not commit to CPU, GPU, CUDA, Numba, JAX, C++, or another backend before the 
 ## Algorithmic priorities
 
 1. Compile instrument transforms once.
-2. Use fixed deterministic source and mosaic nodes.
+2. Use fixed-seed empirical source samples and deterministic/adaptive candidate support.
 3. Construct localized Ewald support instead of scanning a full circle when possible.
-4. Use two-pass count and fill or fused reduction instead of materializing the full source-by-rod-by-quadrature product.
-5. Keep event geometry separate from model intensity so later fits can reuse it.
+4. Stream or use two passes instead of materializing the full incident-by-rod-by-mosaic product.
+5. Keep candidate geometry separate from scattering strength so later fits can reuse it.
 6. Evaluate ordered and stacking models only at event-required `Qz` or `L` coordinates.
 7. Cache rod grids only when profiling proves reuse outweighs interpolation error and memory.
 8. Separate continuous detector hits from deposition.
-9. Use deterministic reduction in proof and fitting modes.
+9. Use fixed seeds and reproducible reduction in proof and fitting modes.
 10. Render only selected detector regions during fitting when the objective does not require the full image.
 
 ## Repeated fitting workloads
@@ -38,7 +38,7 @@ scale or background
     final combination only
 
 ordered or stacking parameters
-    model intensity and detector reduction
+    scattering strength and detector reduction
 
 mosaic parameters
     reciprocal weights and possibly event support

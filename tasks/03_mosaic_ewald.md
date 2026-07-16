@@ -6,7 +6,7 @@ Start from `PROOF_BASE_SHA`.
 
 ## Goal
 
-Produce deterministic source/orientation sampling and correct reciprocal-space scattering events with explicit probability mass, event Jacobian, and elastic residual.
+Produce equal-mass seeded source samples and correct reciprocal-space candidates with physical mass, event Jacobian, and elastic residual; do not select or render events.
 
 ## Owned paths
 
@@ -14,6 +14,7 @@ Produce deterministic source/orientation sampling and correct reciprocal-space s
 src/rasim_next/sampling/
 src/rasim_next/reciprocal/ewald.py
 src/rasim_next/reciprocal/events.py
+src/rasim_next/reciprocal/proof.py
 tests/test_mosaic_ewald.py
 this task's execution-plan and handoff sections
 ```
@@ -30,7 +31,7 @@ this task's execution-plan and handoff sections
 - detector geometry or pixels
 - CIF parsing, structure intensity, Parratt, or stacking
 - interface optics
-- branch and `Qr` selection
+- weighted candidate selection or detector deposition
 - fitting or acceleration frameworks
 - shared contract or dependency edits
 
@@ -67,44 +68,43 @@ detector bandwidth sum and wavelength-dependent geometry
 
 ### MOS-01: source samples
 
-Implement deterministic spatial, directional, wavelength, and declared polarization-state samples with explicit joint or independent correlation semantics and integrated probability mass. A unity polarization assumption must be explicit metadata, not absence of data.
+Implement explicit seeded randomized Latin-hypercube Gaussian sampling for position, divergence, and wavelength: independent dimensions, antithetic pairs, an odd central ray, equal empirical row mass, and reproducible count/seed. Use the direct `scipy.special.ndtri` dependency instead of a local inverse-normal approximation. Never multiply samples by their generating PDF. Keep deterministic Gauss–Hermite only as an oracle.
 
 ### MOS-02: orientation distribution
 
 Implement independent Gaussian-like core width, Lorentzian-like tail width, and mixture weight. Normalize probability under the declared spherical measure without evaluating a singular point density at the pole.
+Record `mosaic.wrapped_line_density` as `rad^-1`, frame-free `PROBABILITY_DENSITY`.
 
 ### MOS-03: dense independent oracle
 
-Implement a transparent dense support calculation using direct equations. It must not call the public localized solver.
+Implement a transparent all-candidate support oracle using direct equations. It must not call the public candidate builder or render an image.
 
 ### MOS-04: Ewald support
 
-Construct the valid support for each incident state and rod. The overnight public reference may use the dense deterministic construction when it is converged; a localized/adaptive production solver is an extension unless completed and proved. Handle two-root, tangent, no-root, and specular-family cases. Use real phase wavevectors.
+Construct every physically valid candidate for each incident state and rod. A localized/adaptive builder is an extension unless proved against the all-candidate oracle. Handle two-root, tangent, no-root, and specular-family cases with real phase wavevectors.
 
-### MOS-05: deterministic quadrature
+### MOS-05: candidate mass
 
-Integrate orientation probability and any required geometric Jacobian into `reciprocal_weight`. Do not use secondary random or quantile resampling in proof mode.
+Calculate each candidate's `reciprocal_weight` as its wrapped-mosaic/Jacobian mass for T07's complete pool. Do not select candidates, assign per-selected-event mass, or raster pixels here.
 
-### MOS-06: event contract
+### MOS-06: candidate contract
 
-Emit event-aligned internal `Q`, `Qz`, `L`, outgoing film phase wavevector, weight, residual, IDs, and validity. Do not include source weight, structure intensity, optics, solid angle, or deposition.
+Emit candidate-aligned full sample-frame `Q`, exact sample-normal projection, `L`, outgoing film phase wavevector, `reciprocal_weight`, residual, source/orientation/rod IDs, exact status, and matching validity. Do not include source PDF weight, structure intensity, optics, solid angle, selection, or deposition.
 
 ### MOS-07: convergence and benchmark
 
-Compare the public method to the dense oracle across narrow, broad, tail, tangent, and bandwidth cases. When the public method is the dense reference, record its convergence and baseline timing. Any localized/adaptive method must agree before it replaces the reference path.
+Compare the candidate builder to the all-candidate oracle across narrow, broad, tail, tangent, and bandwidth cases; record construction convergence, timing, and peak memory before any localized replacement.
 
 ## Required proof
 
-- source and spectrum weight normalization
-- preservation of declared source correlations and polarization-state IDs
+- fixed-seed source support, equal empirical row mass, antithetic pairing, and odd central ray
+- source histograms recover declared distributions/correlations and preserve polarization-state IDs
 - orientation normalization and azimuthal periodicity
 - zero-width limit and finite pole behavior
 - exact elastic residual
 - tangent and no-root status
-- dense versus public integrated event mass
-- no quantile-resampling bias
-- legacy support and event cases with classifications
-- convergence of total mass, event centroid, and selected quantiles
+- all-candidate versus public support and total candidate mass
+- legacy candidate cases with classifications and construction convergence
 
 ## Overnight completion rule
 
@@ -127,31 +127,23 @@ Stop `BLOCKED` if the common incident-state, rod-catalog, event, or probability-
 
 ## Execution plan
 
-State: local recovery complete; central proof-path ownership and the shared tolerance/measure artifact remain blocking.
+State: shared authority merged without commit; smallest consumer migration awaits PM review.
 
-1. Preserve the correct public source, mosaic, Ewald, and count-then-fill event implementation.
-2. Fix MOS-01 metadata preservation under the existing source contracts.
-3. Reduce MOS-02..07 evidence to one compact oracle matrix, one real refinement, seven proof-only controls, and one sparse measured benchmark.
-4. Run the original and repository-wide proof gates without committing unowned proof-path work. Complete.
+1. Replace production Gauss-Hermite source construction with fixed-seed randomized Latin-hypercube samples carrying equal `1/N` mass; retain Gauss-Hermite only as an oracle.
+2. Align candidate status, source/orientation/Q fields, trace types, and proof tolerances with the merged shared contracts.
+3. Preserve wrapped spherical orientation mass, stable Ewald support, exactly one coarea Jacobian, deterministic ordering, and count-then-fill memory behavior.
+4. Stop at valid candidate support and reciprocal mass. T07 alone owns all-rod selection, T/N deposition, detector pixels, and downstream factors; T03 emits no raw solid angle.
 
 ## Handoff
 
-Status: BLOCKED pending central ownership of `src/rasim_next/reciprocal/proof.py` and a reviewed shared stage-tolerance/result-measure artifact.
+Status: migration pending; no merge commit created.
 
-Commit SHA: `9ef8d9a7149b69c1f0c7ab13c528f905ec0340fc` (recovery changes intentionally uncommitted).
+Checkpoint commit: `50245d81c2c8e7044c95d43663155e2fc2def4b4`; merged shared authority: `7cc0620fa826ed1b17e9f589991a3cf77e161374`.
 
-Public APIs: deterministic joint/independent source compilation with preserved polarization/correlation metadata, wrapped axisymmetric mosaic quadrature, continuous-rod Ewald roots, and count-then-fill event/status assembly.
+Retained branch facts: source metadata survives compilation; wrapped axisymmetric mosaic mass is normalized on the declared spherical measure; continuous-rod roots handle two-root, tangent, no-root, and suppressed direct-beam cases; candidate assembly preserves ordered full sample-frame `Q`, `Qz`, `L`, outgoing film phase wavevector, residual, and orientation-mass-times-one-coarea-Jacobian weight without maximum-root preallocation.
 
-Proof summary: the compact T03 suite passes 4/4 and the full suite passes 9/9. Compile, Ruff, documentation, core proof, reference proof, and `git diff --check` pass. Schema-v1 validation passes under an explicitly schema-only clean-guard substitution; the real and poisoned-Git T03 proof commands correctly reject the dirty checkout. The compact proof retains five named oracle regimes, seven detected controls, and one refinement. `proof.py` is 1,083 lines, `+487/-191` versus HEAD (net `+296`, within the PM ceiling).
+Pre-migration evidence: the compact four-test checkpoint, five-regime dense oracle, one quadrature refinement, seven assigned controls, and sparse 4,096-attempt/3-candidate memory fixture passed before this merge. Gates must be rerun after consumer migration.
 
-Legacy classifications: `mosaic.ewald_intersection` is `MATCH`; `mosaic.legacy_density` is `CORRECTED`; deterministic source and continuous-rod events are `NO_ORACLE`.
+Legacy state: Ewald intersection is `MATCH`; legacy mosaic density is `CORRECTED` at `mosaic.wrapped_line_density`; seeded LHS source and continuous-rod candidates remain `NO_ORACLE` outside analytic/oracle proof.
 
-First divergences: the corrected legacy density first diverges at the public wrapped-line-density calculation, before `mosaic.probability_measure`; central approval of the stage name is pending. The `MATCH` and `NO_ORACLE` cases have no divergence stage.
-
-Convergence: alpha-cell levels 4, 8, and 16 preserve total reciprocal mass `2.5467472306046544`; the maximum successive selected-qz-quantile change decreases from `0.0058602352443966055` to `0.0014933815676112516 A^-1`. Acceptance remains blocked until the shared tolerance artifact exists.
-
-Benchmark and peak memory: 4,096 attempted lines produce 3 events and 1 suppressed direct root, with every event/status field matching the 65-node independent dense oracle. Public time is `2.385948400013149 s`; dense-oracle time is `0.0718578000087291 s`. Returned numeric output is `139,603 B`; traced live/peak/temporary-working memory is `175,131/184,280/9,149 B`. The eliminated maximum-root event preallocator alone was `786,432 B` for this fixture.
-
-Known limitations: `UNITY_APPROXIMATION` preserves declared polarization IDs but adds no polarization physics; no localized/adaptive accelerator or generic SO(3) sampler. The shared `IncidentSampleBatch` constructor still accepts a truthy non-string correlation value when called directly; T03 public compilers reject it locally.
-
-Contract requests: centrally amend T03 ownership to include `src/rasim_next/reciprocal/proof.py`; approve a shared wrapped-line-density trace stage; publish a reviewed versioned shared stage-tolerance/result-measure artifact and require its hash before shared-pack acceptance. Integration must squash the two existing branch commits onto `812f896fde5b8365ff5c218fc606df674ad7dcad`; history is not rewritten locally. Recovery changes remain intentionally uncommitted until proof-path ownership is resolved.
+Migration boundary: current production source construction still uses deterministic Gauss-Hermite and must not be accepted as the merged MOS-01 production path. No selection, rendering, solid-angle factor, detector deposition, or pixel work belongs in T03.

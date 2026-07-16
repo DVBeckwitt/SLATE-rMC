@@ -57,10 +57,10 @@ Included:
 
 ### Mosaic and Ewald
 
-- source and wavelength samples under declared correlations
+- fixed-seed empirical source and wavelength samples under declared correlations
 - Gaussian-plus-Lorentzian mosaic distribution
 - correct spherical probability measure
-- reciprocal-event support, Ewald residuals, deterministic quadrature, and event probability mass
+- deterministic/adaptive valid-candidate support, Ewald residuals, and reciprocal mass
 
 ### Ordered rods and reflectivity
 
@@ -93,8 +93,8 @@ Included:
 - automated contract and trace review
 - read-only scientific review
 - one-at-a-time vertical integration
-- exact factor ownership and detector solid angle
-- non-square detector deposition
+- exact factor ownership and complete-pool selection
+- conservative non-square detector deposition
 - ordered and stacking substitution through one event-aligned interface
 - one tiny end-to-end native-detector proof
 - integrated profiling and production-path recommendation

@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
   "gemmi>=0.7,<0.8",
   "numpy>=2.0,<3",
+  "scipy>=1.14,<2",
   "xraydb>=4.5,<5",
 ]
 
