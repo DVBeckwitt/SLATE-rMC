@@ -146,26 +146,56 @@ Stop `BLOCKED` if the common instrument, coordinate, material-optics, or trace c
 
 ## Execution plan
 
-State: NS
+State: shared-authority consumer migration implemented; verification pending.
+
+- Objective: recover only GEO-01 through GEO-08 by preserving exact incident first failures,
+  using canonical trace stages, and making proof status respect clean-tree state.
+- Non-goals: no event generation, new physics, new public API, corpus growth, integration,
+  fitting, caking, GUI, acceleration, dependency, or shared-contract change.
+- Affected files: `geometry/transport.py`, `geometry/proof.py`,
+  `tests/test_geometry_optics.py`, and this execution-plan/handoff.
+- Interfaces: public signatures and shared batch shapes remain unchanged. T02 consumes shared event
+  status, production-neutral trace values, and versioned stage tolerances.
+- Tests: modify the existing transport invariant only; use one-shot proof/schema/clean-tree checks
+  for proof-only corrections; run every original T02 command plus the full suite.
+- Risks: migration remains provisional until focused, full, proof, lint, format, and diff gates pass.
+- Acceptance: incident failures remain exact through outgoing/hit results; all emitted stages are
+  canonical; dirty science never reports PASS; clean scientific proof passes; owned diff and
+  repository residue checks pass.
 
 ## Handoff
 
-Status:
+Status: verification pending. Shared contracts now represent every required GEO-01 through GEO-08
+result; no central request remains open.
 
-Commit SHA:
+The exact commit SHA is reported externally because a commit cannot embed its own hash.
 
-Public APIs:
+### Consumer migration
 
-Proof summary:
+- Starting HEAD: `ea6b38280a9a8b4301d8d582dc9f685c4e3a144e`.
+- Exact shared event failures propagate only after incident status remains valid.
+- Production traces use shared core types and canonical `sampling.source_empirical_mass` and
+  `geometry.detector_pixel_solid_angle` stage IDs. Solid angle remains metadata only.
+- Fixtures use exact uniform source mass plus `orientation_id`, `q_sample_normal_Ainv`, and aligned
+  event `status`; no `qz_Ainv` field remains.
+- Proof loads `rasim-stage-tolerances-v1` with SHA-256
+  `d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3`.
+- Public APIs, shared contracts, dependencies, references, examples, and other workstreams remain
+  unchanged.
 
-Legacy classifications:
+### Local gates
 
-First divergences:
+- Not run at this pre-test migration checkpoint.
 
-Convergence:
+### Legacy classifications
 
-Benchmark and peak memory:
+- MATCH: osc.real.bi2se3, osc.synthetic.non_square, geometry.line_plane,
+  optics.external_exit.
+- CORRECTED: geometry.sample_origin_nonrigid at geometry.instrument_transforms;
+  optics.interface_fresnel at measurement.optical_weight; optics.depth_attenuation at
+  optics.uniform_depth_attenuation.
+- NO_ORACLE: geometry.detector_rectangular_anisotropic,
+  geometry.global_rigid_covariance, optics.critical_limit.
 
-Known limitations:
-
-Contract requests:
+All T02-owned PHY-IO-*, PHY-GEO-*, PHY-OPT-001 through PHY-OPT-010, and PHY-THK-001/002 ledger
+rows remain attached to the compact classifications.
