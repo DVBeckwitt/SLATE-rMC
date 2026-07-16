@@ -146,7 +146,7 @@ Stop `BLOCKED` if the common instrument, coordinate, material-optics, or trace c
 
 ## Execution plan
 
-State: local recovery complete; central blockers remain.
+State: shared-authority consumer migration implemented; verification pending.
 
 - Objective: recover only GEO-01 through GEO-08 by preserving exact incident first failures,
   using canonical trace stages, and making proof status respect clean-tree state.
@@ -154,49 +154,38 @@ State: local recovery complete; central blockers remain.
   fitting, caking, GUI, acceleration, dependency, or shared-contract change.
 - Affected files: `geometry/transport.py`, `geometry/proof.py`,
   `tests/test_geometry_optics.py`, and this execution-plan/handoff.
-- Interfaces: public signatures and shared batch shapes remain unchanged. Missing shared event
-  status, production-neutral trace values, and versioned tolerances are contract requests.
+- Interfaces: public signatures and shared batch shapes remain unchanged. T02 consumes shared event
+  status, production-neutral trace values, and versioned stage tolerances.
 - Tests: modify the existing transport invariant only; use one-shot proof/schema/clean-tree checks
   for proof-only corrections; run every original T02 command plus the full suite.
-- Risks: event failures cannot retain a reason from a boolean-only shared contract; proof acceptance
-  cannot be frozen without centrally reviewed tolerances.
+- Risks: migration remains provisional until focused, full, proof, lint, format, and diff gates pass.
 - Acceptance: incident failures remain exact through outgoing/hit results; all emitted stages are
   canonical; dirty science never reports PASS; clean scientific proof passes; owned diff and
   repository residue checks pass.
 
 ## Handoff
 
-Status: BLOCKED. The bounded GEO-01 through GEO-08 recovery is locally correct, but three shared
-merge requirements remain unresolved.
+Status: verification pending. Shared contracts now represent every required GEO-01 through GEO-08
+result; no central request remains open.
 
 The exact commit SHA is reported externally because a commit cannot embed its own hash.
 
-### Recovery
+### Consumer migration
 
-- Starting HEAD: `4a2388004f39d0775f42b6d3deeed376320daa80`.
-- Incident first-failure codes now remain exact through outgoing-wave and detector-hit results.
-  The existing transport regression also proves lossless `RESIDUAL_EXCEEDED` propagation.
-- Proof-only OSC stages now use the declared `osc.raw_array` ID; no `osc.raw_counts` stage remains.
-- Scientific pass plus a dirty tree reports `BLOCKED`; scientific pass plus a clean tree reports
-  `PASS`. Scientific failure reports `FAIL`.
-- Public APIs and shared batch shapes are unchanged. No shared contract, dependency, reference,
-  example, root configuration, or other workstream file was edited.
+- Starting HEAD: `ea6b38280a9a8b4301d8d582dc9f685c4e3a144e`.
+- Exact shared event failures propagate only after incident status remains valid.
+- Production traces use shared core types and canonical `sampling.source_empirical_mass` and
+  `geometry.detector_pixel_solid_angle` stage IDs. Solid angle remains metadata only.
+- Fixtures use exact uniform source mass plus `orientation_id`, `q_sample_normal_Ainv`, and aligned
+  event `status`; no `qz_Ainv` field remains.
+- Proof loads `rasim-stage-tolerances-v1` with SHA-256
+  `d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3`.
+- Public APIs, shared contracts, dependencies, references, examples, and other workstreams remain
+  unchanged.
 
 ### Local gates
 
-- The focused regression failed before the status fix and passes afterward.
-- Compile, lint, format, five permanent T02 tests, and the ten-test full suite pass.
-- Core proof passes all five checks; reference proof passes all seven checks.
-- Geometry proof passes 11/11 scientific checks, 3/3 convergence checks, and 17/17 required
-  mutations. Its dirty-tree decision is `BLOCKED` as required; the clean post-commit result is
-  reported externally.
-- All 20 proof comparison-stage call sites use IDs declared by `docs/TRACE_SCHEMA.md`.
-- The 512-ray equivalent-work benchmark agrees exactly in sample points, normal wavevectors, and
-  statuses. Maximum complex-amplitude error is 2.23e-16; retained numeric output is 86,528 bytes;
-  incremental tracemalloc peak remains below 0.5 MiB.
-- No new branch-local tolerance artifact was added. The pre-existing embedded candidate was
-  exercised only to preserve provisional evidence; it is not accepted proof authority. Shared-pack
-  acceptance remains blocked until the reviewed shared artifact exists.
+- Not run at this pre-test migration checkpoint.
 
 ### Legacy classifications
 
@@ -209,14 +198,4 @@ The exact commit SHA is reported externally because a commit cannot embed its ow
   geometry.global_rigid_covariance, optics.critical_limit.
 
 All T02-owned PHY-IO-*, PHY-GEO-*, PHY-OPT-001 through PHY-OPT-010, and PHY-THK-001/002 ledger
-rows are attached to the compact classifications.
-
-### Central requests
-
-1. Add an aligned, lossless first-failure status to the shared `ScatteringEventBatch`, require
-   `valid == (status == VALID)`, and bump its shared schema/version. T03 must supply the event
-   reason; T02 must copy it only after an incident remains valid.
-2. Move `TraceRecord`, `Measure`, and `QuantityKind` from the proof namespace to one
-   production-neutral shared core module. Keep tolerance and comparator machinery proof-only.
-3. Publish a reviewed, versioned shared stage-tolerance artifact with canonical stage keys, scale
-   semantics, and a stable hash. T02 must load that shared artifact before reference-pack acceptance.
+rows remain attached to the compact classifications.

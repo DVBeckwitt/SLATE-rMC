@@ -279,7 +279,7 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         origin_lab_m=np.array([[0.0, 0.0, 1.0], [2.1e-4, 0.0, 1.0]]),
         direction_lab=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]),
         wavelength_A=np.full(2, wavelength_A),
-        source_weight=np.array([0.8, 0.2]),
+        source_weight=np.array([0.5, 0.5]),
         polarization_state_id=("p30", "p10"),
         correlation_model="independent",
     )
@@ -294,22 +294,24 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         ValidityCode.OUTSIDE_SUPPORT,
     )
     np.testing.assert_array_equal(incident.states.incident_state_id, [30, 10])
-    np.testing.assert_array_equal(incident.states.source_weight, [0.8, 0.2])
+    np.testing.assert_array_equal(incident.states.source_weight, [0.5, 0.5])
 
     film_normal_Ainv = abs(float(incident.states.kz_film_Ainv[0].real))
     events = ScatteringEventBatch(
         event_id=np.array([200, 100]),
         incident_state_id=np.array([30, 10]),
+        orientation_id=np.array([4, 2]),
         rod_id=np.array([2, 1]),
         wavelength_A=np.full(2, wavelength_A),
         q_internal_sample_Ainv=np.zeros((2, 3)),
-        qz_Ainv=np.zeros(2),
+        q_sample_normal_Ainv=np.zeros(2),
         l_coordinate=np.zeros(2),
         kf_film_phase_sample_Ainv=np.array(
             [[0.0, 0.0, film_normal_Ainv], [0.0, 0.0, film_normal_Ainv]]
         ),
         reciprocal_weight=np.array([0.25, 0.75]),
         ewald_residual_Ainv=np.zeros(2),
+        status=(ValidityCode.VALID, ValidityCode.VALID),
         valid=np.ones(2, dtype=bool),
     )
     transported = transport_scattering_events(
@@ -341,18 +343,19 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         ValidityCode.VALID,
         ValidityCode.OUTSIDE_SUPPORT,
     )
-    residual_incident = replace(
-        incident,
-        status=(ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED),
-    )
-    residual_transport = transport_scattering_events(
+    failed_events = replace(
         events,
-        residual_incident,
+        status=(ValidityCode.RESIDUAL_EXCEEDED, ValidityCode.VALID),
+        valid=np.array([False, True]),
+    )
+    failed_transport = transport_scattering_events(
+        failed_events,
+        incident,
         material,
         instrument,
     )
-    assert residual_transport.outgoing_status[1] is ValidityCode.RESIDUAL_EXCEEDED
-    assert residual_transport.detector_status[1] is ValidityCode.RESIDUAL_EXCEEDED
+    assert failed_transport.outgoing_status[0] is ValidityCode.RESIDUAL_EXCEEDED
+    assert failed_transport.detector_status[0] is ValidityCode.RESIDUAL_EXCEEDED
     np.testing.assert_array_equal(transported.outgoing_waves.event_id, events.event_id)
     np.testing.assert_array_equal(transported.detector_hits.event_id, events.event_id)
     assert (transported.detector_hits.column_px[0], transported.detector_hits.row_px[0]) == (
@@ -385,5 +388,6 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         "optics.uniform_depth_attenuation",
         "geometry.detector_column_px",
         "measurement.optical_weight",
-        "measurement.pixel_solid_angle",
-    } <= {record.stage_id for record in transported.traces}
+        "sampling.source_empirical_mass",
+        "geometry.detector_pixel_solid_angle",
+    } <= {record.stage_id for record in (*incident.traces, *transported.traces)}

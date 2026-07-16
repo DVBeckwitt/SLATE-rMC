@@ -9,7 +9,7 @@ import platform
 import subprocess
 import time
 import tracemalloc
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -41,18 +41,15 @@ from rasim_next.optics.attenuation import (
     uniform_depth_attenuation,
 )
 from rasim_next.optics.refraction import solve_exit_mode, solve_incident_mode
+from rasim_next.proof.tolerances import (
+    STAGE_TOLERANCE_SHA256,
+    STAGE_TOLERANCE_VERSION,
+    StageTolerance,
+    load_stage_tolerances,
+)
 
 _PROOF_BASE_SHA = "812f896fde5b8365ff5c218fc606df674ad7dcad"
 _REFERENCE_PACK_SHA256 = "e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06"
-_TOLERANCES = {
-    "version": "geometry-optics-tolerances-v1",
-    "discrete": {"atol": 0.0, "rtol": 0.0},
-    "rotation_direction_residual": {"atol": 2e-12, "rtol": 0.0},
-    "position_m": {"atol": 1e-12, "rtol": 0.0},
-    "wavevector_Ainv": {"atol": 5e-13, "rtol": 2e-12},
-    "detector_coordinate_px": {"atol": 1e-9, "rtol": 0.0},
-    "amplitude_weight": {"atol": 5e-13, "rtol": 2e-12},
-}
 
 
 def _hash_file(path: Path) -> str:
@@ -335,15 +332,15 @@ def _numeric_stage(
     stage_id: str,
     reference: object,
     mutated: object,
-    tolerance: dict[str, float],
+    tolerance: StageTolerance,
 ) -> tuple[str, str, object, object, float, float]:
     return (
         stage_id,
         "numeric_value",
         reference,
         mutated,
-        tolerance["atol"],
-        tolerance["rtol"],
+        tolerance.atol,
+        tolerance.rtol,
     )
 
 
@@ -449,7 +446,9 @@ def _mutation(
     }
 
 
-def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
+def _error_injections(
+    root: Path, arrays: Any, tolerances: Mapping[str, StageTolerance]
+) -> list[dict[str, Any]]:
     image = read_osc(root / "examples/common/osc/non_square_big_endian.osc")
     raw = image.raw_counts
     native = image.detector_native_counts
@@ -494,7 +493,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                     "osc.beam_center_native",
                     [direct_hit.column_px, direct_hit.row_px],
                     [direct_hit.row_px, direct_hit.column_px],
-                    _TOLERANCES["detector_coordinate_px"],
+                    tolerances["osc.beam_center_native"],
                 ),
             ],
         ),
@@ -508,7 +507,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                     "osc.beam_center_native",
                     [direct_hit.column_px, direct_hit.row_px],
                     [direct_hit.column_px + 0.5, direct_hit.row_px + 0.5],
-                    _TOLERANCES["detector_coordinate_px"],
+                    tolerances["osc.beam_center_native"],
                 )
             ],
         ),
@@ -554,7 +553,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "geometry.instrument_transforms",
                         ordered,
                         reversed_order,
-                        _TOLERANCES["position_m"],
+                        tolerances["geometry.instrument_transforms"],
                     )
                 ],
             ),
@@ -568,7 +567,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "geometry.instrument_transforms",
                         z_step.apply_point(point),
                         wrong_pivot,
-                        _TOLERANCES["position_m"],
+                        tolerances["geometry.instrument_transforms"],
                     )
                 ],
             ),
@@ -582,7 +581,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "geometry.lab_ray",
                         shift.apply_vector(point),
                         shift.apply_point(point),
-                        _TOLERANCES["position_m"],
+                        tolerances["geometry.lab_ray"],
                     )
                 ],
             ),
@@ -596,7 +595,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "geometry.instrument_transforms",
                         arrays["geometry_sample_origin_rigid"],
                         arrays["geometry_sample_origin_legacy"],
-                        _TOLERANCES["position_m"],
+                        tolerances["geometry.instrument_transforms"],
                     )
                 ],
             ),
@@ -689,7 +688,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "optics.kz_incident_film",
                         incident.kz_film_Ainv,
                         wrong_root,
-                        _TOLERANCES["wavevector_Ainv"],
+                        tolerances["optics.kz_incident_film"],
                     )
                 ],
             ),
@@ -717,7 +716,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "measurement.optical_weight",
                         arrays["optics_selected_local_field_weight"],
                         arrays["optics_legacy_power_average"],
-                        _TOLERANCES["amplitude_weight"],
+                        tolerances["measurement.optical_weight"],
                     )
                 ],
             ),
@@ -731,7 +730,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "measurement.optical_weight",
                         optical,
                         omit_entrance,
-                        _TOLERANCES["amplitude_weight"],
+                        tolerances["measurement.optical_weight"],
                     )
                 ],
             ),
@@ -745,7 +744,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "measurement.optical_weight",
                         optical,
                         omit_exit,
-                        _TOLERANCES["amplitude_weight"],
+                        tolerances["measurement.optical_weight"],
                     )
                 ],
             ),
@@ -759,7 +758,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "optics.uniform_depth_attenuation",
                         attenuation,
                         full_depth,
-                        _TOLERANCES["amplitude_weight"],
+                        tolerances["optics.uniform_depth_attenuation"],
                     )
                 ],
             ),
@@ -773,7 +772,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
                         "optics.uniform_depth_attenuation",
                         attenuation,
                         1.0,
-                        _TOLERANCES["amplitude_weight"],
+                        tolerances["optics.uniform_depth_attenuation"],
                     )
                 ],
             ),
@@ -879,7 +878,7 @@ def _osc_checks(root: Path, arrays: Any, manifest: dict[str, Any]) -> list[dict[
     ]
 
 
-def _line_plane_check(arrays: Any) -> dict[str, Any]:
+def _line_plane_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     identity = RigidTransform(np.eye(3), np.zeros(3), FrameId.SAMPLE, FrameId.LAB)
     maximum_error = 0.0
     passed = True
@@ -902,7 +901,7 @@ def _line_plane_check(arrays: Any) -> dict[str, Any]:
                 maximum_error,
                 float(np.max(np.abs(result.point_lab_m - expected[:3]))),
             )
-    passed &= maximum_error <= _TOLERANCES["position_m"]["atol"]
+    passed &= maximum_error <= tolerances["geometry.sample_intersection"].bind(10.0).limit
     return _check(
         "geometry_line_plane_reference",
         passed,
@@ -911,7 +910,9 @@ def _line_plane_check(arrays: Any) -> dict[str, Any]:
     )
 
 
-def _rigid_instrument_check(arrays: Any) -> dict[str, Any]:
+def _rigid_instrument_check(
+    arrays: Any, tolerances: Mapping[str, StageTolerance]
+) -> dict[str, Any]:
     zero = np.zeros(3)
     crystal_angle = 0.2
     crystal_rotation = np.array(
@@ -973,8 +974,8 @@ def _rigid_instrument_check(arrays: Any) -> dict[str, Any]:
         np.linalg.norm(origin - arrays["geometry_sample_origin_legacy"])
     )
     passed = (
-        rotation_error <= 2e-12
-        and origin_error <= _TOLERANCES["position_m"]["atol"]
+        rotation_error <= tolerances["geometry.lab_ray"].bind(1.0).limit
+        and origin_error <= tolerances["geometry.instrument_transforms"].bind(0.5).limit
         and rejected_legacy_difference > 1e-9
     )
     return _check(
@@ -987,7 +988,7 @@ def _rigid_instrument_check(arrays: Any) -> dict[str, Any]:
     )
 
 
-def _detector_check() -> dict[str, Any]:
+def _detector_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     instrument = _instrument()
     origin = np.zeros(3)
     coordinates = ((3.0, 5.0), (-0.5, -0.5), (6.5, 10.5), (1.25, 8.75))
@@ -1038,7 +1039,8 @@ def _detector_check() -> dict[str, Any]:
     )
     maximum_error = max((*errors, covariance_error))
     passed = (
-        maximum_error <= _TOLERANCES["detector_coordinate_px"]["atol"]
+        maximum_error
+        <= tolerances["geometry.detector_column_px"].bind(max(instrument.detector_shape_rc)).limit
         and near.status is ValidityCode.VALID
         and 0.0 < near.ray_distance_m <= 1e-12
     )
@@ -1051,7 +1053,7 @@ def _detector_check() -> dict[str, Any]:
     )
 
 
-def _optics_check(arrays: Any) -> dict[str, Any]:
+def _optics_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     k0_Ainv = float(arrays["optics_exit_inputs"][0, 3])
     wavelength_A = 2.0 * np.pi / k0_Ainv
     film = _material(wavelength_A, 0.999979 + 3.2e-7j, "pack-film")
@@ -1100,7 +1102,9 @@ def _optics_check(arrays: Any) -> dict[str, Any]:
     )
 
     vacuum = _material(wavelength_A, 1.0 + 0.0j, "vacuum")
-    exit_errors: list[float] = []
+    exit_wavevector_errors_Ainv: list[float] = []
+    exit_angle_errors_rad: list[float] = []
+    exit_k0_Ainv = float(np.max(arrays["optics_exit_inputs"][:, 3]))
     exit_statuses: list[bool] = []
     for inputs, expected in zip(
         arrays["optics_exit_inputs"],
@@ -1112,7 +1116,9 @@ def _optics_check(arrays: Any) -> dict[str, Any]:
         expected_valid = bool(expected[0])
         exit_statuses.append((mode.status is ValidityCode.VALID) == expected_valid)
         if expected_valid:
-            exit_errors.append(float(np.max(np.abs(mode.k_air_phase_sample_Ainv - expected[1:4]))))
+            exit_wavevector_errors_Ainv.append(
+                float(np.max(np.abs(mode.k_air_phase_sample_Ainv - expected[1:4])))
+            )
             angle = np.arctan2(
                 mode.k_air_phase_sample_Ainv[2],
                 np.hypot(
@@ -1120,7 +1126,7 @@ def _optics_check(arrays: Any) -> dict[str, Any]:
                     mode.k_air_phase_sample_Ainv[1],
                 ),
             )
-            exit_errors.append(abs(float(angle - expected[4])))
+            exit_angle_errors_rad.append(abs(float(angle - expected[4])))
 
     critical_index = 0.8
     critical = solve_incident_mode(
@@ -1133,18 +1139,22 @@ def _optics_check(arrays: Any) -> dict[str, Any]:
         critical.k_parallel_sample_Ainv,
     )
     critical_residual = abs(dispersion - (critical_index * k0_Ainv) ** 2)
-    wavevector_limit = (
-        _TOLERANCES["wavevector_Ainv"]["atol"] + _TOLERANCES["wavevector_Ainv"]["rtol"] * k0_Ainv
+    wavevector_limit = tolerances["optics.kz_incident_film"].bind(k0_Ainv).limit
+    amplitude_limit = tolerances["optics.entrance_amplitude"].bind(1.0).limit
+    attenuation_scale = max(
+        float(np.max(np.abs(arrays["optics_attenuation_uniform_depth_average"]))),
+        1.0,
     )
-    amplitude_limit = _TOLERANCES["amplitude_weight"]["atol"] + _TOLERANCES["amplitude_weight"][
-        "rtol"
-    ] * float(np.max(np.abs(arrays["optics_t_scalar"])))
+    attenuation_tolerance = tolerances["optics.uniform_depth_attenuation"]
+    attenuation_limit = attenuation_tolerance.bind(attenuation_scale).limit
     passed = (
         max(wavevector_errors) <= wavevector_limit
         and max(amplitude_errors) <= amplitude_limit
-        and attenuation_error <= amplitude_limit
+        and attenuation_error <= attenuation_limit
         and all(exit_statuses)
-        and max(exit_errors) <= max(wavevector_limit, 2e-12)
+        and max(exit_wavevector_errors_Ainv)
+        <= tolerances["optics.kz_exit_air"].bind(exit_k0_Ainv).limit
+        and max(exit_angle_errors_rad) <= 2e-12
         and critical_residual <= 2e-12 * max((critical_index * k0_Ainv) ** 2, 1.0)
     )
     return _check(
@@ -1154,14 +1164,15 @@ def _optics_check(arrays: Any) -> dict[str, Any]:
         maximum_wavevector_error_Ainv=float(max(wavevector_errors)),
         maximum_amplitude_error=float(max(amplitude_errors)),
         maximum_attenuation_error=attenuation_error,
-        maximum_exit_error=float(max(exit_errors)),
+        maximum_exit_wavevector_error_Ainv=float(max(exit_wavevector_errors_Ainv)),
+        maximum_exit_angle_error_rad=float(max(exit_angle_errors_rad)),
         normalized_critical_residual=float(
             critical_residual / max((critical_index * k0_Ainv) ** 2, 1.0)
         ),
     )
 
 
-def _transport_check() -> dict[str, Any]:
+def _transport_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     wavelength_A = 1.54
     instrument = _instrument()
     material = _material(wavelength_A, 0.999979 + 3.2e-7j, "transport-film")
@@ -1170,7 +1181,7 @@ def _transport_check() -> dict[str, Any]:
         origin_lab_m=np.array([[0.0, 0.0, 1.0], [2.1e-4, 0.0, 1.0]]),
         direction_lab=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]),
         wavelength_A=np.full(2, wavelength_A),
-        source_weight=np.array([0.75, 0.25]),
+        source_weight=np.array([0.5, 0.5]),
         polarization_state_id=("p7", "p3"),
         correlation_model="independent",
     )
@@ -1184,16 +1195,18 @@ def _transport_check() -> dict[str, Any]:
     events = ScatteringEventBatch(
         event_id=np.array([9, 4]),
         incident_state_id=np.array([7, 3]),
+        orientation_id=np.array([3, 1]),
         rod_id=np.array([2, 5]),
         wavelength_A=np.full(2, wavelength_A),
         q_internal_sample_Ainv=np.zeros((2, 3)),
-        qz_Ainv=np.zeros(2),
+        q_sample_normal_Ainv=np.zeros(2),
         l_coordinate=np.zeros(2),
         kf_film_phase_sample_Ainv=np.array(
             [[0.0, 0.0, film_normal_Ainv], [0.0, 0.0, film_normal_Ainv]]
         ),
         reciprocal_weight=np.array([0.2, 0.8]),
         ewald_residual_Ainv=np.zeros(2),
+        status=(ValidityCode.VALID, ValidityCode.VALID),
         valid=np.ones(2, dtype=bool),
     )
     transported = transport_scattering_events(
@@ -1222,7 +1235,7 @@ def _transport_check() -> dict[str, Any]:
         exit_mode.exit_amplitude,
         attenuation,
     )
-    stage_ids = {record.stage_id for record in transported.traces}
+    stage_ids = {record.stage_id for record in (*incident.traces, *transported.traces)}
     passed = all(
         (
             incident.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
@@ -1230,7 +1243,10 @@ def _transport_check() -> dict[str, Any]:
             transported.detector_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
             np.array_equal(transported.outgoing_waves.event_id, events.event_id),
             np.array_equal(transported.detector_hits.event_id, events.event_id),
-            abs(transported.outgoing_waves.optical_weight[0] - expected_optical) <= 5e-13,
+            abs(transported.outgoing_waves.optical_weight[0] - expected_optical)
+            <= tolerances["measurement.optical_weight"]
+            .bind(max(abs(float(expected_optical)), 1.0))
+            .limit,
             transported.detector_hits.column_px[0] == 3.0,
             transported.detector_hits.row_px[0] == 5.0,
             {
@@ -1238,7 +1254,8 @@ def _transport_check() -> dict[str, Any]:
                 "optics.uniform_depth_attenuation",
                 "geometry.detector_column_px",
                 "measurement.optical_weight",
-                "measurement.pixel_solid_angle",
+                "sampling.source_empirical_mass",
+                "geometry.detector_pixel_solid_angle",
             }
             <= stage_ids,
         )
@@ -1392,7 +1409,7 @@ def _scalar_incident_oracle(
     return point_lab_m, root, amplitude, ValidityCode.VALID
 
 
-def _benchmark() -> dict[str, Any]:
+def _benchmark(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     size = 512
     wavelength_A = 1.54
     instrument = _instrument(sample_width_m=4.0, sample_length_m=4.0)
@@ -1445,9 +1462,9 @@ def _benchmark() -> dict[str, Any]:
     status_agreement = vector.status == tuple(scalar_status)
     passed = (
         status_agreement
-        and point_error <= 1e-12
-        and kz_error <= 5e-13 + 2e-12 * (2.0 * np.pi / wavelength_A)
-        and amplitude_error <= 5e-13 + 2e-12 * float(np.max(np.abs(scalar_amplitude)))
+        and point_error <= tolerances["geometry.sample_intersection"].bind(4.0).limit
+        and kz_error <= tolerances["optics.kz_incident_film"].bind(2.0 * np.pi / wavelength_A).limit
+        and amplitude_error <= tolerances["optics.entrance_amplitude"].bind(1.0).limit
     )
     return {
         "status": "PASS" if passed else "FAIL",
@@ -1480,6 +1497,8 @@ def _missing_pack_result() -> dict[str, Any]:
         "trace_schema_version": 4,
         "reference_pack_sha256s": {},
         "environment_sha256": _environment_sha256(),
+        "tolerance_version": STAGE_TOLERANCE_VERSION,
+        "tolerance_sha256": STAGE_TOLERANCE_SHA256,
         "checks": [
             {
                 "check_id": "reference_pack",
@@ -1498,6 +1517,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
 
     started = time.perf_counter()
     root = Path(__file__).resolve().parents[3]
+    tolerances = load_stage_tolerances()
     pack_path = root / "reference/rasim_reference_v1.npz"
     if not pack_path.is_file():
         if allow_missing_pack:
@@ -1507,7 +1527,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
     with np.load(pack_path, allow_pickle=False) as arrays:
         manifest = json.loads(arrays["manifest_json"].tobytes())
         classification_check = _classification_check(arrays, manifest)
-        injections = _error_injections(root, arrays)
+        injections = _error_injections(root, arrays, tolerances)
         checks = [
             _reference_integrity(pack_path, manifest),
             classification_check,
@@ -1519,11 +1539,11 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
                 assigned_count=len(injections),
             ),
             *_osc_checks(root, arrays, manifest),
-            _line_plane_check(arrays),
-            _rigid_instrument_check(arrays),
-            _detector_check(),
-            _optics_check(arrays),
-            _transport_check(),
+            _line_plane_check(arrays, tolerances),
+            _rigid_instrument_check(arrays, tolerances),
+            _detector_check(tolerances),
+            _optics_check(arrays, tolerances),
+            _transport_check(tolerances),
         ]
 
     base_process = _git(root, "merge-base", "--is-ancestor", _PROOF_BASE_SHA, "HEAD")
@@ -1537,7 +1557,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
         ),
     )
     convergence = _convergence_checks()
-    benchmark = _benchmark()
+    benchmark = _benchmark(tolerances)
     scientific_passed = (
         all(check["status"] == "PASS" for check in checks)
         and all(check["status"] == "PASS" for check in convergence)
@@ -1579,36 +1599,12 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
         "benchmark": benchmark,
         "limitations": [
             "exact-zero internal exit normal uses the documented +normal limiting side",
-            "the v1 reference pack has a pack hash but no per-array tolerance metadata",
             "tracemalloc does not include driver or operating-system cache memory",
             "multilayer distorted fields, deposition, caking, and fitting remain outside T02",
         ],
-        "contract_requests": [
-            {
-                "request_id": "SHARED-EVENT-FIRST-FAILURE-STATUS",
-                "owner": "shared contracts/T03",
-                "blocking": True,
-                "blocks": "exact GEO-07 event first-failure propagation",
-                "required_action": "Add an aligned lossless status to ScatteringEventBatch, require valid == (status == VALID), and have T03 supply each event failure reason.",
-            },
-            {
-                "request_id": "SHARED-TRACE-TYPE-LAYER",
-                "owner": "shared proof-base/core",
-                "blocking": True,
-                "blocks": "production-neutral GEO-07 public trace values",
-                "required_action": "Move TraceRecord, Measure, and QuantityKind from the proof namespace to one shared production-neutral core module; keep comparator machinery proof-only.",
-            },
-            {
-                "request_id": "SHARED-T02-TOLERANCE-POLICY",
-                "owner": "shared proof-base/integration",
-                "blocking": True,
-                "blocks": "T02 acceptance after comparison with the shared reference pack",
-                "required_action": "Publish a reviewed versioned shared stage-tolerance artifact with canonical stage keys, scale semantics, and a stable hash; T02 must load that shared artifact before acceptance.",
-            },
-        ],
-        "tolerance_version": _TOLERANCES["version"],
-        "tolerance_sha256": _hash_json(_TOLERANCES),
-        "tolerances": _TOLERANCES,
+        "contract_requests": [],
+        "tolerance_version": STAGE_TOLERANCE_VERSION,
+        "tolerance_sha256": STAGE_TOLERANCE_SHA256,
         "error_injections": injections,
         "scientific_gates_passed": scientific_passed,
         "worktree_clean": worktree_clean,

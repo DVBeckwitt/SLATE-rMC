@@ -18,6 +18,7 @@ from rasim_next.core.contracts import (
     ScatteringEventBatch,
 )
 from rasim_next.core.frames import FrameId
+from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.detector import _project_detector_rays
 from rasim_next.geometry.instrument import CompiledInstrument
@@ -31,7 +32,6 @@ from rasim_next.optics.refraction import (
     _solve_exit_mode_arrays,
     _solve_incident_mode_arrays,
 )
-from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord
 
 _MODEL_VERSION = "geometry-optics-v1"
 _PROVENANCE = "T02 detector-native geometry and planar-interface optics"
@@ -274,7 +274,7 @@ def build_incident_states(
                 QuantityKind.AMPLITUDE,
             ),
             (
-                "measurement.source_weight",
+                "sampling.source_empirical_mass",
                 states.source_weight,
                 "1",
                 FrameId.NONE,
@@ -341,7 +341,7 @@ def transport_scattering_events(
 
     outgoing_status = np.asarray(incident.status, dtype=object)[incident_rows]
     incident_valid = outgoing_status == ValidityCode.VALID
-    outgoing_status[incident_valid & ~events.valid] = ValidityCode.NO_SOLUTION
+    outgoing_status[incident_valid] = np.asarray(events.status, dtype=object)[incident_valid]
     candidate = (outgoing_status == ValidityCode.VALID) & (exit_modes.status != ValidityCode.VALID)
     outgoing_status[candidate] = exit_modes.status[candidate]
     outgoing_valid = outgoing_status == ValidityCode.VALID
@@ -527,7 +527,7 @@ def transport_scattering_events(
                 QuantityKind.INTENSITY,
             ),
             (
-                "measurement.pixel_solid_angle",
+                "geometry.detector_pixel_solid_angle",
                 detector_hits.pixel_solid_angle_sr,
                 "sr",
                 FrameId.DETECTOR,
