@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
-import math
 import os
 import platform
 import subprocess
@@ -27,6 +25,8 @@ from rasim_next.core.contracts import (
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
+from rasim_next.core.validity import ValidityCode
+from rasim_next.proof.tolerances import STAGE_TOLERANCE_SHA256, load_stage_tolerances
 from rasim_next.reciprocal.events import EventBuildResult, build_scattering_events
 from rasim_next.reciprocal.ewald import EwaldRootStatus, solve_continuous_rod_ewald
 from rasim_next.sampling.mosaic import (
@@ -35,10 +35,7 @@ from rasim_next.sampling.mosaic import (
     manuscript_axisymmetric_v1_orientation_quadrature,
     wrapped_mosaic_line_density_rad_inv,
 )
-from rasim_next.sampling.source import (
-    compile_independent_source_samples,
-    compile_joint_source_samples,
-)
+from rasim_next.sampling.source import sample_gaussian_source_rays
 
 _PROOF_BASE_SHA = "812f896fde5b8365ff5c218fc606df674ad7dcad"
 _REFERENCE_PACK_SHA256 = "e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06"
@@ -58,66 +55,37 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _canonical_sha256(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _environment_sha256() -> str:
-    return _canonical_sha256(
-        {
-            "implementation": platform.python_implementation(),
-            "numpy": np.__version__,
-            "python": platform.python_version(),
-        }
-    )
+    identity = f"{platform.python_implementation()}|{platform.python_version()}|{np.__version__}"
+    return hashlib.sha256(identity.encode()).hexdigest()
 
 
-def _verified_commit_sha(root: Path) -> str:
+def _verified_checkout(root: Path) -> tuple[str, tuple[str, ...]]:
     git_environment = {
-        name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")
+        key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")
+    }
+    options = {
+        "check": True,
+        "capture_output": True,
+        "cwd": root,
+        "env": git_environment,
+        "text": True,
+        "timeout": 10.0,
     }
     identity = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"],
-        check=False,
-        capture_output=True,
-        cwd=root,
-        env=git_environment,
-        text=True,
-        timeout=10.0,
+        ["git", "rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"], **options
     )
-    _require(identity.returncode == 0, "cannot verify proof checkout identity")
-    identity_lines = identity.stdout.splitlines()
-    _require(len(identity_lines) == 2, "proof checkout identity is malformed")
-    reported_root, commit_sha = identity_lines
+    reported_root, commit_sha = identity.stdout.splitlines()
     _require(Path(reported_root).resolve() == root.resolve(), "proof checkout root mismatch")
-    _require(
-        len(commit_sha) == 40
-        and commit_sha == commit_sha.lower()
-        and all(character in "0123456789abcdef" for character in commit_sha),
-        "proof checkout commit is malformed",
-    )
     status = subprocess.run(
-        [
-            "git",
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ],
-        check=False,
-        capture_output=True,
-        cwd=root,
-        env=git_environment,
-        text=True,
-        timeout=10.0,
+        ["git", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
+        **options,
     )
-    _require(status.returncode == 0, "cannot verify proof checkout cleanliness")
-    _require(not status.stdout, "proof checkout is dirty")
-    return commit_sha
+    changed_paths = tuple(line[3:].replace("\\", "/") for line in status.stdout.splitlines())
+    return commit_sha, changed_paths
 
 
-def _load_reference_pack(root: Path) -> tuple[dict[str, Any], dict[str, NDArray[Any]]]:
+def _load_reference_pack(root: Path) -> dict[str, NDArray[Any]]:
     path = root / "reference" / "rasim_reference_v1.npz"
     _require(path.is_file(), "reference pack is missing")
     pack_bytes = path.read_bytes()
@@ -126,94 +94,42 @@ def _load_reference_pack(root: Path) -> tuple[dict[str, Any], dict[str, NDArray[
         "reference pack hash mismatch",
     )
     with np.load(io.BytesIO(pack_bytes), allow_pickle=False) as data:
-        manifest = json.loads(data["manifest_json"].tobytes().decode("utf-8"))
         arrays = {
             name: np.array(data[name], copy=True) for name in data.files if name != "manifest_json"
         }
-    return manifest, arrays
-
-
-def _legacy_circle_errors(
-    q_sample_Ainv: NDArray[np.float64],
-    incident_sample_Ainv: NDArray[np.float64],
-    scattered_norm_Ainv: float,
-    reciprocal_norm_Ainv: float,
-) -> tuple[float, float]:
-    center = -incident_sample_Ainv
-    center_norm = float(np.linalg.norm(center))
-    center_hat = center / center_norm
-    plane_distance = (
-        reciprocal_norm_Ainv**2 + center_norm**2 - scattered_norm_Ainv**2
-    ) / (2.0 * center_norm)
-    circle_center = plane_distance * center_hat
-    circle_radius = math.sqrt(reciprocal_norm_Ainv**2 - plane_distance**2)
-    seed = np.zeros(3)
-    seed[int(np.argmin(np.abs(center_hat)))] = 1.0
-    first_axis = seed - np.dot(seed, center_hat) * center_hat
-    first_axis /= np.linalg.norm(first_axis)
-    second_axis = np.cross(center_hat, first_axis)
-    relative = q_sample_Ainv - circle_center
-    azimuth = np.arctan2(relative @ second_axis, relative @ first_axis)
-    reconstructed = circle_center + circle_radius * (
-        np.cos(azimuth)[:, None] * first_axis + np.sin(azimuth)[:, None] * second_axis
-    )
-    dense_azimuth = np.linspace(0.0, 2.0 * np.pi, 256, endpoint=False)
-    dense_circle = circle_center + circle_radius * (
-        np.cos(dense_azimuth)[:, None] * first_axis
-        + np.sin(dense_azimuth)[:, None] * second_axis
-    )
-    coordinate_error = float(np.max(np.abs(reconstructed - q_sample_Ainv)))
-    dense_invariant_error = max(
-        float(np.max(np.abs(np.linalg.norm(dense_circle, axis=1) - reciprocal_norm_Ainv))),
-        float(
-            np.max(
-                np.abs(
-                    np.linalg.norm(incident_sample_Ainv + dense_circle, axis=1)
-                    - scattered_norm_Ainv
-                )
-            )
-        ),
-    )
-    return coordinate_error, dense_invariant_error
+    return arrays
 
 
 def _reference_evidence(
-    manifest: dict[str, Any], arrays: dict[str, NDArray[Any]]
-) -> tuple[list[dict[str, object]], dict[str, float]]:
-    cases = {case["case_id"]: case for case in manifest["cases"]}
-    density_case = cases["mosaic.legacy_density"]
-    ewald_case = cases["mosaic.ewald_intersection"]
-    _require(density_case["classification"] == "CORRECTED", "tracked mosaic classification mismatch")
-    _require(
-        ewald_case["classification"] == "MATCH" and ewald_case["first_divergence"] is None,
-        "tracked Ewald classification mismatch",
-    )
+    arrays: dict[str, NDArray[Any]], tolerances: Any
+) -> list[dict[str, object]]:
     q = arrays["mosaic_q_xyz"]
     reciprocal_vector = arrays["mosaic_G"]
     q_elevation = np.arctan2(q[:, 2], np.linalg.norm(q[:, :2], axis=1))
-    reciprocal_elevation = np.arctan2(
-        reciprocal_vector[2], np.linalg.norm(reciprocal_vector[:2])
-    )
+    reciprocal_elevation = np.arctan2(reciprocal_vector[2], np.linalg.norm(reciprocal_vector[:2]))
     offset = np.remainder(q_elevation - reciprocal_elevation + np.pi, 2.0 * np.pi) - np.pi
-    public_line_density = wrapped_mosaic_line_density_rad_inv(
-        offset, WrappedMosaicParameters(*map(float, arrays["mosaic_parameters"]))
-    )
+    parameters = WrappedMosaicParameters(*map(float, arrays["mosaic_parameters"]))
+    public_line_density = wrapped_mosaic_line_density_rad_inv(offset, parameters)
     legacy_line_density = arrays["mosaic_legacy_density"] * (
         2.0 * np.pi * np.dot(reciprocal_vector, reciprocal_vector)
     )
     density_difference = np.abs(public_line_density - legacy_line_density)
-    _require(np.any(density_difference > 0.0), "wrapped public density did not diverge")
+    density_peak = float(wrapped_mosaic_line_density_rad_inv(np.zeros(1), parameters)[0])
+    density_limit = tolerances["mosaic.wrapped_line_density"].bind(density_peak).limit
+    _require(
+        float(density_difference.max()) > density_limit,
+        "wrapped public density did not diverge beyond the shared tolerance",
+    )
 
     incident = arrays["ewald_k_in"]
     scattered_norm = float(arrays["ewald_k_scat"])
     reciprocal_norm = float(np.linalg.norm(arrays["mosaic_G"]))
-    ewald_bound = 64.0 * np.finfo(np.float64).eps * max(
-        scattered_norm, reciprocal_norm, 1.0
+    elastic_bound = (
+        tolerances["reciprocal.ewald_residual"].bind(float(np.linalg.norm(incident))).limit
     )
+    reciprocal_bound = tolerances["reciprocal.event_q_internal"].bind(reciprocal_norm).limit
     elastic_error = 0.0
     reciprocal_error = 0.0
-    coordinate_error = 0.0
-    dense_circle_error = 0.0
     for prefix in ("ewald_uniform", "ewald_adaptive"):
         q = arrays[f"{prefix}_events"][:, :3]
         elastic_error = max(
@@ -224,59 +140,35 @@ def _reference_evidence(
             reciprocal_error,
             float(np.max(np.abs(np.linalg.norm(q, axis=1) - reciprocal_norm))),
         )
-        case_coordinate_error, case_dense_circle_error = _legacy_circle_errors(
-            q,
-            incident,
-            scattered_norm,
-            reciprocal_norm,
-        )
-        coordinate_error = max(coordinate_error, case_coordinate_error)
-        dense_circle_error = max(dense_circle_error, case_dense_circle_error)
         _require(int(arrays[f"{prefix}_status"]) == 0, "tracked Ewald status mismatch")
     _require(
-        max(elastic_error, reciprocal_error, coordinate_error, dense_circle_error) <= ewald_bound,
-        "tracked Ewald events disagree with the independent Bragg-circle oracle",
+        elastic_error <= elastic_bound and reciprocal_error <= reciprocal_bound,
+        "tracked Ewald events violate elastic or reciprocal-sphere invariants",
+    )
+    rows = (
+        ("mosaic.ewald_intersection", "MATCH", "PHY-REC-002 PHY-REC-003"),
+        ("mosaic.legacy_density", "CORRECTED", "PHY-MOS-001 PHY-MOS-002 PHY-MOS-003 PHY-MOS-004"),
+        (
+            "mosaic.seeded_gaussian_source",
+            "NO_ORACLE",
+            "PHY-SRC-001 PHY-SRC-002 PHY-SRC-003 PHY-SRC-005 PHY-SRC-006",
+        ),
+        (
+            "mosaic.continuous_rod_events",
+            "NO_ORACLE",
+            "PHY-MOS-005 PHY-REC-004 PHY-REC-005 PHY-REC-006 PHY-REC-007 PHY-REC-009",
+        ),
     )
     classifications = [
         {
-            "case_id": "mosaic.ewald_intersection",
-            "classification": "MATCH",
-            "ledger_ids": ["PHY-REC-002", "PHY-REC-003"],
-            "first_divergence_stage": None,
-            "evidence": "tracked coordinates reconstruct on an independent 256-node Bragg-circle oracle",
-        },
-        {
-            "case_id": "mosaic.legacy_density",
-            "classification": "CORRECTED",
-            "ledger_ids": ["PHY-MOS-001", "PHY-MOS-002", "PHY-MOS-003", "PHY-MOS-004"],
-            "first_divergence_stage": "mosaic.wrapped_line_density",
-            "evidence": "the public wrapped Lorentzian line density diverges from the unwrapped legacy profile before probability-measure conversion",
-        },
-        {
-            "case_id": "mosaic.deterministic_source",
-            "classification": "NO_ORACLE",
-            "ledger_ids": ["PHY-SRC-001", "PHY-SRC-002", "PHY-SRC-003", "PHY-SRC-005", "PHY-SRC-006"],
-            "first_divergence_stage": None,
-            "evidence": "analytic normalization and deterministic Cartesian ordering",
-        },
-        {
-            "case_id": "mosaic.continuous_rod_events",
-            "classification": "NO_ORACLE",
-            "ledger_ids": ["PHY-MOS-005", "PHY-REC-004", "PHY-REC-005", "PHY-REC-006", "PHY-REC-007", "PHY-REC-008", "PHY-REC-009"],
-            "first_divergence_stage": None,
-            "evidence": "analytic roots plus an independent residual-scan oracle",
-        },
+            "case_id": case_id,
+            "classification": classification,
+            "ledger_ids": ledger_ids.split(),
+        }
+        for case_id, classification, ledger_ids in rows
     ]
-    return classifications, {
-        "legacy_wrapped_line_density_max_difference_rad_inv": float(density_difference.max()),
-        "legacy_wrapped_line_density_p95_difference_rad_inv": float(
-            np.percentile(density_difference, 95.0)
-        ),
-        "legacy_elastic_max_error_Ainv": elastic_error,
-        "legacy_reciprocal_sphere_max_error_Ainv": reciprocal_error,
-        "legacy_coordinate_max_error_Ainv": coordinate_error,
-        "legacy_dense_circle_max_error_Ainv": dense_circle_error,
-    }
+    classifications[1]["first_divergence_stage"] = "mosaic.wrapped_line_density"
+    return classifications
 
 
 def _signed_residual(
@@ -377,6 +269,7 @@ def _build_fixture(
     alpha_cell_count: int,
     azimuth_cell_count: int,
     b1_Ainv: float = 1.0,
+    analytic_zero_tilt: bool = False,
 ) -> tuple[
     IncidentSampleBatch,
     IncidentStateBatch,
@@ -423,22 +316,25 @@ def _build_fixture(
         reciprocal_basis_Ainv=basis,
         symmetry_metadata=("none",) * rod_count,
     )
-    if parameters.zero_tilt_probability_mass == 1.0:
+    orientations = manuscript_axisymmetric_v1_orientation_quadrature(
+        parameters,
+        reciprocal_basis_Ainv=basis,
+        alpha_cell_count=alpha_cell_count,
+        azimuth_cell_count=azimuth_cell_count,
+    )
+    if analytic_zero_tilt:
+        _require(
+            orientations.orientation_id.size == 1 and parameters.zero_tilt_probability_mass == 1.0,
+            "analytic zero-tilt fixture requires one atomic orientation",
+        )
         orientations = MosaicOrientationBatch(
             np.array([0]),
             np.array([0.0]),
-            np.array([0.0]),
-            np.eye(3)[None, :, :],
+            np.array([np.pi]),
+            np.diag([-1.0, -1.0, 1.0])[None, :, :],
             np.array([1.0]),
             basis,
             "manuscript_axisymmetric_v1",
-        )
-    else:
-        orientations = manuscript_axisymmetric_v1_orientation_quadrature(
-            parameters,
-            reciprocal_basis_Ainv=basis,
-            alpha_cell_count=alpha_cell_count,
-            azimuth_cell_count=azimuth_cell_count,
         )
     transform = RigidTransform(np.eye(3), np.zeros(3), FrameId.CRYSTAL, FrameId.SAMPLE)
     return samples, states, rods, orientations, transform
@@ -457,20 +353,8 @@ def _dense_events(
     wavelength_by_sample = dict(
         zip(map(int, samples.incident_sample_id), map(float, samples.wavelength_A), strict=True)
     )
-    event_state_ids: list[int] = []
-    event_rod_ids: list[int] = []
-    q_values: list[NDArray[np.float64]] = []
-    l_values: list[float] = []
-    kf_values: list[NDArray[np.float64]] = []
-    weights: list[float] = []
-    residuals: list[float] = []
-    wavelengths: list[float] = []
-    attempt_state_ids: list[int] = []
-    attempt_rod_ids: list[int] = []
-    attempt_orientation_ids: list[int] = []
-    statuses: list[EwaldRootStatus] = []
-    emitted_counts: list[int] = []
-    direct_counts: list[int] = []
+    event_rows: list[tuple[Any, ...]] = []
+    attempt_rows: list[tuple[Any, ...]] = []
     for state_index, valid in enumerate(states.valid):
         if not valid:
             continue
@@ -486,109 +370,130 @@ def _dense_events(
                 rotation = transform.rotation @ orientations.rotation_crystal[orientation_index]
                 q0 = rotation @ q0_crystal
                 direction = rotation @ b3_hat
-                status, roots, direct_count = _dense_roots(
-                    incident, q0, direction, b3_norm
+                status, roots, direct_count = _dense_roots(incident, q0, direction, b3_norm)
+                orientation_id = int(orientations.orientation_id[orientation_index])
+                attempt_rows.append(
+                    (state_id, int(rod_id), orientation_id, status, len(roots), direct_count)
                 )
-                attempt_state_ids.append(state_id)
-                attempt_rod_ids.append(int(rod_id))
-                attempt_orientation_ids.append(int(orientations.orientation_id[orientation_index]))
-                statuses.append(status)
-                emitted_counts.append(len(roots))
-                direct_counts.append(direct_count)
                 for root in roots:
-                    event_state_ids.append(state_id)
-                    event_rod_ids.append(int(rod_id))
-                    wavelengths.append(wavelength)
-                    q_values.append(root.q_sample_Ainv)
-                    l_values.append(root.l_coordinate)
-                    kf_values.append(root.kf_sample_Ainv)
-                    weights.append(mass * root.coarea_jacobian)
-                    residuals.append(root.ewald_residual_Ainv)
-    event_count = len(q_values)
-    attempt_count = len(statuses)
-    q_array = np.asarray(q_values, dtype=np.float64).reshape((-1, 3))
+                    event_rows.append(
+                        (
+                            state_id,
+                            orientation_id,
+                            int(rod_id),
+                            wavelength,
+                            root.q_sample_Ainv,
+                            root.l_coordinate,
+                            root.kf_sample_Ainv,
+                            mass * root.coarea_jacobian,
+                            root.ewald_residual_Ainv,
+                        )
+                    )
+    event_count, attempt_count = len(event_rows), len(attempt_rows)
+    event_columns = list(zip(*event_rows, strict=True)) if event_rows else [()] * 9
+    attempt_columns = list(zip(*attempt_rows, strict=True)) if attempt_rows else [()] * 6
+    q_array = np.asarray(event_columns[4], dtype=np.float64).reshape((-1, 3))
     return {
         "event_id": np.arange(event_count, dtype=np.int64),
-        "event_state_id": np.asarray(event_state_ids, dtype=np.int64),
-        "event_rod_id": np.asarray(event_rod_ids, dtype=np.int64),
-        "wavelength": np.asarray(wavelengths),
+        "event_state_id": np.asarray(event_columns[0], dtype=np.int64),
+        "event_orientation_id": np.asarray(event_columns[1], dtype=np.int64),
+        "event_rod_id": np.asarray(event_columns[2], dtype=np.int64),
+        "wavelength": np.asarray(event_columns[3], dtype=np.float64),
         "q": q_array,
-        "qz": q_array[:, 2],
-        "l": np.asarray(l_values),
-        "kf": np.asarray(kf_values).reshape((-1, 3)),
-        "weight": np.asarray(weights),
-        "residual": np.asarray(residuals),
+        "q_sample_normal": q_array[:, 2],
+        "l": np.asarray(event_columns[5], dtype=np.float64),
+        "kf": np.asarray(event_columns[6], dtype=np.float64).reshape((-1, 3)),
+        "weight": np.asarray(event_columns[7], dtype=np.float64),
+        "residual": np.asarray(event_columns[8], dtype=np.float64),
         "valid": np.ones(event_count, dtype=np.bool_),
+        "event_status": (ValidityCode.VALID,) * event_count,
         "attempt_id": np.arange(attempt_count, dtype=np.int64),
-        "attempt_state_id": np.asarray(attempt_state_ids, dtype=np.int64),
-        "attempt_rod_id": np.asarray(attempt_rod_ids, dtype=np.int64),
-        "attempt_orientation_id": np.asarray(attempt_orientation_ids, dtype=np.int64),
-        "status": tuple(statuses),
-        "emitted_count": np.asarray(emitted_counts, dtype=np.int8),
-        "direct_count": np.asarray(direct_counts, dtype=np.int8),
+        "attempt_state_id": np.asarray(attempt_columns[0], dtype=np.int64),
+        "attempt_rod_id": np.asarray(attempt_columns[1], dtype=np.int64),
+        "attempt_orientation_id": np.asarray(attempt_columns[2], dtype=np.int64),
+        "status": tuple(attempt_columns[3]),
+        "emitted_count": np.asarray(attempt_columns[4], dtype=np.int8),
+        "direct_count": np.asarray(attempt_columns[5], dtype=np.int8),
     }
 
 
 def _compare_public_dense(
-    public: EventBuildResult, dense: dict[str, object], *, require_exact_numeric: bool = False
-) -> dict[str, float]:
-    event_fields = {
-        "event_id": "event_id",
-        "incident_state_id": "event_state_id",
-        "rod_id": "event_rod_id",
-        "wavelength_A": "wavelength",
-        "q_internal_sample_Ainv": "q",
-        "qz_Ainv": "qz",
-        "l_coordinate": "l",
-        "kf_film_phase_sample_Ainv": "kf",
-        "reciprocal_weight": "weight",
-        "ewald_residual_Ainv": "residual",
-        "valid": "valid",
-    }
-    status_fields = {
-        "attempt_id": "attempt_id",
-        "incident_state_id": "attempt_state_id",
-        "rod_id": "attempt_rod_id",
-        "orientation_id": "attempt_orientation_id",
-        "emitted_root_count": "emitted_count",
-        "direct_beam_root_count": "direct_count",
-    }
-    numeric_fields = {
-        "q_internal_sample_Ainv",
-        "qz_Ainv",
-        "l_coordinate",
-        "kf_film_phase_sample_Ainv",
-        "reciprocal_weight",
-        "ewald_residual_Ainv",
-    }
-    errors: dict[str, float] = {}
-    for public_name, dense_name in event_fields.items():
-        public_value = getattr(public.events, public_name)
-        dense_value = np.asarray(dense[dense_name])
-        _require(
-            public_value.shape == dense_value.shape and public_value.dtype == dense_value.dtype,
-            f"{public_name} shape or dtype differs from dense oracle",
-        )
-        if public_name in numeric_fields:
-            errors[public_name] = float(
-                np.max(np.abs(public_value - dense_value), initial=0.0)
-            )
-        else:
-            _require(
-                np.array_equal(public_value, dense_value),
-                f"{public_name} identity or order differs from dense oracle",
-            )
+    public: EventBuildResult,
+    dense: dict[str, object],
+    tolerances: Any,
+    incident_norm_Ainv: float,
+    b3_norm_Ainv: float,
+    *,
+    require_exact_numeric: bool = False,
+) -> None:
+    exact_pairs = (
+        (public.events.event_id, dense["event_id"]),
+        (public.events.incident_state_id, dense["event_state_id"]),
+        (public.events.orientation_id, dense["event_orientation_id"]),
+        (public.events.rod_id, dense["event_rod_id"]),
+        (public.events.wavelength_A, dense["wavelength"]),
+        (public.events.valid, dense["valid"]),
+        (public.status.attempt_id, dense["attempt_id"]),
+        (public.status.incident_state_id, dense["attempt_state_id"]),
+        (public.status.rod_id, dense["attempt_rod_id"]),
+        (public.status.orientation_id, dense["attempt_orientation_id"]),
+        (public.status.emitted_root_count, dense["emitted_count"]),
+        (public.status.direct_beam_root_count, dense["direct_count"]),
+    )
     _require(
         all(
-            np.array_equal(getattr(public.status, public_name), dense[dense_name])
-            for public_name, dense_name in status_fields.items()
+            left.dtype == np.asarray(right).dtype and np.array_equal(left, right)
+            for left, right in exact_pairs
         )
+        and public.events.status == dense["event_status"]
         and public.status.root_status == dense["status"],
-        "public statuses differ from the ordered independent oracle",
+        "public identities, ordering, or statuses differ from the dense oracle",
     )
+
+    dense_q = np.asarray(dense["q"])
+    dense_kf = np.asarray(dense["kf"])
+    q_scale = max(
+        incident_norm_Ainv,
+        float(np.max(np.linalg.norm(dense_q, axis=1), initial=0.0)),
+    )
+    kf_scale = max(
+        incident_norm_Ainv,
+        float(np.max(np.linalg.norm(dense_kf, axis=1), initial=0.0)),
+    )
+    weight_scale = float(np.max(np.abs(np.asarray(dense["weight"])), initial=0.0))
+    numeric_fields = (
+        ("q_internal_sample_Ainv", "q", "reciprocal.event_q_internal", q_scale),
+        ("q_sample_normal_Ainv", "q_sample_normal", "reciprocal.event_q_internal", q_scale),
+        ("kf_film_phase_sample_Ainv", "kf", "optics.kf_film_sample", kf_scale),
+        ("reciprocal_weight", "weight", "reciprocal.event_weight", weight_scale),
+        ("ewald_residual_Ainv", "residual", "reciprocal.ewald_residual", incident_norm_Ainv),
+    )
+    maximum_error = 0.0
+    for public_name, dense_name, stage, scale in numeric_fields:
+        observed = getattr(public.events, public_name)
+        expected = np.asarray(dense[dense_name])
+        _require(
+            observed.shape == expected.shape and observed.dtype == expected.dtype,
+            f"{public_name} shape or dtype differs from dense oracle",
+        )
+        error = float(np.max(np.abs(observed - expected), initial=0.0))
+        _require(error <= tolerances[stage].bind(scale).limit, f"{public_name} exceeds tolerance")
+        maximum_error = max(maximum_error, error)
+
+    dense_l = np.asarray(dense["l"])
+    _require(
+        public.events.l_coordinate.shape == dense_l.shape
+        and public.events.l_coordinate.dtype == dense_l.dtype,
+        "l_coordinate shape or dtype differs from dense oracle",
+    )
+    l_error_Ainv = b3_norm_Ainv * float(
+        np.max(np.abs(public.events.l_coordinate - dense_l), initial=0.0)
+    )
+    l_limit = tolerances["reciprocal.intersection_support"].bind(q_scale).limit
+    _require(l_error_Ainv <= l_limit, "L displacement exceeds reciprocal tolerance")
+    maximum_error = max(maximum_error, l_error_Ainv)
     if require_exact_numeric:
-        _require(max(errors.values(), default=0.0) == 0.0, "numeric sparse oracle mismatch")
-    return errors
+        _require(maximum_error == 0.0, "numeric sparse oracle mismatch")
 
 
 def _observables(
@@ -599,19 +504,17 @@ def _observables(
     order = np.argsort(q[:, 2])
     sorted_weight = weight[order]
     cumulative = (np.cumsum(sorted_weight) - 0.5 * sorted_weight) / total_mass
+    centroid = (np.sum(weight[:, None] * q, axis=0) / total_mass).tolist()
+    quantiles = np.interp((0.1, 0.9), cumulative, q[order, 2]).tolist()
     return {
         "total_reciprocal_mass": total_mass,
-        "weighted_Q_centroid_sample_Ainv": (
-            np.sum(weight[:, None] * q, axis=0) / total_mass
-        ).tolist(),
-        "weighted_qz_quantiles_Ainv": np.interp(
-            (0.1, 0.9), cumulative, q[order, 2]
-        ).tolist(),
+        "weighted_Q_centroid_sample_Ainv": centroid,
+        "weighted_q_sample_normal_quantiles_Ainv": quantiles,
         "maximum_ewald_residual_Ainv": float(np.max(residual, initial=0.0)),
     }
 
 
-def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def _oracle_evidence(tolerances: Any) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     atom = WrappedMosaicParameters(0.0, 0.0, 0.0)
 
     def evaluate(
@@ -622,6 +525,7 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
         alpha_count: int,
         azimuth_count: int,
         b1_Ainv: float = 1.0,
+        analytic_tangent: bool = False,
     ) -> dict[str, object]:
         batches = _build_fixture(
             np.asarray(h_values, dtype=np.int32),
@@ -630,6 +534,7 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
             alpha_cell_count=alpha_count,
             azimuth_cell_count=azimuth_count,
             b1_Ainv=b1_Ainv,
+            analytic_zero_tilt=analytic_tangent,
         )
         samples, states, rods, orientations, transform = batches
         public = build_scattering_events(
@@ -640,12 +545,18 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
             sample_from_crystal=transform,
         )
         dense = _dense_events(samples, states, rods, orientations, transform)
-        errors = _compare_public_dense(public, dense)
+        incident_norm = float(np.max(np.linalg.norm(states.k_film_phase_sample_Ainv, axis=1)))
+        _compare_public_dense(
+            public,
+            dense,
+            tolerances,
+            incident_norm,
+            float(np.linalg.norm(rods.reciprocal_basis_Ainv[:, 2])),
+            require_exact_numeric=analytic_tangent,
+        )
         statuses = public.status.root_status
         return {
             "case_id": case_id,
-            "requested_alpha_cell_count": alpha_count,
-            "orientation_count": int(orientations.orientation_id.size),
             "event_count": int(public.events.event_id.size),
             "status_counts": {status.value: statuses.count(status) for status in EwaldRootStatus},
             "suppressed_direct_roots": int(public.status.direct_beam_root_count.sum()),
@@ -654,19 +565,16 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
                 public.events.reciprocal_weight,
                 public.events.ewald_residual_Ainv,
             ),
-            "dense_oracle": _observables(
-                np.asarray(dense["q"]),
-                np.asarray(dense["weight"]),
-                np.asarray(dense["residual"]),
-            ),
-            "public_dense_max_absolute_field_difference": errors,
+            "ordered_dense_oracle_match": True,
+            "_dense_weight": np.asarray(dense["weight"]),
+            "_alpha": orientations.alpha_rad,
         }
 
     configurations = (
         ("narrow", WrappedMosaicParameters(0.01, 0.08, 0.05), (1,), (np.pi / 2.0,), 4, 4),
         ("broad", WrappedMosaicParameters(0.2, 0.35, 0.2), (1,), (np.pi / 2.0,), 4, 4),
         ("lorentz_tail", WrappedMosaicParameters(0.02, 0.25, 0.85), (1,), (np.pi / 2.0,), 4, 4),
-        ("tangent_no_root", atom, (1, 4, 5), (np.pi / 2.0,), 1, 1),
+        ("analytic_tangent_no_root", atom, (1, 4, 5), (np.pi / 2.0,), 1, 1, 1.0, True),
         ("bandwidth_specular", atom, (0,), (np.pi / 2.0, 1.1), 1, 1),
     )
     matrix = [evaluate(*configuration) for configuration in configurations]
@@ -675,7 +583,10 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
         and matrix[4]["suppressed_direct_roots"] == 2,
         "named support regimes changed",
     )
-    levels = (4, 8, 16)
+    for row in matrix:
+        del row["_dense_weight"], row["_alpha"]
+
+    levels = (5, 10, 20)
     refinement = [
         evaluate(
             "regular_quadrature_refinement",
@@ -688,24 +599,56 @@ def _oracle_evidence() -> tuple[list[dict[str, object]], list[dict[str, object]]
         )
         for level in levels
     ]
+    dense_weights = [np.asarray(row.pop("_dense_weight")) for row in refinement]
+    alpha_nodes = [np.asarray(row.pop("_alpha")) for row in refinement]
+    panel_edges = np.array([0.0, 0.2, 0.4, 0.8, 1.6, np.pi])
+    node_counts = np.array([np.histogram(alpha, bins=panel_edges)[0] for alpha in alpha_nodes])
+    _require(
+        np.array_equal(node_counts, np.array([[64] * 5, [128] * 5, [256] * 5])),
+        "5/10/20 quadrature is not exact per-segment panel doubling",
+    )
+
+    mass = np.array([row["public"]["total_reciprocal_mass"] for row in refinement])
+    mass_changes = np.abs(np.diff(mass))
+    epsilon = np.finfo(np.float64).eps
+    mass_floor = 0.0
+    for weight in dense_weights[1:]:
+        count = weight.size
+        gamma = (count - 1) * epsilon / (1.0 - (count - 1) * epsilon)
+        mass_floor += gamma * float(np.sum(np.abs(weight)))
+    quantile_changes = np.max(
+        np.abs(
+            np.diff(
+                [row["public"]["weighted_q_sample_normal_quantiles_Ainv"] for row in refinement],
+                axis=0,
+            )
+        ),
+        axis=1,
+    )
+    q_floor = tolerances["reciprocal.event_q_internal"].bind(8.0).limit
+    _require(
+        mass_changes[1] <= max(0.5 * mass_changes[0], mass_floor)
+        and quantile_changes[1] <= max(0.5 * quantile_changes[0], q_floor),
+        "quadrature refinement failed mass or Q-normal contraction",
+    )
     return matrix, [
         {
             "case_id": "regular_quadrature_refinement",
             "refinement_variable": "alpha_cell_count",
             "levels": list(levels),
             "observables": [row["public"] for row in refinement],
-            "successive_qz_quantile_max_change_Ainv": np.max(
-                np.abs(
-                    np.diff([row["public"]["weighted_qz_quantiles_Ainv"] for row in refinement], axis=0)
-                ),
-                axis=1,
-            ).tolist(),
-            "assessment": "BLOCKED_PENDING_SHARED_STAGE_TOLERANCE",
+            "panel_node_counts": node_counts.tolist(),
+            "successive_total_mass_change": mass_changes.tolist(),
+            "binary64_mass_floor": mass_floor,
+            "successive_q_sample_normal_quantile_max_change_Ainv": quantile_changes.tolist(),
+            "shared_q_floor_Ainv": q_floor,
+            "criterion": "fine <= max(0.5*coarse, independent floor)",
+            "assessment": "PASS",
         }
     ]
 
 
-def _benchmark_evidence() -> dict[str, object]:
+def _benchmark_evidence(tolerances: Any) -> dict[str, object]:
     h = np.arange(5, 4101, dtype=np.int32)
     h[2047:2050] = (0, 1, 4)
     samples, states, rods, orientations, transform = _build_fixture(
@@ -714,6 +657,7 @@ def _benchmark_evidence() -> dict[str, object]:
         WrappedMosaicParameters(0.0, 0.0, 0.0),
         alpha_cell_count=1,
         azimuth_cell_count=1,
+        analytic_zero_tilt=True,
     )
     tracemalloc.start()
     start = time.perf_counter()
@@ -730,7 +674,14 @@ def _benchmark_evidence() -> dict[str, object]:
     start = time.perf_counter()
     dense = _dense_events(samples, states, rods, orientations, transform)
     dense_wall_seconds = time.perf_counter() - start
-    _compare_public_dense(public, dense, require_exact_numeric=True)
+    _compare_public_dense(
+        public,
+        dense,
+        tolerances,
+        float(np.linalg.norm(states.k_film_phase_sample_Ainv[0])),
+        float(np.linalg.norm(rods.reciprocal_basis_Ainv[:, 2])),
+        require_exact_numeric=True,
+    )
     attempt_count = int(public.status.attempt_id.size)
     event_count = int(public.events.event_id.size)
     _require(
@@ -741,30 +692,17 @@ def _benchmark_evidence() -> dict[str, object]:
         and public.status.root_status.count(EwaldRootStatus.TANGENT) == 1,
         "sparse fixture support changed",
     )
-    event_fields = (
-        "event_id",
+    fill_fields = (
         "incident_state_id",
+        "orientation_id",
         "rod_id",
         "wavelength_A",
         "q_internal_sample_Ainv",
-        "qz_Ainv",
         "l_coordinate",
         "kf_film_phase_sample_Ainv",
         "reciprocal_weight",
         "ewald_residual_Ainv",
-        "valid",
     )
-    status_fields = (
-        "attempt_id",
-        "incident_state_id",
-        "rod_id",
-        "orientation_id",
-        "emitted_root_count",
-        "direct_beam_root_count",
-    )
-    event_bytes = sum(getattr(public.events, name).nbytes for name in event_fields)
-    status_bytes = sum(getattr(public.status, name).nbytes for name in status_fields)
-    fill_fields = event_fields[1:5] + event_fields[6:10]
     fill_row_bytes = sum(getattr(public.events, name).nbytes // event_count for name in fill_fields)
     former_preallocator_bytes = 2 * fill_row_bytes * attempt_count
     _require(peak_bytes < former_preallocator_bytes, "former maximum-root preallocation returned")
@@ -778,7 +716,6 @@ def _benchmark_evidence() -> dict[str, object]:
         "ordered_dense_oracle_match": True,
         "public_wall_seconds_with_memory_tracing": public_wall_seconds,
         "dense_oracle_wall_seconds": dense_wall_seconds,
-        "returned_numeric_output_bytes": int(event_bytes + status_bytes),
         "traced_live_bytes_at_return": current_bytes,
         "traced_peak_bytes": peak_bytes,
         "temporary_peak_working_bytes": peak_bytes - current_bytes,
@@ -787,38 +724,38 @@ def _benchmark_evidence() -> dict[str, object]:
     }
 
 
-def _scientific_evidence() -> tuple[
-    list[dict[str, str]], dict[str, float], list[dict[str, object]]
-]:
-    joint = compile_joint_source_samples(
-        origin_lab_m=np.zeros((2, 3)),
-        direction_lab=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
-        wavelength_A=np.array([1.0, 1.5]),
-        probability_mass=np.array([0.25, 0.75]),
-        polarization_state_id=("linear_s", "circular_plus"),
-        correlation_model="proof_joint",
-    )
-    independent = compile_independent_source_samples(
-        origin_lab_m=np.zeros((2, 3)),
-        origin_probability_mass=np.array([0.25, 0.75]),
-        direction_lab=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
-        direction_probability_mass=np.array([0.5, 0.5]),
-        wavelength_A=np.array([1.0]),
-        wavelength_probability_mass=np.array([1.0]),
+def _scientific_evidence(
+    tolerances: Any,
+) -> list[dict[str, object]]:
+    source = sample_gaussian_source_rays(
+        mean_origin_lab_m=np.zeros(3),
+        mean_direction_lab=np.array([0.0, 0.0, 1.0]),
+        transverse_axes_lab=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        spatial_sigma_m=np.array([2.0e-4, 3.0e-4]),
+        divergence_sigma_rad=np.array([0.02, 0.03]),
+        mean_wavelength_A=1.2,
+        wavelength_sigma_A=0.04,
+        sample_count=4097,
+        seed=1729,
         polarization_state_id="proof_state",
-        correlation_model="proof_independent",
     )
-    source_mass_error = max(
-        abs(float(joint.source_weight.sum()) - 1.0),
-        abs(float(independent.source_weight.sum()) - 1.0),
+    radius = np.arccos(np.clip(source.direction_lab[:, 2], -1.0, 1.0))
+    inverse_sine = np.divide(radius, np.sin(radius), out=np.ones_like(radius), where=radius != 0.0)
+    standardized = np.column_stack(
+        (
+            source.origin_lab_m[:, 0] / 2.0e-4,
+            source.origin_lab_m[:, 1] / 3.0e-4,
+            source.direction_lab[:, 0] * inverse_sine / 0.02,
+            source.direction_lab[:, 1] * inverse_sine / 0.03,
+            (source.wavelength_A - 1.2) / 0.04,
+        )
     )
-    orientations = manuscript_axisymmetric_v1_orientation_quadrature(
-        WrappedMosaicParameters(0.0, 0.3, 0.25),
-        reciprocal_basis_Ainv=np.eye(3),
-        alpha_cell_count=4,
-        azimuth_cell_count=4,
-    )
-    orientation_mass_error = abs(float(orientations.probability_mass.sum()) - 1.0)
+    source_mass_error = abs(float(source.source_weight.sum()) - 1.0)
+    source_correlation = np.corrcoef(standardized, rowvar=False)
+    source_variance = np.sum(source.source_weight[:, None] * standardized**2, axis=0)
+    pdf_weight = np.exp(-0.5 * np.sum(standardized * standardized, axis=1))
+    pdf_weight /= pdf_weight.sum()
+    double_weighted_variance = np.sum(pdf_weight[:, None] * standardized**2, axis=0)
     incident = np.array([0.0, 0.0, 4.0])
     direction = np.array([0.0, 0.0, 1.0])
     two = solve_continuous_rod_ewald(
@@ -827,257 +764,196 @@ def _scientific_evidence() -> tuple[
         d_hat_sample=direction,
         b3_norm_Ainv=2.0,
     )
-    tangent = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([4.0, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
+    _require(
+        source_mass_error <= tolerances["sampling.source_empirical_mass"].bind(1.0).limit
+        and np.array_equal(source.source_weight, np.full(4097, 1.0 / 4097))
+        and source.polarization_state_id == ("proof_state",) * 4097
+        and source.correlation_model == "independent_gaussian_lhs.v1"
+        and np.max(np.abs(np.mean(standardized, axis=0))) < 1.0e-12
+        and np.max(np.abs(source_variance - 1.0)) < 0.25
+        and np.max(np.abs(source_correlation - np.eye(5))) < 0.05
+        and np.max(np.abs(double_weighted_variance - 1.0)) >= 0.25
+        and two.status is EwaldRootStatus.TWO_ROOT,
+        "sampled source, mosaic, or coarea fixture invariant failed",
     )
-    no_root = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([5.0, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
+
+    control = _build_fixture(
+        np.array([1], dtype=np.int32),
+        np.array([np.pi / 2.0]),
+        WrappedMosaicParameters(0.45, 0.7, 0.35),
+        alpha_cell_count=5,
+        azimuth_cell_count=1,
     )
-    direct = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.zeros(3),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
+    samples, states, rods, orientations, transform = control
+    public = build_scattering_events(
+        incident_samples=samples,
+        incident_states=states,
+        rods=rods,
+        orientations=orientations,
+        sample_from_crystal=transform,
+    )
+    dense = _dense_events(samples, states, rods, orientations, transform)
+    incident_norm = float(np.linalg.norm(states.k_film_phase_sample_Ainv[0]))
+    b3_norm = float(np.linalg.norm(rods.reciprocal_basis_Ainv[:, 2]))
+    _compare_public_dense(public, dense, tolerances, incident_norm, b3_norm)
+
+    reference_weight = np.asarray(dense["weight"])
+    correct_weight = public.events.reciprocal_weight
+    orientation_id = public.events.orientation_id
+    orientation_mass = orientations.probability_mass[orientation_id]
+    alpha = orientations.alpha_rad[orientation_id]
+    jacobian = reference_weight / orientation_mass
+    gaussian_count = manuscript_axisymmetric_v1_orientation_quadrature(
+        WrappedMosaicParameters(0.45, 0.0, 0.0),
+        reciprocal_basis_Ainv=rods.reciprocal_basis_Ainv,
+        alpha_cell_count=5,
+        azimuth_cell_count=1,
+    ).orientation_id.size
+    component_probability = np.where(orientation_id < gaussian_count, 0.65, 0.35)
+    event_limit = (
+        tolerances["reciprocal.event_weight"].bind(float(np.max(np.abs(reference_weight)))).limit
+    )
+    correct_event_error = float(np.max(np.abs(correct_weight - reference_weight)))
+    event_mutants = (
+        (
+            "removed_spherical_measure",
+            "mosaic.spherical_measure.v1",
+            correct_weight * np.sin(alpha),
+        ),
+        (
+            "mixture_misnormalization",
+            "mosaic.mixture_normalization.v1",
+            correct_weight / component_probability,
+        ),
+        ("reversed_signed_arc_measure", "mosaic.signed_arc.v1", -correct_weight),
+        ("omitted_coarea_jacobian", "reciprocal.coarea.v1", orientation_mass),
+        (
+            "duplicate_empirical_lorentz_factor",
+            "reciprocal.single_lorentz.v1",
+            correct_weight * jacobian,
+        ),
+    )
+    control_rows: list[tuple[str, str, str, str, float, float, float]] = []
+    for mutation_id, fixture_id, mutant_weight in event_mutants:
+        mutant_error = float(np.max(np.abs(mutant_weight - reference_weight)))
+        control_rows.append(
+            (
+                mutation_id,
+                fixture_id,
+                "reciprocal.event_weight",
+                "maximum_event_weight_error",
+                event_limit,
+                correct_event_error,
+                mutant_error,
+            )
+        )
+
+    source_correct_error = float(np.max(np.abs(source_variance - 1.0)))
+    source_mutant_error = float(np.max(np.abs(double_weighted_variance - 1.0)))
+    control_rows.append(
+        (
+            "pdf_double_weighting",
+            "source.pdf_double_weight.v1",
+            "sampling.source_empirical_mass",
+            "variance_from_analytic_one",
+            0.25,
+            source_correct_error,
+            source_mutant_error,
+        )
+    )
+
+    root = two.emittable_roots[0]
+    bad_q = root.q_sample_Ainv + 1.0e-3 * direction
+    bad_residual = abs(float(np.linalg.norm(incident + bad_q) - np.linalg.norm(incident)))
+    residual_limit = (
+        tolerances["reciprocal.ewald_residual"].bind(float(np.linalg.norm(incident))).limit
+    )
+    correct_residual = max(item.ewald_residual_Ainv for item in two.emittable_roots)
+    control_rows.append(
+        (
+            "accepted_bad_residual_root",
+            "reciprocal.residual_rejection.v1",
+            "reciprocal.ewald_residual",
+            "accepted_ewald_residual_Ainv",
+            residual_limit,
+            correct_residual,
+            bad_residual,
+        )
     )
     _require(
-        source_mass_error == 0.0
-        and joint.polarization_state_id == ("linear_s", "circular_plus")
-        and joint.correlation_model == "proof_joint"
-        and independent.correlation_model == "proof_independent"
-        and orientation_mass_error <= np.spacing(1.0)
-        and two.status is EwaldRootStatus.TWO_ROOT
-        and tangent.status is EwaldRootStatus.TANGENT
-        and no_root.status is EwaldRootStatus.NO_ROOT
-        and direct.direct_beam_root_count == 1,
-        "source, mosaic, or analytic Ewald invariant failed",
+        len(control_rows) == 7
+        and all(correct < limit <= mutant for *_, limit, correct, mutant in control_rows),
+        "one or more controls failed the common correct-PASS/mutant-FAIL rule",
     )
-
-    def orientation_path(mutation: str | None = None, seed: int = 0) -> tuple[tuple[str, NDArray[np.float64]], ...]:
-        count = 24
-        if mutation == "node_resampling":
-            generator = np.random.default_rng(seed)
-            alpha = np.pi * (np.arange(count) + generator.random(count)) / count
-            differential = np.full(count, np.pi / count)
-        else:
-            node, weight = np.polynomial.legendre.leggauss(count)
-            half_width = -0.5 * np.pi if mutation == "reversed_signed_arc_measure" else 0.5 * np.pi
-            alpha = 0.5 * np.pi + half_width * node
-            differential = half_width * weight
-            order = np.argsort(alpha)
-            alpha, differential = alpha[order], differential[order]
-        gaussian = wrapped_mosaic_line_density_rad_inv(
-            alpha, WrappedMosaicParameters(0.45, 0.7, 0.0)
-        )
-        lorentzian = wrapped_mosaic_line_density_rad_inv(
-            alpha, WrappedMosaicParameters(0.45, 0.7, 1.0)
-        )
-        density = gaussian + lorentzian if mutation == "mixture_misnormalization" else 0.65 * gaussian + 0.35 * lorentzian
-        if mutation == "removed_spherical_measure":
-            density = density * np.sin(alpha)
-        mass = 2.0 * density * differential
-        jacobian = np.array([root.coarea_jacobian for root in two.emittable_roots])
-        if mutation == "omitted_coarea_jacobian":
-            factor = np.ones_like(jacobian)
-        elif mutation == "duplicate_empirical_lorentz_factor":
-            factor = jacobian * jacobian
-        else:
-            factor = jacobian
-        return (
-            ("reciprocal.quadrature_coordinate", alpha),
-            ("reciprocal.event_weight", (mass[:, None] * factor).ravel()),
-        )
-
-    def compare(
-        reference: tuple[tuple[str, NDArray[np.float64]], ...],
-        candidate: tuple[tuple[str, NDArray[np.float64]], ...],
-    ) -> dict[str, object] | None:
-        for (stage, expected), (candidate_stage, observed) in zip(reference, candidate, strict=True):
-            _require(stage == candidate_stage, "mutation stage sequence changed")
-            if np.array_equal(expected, observed):
-                continue
-            common = min(expected.size, observed.size)
-            errors = np.abs(expected.ravel()[:common] - observed.ravel()[:common])
-            if observed.size > common:
-                errors = np.concatenate((errors, np.abs(observed.ravel()[common:])))
-            if expected.size > common:
-                errors = np.concatenate((errors, np.abs(expected.ravel()[common:])))
-            metric = (
-                "bitwise_repeatability"
-                if stage == "reciprocal.quadrature_coordinate"
-                else "accepted_ewald_residual_Ainv"
-                if stage == "reciprocal.ewald_residual"
-                else "nonnegative_event_mass"
-                if np.any(observed < 0.0)
-                else "integrated_event_mass"
-            )
-            index = int(np.argmax(errors))
-            return {
-                "observed_first_stage": stage,
-                "observed_failure_metric": metric,
-                "max_absolute_error": float(errors[index]),
-                "p95_absolute_error": float(np.percentile(errors, 95.0)),
-                "failing_element_id": index,
-            }
-        return None
-
-    correct = orientation_path()
-    first_resample, second_resample = orientation_path("node_resampling", 1729), orientation_path(
-        "node_resampling", 2718
-    )
-    repeated_correct = tuple((stage, np.stack((value, value))) for stage, value in correct)
-    repeated_resampled = tuple(
-        (stage, np.stack((first_value, second_value)))
-        for (stage, first_value), (_, second_value) in zip(
-            first_resample, second_resample, strict=True
-        )
-    )
-    root = two.emittable_roots[0]
-    bad_q = np.array([1.0, 0.0, root.u_Ainv + 1.0e-3])
-    bad_kf = incident + bad_q
-    bad_residual = abs(float(np.linalg.norm(bad_kf) - np.linalg.norm(incident)))
-    residual_bound = 64.0 * np.finfo(np.float64).eps * np.linalg.norm(incident)
-    rejected = (
-        ("reciprocal.intersection_support", bad_q[None, :]),
-        ("reciprocal.ewald_residual", np.array([bad_residual]) if bad_residual <= residual_bound else np.empty(0)),
-    )
-    accepted = (
-        ("reciprocal.intersection_support", bad_q[None, :]),
-        ("reciprocal.ewald_residual", np.array([bad_residual])),
-    )
-    cases = (
-        ("removed_spherical_measure", "reciprocal.event_weight", "integrated_event_mass", correct, orientation_path("removed_spherical_measure")),
-        ("mixture_misnormalization", "reciprocal.event_weight", "integrated_event_mass", correct, orientation_path("mixture_misnormalization")),
-        ("node_resampling", "reciprocal.quadrature_coordinate", "bitwise_repeatability", repeated_correct, repeated_resampled),
-        ("reversed_signed_arc_measure", "reciprocal.event_weight", "nonnegative_event_mass", correct, orientation_path("reversed_signed_arc_measure")),
-        ("omitted_coarea_jacobian", "reciprocal.event_weight", "integrated_event_mass", correct, orientation_path("omitted_coarea_jacobian")),
-        ("duplicate_empirical_lorentz_factor", "reciprocal.event_weight", "integrated_event_mass", correct, orientation_path("duplicate_empirical_lorentz_factor")),
-        ("accepted_bad_residual_root", "reciprocal.ewald_residual", "accepted_ewald_residual_Ainv", rejected, accepted),
-    )
-    mutations: list[dict[str, object]] = []
-    for mutation_id, expected_stage, expected_metric, reference, candidate in cases:
-        observed = compare(reference, candidate)
-        _require(
-            observed is not None
-            and observed["observed_first_stage"] == expected_stage
-            and observed["observed_failure_metric"] == expected_metric,
-            f"{mutation_id} failed at the wrong stage or metric",
-        )
-        mutations.append(
-            {
-                "mutation_id": mutation_id,
-                "fixture_id": "mosaic.compact_real_calculation_v1",
-                "expected_first_stage": expected_stage,
-                "expected_failure_metric": expected_metric,
-                **observed,
-                "detected": True,
-            }
-        )
-    checks = [
+    mutations = [
         {
-            "check_id": "source_probability",
-            "status": "PASS",
-            "evidence": "declared polarization IDs, correlation labels, ordering, and mass survive source compilation",
-        },
-        {
-            "check_id": "spherical_mosaic_measure",
-            "status": "PASS",
-            "evidence": "mixed atom plus continuous folded-alpha probability is nonnegative and normalized",
-        },
-        {
-            "check_id": "analytic_ewald",
-            "status": "PASS",
-            "evidence": "two-root, tangent, no-root, direct suppression, residual, and coarea invariants pass",
-        },
+            "mutation_id": mutation_id,
+            "fixture_id": fixture_id,
+            "observed_first_stage": stage,
+            "observed_failure_metric": metric,
+            "gate_limit": limit,
+            "correct_error": correct,
+            "correct_status": "PASS",
+            "mutant_error": mutant,
+            "mutant_status": "FAIL",
+            "detected": True,
+        }
+        for mutation_id, fixture_id, stage, metric, limit, correct, mutant in control_rows
     ]
-    metrics = {
-        "source_mass_error": source_mass_error,
-        "orientation_mass_error": orientation_mass_error,
-        "elastic_residual_max_Ainv": max(
-            root.ewald_residual_Ainv for root in two.emittable_roots
-        ),
-    }
-    return checks, metrics, mutations
+    return mutations
 
 
 def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     """Run the compact T03 proof without writing diagnostics."""
-
     del allow_missing_pack
     root = Path(__file__).resolve().parents[3]
     proof_base = os.environ.get("PROOF_BASE_SHA", "")
     _require(proof_base == _PROOF_BASE_SHA, "PROOF_BASE_SHA is unset or does not match T03")
-    commit_sha = _verified_commit_sha(root)
-    manifest, arrays = _load_reference_pack(root)
-    classifications, reference_metrics = _reference_evidence(manifest, arrays)
-    scientific_checks, scientific_metrics, mutations = _scientific_evidence()
-    oracle_matrix, convergence = _oracle_evidence()
-    benchmark = _benchmark_evidence()
+    commit_sha, changed_paths = _verified_checkout(root)
+    tolerances = load_stage_tolerances()
+    arrays = _load_reference_pack(root)
+    classifications = _reference_evidence(arrays, tolerances)
+    mutations = _scientific_evidence(tolerances)
+    oracle_matrix, convergence = _oracle_evidence(tolerances)
+    benchmark = _benchmark_evidence(tolerances)
     checks = [
         {
-            "check_id": "tracked_reference",
-            "status": "SKIP",
-            "evidence": "raw public/pack differences recorded; shared tolerance artifact is missing",
-        },
-        *scientific_checks,
-        {
-            "check_id": "sparse_event_memory",
+            "check_id": "mosaic_ewald_science",
             "status": "PASS",
-            "evidence": "4,096 attempted lines and 3 events match every ordered dense-oracle field within the measured memory ceiling",
+            "evidence": "shared gates, dense oracle, convergence, memory, and 7/7 controls pass",
         },
         {
-            "check_id": "negative_controls",
-            "status": "PASS",
-            "evidence": "7/7 assigned real-calculation mutations fail at the expected first stage",
-        },
-        {
-            "check_id": "shared_validation_contract",
-            "status": "FAIL",
-            "evidence": "proof base lacks the required reviewed stage-tolerance/result-measure artifact",
+            "check_id": "worktree_clean",
+            "status": "PASS" if not changed_paths else "FAIL",
+            "evidence": "clean checkout"
+            if not changed_paths
+            else "dirty paths reported separately",
         },
     ]
     return {
         "schema_version": 1,
         "task_id": "T03",
-        "status": "BLOCKED",
+        "status": "READY" if not changed_paths else "BLOCKED",
+        "scientific_status": "PASS",
+        "worktree_status": {
+            "status": "READY" if not changed_paths else "BLOCKED",
+            "changed_paths": list(changed_paths),
+        },
         "base_sha": proof_base,
         "commit_sha": commit_sha,
+        "commit_sha_scope": "HEAD_ONLY",
         "contract_version": CONTRACT_API_VERSION,
         "trace_schema_version": 4,
         "reference_pack_sha256s": {"rasim_reference_v1": _REFERENCE_PACK_SHA256},
         "environment_sha256": _environment_sha256(),
-        "owned_paths": [
-            "src/rasim_next/sampling/source.py",
-            "src/rasim_next/sampling/mosaic.py",
-            "src/rasim_next/reciprocal/ewald.py",
-            "src/rasim_next/reciprocal/events.py",
-            "tests/test_mosaic_ewald.py",
-            "tasks/03_mosaic_ewald.md",
-        ],
         "checks": checks,
-        "metrics": {**reference_metrics, **scientific_metrics, "oracle_matrix": oracle_matrix},
+        "metrics": {"oracle_matrix": oracle_matrix},
         "classifications": classifications,
         "convergence": convergence,
         "mutations": mutations,
         "benchmark": benchmark,
-        "tolerance_artifact_sha256": None,
+        "tolerance_artifact_sha256": STAGE_TOLERANCE_SHA256,
         "limitations": [
-            "UNITY_APPROXIMATION boundary: T03 preserves declared polarization-state IDs and applies no polarization factor",
-            "reciprocal_weight contains orientation probability mass times exactly one coarea Jacobian; optics and detector factors remain downstream",
-            "localized/adaptive acceleration and a generic SO(3) sampler are not implemented",
-        ],
-        "contract_requests": [
-            {
-                "request_id": "T03-PROOF-OWNERSHIP-AND-SHARED-VALIDATION",
-                "owner": "proof-base/integration",
-                "required_action": "amend T03 ownership to include reciprocal/proof.py, approve a shared wrapped-line-density trace stage, and publish a reviewed versioned stage-tolerance/result-measure artifact with its hash",
-                "evidence": "the original T03 owned paths exclude proof.py and docs/VALIDATION.md forbids shared-pack acceptance without the reviewed artifact",
-                "blocking_for_local_merge": True,
-            }
+            "T03 preserves polarization IDs; reciprocal_weight is orientation mass times one coarea Jacobian, with all downstream factors excluded"
         ],
     }

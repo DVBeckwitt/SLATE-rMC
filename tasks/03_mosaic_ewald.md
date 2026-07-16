@@ -127,23 +127,23 @@ Stop `BLOCKED` if the common incident-state, rod-catalog, event, or probability-
 
 ## Execution plan
 
-State: shared authority merged without commit; smallest consumer migration awaits PM review.
+State: deletion-first consumer migration is implemented but unstaged; final gates await PM review.
 
-1. Replace production Gauss-Hermite source construction with fixed-seed randomized Latin-hypercube samples carrying equal `1/N` mass; retain Gauss-Hermite only as an oracle.
-2. Align candidate status, source/orientation/Q fields, trace types, and proof tolerances with the merged shared contracts.
-3. Preserve wrapped spherical orientation mass, stable Ewald support, exactly one coarea Jacobian, deterministic ordering, and count-then-fill memory behavior.
+1. Use the legacy-equivalent seeded randomized pair-stratified antithetic Gaussian sampler with odd center, independent dimensions, and exact equal `1/N` empirical mass.
+2. Emit candidate orientation ID, full sample-frame `Q`, exact sample-normal projection, and `VALID` status through the shared event contract.
+3. Prove wrapped spherical orientation mass, stable Ewald support, one coarea Jacobian, ordered dense-oracle equality, and count-then-fill memory against reviewed shared tolerances.
 4. Stop at valid candidate support and reciprocal mass. T07 alone owns all-rod selection, T/N deposition, detector pixels, and downstream factors; T03 emits no raw solid angle.
 
 ## Handoff
 
-Status: migration pending; no merge commit created.
+Status: unstaged edit milestone at clean-start HEAD `1456c962da732411c74dc39f5c90ce5eacabecfa`; no commit created.
 
-Checkpoint commit: `50245d81c2c8e7044c95d43663155e2fc2def4b4`; merged shared authority: `7cc0620fa826ed1b17e9f589991a3cf77e161374`.
+Production facts: the sole source path is seeded pair-stratified antithetic Gaussian sampling with exact equal row mass and preserved polarization ID; wrapped axisymmetric mosaic mass uses the declared spherical measure; continuous rods handle two-root, tangent, no-root, and suppressed direct-beam cases.
 
-Retained branch facts: source metadata survives compilation; wrapped axisymmetric mosaic mass is normalized on the declared spherical measure; continuous-rod roots handle two-root, tangent, no-root, and suppressed direct-beam cases; candidate assembly preserves ordered full sample-frame `Q`, `Qz`, `L`, outgoing film phase wavevector, residual, and orientation-mass-times-one-coarea-Jacobian weight without maximum-root preallocation.
+Candidate facts: assembly preserves orientation and rod identity, full sample-frame `Q`, sample-normal projection, `L`, outgoing film phase wavevector, elastic residual, validity, and orientation-mass-times-one-coarea-Jacobian weight without maximum-root preallocation.
 
-Pre-migration evidence: the compact four-test checkpoint, five-regime dense oracle, one quadrature refinement, seven assigned controls, and sparse 4,096-attempt/3-candidate memory fixture passed before this merge. Gates must be rerun after consumer migration.
+Proof facts: five named regimes, one quadrature refinement, seven real-calculation controls, and the sparse 4,096-attempt/3-candidate fixture use the shared reviewed tolerance artifact. Final gates remain intentionally unrun at this edit milestone.
 
 Legacy state: Ewald intersection is `MATCH`; legacy mosaic density is `CORRECTED` at `mosaic.wrapped_line_density`; seeded LHS source and continuous-rod candidates remain `NO_ORACLE` outside analytic/oracle proof.
 
-Migration boundary: current production source construction still uses deterministic Gauss-Hermite and must not be accepted as the merged MOS-01 production path. No selection, rendering, solid-angle factor, detector deposition, or pixel work belongs in T03.
+Boundary: T03 preserves declared polarization IDs unchanged and implements no polarization physics. No selection, rendering, solid-angle factor, detector deposition, or pixel work belongs in T03.

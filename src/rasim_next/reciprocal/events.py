@@ -16,6 +16,7 @@ from rasim_next.core.contracts import (
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
+from rasim_next.core.validity import ValidityCode
 from rasim_next.reciprocal.ewald import EwaldRootStatus, solve_continuous_rod_ewald
 from rasim_next.sampling.mosaic import MosaicOrientationBatch
 
@@ -297,6 +298,7 @@ def build_scattering_events(
     )
 
     event_state_id = np.empty(event_count, dtype=np.int64)
+    event_orientation_id = np.empty(event_count, dtype=np.int64)
     event_rod_id = np.empty(event_count, dtype=np.int64)
     event_wavelength = np.empty(event_count, dtype=np.float64)
     event_q = np.empty((event_count, 3), dtype=np.float64)
@@ -319,7 +321,9 @@ def build_scattering_events(
         emitted_count = int(emitted_counts[attempt_index])
         if emitted_count == 0:
             continue
-        state_id, wavelength, rod_id, _, orientation_mass, incident, q0, direction = context
+        state_id, wavelength, rod_id, orientation_id, orientation_mass, incident, q0, direction = (
+            context
+        )
         roots = solve_continuous_rod_ewald(
             ki_sample_Ainv=incident,
             q0_sample_Ainv=q0,
@@ -330,6 +334,7 @@ def build_scattering_events(
             raise RuntimeError("Ewald root count changed between count and fill passes")
         for root in roots.emittable_roots:
             event_state_id[next_event] = state_id
+            event_orientation_id[next_event] = orientation_id
             event_rod_id[next_event] = rod_id
             event_wavelength[next_event] = wavelength
             event_q[next_event] = root.q_sample_Ainv
@@ -344,14 +349,16 @@ def build_scattering_events(
     events = ScatteringEventBatch(
         event_id=np.arange(event_count, dtype=np.int64),
         incident_state_id=event_state_id,
+        orientation_id=event_orientation_id,
         rod_id=event_rod_id,
         wavelength_A=event_wavelength,
         q_internal_sample_Ainv=event_q,
-        qz_Ainv=event_q[:, 2],
+        q_sample_normal_Ainv=event_q[:, 2],
         l_coordinate=event_l,
         kf_film_phase_sample_Ainv=event_kf,
         reciprocal_weight=event_weight,
         ewald_residual_Ainv=event_residual,
+        status=(ValidityCode.VALID,) * event_count,
         valid=np.ones(event_count, dtype=np.bool_),
     )
     return EventBuildResult(events=events, status=status)
