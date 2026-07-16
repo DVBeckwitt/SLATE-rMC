@@ -335,12 +335,24 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         )
     assert transported.outgoing_status == (
         ValidityCode.VALID,
-        ValidityCode.NO_SOLUTION,
+        ValidityCode.OUTSIDE_SUPPORT,
     )
     assert transported.detector_status == (
         ValidityCode.VALID,
-        ValidityCode.NO_SOLUTION,
+        ValidityCode.OUTSIDE_SUPPORT,
     )
+    residual_incident = replace(
+        incident,
+        status=(ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED),
+    )
+    residual_transport = transport_scattering_events(
+        events,
+        residual_incident,
+        material,
+        instrument,
+    )
+    assert residual_transport.outgoing_status[1] is ValidityCode.RESIDUAL_EXCEEDED
+    assert residual_transport.detector_status[1] is ValidityCode.RESIDUAL_EXCEEDED
     np.testing.assert_array_equal(transported.outgoing_waves.event_id, events.event_id)
     np.testing.assert_array_equal(transported.detector_hits.event_id, events.event_id)
     assert (transported.detector_hits.column_px[0], transported.detector_hits.row_px[0]) == (

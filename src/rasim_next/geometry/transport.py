@@ -339,10 +339,9 @@ def transport_scattering_events(
         material,
     )
 
-    outgoing_status = np.full(size, ValidityCode.VALID, dtype="U16")
-    outgoing_status[~events.valid] = ValidityCode.NO_SOLUTION
-    incident_valid = incident.states.valid[incident_rows]
-    outgoing_status[events.valid & ~incident_valid] = ValidityCode.NO_SOLUTION
+    outgoing_status = np.asarray(incident.status, dtype=object)[incident_rows]
+    incident_valid = outgoing_status == ValidityCode.VALID
+    outgoing_status[incident_valid & ~events.valid] = ValidityCode.NO_SOLUTION
     candidate = (outgoing_status == ValidityCode.VALID) & (exit_modes.status != ValidityCode.VALID)
     outgoing_status[candidate] = exit_modes.status[candidate]
     outgoing_valid = outgoing_status == ValidityCode.VALID

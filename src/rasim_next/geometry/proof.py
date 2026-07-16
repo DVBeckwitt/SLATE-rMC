@@ -465,7 +465,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
             "osc.detector_native_array",
             "exact_value",
             [
-                _exact_stage("osc.raw_counts", raw, raw),
+                _exact_stage("osc.raw_array", raw, raw),
                 _exact_stage(
                     "osc.detector_native_array",
                     native,
@@ -479,7 +479,7 @@ def _error_injections(root: Path, arrays: Any) -> list[dict[str, Any]]:
             "osc.detector_native_array",
             "exact_value",
             [
-                _exact_stage("osc.raw_counts", raw, raw),
+                _exact_stage("osc.raw_array", raw, raw),
                 _exact_stage("osc.detector_native_array", native, raw.T),
             ],
         ),
@@ -1226,8 +1226,8 @@ def _transport_check() -> dict[str, Any]:
     passed = all(
         (
             incident.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
-            transported.outgoing_status == (ValidityCode.VALID, ValidityCode.NO_SOLUTION),
-            transported.detector_status == (ValidityCode.VALID, ValidityCode.NO_SOLUTION),
+            transported.outgoing_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
+            transported.detector_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
             np.array_equal(transported.outgoing_waves.event_id, events.event_id),
             np.array_equal(transported.detector_hits.event_id, events.event_id),
             abs(transported.outgoing_waves.optical_weight[0] - expected_optical) <= 5e-13,
@@ -1550,9 +1550,9 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
     worktree_changes = [line for line in status_process.stdout.splitlines() if line.strip()]
     worktree_clean = status_process.returncode == 0 and not worktree_changes
     status = (
-        "BLOCKED"
+        "PASS"
         if scientific_passed and worktree_clean
-        else "PASS"
+        else "BLOCKED"
         if scientific_passed
         else "FAIL"
     )
@@ -1585,24 +1585,25 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, Any]:
         ],
         "contract_requests": [
             {
+                "request_id": "SHARED-EVENT-FIRST-FAILURE-STATUS",
+                "owner": "shared contracts/T03",
+                "blocking": True,
+                "blocks": "exact GEO-07 event first-failure propagation",
+                "required_action": "Add an aligned lossless status to ScatteringEventBatch, require valid == (status == VALID), and have T03 supply each event failure reason.",
+            },
+            {
+                "request_id": "SHARED-TRACE-TYPE-LAYER",
+                "owner": "shared proof-base/core",
+                "blocking": True,
+                "blocks": "production-neutral GEO-07 public trace values",
+                "required_action": "Move TraceRecord, Measure, and QuantityKind from the proof namespace to one shared production-neutral core module; keep comparator machinery proof-only.",
+            },
+            {
                 "request_id": "SHARED-T02-TOLERANCE-POLICY",
                 "owner": "shared proof-base/integration",
                 "blocking": True,
                 "blocks": "T02 acceptance after comparison with the shared reference pack",
-                "required_action": "Publish and review a versioned stage-tolerance artifact, then make T02 load it and record its hash; the current table is a provisional branch-local candidate only.",
-            },
-            {
-                "request_id": "T07-SAMPLE-FOOTPRINT-REPRESENTATION",
-                "owner": "integration",
-                "blocking": False,
-                "blocks": "running the tracked Bi2Se3 forward_case.toml unchanged",
-                "question": "Replace legacy zero sample dimensions with explicit finite dimensions or an explicit unbounded-footprint representation; zero must not become a silent sentinel.",
-            },
-            {
-                "request_id": "SHARED-TRACE-TYPE-LAYER",
-                "owner": "integration",
-                "blocking": False,
-                "question": "Move TraceRecord, Measure, and QuantityKind out of the proof namespace when shared contracts next change.",
+                "required_action": "Publish a reviewed versioned shared stage-tolerance artifact with canonical stage keys, scale semantics, and a stable hash; T02 must load that shared artifact before acceptance.",
             },
         ],
         "tolerance_version": _TOLERANCES["version"],
