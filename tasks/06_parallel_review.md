@@ -20,7 +20,7 @@ immutable legacy-pack path and SHA-256
 
 1. Verify ancestry from `PROOF_BASE_SHA`.
 2. Verify only owned paths changed.
-3. Verify no dependency, shared-contract, root-guidance, or reference-manifest changes.
+3. Verify no unreviewed dependency, shared-contract, root-guidance, or reference-manifest changes.
 4. Rerun the exact proof and permanent test commands.
 5. Unset original source and manuscript variables, then rerun permanent tests.
 6. Inspect the independent oracle and ensure it is not a wrapper around the public calculation.
@@ -38,10 +38,11 @@ Check:
 - material optics output matches geometry input
 - real phase wavevectors and decay components are not mixed
 - rod IDs, phase IDs, family IDs, `Qz`, `L`, and wavelength semantics align
-- mosaic event output is sufficient for both ordered and stacking event queries
-- ordered and stacking return interchangeable `EventIntensityResult`
+- T03 source samples have equal empirical mass and its candidates suffice for ordered and stacking queries
+- ordered and stacking return compatible physical intensity components under the corrected result measure
 - outgoing film wavevectors can be consumed by geometry exit transport
-- source, reciprocal, optical, model, footprint, solid-angle, and deposition factors each have one owner
+- source/mosaic probability acts only through frequency; physical factors act once; raw pixels exclude solid angle
+- T07 alone owns weighted selection, equal selected-event mass, clipping reports, and deposition
 - no branch assumes a square detector
 - no branch assigns final branch or `Qr` selections prematurely
 

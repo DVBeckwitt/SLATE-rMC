@@ -4,7 +4,7 @@ Passing a comparison is not enough. The proof system must also demonstrate that 
 
 ## Tolerances are part of the specification
 
-Stage tolerances are declared before an implementation result is inspected. Store them in the immutable reference manifest or a versioned proof configuration. Do not choose a tolerance from the observed disagreement.
+T02--T05 stage tolerances are declared before implementation inspection in `proof/stage_tolerances_v1.json`, verified by its strict loader and canonical hash. The immutable reference pack is not modified. Do not choose a tolerance from observed disagreement.
 
 For a scalar or array quantity `x`, use a declared criterion of the form
 
@@ -13,7 +13,7 @@ For a scalar or array quantity `x`, use a declared criterion of the form
 \le a_{\mathrm{stage}}+r_{\mathrm{stage}}S,
 \]
 
-where `S` is a stated physical scale. The scale must not be an arbitrary large constant that hides an error.
+where `S` comes only from declared physical inputs, analytic bounds, or immutable reference values. It never depends on the candidate magnitude and cannot loosen as an error grows.
 
 Rules:
 
@@ -23,8 +23,8 @@ Rules:
 - Continuous detector coordinates are checked in pixels before any integer rounding or deposition.
 - Complex amplitudes are compared as complex values. When a global gauge is physically irrelevant, align the one declared gauge once and then compare both amplitude and phase-sensitive derived quantities.
 - Intensities are compared before display normalization, rounding, clipping, or log transformation.
-- Near-zero quantities use an absolute tolerance. Relative error alone is invalid near zero.
-- Convergence is assessed at the declared final observable and at the stage whose refinement variable is being changed.
+- Near-zero quantities use the artifact's derived positive absolute tolerance. Relative error alone and zero absolute tolerance are invalid near zero.
+- Convergence is assessed only for a real approximation variable, at both its stage and the declared final observable.
 - Reference-versus-optimized tolerances may differ from analytic tolerances, but both are declared and justified.
 - A `CORRECTED` legacy case uses the legacy tolerance only through the declared first-divergence stage. Downstream stages use the independent-oracle tolerance.
 
@@ -104,9 +104,10 @@ For the tiny end-to-end case, inject each of the following separately:
 
 - omit one factor from the event-to-pixel ledger
 - apply one factor twice
-- apply detector solid angle twice
+- multiply sampled source or selected mosaic probability again
+- allow solid-angle metadata to change the raw image
 - treat deposition weights as a physical point-spread function
-- break event-ID alignment between geometry and intensity
+- break event-ID alignment between geometry and scattering strength
 - use the wrong rod or family identity
 - rotate the detector image after integration
 - deposit with row and column reversed

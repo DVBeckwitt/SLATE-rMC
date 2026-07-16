@@ -46,11 +46,11 @@ Every `(h,k)` rod remains distinct. `Qr` is family metadata and is collapsed onl
 
 ## D012: Event-aligned model contracts
 
-Ordered and stacking models return intensities aligned by `event_id`. Internal grids and interpolation are implementation details with convergence proof.
+Ordered and stacking models return scattering strengths aligned by `event_id`. Internal grids and interpolation are implementation details with convergence proof.
 
 ## D013: One explicit detector measure
 
-Integration assembles source mass, reciprocal mass, model intensity, optics, footprint, solid angle, and deposition exactly once.
+For each incident ray and phase/parent, integration selects from one all-rod candidate pool using the full once-only physical mass. Selected events deposit equal `T/N`; source PDF, structure, mosaic, selection probability, and solid angle are not reapplied.
 
 ## D014: Branch and Qr selection follow integration
 

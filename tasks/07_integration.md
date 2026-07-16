@@ -2,11 +2,11 @@
 
 Branch: `feat/integration`
 
-Begin only after T06 approves the branch SHAs and any shared-contract changes are separately reviewed.
+Begin only after T06 approves corrected T02–T05 SHAs and the follow-up shared-measure commit.
 
 ## Goal
 
-Compose the four proven subsystems into one correct native-detector forward model without duplicating equations in orchestration code. Produce the reusable states required by later selection and fitting.
+Compose the four proven subsystems into the seeded statistical raw native-detector model without duplicating physics. Preserve reusable fixed-geometry states for later fitting.
 
 ## Owned paths
 
@@ -18,44 +18,46 @@ tests/test_integration.py
 this task's execution-plan and handoff sections
 ```
 
+## Production and recycling boundary
+
+- Integrate exactly one source sampler from T03, implement one weighted selector, and implement one conservative bilinear depositor.
+- For each statistically sampled incident ray and independent phase/parent, reuse that ray across all eligible individual `(h,k)` rods and every valid mosaic/Q solution; build one complete candidate-mass pool for that ray+phase, never one pool per reflection.
+- Each candidate retains its rod/reflection ID, orientation/Q solution, full `Q`, elastic `kf`, detector hit, model/structure-factor strength, mosaic mass, and every other once-only physical factor.
+- Select a configurable outgoing-event count per source+phase (legacy default 50) from the complete pool by seeded cumulative inverse CDF.
+- Each selection uses that candidate's own `Q`, `kf`, rod, and hit; never reuse one `kf` across reflections.
+- Assign every selection `total_pool_mass / selected_count`; do not reapply structure factor, mosaic mass, or selection probability.
+- Prefer two-pass/streaming enumeration so the full incident×rod×mosaic product is not retained. Preserve individual rods; never collapse a `Qr` family.
+- Deterministic/adaptive candidate support and all-candidate raster paths are oracle/diagnostic only, never the production rasterizer.
+
 ## Mandatory integration order
 
-1. Merge ordered rod catalog and prove it can feed mosaic under synthetic incident states.
-2. Merge geometry incident states and feed mosaic event generation.
-3. Feed event-aligned queries to ordered intensity.
-4. Feed outgoing film wavevectors to geometry exit transport and continuous detector hits.
-5. Assemble source, reciprocal, population, model, optical, footprint, polarization, solid-angle, and deposition factors exactly once.
-6. Substitute stacking intensity under the same event contract.
-7. Add phase mixtures only after single-phase mass conservation passes.
-8. Run the tiny end-to-end legacy and independent cases.
+1. Correct the shared result measure, contracts, names, and factor ledger after superseded base `b4c10fa`.
+2. Merge locally approved T04 rods, T02 incident/exit geometry, corrected T03 source/candidates, then T05 stacking support.
+3. Prove one sampled ray reaches all eligible individual rods and candidate-specific mosaic/Q solutions.
+4. Join each candidate to its own ordered or stacking strength, optical factors, polarization, phase/parent population, and detector hit exactly once.
+5. Build one complete mass pool per source+phase, normalize it, and select by seeded cumulative inverse CDF.
+6. Assign uniform selected-event mass, deposit bilinearly once, and report explicit edge clipping.
+7. Substitute stacking under the same candidate/selection boundary only after single-phase conservation passes.
+8. Run the tiny case, authoritative high-sample comparison, and fitting-relevant performance workloads.
 
-## Required implementation
+## Raw observable
 
-- one factor ledger matching `docs/RESULT_MEASURE.md`, including explicit polarization and phase/parent population semantics
-- exact detector solid angle when required by the model measure
-- mass-conserving non-square bilinear or exact pixel deposition
-- detector PSF as a separate identity-default operator, if implemented
-- distinct rod and phase sums without max normalization
-- pure specular outputs kept separate from off-specular events until a declared detector composition step
-- immutable compiled instrument, source, incident-state, rod-catalog, event, hit, and detector-response states
-- proof traces containing all integration-stage factors
-- profiling of full simulation and repeated intensity-evaluation workloads
+The raw native image is the accumulated selected-event mass. Source and mosaic distributions act only through sampling/selection frequency. Pixel solid angle is metadata or optional later analysis and cannot multiply raw events or pixels; exposure and overall normalization remain separate.
 
 ## Tiny end-to-end case
 
-Use a small non-square detector, explicit source samples, one wavelength, nonzero sample rotation, tilted detector, nonzero refraction, nonzero attenuation, one or two rods, deterministic mosaic quadrature, ordered intensity, and one stacking substitution. Record continuous hits, deposition indices and weights, total event mass, total detector mass, peak pixel, and selected pixel values.
+Use a non-square detector, fixed seed, one ray reused across at least two reflections, nonzero sample/detector rotations, refraction and attenuation, multiple mosaic solutions, candidate-specific `kf`/hits, one stacking substitution, and declared clipping. Record pool mass, selection counts, assigned mass, deposited/clipped mass, peak pixel, and selected pixels.
 
-## Merge gates
+## Required proof — exactly eight obligations
 
-- all subsystem proofs still pass after each merge
-- one canonical equation per operation
-- one OSC conversion
-- event IDs survive every stage
-- no factor is duplicated or omitted
-- total deposition mass is conserved under the declared clipping rule
-- ordered and stacking use the same event-aligned interface
-- legacy `MATCH` and `CORRECTED` cases are explained by stage traces
-- no fitting, selection, caking, `2theta/phi`, or GUI code exists yet
+1. Fixed seed is exactly repeatable, including complete-pool selection.
+2. Source histograms recover declared distributions and correlations.
+3. Mosaic selection frequencies converge to normalized candidate intensities across the complete ray+phase pool; one-ray/two-reflection candidates retain distinct `kf`/hits and frequency responds to structure-factor and mosaic-mass ratios.
+4. Increasing event count preserves the normalized ensemble mean and noise falls approximately as `1/sqrt(N)`.
+5. One selected event deposits its assigned mass exactly once; bilinear deposition conserves it except for declared edge clipping, and batch deposit sums to total pool mass.
+6. A high-sample ensemble matches the authoritative legacy raw-detector observable without solid-angle correction through a named comparison stage.
+7. A mutation detects double-weighting sampled source or mosaic probabilities, including structure-factor/mosaic/probability reapplication after selection.
+8. Changing or enabling solid-angle metadata cannot change the raw detector image.
 
 ## Commands
 
@@ -68,37 +70,12 @@ python -m rasim_next.proof tiny-end-to-end --json
 git diff --check
 ```
 
-## Performance output
+## Performance and boundaries
 
-Record the dominant runtime and memory stages for:
+Profile high-sample full rendering and repeated ordered/stacking evaluation with geometry fixed; report time, peak memory, candidate count, selected count, and speed relevant to later fitting. Broad sweeps remain external artifacts.
 
-- full forward rendering
-- repeated ordered intensity evaluation with fixed event geometry
-- repeated stacking intensity evaluation with fixed event geometry
-- geometry-invalidating reevaluation of selected rays/rods
-
-Recommend one production acceleration path. Do not implement a large backend framework in this task.
-
-## Execution plan
-
-State: NS
+Do not add a framework, PSF, caking, fitting, backend, generic RNG layer, proof infrastructure, or reference mutation. Keep pure specular composition explicit and separate.
 
 ## Handoff
 
-Status:
-
-Integrated branch SHAs in order:
-
-Proof summary:
-
-Legacy classifications:
-
-Mass and convergence evidence:
-
-Compiled states:
-
-Performance profile:
-
-Recommended production path:
-
-Remaining limitations:
+Record integrated SHAs, eight-proof results, authoritative comparison stage, mass/clipping evidence, performance, and remaining limitations.

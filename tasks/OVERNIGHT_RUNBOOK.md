@@ -57,10 +57,10 @@ Each branch must complete its mandatory reference slice:
 
 ### T03 mosaic and Ewald
 
-- deterministic source and wavelength samples
+- fixed-seed randomized equal-mass source and wavelength samples
 - normalized wrapped Gaussian-plus-Lorentzian orientation model
 - transparent dense event oracle
-- correct deterministic event support and integrated event mass for manuscript cases
+- deterministic/adaptive valid-candidate support and physical reciprocal candidate mass; selection and rasterization belong to T07
 - event contract and convergence evidence
 
 A faster localized/adaptive solver is optional overnight. A dense correct implementation is acceptable as the reference authority.
