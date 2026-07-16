@@ -138,9 +138,9 @@ Stop `BLOCKED` if species, occupancy, displacement, density, or shared wave-mode
 
 ## Execution plan
 
-State: READY
+State: IMPLEMENTED — AWAITING INDEPENDENT T06; DO NOT MERGE OR FREEZE
 
-### Execution result
+### Pre-compatibility execution result (superseded by the extension handoff below)
 
 - T04-00 through T04-11 are complete. The branch implements strict tracked-CIF expansion, physical
   reciprocal bases and rods, event-aligned raw amplitudes and intensities, PbI2 layer motifs,
@@ -643,7 +643,100 @@ one coherent commit, then confirm a clean tree.
 
 ## Handoff
 
-Status: READY. Final branch-tip SHA is reported externally because a commit cannot embed itself.
+Status: IMPLEMENTED — AWAITING INDEPENDENT T06. Do not merge or freeze T04. The final
+compatibility commit SHA is reported externally because a commit cannot embed itself.
+
+### Narrow whole-cell compatibility extension
+
+This extension preserves the corrected XrayDB/VESTA route and the frozen T04/T05 raw-electron
+boundary. It adds only the explicit `bi2se3_whole_cell_compat` literal; there is no implicit
+material selection, fallback, enum, UI control, persisted-state field, interpolation layer, new
+module, dependency, fixture, or snapshot.
+
+Public compatibility APIs:
+
+- `unit_cell_amplitude(..., basis_mode="bi2se3_whole_cell_compat")` and
+  `ordered_event_result(..., basis_mode=...)` expose cache-distinct raw whole-cell amplitudes while
+  the default `exact_provider` numerical output remains bit-for-bit unchanged.
+- `Bi2Se3WholeCellCompatResult` and `bi2se3_whole_cell_compat_curve` expose the raw 17-cell complex
+  amplitude/electron-squared intensity separately from the historical AREA-normalized,
+  pole-clamped intensity. No historical complex phase is invented for that intensity-only stage.
+- `Bi2Se3WholeCellCompatSpecularResult` and `bi2se3_whole_cell_compat_specular` consume separately
+  evaluated external- and internal-phase curves. They require exact coordinates and expose pure
+  Parratt, raw finite-stack electron squared, external/phase legacy kinematic curves, `HT/Qz^2`,
+  both scale directions, blend selection/bounds, dimensionless composite, and downstream legacy
+  units as separate immutable arrays.
+
+Frozen-source evidence:
+
+- Legacy revision: `494accdc2655bd677fafaf070b3dad816b65fa3c`; CIF SHA-256:
+  `a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888`.
+- A disposable detached legacy worktree reproduced all four 1001-point curves twice with digest
+  `042d1f73bd51d85df31541d7269dd3bea1cdf2c814fb0730c720a97fbaedeb7d`; no generated oracle
+  artifact remains.
+- The permanent proof independently transcribes the scalar historical equations and covers 4,004
+  ordered events. Maximum component-wise whole-cell errors for rods `(0,0)`, `(-1,0)`, `(-2,0)`,
+  and `(-3,1)` are respectively `2.2737367544323206e-13`, `1.1368683772161603e-13`,
+  `1.4210854715202004e-13`, and `1.1368683772161603e-13 e`.
+- Maximum raw 17-cell complex-amplitude residuals for those rods are respectively
+  `4.785887488181624e-10`, `7.38402163543386e-10`, `8.280603384719736e-10`, and
+  `5.736172340872927e-10 e`; electron-squared residuals are `1.4677643775939941e-6`,
+  `4.4405460357666016e-6`, `4.0978193283081055e-6`, and `2.6747584342956543e-6`.
+- Maximum historical-intensity residuals are `256`, `128`, `128`, and `128` legacy units; the
+  largest tolerance fraction is `0.016299251303216793`. Integrated-intensity residuals are
+  `4`, `8`, `0`, and `4` on integrals of order `1e16`; normalized-sample and extinction-ratio
+  maxima are `1.6263032587282567e-17` and `8.326672684688674e-17`. Selected absolute peaks and
+  the first 20 fringe positions match on every rod.
+- The separate 1,001-point specular oracle has maximum stage residuals: raw finite electron squared
+  `3.827153705060482e-9`, external legacy kinematic `10.375`, phase legacy kinematic `14.125`,
+  `HT/Qz^2` `992`, pure Parratt `0`, scaled Parratt `0`, stitched `HT/Qz^2` `275.25`, dimensionless
+  composite `1.5585406229479126e-17`, and downstream legacy units `12.515625`. The largest
+  scale-aware tolerance fraction is `0.04142036517973313`; both scale-factor residuals are zero,
+  the legacy direction is `parratt_to_kinematic`, and the selected fallback bounds are `[3,6]`.
+- External `L`, internal phase `L`, event identity, `h`, `k`, and `qz` propagate exactly. Exact and
+  compatibility identities remain distinct in both call orders. No arbitrary rescaling, phase
+  correction, rounding, interpolation, or grid regeneration occurs.
+
+Current classifications:
+
+- corrected XrayDB/VESTA ordered route: `CORRECTED`, first divergence
+  `ordered.unit_cell_amplitude`;
+- `ordered.bi2se3_whole_cell_compat`: `MATCH`;
+- pure Parratt: `MATCH`;
+- corrected-material manuscript composite: `CORRECTED`, first divergence
+  `ordered.unit_cell_amplitude`;
+- compatibility composite and compatibility downstream legacy-unit curve: `MATCH`.
+
+Proof and cleanup state:
+
+- Compatibility tolerance policy is `ordered-reflectivity-tolerances-v3`, SHA-256
+  `9f113e83a2b4e6e3db16fc3e0018dc638b817358e6afff2ff080110ba55941ff`. Ordinary nonzero legacy
+  values use `rtol=1e-8`; normalized or near-zero values use `atol=1e-12`.
+- The PbI2 deterministic material payload remains
+  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`; corrected direct-atom,
+  VESTA, Parratt, convergence, mutation, and reference-pack checks remain passing.
+- The retained equivalent-work benchmark covers 10,000 amplitudes plus 4,096 three-layer Parratt
+  points. One-thread production/oracle medians are `0.025104700005613267/0.45258539999485947 s`
+  (`18.0279x`); traced peaks are `9,099,213/3,500,323 bytes`. Structure, raw-intensity, and
+  Parratt oracle maxima remain `2.0920868753727402e-12 e`, `4.5838532969355583e-10 electron2`,
+  and `4.440892098500626e-16`.
+- Three permanent tests were retained because each protects one distinct long-term contract:
+  explicit mode/frozen-source/cache separation; raw-versus-legacy finite units; and exact
+  external/phase specular stages. Complete curves, peak/integral/extinction/fringe metrics,
+  benchmarks, and memory remain proof-command evidence rather than permanent tests.
+- Exact changed files for this extension are `ordered/__init__.py`, `amplitudes.py`,
+  `finite_stack.py`, `proof.py`, `reflectivity/__init__.py`, `specular.py`, the existing ordered
+  test module, and this handoff. No file was added.
+- Final extension gates: compile PASS; Ruff lint PASS; Ruff format PASS (`16` files); focused suite
+  PASS (`14`); full suite PASS (`19`); ordered proof `READY` (`17/17` checks and the existing
+  `18/18` mutations); reference proof PASS (`7/7`); `git diff --check` PASS. The post-commit clean
+  status and final SHA are reported externally.
+
+The primary-writer proof being `READY` is not the independent acceptance gate. T04 remains open
+until T06 reruns the frozen legacy oracle against the final commit and reports all ordered and
+specular compatibility stages as `MATCH`.
+
+### Pre-compatibility readiness record
 
 Readiness baseline:
 

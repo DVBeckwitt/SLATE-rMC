@@ -16,15 +16,22 @@ from rasim_next.materials import (
     material_optics,
     read_crystal,
 )
+from rasim_next.ordered import (
+    bi2se3_whole_cell_compat_curve,
+    coherent_finite_stack,
+    uniform_finite_stack,
+)
 from rasim_next.ordered.amplitudes import ordered_event_result, unit_cell_amplitude
 from rasim_next.ordered.bi2se3_proof import run_bi2se3_ql_proof
-from rasim_next.ordered.finite_stack import coherent_finite_stack, uniform_finite_stack
 from rasim_next.ordered.motifs import extract_pbi2_motifs, pbi2_layer_amplitudes
 from rasim_next.ordered.proof import TOLERANCES, _direct_atom_amplitudes
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
+from rasim_next.reflectivity import (
+    bi2se3_whole_cell_compat_specular,
+    manuscript_specular_composite,
+)
 from rasim_next.reflectivity.parratt import ParrattResult, parratt_reflectivity
-from rasim_next.reflectivity.specular import manuscript_specular_composite
 
 ROOT = Path(__file__).parents[1]
 STRUCTURES = ROOT / "examples"
@@ -353,6 +360,119 @@ def test_raw_structure_amplitude_matches_direct_atom_sum() -> None:
         unit_cell_amplitude(crystal, [0.0, 0.0, 0.0], 1e-6)
 
 
+def test_bi2se3_whole_cell_compat_is_explicit_and_cache_distinct() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_legacy.cif",
+        phase_id="bi2se3",
+    )
+    hkl = np.array(
+        [
+            [0.0, 0.0, 0.37],
+            [-1.0, 0.0, 0.37],
+            [-2.0, 0.0, 0.37],
+            [-3.0, 1.0, 0.37],
+        ]
+    )
+    expected = np.array(
+        [
+            317.6771331555972 + 525.7083276045228j,
+            -27.50415907336336 - 93.02569073466447j,
+            91.2237330594924 + 94.06641949221356j,
+            -26.434813671526612 - 71.95351138760894j,
+        ]
+    )
+
+    default = unit_cell_amplitude(crystal, hkl, 1.54)
+    exact = unit_cell_amplitude(crystal, hkl, 1.54, basis_mode="exact_provider")
+    compat = unit_cell_amplitude(
+        crystal,
+        hkl,
+        1.54,
+        basis_mode="bi2se3_whole_cell_compat",
+    )
+    compat_first = unit_cell_amplitude(
+        crystal,
+        hkl,
+        1.54,
+        basis_mode="bi2se3_whole_cell_compat",
+    )
+    exact_second = unit_cell_amplitude(crystal, hkl, 1.54, basis_mode="exact_provider")
+
+    np.testing.assert_array_equal(default.amplitude_e, exact.amplitude_e)
+    np.testing.assert_allclose(compat.amplitude_e.real, expected.real, rtol=1e-8, atol=1e-12)
+    np.testing.assert_allclose(compat.amplitude_e.imag, expected.imag, rtol=1e-8, atol=1e-12)
+    assert exact.cache_identity == exact_second.cache_identity
+    assert compat.cache_identity == compat_first.cache_identity
+    assert exact.cache_identity != compat.cache_identity
+    assert "basis_mode=bi2se3_whole_cell_compat" in compat.provenance
+    assert "legacy_revision=494accdc2655bd677fafaf070b3dad816b65fa3c" in compat.provenance
+    assert "cif_sha256=a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888" in (
+        compat.provenance
+    )
+    assert "legacy_form_factor_a_A=4.557" in compat.provenance
+
+    catalog = build_rod_catalog(crystal, h_bounds=(-3, 0), k_bounds=(0, 1))
+    rows = [
+        int(np.flatnonzero((catalog.h == h) & (catalog.k == k))[0])
+        for h, k in ((0, 0), (-1, 0), (-2, 0), (-3, 1))
+    ]
+    query = RodQueryBatch(
+        event_id=np.array([71, 12, 99, 3]),
+        rod_id=catalog.rod_id[rows],
+        phase_id=("bi2se3",) * 4,
+        h=np.array([0, -1, -2, -3], dtype=np.int32),
+        k=np.array([0, 0, 0, 1], dtype=np.int32),
+        qz_Ainv=0.37 * ReciprocalLattice.from_crystal(crystal).basis_Ainv[2, 2] * np.ones(4),
+        l_coordinate=np.full(4, 0.37),
+        wavelength_A=np.full(4, 1.54),
+    )
+    events = ordered_event_result(
+        crystal,
+        catalog,
+        query,
+        basis_mode="bi2se3_whole_cell_compat",
+    )
+    np.testing.assert_array_equal(events.event_id, query.event_id)
+    np.testing.assert_allclose(events.amplitude_e, expected, rtol=1e-8, atol=1e-12)
+    np.testing.assert_allclose(
+        events.intensity.intensity_per_sr,
+        np.abs(expected) ** 2,
+        rtol=1e-8,
+        atol=1e-12,
+    )
+    assert events.intensity.model_component_id == "bi2se3_whole_cell_compat"
+    assert events.cache_identity == compat.cache_identity
+    assert events.basis_mode == "bi2se3_whole_cell_compat"
+
+    with pytest.raises(ValueError, match="basis_mode"):
+        unit_cell_amplitude(crystal, hkl, 1.54, basis_mode="unknown")
+    with pytest.raises(ValueError, match="wavelength"):
+        unit_cell_amplitude(
+            crystal,
+            hkl,
+            1.540592925,
+            basis_mode="bi2se3_whole_cell_compat",
+        )
+    with pytest.raises(ValueError, match="supported rods"):
+        unit_cell_amplitude(
+            crystal,
+            [[1.0, 0.0, 0.37]],
+            1.54,
+            basis_mode="bi2se3_whole_cell_compat",
+        )
+    nonfrozen = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_expanded_P1.cif",
+        phase_id="bi2se3",
+    )
+    with pytest.raises(ValueError, match="frozen CIF"):
+        unit_cell_amplitude(
+            nonfrozen,
+            hkl,
+            1.54,
+            basis_mode="bi2se3_whole_cell_compat",
+        )
+
+
 def test_material_optics_matches_atomic_forward_sum() -> None:
     crystal = read_crystal(
         STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_expanded_P1.cif",
@@ -663,6 +783,69 @@ def test_finite_stack_limits_and_motif_gauge() -> None:
     np.testing.assert_allclose(gauge.amplitude_e, direct.amplitude_e, rtol=1e-12, atol=1e-10)
 
 
+def test_bi2se3_compat_finite_stack_keeps_raw_and_legacy_units_separate() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_legacy.cif",
+        phase_id="bi2se3",
+    )
+    catalog = build_rod_catalog(crystal, h_bounds=(-3, 0), k_bounds=(0, 1))
+    rods = ((0, 0), (-1, 0), (-2, 0), (-3, 1))
+    rows = [int(np.flatnonzero((catalog.h == h) & (catalog.k == k))[0]) for h, k in rods]
+    l_coordinate = np.array([0.0, 0.37, 0.37, 0.37])
+    query = RodQueryBatch(
+        event_id=np.array([71, 12, 99, 3]),
+        rod_id=catalog.rod_id[rows],
+        phase_id=("bi2se3",) * 4,
+        h=np.array([rod[0] for rod in rods], dtype=np.int32),
+        k=np.array([rod[1] for rod in rods], dtype=np.int32),
+        qz_Ainv=l_coordinate * ReciprocalLattice.from_crystal(crystal).basis_Ainv[2, 2],
+        l_coordinate=l_coordinate,
+        wavelength_A=np.full(4, 1.54),
+    )
+    ordered = ordered_event_result(
+        crystal,
+        catalog,
+        query,
+        basis_mode="bi2se3_whole_cell_compat",
+    )
+    result = bi2se3_whole_cell_compat_curve(query, ordered)
+
+    geometric = np.sum(
+        np.exp(2.0j * np.pi * l_coordinate[:, None] * np.arange(17)),
+        axis=1,
+    )
+    expected_amplitude = ordered.amplitude_e * geometric
+    expected_legacy = np.array(
+        [
+            6.764086605888648e17,
+            2.7028356574909633e13,
+            4.93168130781137e13,
+            1.6877488548303203e13,
+        ]
+    )
+    np.testing.assert_array_equal(result.event_id, query.event_id)
+    np.testing.assert_array_equal(result.external_l_coordinate, l_coordinate)
+    np.testing.assert_allclose(
+        result.finite_stack.amplitude_e,
+        expected_amplitude,
+        rtol=1e-12,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(
+        result.finite_stack.intensity.intensity_per_sr,
+        np.abs(expected_amplitude) ** 2,
+        rtol=1e-12,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(result.legacy_intensity, expected_legacy, rtol=1e-8, atol=1e-12)
+    assert result.finite_stack.intensity.normalization.endswith("electron2")
+    assert result.legacy_normalization == "legacy AREA*(pole-clamped pair sum/17)*|F|^2"
+    assert result.layer_count == 17
+    assert result.phi_l_divisor == 1.0
+    assert result.pole_clamp == 1e-6
+    assert not result.legacy_intensity.flags.writeable
+
+
 def test_parratt_matches_analytic_limits() -> None:
     wavelength_A = 1.540592925
     qz_Ainv = np.array([0.025, 0.055, 0.11])
@@ -855,3 +1038,145 @@ def test_specular_outputs_and_handoff_are_distinct() -> None:
     )
     assert fallback.blend_bounds_q_over_qc == (3.0, 6.0)
     assert fallback.blend_selection == "fallback"
+
+
+def test_bi2se3_compat_specular_consumes_exact_external_and_phase_curves() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_legacy.cif",
+        phase_id="bi2se3",
+    )
+    catalog = build_rod_catalog(crystal, h_bounds=(0, 0), k_bounds=(0, 0))
+    event_id = np.arange(181, dtype=np.int64) + 700
+    q_over_qc = np.linspace(2.0, 11.0, event_id.size)
+    qc_Ainv = 0.05
+    qz_Ainv = q_over_qc * qc_Ainv
+    external_l = qz_Ainv * 28.636 / (2.0 * np.pi)
+    intended_phase_l = 0.8 * external_l + 0.05
+
+    def compatibility_curve(l_coordinate: np.ndarray):
+        query = RodQueryBatch(
+            event_id=event_id,
+            rod_id=np.repeat(catalog.rod_id[0], event_id.size),
+            phase_id=("bi2se3",) * event_id.size,
+            h=np.zeros(event_id.size, dtype=np.int32),
+            k=np.zeros(event_id.size, dtype=np.int32),
+            qz_Ainv=l_coordinate * (2.0 * np.pi / 28.636),
+            l_coordinate=l_coordinate,
+            wavelength_A=np.full(event_id.size, 1.54),
+        )
+        ordered = ordered_event_result(
+            crystal,
+            catalog,
+            query,
+            basis_mode="bi2se3_whole_cell_compat",
+        )
+        return bi2se3_whole_cell_compat_curve(query, ordered)
+
+    kz_Ainv = np.repeat((qz_Ainv / 2.0)[:, None], 3, axis=1).astype(np.complex128)
+    kz_Ainv[:, 1] = intended_phase_l * np.pi / 28.636
+    phase_l = 2.0 * kz_Ainv[:, 1].real * 28.636 / (2.0 * np.pi)
+    external_curve = compatibility_curve(external_l)
+    phase_curve = compatibility_curve(phase_l)
+    ht_over_qz2 = phase_curve.legacy_intensity / qz_Ainv**2
+    log_offset = np.where(
+        q_over_qc < 5.0,
+        0.3,
+        np.where(
+            q_over_qc <= 7.0,
+            0.0,
+            np.where(q_over_qc <= 8.5, 0.3, -0.3),
+        ),
+    )
+    pure_parratt = (ht_over_qz2 / 4.0) * 10.0**log_offset
+    parratt = ParrattResult(
+        qz_Ainv=qz_Ainv,
+        kz_Ainv=kz_Ainv,
+        interface_amplitude=np.zeros((event_id.size, 2), dtype=np.complex128),
+        amplitude=np.sqrt(pure_parratt).astype(np.complex128),
+        reflectivity=pure_parratt,
+    )
+
+    result = bi2se3_whole_cell_compat_specular(
+        parratt,
+        external_curve,
+        phase_curve,
+        c_A=28.636,
+        qc_Ainv=qc_Ainv,
+        film_layer_index=1,
+    )
+
+    np.testing.assert_array_equal(result.external_l_coordinate, external_l)
+    np.testing.assert_array_equal(result.phase_l_coordinate, phase_l)
+    np.testing.assert_array_equal(
+        result.raw_finite_stack_e2,
+        external_curve.finite_stack.intensity.intensity_per_sr,
+    )
+    np.testing.assert_array_equal(
+        result.external_legacy_kinematic,
+        external_curve.legacy_intensity,
+    )
+    np.testing.assert_array_equal(result.phase_legacy_kinematic, phase_curve.legacy_intensity)
+    np.testing.assert_allclose(result.ht_over_qz2, ht_over_qz2, rtol=0.0, atol=0.0)
+    np.testing.assert_array_equal(result.parratt_reflectivity, pure_parratt)
+    assert result.parratt_to_kinematic_scale == pytest.approx(4.0, rel=2e-14)
+    assert result.kinematic_to_reflectivity_scale == pytest.approx(0.25, rel=2e-14)
+    assert result.scale_direction == "parratt_to_kinematic"
+    assert result.blend_bounds_q_over_qc == pytest.approx((5.0, 7.0))
+    assert result.blend_selection == "automatic"
+
+    lower, upper = result.blend_bounds_q_over_qc
+    below = q_over_qc <= lower
+    above = q_over_qc >= upper
+    interior = ~(below | above)
+    np.testing.assert_array_equal(
+        result.kinematic_stitched_over_qz2[below],
+        result.kinematic_parratt_over_qz2[below],
+    )
+    np.testing.assert_array_equal(result.kinematic_stitched_over_qz2[above], ht_over_qz2[above])
+    blend_coordinate = (q_over_qc[interior] - lower) / (upper - lower)
+    blend_weight = (
+        6.0 * blend_coordinate**5 - 15.0 * blend_coordinate**4 + 10.0 * blend_coordinate**3
+    )
+    expected_blend = 10.0 ** (
+        (1.0 - blend_weight) * np.log10(result.kinematic_parratt_over_qz2[interior])
+        + blend_weight * np.log10(ht_over_qz2[interior])
+    )
+    np.testing.assert_allclose(
+        result.kinematic_stitched_over_qz2[interior],
+        expected_blend,
+        rtol=5e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        result.composite_reflectivity,
+        result.kinematic_stitched_over_qz2 * result.kinematic_to_reflectivity_scale,
+        rtol=1e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        result.legacy_stitched_intensity,
+        result.kinematic_stitched_over_qz2 * qz_Ainv**2,
+        rtol=1e-15,
+        atol=0.0,
+    )
+
+    shifted_phase = compatibility_curve(phase_l + 0.01)
+    with pytest.raises(ValueError, match="phase L"):
+        bi2se3_whole_cell_compat_specular(
+            parratt,
+            external_curve,
+            shifted_phase,
+            c_A=28.636,
+            qc_Ainv=qc_Ainv,
+            film_layer_index=1,
+        )
+    shifted_external = compatibility_curve(external_l + 0.01)
+    with pytest.raises(ValueError, match="external L"):
+        bi2se3_whole_cell_compat_specular(
+            parratt,
+            shifted_external,
+            phase_curve,
+            c_A=28.636,
+            qc_Ainv=qc_Ainv,
+            film_layer_index=1,
+        )
