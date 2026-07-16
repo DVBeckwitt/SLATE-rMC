@@ -127,26 +127,23 @@ Stop `BLOCKED` if the common incident-state, rod-catalog, event, or probability-
 
 ## Execution plan
 
-State: NS
+State: deletion-first consumer migration is implemented but unstaged; final gates await PM review.
+
+1. Use the legacy-equivalent seeded randomized pair-stratified antithetic Gaussian sampler with odd center, independent dimensions, and exact equal `1/N` empirical mass.
+2. Emit candidate orientation ID, full sample-frame `Q`, exact sample-normal projection, and `VALID` status through the shared event contract.
+3. Prove wrapped spherical orientation mass, stable Ewald support, one coarea Jacobian, ordered dense-oracle equality, and count-then-fill memory against reviewed shared tolerances.
+4. Stop at valid candidate support and reciprocal mass. T07 alone owns all-rod selection, T/N deposition, detector pixels, and downstream factors; T03 emits no raw solid angle.
 
 ## Handoff
 
-Status:
+Status: unstaged edit milestone at clean-start HEAD `1456c962da732411c74dc39f5c90ce5eacabecfa`; no commit created.
 
-Commit SHA:
+Production facts: the sole source path is seeded pair-stratified antithetic Gaussian sampling with exact equal row mass and preserved polarization ID; wrapped axisymmetric mosaic mass uses the declared spherical measure; continuous rods handle two-root, tangent, no-root, and suppressed direct-beam cases.
 
-Public APIs:
+Candidate facts: assembly preserves orientation and rod identity, full sample-frame `Q`, sample-normal projection, `L`, outgoing film phase wavevector, elastic residual, validity, and orientation-mass-times-one-coarea-Jacobian weight without maximum-root preallocation.
 
-Proof summary:
+Proof facts: five named regimes, one quadrature refinement, seven real-calculation controls, and the sparse 4,096-attempt/3-candidate fixture use the shared reviewed tolerance artifact. Final gates remain intentionally unrun at this edit milestone.
 
-Legacy classifications:
+Legacy state: Ewald intersection is `MATCH`; legacy mosaic density is `CORRECTED` at `mosaic.wrapped_line_density`; seeded LHS source and continuous-rod candidates remain `NO_ORACLE` outside analytic/oracle proof.
 
-First divergences:
-
-Convergence:
-
-Benchmark and peak memory:
-
-Known limitations:
-
-Contract requests:
+Boundary: T03 preserves declared polarization IDs unchanged and implements no polarization physics. No selection, rendering, solid-angle factor, detector deposition, or pixel work belongs in T03.
