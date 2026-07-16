@@ -136,87 +136,69 @@ Stop `BLOCKED` if the layer-amplitude, population, state-order, or event-intensi
 
 ## Execution plan
 
-State: READY after the exact-SHA gate and normal publication to PR #252.
+State: BLOCKED after compact local recovery. The finite T05 calculations are locally evidenced;
+reviewed shared measure, layer-gauge, and tolerance contracts remain required for integration.
 
-1. [x] Replace the cancellation-prone finite self/pair subtraction in both public paths with exact
-   state-conditioned amplitude mean/variance recurrences. Keep a transparent pair sum only in the
-   compact proof for short stacks.
-2. [x] Add one permanent coherent-zero neighborhood regression covering both sides of the zero,
-   multiple layer counts, both public paths, and an independent direct amplitude sum.
-3. [x] Make population components unweighted and give every `StackingPopulation` its own
-   `InitialPopulation`. Return branch-local raw electron-squared event results rather than placing
-   them in a per-steradian field.
-4. [x] Prune broad sweeps, material parity scaffolding, mutation traces, stationary/infinite code,
-   retained benchmark code, redundant tests, and stale handoff claims. Keep only the compact T05
-   finite-stack proof and six permanent invariants.
-5. [x] Require an exact-ID-aligned `LayerNormalQBatch` at every event API. Derive stacking phase
-   only from `layer_normal_q_Ainv`; never substitute sample-frame `RodQueryBatch.qz_Ainv`.
+1. [x] Preserve the stable conditional-amplitude recurrence, coherent-zero regression, unweighted
+   population components, honest raw electron-squared output, and explicit layer-normal phase input.
+2. [x] Restore compact STK-01..07 evidence for finite direct/pair/full/reduced agreement, declared
+   parents and models, analytic limits, immutable-pack values, normalization, and event alignment.
+3. [x] Detect all seven assigned error injections through recalculated proof-only stages without
+   adding mutation tests, stationary production code, or retained artifacts.
+4. [x] Record one exact finite-equality record and one disposable 48-event by 24-layer benchmark;
+   retain only the six distinct permanent tests.
+5. [ ] Consume reviewed shared event-measure/layer-gauge and frozen-tolerance contracts. Until all
+   three requests are resolved, numerical acceptance remains `SKIP`/`UNRESOLVED` and T05 is BLOCKED.
 
 ## Handoff
 
-Status: READY locally. PR #252 must point to the exact commit containing this handoff.
+Status: BLOCKED. The proof result is schema-v1 valid and reports one exact `PASS` plus five
+tolerance-dependent `SKIP` checks; it does not convert finite raw errors into acceptance without a
+reviewed tolerance policy. All seven real-calculation mutations are detected at their assigned
+first stages. The proof patch has stable patch-id
+`9318b7f23e8d10240ece470b49d3d3b0bd3dc0d4` and remains within the +350 ceiling at
+`501` additions and `152` deletions relative to `aafee400`.
 
-Public APIs retained: `STATE_ORDER`, `StackingState`, `TransitionLaw`, `InitialPopulation`,
-`RegistryPhaseModel`, `Parent`, `Handedness`, `RichEpsilonModel`, `ReducedABDModel`,
-`StackingPopulation`, `FiniteIntensity`, `StackingEventIntensityResult`,
-`PopulationIntensityResult`, `LayerNormalQBatch`, `registry_phase`, `full_transition_matrix`,
-`reduced_transition_matrix`, `finite_explicit_sequence_intensity`,
-`finite_intensity_by_enumeration`, `finite_intensity_full`, `finite_intensity_reduced`,
-`finite_event_intensity`, and `finite_population_event_intensity`.
+Scientific evidence: the proof covers stochasticity and declared state order; `N=1,3,6`
+direct-sequence, transparent-pair, full, and reduced finite equality; deterministic
+2H/4H+/4H-/6H+/6H- across three Miller sectors; rich-epsilon and handed reduced-ABD fixtures; the
+general `h=k=0`, `F+=F-` Laue identity; normalization, nonnegativity, population-order invariance,
+and all 60 transition probabilities plus 165 immutable-pack curve values. Cross-material parity
+and stationary production output remain outside T05.
 
-Near-extinction correction: the public full and reduced implementations now propagate conditional
-complex-amplitude means and variances. They never form the cancellation-prone difference between
-large self and pair terms. For `N=512`, `F+=F-=1`, `omega=1`,
-`xi=exp(i*(2*pi/512+1e-9))`, 2H plus-only, direct/full/reduced electron-squared intensities are
+Near extinction at `N=512`, `F+=F-=1`, `omega=1`,
+`xi=exp(i*(2*pi/512+1e-9))`, 2H plus-only gives direct/full/reduced raw electron-squared values
 `1.7407062383566972e-9`, `1.7407062353385284e-9`, and
-`1.7407062372412564e-9`. The maximum direct-versus-public absolute error across exact zeros and
-both nearby phases for `N=(8,64,512)` is `9.848353643232856e-18`; nearby positive intensity is
-never clipped to zero.
+`1.7407062353385284e-9`; nearby positive intensity is not erased. The immutable-pack raw maximum
+absolute differences are `2.13623046875e-3` (full/pack), `1.52587890625e-3` (reduced/pack), and
+`6.7138671875e-4` (full/reduced). These remain unaccepted numerical evidence pending policy.
 
-Compact proof: six checks pass. The stochastic row-sum error is zero. At `N=6`, direct enumeration
-versus the transparent pair sum, stable full path, and stable reduced path have absolute errors
-`1.510e-14`, `1.421e-14`, and `1.599e-14`. The `N=1` error and total/per-layer normalization error
-are zero. Per-population components with individual initial states agree with direct enumeration to
-`4.441e-16` and are exactly order invariant. The proof JSON validates against
-`schemas/proof_result.schema.json`.
+Classifications: `stacking.transition_matrix_6` is `MATCH`; legacy total/per-layer normalization is
+`CORRECTED` at `stacking.finite_intensity` under `PHY-STK-013`; synthetic finite curves, legacy
+initial population, and legacy phase are `UNRESOLVED`; stationary output is `NO_ORACLE` and
+deferred. The seven detected mutations cover transpose/reversal, layer-count offset,
+total/per-layer swap, coherent population mixing, omitted registry phase, stationary-for-finite
+substitution, and a perturbed reduced coefficient.
 
-Layer-phase frame boundary: all three event APIs require immutable `event_id[E]` plus finite
-`layer_normal_q_Ainv[E]` in inverse angstroms. In a tilted two-event case, the recurrence and
-explicit-sequence paths agree with the analytic layer-frame sum to `1.499e-15`; substituting
-sample-frame `qz_Ainv` changes the result by `1.924e+00`. Shape, finiteness, real-valued input, and
-exact event-ID order are validated without a compatibility fallback.
+One-shot 48-event by 24-layer evidence: full evaluation took `0.1051613 s` with `34,748` peak
+traced bytes; reduced evaluation took `0.0152844 s` with `19,546` peak bytes (`6.8803x`), with
+maximum absolute difference `4.263256414560601e-14`. Exact finite algebra has no numerical
+refinement variable; the `N=1,3,6` equality record is reported as equality evidence, not invented
+convergence.
 
-Output and population semantics: T05 returns raw finite-stack total and per-layer electron-squared
-arrays aligned by exact `event_id`. It does not label either value per steradian and applies no
-`r_e^2`, source, optical, geometric, detector, phase-population, or parent-population factor.
-`StackingPopulation` contains only its ID, transition law, and initial orientation. Population
-results contain unweighted components and no weighted total; T07 owns ID-aligned population mass
-and applies it exactly once.
+The six retained tests each protect one long-term invariant: declared state order/stochasticity;
+short-stack direct/full/reduced agreement; the `N=1` initial-population limit; exact and nearby
+coherent zeros; event alignment, layer-normal phase, and normalization; and unweighted population
+components with individual initial states. No permanent mutation or benchmark framework is kept.
 
-Disposable benchmark: 48 events by 24 layers, minimum of five measured runs. Stable full-state
-evaluation took `0.02865 s` with `21,540` peak traced bytes. Stable vectorized reduced evaluation
-took `0.002305 s` with `17,894` peak traced bytes (`12.43x` faster). Their maximum absolute
-difference was `1.1368683772161603e-13`. No benchmark code or artifact is retained.
+Blocking requests:
 
-Permanent tests retained, one distinct invariant each:
+1. `T05-SHARED-EVENT-MEASURE`: a shared result capable of unweighted raw electron-squared total
+   and per-layer values, with T07 owning population mass and reviewed `r_e^2`/per-steradian use.
+2. `T05-LAYER-PHASE-GAUGE`: an exact-ID event handoff for finite `layer_normal_q_Ainv` (or explicit
+   phase step) in the declared crystallite/layer gauge, with no sample-frame `qz_Ainv` fallback.
+3. `T05-FROZEN-TOLERANCE-PROVENANCE`: a versioned tolerance policy specifying stage, units,
+   scale, `atol`, `rtol`, near-zero rationale, and `tolerance_config_sha256`.
 
-1. declared state order and stochastic transition rows;
-2. direct enumeration/full/reduced agreement on a short stack;
-3. the `N=1` initial-population limit;
-4. exact coherent zeros and positive neighborhoods;
-5. raw event alignment, layer-frame phase, and explicit total/per-layer normalization;
-6. unweighted population components with per-population initial states.
-
-Minimum integration request `T05-T07-INTEGRATION-BOUNDARY`: T07 must supply `event_id[E]` int64 in
-exact query order and finite `layer_normal_q_Ainv[E]` float64 in inverse angstroms, obtained by
-projecting each real event Q onto its crystallite/layer normal in the same T04 motif and first-layer
-gauge. T07 must also accept raw event-aligned electron-squared components without routing them
-through `intensity_per_sr`, provide a separate ID-aligned population-weight table, and own both
-population weighting and any `r_e^2`/per-steradian conversion exactly once. This request does not
-block the self-contained T05 finite core. Cross-material T04/T05 A/B/C parity belongs to T06/T07
-and is intentionally absent here.
-
-Known limitations: homogeneous first-order transition law, one explicit layer repeat per event
-batch, and an integration-supplied layer-normal projection. Fitting, detector rendering, optics,
-material parsing, cross-branch parity, and stationary infinite-stack evaluation are outside this
-compact branch.
+Until those contracts are reviewed, raw electron-squared results and unweighted populations remain
+honestly branch-local, no PR update or merge is authorized, and overall status is BLOCKED.
