@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,6 +22,8 @@ from rasim_next.sampling.source import UNITY_SCALAR_POLARIZATION
 
 IntArray = NDArray[np.int64]
 ByteArray = NDArray[np.int8]
+FloatArray = NDArray[np.float64]
+_AttemptContext = tuple[int, float, int, int, float, FloatArray, FloatArray, FloatArray]
 
 
 def _integer_array(value: ArrayLike, dtype: np.dtype, size: int, name: str) -> NDArray[np.integer]:
@@ -63,7 +66,15 @@ class EwaldStatusBatch:
             ("direct_beam_root_count", np.dtype(np.int8)),
         ):
             object.__setattr__(self, name, _integer_array(getattr(self, name), dtype, size, name))
-        statuses = tuple(EwaldRootStatus(status) for status in self.root_status)
+        self._validate_statuses(size)
+
+    def _validate_statuses(self, size: int) -> None:
+        statuses = self.root_status
+        if not (
+            isinstance(statuses, tuple)
+            and all(isinstance(status, EwaldRootStatus) for status in statuses)
+        ):
+            statuses = tuple(EwaldRootStatus(status) for status in statuses)
         if len(statuses) != size:
             raise ValueError("root_status must align with attempt_id")
         if np.any(self.emitted_root_count < 0) or np.any(self.direct_beam_root_count < 0):
@@ -83,11 +94,136 @@ class EwaldStatusBatch:
                 raise ValueError("root counts are inconsistent with root_status")
         object.__setattr__(self, "root_status", statuses)
 
+    @classmethod
+    def _from_builder_owned_arrays(
+        cls,
+        *,
+        attempt_id: IntArray,
+        incident_state_id: IntArray,
+        rod_id: IntArray,
+        orientation_id: IntArray,
+        root_status: tuple[EwaldRootStatus, ...],
+        emitted_root_count: ByteArray,
+        direct_beam_root_count: ByteArray,
+    ) -> EwaldStatusBatch:
+        """Adopt already validated builder arrays without attempt-sized copies."""
+
+        batch = object.__new__(cls)
+        arrays = {
+            "attempt_id": (attempt_id, np.dtype(np.int64)),
+            "incident_state_id": (incident_state_id, np.dtype(np.int64)),
+            "rod_id": (rod_id, np.dtype(np.int64)),
+            "orientation_id": (orientation_id, np.dtype(np.int64)),
+            "emitted_root_count": (emitted_root_count, np.dtype(np.int8)),
+            "direct_beam_root_count": (direct_beam_root_count, np.dtype(np.int8)),
+        }
+        size = attempt_id.size
+        for name, (array, dtype) in arrays.items():
+            if array.shape != (size,) or array.dtype != dtype or not array.flags.owndata:
+                raise ValueError(f"builder-owned {name} has invalid storage")
+            array.setflags(write=False)
+            object.__setattr__(batch, name, array)
+        object.__setattr__(batch, "root_status", root_status)
+        batch._validate_statuses(size)
+        return batch
+
 
 @dataclass(frozen=True, slots=True)
 class EventBuildResult:
     events: ScatteringEventBatch
     status: EwaldStatusBatch
+
+
+def _iter_attempt_contexts(
+    *,
+    incident_states: IncidentStateBatch,
+    sample_wavelength: dict[int, float],
+    rods: RodCatalog,
+    basis_b1_crystal: FloatArray,
+    basis_b2_crystal: FloatArray,
+    b3_hat_crystal: FloatArray,
+    orientations: MosaicOrientationBatch,
+    crystal_to_sample_rotation: FloatArray,
+) -> Iterator[_AttemptContext]:
+    for state_index, valid in enumerate(incident_states.valid):
+        if not valid:
+            continue
+        state_id = int(incident_states.incident_state_id[state_index])
+        sample_id = int(incident_states.incident_sample_id[state_index])
+        incident = incident_states.k_film_phase_sample_Ainv[state_index]
+        wavelength = sample_wavelength[sample_id]
+        for rod_index, rod_id_value in enumerate(rods.rod_id):
+            rod_id = int(rod_id_value)
+            rod_q0_crystal = (
+                int(rods.h[rod_index]) * basis_b1_crystal
+                + int(rods.k[rod_index]) * basis_b2_crystal
+            )
+            for orientation_index, orientation_mass_value in enumerate(
+                orientations.probability_mass
+            ):
+                orientation_mass = float(orientation_mass_value)
+                if orientation_mass == 0.0:
+                    continue
+                rotation = orientations.rotation_crystal[orientation_index]
+                q0_sample = crystal_to_sample_rotation @ (rotation @ rod_q0_crystal)
+                direction = (rotation @ b3_hat_crystal) @ crystal_to_sample_rotation.T
+                yield (
+                    state_id,
+                    wavelength,
+                    rod_id,
+                    int(orientations.orientation_id[orientation_index]),
+                    orientation_mass,
+                    incident,
+                    q0_sample,
+                    direction,
+                )
+
+
+def _classify_attempts(
+    contexts: Iterable[_AttemptContext],
+    *,
+    attempt_count: int,
+    b3_norm_Ainv: float,
+) -> tuple[IntArray, IntArray, IntArray, ByteArray, ByteArray, tuple[EwaldRootStatus, ...]]:
+    incident_state_id = np.empty(attempt_count, dtype=np.int64)
+    rod_id = np.empty(attempt_count, dtype=np.int64)
+    orientation_id = np.empty(attempt_count, dtype=np.int64)
+    emitted_root_count = np.empty(attempt_count, dtype=np.int8)
+    direct_beam_root_count = np.empty(attempt_count, dtype=np.int8)
+
+    def statuses() -> Iterator[EwaldRootStatus]:
+        for attempt_index, context in enumerate(contexts):
+            (
+                state_id,
+                _,
+                attempt_rod_id,
+                attempt_orientation_id,
+                _,
+                incident,
+                q0,
+                direction,
+            ) = context
+            roots = solve_continuous_rod_ewald(
+                ki_sample_Ainv=incident,
+                q0_sample_Ainv=q0,
+                d_hat_sample=direction,
+                b3_norm_Ainv=b3_norm_Ainv,
+            )
+            incident_state_id[attempt_index] = state_id
+            rod_id[attempt_index] = attempt_rod_id
+            orientation_id[attempt_index] = attempt_orientation_id
+            emitted_root_count[attempt_index] = len(roots.emittable_roots)
+            direct_beam_root_count[attempt_index] = roots.direct_beam_root_count
+            yield roots.status
+
+    return (
+        incident_state_id,
+        rod_id,
+        orientation_id,
+        emitted_root_count,
+        direct_beam_root_count,
+        tuple(statuses()),
+    )
 
 
 def build_scattering_events(
@@ -128,100 +264,99 @@ def build_scattering_events(
     crystal_to_sample_rotation = sample_from_crystal.rotation
     b3_norm = float(np.linalg.norm(basis[:, 2]))
     b3_hat_crystal = basis[:, 2] / b3_norm
-    q0_crystal = rods.h[:, None] * basis[:, 0][None, :] + rods.k[:, None] * basis[:, 1][None, :]
-    d_hat_sample = (orientations.rotation_crystal @ b3_hat_crystal) @ crystal_to_sample_rotation.T
-
-    event_capacity = (
-        2
-        * int(np.count_nonzero(incident_states.valid))
+    attempt_count = int(
+        np.count_nonzero(incident_states.valid)
         * rods.rod_id.size
-        * int(np.count_nonzero(orientations.probability_mass > 0.0))
+        * np.count_nonzero(orientations.probability_mass > 0.0)
     )
-    event_state_id = np.empty(event_capacity, dtype=np.int64)
-    event_rod_id = np.empty(event_capacity, dtype=np.int64)
-    event_wavelength = np.empty(event_capacity, dtype=np.float64)
-    event_q = np.empty((event_capacity, 3), dtype=np.float64)
-    event_l = np.empty(event_capacity, dtype=np.float64)
-    event_kf = np.empty((event_capacity, 3), dtype=np.float64)
-    event_weight = np.empty(event_capacity, dtype=np.float64)
-    event_residual = np.empty(event_capacity, dtype=np.float64)
-    event_count = 0
-    attempt_state_id: list[int] = []
-    attempt_rod_id: list[int] = []
-    attempt_orientation_id: list[int] = []
-    statuses: list[EwaldRootStatus] = []
-    emitted_counts: list[int] = []
-    direct_counts: list[int] = []
+    (
+        attempt_state_id,
+        attempt_rod_id,
+        attempt_orientation_id,
+        emitted_counts,
+        direct_counts,
+        root_status,
+    ) = _classify_attempts(
+        _iter_attempt_contexts(
+            incident_states=incident_states,
+            sample_wavelength=sample_wavelength,
+            rods=rods,
+            basis_b1_crystal=basis[:, 0],
+            basis_b2_crystal=basis[:, 1],
+            b3_hat_crystal=b3_hat_crystal,
+            orientations=orientations,
+            crystal_to_sample_rotation=crystal_to_sample_rotation,
+        ),
+        attempt_count=attempt_count,
+        b3_norm_Ainv=b3_norm,
+    )
+    event_count = int(emitted_counts.sum(dtype=np.int64))
+    status = EwaldStatusBatch._from_builder_owned_arrays(
+        attempt_id=np.arange(attempt_count, dtype=np.int64),
+        incident_state_id=attempt_state_id,
+        rod_id=attempt_rod_id,
+        orientation_id=attempt_orientation_id,
+        root_status=root_status,
+        emitted_root_count=emitted_counts,
+        direct_beam_root_count=direct_counts,
+    )
 
-    for state_id_value, sample_id_value, incident, valid in zip(
-        incident_states.incident_state_id,
-        incident_states.incident_sample_id,
-        incident_states.k_film_phase_sample_Ainv,
-        incident_states.valid,
-        strict=True,
-    ):
-        if not valid:
+    event_state_id = np.empty(event_count, dtype=np.int64)
+    event_rod_id = np.empty(event_count, dtype=np.int64)
+    event_wavelength = np.empty(event_count, dtype=np.float64)
+    event_q = np.empty((event_count, 3), dtype=np.float64)
+    event_l = np.empty(event_count, dtype=np.float64)
+    event_kf = np.empty((event_count, 3), dtype=np.float64)
+    event_weight = np.empty(event_count, dtype=np.float64)
+    event_residual = np.empty(event_count, dtype=np.float64)
+    next_event = 0
+    contexts = _iter_attempt_contexts(
+        incident_states=incident_states,
+        sample_wavelength=sample_wavelength,
+        rods=rods,
+        basis_b1_crystal=basis[:, 0],
+        basis_b2_crystal=basis[:, 1],
+        b3_hat_crystal=b3_hat_crystal,
+        orientations=orientations,
+        crystal_to_sample_rotation=crystal_to_sample_rotation,
+    )
+    for attempt_index, context in enumerate(contexts):
+        emitted_count = int(emitted_counts[attempt_index])
+        if emitted_count == 0:
             continue
-        state_id = int(state_id_value)
-        wavelength = sample_wavelength[int(sample_id_value)]
-        for rod_id_value, rod_q0_crystal in zip(rods.rod_id, q0_crystal, strict=True):
-            rod_id = int(rod_id_value)
-            for orientation_id_value, orientation_mass_value, rotation, direction in zip(
-                orientations.orientation_id,
-                orientations.probability_mass,
-                orientations.rotation_crystal,
-                d_hat_sample,
-                strict=True,
-            ):
-                orientation_mass = float(orientation_mass_value)
-                if orientation_mass == 0.0:
-                    continue
-                q0_sample = crystal_to_sample_rotation @ (rotation @ rod_q0_crystal)
-                roots = solve_continuous_rod_ewald(
-                    ki_sample_Ainv=incident,
-                    q0_sample_Ainv=q0_sample,
-                    d_hat_sample=direction,
-                    b3_norm_Ainv=b3_norm,
-                )
-                attempt_state_id.append(state_id)
-                attempt_rod_id.append(rod_id)
-                attempt_orientation_id.append(int(orientation_id_value))
-                statuses.append(roots.status)
-                emitted_counts.append(len(roots.emittable_roots))
-                direct_counts.append(roots.direct_beam_root_count)
-                for root in roots.emittable_roots:
-                    event_state_id[event_count] = state_id
-                    event_rod_id[event_count] = rod_id
-                    event_wavelength[event_count] = wavelength
-                    event_q[event_count] = root.q_sample_Ainv
-                    event_l[event_count] = root.l_coordinate
-                    event_kf[event_count] = root.kf_sample_Ainv
-                    event_weight[event_count] = orientation_mass * root.coarea_jacobian
-                    event_residual[event_count] = root.ewald_residual_Ainv
-                    event_count += 1
+        state_id, wavelength, rod_id, _, orientation_mass, incident, q0, direction = context
+        roots = solve_continuous_rod_ewald(
+            ki_sample_Ainv=incident,
+            q0_sample_Ainv=q0,
+            d_hat_sample=direction,
+            b3_norm_Ainv=b3_norm,
+        )
+        if len(roots.emittable_roots) != emitted_count:
+            raise RuntimeError("Ewald root count changed between count and fill passes")
+        for root in roots.emittable_roots:
+            event_state_id[next_event] = state_id
+            event_rod_id[next_event] = rod_id
+            event_wavelength[next_event] = wavelength
+            event_q[next_event] = root.q_sample_Ainv
+            event_l[next_event] = root.l_coordinate
+            event_kf[next_event] = root.kf_sample_Ainv
+            event_weight[next_event] = orientation_mass * root.coarea_jacobian
+            event_residual[next_event] = root.ewald_residual_Ainv
+            next_event += 1
+    if next_event != event_count:
+        raise RuntimeError("Ewald event fill count does not match classified roots")
 
-    event_q_array = event_q[:event_count]
     events = ScatteringEventBatch(
         event_id=np.arange(event_count, dtype=np.int64),
-        incident_state_id=event_state_id[:event_count],
-        rod_id=event_rod_id[:event_count],
-        wavelength_A=event_wavelength[:event_count],
-        q_internal_sample_Ainv=event_q_array,
-        qz_Ainv=event_q_array[:, 2],
-        l_coordinate=event_l[:event_count],
-        kf_film_phase_sample_Ainv=event_kf[:event_count],
-        reciprocal_weight=event_weight[:event_count],
-        ewald_residual_Ainv=event_residual[:event_count],
+        incident_state_id=event_state_id,
+        rod_id=event_rod_id,
+        wavelength_A=event_wavelength,
+        q_internal_sample_Ainv=event_q,
+        qz_Ainv=event_q[:, 2],
+        l_coordinate=event_l,
+        kf_film_phase_sample_Ainv=event_kf,
+        reciprocal_weight=event_weight,
+        ewald_residual_Ainv=event_residual,
         valid=np.ones(event_count, dtype=np.bool_),
-    )
-    attempt_count = len(statuses)
-    status = EwaldStatusBatch(
-        attempt_id=np.arange(attempt_count, dtype=np.int64),
-        incident_state_id=np.asarray(attempt_state_id, dtype=np.int64),
-        rod_id=np.asarray(attempt_rod_id, dtype=np.int64),
-        orientation_id=np.asarray(attempt_orientation_id, dtype=np.int64),
-        root_status=tuple(statuses),
-        emitted_root_count=np.asarray(emitted_counts, dtype=np.int8),
-        direct_beam_root_count=np.asarray(direct_counts, dtype=np.int8),
     )
     return EventBuildResult(events=events, status=status)
