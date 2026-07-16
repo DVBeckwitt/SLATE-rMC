@@ -138,26 +138,8 @@ Stop `BLOCKED` if species, occupancy, displacement, density, or shared wave-mode
 
 ## Execution plan
 
-State: NS
+State: shared-v5 consumer migration edited; verification pending.
 
 ## Handoff
 
-Status:
-
-Commit SHA:
-
-Public APIs:
-
-Proof summary:
-
-Legacy classifications:
-
-First divergences:
-
-Convergence:
-
-Benchmark and peak memory:
-
-Known limitations:
-
-Contract requests:
+Status: `BLOCKED` pending verification; shared v5 now owns Å² measure, layer metadata, and tolerances without adapters.
