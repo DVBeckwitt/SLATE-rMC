@@ -1,27 +1,42 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
-from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
+from rasim_next.core.contracts import (
+    EventIntensityNormalization,
+    LayerAmplitudeNormalization,
+    LayerAmplitudeResult,
+    LayerNormalQBatch,
+    LayerPhaseSign,
+    RodQueryBatch,
+)
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
+from rasim_next.proof.tolerances import load_stage_tolerances
 from rasim_next.stacking import (
     STATE_ORDER,
     InitialPopulation,
-    LayerNormalQBatch,
     Parent,
-    PopulationIntensityResult,
     StackingPopulation,
     StackingState,
     TransitionLaw,
     finite_event_intensity,
-    finite_explicit_sequence_intensity,
-    finite_intensity_by_enumeration,
-    finite_intensity_full,
-    finite_intensity_reduced,
     finite_population_event_intensity,
     full_transition_matrix,
     registry_phase,
 )
+from rasim_next.stacking.enumeration import (
+    finite_explicit_sequence_intensity,
+    finite_intensity_by_enumeration,
+)
+from rasim_next.stacking.finite_intensity import (
+    finite_intensity_full,
+    finite_intensity_reduced,
+)
+
+_TOLERANCES = load_stage_tolerances()
 
 
 def _query_and_amplitudes() -> tuple[RodQueryBatch, LayerAmplitudeResult]:
@@ -36,9 +51,16 @@ def _query_and_amplitudes() -> tuple[RodQueryBatch, LayerAmplitudeResult]:
         np.array([1.0, 1.0]),
     )
     amplitudes = LayerAmplitudeResult(
-        query.event_id,
-        np.array([1.1 + 0.2j, 0.8 - 0.1j]),
-        np.array([0.7 - 0.3j, 1.0 + 0.4j]),
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        f_plus_e=np.array([1.1 + 0.2j, 0.8 - 0.1j]),
+        f_minus_e=np.array([0.7 - 0.3j, 1.0 + 0.4j]),
+        normalization=LayerAmplitudeNormalization.ONE_REGISTRY_FREE_LAYER,
+        phase_sign=LayerPhaseSign.POSITIVE_Q_DOT_R,
+        gauge_id="pbi2.pb_centered.v1",
+        layer_normal_crystal=np.array([0.0, 0.0, 1.0]),
+        layer_repeat_A=3.4,
     )
     return query, amplitudes
 
@@ -68,11 +90,14 @@ def test_short_stack_direct_full_and_reduced_results_agree() -> None:
     law = TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18)
     initial = InitialPopulation(0.8, 0.2)
     arguments = (layers, f_plus, f_minus, omega, vertical_phase, law, initial)
-    direct = finite_intensity_by_enumeration(*arguments).intensity_electron2
-    full = finite_intensity_full(*arguments).intensity_electron2
-    reduced = finite_intensity_reduced(*arguments).intensity_electron2
-    np.testing.assert_allclose(full, direct, rtol=5e-13, atol=5e-13)
-    np.testing.assert_allclose(reduced, direct, rtol=5e-13, atol=5e-13)
+    direct = finite_intensity_by_enumeration(*arguments)
+    limit = (
+        _TOLERANCES["stacking.pair_kernel"]
+        .bind(layers**2 * max(abs(f_plus), abs(f_minus)) ** 2)
+        .limit
+    )
+    np.testing.assert_allclose(finite_intensity_full(*arguments), direct, rtol=0.0, atol=limit)
+    np.testing.assert_allclose(finite_intensity_reduced(*arguments), direct, rtol=0.0, atol=limit)
 
 
 def test_single_layer_uses_only_the_declared_initial_population() -> None:
@@ -89,13 +114,9 @@ def test_single_layer_uses_only_the_declared_initial_population() -> None:
         TransitionLaw(0.13, 0.21, 0.08, 0.34, 0.24),
         initial,
     )
+    limit = _TOLERANCES["stacking.pair_kernel"].bind(max(abs(f_plus), abs(f_minus)) ** 2).limit
     for evaluator in (finite_intensity_full, finite_intensity_reduced):
-        np.testing.assert_allclose(
-            evaluator(*arguments).intensity_electron2,
-            expected,
-            rtol=5e-13,
-            atol=5e-13,
-        )
+        np.testing.assert_allclose(evaluator(*arguments), expected, rtol=0.0, atol=limit)
 
 
 def test_coherent_extinction_never_erases_nearby_positive_intensity() -> None:
@@ -116,99 +137,142 @@ def test_coherent_extinction_never_erases_nearby_positive_intensity() -> None:
                     vertical_phase,
                     law,
                     initial,
-                ).intensity_electron2
+                )
                 assert observed >= 0.0
                 if phase_offset:
                     assert direct > 0.0
                     assert observed > 0.0
-                np.testing.assert_allclose(observed, direct, rtol=5e-13, atol=5e-13)
+                limit = _TOLERANCES["stacking.pair_kernel"].bind(float(layers**2)).limit
+                np.testing.assert_allclose(observed, direct, rtol=0.0, atol=limit)
 
 
-def test_raw_event_intensity_is_aligned_normalized_and_uses_layer_normal_q() -> None:
+def test_event_intensity_uses_shared_alignment_measure_and_layer_normal_q() -> None:
     query, amplitudes = _query_and_amplitudes()
-    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
+    layer_normal_q = LayerNormalQBatch(
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        layer_normal_q_Ainv=np.array([0.63, -0.28]),
+        gauge_id=amplitudes.gauge_id,
+    )
     layers = 9
-    layer_repeat_A = 3.4
-    result = finite_event_intensity(
+    total = finite_event_intensity(
         query,
         amplitudes,
         TransitionLaw.for_parent(Parent.TWO_H),
         layer_normal_q=layer_normal_q,
         layers=layers,
-        layer_repeat_A=layer_repeat_A,
         initial=InitialPopulation.plus_only(),
         model_component_id="2H",
         population_group_id=None,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+    )
+    per_layer = finite_event_intensity(
+        query,
+        amplitudes,
+        TransitionLaw.for_parent(Parent.TWO_H),
+        layer_normal_q=layer_normal_q,
+        layers=layers,
+        initial=InitialPopulation.plus_only(),
+        model_component_id="2H",
+        population_group_id=None,
+        normalization=EventIntensityNormalization.FINITE_PER_LAYER,
     )
     direct = finite_explicit_sequence_intensity(
         query,
         amplitudes,
         (StackingState.REGISTRY_0_PLUS,) * layers,
-        np.arange(layers) * layer_repeat_A,
+        np.arange(layers) * amplitudes.layer_repeat_A,
         layer_normal_q=layer_normal_q,
         layers=layers,
-        layer_repeat_A=layer_repeat_A,
     )
-    layer_frame_amplitude = amplitudes.f_plus * np.exp(
-        1j * layer_normal_q.layer_normal_q_Ainv[:, np.newaxis] * np.arange(layers) * layer_repeat_A
+    layer_frame_amplitude = amplitudes.f_plus_e * np.exp(
+        1j
+        * layer_normal_q.layer_normal_q_Ainv[:, np.newaxis]
+        * np.arange(layers)
+        * amplitudes.layer_repeat_A
     ).sum(axis=1)
-    expected = np.abs(layer_frame_amplitude) ** 2
-    np.testing.assert_array_equal(result.event_id, query.event_id)
-    np.testing.assert_allclose(result.intensity_electron2, expected, rtol=5e-13, atol=5e-13)
-    np.testing.assert_allclose(direct.intensity_electron2, expected, rtol=5e-13, atol=5e-13)
+    expected_raw = np.abs(layer_frame_amplitude) ** 2
+    expected_A2 = electron_squared_to_scattering_strength_A2(expected_raw)
+    raw_scale = layers**2 * float(np.max(np.abs(amplitudes.f_plus_e)) ** 2)
+    raw_limit = _TOLERANCES["stacking.pair_kernel"].bind(raw_scale).limit
+    A2_scale = float(electron_squared_to_scattering_strength_A2([raw_scale])[0])
+    A2_limit = _TOLERANCES["stacking.finite_intensity"].bind(A2_scale).limit
+    np.testing.assert_array_equal(total.event_id, query.event_id)
+    np.testing.assert_allclose(total.scattering_strength_A2, expected_A2, rtol=0.0, atol=A2_limit)
+    np.testing.assert_allclose(direct, expected_raw, rtol=0.0, atol=raw_limit)
     np.testing.assert_allclose(
-        result.intensity_electron2,
-        layers * result.intensity_per_layer_electron2,
-        rtol=5e-13,
-        atol=5e-13,
+        total.scattering_strength_A2,
+        layers * per_layer.scattering_strength_A2,
+        rtol=0.0,
+        atol=A2_limit,
     )
-    sample_frame_amplitude = amplitudes.f_plus * np.exp(
-        1j * query.qz_Ainv[:, np.newaxis] * np.arange(layers) * layer_repeat_A
+    assert total.model_id == "stacking"
+    assert total.model_component_id == "2H"
+    assert total.population_group_id is None
+    assert total.normalization is EventIntensityNormalization.FINITE_TOTAL
+    assert per_layer.normalization is EventIntensityNormalization.FINITE_PER_LAYER
+    sample_frame_amplitude = amplitudes.f_plus_e * np.exp(
+        1j
+        * query.q_sample_normal_Ainv[:, np.newaxis]
+        * np.arange(layers)
+        * amplitudes.layer_repeat_A
     ).sum(axis=1)
     assert not np.allclose(
-        result.intensity_electron2,
-        np.abs(sample_frame_amplitude) ** 2,
-        rtol=5e-13,
-        atol=5e-13,
+        total.scattering_strength_A2,
+        electron_squared_to_scattering_strength_A2(np.abs(sample_frame_amplitude) ** 2),
+        rtol=0.0,
+        atol=A2_limit,
     )
-    assert not hasattr(result, "intensity_per_sr")
-    misaligned = LayerAmplitudeResult(query.event_id[::-1], amplitudes.f_plus, amplitudes.f_minus)
-    with pytest.raises(ValueError, match="event-aligned"):
-        finite_event_intensity(
-            query,
-            misaligned,
-            TransitionLaw.for_parent(Parent.TWO_H),
-            layer_normal_q=layer_normal_q,
-            layers=layers,
-            layer_repeat_A=layer_repeat_A,
-            initial=InitialPopulation.plus_only(),
-            model_component_id="2H",
-            population_group_id=None,
-        )
-    misaligned_q = LayerNormalQBatch(query.event_id[::-1], layer_normal_q.layer_normal_q_Ainv)
-    with pytest.raises(ValueError, match="event-aligned"):
+    assert not hasattr(total, "intensity_electron2")
+    assert not hasattr(total, "intensity_per_sr")
+
+    bad_inputs = (
+        (replace(amplitudes, event_id=amplitudes.event_id[::-1]), layer_normal_q),
+        (replace(amplitudes, rod_id=amplitudes.rod_id[::-1]), layer_normal_q),
+        (replace(amplitudes, phase_id=("other",) * 2), layer_normal_q),
+        (replace(amplitudes, gauge_id="other.gauge.v1"), layer_normal_q),
+        (amplitudes, replace(layer_normal_q, event_id=layer_normal_q.event_id[::-1])),
+        (amplitudes, replace(layer_normal_q, rod_id=layer_normal_q.rod_id[::-1])),
+        (amplitudes, replace(layer_normal_q, phase_id=("other",) * 2)),
+        (amplitudes, replace(layer_normal_q, gauge_id="other.gauge.v1")),
+    )
+    for bad_amplitudes, bad_q in bad_inputs:
+        with pytest.raises(ValueError):
+            finite_event_intensity(
+                query,
+                bad_amplitudes,
+                TransitionLaw.for_parent(Parent.TWO_H),
+                layer_normal_q=bad_q,
+                layers=layers,
+                initial=InitialPopulation.plus_only(),
+                model_component_id="2H",
+                population_group_id=None,
+                normalization=EventIntensityNormalization.FINITE_TOTAL,
+            )
+    with pytest.raises(ValueError, match="FINITE_TOTAL or FINITE_PER_LAYER"):
         finite_event_intensity(
             query,
             amplitudes,
             TransitionLaw.for_parent(Parent.TWO_H),
-            layer_normal_q=misaligned_q,
+            layer_normal_q=layer_normal_q,
             layers=layers,
-            layer_repeat_A=layer_repeat_A,
             initial=InitialPopulation.plus_only(),
             model_component_id="2H",
             population_group_id=None,
+            normalization=EventIntensityNormalization.UNIT_CELL,
         )
-    with pytest.raises(ValueError, match="one value per event_id"):
-        LayerNormalQBatch(query.event_id, np.array([0.63]))
-    with pytest.raises(ValueError, match="finite"):
-        LayerNormalQBatch(query.event_id, np.array([0.63, np.nan]))
-    with pytest.raises(ValueError, match="real numeric"):
-        LayerNormalQBatch(query.event_id, np.array([0.63 + 0.1j, -0.28]))
 
 
 def test_population_components_are_unweighted_and_use_individual_initial_states() -> None:
     query, amplitudes = _query_and_amplitudes()
-    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
+    layer_normal_q = LayerNormalQBatch(
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        layer_normal_q_Ainv=np.array([0.63, -0.28]),
+        gauge_id=amplitudes.gauge_id,
+    )
     populations = (
         StackingPopulation(
             "2H",
@@ -226,44 +290,61 @@ def test_population_components_are_unweighted_and_use_individual_initial_states(
         "amplitudes": amplitudes,
         "layer_normal_q": layer_normal_q,
         "layers": 6,
-        "layer_repeat_A": 3.4,
         "population_group_id": "parents",
+        "normalization": EventIntensityNormalization.FINITE_TOTAL,
     }
     result = finite_population_event_intensity(populations=populations, **arguments)
     reversed_result = finite_population_event_intensity(
         populations=tuple(reversed(populations)), **arguments
     )
-    assert isinstance(result, PopulationIntensityResult)
-    assert result.population_id == ("2H", "4H")
-    np.testing.assert_array_equal(result.event_id, query.event_id)
+    assert tuple(component.model_component_id for component in result) == ("2H", "4H")
+    assert all(component.model_id == "stacking" for component in result)
+    assert all(component.population_group_id == "parents" for component in result)
+    assert all(
+        component.normalization is EventIntensityNormalization.FINITE_TOTAL for component in result
+    )
+    assert all(np.array_equal(component.event_id, query.event_id) for component in result)
     np.testing.assert_array_equal(
-        result.component_intensity_electron2,
-        reversed_result.component_intensity_electron2,
+        np.stack([component.scattering_strength_A2 for component in result]),
+        np.stack([component.scattering_strength_A2 for component in reversed_result]),
     )
     omega = np.asarray(registry_phase(query.h, query.k))
-    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * 3.4)
-    expected = np.array(
+    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * amplitudes.layer_repeat_A)
+    expected_raw = np.array(
         [
             [
                 finite_intensity_by_enumeration(
                     6,
-                    amplitudes.f_plus[event],
-                    amplitudes.f_minus[event],
+                    amplitudes.f_plus_e[event],
+                    amplitudes.f_minus_e[event],
                     omega[event],
                     vertical_phase[event],
                     population.model,
                     population.initial,
-                ).intensity_electron2
+                )
                 for event in range(query.event_id.size)
             ]
             for population in populations
         ]
     )
-    np.testing.assert_allclose(
-        result.component_intensity_electron2,
-        expected,
-        rtol=5e-13,
-        atol=5e-13,
+    expected_A2 = electron_squared_to_scattering_strength_A2(expected_raw)
+    scale_raw = (
+        len(populations)
+        * 6**2
+        * max(
+            float(np.max(np.abs(amplitudes.f_plus_e) ** 2)),
+            float(np.max(np.abs(amplitudes.f_minus_e) ** 2)),
+        )
     )
-    assert not hasattr(result, "weight")
-    assert not hasattr(result, "weighted_total_intensity_electron2")
+    scale_A2 = float(electron_squared_to_scattering_strength_A2([scale_raw])[0])
+    limit = _TOLERANCES["stacking.population_intensity"].bind(scale_A2).limit
+    np.testing.assert_allclose(
+        np.stack([component.scattering_strength_A2 for component in result]),
+        expected_A2,
+        rtol=0.0,
+        atol=limit,
+    )
+    assert all(not hasattr(component, "weight") for component in result)
+    assert all(
+        not hasattr(component, "weighted_total_scattering_strength_A2") for component in result
+    )

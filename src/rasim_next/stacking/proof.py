@@ -14,13 +14,26 @@ from pathlib import Path
 
 import numpy as np
 
-from rasim_next.core.contracts import CONTRACT_API_VERSION, LayerAmplitudeResult, RodQueryBatch
+from rasim_next.core.contracts import (
+    CONTRACT_API_VERSION,
+    EventIntensityNormalization,
+    LayerAmplitudeNormalization,
+    LayerAmplitudeResult,
+    LayerNormalQBatch,
+    LayerPhaseSign,
+    RodQueryBatch,
+)
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
+from rasim_next.proof.tolerances import (
+    STAGE_TOLERANCE_SHA256,
+    STAGE_TOLERANCE_VERSION,
+    load_stage_tolerances,
+)
 from rasim_next.stacking.enumeration import (
     finite_explicit_sequence_intensity,
     finite_intensity_by_enumeration,
 )
 from rasim_next.stacking.finite_intensity import (
-    LayerNormalQBatch,
     finite_event_intensity,
     finite_intensity_full,
     finite_intensity_reduced,
@@ -36,6 +49,7 @@ from rasim_next.stacking.transition import (
     STATE_ORDER,
     InitialPopulation,
     Parent,
+    RegistryPhaseModel,
     StackingState,
     TransitionLaw,
     full_transition_matrix,
@@ -95,8 +109,8 @@ def _git(root: Path, *arguments: str) -> str:
     return completed.stdout.strip() if completed.returncode == 0 else "unavailable"
 
 
-def _check(check_id: str, status: str, evidence: str) -> dict[str, str]:
-    return {"check_id": check_id, "status": status, "evidence": evidence}
+def _check(check_id: str, passed: bool, evidence: str) -> dict[str, str]:
+    return {"check_id": check_id, "status": "PASS" if passed else "FAIL", "evidence": evidence}
 
 
 def _records(
@@ -139,9 +153,9 @@ def _direct_pair_intensity(
 
 def _errors(arguments: tuple[object, ...], expected: float) -> dict[str, float]:
     observed = {
-        "enumeration": finite_intensity_by_enumeration(*arguments).intensity_electron2,
-        "full": finite_intensity_full(*arguments).intensity_electron2,
-        "reduced": finite_intensity_reduced(*arguments).intensity_electron2,
+        "enumeration": finite_intensity_by_enumeration(*arguments),
+        "full": finite_intensity_full(*arguments),
+        "reduced": finite_intensity_reduced(*arguments),
     }
     return {name: abs(float(value) - expected) for name, value in observed.items()}
 
@@ -160,13 +174,11 @@ def _finite_equality() -> dict[str, object]:
     single_layer_error = 0.0
     for layers in (1, 3, 6):
         arguments = (layers, *common)
-        direct = float(finite_intensity_by_enumeration(*arguments).intensity_electron2)
+        direct = float(finite_intensity_by_enumeration(*arguments))
         errors = {
             "pair": abs(_direct_pair_intensity(*arguments) - direct),
-            "full": abs(float(finite_intensity_full(*arguments).intensity_electron2) - direct),
-            "reduced": abs(
-                float(finite_intensity_reduced(*arguments).intensity_electron2) - direct
-            ),
+            "full": abs(float(finite_intensity_full(*arguments)) - direct),
+            "reduced": abs(float(finite_intensity_reduced(*arguments)) - direct),
         }
         if layers == 1:
             expected = (
@@ -180,6 +192,7 @@ def _finite_equality() -> dict[str, object]:
         "records": records,
         "maximum_absolute_errors": maximum,
         "single_layer_absolute_error": single_layer_error,
+        "scale_electron2": 6**2 * max(abs(common[0]), abs(common[1])) ** 2,
     }
 
 
@@ -229,7 +242,7 @@ def _science_evidence() -> dict[str, object]:
             law,
             InitialPopulation(0.8, 0.2),
         )
-        expected = float(finite_intensity_by_enumeration(*arguments).intensity_electron2)
+        expected = float(finite_intensity_by_enumeration(*arguments))
         model_errors[case_id] = _errors(arguments, expected)
     amplitude, laue_xi, layers = 1.4 - 0.2j, np.exp(0.44j), 13
     laue_expected = float(abs(amplitude * sum(laue_xi**n for n in range(layers))) ** 2)
@@ -250,12 +263,24 @@ def _science_evidence() -> dict[str, object]:
         "typed_model_absolute_errors": model_errors,
         "laue_analytic_intensity_electron2": laue_expected,
         "laue_absolute_errors": {
-            name: abs(float(evaluator(*laue_args).intensity_electron2) - laue_expected)
+            name: abs(float(evaluator(*laue_args)) - laue_expected)
             for name, evaluator in (
                 ("full", finite_intensity_full),
                 ("reduced", finite_intensity_reduced),
             )
         },
+        "scale_electron2": max(
+            6**2 * max(abs(f_plus), abs(f_minus)) ** 2,
+            layers**2 * abs(amplitude) ** 2,
+        ),
+        "legacy_initial_difference_electron2": abs(
+            laue_args[-1].plus * abs(f_plus) ** 2
+            + laue_args[-1].minus * abs(f_minus) ** 2
+            - abs(f_plus) ** 2
+        ),
+        "legacy_phase_difference": float(
+            abs(registry_phase(1, 0) - registry_phase(1, 0, RegistryPhaseModel.LEGACY_2H_PLUS_K))
+        ),
     }
 
 
@@ -284,11 +309,17 @@ def _pack_evidence(pack_path: Path) -> dict[str, object]:
             for index, values in enumerate(pack["stacking_abd_cases"])
         )
         maximum = {name: 0.0 for name in ("full_vs_pack", "reduced_vs_pack", "full_vs_reduced")}
+        curve_scale = 12.0 * float(
+            max(
+                np.max(np.abs(pack["stacking_F_plus"])) ** 2,
+                np.max(np.abs(pack["stacking_F_minus"])) ** 2,
+            )
+        )
         initial = InitialPopulation.plus_only()
         for law, expected in laws:
+            expected_raw = expected / _LEGACY_AREA_SCALE
             reduced = (
-                _LEGACY_AREA_SCALE
-                * finite_intensity_reduced(
+                finite_intensity_reduced(
                     12,
                     pack["stacking_F_plus"],
                     pack["stacking_F_minus"],
@@ -296,13 +327,15 @@ def _pack_evidence(pack_path: Path) -> dict[str, object]:
                     pack["stacking_xi"],
                     law,
                     initial,
-                ).intensity_per_layer_electron2
+                )
+                / 12.0
             )
-            full = _LEGACY_AREA_SCALE * np.array(
+            full = np.array(
                 [
                     finite_intensity_full(
                         12, f_plus, f_minus, complex(pack["stacking_omega"]), xi, law, initial
-                    ).intensity_per_layer_electron2
+                    )
+                    / 12.0
                     for f_plus, f_minus, xi in zip(
                         pack["stacking_F_plus"],
                         pack["stacking_F_minus"],
@@ -312,19 +345,20 @@ def _pack_evidence(pack_path: Path) -> dict[str, object]:
                 ]
             )
             errors = {
-                "full_vs_pack": float(np.max(np.abs(full - expected))),
-                "reduced_vs_pack": float(np.max(np.abs(reduced - expected))),
+                "full_vs_pack": float(np.max(np.abs(full - expected_raw))),
+                "reduced_vs_pack": float(np.max(np.abs(reduced - expected_raw))),
                 "full_vs_reduced": float(np.max(np.abs(full - reduced))),
             }
             maximum = {name: max(maximum[name], error) for name, error in errors.items()}
     return {
         "case_id": "stacking.synthetic_finite",
         "reference_manifest_classification": "MATCH",
-        "acceptance": "PENDING_REVIEWED_SHARED_TOLERANCE",
+        "acceptance": "SHARED_TOLERANCE",
         "probability_value_count": 60,
         "curve_value_count": 165,
         "probability_maximum_absolute_error": probability_error,
         "curve_maximum_absolute_errors": maximum,
+        "curve_scale_electron2": curve_scale,
         "legacy_area_scale": float(_LEGACY_AREA_SCALE),
     }
 
@@ -348,8 +382,8 @@ def _near_extinction() -> dict[str, object]:
                 TransitionLaw.for_parent(Parent.TWO_H),
                 InitialPopulation.plus_only(),
             )
-            full = float(finite_intensity_full(*arguments).intensity_electron2)
-            reduced = float(finite_intensity_reduced(*arguments).intensity_electron2)
+            full = float(finite_intensity_full(*arguments))
+            reduced = float(finite_intensity_reduced(*arguments))
             maximum_error = max(maximum_error, abs(full - direct), abs(reduced - direct))
             if offset:
                 minimum_nearby_positive = min(minimum_nearby_positive, direct, full, reduced)
@@ -362,7 +396,7 @@ def _near_extinction() -> dict[str, object]:
     }
 
 
-def _event_and_population_errors() -> tuple[bool, float, float, float, float, float]:
+def _event_and_population_errors() -> tuple[bool, float, float, float, float, float, float, float]:
     query = RodQueryBatch(
         np.array([101, 102], dtype=np.int64),
         np.array([5, 6], dtype=np.int64),
@@ -374,34 +408,52 @@ def _event_and_population_errors() -> tuple[bool, float, float, float, float, fl
         np.array([1.0, 1.0]),
     )
     amplitudes = LayerAmplitudeResult(
-        query.event_id,
-        np.array([1.1 + 0.2j, 0.8 - 0.1j]),
-        np.array([0.7 - 0.3j, 1.0 + 0.4j]),
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        f_plus_e=np.array([1.1 + 0.2j, 0.8 - 0.1j]),
+        f_minus_e=np.array([0.7 - 0.3j, 1.0 + 0.4j]),
+        normalization=LayerAmplitudeNormalization.ONE_REGISTRY_FREE_LAYER,
+        phase_sign=LayerPhaseSign.POSITIVE_Q_DOT_R,
+        gauge_id="pbi2.pb_centered.v1",
+        layer_normal_crystal=np.array([0.0, 0.0, 1.0]),
+        layer_repeat_A=3.4,
     )
-    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
-    event_layers = 9
-    layer_repeat_A = 3.4
-    event = finite_event_intensity(
-        query,
-        amplitudes,
-        TransitionLaw.for_parent(Parent.TWO_H),
+    layer_normal_q = LayerNormalQBatch(
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        layer_normal_q_Ainv=np.array([0.63, -0.28]),
+        gauge_id=amplitudes.gauge_id,
+    )
+    event_layers, law = 9, TransitionLaw.for_parent(Parent.TWO_H)
+    event_arguments = dict(
+        query=query,
+        amplitudes=amplitudes,
+        law=law,
         layer_normal_q=layer_normal_q,
         layers=event_layers,
-        layer_repeat_A=layer_repeat_A,
         initial=InitialPopulation.plus_only(),
         model_component_id="2H",
         population_group_id=None,
     )
+    event = finite_event_intensity(
+        **event_arguments, normalization=EventIntensityNormalization.FINITE_TOTAL
+    )
+    event_per_layer = finite_event_intensity(
+        **event_arguments, normalization=EventIntensityNormalization.FINITE_PER_LAYER
+    )
     normalization_error = float(
         np.max(
-            np.abs(event.intensity_electron2 - event_layers * event.intensity_per_layer_electron2)
+            abs(
+                event.scattering_strength_A2 - event_layers * event_per_layer.scattering_strength_A2
+            )
         )
     )
-    layer_depth_A = np.arange(event_layers) * layer_repeat_A
-    layer_frame_amplitude = amplitudes.f_plus * np.exp(
+    layer_depth_A = np.arange(event_layers) * amplitudes.layer_repeat_A
+    layer_frame_amplitude = amplitudes.f_plus_e * np.exp(
         1j * layer_normal_q.layer_normal_q_Ainv[:, np.newaxis] * layer_depth_A
     ).sum(axis=1)
-    expected = np.abs(layer_frame_amplitude) ** 2
     explicit = finite_explicit_sequence_intensity(
         query,
         amplitudes,
@@ -409,69 +461,87 @@ def _event_and_population_errors() -> tuple[bool, float, float, float, float, fl
         layer_depth_A,
         layer_normal_q=layer_normal_q,
         layers=event_layers,
-        layer_repeat_A=layer_repeat_A,
+    )
+    sample_frame_amplitude = amplitudes.f_plus_e * np.exp(
+        1j * query.q_sample_normal_Ainv[:, np.newaxis] * layer_depth_A
+    ).sum(axis=1)
+    expected, explicit_A2, sample_A2 = electron_squared_to_scattering_strength_A2(
+        np.stack(
+            (
+                np.abs(layer_frame_amplitude) ** 2,
+                explicit,
+                np.abs(sample_frame_amplitude) ** 2,
+            )
+        )
     )
     frame_error = float(
         max(
-            np.max(np.abs(event.intensity_electron2 - expected)),
-            np.max(np.abs(explicit.intensity_electron2 - expected)),
+            np.max(abs(event.scattering_strength_A2 - expected)),
+            np.max(abs(explicit_A2 - expected)),
         )
     )
-    sample_frame_amplitude = amplitudes.f_plus * np.exp(
-        1j * query.qz_Ainv[:, np.newaxis] * layer_depth_A
-    ).sum(axis=1)
-    sample_frame_separation = float(np.max(np.abs(expected - np.abs(sample_frame_amplitude) ** 2)))
-    population_rows = (
-        ("2H", Parent.TWO_H, InitialPopulation.minus_only()),
-        ("4H", Parent.FOUR_H_PLUS, InitialPopulation.plus_only()),
-    )
-    populations = tuple(
-        StackingPopulation(name, TransitionLaw.for_parent(parent), initial)
-        for name, parent, initial in population_rows
+    sample_frame_separation = float(np.max(abs(expected - sample_A2)))
+    populations = (
+        StackingPopulation(
+            "2H", TransitionLaw.for_parent(Parent.TWO_H), InitialPopulation.minus_only()
+        ),
+        StackingPopulation(
+            "4H", TransitionLaw.for_parent(Parent.FOUR_H_PLUS), InitialPopulation.plus_only()
+        ),
     )
     arguments = {
         "query": query,
         "amplitudes": amplitudes,
         "layer_normal_q": layer_normal_q,
         "layers": 6,
-        "layer_repeat_A": 3.4,
         "population_group_id": "parents",
+        "normalization": EventIntensityNormalization.FINITE_TOTAL,
     }
     components = finite_population_event_intensity(populations=populations, **arguments)
     reversed_components = finite_population_event_intensity(
         populations=tuple(reversed(populations)), **arguments
     )
     omega = np.asarray(registry_phase(query.h, query.k))
-    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * 3.4)
-    direct = np.fromiter(
-        (
-            finite_intensity_by_enumeration(
-                6, f_plus, f_minus, phase, vertical, population.model, population.initial
-            ).intensity_electron2
+    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * amplitudes.layer_repeat_A)
+    direct = np.array(
+        [
+            [
+                finite_intensity_by_enumeration(
+                    6, f_plus, f_minus, phase, vertical, population.model, population.initial
+                )
+                for f_plus, f_minus, phase, vertical in zip(
+                    amplitudes.f_plus_e,
+                    amplitudes.f_minus_e,
+                    omega,
+                    vertical_phase,
+                    strict=True,
+                )
+            ]
             for population in populations
-            for f_plus, f_minus, phase, vertical in zip(
-                amplitudes.f_plus, amplitudes.f_minus, omega, vertical_phase, strict=True
-            )
-        ),
-        dtype=np.float64,
-    ).reshape(len(populations), -1)
-    component_error = float(np.max(np.abs(components.component_intensity_electron2 - direct)))
-    order_error = float(
-        np.max(
-            abs(
-                components.component_intensity_electron2
-                - reversed_components.component_intensity_electron2
-            )
-        )
+        ]
     )
+    component = np.stack([item.scattering_strength_A2 for item in components])
+    reversed_component = np.stack([item.scattering_strength_A2 for item in reversed_components])
+    component_error = float(
+        np.max(abs(component - electron_squared_to_scattering_strength_A2(direct)))
+    )
+    order_error = float(np.max(abs(component - reversed_component)))
     aligned_and_unweighted = bool(
         np.array_equal(event.event_id, query.event_id)
-        and np.array_equal(components.event_id, query.event_id)
-        and np.all(event.intensity_electron2 >= 0.0)
-        and np.all(components.component_intensity_electron2 >= 0.0)
+        and all(np.array_equal(item.event_id, query.event_id) for item in components)
+        and event.model_id == "stacking"
+        and tuple(item.model_component_id for item in components) == ("2H", "4H")
+        and all(item.population_group_id == "parents" for item in components)
+        and np.all(event.scattering_strength_A2 >= 0.0)
+        and np.all(component >= 0.0)
         and not hasattr(event, "intensity_per_sr")
-        and not hasattr(components, "weight")
-        and not hasattr(components, "weighted_total_intensity_electron2")
+        and all(not hasattr(item, "weight") for item in components)
+    )
+    maximum_amplitude2 = float(
+        max(np.max(abs(amplitudes.f_plus_e) ** 2), np.max(abs(amplitudes.f_minus_e) ** 2))
+    )
+    scales = electron_squared_to_scattering_strength_A2(
+        [event_layers**2 * maximum_amplitude2, len(populations) * 6**2 * maximum_amplitude2]
     )
     return (
         aligned_and_unweighted,
@@ -480,6 +550,8 @@ def _event_and_population_errors() -> tuple[bool, float, float, float, float, fl
         sample_frame_separation,
         component_error,
         order_error,
+        float(scales[0]),
+        float(scales[1]),
     )
 
 
@@ -519,7 +591,7 @@ def _calculated_trace(
         _STAGES[1]: t6,
         _STAGES[2]: block,
         _STAGES[3]: np.r_[self_terms, pair_terms],
-        _STAGES[4]: np.array([total, total / layers]),
+        _STAGES[4]: electron_squared_to_scattering_strength_A2([total, total / layers]),
     }
 
 
@@ -562,7 +634,7 @@ def _mutation_evidence() -> list[dict[str, object]]:
     finite = _calculated_trace(**stationary_fixture)
     stationary = _calculated_trace(**stationary_fixture)
     per_layer = _stationary_value(law, omega)
-    stationary[_STAGES[4]] = np.array([7 * per_layer, per_layer])
+    stationary[_STAGES[4]] = electron_squared_to_scattering_strength_A2([7 * per_layer, per_layer])
     xi = np.exp(0.43j)
     amplitudes = np.array(
         [
@@ -571,8 +643,14 @@ def _mutation_evidence() -> list[dict[str, object]]:
         ]
     )
     weights = np.array([0.4, 0.6])
-    incoherent = {_STAGES[5]: np.asarray(weights @ abs(amplitudes) ** 2)}
-    coherent = {_STAGES[5]: np.asarray(abs(np.sqrt(weights) @ amplitudes) ** 2)}
+    incoherent = {
+        _STAGES[5]: electron_squared_to_scattering_strength_A2(weights @ abs(amplitudes) ** 2)
+    }
+    coherent = {
+        _STAGES[5]: electron_squared_to_scattering_strength_A2(
+            abs(np.sqrt(weights) @ amplitudes) ** 2
+        )
+    }
     pairs = (
         ("transition_convention_transposed", reference, transposed),
         ("wrong_layer_count_offset", reference, offset),
@@ -620,22 +698,16 @@ def _benchmark() -> dict[str, object]:
     full, full_seconds, full_peak = _measure(
         lambda: np.array(
             [
-                finite_intensity_full(
-                    layers, f_plus[i], f_minus[i], omega[i], xi[i], law, initial
-                ).intensity_electron2
+                finite_intensity_full(layers, f_plus[i], f_minus[i], omega[i], xi[i], law, initial)
                 for i in range(events)
             ]
         )
     )
     reduced, reduced_seconds, reduced_peak = _measure(
-        lambda: (
-            finite_intensity_reduced(
-                layers, f_plus, f_minus, omega, xi, law, initial
-            ).intensity_electron2
-        )
+        lambda: finite_intensity_reduced(layers, f_plus, f_minus, omega, xi, law, initial)
     )
     # fmt: off
-    return {"equivalent_work": {"events": events, "layers": layers}, "full_seconds": full_seconds, "full_peak_bytes": full_peak, "reduced_seconds": reduced_seconds, "reduced_peak_bytes": reduced_peak, "speedup": full_seconds / reduced_seconds, "maximum_absolute_difference": float(np.max(abs(full - reduced)))}
+    return {"equivalent_work": {"events": events, "layers": layers}, "full_seconds": full_seconds, "full_peak_bytes": full_peak, "reduced_seconds": reduced_seconds, "reduced_peak_bytes": reduced_peak, "speedup": full_seconds / reduced_seconds, "maximum_absolute_difference": float(np.max(abs(full - reduced))), "scale_electron2": layers**2 * float(max(np.max(abs(f_plus)) ** 2, np.max(abs(f_minus)) ** 2))}
     # fmt: on
 
 
@@ -643,10 +715,10 @@ def _classifications() -> list[dict[str, object]]:
     # fmt: off
     rows = (
         ("stacking.transition_matrix_6", "MATCH", ["PHY-STK-003", "PHY-STK-004"], None),
-        ("stacking.synthetic_finite", "UNRESOLVED", ["PHY-STK-006", "PHY-STK-009", "PHY-STK-010", "PHY-STK-015", "PHY-STK-016"], None),
-        ("stacking.legacy_initial_population", "UNRESOLVED", ["PHY-STK-007"], None),
+        ("stacking.synthetic_finite", "MATCH", ["PHY-STK-006", "PHY-STK-009", "PHY-STK-010", "PHY-STK-015", "PHY-STK-016"], None),
+        ("stacking.legacy_initial_population", "CORRECTED", ["PHY-STK-007"], _STAGES[3]),
         ("stacking.legacy_normalization", "CORRECTED", ["PHY-STK-013"], _STAGES[4]),
-        ("stacking.legacy_phase_expression", "UNRESOLVED", ["PHY-STK-017"], None),
+        ("stacking.legacy_phase_expression", "CORRECTED", ["PHY-STK-017"], _STAGES[0]),
         ("stacking.stationary_output", "NO_ORACLE", ["PHY-STK-018"], None),
     )
     # fmt: on
@@ -657,6 +729,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     del allow_missing_pack
     root = Path(__file__).resolve().parents[3]
     pack_path = root / "reference" / "rasim_reference_v1.npz"
+    tolerances = load_stage_tolerances()
     transition = full_transition_matrix(TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18))
     stochastic_error = float(np.max(np.abs(transition.sum(axis=1) - 1.0)))
     state_order = tuple(state.value for state in STATE_ORDER)
@@ -673,6 +746,8 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         sample_frame_separation,
         component_error,
         order_error,
+        event_scale_A2,
+        population_scale_A2,
     ) = _event_and_population_errors()
     finite_errors = list(finite["maximum_absolute_errors"].values())
     science_errors = list(science["parent_maximum_absolute_errors"].values()) + list(
@@ -684,75 +759,69 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         for error in record.values()
     )
     pack_errors = list(pack["curve_maximum_absolute_errors"].values())
+    transition_limit = tolerances[_STAGES[1]].bind(1.0).limit
+    registry_limit = tolerances[_STAGES[0]].bind(1.0).limit
+    finite_limit = tolerances[_STAGES[3]].bind(float(finite["scale_electron2"])).limit
+    science_limit = tolerances[_STAGES[3]].bind(float(science["scale_electron2"])).limit
+    near_limit = tolerances[_STAGES[3]].bind(float(512**2)).limit
+    pack_limit = tolerances[_STAGES[3]].bind(float(pack["curve_scale_electron2"])).limit
+    event_limit = tolerances[_STAGES[4]].bind(event_scale_A2).limit
+    population_limit = tolerances[_STAGES[5]].bind(population_scale_A2).limit
+    benchmark_limit = tolerances[_STAGES[3]].bind(float(benchmark["scale_electron2"])).limit
+    pack["acceptance"] = "PASS" if max(pack_errors) <= pack_limit else "FAIL"
     checks = [
         _check(
             "stochastic_transition_and_state_order",
-            "PASS"
-            if stochastic_error == 0.0 and state_order == ("0F+", "1F+", "2F+", "0F-", "1F-", "2F-")
-            else "FAIL",
-            f"declared state order; maximum row-sum error {stochastic_error:.3e}",
+            stochastic_error <= transition_limit
+            and state_order == ("0F+", "1F+", "2F+", "0F-", "1F-", "2F-"),
+            f"declared state order; row-sum error {stochastic_error:.3e} <= {transition_limit:.3e}",
         ),
         _check(
             "finite_oracles_parents_and_models",
-            "SKIP"
-            if np.all(np.isfinite(finite_errors + science_errors))
+            max(finite_errors) <= finite_limit
+            and max(science_errors) <= science_limit
             and science["parent_case_count"] == 15
-            else "FAIL",
-            f"N=1,3,6 raw errors {finite['maximum_absolute_errors']}; five parents/three sectors {science['parent_maximum_absolute_errors']}; rich and ABD fixtures recorded; shared tolerance pending",
+            and science["legacy_initial_difference_electron2"] > finite_limit
+            and science["legacy_phase_difference"] > registry_limit,
+            f"finite limit {finite_limit:.3e}; parent/model limit {science_limit:.3e}; explicit initial and typed phase corrections diverge at named stages",
         ),
         _check(
             "analytic_limits_and_near_extinction",
-            "SKIP"
-            if np.isfinite(finite["single_layer_absolute_error"])
-            and np.all(np.isfinite(list(science["laue_absolute_errors"].values())))
+            float(finite["single_layer_absolute_error"]) <= finite_limit
+            and max(science["laue_absolute_errors"].values()) <= science_limit
             and float(near_extinction["minimum_nearby_positive_intensity_electron2"]) > 0.0
-            and np.isfinite(float(near_extinction["maximum_absolute_error"]))
-            else "FAIL",
-            f"N=1 error {finite['single_layer_absolute_error']:.3e}; Laue raw errors {science['laue_absolute_errors']}; N=512,+1e-9 {near_extinction['n512_plus_1e_9']}",
+            and float(near_extinction["maximum_absolute_error"]) <= near_limit,
+            f"N=1 and Laue limits pass; near-zero error <= {near_limit:.3e}; N=512,+1e-9 {near_extinction['n512_plus_1e_9']}",
         ),
         _check(
             "event_alignment_frame_and_normalization",
-            "SKIP"
-            if aligned
-            and normalization_error == 0.0
-            and np.isfinite(frame_error)
-            and sample_frame_separation > 0.0
-            else "FAIL",
-            f"raw electron2 aligned and nonnegative; normalization {normalization_error:.3e}; layer-frame {frame_error:.3e}; sample-qz separation {sample_frame_separation:.3e}",
+            aligned
+            and normalization_error <= event_limit
+            and frame_error <= event_limit
+            and sample_frame_separation > event_limit,
+            f"shared A2 result; normalization {normalization_error:.3e}; layer-frame {frame_error:.3e}; sample-frame separation {sample_frame_separation:.3e}; limit {event_limit:.3e}",
         ),
         _check(
             "unweighted_population_components",
-            "SKIP" if np.isfinite(component_error) and order_error == 0.0 else "FAIL",
-            f"individual initials; raw direct error {component_error:.3e}; order error {order_error:.3e}",
+            component_error <= population_limit and order_error <= population_limit,
+            f"individual initials; A2 direct error {component_error:.3e}; order error {order_error:.3e}; limit {population_limit:.3e}",
         ),
         _check(
             "reference_pack_mutations_and_benchmark",
-            "SKIP"
-            if pack["probability_maximum_absolute_error"] == 0.0
+            pack["probability_maximum_absolute_error"] <= transition_limit
             and pack["curve_value_count"] == 165
-            and np.all(np.isfinite(pack_errors))
+            and max(pack_errors) <= pack_limit
             and len(mutations) == 7
             and all(record["detected"] for record in mutations)
-            and np.isfinite(benchmark["maximum_absolute_difference"])
-            else "FAIL",
-            f"60 probabilities/165 curve values; {sum(record['detected'] for record in mutations)}/7 calculated controls; 48x24 timing/memory recorded; shared tolerance pending",
+            and benchmark["maximum_absolute_difference"] <= benchmark_limit,
+            f"60 probabilities/165 raw curves <= {pack_limit:.3e}; {sum(record['detected'] for record in mutations)}/7 calculated controls; 48x24 difference <= {benchmark_limit:.3e}",
         ),
     ]
     failed = any(check["status"] == "FAIL" for check in checks)
-    # fmt: off
-    request_rows = (
-        ("T05-SHARED-EVENT-MEASURE", "proof-base and T07", True, "Shared EventIntensityResult cannot represent unweighted raw electron2; require total/per-layer electron2 input, T07-owned population mass, and a reviewed r_e^2/per-steradian owner."),
-        ("T05-LAYER-PHASE-GAUGE", "proof-base with T03/T04/T07", True, "Shared contracts require exact-ID layer_normal_q_Ainv, xi=exp(+1j*q_layer*d), orientation/T04 gauge provenance, and no sample-qz fallback."),
-        ("T05-FROZEN-TOLERANCE-PROVENANCE", "proof-base and T01", True, "Require a versioned stage tolerance policy with atol/rtol/scale/unit/near-zero justification and tolerance_config_sha256."),
-    )
-    # fmt: on
-    requests = _records(("request_id", "owner", "blocking", "reason"), request_rows)
     return {
         "schema_version": 1,
         "task_id": "T05",
-        "status": "FAIL" if failed else "BLOCKED",
-        "local_proof_status": "FAIL" if failed else "BLOCKED",
-        "blocking_request_ids": [request["request_id"] for request in requests],
+        "status": "FAIL" if failed else "PASS",
         "base_sha": _git(root, "merge-base", "HEAD", "origin/codex/proof-base"),
         "commit_sha": _git(root, "rev-parse", "HEAD"),
         "contract_version": CONTRACT_API_VERSION,
@@ -773,14 +842,14 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         "mutations": mutations,
         "near_extinction": near_extinction,
         "tolerance_policy": {
-            "status": "MISSING_REVIEWED_SHARED_ARTIFACT",
-            "tolerance_config_sha256": None,
+            "status": "PASS",
+            "artifact_version": STAGE_TOLERANCE_VERSION,
+            "tolerance_config_sha256": STAGE_TOLERANCE_SHA256,
             "branch_local_thresholds_used_for_acceptance": False,
         },
         "limitations": [
             "homogeneous first-order law and one layer repeat; exact finite algebra has no refinement variable",
             "PHY-STK-018 stationary production output remains deferred; its calculated counterfactual is error-injection-only",
-            "integration supplies reviewed-gauge layer-normal q; raw electron2 remains upstream of all downstream factors",
+            "outputs exclude population weights, optics, polarization, solid angle, and deposition",
         ],
-        "contract_requests": requests,
     }

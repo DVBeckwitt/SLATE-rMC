@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from numbers import Real
-
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
+from rasim_next.core.contracts import (
+    EventIntensityNormalization,
+    EventIntensityResult,
+    LayerAmplitudeNormalization,
+    LayerAmplitudeResult,
+    LayerNormalQBatch,
+    LayerPhaseSign,
+    RodQueryBatch,
+)
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 from rasim_next.stacking.parent_models import StackingPopulation
 from rasim_next.stacking.transition import (
     InitialPopulation,
@@ -37,163 +43,6 @@ def _readonly_nonnegative(value: ArrayLike, name: str) -> NDArray[np.float64]:
     result[result < 0.0] = 0.0
     result.setflags(write=False)
     return result
-
-
-def _normalization_is_consistent(
-    total: NDArray[np.float64], per_layer: NDArray[np.float64], layers: int
-) -> bool:
-    reconstructed = layers * per_layer
-    tolerance = 8.0 * np.finfo(np.float64).eps * np.maximum(1.0, np.abs(total))
-    return bool(np.all(np.abs(total - reconstructed) <= tolerance))
-
-
-@dataclass(frozen=True, slots=True)
-class LayerNormalQBatch:
-    """Event-aligned layer-normal wavevector components in inverse angstroms."""
-
-    event_id: NDArray[np.int64]
-    layer_normal_q_Ainv: NDArray[np.float64]
-
-    def __post_init__(self) -> None:
-        supplied_ids = np.asarray(self.event_id)
-        if supplied_ids.dtype.kind not in "iu":
-            raise ValueError("event_id must contain integers")
-        supplied_q = np.asarray(self.layer_normal_q_Ainv)
-        if supplied_q.dtype.kind not in "fiu":
-            raise ValueError("layer_normal_q_Ainv must contain real numeric values")
-        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
-        layer_normal_q_Ainv = np.array(
-            self.layer_normal_q_Ainv,
-            dtype=np.float64,
-            copy=True,
-            order="C",
-        )
-        if event_id.ndim != 1 or layer_normal_q_Ainv.shape != event_id.shape:
-            raise ValueError("layer_normal_q_Ainv must contain one value per event_id")
-        if np.any(event_id < 0) or np.unique(event_id).size != event_id.size:
-            raise ValueError("event_id must contain unique nonnegative values")
-        if np.any(~np.isfinite(layer_normal_q_Ainv)):
-            raise ValueError("layer_normal_q_Ainv must be finite")
-        event_id.setflags(write=False)
-        layer_normal_q_Ainv.setflags(write=False)
-        object.__setattr__(self, "event_id", event_id)
-        object.__setattr__(self, "layer_normal_q_Ainv", layer_normal_q_Ainv)
-
-
-@dataclass(frozen=True, slots=True)
-class FiniteIntensity:
-    """Raw finite-stack intensity in electron2 and its explicit per-layer quotient."""
-
-    intensity_electron2: NDArray[np.float64]
-    intensity_per_layer_electron2: NDArray[np.float64]
-
-    def __post_init__(self) -> None:
-        total = _readonly_nonnegative(self.intensity_electron2, "intensity_electron2")
-        per_layer = _readonly_nonnegative(
-            self.intensity_per_layer_electron2,
-            "intensity_per_layer_electron2",
-        )
-        if total.shape != per_layer.shape:
-            raise ValueError("total and per-layer intensities must have identical shapes")
-        object.__setattr__(self, "intensity_electron2", total)
-        object.__setattr__(self, "intensity_per_layer_electron2", per_layer)
-
-
-@dataclass(frozen=True, slots=True)
-class StackingEventIntensityResult:
-    """Event-aligned finite-stack intensity in electron2, without solid-angle semantics."""
-
-    event_id: NDArray[np.int64]
-    layers: int
-    intensity_electron2: NDArray[np.float64]
-    intensity_per_layer_electron2: NDArray[np.float64]
-    model_component_id: str
-    population_group_id: str | None
-
-    def __post_init__(self) -> None:
-        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
-        count = _layers(self.layers)
-        finite = FiniteIntensity(
-            self.intensity_electron2,
-            self.intensity_per_layer_electron2,
-        )
-        if event_id.ndim != 1 or finite.intensity_electron2.shape != event_id.shape:
-            raise ValueError("event intensity must be one-dimensional and event-aligned")
-        if not _normalization_is_consistent(
-            finite.intensity_electron2,
-            finite.intensity_per_layer_electron2,
-            count,
-        ):
-            raise ValueError("total and per-layer event intensities are inconsistent")
-        event_id.setflags(write=False)
-        object.__setattr__(self, "event_id", event_id)
-        object.__setattr__(self, "layers", count)
-        object.__setattr__(self, "intensity_electron2", finite.intensity_electron2)
-        object.__setattr__(
-            self,
-            "intensity_per_layer_electron2",
-            finite.intensity_per_layer_electron2,
-        )
-        object.__setattr__(
-            self,
-            "model_component_id",
-            _identifier(self.model_component_id, "model_component_id"),
-        )
-        object.__setattr__(
-            self,
-            "population_group_id",
-            _identifier(self.population_group_id, "population_group_id", allow_none=True),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class PopulationIntensityResult:
-    """Event-aligned unweighted intensity components for independent populations."""
-
-    event_id: NDArray[np.int64]
-    population_id: tuple[str, ...]
-    layers: int
-    component_intensity_electron2: NDArray[np.float64]
-    component_intensity_per_layer_electron2: NDArray[np.float64]
-    population_group_id: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.population_id, tuple):
-            raise ValueError("population_id must be a tuple")
-        population_id = tuple(self.population_id)
-        if (
-            not population_id
-            or any(not isinstance(item, str) or not item for item in population_id)
-            or len(set(population_id)) != len(population_id)
-            or population_id != tuple(sorted(population_id))
-        ):
-            raise ValueError("population_id must be nonempty, unique, and sorted")
-        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
-        count = _layers(self.layers)
-        component = _readonly_nonnegative(
-            self.component_intensity_electron2,
-            "component_intensity_electron2",
-        )
-        per_layer = _readonly_nonnegative(
-            self.component_intensity_per_layer_electron2,
-            "component_intensity_per_layer_electron2",
-        )
-        expected_shape = (len(population_id), event_id.size)
-        if event_id.ndim != 1 or component.shape != expected_shape or per_layer.shape != expected_shape:
-            raise ValueError("population intensity arrays have inconsistent shapes")
-        if not _normalization_is_consistent(component, per_layer, count):
-            raise ValueError("population total and per-layer component intensities are inconsistent")
-        event_id.setflags(write=False)
-        object.__setattr__(self, "event_id", event_id)
-        object.__setattr__(self, "population_id", population_id)
-        object.__setattr__(self, "layers", count)
-        object.__setattr__(self, "component_intensity_electron2", component)
-        object.__setattr__(self, "component_intensity_per_layer_electron2", per_layer)
-        object.__setattr__(
-            self,
-            "population_group_id",
-            _identifier(self.population_group_id, "population_group_id"),
-        )
 
 
 def _broadcast_inputs(
@@ -266,12 +115,9 @@ def _reduced_moment_intensity(
             for source, target, transition_probability, registry_gauge in edges:
                 weight = probability[source] * transition_probability
                 if weight:
-                    candidate_mean = (
-                        registry_gauge * mean[..., source] + contribution[..., target]
-                    )
+                    candidate_mean = registry_gauge * mean[..., source] + contribution[..., target]
                     next_variance[..., target] += weight * (
-                        variance[..., source]
-                        + np.abs(candidate_mean - next_mean[..., target]) ** 2
+                        variance[..., source] + np.abs(candidate_mean - next_mean[..., target]) ** 2
                     )
             variance = np.divide(
                 next_variance,
@@ -344,14 +190,14 @@ def finite_intensity_reduced(
     vertical_phase: ArrayLike,
     law: TransitionLaw,
     initial: InitialPopulation,
-) -> FiniteIntensity:
+) -> NDArray[np.float64]:
     """Evaluate an exact two-orientation finite moment recurrence."""
 
     count = _layers(layers)
     f_plus_array, f_minus_array, omega_array, phase_array = _broadcast_inputs(
         f_plus, f_minus, omega, vertical_phase
     )
-    total = _reduced_moment_intensity(
+    return _reduced_moment_intensity(
         count,
         f_plus_array,
         f_minus_array,
@@ -360,7 +206,6 @@ def finite_intensity_reduced(
         law,
         initial,
     )
-    return FiniteIntensity(total, total / float(count))
 
 
 def finite_intensity_full(
@@ -371,7 +216,7 @@ def finite_intensity_full(
     vertical_phase: complex,
     law: TransitionLaw,
     initial: InitialPopulation,
-) -> FiniteIntensity:
+) -> NDArray[np.float64]:
     """Evaluate a stable six-state finite moment recurrence for one event."""
 
     count = _layers(layers)
@@ -397,28 +242,19 @@ def finite_intensity_full(
     transition = full_transition_matrix(law)
     if np.any(~np.isfinite(amplitude_intensity)):
         raise ValueError("full-state intensity must remain finite")
-    total = _full_moment_intensity(count, amplitudes, phase_value, transition, initial)
-    return FiniteIntensity(total, total / count)
+    return _full_moment_intensity(count, amplitudes, phase_value, transition, initial)
 
 
 def _event_phases(
     query: RodQueryBatch,
+    amplitudes: LayerAmplitudeResult,
     layer_normal_q: LayerNormalQBatch,
-    layer_repeat_A: float,
     phase_model: RegistryPhaseModel,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-    if isinstance(layer_repeat_A, bool) or not isinstance(layer_repeat_A, Real):
-        raise ValueError("layer_repeat_A must be a real scalar")
-    try:
-        repeat = float(layer_repeat_A)
-    except (OverflowError, ValueError) as error:
-        raise ValueError("layer_repeat_A must be finite and positive") from error
-    if not np.isfinite(repeat) or repeat <= 0.0:
-        raise ValueError("layer_repeat_A must be finite and positive")
-    layer_normal_q_Ainv = _aligned_layer_normal_q(query, layer_normal_q)
+    layer_normal_q_Ainv = _aligned_layer_normal_q(query, amplitudes, layer_normal_q)
     omega = np.asarray(registry_phase(query.h, query.k, phase_model), dtype=np.complex128)
     with np.errstate(over="ignore", invalid="ignore"):
-        phase_argument = layer_normal_q_Ainv * repeat
+        phase_argument = layer_normal_q_Ainv * amplitudes.layer_repeat_A
     if np.any(~np.isfinite(phase_argument)):
         raise ValueError("layer_normal_q_Ainv * layer_repeat_A must be finite")
     vertical = np.exp(1j * phase_argument)
@@ -428,30 +264,35 @@ def _event_phases(
 def _aligned_amplitudes(
     query: RodQueryBatch, amplitudes: LayerAmplitudeResult
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
-    if not np.array_equal(query.event_id, amplitudes.event_id):
-        raise ValueError("layer amplitudes must be exactly event-aligned")
-    if amplitudes.f_minus is None:
+    if not (
+        np.array_equal(query.event_id, amplitudes.event_id)
+        and np.array_equal(query.rod_id, amplitudes.rod_id)
+        and query.phase_id == amplitudes.phase_id
+    ):
+        raise ValueError("layer amplitudes must be exactly event/rod/phase-aligned")
+    if amplitudes.normalization is not LayerAmplitudeNormalization.ONE_REGISTRY_FREE_LAYER:
+        raise ValueError("stacking requires one-registry-free-layer amplitudes")
+    if amplitudes.phase_sign is not LayerPhaseSign.POSITIVE_Q_DOT_R:
+        raise ValueError("stacking requires the positive-Q-dot-R phase convention")
+    if amplitudes.f_minus_e is None:
         raise ValueError("stacking intensity requires both f_plus and f_minus")
-    return amplitudes.f_plus, amplitudes.f_minus
+    return amplitudes.f_plus_e, amplitudes.f_minus_e
 
 
 def _aligned_layer_normal_q(
-    query: RodQueryBatch, layer_normal_q: LayerNormalQBatch
+    query: RodQueryBatch,
+    amplitudes: LayerAmplitudeResult,
+    layer_normal_q: LayerNormalQBatch,
 ) -> NDArray[np.float64]:
-    if not isinstance(layer_normal_q, LayerNormalQBatch):
-        raise TypeError("layer_normal_q must be a LayerNormalQBatch")
-    if not np.array_equal(query.event_id, layer_normal_q.event_id):
-        raise ValueError("layer-normal wavevectors must be exactly event-aligned")
+    if not (
+        np.array_equal(query.event_id, layer_normal_q.event_id)
+        and np.array_equal(query.rod_id, layer_normal_q.rod_id)
+        and query.phase_id == layer_normal_q.phase_id
+    ):
+        raise ValueError("layer-normal wavevectors must be exactly event/rod/phase-aligned")
+    if amplitudes.gauge_id != layer_normal_q.gauge_id:
+        raise ValueError("layer amplitudes and layer-normal wavevectors must share one gauge_id")
     return layer_normal_q.layer_normal_q_Ainv
-
-
-def _identifier(value: object, name: str, *, allow_none: bool = False) -> str | None:
-    if value is None and allow_none:
-        return None
-    if not isinstance(value, str) or not value:
-        optional = " or None" if allow_none else ""
-        raise ValueError(f"{name} must be a nonempty string{optional}")
-    return value
 
 
 def finite_event_intensity(
@@ -461,26 +302,30 @@ def finite_event_intensity(
     *,
     layer_normal_q: LayerNormalQBatch,
     layers: int,
-    layer_repeat_A: float,
     initial: InitialPopulation,
     model_component_id: str,
     population_group_id: str | None,
+    normalization: EventIntensityNormalization,
     phase_model: RegistryPhaseModel = RegistryPhaseModel.FORWARD_H_PLUS_2K,
-) -> StackingEventIntensityResult:
-    """Return event-aligned electron2 values without claiming a per-steradian measure."""
+) -> EventIntensityResult:
+    """Return one unweighted finite stacking component in angstrom squared."""
 
-    component_id = _identifier(model_component_id, "model_component_id")
-    group_id = _identifier(population_group_id, "population_group_id", allow_none=True)
+    count = _layers(layers)
+    normalization = EventIntensityNormalization(normalization)
+    if normalization is EventIntensityNormalization.UNIT_CELL:
+        raise ValueError("finite stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, vertical = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
-    result = finite_intensity_reduced(layers, f_plus, f_minus, omega, vertical, law, initial)
-    return StackingEventIntensityResult(
-        query.event_id,
-        layers,
-        result.intensity_electron2,
-        result.intensity_per_layer_electron2,
-        component_id,
-        group_id,
+    omega, vertical = _event_phases(query, amplitudes, layer_normal_q, phase_model)
+    raw = finite_intensity_reduced(count, f_plus, f_minus, omega, vertical, law, initial)
+    if normalization is EventIntensityNormalization.FINITE_PER_LAYER:
+        raw = raw / float(count)
+    return EventIntensityResult(
+        event_id=query.event_id,
+        scattering_strength_A2=electron_squared_to_scattering_strength_A2(raw),
+        model_id="stacking",
+        model_component_id=model_component_id,
+        population_group_id=population_group_id,
+        normalization=normalization,
     )
 
 
@@ -491,14 +336,16 @@ def finite_population_event_intensity(
     *,
     layer_normal_q: LayerNormalQBatch,
     layers: int,
-    layer_repeat_A: float,
     population_group_id: str,
+    normalization: EventIntensityNormalization,
     phase_model: RegistryPhaseModel = RegistryPhaseModel.FORWARD_H_PLUS_2K,
-) -> PopulationIntensityResult:
-    """Return event-aligned unweighted population components in electron2."""
+) -> tuple[EventIntensityResult, ...]:
+    """Return sorted event-aligned components without applying population weights."""
 
     count = _layers(layers)
-    group_id = _identifier(population_group_id, "population_group_id")
+    normalization = EventIntensityNormalization(normalization)
+    if normalization is EventIntensityNormalization.UNIT_CELL:
+        raise ValueError("finite stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
     supplied = tuple(populations)
     if not supplied:
         raise ValueError("populations must be nonempty")
@@ -509,7 +356,7 @@ def finite_population_event_intensity(
     if len(set(population_id)) != len(population_id):
         raise ValueError("population_id values must be unique")
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, vertical = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
+    omega, vertical = _event_phases(query, amplitudes, layer_normal_q, phase_model)
     component = np.stack(
         [
             finite_intensity_reduced(
@@ -520,15 +367,21 @@ def finite_population_event_intensity(
                 vertical,
                 population.model,
                 population.initial,
-            ).intensity_electron2
+            )
             for population in ordered
         ]
     )
-    return PopulationIntensityResult(
-        query.event_id,
-        population_id,
-        count,
-        component,
-        component / float(count),
-        group_id,
+    if normalization is EventIntensityNormalization.FINITE_PER_LAYER:
+        component = component / float(count)
+    scattering_strength_A2 = electron_squared_to_scattering_strength_A2(component)
+    return tuple(
+        EventIntensityResult(
+            event_id=query.event_id,
+            scattering_strength_A2=scattering_strength_A2[index],
+            model_id="stacking",
+            model_component_id=population.population_id,
+            population_group_id=population_group_id,
+            normalization=normalization,
+        )
+        for index, population in enumerate(ordered)
     )

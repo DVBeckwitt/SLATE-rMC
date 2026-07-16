@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
+from rasim_next.core.contracts import LayerAmplitudeResult, LayerNormalQBatch, RodQueryBatch
 from rasim_next.stacking.finite_intensity import (
-    FiniteIntensity,
-    LayerNormalQBatch,
     _aligned_amplitudes,
     _broadcast_inputs,
     _event_phases,
     _layers,
+    _readonly_nonnegative,
 )
 from rasim_next.stacking.transition import (
     STATE_ORDER,
@@ -32,9 +31,8 @@ def finite_explicit_sequence_intensity(
     *,
     layer_normal_q: LayerNormalQBatch,
     layers: int,
-    layer_repeat_A: float,
     phase_model: RegistryPhaseModel = RegistryPhaseModel.FORWARD_H_PLUS_2K,
-) -> FiniteIntensity:
+) -> NDArray[np.float64]:
     """Directly sum one declared orientation/registry state at each physical depth."""
 
     count = _layers(layers)
@@ -50,16 +48,15 @@ def finite_explicit_sequence_intensity(
     if depths.shape != (count,) or np.any(~np.isfinite(depths)):
         raise ValueError("layer_depth_A must contain one finite depth per layer")
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, _ = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
-    repeat = float(layer_repeat_A)
+    omega, _ = _event_phases(query, amplitudes, layer_normal_q, phase_model)
     if count > 1:
         spacing = np.diff(depths)
         tolerance = (
             256.0
             * np.finfo(np.float64).eps
-            * np.maximum(1.0, np.maximum(np.abs(spacing), abs(repeat)))
+            * np.maximum(1.0, np.maximum(np.abs(spacing), amplitudes.layer_repeat_A))
         )
-        if np.any(np.abs(spacing - repeat) > tolerance):
+        if np.any(np.abs(spacing - amplitudes.layer_repeat_A) > tolerance):
             raise ValueError("layer_depth_A must advance by layer_repeat_A")
 
     coherent_amplitude = np.zeros(query.event_id.size, dtype=np.complex128)
@@ -74,7 +71,7 @@ def finite_explicit_sequence_intensity(
                 orientation_amplitude * registry_factor * np.exp(1j * phase_argument)
             )
         intensity = np.abs(coherent_amplitude) ** 2
-    return FiniteIntensity(intensity, intensity / float(count))
+    return _readonly_nonnegative(intensity, "explicit sequence intensity")
 
 
 def finite_intensity_by_enumeration(
@@ -85,7 +82,7 @@ def finite_intensity_by_enumeration(
     vertical_phase: complex,
     law: TransitionLaw,
     initial: InitialPopulation,
-) -> FiniteIntensity:
+) -> NDArray[np.float64]:
     """Enumerate every nonzero state path; intended only for short proof sequences."""
 
     count = _layers(layers)
@@ -133,4 +130,4 @@ def finite_intensity_by_enumeration(
     if not np.isclose(total_probability, 1.0, rtol=0.0, atol=2e-12):
         raise ValueError("enumerated path probabilities do not sum to one")
     total = sum(probability * abs(amplitude) ** 2 for _, probability, amplitude in paths)
-    return FiniteIntensity(total, total / count)
+    return _readonly_nonnegative(total, "enumerated sequence intensity")
