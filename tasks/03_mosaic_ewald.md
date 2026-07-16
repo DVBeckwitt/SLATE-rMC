@@ -68,7 +68,7 @@ detector bandwidth sum and wavelength-dependent geometry
 
 ### MOS-01: source samples
 
-Implement explicit seeded randomized Latin-hypercube Gaussian sampling for position, divergence, and wavelength: independent dimensions, antithetic pairs, an odd central ray, equal empirical row mass, and reproducible count/seed. Never multiply samples by their generating PDF. Keep deterministic Gauss–Hermite only as an oracle.
+Implement explicit seeded randomized Latin-hypercube Gaussian sampling for position, divergence, and wavelength: independent dimensions, antithetic pairs, an odd central ray, equal empirical row mass, and reproducible count/seed. Use the direct `scipy.special.ndtri` dependency instead of a local inverse-normal approximation. Never multiply samples by their generating PDF. Keep deterministic Gauss–Hermite only as an oracle.
 
 ### MOS-02: orientation distribution
 
@@ -85,11 +85,11 @@ Construct every physically valid candidate for each incident state and rod. A lo
 
 ### MOS-05: candidate mass
 
-Calculate each candidate's physical reciprocal/mosaic mass and required Jacobian for T07 normalization. Do not select candidates, assign per-selected-event mass, or raster pixels here.
+Calculate each candidate's `reciprocal_weight` as its wrapped-mosaic/Jacobian mass for T07's complete pool. Do not select candidates, assign per-selected-event mass, or raster pixels here.
 
 ### MOS-06: candidate contract
 
-Emit candidate-aligned full sample-frame `Q`, exact sample-normal projection, `L`, outgoing film phase wavevector, physical candidate mass, residual, source/orientation/rod IDs, exact status, and matching validity. Do not include source PDF weight, structure intensity, optics, solid angle, selection, or deposition.
+Emit candidate-aligned full sample-frame `Q`, exact sample-normal projection, `L`, outgoing film phase wavevector, `reciprocal_weight`, residual, source/orientation/rod IDs, exact status, and matching validity. Do not include source PDF weight, structure intensity, optics, solid angle, selection, or deposition.
 
 ### MOS-07: convergence and benchmark
 

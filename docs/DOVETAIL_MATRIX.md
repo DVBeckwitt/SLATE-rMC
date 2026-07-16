@@ -13,42 +13,43 @@ T04 rod catalog ----------------------^
 T04 material optics -> T02 optics
 
 T03 scattering events
-    -> T04 ordered event intensities
-    -> T05 stacking event intensities using T04 layer amplitudes
+    -> T04 ordered scattering strengths
+    -> T05 stacking scattering strengths using T04 layer amplitudes
     -> T02 exit transport and continuous detector hits
 
-T02 hits + T04 or T05 intensities
-    -> T07 factor assembly, solid angle, deposition, detector-native image
+T02 hits + T04 or T05 strengths
+    -> T07 complete-pool selection, conservative deposition, raw detector image
 ```
 
 ## Interface ownership
 
 | Contract or factor | Producer | Consumer | Acceptance rule |
 |---|---|---|---|
-| `IncidentSampleBatch` | T03 sampling | T02 geometry | weights are integrated source/wavelength mass and sum under the declared normalization |
+| `IncidentSampleBatch` | T03 sampling | T02 geometry | every row has exact empirical mass `1/N`; no generating PDF weight |
 | `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | wavelength grid, complex index convention, `delta`, `beta`, and absorption are identical |
-| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | frames, real phase wavevector, complex normal mode, source ID, and validity are explicit |
+| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | one phase/parent batch preserves exact `1/N` source mass; frames, wavevectors, source ID, and validity are explicit |
 | `RodCatalog` | T04 ordered | T03 Ewald, T08 selection | every `(h,k)` rod remains distinct; exact family metadata is preserved |
-| `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | event IDs retain exact status and map to repeatable orientation IDs; full sample-frame `Q`, sample-normal projection, `L`, wavelength, outgoing film phase wavevector, and reciprocal mass agree |
+| `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | pre-selection candidates retain exact rod/orientation/`Q`/`kf` identity and mosaic/Jacobian mass for one all-rod pool; no per-reflection normalization or post-selection reweighting |
 | `LayerAmplitudeResult` | T04 ordered motifs | T05 stacking | event/rod alignment, phase convention, motif gauge, and normalization are explicit |
 | `LayerNormalQBatch` | future T07 projection | T05 stacking | exact event/rod/phase/gauge alignment; projection comes from event `Q` and T04 metadata with no sample-`Qz` fallback |
-| `EventIntensityResult` | T04 ordered or T05 stacking | T07 integration | unweighted polarization-neutral `r_e² × electron²` in `angstrom²/sr`; typed unit-cell, finite-total, or finite-per-layer normalization |
+| `EventIntensityResult` | T04 ordered or T05 stacking | T07 integration | unweighted polarization-neutral `r_e² × electron²` in `angstrom²`; typed unit-cell, finite-total, or finite-per-layer normalization |
 | `OutgoingWaveBatch` | T02 optics | T02 detector and T07 integration | exit amplitude, attenuation, phase direction, and validity are separate fields |
-| `DetectorHitBatch` | T02 geometry | T07 measurement/render | continuous `(column_px,row_px)`, solid angle, and event IDs only; no deposition |
+| `DetectorHitBatch` | T02 geometry | T07 measurement/render | continuous `(column_px,row_px)`, event IDs, and solid-angle metadata; solid angle never enters raw rendering |
 | `PixelContributionBatch` | T07 render | T07 image reduction | deposition weights conserve event mass under the declared clipping rule |
 
 ## Factor ownership
 
 ```text
-source and wavelength mass       T03
+uniform source empirical mass    T03
 footprint acceptance             T02
-mosaic/Ewald mass and Jacobian   T03
-ordered or stacking intensity    T04 or T05, including r_e^2 exactly once
+mosaic/Jacobian candidate mass   T03
+ordered or stacking strength     T04 or T05, including r_e^2 exactly once
 phase/parent population mass     T07 from T04/T05 metadata
 Fresnel and attenuation          T02
 scattering polarization          T07 from source state and event direction
-detector solid angle             T07
-deposition support               T07
+pool selection and equal T/N     T07
+deposition and clipped mass      T07
+detector solid-angle metadata    T02, excluded from raw rendering
 ```
 
 No factor may be hidden inside a contract owned by another branch. T06 review checks both omissions and duplicates.
@@ -79,11 +80,11 @@ Before a branch is accepted for integration, prove:
 ```text
 1. T04 RodCatalog -> T03 with synthetic IncidentStateBatch
 2. T03 IncidentSampleBatch -> T02 -> T03 events
-3. T03 RodQueryBatch -> T04 ordered intensity
-4. T04 LayerAmplitudeResult + T07 LayerNormalQBatch -> T05 stacking intensity
+3. T03 RodQueryBatch -> T04 ordered strength
+4. T04 LayerAmplitudeResult + T07 LayerNormalQBatch -> T05 stacking strength
 5. T03 outgoing film wavevector -> T02 exit transport and hits
-6. T02 hits + T04 intensity -> T07 detector mass
-7. substitute T05 intensity under the same interface
+6. T02 hits + T04 strength -> T07 raw detector image
+7. substitute T05 strength under the same interface
 8. run the non-square tiny end-to-end case
 ```
 

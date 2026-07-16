@@ -144,7 +144,7 @@ Integrate through vertical slices:
 4. event-aligned queries to ordered intensities
 5. event outgoing wavevectors to exit refraction and continuous detector hits
 6. hits to integration-owned detector deposition
-7. substitute stacking intensity for ordered intensity under the same contract
+7. substitute stacking strength for ordered strength under the same contract
 8. run the tiny end-to-end detector case
 
 ## Later fitting proof
@@ -162,6 +162,6 @@ Measured-data improvement is not proof without synthetic recovery and parameter-
 
 ## Tolerance freeze and proof sensitivity
 
-Before T02--T05 compare with the shared pack, they load `proof/stage_tolerances_v1.json` through the strict loader and record canonical SHA-256 `e3b88394a27208e97ac62066354affaf5ca0844a9902961aaf624a008599e0d2`. Tolerances may change only through reviewed proof-base work, never after seeing branch error. Exact calculations do not invent convergence; broad sweeps, mutations, and benchmarks remain one-shot evidence rather than permanent frameworks.
+Before T02--T05 compare with the shared pack, they load `proof/stage_tolerances_v1.json` through the strict loader and record canonical SHA-256 `d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3`. Tolerances may change only through reviewed proof-base work, never after seeing branch error. Exact calculations do not invent convergence; broad sweeps, mutations, and benchmarks remain one-shot evidence rather than permanent frameworks.
 
 A branch is not proven when the fixture is insensitive to likely mistakes. Run the workstream mutations from [ERROR_INJECTION.md](ERROR_INJECTION.md) and record the expected and observed first failing stage. The integration proof runs the factor-omission, factor-duplication, event-identity, OSC-orientation, and row-column mutations.

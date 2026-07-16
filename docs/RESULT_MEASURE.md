@@ -2,62 +2,34 @@
 
 ## Declared final output
 
-The first integrated core returns a nonnegative detector-native array of relative expected photon mass per pixel for explicit normalized source distributions, explicit phase/population weights, and the selected scalar optical model.
+The integrated core returns a nonnegative detector-native array of sampled scattering mass in `angstrom^2` per pixel. Its normalized ensemble mean is the raw detector observable; it is not differential per solid angle.
 
-It does not silently apply incident flux, exposure, gain, detector quantum efficiency, background, maximum normalization, or display rescaling.
+The default source is fixed-seed randomized Latin-hypercube Gaussian sampling with independent dimensions, antithetic pairs, and an odd central ray. Every row has exact empirical mass `1/N`; the generating Gaussian PDF is never a weight. Deterministic Gauss–Hermite is an oracle only.
 
-## Event-to-pixel equation
+The raw result does not apply incident flux, exposure, gain, detector quantum efficiency, background, pixel solid angle, maximum normalization, or display rescaling.
 
-For detector pixel `p`,
+## Complete-pool selection and deposition
+
+For each incident ray and independent phase/parent, valid-support construction forms one candidate pool spanning every individual `(h,k)` rod and valid mosaic/`Q` solution. Each candidate retains its own rod, orientation, `Q`, elastic `kf`, detector hit, scattering strength, mosaic mass, and other physical factors. `Qr` is never candidate identity.
+
+For candidate `i`,
 
 \[
-M_p=
-\sum_e
-w^{\mathrm{src}}_e
-w^{\mathrm{recip}}_e
-w^{\mathrm{pop}}_e
-I^{\mathrm{model}}_e
-W^{\mathrm{opt}}_e
-W^{\mathrm{foot}}_e
-W^{\mathrm{pol}}_e
-\Delta\Omega_e
-D_{ep}.
+m_i=w^{\mathrm{src}}w^{\mathrm{recip}}_i w^{\mathrm{pop}}
+S_i W^{\mathrm{opt}}_i W^{\mathrm{foot}} W^{\mathrm{pol}}_i,
+\qquad T=\sum_i m_i,
+\qquad P(i)=m_i/T.
 \]
 
-Definitions:
+`S_i` is polarization-neutral `r_e^2` times raw electron² in `angstrom^2`. T04 or T05 applies the single `core.scattering` conversion exactly once. `w_recip` is the candidate mosaic/Jacobian mass, and source and population masses are independent incoherent factors.
 
-```text
-w_src
-    integrated source and wavelength probability mass
+T07 selects a configurable `N` outgoing events from the complete pool by seeded cumulative inverse CDF (legacy default `50`). Every selected event receives exactly `T/N` and uses its selected candidate's own geometry and hit. For detector pixel `p`,
 
-w_recip
-    integrated mosaic/Ewald support mass, including the declared event Jacobian
+\[
+M_p=\sum_s \frac{T}{N}D_{sp}.
+\]
 
-w_pop
-    declared incoherent crystalline-phase or parent-population mass
-
-I_model
-    unweighted, polarization-neutral ordered or stacking differential intensity:
-    r_e^2 times raw electron^2 in angstrom^2 sr^-1
-
-W_opt
-    scalar entrance/exit field intensity factor times attenuation
-
-W_foot
-    footprint acceptance or partial source-cell mass
-
-W_pol
-    scattering polarization factor, distinct from Fresnel interface fields
-
-DeltaOmega
-    detector-pixel solid angle when I_model is per solid angle
-
-D_ep
-    mass-conserving deposition fraction from event e to pixel p
-```
-
-Every factor has one owner and is multiplied exactly once in integration.
-T04 or T05 owns the `r_e²` conversion through `core.scattering`; T07 never reapplies it and alone owns future incoherent population weights.
+Bilinear deposition splits that mass once and reports edge clipping explicitly. There is no per-reflection normalization and no post-selection source PDF, structure factor, mosaic mass, selection probability, or solid-angle multiplier. Deterministic/adaptive support construction precedes statistical selection; two-pass or streaming enumeration is preferred so the incident×rod×mosaic product is not retained.
 
 ## Optical model for the first reference core
 
@@ -122,7 +94,7 @@ There is no silent unity default. A full vector polarization-resolved interface-
 
 ## Event Jacobian and Lorentz terminology
 
-`w_recip` already contains the measure/Jacobian required when the reciprocal support is integrated. Do not multiply a second empirical or powder Lorentz factor unless an independent derivation shows it is absent from the event measure. The trace and factor ledger record this decision.
+`w_recip` contains the candidate measure/Jacobian required by reciprocal support construction. It enters `m_i` once and is not multiplied after selection. Do not add a second empirical or powder Lorentz factor.
 
 ## Solid angle
 
@@ -133,8 +105,8 @@ For a flat detector pixel of area `A_pixel`, ray distance `R`, detector normal `
 \frac{|\hat{\mathbf n}\cdot\hat{\mathbf r}|}{R^2}.
 \]
 
-Apply it only when converting differential intensity per solid angle to detector pixel mass. Bilinear deposition is numerical support allocation, not a physical point-spread function.
+`pixel_solid_angle_sr` is immutable geometry metadata for optional later caking or analysis. It cannot change the raw detector image. Bilinear deposition is numerical support allocation, not a physical point-spread function.
 
 ## Reflectivity
 
-Pure Parratt, pure kinematic specular intensity, and the named smooth composite are separate outputs. They are not silently added to off-specular event intensity. Integration declares how a specular-family output enters the detector image.
+Pure Parratt, pure kinematic specular intensity, and the named smooth composite are separate outputs. They are not silently added to off-specular scattering strength. Integration declares how a specular-family output enters the detector image.

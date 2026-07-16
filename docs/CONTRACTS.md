@@ -67,6 +67,7 @@ IncidentSampleBatch
 ```
 
 A Cartesian product is allowed only when source variables are declared independent.
+In both source and incident-state batches, `source_weight` is exactly uniform empirical mass `1/N` and sums to one; it is never the sampled PDF. An incident-state batch covers one source-ray batch for one phase/parent.
 
 ## Material optics
 
@@ -117,7 +118,7 @@ RodCatalog
 
 Every physical `(h,k)` rod remains separate.
 
-## Scattering events
+## Pre-selection scattering candidates
 
 ```text
 ScatteringEventBatch
@@ -136,7 +137,8 @@ ScatteringEventBatch
     valid[E] bool
 ```
 
-`reciprocal_weight` is integrated mosaic/Ewald probability mass and does not include source weight, structure intensity, optics, solid angle, or detector deposition.
+Rows are deterministic/adaptive valid-support candidates. For one incident ray and independent phase/parent, T07 forms one pool across every individual rod and valid mosaic/`Q` solution; each candidate retains its own rod, orientation, `Q`, `kf`, hit, scattering strength, mosaic mass, and other once-only factors. There is no per-reflection normalization or `Qr` collapse, and two-pass/streaming enumeration is preferred.
+`reciprocal_weight` is candidate mosaic/Jacobian mass used only in that complete-pool candidate mass, never as a post-selection multiplier. It excludes source, population, scattering strength, optics, solid angle, and deposition.
 `orientation_id` is a repeatable foreign key, not an array index. `event_id` maps uniquely to it.
 `q_sample_normal_Ainv` equals `q_internal_sample_Ainv[:,2]`, and `valid` is true exactly where `status` is `VALID`; failures retain their exact status.
 
@@ -180,7 +182,7 @@ LayerNormalQBatch
 
 EventIntensityResult
     event_id[E] int64
-    intensity_per_sr[E] float64
+    scattering_strength_A2[E] float64
     model_id
     model_component_id
     population_group_id or absent
@@ -194,9 +196,9 @@ PopulationWeightTable
     provenance
 ```
 
-Ordered and stacking models implement the same event-intensity result contract.
+Ordered and stacking models implement the same event-aligned scattering-strength contract.
 `LayerNormalQBatch` is produced by future T07 from full event `Q`, `orientation_id`, and T04 layer metadata; T05 requires exact event/rod/phase/gauge alignment and uses `exp(+i Q·R)` with no sample-`Qz` fallback.
-`intensity_per_sr` is unweighted, polarization-neutral `r_e²` times raw electron² in `angstrom² sr^-1`; it excludes population, optics, polarization, solid angle, and deposition. T04 and T05 use the single core conversion helper exactly once; T07 does not apply `r_e²`.
+`scattering_strength_A2` is unweighted, polarization-neutral `r_e²` times raw electron² in `angstrom²`; it excludes population, optics, polarization, solid angle, and deposition. T04 and T05 use the single core conversion helper exactly once; T07 does not apply `r_e²`.
 `PopulationWeightTable` remains a declared incoherent-intensity contract but is deferred to reviewed T07 preparation; T02--T05 do not implement or apply it.
 
 ## Outgoing transport and detector hits
@@ -217,6 +219,8 @@ DetectorHitBatch
     pixel_solid_angle_sr[H] float64
     valid[H] bool
 ```
+
+`pixel_solid_angle_sr` is immutable geometry metadata for optional later analysis; it is never an input to raw rendering.
 
 ## Pixel contributions
 
@@ -325,7 +329,7 @@ DataCorrectionLedger
     dark subtraction status
     flat-field status
     polarization: model, data-corrected, or declared unity approximation
-    solid angle: model or data-corrected
+    solid angle: optional later caking/analysis metadata, never raw-render input
     detector efficiency status
     exposure/flux normalization status
     background policy
@@ -343,7 +347,7 @@ FitDataset
 CompiledFitContext
     immutable forward states
     selected observations and support
-    deterministic sample revision
+    seeded sample revision
     invalidation graph
 
 FitResult

@@ -104,7 +104,7 @@ class IncidentSampleBatch:
     correlation_model: str
 
     def __post_init__(self) -> None:
-        _batch(
+        size = _batch(
             self,
             "incident_sample_id",
             (
@@ -119,8 +119,8 @@ class IncidentSampleBatch:
             np.linalg.norm(self.direction_lab, axis=1), 1.0, rtol=0.0, atol=1e-12
         ):
             raise ValueError("wavelengths must be positive and directions unit length")
-        if not np.isclose(self.source_weight.sum(), 1.0, rtol=0.0, atol=1e-12):
-            raise ValueError("source_weight must sum to one")
+        if size == 0 or not np.all(self.source_weight == 1.0 / size):
+            raise ValueError("source_weight must be uniform empirical mass 1/N")
         if not self.correlation_model:
             raise ValueError("correlation_model is required")
 
@@ -166,7 +166,7 @@ class IncidentStateBatch:
     valid: NDArray[np.bool_]
 
     def __post_init__(self) -> None:
-        _batch(
+        size = _batch(
             self,
             "incident_state_id",
             (
@@ -182,6 +182,8 @@ class IncidentStateBatch:
                 ("valid", np.bool_, (), False),
             ),
         )
+        if size == 0 or not np.all(self.source_weight == 1.0 / size):
+            raise ValueError("source_weight must be uniform empirical mass 1/N")
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,14 +356,14 @@ class LayerNormalQBatch:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class EventIntensityResult:
     event_id: NDArray[np.int64]
-    intensity_per_sr: NDArray[np.float64]
+    scattering_strength_A2: NDArray[np.float64]
     model_id: str
     model_component_id: str
     population_group_id: str | None
     normalization: EventIntensityNormalization
 
     def __post_init__(self) -> None:
-        _batch(self, "event_id", (("intensity_per_sr", np.float64, (), True),))
+        _batch(self, "event_id", (("scattering_strength_A2", np.float64, (), True),))
         if (
             not self.model_id
             or not self.model_component_id

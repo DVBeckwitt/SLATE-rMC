@@ -63,18 +63,24 @@ geometry.kf_air_lab
 geometry.detector_intersection
 geometry.detector_column_px
 geometry.detector_row_px
+geometry.detector_pixel_solid_angle
 
-measurement.source_weight
+sampling.source_empirical_mass
 measurement.reciprocal_weight
-measurement.model_intensity
+measurement.scattering_strength
 measurement.population_weight
 measurement.optical_weight
 measurement.footprint_weight
 measurement.polarization_weight
-measurement.pixel_solid_angle
 measurement.deposition_indices
 measurement.deposition_weights
 measurement.total_detector_mass
+
+render.candidate_mass
+render.selection_probability
+render.selected_event_mass
+render.raw_detector_image
+render.clipped_mass
 
 selection.radial_family_key
 selection.reflection_group_key

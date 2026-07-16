@@ -13,7 +13,7 @@ from rasim_next.core import contracts
 from rasim_next.core.contracts import IncidentSampleBatch
 from rasim_next.core.frames import FrameId
 from rasim_next.core.interfaces import scalar_interface_amplitude
-from rasim_next.core.scattering import electron_squared_to_intensity_per_sr
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
@@ -64,23 +64,41 @@ def test_shared_coordinate_and_optical_primitives() -> None:
 
 def test_minimal_contract_flow_preserves_event_identity_and_mass() -> None:
     samples = IncidentSampleBatch(
-        np.array([10], dtype=np.int64),
-        np.zeros((1, 3)),
-        np.array([[1.0, 0.0, 0.0]]),
-        np.array([1.0]),
-        np.array([1.0]),
-        ("linear",),
+        np.array([10, 11], dtype=np.int64),
+        np.zeros((2, 3)),
+        np.tile([1.0, 0.0, 0.0], (2, 1)),
+        np.ones(2),
+        np.full(2, 0.5),
+        ("linear", "linear"),
         "explicit_joint",
     )
-    assert samples.incident_sample_id.size == 1
+    assert samples.incident_sample_id.size == 2
     assert not samples.origin_lab_m.flags.writeable
+    states = contracts.IncidentStateBatch(
+        np.array([20, 21]),
+        samples.incident_sample_id,
+        np.zeros((2, 3)),
+        samples.direction_lab,
+        samples.direction_lab,
+        samples.direction_lab,
+        np.ones(2, dtype=np.complex128),
+        np.ones(2, dtype=np.complex128),
+        np.ones(2),
+        samples.source_weight,
+        np.ones(2, dtype=np.bool_),
+    )
+    for batch in (samples, states):
+        with pytest.raises(ValueError, match="uniform empirical"):
+            replace(batch, source_weight=np.array([0.25, 0.75]))
 
     result = run_synthetic_plumbing()
     np.testing.assert_array_equal(result.event_id, [100])
-    np.testing.assert_allclose(result.event_mass, [0.06], rtol=0.0, atol=1e-15)
-    np.testing.assert_allclose(result.detector_image, [[0.015, 0.045]], rtol=0.0, atol=1e-15)
+    np.testing.assert_allclose(result.event_mass, [0.6], rtol=0.0, atol=1e-15)
+    np.testing.assert_allclose(result.detector_image, [[0.15, 0.45]], rtol=0.0, atol=1e-15)
+    changed_metadata = run_synthetic_plumbing(pixel_solid_angle_sr=0.2)
+    np.testing.assert_array_equal(changed_metadata.detector_image, result.detector_image)
     assert result.detector_image.sum() == pytest.approx(result.event_mass.sum())
-    assert len(result.factor_names) == 8
+    assert len(result.factor_names) == 7
 
 
 def test_scattering_event_contract_is_explicit() -> None:
@@ -137,7 +155,7 @@ def test_layer_phase_and_intensity_conversion_contracts_are_explicit() -> None:
         layer_normal_q_Ainv=np.array([0.63]),
         gauge_id=amplitudes.gauge_id,
     )
-    converted = electron_squared_to_intensity_per_sr(np.array([1.0]))
+    converted = electron_squared_to_scattering_strength_A2(np.array([1.0]))
     np.testing.assert_allclose(converted, [7.940787682024163e-10], rtol=0.0, atol=0.0)
 
 
@@ -183,10 +201,10 @@ def test_first_stage_comparator_and_single_external_diagnostic(tmp_path: Path) -
 
 def test_stage_tolerance_artifact_is_versioned_hashed_and_bindable() -> None:
     stages = stage_tolerances.load_stage_tolerances()
-    bound = stages["measurement.pixel_solid_angle"].bind(1e-6)
+    bound = stages["geometry.detector_pixel_solid_angle"].bind(1e-6)
     assert isinstance(bound, Tolerance) and bound.scale == 1e-6
     with pytest.raises(ValueError, match="nonnegative"):
-        stages["measurement.pixel_solid_angle"].bind(-1.0)
+        stages["geometry.detector_pixel_solid_angle"].bind(-1.0)
 
 
 def test_core_proof_cli_emits_one_passing_json_object() -> None:

@@ -6,8 +6,10 @@ from numpy.typing import ArrayLike, NDArray
 CLASSICAL_ELECTRON_RADIUS_A = 2.8179403262e-5
 
 
-def electron_squared_to_intensity_per_sr(raw_electron_squared: ArrayLike) -> NDArray[np.float64]:
-    """Return polarization-neutral ``r_e**2 * electron**2`` in angstrom²/sr."""
+def electron_squared_to_scattering_strength_A2(
+    raw_electron_squared: ArrayLike,
+) -> NDArray[np.float64]:
+    """Return polarization-neutral ``r_e**2 * electron**2`` in angstrom²."""
 
     supplied = np.asarray(raw_electron_squared)
     if supplied.dtype.kind not in "fiu":

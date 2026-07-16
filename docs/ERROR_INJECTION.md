@@ -104,9 +104,10 @@ For the tiny end-to-end case, inject each of the following separately:
 
 - omit one factor from the event-to-pixel ledger
 - apply one factor twice
-- apply detector solid angle twice
+- multiply sampled source or selected mosaic probability again
+- allow solid-angle metadata to change the raw image
 - treat deposition weights as a physical point-spread function
-- break event-ID alignment between geometry and intensity
+- break event-ID alignment between geometry and scattering strength
 - use the wrong rod or family identity
 - rotate the detector image after integration
 - deposit with row and column reversed

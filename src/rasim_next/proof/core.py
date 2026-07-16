@@ -56,8 +56,8 @@ class SyntheticPlumbingResult:
     factor_names: tuple[str, ...]
 
 
-def run_synthetic_plumbing() -> SyntheticPlumbingResult:
-    """Pass one trivial event through every T02--T05 boundary contract."""
+def run_synthetic_plumbing(*, pixel_solid_angle_sr: float = 0.1) -> SyntheticPlumbingResult:
+    """Pass one candidate through the trivial one-candidate selection case."""
 
     samples = IncidentSampleBatch(
         np.array([10], dtype=np.int64),
@@ -119,7 +119,7 @@ def run_synthetic_plumbing() -> SyntheticPlumbingResult:
     )
     intensity = EventIntensityResult(
         event_id=query.event_id,
-        intensity_per_sr=np.array([2.0]),
+        scattering_strength_A2=np.array([2.0]),
         model_id="synthetic-no-physics",
         model_component_id="identity",
         population_group_id="population",
@@ -137,7 +137,7 @@ def run_synthetic_plumbing() -> SyntheticPlumbingResult:
         outgoing.event_id,
         np.array([0.75]),
         np.array([0.0]),
-        np.array([0.1]),
+        np.array([pixel_solid_angle_sr]),
         np.array([True]),
     )
     for aligned in (query.event_id, intensity.event_id, outgoing.event_id, hits.event_id):
@@ -148,11 +148,10 @@ def run_synthetic_plumbing() -> SyntheticPlumbingResult:
         states.source_weight
         * events.reciprocal_weight
         * 1.0
-        * intensity.intensity_per_sr
+        * intensity.scattering_strength_A2
         * outgoing.optical_weight
         * states.footprint_acceptance
         * 0.75
-        * hits.pixel_solid_angle_sr
     )
     image = event_mass[:, None] * np.array([[0.25, 0.75]])
     return SyntheticPlumbingResult(
@@ -163,11 +162,10 @@ def run_synthetic_plumbing() -> SyntheticPlumbingResult:
             "source_weight",
             "reciprocal_weight",
             "population_weight",
-            "model_intensity",
+            "scattering_strength",
             "optical_weight",
             "footprint_weight",
             "polarization_weight",
-            "pixel_solid_angle",
         ),
     )
 
@@ -247,7 +245,7 @@ def _checks() -> tuple[list[dict[str, str]], list[dict[str, object]]]:
         {
             "check_id": "contract_flow",
             "status": "PASS" if np.isclose(flow.detector_image.sum(), flow.event_mass.sum()) else "FAIL",
-            "evidence": "stable event ID and eight factors conserve synthetic mass",
+            "evidence": "stable event ID and seven factors conserve synthetic mass",
         },
     ]
     mutations = _mutations()

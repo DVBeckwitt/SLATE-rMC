@@ -8,7 +8,7 @@ from types import MappingProxyType
 from rasim_next.proof.traces import Tolerance
 
 STAGE_TOLERANCE_VERSION = "rasim-stage-tolerances-v1"
-STAGE_TOLERANCE_SHA256 = "e3b88394a27208e97ac62066354affaf5ca0844a9902961aaf624a008599e0d2"
+STAGE_TOLERANCE_SHA256 = "d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3"
 _TOP_KEYS = {
     "artifact_version",
     "contract_api_version",
