@@ -83,20 +83,3 @@ class ReciprocalLattice:
         rod_axis = rod_axis / np.linalg.norm(rod_axis)
         radial_q = inplane_q - np.sum(inplane_q * rod_axis, axis=-1)[..., None] * rod_axis
         return np.asarray(np.linalg.norm(radial_q, axis=-1), dtype=np.float64)
-
-    def validate_layer_qz(self, l_coordinate: ArrayLike, qz_Ainv: ArrayLike) -> NDArray[np.float64]:
-        """Return L after checking the c-axis-normal layered-cell relation to Qz."""
-
-        if not np.allclose(
-            self.direct_basis_A[2, :2], 0.0, rtol=0.0, atol=1e-12
-        ) or not np.allclose(self.direct_basis_A[:2, 2], 0.0, rtol=0.0, atol=1e-12):
-            raise ValueError("layer Qz validation requires the crystallographic c axis normal")
-        l_value, qz = np.broadcast_arrays(
-            np.asarray(l_coordinate, dtype=np.float64), np.asarray(qz_Ainv, dtype=np.float64)
-        )
-        if not np.all(np.isfinite(l_value)) or not np.all(np.isfinite(qz)):
-            raise ValueError("L and Qz must be finite")
-        expected_qz = l_value * self.basis_Ainv[2, 2]
-        if not np.allclose(qz, expected_qz, rtol=2e-12, atol=1e-12):
-            raise ValueError("L and Qz are inconsistent for this layered cell")
-        return np.asarray(l_value, dtype=np.float64)

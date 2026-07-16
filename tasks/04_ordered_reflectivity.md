@@ -45,6 +45,7 @@ Original paths resolve under reference/legacy_source/.
 Manuscript equation labels resolve under reference/manuscript/.
 ```
 
+
 Inventory: `PHY-MAT-*`, `PHY-REC-001`, `PHY-REC-010`, `PHY-ORD-*`, `PHY-MOT-*`, `PHY-REF-001` through `PHY-REF-007`, `PHY-THK-003`, `PHY-THK-004`.
 
 Original:
@@ -135,81 +136,42 @@ git diff --check
 
 Stop `BLOCKED` if species, occupancy, displacement, density, or shared wave-mode conventions cannot be represented without silent approximation. Record the smallest required change.
 
-## Compact cleanup execution
+## Execution plan
 
-State: implementation and compact proof complete; final Git handoff supplies the cleanup commit SHA.
+State: local recovery complete; shared measure, phase/gauge, and tolerance contracts remain
+blocking.
 
-The superseding cleanup order narrows permanent proof to distinct long-term scientific boundaries.
-It removes the unmerged compatibility expansion and assigns cross-material parity and detector
-agreement to T06/T07.
+1. Keep the strict Gemmi 0.7 CIF validation fix and the compact six-test budget.
+2. Treat `l_coordinate` as authoritative for crystal amplitudes; do not equate it to sample `qz`.
+3. Preserve the HEAD result types and finite-stack signatures while recording their unresolved
+   measure and phase semantics.
+4. Correct Parratt for a general lossless incident ambient without changing the vacuum result.
+5. Emit schema-v1 proof evidence and leave benchmarks and mutations as disposable command output.
+6. Commit only owned-path local fixes; do not publish or rewrite history.
 
-### Retained core scope
+## Handoff
 
-- strict CIF ingestion with explicit occupancy, species, displacement, cell, and symmetry handling
-- every individual `(h,k)` rod, with `Qr` and symmetry families retained only as metadata
-- positive-phase raw complex unit-cell amplitudes in electrons and explicit raw `|F|^2` electron²
-- one Bi2Se3 quintuple layer reconstructed by the three exact R-centering translations
-- Pb-centered, registry-free PbI2 `F_plus` and `F_minus` layer amplitudes
-- explicit and uniform finite ordered stacks
-- pure Parratt reflectivity
-- the separately named corrected manuscript specular composite
+Status: `BLOCKED`
 
-### Deleted scope and residue
+Commit SHA: the local checkpoint commit containing this handoff.
 
-- production `bi2se3_whole_cell_compat`, its public facade, cache identities, hard-coded factors,
-  17-cell/AREA/pole-clamp observable, and legacy specular stitch
-- full VESTA tables, broad material/curve sweeps, deterministic PbI2 parent payloads, generated
-  traces, figures, data, mutation frameworks, convergence frameworks, and benchmark frameworks
-- `ordered/pbi2_proof.py`; its cross-material/repeat parity belongs to T06/T07
-- compatibility and snapshot-style permanent tests
+Public signatures and result types: unchanged from
+`8954474702009b61e3455318d94bb048d7f1f30c` except deletion of the invalid
+`ReciprocalLattice.validate_layer_qz` helper. Existing ordered and finite-stack result types and
+call signatures are preserved. `read_crystal` regains strict Gemmi 0.7 validation, crystal
+amplitudes use authoritative `L`, and Parratt now handles a general lossless incident ambient.
 
-The feature branch ancestry includes quarantined commit `589988d`, but its surviving production
-hunks were not accepted: `ordered/motifs.py`, `reciprocal/lattice.py`, and
-`reciprocal/rods.py` are restored to their pre-quarantine `920fc59` content. No change was
-copied from the separate `wt-post-readiness-quarantine` worktree.
+Proof summary: focused `6/6` and full `11/11` pass with both Gemmi 0.7.1 and 0.7.5. The ordered
+proof has six passing checks, validates against `proof_result.schema.json` v1, and reports
+`BLOCKED`; core passes `5/5`; references pass `7/7`. Eleven disposable ordered/reflectivity
+mutations were detected at their first affected stages.
 
-### Compact permanent proof
+Benchmark and peak memory: one frozen single-thread run over 256 equivalent amplitudes took
+`0.011439099995186552 s` optimized versus `5.972575199994026 s` scalar, with maximum disagreement
+`5.275749907936691e-13 e`. A combined 10,000-amplitude and 4,096-point Parratt run took
+`0.088571200001752 s` with `8.445280075073242 MiB` traced peak. No benchmark artifact remains.
 
-The ordered proof emits six checks and no artifacts:
-
-1. scalar XrayDB atom sum, tracked F003 boundary, raw event identity, and electron² normalization
-2. one five-atom Bi2Se3 QL reconstruction plus distinct same-family rod identities
-3. one PbI2 2H motif/layer scalar boundary
-4. coherent direct sum, five-repeat off-Bragg enumeration, and seven-repeat Bragg limit
-5. three-point scalar Parratt recursion plus immutable-pack sample and zero-thickness collapse
-6. separate raw kinematic, pure Parratt, and corrected-composite outputs, including direct
-   internal-film phase and normalized `Qz^-2` high-branch equations
-
-Permanent tests retain the same six boundaries. The focused suite passes `6/6`; the full suite
-passes `11/11`. The ordered proof is `READY` at `6/6`; core proof passes `5/5`; reference
-proof passes `7/7`.
-
-### Numerical evidence
-
-- optimized versus scalar atom sum: maximum `1.9335119931946505e-12 e` over 256 equivalent events
-- QL reconstruction: maximum `3.336525901964335e-13 e`; coordinate residual
-  `1.1102230246251565e-16` fractional
-- PbI2 layer scalar boundary: maximum `7.588599744428075e-15 e`
-- uniform finite stack: five-repeat off-Bragg error `1.807312143953211e-15 e`; exact Bragg error
-  `0.0 e`
-- Parratt scalar stages: maximum `1.3877787807814457e-16`; three-point pack reflectivity maximum
-  `4.086730953645201e-13`
-- corrected composite direct internal-phase, raw-kinematic, and normalized-high-branch errors:
-  `0.0`
-- fixed-fit nested composite grids `257/513/1025`: common-node absolute and relative differences
-  are `0.0`
-
-Disposable single-thread timing and memory evidence:
-
-- 256 equivalent amplitudes: optimized median `0.01343220000853762 s`; scalar median
-  `6.099646199989365 s`
-- 10,000 optimized amplitudes: median `0.02356179998605512 s`
-- 4,096 three-layer Parratt points: median `0.0014921999827492982 s`
-- combined 10,000-amplitude plus 4,096-Parratt traced peak: `8.444900512695312 MiB`
-
-No benchmark script, output artifact, or import-time thread mutation is retained.
-
-### Legacy classifications
+Legacy classifications:
 
 - `ordered.bi2se3_vesta`: `CORRECTED`. F003 reciprocal d-spacing agrees exactly at the sampled
   prior stage; `ordered.unit_cell_amplitude` is the first divergence from the immutable historical
@@ -219,27 +181,25 @@ No benchmark script, output artifact, or import-time thread mutation is retained
 - `reflectivity.manuscript_specular_composite`: `NO_ORACLE`; the immutable pack contains pure
   Parratt arrays but no composite observable.
 
-### Public APIs
+First divergences: `ordered.unit_cell_amplitude` for the corrected Bi2Se3 legacy amplitude; none
+for pure Parratt; no legacy composite oracle exists.
 
-`read_crystal`, `build_rod_catalog`, `unit_cell_amplitude`, `ordered_event_result`,
-`extract_pbi2_motifs`, `pbi2_layer_amplitudes`, `coherent_finite_stack`,
-`uniform_finite_stack`, `parratt_reflectivity`, and `manuscript_specular_composite`.
+Convergence: not applicable to the retained exact atom, finite-sum, and Parratt kernels; no
+approximation/refinement variable is present, so no convergence record is fabricated.
 
-### Minimum integration request
+Known limitations: T04 does not implement stacking disorder, cross-material parity, mosaic,
+detector geometry/agreement, fitting, CLI, GUI, or acceleration. The protected
+`EventIntensityResult.intensity_per_sr` still contains raw electron², the finite-stack phase input
+is frame-ambiguous, `LayerAmplitudeResult` lacks gauge/unit metadata, and the local tolerances have
+no reviewed version/hash.
 
-`IR-T04-MEASURE-GAUGE`
+Contract requests: `IR-T04-MEASURE-GAUGE` is blocking and owned by a future reviewed shared-contract
+change. It must freeze the event measure and once-only `r_e^2`/solid-angle ownership; layer units,
+normalization, positive phase sign, Pb-centered origin/gauge, event/rod alignment, and projection/
+registry ownership; and a versioned tolerance artifact. T06 records acceptance but does not
+silently repair production. Acceptance requires direct T04/T05 substitution without adapters,
+false per-steradian labels, hidden scaling, or duplicate factors.
 
-- Owner: shared-contract/T06 integration.
-- Problem: `LayerAmplitudeResult` cannot encode the established Pb-centered, registry-free,
-  positive-phase gauge. `EventIntensityResult.intensity_per_sr` currently carries T04's explicitly
-  normalized raw electron², not a true per-steradian observable; T05 uses a neutral
-  `intensity_electron2` field.
-- Decision required: freeze one common raw event-intensity measure, ownership of `r_e^2`, detector
-  solid angle, total-versus-per-layer normalization, and the layer gauge convention.
-- Acceptance: T04 and T05 event results are interchangeable without a branch-local adapter, false
-  per-sr labeling, or hidden scaling. T04 does not change the protected shared contract locally.
-
-### Limitations
-
-T04 does not implement stacking disorder, cross-material parity, mosaic, detector geometry,
-detector agreement, fitting, CLI, GUI, or acceleration. Those remain T06/T07 or later work.
+History: after the checkpoint this remains a seven-commit development series from
+`812f896fde5b8365ff5c218fc606df674ad7dcad`; integration still needs a squash. No history rewrite
+or publication is performed here.

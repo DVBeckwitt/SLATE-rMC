@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import cmath
 import hashlib
+import json
 import math
+import platform
 import subprocess
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +18,13 @@ import numpy as np
 import xraydb
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import RodQueryBatch
+from rasim_next.core.contracts import CONTRACT_API_VERSION, RodQueryBatch
 from rasim_next.materials import CrystalStructure, read_crystal
-from rasim_next.materials.optics import HC_EV_A
+from rasim_next.materials.optics import (
+    CLASSICAL_ELECTRON_RADIUS_A,
+    HC_EV_A,
+    material_optics,
+)
 from rasim_next.ordered.amplitudes import ordered_event_result, unit_cell_amplitude
 from rasim_next.ordered.bi2se3_proof import run_bi2se3_ql_proof
 from rasim_next.ordered.finite_stack import coherent_finite_stack, uniform_finite_stack
@@ -30,6 +37,8 @@ from rasim_next.reflectivity.specular import manuscript_specular_composite
 ROOT = Path(__file__).resolve().parents[3]
 PACK_PATH = ROOT / "reference" / "rasim_reference_v1.npz"
 WAVELENGTH_A = 1.540592925
+PROOF_BASE_SHA = "812f896fde5b8365ff5c218fc606df674ad7dcad"
+TRACE_SCHEMA_VERSION = 4
 TOLERANCES = {
     "amplitude_e": {"atol": 1e-10, "rtol": 1e-12},
     "coordinate_fractional": {"atol": 2e-15, "rtol": 0.0},
@@ -60,7 +69,7 @@ def _check(check_id: str, passed: bool, evidence: dict[str, object]) -> dict[str
     return {
         "check_id": check_id,
         "status": "PASS" if passed else "FAIL",
-        "evidence": evidence,
+        "evidence": json.dumps(evidence, sort_keys=True, separators=(",", ":"), allow_nan=False),
     }
 
 
@@ -68,6 +77,10 @@ def _reference_pack() -> tuple[dict[str, NDArray[Any]], str]:
     manifest = tomllib.loads(
         (ROOT / "reference" / "reference_manifest.toml").read_text(encoding="utf-8")
     )
+    if manifest["contract_api_version"] != f"rasim-contracts-v{CONTRACT_API_VERSION}":
+        raise ValueError("reference manifest contract version mismatch")
+    if manifest["trace_schema_version"] != f"rasim-stage-trace-v{TRACE_SCHEMA_VERSION}":
+        raise ValueError("reference manifest trace-schema version mismatch")
     expected_hash = str(manifest["reference_pack"]["sha256"])
     observed_hash = _sha256(PACK_PATH)
     if observed_hash != expected_hash:
@@ -150,13 +163,52 @@ def _scalar_and_raw_check(
 ) -> tuple[dict[str, object], dict[str, object]]:
     pack_hkl = np.asarray(pack["ordered_hkl"], dtype=np.float64)
     row_003 = int(np.flatnonzero(np.all(pack_hkl == (0.0, 0.0, 3.0), axis=1))[0])
-    hkl = np.asarray(((0.0, 0.0, 3.0), (1.0, 0.0, 1.0), (1.0, -1.0, 0.37)))
-    wavelength = np.full(3, WAVELENGTH_A)
+    hkl = np.asarray(((0.0, 0.0, 3.0), (0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (1.0, -1.0, 0.37)))
+    wavelength = np.asarray((WAVELENGTH_A, WAVELENGTH_A, 1.1, 1.8))
     production = unit_cell_amplitude(crystal, hkl, wavelength).amplitude_e
     direct = _direct_atom_amplitudes(crystal, hkl, wavelength)
     direct_error = float(np.max(np.abs(production - direct)))
+    absence_error_e = float(abs(production[1]))
+    small_atom_errors = []
+    for atom_count in (1, 2):
+        small = replace(
+            crystal,
+            phase_id=f"bi2se3-{atom_count}-atom",
+            sites=crystal.sites[:atom_count],
+        )
+        small_atom_errors.append(
+            float(
+                np.max(
+                    np.abs(
+                        unit_cell_amplitude(small, hkl, wavelength).amplitude_e
+                        - _direct_atom_amplitudes(small, hkl, wavelength)
+                    )
+                )
+            )
+        )
+    small_atom_error_e = max(small_atom_errors)
+
+    partial = replace(
+        crystal,
+        phase_id="bi2se3-half-bi",
+        sites=tuple(
+            replace(site, occupancy=0.5) if site.source_label == "Bi" else site
+            for site in crystal.sites
+        ),
+    )
+    partial_production = unit_cell_amplitude(partial, hkl, wavelength).amplitude_e
+    partial_direct = _direct_atom_amplitudes(partial, hkl, wavelength)
+    partial_error_e = float(np.max(np.abs(partial_production - partial_direct)))
+    occupancy_effect_e = float(np.max(np.abs(partial_production - production)))
 
     lattice = ReciprocalLattice.from_crystal(crystal)
+    reciprocal_duality_error = float(
+        np.max(np.abs(crystal.direct_basis_A.T @ lattice.basis_Ainv - 2.0 * math.pi * np.eye(3)))
+    )
+    nonorthogonal_cell = not np.isclose(
+        np.dot(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1]),
+        0.0,
+    )
     d_003_A = 2.0 * math.pi / float(np.linalg.norm(lattice.q_cartesian_Ainv(hkl[0])))
     d_error_A = abs(d_003_A - float(pack["ordered_sim_d"][row_003]))
     historical = complex(
@@ -183,7 +235,26 @@ def _scalar_and_raw_check(
         )
     )
 
+    optical_wavelength_A = np.asarray((1.1, WAVELENGTH_A, 1.8))
+    optics = material_optics(crystal, optical_wavelength_A)
+    forward = unit_cell_amplitude(
+        crystal,
+        np.zeros((optical_wavelength_A.size, 3)),
+        optical_wavelength_A,
+    ).amplitude_e
+    prefactor = (
+        CLASSICAL_ELECTRON_RADIUS_A * optical_wavelength_A**2 / (2.0 * math.pi * crystal.volume_A3)
+    )
+    optics_consistency_error = max(
+        float(np.max(np.abs(optics.delta - prefactor * forward.real))),
+        float(np.max(np.abs(optics.beta - prefactor * forward.imag))),
+        float(np.max(np.abs(optics.mu_Ainv - 4.0 * math.pi * optics.beta / optical_wavelength_A))),
+        float(np.max(np.abs(optics.n_complex - (1.0 - optics.delta + 1.0j * optics.beta)))),
+    )
+
     catalog = build_rod_catalog(crystal, h_bounds=(0, 1), k_bounds=(0, 0))
+    catalog_hk = set(zip(catalog.h.tolist(), catalog.k.tolist(), strict=True))
+    catalog_complete = catalog_hk == {(0, 0), (1, 0)} and np.unique(catalog.rod_id).size == 2
     rows = [int(np.flatnonzero((catalog.h == h_value) & (catalog.k == 0))[0]) for h_value in (0, 1)]
     l_coordinate = np.asarray((0.5, 1.25))
     query = RodQueryBatch(
@@ -192,33 +263,64 @@ def _scalar_and_raw_check(
         phase_id=(crystal.phase_id,) * 2,
         h=np.asarray((0, 1), dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        qz_Ainv=np.asarray((0.123, -0.456)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
     ordered = ordered_event_result(crystal, catalog, query)
-    raw_measure_error_e2 = float(
-        np.max(np.abs(ordered.intensity.intensity_per_sr - np.abs(ordered.amplitude_e) ** 2))
+    expected_event = unit_cell_amplitude(
+        crystal,
+        np.column_stack((query.h, query.k, query.l_coordinate)),
+        query.wavelength_A,
+    ).amplitude_e
+    event_amplitude_error_e = float(np.max(np.abs(ordered.amplitude_e - expected_event)))
+    raw_electron2 = np.abs(ordered.amplitude_e) ** 2
+    protected_field_error_electron2 = float(
+        np.max(np.abs(ordered.intensity.intensity_per_sr - raw_electron2))
     )
     passed = bool(
         direct_error <= TOLERANCES["amplitude_e"]["atol"]
+        and small_atom_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and partial_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and occupancy_effect_e > 1.0
+        and absence_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and reciprocal_duality_error <= 1e-12
+        and nonorthogonal_cell
+        and optics_consistency_error <= 1e-12
+        and np.all(optics.beta > 0.0)
         and d_error_A <= TOLERANCES["reference_d_A"]["atol"]
         and vesta_component_error_e <= 0.01
-        and raw_measure_error_e2 <= 5e-12
+        and event_amplitude_error_e == 0.0
+        and protected_field_error_electron2 <= 5e-12
+        and np.all(np.isfinite(raw_electron2))
+        and catalog_complete
         and np.array_equal(ordered.event_id, query.event_id)
+        and np.array_equal(ordered.intensity.event_id, query.event_id)
         and ordered.intensity.normalization == "|F_e|^2; electron2; no external factors"
         and not ordered.amplitude_e.flags.writeable
     )
     check = _check(
-        "scalar_atom_sum_and_raw_measure",
+        "cif_atom_optics_and_raw_amplitude",
         passed,
         {
             "maximum_scalar_oracle_error_e": direct_error,
+            "one_two_atom_scalar_oracle_error_e": small_atom_error_e,
+            "partial_occupancy_oracle_error_e": partial_error_e,
+            "partial_occupancy_effect_e": occupancy_effect_e,
+            "F001_systematic_absence_e": absence_error_e,
+            "reciprocal_duality_error": reciprocal_duality_error,
+            "nonorthogonal_cell": nonorthogonal_cell,
+            "material_optics_consistency_error": optics_consistency_error,
+            "minimum_beta": float(np.min(optics.beta)),
             "F003_reciprocal_d_error_A": d_error_A,
             "F003_vesta_component_error_e": vesta_component_error_e,
             "F003_historical_pack_residual_e": historical_residual_e,
-            "raw_measure_error_electron2": raw_measure_error_e2,
-            "normalization": ordered.intensity.normalization,
+            "arbitrary_L_event_amplitude_error_e": event_amplitude_error_e,
+            "bounded_rod_catalog_complete": catalog_complete,
+            "protected_intensity_per_sr_field_error_electron2": (protected_field_error_electron2),
+            "protected_field_normalization": ordered.intensity.normalization,
+            "raw_electron2_minimum": float(np.min(raw_electron2)),
+            "raw_electron2_maximum": float(np.max(raw_electron2)),
         },
     )
     comparison = {
@@ -264,7 +366,7 @@ def _pbi2_check() -> dict[str, object]:
         phase_id=(crystal.phase_id,) * 2,
         h=np.ones(2, dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        qz_Ainv=np.asarray((0.2, 0.3)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
@@ -408,7 +510,9 @@ def _direct_parratt(
     amplitudes: list[complex] = []
     for qz in qz_Ainv:
         kz = [
-            cmath.sqrt((complex(index) ** 2 - 1.0) * k0**2 + (0.5 * float(qz)) ** 2)
+            cmath.sqrt(
+                (complex(index) ** 2 - complex(indices[0]) ** 2) * k0**2 + (0.5 * float(qz)) ** 2
+            )
             for index in indices
         ]
         kz = [
@@ -488,10 +592,43 @@ def _parratt_check(
         roughness_A=(0.0,),
     )
     collapse_error = float(np.max(np.abs(collapsed.amplitude - bare.amplitude)))
+    thick = parratt_reflectivity(
+        qz,
+        float(wavelength),
+        refractive_index=indices,
+        thickness_A=(None, 1.0e7, None),
+        roughness_A=(0.0, 0.0),
+    )
+    thick_limit_error = float(np.max(np.abs(thick.amplitude - thick.interface_amplitude[:, 0])))
+
+    k0 = 2.0 * math.pi / float(wavelength)
+    ambient_qz = np.asarray((2.2 * k0,))
+    ambient_indices = np.asarray((1.2 + 0.0j, 1.5 + 0.0j))
+    ambient = parratt_reflectivity(
+        ambient_qz,
+        float(wavelength),
+        refractive_index=ambient_indices,
+        thickness_A=(None, None),
+        roughness_A=(0.0,),
+    )
+    ambient_kz, ambient_interfaces, ambient_amplitude = _direct_parratt(
+        ambient_qz,
+        float(wavelength),
+        ambient_indices,
+        (None, None),
+        np.asarray((0.0,)),
+    )
+    ambient_error = max(
+        float(np.max(np.abs(ambient.kz_Ainv - ambient_kz))),
+        float(np.max(np.abs(ambient.interface_amplitude - ambient_interfaces))),
+        float(np.max(np.abs(ambient.amplitude - ambient_amplitude))),
+    )
     passed = bool(
         scalar_error <= TOLERANCES["parratt"]["atol"]
         and pack_error <= TOLERANCES["parratt"]["atol"]
         and collapse_error <= TOLERANCES["parratt"]["atol"]
+        and thick_limit_error <= TOLERANCES["parratt"]["atol"]
+        and ambient_error <= TOLERANCES["parratt"]["atol"]
         and production.normalization == "dimensionless pure Parratt reflectivity"
     )
     check = _check(
@@ -502,6 +639,8 @@ def _parratt_check(
             "maximum_scalar_stage_error": scalar_error,
             "maximum_pack_reflectivity_error": pack_error,
             "zero_thickness_collapse_error": collapse_error,
+            "thick_film_top_interface_error": thick_limit_error,
+            "arbitrary_lossless_ambient_stage_error": ambient_error,
         },
     )
     comparison = {
@@ -575,16 +714,93 @@ def _specular_check(pack: dict[str, NDArray[Any]]) -> dict[str, object]:
     )
 
 
+def _proof_metadata() -> dict[str, object]:
+    environment = {
+        "gemmi": gemmi.__version__,
+        "implementation": platform.python_implementation(),
+        "numpy": np.__version__,
+        "python": platform.python_version(),
+        "xraydb": xraydb.__version__,
+    }
+    encoded_environment = json.dumps(
+        environment,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    return {
+        "schema_version": 1,
+        "task_id": "T04",
+        "base_sha": PROOF_BASE_SHA,
+        "commit_sha": _git("rev-parse", "HEAD"),
+        "contract_version": CONTRACT_API_VERSION,
+        "trace_schema_version": TRACE_SCHEMA_VERSION,
+        "environment_sha256": hashlib.sha256(encoded_environment).hexdigest(),
+        "environment": environment,
+    }
+
+
+def _contract_requests() -> list[dict[str, object]]:
+    return [
+        {
+            "request_id": "IR-T04-MEASURE-GAUGE",
+            "status": "BLOCKING",
+            "owner": "future reviewed shared-contract/integration change",
+            "t06_role": "record reviewed acceptance; do not silently change production",
+            "problems": [
+                (
+                    "EventIntensityResult.intensity_per_sr carries raw |F_e|^2 electron2 "
+                    "without r_e^2 or detector solid angle"
+                ),
+                (
+                    "LayerAmplitudeResult cannot declare electron units, motif normalization, "
+                    "positive Fourier sign, Pb-centered origin/gauge, or event/rod alignment"
+                ),
+                (
+                    "the finite-stack qz-times-depth interface does not identify the qz frame or "
+                    "the owner of layer projection and registry phase"
+                ),
+                "T04 has no reviewed versioned tolerance artifact or recorded tolerance hash",
+            ],
+            "decision": (
+                "freeze whether EventIntensityResult is raw electron2 or true per_sr and assign "
+                "r_e^2 and detector solid angle exactly once; freeze LayerAmplitudeResult as "
+                "event/rod-aligned complex electron amplitudes for one Pb-centered I-Pb-I motif "
+                "with occupancy, anomalous, and displacement factors, exp(+i Q dot r), a fixed "
+                "F-plus/F-minus mapping, and no registry/population/optical/solid-angle factor; "
+                "freeze a frame-tagged layer projection or event-aligned phase owner and publish "
+                "reviewed tolerances with version and hash"
+            ),
+            "acceptance": (
+                "T04 and T05 preserve query event and rod order and interoperate without an "
+                "adapter, false per-sr labeling, hidden phase/scaling, or duplicate factors; T04 "
+                "loads the reviewed tolerance artifact and records its version/hash"
+            ),
+        }
+    ]
+
+
 def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     """Run the compact permanent T04 proof without generating artifacts."""
 
+    metadata = _proof_metadata()
     if not PACK_PATH.is_file():
         if allow_missing_pack:
             return {
-                "schema_version": "ordered-reflectivity-proof-v1",
-                "task_id": "T04",
+                **metadata,
                 "status": "BLOCKED",
-                "reason": "immutable reference pack is missing",
+                "reference_pack_sha256s": {},
+                "checks": [
+                    {
+                        "check_id": "reference_pack",
+                        "status": "SKIP",
+                        "evidence": "immutable reference pack is missing",
+                    }
+                ],
+                "classifications": [],
+                "convergence": [],
+                "limitations": ["immutable reference pack is missing"],
+                "contract_requests": _contract_requests(),
             }
         raise FileNotFoundError(PACK_PATH)
 
@@ -609,60 +825,30 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         parratt_check,
         _specular_check(pack),
     ]
-    status = "READY" if all(check["status"] == "PASS" for check in checks) else "FAIL"
+    status = "BLOCKED" if all(check["status"] == "PASS" for check in checks) else "FAIL"
     return {
-        "schema_version": "ordered-reflectivity-proof-v1",
-        "task_id": "T04",
+        **metadata,
         "status": status,
-        "commit_sha": _git("rev-parse", "HEAD"),
-        "reference_pack_sha256": pack_hash,
-        "tolerances": TOLERANCES,
-        "environment": {
-            "gemmi": gemmi.__version__,
-            "numpy": np.__version__,
-            "xraydb": xraydb.__version__,
-        },
+        "reference_pack_sha256s": {"rasim_reference_v1": pack_hash},
         "checks": checks,
         "classifications": [
-            ordered_comparison,
-            parratt_comparison,
+            {**ordered_comparison, "ledger_ids": ["PHY-ORD-009"]},
+            {**parratt_comparison, "ledger_ids": ["PHY-REF-002"]},
             {
                 "case_id": "reflectivity.manuscript_specular_composite",
                 "classification": "NO_ORACLE",
+                "ledger_ids": ["PHY-REF-007"],
                 "first_divergence_stage": None,
                 "reason": "the immutable pack contains pure Parratt but no composite observable",
             },
         ],
-        "public_apis": [
-            "read_crystal",
-            "build_rod_catalog",
-            "unit_cell_amplitude",
-            "ordered_event_result",
-            "extract_pbi2_motifs",
-            "pbi2_layer_amplitudes",
-            "coherent_finite_stack",
-            "uniform_finite_stack",
-            "parratt_reflectivity",
-            "manuscript_specular_composite",
-        ],
-        "integration_requests": [
-            {
-                "request_id": "IR-T04-MEASURE-GAUGE",
-                "owner": "shared contracts / T06",
-                "decision": (
-                    "freeze one raw event-intensity measure for T04 and T05, ownership of r_e^2 "
-                    "and detector solid angle, total-versus-per-layer normalization, and the "
-                    "Pb-centered registry-free positive-phase layer convention"
-                ),
-                "acceptance": (
-                    "T04 and T05 event results are interchangeable without a branch-local "
-                    "adapter, false per-sr labeling, or hidden scaling"
-                ),
-            }
-        ],
+        "convergence": [],
+        "contract_requests": _contract_requests(),
         "limitations": [
             "T04 does not implement stacking disorder, mosaic, detector geometry, fitting, CLI, or GUI",
-            "the shared EventIntensityResult field is named intensity_per_sr although T04 stores explicitly normalized raw electron2",
-            "benchmarks and convergence are disposable handoff evidence, not permanent proof code",
+            "the protected EventIntensityResult.intensity_per_sr output contains raw electron2 and is not a true per-steradian measure",
+            "layer phase/projection ownership, motif gauge metadata, and reviewed tolerance provenance remain unresolved shared-contract gates",
+            "this exact numerical core has no approximation or refinement variable, so convergence is not fabricated",
+            "benchmarks and negative controls are disposable handoff evidence, not permanent proof frameworks",
         ],
     }

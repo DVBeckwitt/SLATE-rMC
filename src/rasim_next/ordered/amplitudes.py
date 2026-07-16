@@ -151,7 +151,6 @@ def ordered_event_result(
             or int(query.k[row]) != int(catalog.k[catalog_row])
         ):
             raise ValueError(f"rod identity mismatch at query row {row}")
-    lattice.validate_layer_qz(query.l_coordinate, query.qz_Ainv)
     hkl = np.column_stack((query.h, query.k, query.l_coordinate))
     amplitude = unit_cell_amplitude(
         crystal,

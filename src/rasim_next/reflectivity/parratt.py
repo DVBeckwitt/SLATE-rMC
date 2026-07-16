@@ -75,7 +75,7 @@ def parratt_reflectivity(
     thickness_A: Sequence[float | None],
     roughness_A: ArrayLike,
 ) -> ParrattResult:
-    """Evaluate a passive ambient-to-substrate multilayer bottom-up."""
+    """Evaluate a lossless-ambient, passive multilayer bottom-up."""
 
     qz_input = np.asarray(qz_Ainv, dtype=np.float64)
     wavelength_input = np.asarray(wavelength_A, dtype=np.float64)
@@ -106,14 +106,19 @@ def parratt_reflectivity(
         raise ValueError("refractive indices must be finite with positive real part")
     if np.any(media.imag < 0.0):
         raise ValueError("active-gain refractive indices are not supported")
+    ambient = media[..., 0]
+    if np.any(ambient.imag != 0.0):
+        raise ValueError("real qz_Ainv requires a lossless incident ambient")
     if not np.all(np.isfinite(roughness)) or np.any(roughness < 0.0):
         raise ValueError("interface roughness must be finite and nonnegative")
 
     k0 = 2.0 * np.pi / wavelength
-    if np.any(qz > 2.0 * k0):
-        raise ValueError("qz_Ainv exceeds the external specular range")
-    vacuum_normal = 0.5 * qz
-    squared_normal = (media * media - 1.0) * k0[..., None] ** 2 + vacuum_normal[..., None] ** 2
+    if np.any(qz > 2.0 * ambient.real * k0):
+        raise ValueError("qz_Ainv exceeds the incident-ambient specular range")
+    ambient_normal = 0.5 * qz
+    squared_normal = (media * media - ambient[..., None] ** 2) * k0[
+        ..., None
+    ] ** 2 + ambient_normal[..., None] ** 2
     kz = np.asarray(
         select_normal_wavevector(squared_normal, propagation_direction=1),
         dtype=np.complex128,

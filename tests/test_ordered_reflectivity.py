@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import cmath
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xraydb
 from numpy.typing import NDArray
 
 from rasim_next.core.contracts import RodQueryBatch
-from rasim_next.materials import CrystalStructure, read_crystal
+from rasim_next.materials import (
+    CLASSICAL_ELECTRON_RADIUS_A,
+    CrystalStructure,
+    material_optics,
+    read_crystal,
+)
 from rasim_next.materials.optics import HC_EV_A
 from rasim_next.ordered import (
     coherent_finite_stack,
@@ -19,7 +26,6 @@ from rasim_next.ordered import (
     uniform_finite_stack,
     unit_cell_amplitude,
 )
-from rasim_next.ordered.bi2se3_proof import run_bi2se3_ql_proof
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity import manuscript_specular_composite, parratt_reflectivity
@@ -87,34 +93,93 @@ def _scalar_atom_sum(
     return np.asarray(values, dtype=np.complex128)
 
 
-def test_cif_scalar_amplitude_and_raw_event_measure() -> None:
-    crystal = read_crystal(
-        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
+def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
+    invalid_cif = tmp_path / "empty-loop.cif"
+    invalid_cif.write_text("data_invalid\nloop_\n_tag\n", encoding="ascii")
+    with pytest.raises(ValueError, match="empty loop"):
+        read_crystal(invalid_cif)
+
+    source_cif = STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif"
+    anisotropic_cif = tmp_path / "anisotropic.cif"
+    anisotropic_cif.write_text(
+        source_cif.read_text(encoding="utf-8")
+        + "\nloop_\n_atom_site_aniso_label\n_atom_site_aniso_U_11\nBi 0.01\n",
+        encoding="utf-8",
     )
+    with pytest.raises(NotImplementedError, match="anisotropic"):
+        read_crystal(anisotropic_cif)
+
+    crystal = read_crystal(source_cif, phase_id="bi2se3")
     assert crystal.spacegroup_hm == "R -3 m:H"
     assert len(crystal.sites) == 15
-    assert {site.occupancy for site in crystal.sites} == {1.0}
+    assert {(site.source_label, site.source_multiplicity) for site in crystal.sites} == {
+        ("Bi", 6),
+        ("Se1", 3),
+        ("Se2", 6),
+    }
     assert {site.u_iso_A2 for site in crystal.sites} == {0.019}
+    assert not np.isclose(
+        np.dot(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1]),
+        0.0,
+    )
 
-    hkl = np.asarray(((0.0, 0.0, 3.0), (1.0, 0.0, 1.0), (1.0, -1.0, 0.37)))
-    wavelength = np.asarray((WAVELENGTH_A, 1.1, 1.8))
+    hkl = np.asarray(((0.0, 0.0, 3.0), (0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (1.0, -1.0, 0.37)))
+    wavelength = np.asarray((WAVELENGTH_A, WAVELENGTH_A, 1.1, 1.8))
     production = unit_cell_amplitude(crystal, hkl, wavelength)
     expected = _scalar_atom_sum(crystal, hkl, wavelength)
     np.testing.assert_allclose(production.amplitude_e, expected, rtol=1e-12, atol=1e-10)
+    assert abs(production.amplitude_e[1]) <= 1e-10
     assert not production.amplitude_e.flags.writeable
+
+    for atom_count in (1, 2):
+        small = replace(
+            crystal,
+            phase_id=f"bi2se3-{atom_count}-atom",
+            sites=crystal.sites[:atom_count],
+        )
+        small_production = unit_cell_amplitude(small, hkl, wavelength).amplitude_e
+        small_expected = _scalar_atom_sum(small, hkl, wavelength)
+        np.testing.assert_allclose(small_production, small_expected, rtol=1e-12, atol=1e-10)
+
+    partial = replace(
+        crystal,
+        phase_id="bi2se3-half-bi",
+        sites=tuple(
+            replace(site, occupancy=0.5) if site.source_label == "Bi" else site
+            for site in crystal.sites
+        ),
+    )
+    partial_production = unit_cell_amplitude(partial, hkl, wavelength).amplitude_e
+    partial_expected = _scalar_atom_sum(partial, hkl, wavelength)
+    np.testing.assert_allclose(partial_production, partial_expected, rtol=1e-12, atol=1e-10)
+    assert np.max(np.abs(partial_production - production.amplitude_e)) > 1.0
+
+    optical_wavelength_A = np.asarray((1.1, WAVELENGTH_A, 1.8))
+    optics = material_optics(crystal, optical_wavelength_A)
+    forward = unit_cell_amplitude(
+        crystal,
+        np.zeros((optical_wavelength_A.size, 3)),
+        optical_wavelength_A,
+    ).amplitude_e
+    prefactor = (
+        CLASSICAL_ELECTRON_RADIUS_A * optical_wavelength_A**2 / (2.0 * np.pi * crystal.volume_A3)
+    )
+    np.testing.assert_allclose(optics.delta, prefactor * forward.real, rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(optics.beta, prefactor * forward.imag, rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(optics.mu_Ainv, 4.0 * np.pi * optics.beta / optical_wavelength_A)
+    np.testing.assert_allclose(optics.n_complex, 1.0 - optics.delta + 1.0j * optics.beta)
+    assert np.all(optics.beta > 0.0)
 
     catalog = build_rod_catalog(crystal, h_bounds=(0, 1), k_bounds=(0, 0))
     rows = [int(np.flatnonzero((catalog.h == h_value) & (catalog.k == 0))[0]) for h_value in (0, 1)]
     l_coordinate = np.asarray((0.5, 1.25))
-    lattice = ReciprocalLattice.from_crystal(crystal)
     query = RodQueryBatch(
         event_id=np.asarray((42, 7)),
         rod_id=catalog.rod_id[rows],
         phase_id=(crystal.phase_id,) * 2,
         h=np.asarray((0, 1), dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        qz_Ainv=np.asarray((0.123, -0.456)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
@@ -133,20 +198,27 @@ def test_cif_scalar_amplitude_and_raw_event_measure() -> None:
         atol=0.0,
     )
     assert result.intensity.normalization == "|F_e|^2; electron2; no external factors"
+    assert not result.amplitude_e.flags.writeable
 
 
-def test_bi2se3_quintuple_reconstruction_preserves_individual_rods() -> None:
-    result = run_bi2se3_ql_proof(str(ROOT))
+def test_bi2se3_same_family_rods_keep_distinct_identities() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    catalog = build_rod_catalog(crystal, h_bounds=(-1, 1), k_bounds=(-1, 1))
+    expected_hk = {(h_value, k_value) for h_value in range(-1, 2) for k_value in range(-1, 2)}
+    assert set(zip(catalog.h.tolist(), catalog.k.tolist(), strict=True)) == expected_hk
+    assert np.unique(catalog.rod_id).size == len(expected_hk)
+    selected_hk = ((1, 0), (0, 1), (1, -1))
+    rows = [
+        int(np.flatnonzero((catalog.h == h_value) & (catalog.k == k_value))[0])
+        for h_value, k_value in selected_hk
+    ]
 
-    assert result["status"] == "PASS"
-    assert result["ql_count"] == 3
-    assert result["atoms_per_ql"] == 5
-    assert result["stoichiometry"] == {"Bi": 2, "Se": 3}
-    assert result["site_coverage_exact"] is True
-    assert result["same_family_distinct_rods"] is True
-    assert len(set(result["rod_ids"])) == 3
-    assert result["maximum_coordinate_error_fractional"] <= 2e-15
-    assert result["maximum_amplitude_error_e"] <= 1e-10
+    assert np.unique(catalog.rod_id[rows]).size == len(selected_hk)
+    assert len({catalog.family_id[row] for row in rows}) == 1
+    assert len({catalog.family_key[row] for row in rows}) == 1
 
 
 def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
@@ -168,7 +240,7 @@ def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
         phase_id=(crystal.phase_id,) * 2,
         h=np.ones(2, dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        qz_Ainv=np.asarray((0.2, 0.3)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
@@ -244,6 +316,7 @@ def test_finite_stack_matches_direct_sum_and_bragg_limit() -> None:
     np.testing.assert_allclose(result.amplitude_e, expected, rtol=1e-12, atol=1e-10)
     np.testing.assert_allclose(result.intensity.intensity_per_sr, np.abs(expected) ** 2)
     assert result.intensity.normalization == "finite total |sum(F_e exp(i phase))|^2; electron2"
+    assert not result.amplitude_e.flags.writeable
 
     repeat = np.asarray((1.2 + 0.4j,))
     off_bragg_qz = np.asarray((0.31,))
@@ -331,6 +404,37 @@ def test_parratt_matches_small_scalar_recursion() -> None:
         roughness_A=(0.0,),
     )
     np.testing.assert_allclose(collapsed.amplitude, bare.amplitude, rtol=1e-12, atol=1e-12)
+
+    thick = parratt_reflectivity(
+        qz_Ainv,
+        wavelength_A,
+        refractive_index=indices,
+        thickness_A=(None, 1.0e7, None),
+        roughness_A=(0.0, 0.0),
+    )
+    np.testing.assert_allclose(
+        thick.amplitude,
+        thick.interface_amplitude[:, 0],
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+    ambient_indices = np.asarray((1.2 + 0.0j, 1.5 + 0.0j))
+    ambient_qz = np.asarray((2.2 * k0,))
+    ambient = parratt_reflectivity(
+        ambient_qz,
+        wavelength_A,
+        refractive_index=ambient_indices,
+        thickness_A=(None, None),
+        roughness_A=(0.0,),
+    )
+    ambient_kz = 0.5 * ambient_qz[0]
+    substrate_kz = cmath.sqrt(
+        (ambient_indices[1] ** 2 - ambient_indices[0] ** 2) * k0**2 + ambient_kz**2
+    )
+    expected_ambient_amplitude = (ambient_kz - substrate_kz) / (ambient_kz + substrate_kz)
+    np.testing.assert_allclose(ambient.kz_Ainv[0], (ambient_kz, substrate_kz))
+    np.testing.assert_allclose(ambient.amplitude[0], expected_ambient_amplitude)
 
 
 def test_corrected_specular_keeps_named_outputs_separate() -> None:

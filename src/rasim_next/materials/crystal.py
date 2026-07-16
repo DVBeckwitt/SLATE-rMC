@@ -138,8 +138,23 @@ def read_crystal(path: str | Path, *, phase_id: str | None = None) -> CrystalStr
 
     source_path = Path(path)
     try:
-        document = gemmi.cif.read_file(str(source_path), check_level=2)
-    except (OSError, RuntimeError) as error:
+        document = gemmi.cif.read_file(str(source_path))
+        document.check_for_missing_values()
+        document.check_for_duplicates()
+        for source_block in document:
+            if source_block.name == " ":
+                raise RuntimeError("missing block name (bare data_)")
+        pending_blocks = list(document)
+        while pending_blocks:
+            source_block = pending_blocks.pop()
+            for item in source_block:
+                loop = item.loop
+                if loop is not None and loop.length() == 0:
+                    raise RuntimeError(f"empty loop with {loop.tags[0]}")
+                frame = item.frame
+                if frame is not None:
+                    pending_blocks.append(frame)
+    except (OSError, RuntimeError, ValueError) as error:
         raise ValueError(f"failed to read CIF {source_path}: {error}") from error
     if len(document) != 1:
         raise ValueError("CIF must contain exactly one data block")

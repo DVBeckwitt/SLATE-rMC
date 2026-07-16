@@ -10,7 +10,6 @@ import numpy as np
 from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
 from rasim_next.materials.crystal import CrystalSite, CrystalStructure
 from rasim_next.ordered.amplitudes import unit_cell_amplitude
-from rasim_next.reciprocal.lattice import ReciprocalLattice
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +270,6 @@ def pbi2_layer_amplitudes(
 
     if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
         raise ValueError("query phase does not match the PbI2 crystal")
-    ReciprocalLattice.from_crystal(crystal).validate_layer_qz(query.l_coordinate, query.qz_Ainv)
     motifs = extract_pbi2_motifs(crystal)
     plus_atoms = _canonical_plus_atoms(crystal, motifs)
     minus_atoms = _reflected_atoms(plus_atoms)
