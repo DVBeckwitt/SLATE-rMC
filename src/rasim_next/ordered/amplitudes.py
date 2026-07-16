@@ -9,6 +9,7 @@ import xraydb
 from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.contracts import EventIntensityResult, RodCatalog, RodQueryBatch
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 from rasim_next.materials.crystal import CrystalStructure
 from rasim_next.materials.optics import atomic_scattering_factor_e
 from rasim_next.reciprocal.lattice import ReciprocalLattice
@@ -26,30 +27,6 @@ class StructureAmplitudeResult:
         if not np.all(np.isfinite(amplitude)) or not self.provenance:
             raise ValueError("finite amplitude and provenance are required")
         amplitude.setflags(write=False)
-        object.__setattr__(self, "amplitude_e", amplitude)
-
-
-@dataclass(frozen=True, slots=True)
-class OrderedEventResult:
-    """Raw event-aligned amplitude and unscaled electron-squared intensity."""
-
-    event_id: NDArray[np.int64]
-    amplitude_e: NDArray[np.complex128]
-    intensity: EventIntensityResult
-    provenance: str
-
-    def __post_init__(self) -> None:
-        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
-        amplitude = np.array(self.amplitude_e, dtype=np.complex128, copy=True, order="C")
-        if event_id.ndim != 1 or amplitude.shape != event_id.shape:
-            raise ValueError("event_id and amplitude_e must be aligned one-dimensional arrays")
-        if not np.array_equal(event_id, self.intensity.event_id) or not self.provenance:
-            raise ValueError("raw amplitude and intensity must preserve identical event identity")
-        if not np.all(np.isfinite(amplitude)):
-            raise ValueError("amplitude_e must be finite")
-        event_id.setflags(write=False)
-        amplitude.setflags(write=False)
-        object.__setattr__(self, "event_id", event_id)
         object.__setattr__(self, "amplitude_e", amplitude)
 
 
@@ -135,8 +112,8 @@ def ordered_event_result(
     query: RodQueryBatch,
     *,
     unknown_u_iso_A2: float | None = None,
-) -> OrderedEventResult:
-    """Evaluate arbitrary-L ordered amplitudes after exact rod-identity validation."""
+) -> EventIntensityResult:
+    """Return arbitrary-L unit-cell scattering strength after rod-identity validation."""
 
     lattice = ReciprocalLattice.from_crystal(crystal)
     if not np.allclose(catalog.reciprocal_basis_Ainv, lattice.basis_Ainv, rtol=2e-12, atol=1e-12):
@@ -158,17 +135,13 @@ def ordered_event_result(
         query.wavelength_A,
         unknown_u_iso_A2=unknown_u_iso_A2,
     )
-    intensity = EventIntensityResult(
+    return EventIntensityResult(
         event_id=query.event_id,
-        intensity_per_sr=np.abs(amplitude.amplitude_e) ** 2,
+        scattering_strength_A2=electron_squared_to_scattering_strength_A2(
+            np.abs(amplitude.amplitude_e) ** 2
+        ),
         model_id="ordered",
         model_component_id="raw_unit_cell",
         population_group_id=None,
-        normalization="|F_e|^2; electron2; no external factors",
-    )
-    return OrderedEventResult(
-        event_id=query.event_id,
-        amplitude_e=amplitude.amplitude_e,
-        intensity=intensity,
-        provenance=amplitude.provenance,
+        normalization="UNIT_CELL",
     )

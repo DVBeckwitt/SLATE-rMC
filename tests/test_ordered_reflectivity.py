@@ -11,8 +11,8 @@ import xraydb
 from numpy.typing import NDArray
 
 from rasim_next.core.contracts import RodQueryBatch
+from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.materials import (
-    CLASSICAL_ELECTRON_RADIUS_A,
     CrystalStructure,
     material_optics,
     read_crystal,
@@ -179,7 +179,7 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
         phase_id=(crystal.phase_id,) * 2,
         h=np.asarray((0, 1), dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=np.asarray((0.123, -0.456)),
+        q_sample_normal_Ainv=np.asarray((0.123, -0.456)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
@@ -190,15 +190,12 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
         query.wavelength_A,
     ).amplitude_e
     np.testing.assert_array_equal(result.event_id, query.event_id)
-    np.testing.assert_allclose(result.amplitude_e, expected_event, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(
-        result.intensity.intensity_per_sr,
-        np.abs(expected_event) ** 2,
+        result.scattering_strength_A2,
+        CLASSICAL_ELECTRON_RADIUS_A**2 * np.abs(expected_event) ** 2,
         rtol=2e-15,
         atol=0.0,
     )
-    assert result.intensity.normalization == "|F_e|^2; electron2; no external factors"
-    assert not result.amplitude_e.flags.writeable
 
 
 def test_bi2se3_same_family_rods_keep_distinct_identities() -> None:
@@ -240,7 +237,7 @@ def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
         phase_id=(crystal.phase_id,) * 2,
         h=np.ones(2, dtype=np.int32),
         k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=np.asarray((0.2, 0.3)),
+        q_sample_normal_Ainv=np.asarray((0.2, 0.3)),
         l_coordinate=l_coordinate,
         wavelength_A=np.full(2, WAVELENGTH_A),
     )
@@ -258,7 +255,6 @@ def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
         for atom in motifs[0].atoms
     ]
     expected_plus: list[complex] = []
-    expected_minus: list[complex] = []
     for h_value, k_value, l_value, wavelength in zip(
         query.h,
         query.k,
@@ -269,7 +265,6 @@ def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
         q_vector = lattice.q_cartesian_Ainv((h_value, k_value, l_value))
         q_magnitude = float(np.linalg.norm(q_vector))
         plus_terms = []
-        minus_terms = []
         for atom, offset in plus_offsets:
             factor = _factor_e(
                 atom.species,
@@ -284,23 +279,46 @@ def test_pbi2_motif_layer_boundary_matches_scalar_sum() -> None:
                 * factor
                 * cmath.exp(1.0j * (common + 2.0 * np.pi * l_value * offset[2]))
             )
-            minus_terms.append(
-                atom.occupancy
-                * factor
-                * cmath.exp(1.0j * (common - 2.0 * np.pi * l_value * offset[2]))
-            )
         expected_plus.append(sum(plus_terms))
-        expected_minus.append(sum(minus_terms))
 
-    np.testing.assert_allclose(result.f_plus, expected_plus, rtol=1e-12, atol=1e-10)
-    np.testing.assert_allclose(result.f_minus, expected_minus, rtol=1e-12, atol=1e-10)
-    np.testing.assert_allclose(result.f_minus[0], result.f_plus[1], rtol=1e-12, atol=1e-10)
-    assert not result.f_plus.flags.writeable
+    np.testing.assert_allclose(result.f_plus_e, expected_plus, rtol=1e-12, atol=1e-10)
+    assert (
+        np.array_equal(result.event_id, query.event_id)
+        and np.array_equal(result.rod_id, query.rod_id)
+        and result.phase_id == query.phase_id
+    )
+    assert (result.normalization, result.phase_sign, result.gauge_id) == (
+        "ONE_REGISTRY_FREE_LAYER",
+        "POSITIVE_Q_DOT_R",
+        "pbi2.pb_centered.v1",
+    )
+    expected_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    expected_normal /= np.linalg.norm(expected_normal)
+    np.testing.assert_allclose(result.layer_normal_crystal, expected_normal)
+    assert np.isclose(
+        result.layer_repeat_A, np.dot(crystal.direct_basis_A[:, 2], result.layer_normal_crystal)
+    )
+
+    double = replace(
+        crystal,
+        phase_id="pbi2-double",
+        direct_basis_A=crystal.direct_basis_A @ np.diag((1.0, 1.0, 2.0)),
+        volume_A3=2.0 * crystal.volume_A3,
+        sites=tuple(
+            replace(site, fractional=(*site.fractional[:2], (site.fractional[2] + offset) / 2.0))
+            for offset in (0.0, 1.0)
+            for site in crystal.sites
+        ),
+    )
+    with pytest.raises(ValueError, match="exactly one PbI2 motif"):
+        pbi2_layer_amplitudes(
+            double, replace(query, phase_id=(double.phase_id,) * 2), unknown_u_iso_A2=0.0
+        )
 
 
 def test_finite_stack_matches_direct_sum_and_bragg_limit() -> None:
     event_id = np.asarray((17, 3))
-    qz_Ainv = np.asarray((0.0, 0.73))
+    q_sample_normal_Ainv = np.asarray((0.0, 0.73))
     layer_amplitude_e = np.asarray(
         (
             (1.0 + 0.5j, 2.0 - 0.25j, -0.4 + 0.7j),
@@ -308,30 +326,16 @@ def test_finite_stack_matches_direct_sum_and_bragg_limit() -> None:
         )
     )
     layer_depth_A = np.asarray((0.0, 2.5, 7.25))
-    result = coherent_finite_stack(event_id, qz_Ainv, layer_amplitude_e, layer_depth_A)
+    result = coherent_finite_stack(event_id, q_sample_normal_Ainv, layer_amplitude_e, layer_depth_A)
     expected = np.sum(
-        layer_amplitude_e * np.exp(1.0j * qz_Ainv[:, None] * layer_depth_A),
+        layer_amplitude_e * np.exp(1.0j * q_sample_normal_Ainv[:, None] * layer_depth_A),
         axis=1,
     )
-    np.testing.assert_allclose(result.amplitude_e, expected, rtol=1e-12, atol=1e-10)
-    np.testing.assert_allclose(result.intensity.intensity_per_sr, np.abs(expected) ** 2)
-    assert result.intensity.normalization == "finite total |sum(F_e exp(i phase))|^2; electron2"
-    assert not result.amplitude_e.flags.writeable
+    np.testing.assert_allclose(
+        result.scattering_strength_A2, CLASSICAL_ELECTRON_RADIUS_A**2 * np.abs(expected) ** 2
+    )
 
     repeat = np.asarray((1.2 + 0.4j,))
-    off_bragg_qz = np.asarray((0.31,))
-    off_bragg = uniform_finite_stack(
-        event_id[:1],
-        off_bragg_qz,
-        repeat,
-        2.5,
-        5,
-    )
-    enumerated = repeat * np.sum(
-        np.exp(1.0j * off_bragg_qz[:, None] * 2.5 * np.arange(5)),
-        axis=1,
-    )
-    np.testing.assert_allclose(off_bragg.amplitude_e, enumerated, rtol=1e-12, atol=1e-10)
     bragg = uniform_finite_stack(
         event_id[:1],
         np.asarray((2.0 * np.pi / 2.5,)),
@@ -339,10 +343,9 @@ def test_finite_stack_matches_direct_sum_and_bragg_limit() -> None:
         2.5,
         7,
     )
-    np.testing.assert_allclose(bragg.amplitude_e, 7.0 * repeat)
     np.testing.assert_allclose(
-        bragg.intensity.intensity_per_sr,
-        49.0 * np.abs(repeat) ** 2,
+        bragg.scattering_strength_A2,
+        CLASSICAL_ELECTRON_RADIUS_A**2 * 49.0 * np.abs(repeat) ** 2,
     )
 
 

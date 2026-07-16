@@ -2,70 +2,44 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from operator import index
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
 from rasim_next.core.contracts import EventIntensityResult
+from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 
 
-@dataclass(frozen=True, slots=True)
-class FiniteStackResult:
-    """Event-aligned finite total before any universal scattering scale."""
-
-    event_id: NDArray[np.int64]
-    amplitude_e: NDArray[np.complex128]
-    intensity: EventIntensityResult
-
-    def __post_init__(self) -> None:
-        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
-        amplitude = np.array(self.amplitude_e, dtype=np.complex128, copy=True, order="C")
-        if event_id.ndim != 1 or amplitude.shape != event_id.shape:
-            raise ValueError("event_id and amplitude_e must be aligned one-dimensional arrays")
-        if not np.array_equal(event_id, self.intensity.event_id) or not np.all(
-            np.isfinite(amplitude)
-        ):
-            raise ValueError(
-                "finite stack amplitude and intensity must be finite and event-aligned"
-            )
-        event_id.setflags(write=False)
-        amplitude.setflags(write=False)
-        object.__setattr__(self, "event_id", event_id)
-        object.__setattr__(self, "amplitude_e", amplitude)
-
-
-def _result(event_id: ArrayLike, amplitude_e: ArrayLike) -> FiniteStackResult:
+def _result(event_id: ArrayLike, amplitude_e: ArrayLike) -> EventIntensityResult:
     event = np.asarray(event_id, dtype=np.int64)
     amplitude = np.asarray(amplitude_e, dtype=np.complex128)
-    intensity = EventIntensityResult(
+    return EventIntensityResult(
         event_id=event,
-        intensity_per_sr=np.abs(amplitude) ** 2,
+        scattering_strength_A2=electron_squared_to_scattering_strength_A2(np.abs(amplitude) ** 2),
         model_id="ordered",
         model_component_id="finite_coherent_total",
         population_group_id=None,
-        normalization="finite total |sum(F_e exp(i phase))|^2; electron2",
+        normalization="FINITE_TOTAL",
     )
-    return FiniteStackResult(event_id=event, amplitude_e=amplitude, intensity=intensity)
 
 
 def coherent_finite_stack(
     event_id: ArrayLike,
-    qz_Ainv: ArrayLike,
+    q_sample_normal_Ainv: ArrayLike,
     layer_amplitude_e: ArrayLike,
     layer_depth_A: ArrayLike,
     *,
     registry_phase_rad: ArrayLike = 0.0,
-) -> FiniteStackResult:
+) -> EventIntensityResult:
     """Sum explicit layer amplitudes with external depth and registry phases."""
 
     event = np.asarray(event_id, dtype=np.int64)
-    qz = np.asarray(qz_Ainv, dtype=np.float64)
+    q_sample_normal = np.asarray(q_sample_normal_Ainv, dtype=np.float64)
     amplitude = np.asarray(layer_amplitude_e, dtype=np.complex128)
     depth = np.asarray(layer_depth_A, dtype=np.float64)
-    if event.ndim != 1 or qz.shape != event.shape or amplitude.ndim != 2:
-        raise ValueError("event, qz, and layer amplitudes must form an event-by-layer batch")
+    if event.ndim != 1 or q_sample_normal.shape != event.shape or amplitude.ndim != 2:
+        raise ValueError("inputs must form an event-by-layer batch with sample-normal Q")
     if amplitude.shape[0] != event.size or amplitude.shape[1] == 0:
         raise ValueError("layer amplitudes must contain at least one layer for every event")
     try:
@@ -78,32 +52,32 @@ def coherent_finite_stack(
             "layer depths and registry phases must broadcast to event-by-layer shape"
         ) from error
     if not (
-        np.all(np.isfinite(qz))
+        np.all(np.isfinite(q_sample_normal))
         and np.all(np.isfinite(amplitude))
         and np.all(np.isfinite(depth_batch))
         and np.all(np.isfinite(registry))
     ):
         raise ValueError("finite stack inputs must be finite")
-    phase = qz[:, None] * depth_batch + registry
+    phase = q_sample_normal[:, None] * depth_batch + registry
     return _result(event, np.sum(amplitude * np.exp(1.0j * phase), axis=1))
 
 
 def uniform_finite_stack(
     event_id: ArrayLike,
-    qz_Ainv: ArrayLike,
+    q_sample_normal_Ainv: ArrayLike,
     repeat_amplitude_e: ArrayLike,
     repeat_spacing_A: float,
     repeat_count: int,
     *,
     registry_step_phase_rad: ArrayLike = 0.0,
-) -> FiniteStackResult:
+) -> EventIntensityResult:
     """Evaluate a uniform finite geometric sum stably at and near Bragg points."""
 
     event = np.asarray(event_id, dtype=np.int64)
-    qz = np.asarray(qz_Ainv, dtype=np.float64)
+    q_sample_normal = np.asarray(q_sample_normal_Ainv, dtype=np.float64)
     repeat = np.asarray(repeat_amplitude_e, dtype=np.complex128)
-    if event.ndim != 1 or qz.shape != event.shape or repeat.shape != event.shape:
-        raise ValueError("event, qz, and repeat amplitude must be aligned one-dimensional arrays")
+    if event.ndim != 1 or q_sample_normal.shape != event.shape or repeat.shape != event.shape:
+        raise ValueError("event, sample-normal Q, and amplitude must be aligned arrays")
     try:
         count = index(repeat_count)
     except TypeError as error:
@@ -120,12 +94,12 @@ def uniform_finite_stack(
     if not (
         np.isfinite(spacing)
         and spacing >= 0.0
-        and np.all(np.isfinite(qz))
+        and np.all(np.isfinite(q_sample_normal))
         and np.all(np.isfinite(repeat))
         and np.all(np.isfinite(registry))
     ):
         raise ValueError("uniform finite stack inputs must be finite with nonnegative spacing")
-    step_phase = qz * spacing + registry
+    step_phase = q_sample_normal * spacing + registry
     wrapped = np.remainder(step_phase + np.pi, 2.0 * np.pi) - np.pi
     geometric = (
         count

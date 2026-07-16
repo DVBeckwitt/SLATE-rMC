@@ -271,6 +271,8 @@ def pbi2_layer_amplitudes(
     if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
         raise ValueError("query phase does not match the PbI2 crystal")
     motifs = extract_pbi2_motifs(crystal)
+    if len(motifs) != 1:
+        raise ValueError("layer amplitudes require exactly one PbI2 motif per unit cell")
     plus_atoms = _canonical_plus_atoms(crystal, motifs)
     minus_atoms = _reflected_atoms(plus_atoms)
     hkl = np.column_stack((query.h, query.k, query.l_coordinate))
@@ -286,4 +288,17 @@ def pbi2_layer_amplitudes(
         query.wavelength_A,
         unknown_u_iso_A2=unknown_u_iso_A2,
     ).amplitude_e
-    return LayerAmplitudeResult(event_id=query.event_id, f_plus=f_plus, f_minus=f_minus)
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    return LayerAmplitudeResult(
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        f_plus_e=f_plus,
+        f_minus_e=f_minus,
+        normalization="ONE_REGISTRY_FREE_LAYER",
+        phase_sign="POSITIVE_Q_DOT_R",
+        gauge_id="pbi2.pb_centered.v1",
+        layer_normal_crystal=layer_normal,
+        layer_repeat_A=float(np.dot(crystal.direct_basis_A[:, 2], layer_normal)),
+    )

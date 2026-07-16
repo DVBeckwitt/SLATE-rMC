@@ -208,7 +208,7 @@ def run_bi2se3_ql_proof(root: str) -> dict[str, object]:
         phase_id=(crystal.phase_id,) * 3,
         h=np.asarray([value[0] for value in selected_hk], dtype=np.int32),
         k=np.asarray([value[1] for value in selected_hk], dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        q_sample_normal_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
         l_coordinate=l_coordinate,
         wavelength_A=np.full(3, _WAVELENGTH_A),
     )
@@ -238,5 +238,4 @@ def run_bi2se3_ql_proof(root: str) -> dict[str, object]:
         "rod_hk": [list(value) for value in selected_hk],
         "rod_ids": query.rod_id.tolist(),
         "same_family_distinct_rods": rods_are_distinct,
-        "raw_amplitudes_preserved": not ordered.amplitude_e.flags.writeable,
     }

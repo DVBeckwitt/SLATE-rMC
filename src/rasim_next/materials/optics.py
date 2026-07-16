@@ -7,11 +7,11 @@ import xraydb
 from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.materials.crystal import CrystalStructure
 
 HC_EV_A = 12398.419843320026
 AVOGADRO_PER_MOL = 6.02214076e23
-CLASSICAL_ELECTRON_RADIUS_A = 2.8179403262e-5
 
 
 def _f0_species(element: str, charge: int) -> str:

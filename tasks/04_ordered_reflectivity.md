@@ -138,68 +138,8 @@ Stop `BLOCKED` if species, occupancy, displacement, density, or shared wave-mode
 
 ## Execution plan
 
-State: local recovery complete; shared measure, phase/gauge, and tolerance contracts remain
-blocking.
-
-1. Keep the strict Gemmi 0.7 CIF validation fix and the compact six-test budget.
-2. Treat `l_coordinate` as authoritative for crystal amplitudes; do not equate it to sample `qz`.
-3. Preserve the HEAD result types and finite-stack signatures while recording their unresolved
-   measure and phase semantics.
-4. Correct Parratt for a general lossless incident ambient without changing the vacuum result.
-5. Emit schema-v1 proof evidence and leave benchmarks and mutations as disposable command output.
-6. Commit only owned-path local fixes; do not publish or rewrite history.
+State: shared-v5 consumer migration edited; verification pending.
 
 ## Handoff
 
-Status: `BLOCKED`
-
-Commit SHA: the local checkpoint commit containing this handoff.
-
-Public signatures and result types: unchanged from
-`8954474702009b61e3455318d94bb048d7f1f30c` except deletion of the invalid
-`ReciprocalLattice.validate_layer_qz` helper. Existing ordered and finite-stack result types and
-call signatures are preserved. `read_crystal` regains strict Gemmi 0.7 validation, crystal
-amplitudes use authoritative `L`, and Parratt now handles a general lossless incident ambient.
-
-Proof summary: focused `6/6` and full `11/11` pass with both Gemmi 0.7.1 and 0.7.5. The ordered
-proof has six passing checks, validates against `proof_result.schema.json` v1, and reports
-`BLOCKED`; core passes `5/5`; references pass `7/7`. Eleven disposable ordered/reflectivity
-mutations were detected at their first affected stages.
-
-Benchmark and peak memory: one frozen single-thread run over 256 equivalent amplitudes took
-`0.011439099995186552 s` optimized versus `5.972575199994026 s` scalar, with maximum disagreement
-`5.275749907936691e-13 e`. A combined 10,000-amplitude and 4,096-point Parratt run took
-`0.088571200001752 s` with `8.445280075073242 MiB` traced peak. No benchmark artifact remains.
-
-Legacy classifications:
-
-- `ordered.bi2se3_vesta`: `CORRECTED`. F003 reciprocal d-spacing agrees exactly at the sampled
-  prior stage; `ordered.unit_cell_amplitude` is the first divergence from the immutable historical
-  amplitude (`9.672786160086654 e`). The scalar atom sum is the downstream authority. The single
-  tracked corrected VESTA F003 component check differs by at most `0.0026578549913445215 e`.
-- `reflectivity.parratt_three_layer`: `MATCH`; no divergence.
-- `reflectivity.manuscript_specular_composite`: `NO_ORACLE`; the immutable pack contains pure
-  Parratt arrays but no composite observable.
-
-First divergences: `ordered.unit_cell_amplitude` for the corrected Bi2Se3 legacy amplitude; none
-for pure Parratt; no legacy composite oracle exists.
-
-Convergence: not applicable to the retained exact atom, finite-sum, and Parratt kernels; no
-approximation/refinement variable is present, so no convergence record is fabricated.
-
-Known limitations: T04 does not implement stacking disorder, cross-material parity, mosaic,
-detector geometry/agreement, fitting, CLI, GUI, or acceleration. The protected
-`EventIntensityResult.intensity_per_sr` still contains raw electron², the finite-stack phase input
-is frame-ambiguous, `LayerAmplitudeResult` lacks gauge/unit metadata, and the local tolerances have
-no reviewed version/hash.
-
-Contract requests: `IR-T04-MEASURE-GAUGE` is blocking and owned by a future reviewed shared-contract
-change. It must freeze the event measure and once-only `r_e^2`/solid-angle ownership; layer units,
-normalization, positive phase sign, Pb-centered origin/gauge, event/rod alignment, and projection/
-registry ownership; and a versioned tolerance artifact. T06 records acceptance but does not
-silently repair production. Acceptance requires direct T04/T05 substitution without adapters,
-false per-steradian labels, hidden scaling, or duplicate factors.
-
-History: after the checkpoint this remains a seven-commit development series from
-`812f896fde5b8365ff5c218fc606df674ad7dcad`; integration still needs a squash. No history rewrite
-or publication is performed here.
+Status: `BLOCKED` pending verification; shared v5 now owns Å² measure, layer metadata, and tolerances without adapters.
