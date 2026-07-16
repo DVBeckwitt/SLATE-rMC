@@ -138,13 +138,16 @@ sufficient proof.
 - Treat Qr as family metadata, not rod identity.
 - Sum coherent contributions as amplitudes, and independent source/wavelength/mosaic/phase/
   parent contributions as intensities.
-- Apply each source, event, optical, polarization, solid-angle, and deposition factor exactly once.
+- Apply each applicable source, event, optical, polarization, and deposition factor exactly once.
+  Detector solid angle is excluded from the raw image and applies only in an explicitly requested
+  later analysis correction.
 
 ## Worktree isolation
 
-Run bootstrap and reference verification serially. Create all four physics worktrees from the same
-clean `PROOF_BASE_SHA`. Each worktree edits only owned paths, treats shared contracts, examples,
-dependencies, and reference files as read-only, and never merges another physics branch.
+T02--T05 were created from one clean `PROOF_BASE_SHA`, reviewed, merged into `main` at
+`caf7acd649a27dc66c6c0b73a2f66dcd520389f9`, and retired. Do not recreate or resume those
+worktrees or feature branches. New write-heavy phases start from the approved current `main` in
+their own worktree and retain the same owned-path and read-only-contract discipline.
 
 The main agent is the only writer. Subagents may be used for bounded read-heavy exploration,
 derivation challenge, test review, or log analysis. Stop `BLOCKED` when a shared contract is

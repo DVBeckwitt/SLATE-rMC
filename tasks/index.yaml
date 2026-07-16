@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: forward_proof
+current_phase: native_detector_integration
 
 tasks:
   - id: T00
@@ -15,32 +15,32 @@ tasks:
   - id: T02
     file: tasks/02_geometry_optics.md
     branch: feat/geometry-optics
-    status: NS
+    status: READY
     depends_on: [T01]
   - id: T03
     file: tasks/03_mosaic_ewald.md
     branch: feat/mosaic-ewald
-    status: NS
+    status: READY
     depends_on: [T01]
   - id: T04
     file: tasks/04_ordered_reflectivity.md
     branch: feat/ordered-reflectivity
-    status: NS
+    status: READY
     depends_on: [T01]
   - id: T05
     file: tasks/05_stacking_transition.md
     branch: feat/stacking-transition
-    status: NS
+    status: READY
     depends_on: [T01]
   - id: T06
     file: tasks/06_parallel_review.md
     branch: review/parallel-proof
-    status: NS
+    status: READY
     depends_on: [T02, T03, T04, T05]
   - id: T07
     file: tasks/07_integration.md
     branch: feat/integration
-    status: NS
+    status: PLANNED
     depends_on: [T06]
   - id: T08
     file: tasks/08_selection_indexing.md
