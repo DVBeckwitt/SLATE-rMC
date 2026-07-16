@@ -6,6 +6,7 @@ from rasim_next.stacking.enumeration import (
 )
 from rasim_next.stacking.finite_intensity import (
     FiniteIntensity,
+    LayerNormalQBatch,
     PopulationIntensityResult,
     StackingEventIntensityResult,
     finite_event_intensity,
@@ -36,6 +37,7 @@ __all__ = [
     "FiniteIntensity",
     "Handedness",
     "InitialPopulation",
+    "LayerNormalQBatch",
     "Parent",
     "PopulationIntensityResult",
     "ReducedABDModel",

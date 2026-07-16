@@ -48,6 +48,39 @@ def _normalization_is_consistent(
 
 
 @dataclass(frozen=True, slots=True)
+class LayerNormalQBatch:
+    """Event-aligned layer-normal wavevector components in inverse angstroms."""
+
+    event_id: NDArray[np.int64]
+    layer_normal_q_Ainv: NDArray[np.float64]
+
+    def __post_init__(self) -> None:
+        supplied_ids = np.asarray(self.event_id)
+        if supplied_ids.dtype.kind not in "iu":
+            raise ValueError("event_id must contain integers")
+        supplied_q = np.asarray(self.layer_normal_q_Ainv)
+        if supplied_q.dtype.kind not in "fiu":
+            raise ValueError("layer_normal_q_Ainv must contain real numeric values")
+        event_id = np.array(self.event_id, dtype=np.int64, copy=True, order="C")
+        layer_normal_q_Ainv = np.array(
+            self.layer_normal_q_Ainv,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        if event_id.ndim != 1 or layer_normal_q_Ainv.shape != event_id.shape:
+            raise ValueError("layer_normal_q_Ainv must contain one value per event_id")
+        if np.any(event_id < 0) or np.unique(event_id).size != event_id.size:
+            raise ValueError("event_id must contain unique nonnegative values")
+        if np.any(~np.isfinite(layer_normal_q_Ainv)):
+            raise ValueError("layer_normal_q_Ainv must be finite")
+        event_id.setflags(write=False)
+        layer_normal_q_Ainv.setflags(write=False)
+        object.__setattr__(self, "event_id", event_id)
+        object.__setattr__(self, "layer_normal_q_Ainv", layer_normal_q_Ainv)
+
+
+@dataclass(frozen=True, slots=True)
 class FiniteIntensity:
     """Raw finite-stack intensity in electron2 and its explicit per-layer quotient."""
 
@@ -370,6 +403,7 @@ def finite_intensity_full(
 
 def _event_phases(
     query: RodQueryBatch,
+    layer_normal_q: LayerNormalQBatch,
     layer_repeat_A: float,
     phase_model: RegistryPhaseModel,
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128]]:
@@ -381,11 +415,12 @@ def _event_phases(
         raise ValueError("layer_repeat_A must be finite and positive") from error
     if not np.isfinite(repeat) or repeat <= 0.0:
         raise ValueError("layer_repeat_A must be finite and positive")
+    layer_normal_q_Ainv = _aligned_layer_normal_q(query, layer_normal_q)
     omega = np.asarray(registry_phase(query.h, query.k, phase_model), dtype=np.complex128)
     with np.errstate(over="ignore", invalid="ignore"):
-        phase_argument = query.qz_Ainv * repeat
+        phase_argument = layer_normal_q_Ainv * repeat
     if np.any(~np.isfinite(phase_argument)):
-        raise ValueError("qz_Ainv * layer_repeat_A must be finite")
+        raise ValueError("layer_normal_q_Ainv * layer_repeat_A must be finite")
     vertical = np.exp(1j * phase_argument)
     return omega, vertical
 
@@ -398,6 +433,16 @@ def _aligned_amplitudes(
     if amplitudes.f_minus is None:
         raise ValueError("stacking intensity requires both f_plus and f_minus")
     return amplitudes.f_plus, amplitudes.f_minus
+
+
+def _aligned_layer_normal_q(
+    query: RodQueryBatch, layer_normal_q: LayerNormalQBatch
+) -> NDArray[np.float64]:
+    if not isinstance(layer_normal_q, LayerNormalQBatch):
+        raise TypeError("layer_normal_q must be a LayerNormalQBatch")
+    if not np.array_equal(query.event_id, layer_normal_q.event_id):
+        raise ValueError("layer-normal wavevectors must be exactly event-aligned")
+    return layer_normal_q.layer_normal_q_Ainv
 
 
 def _identifier(value: object, name: str, *, allow_none: bool = False) -> str | None:
@@ -414,6 +459,7 @@ def finite_event_intensity(
     amplitudes: LayerAmplitudeResult,
     law: TransitionLaw,
     *,
+    layer_normal_q: LayerNormalQBatch,
     layers: int,
     layer_repeat_A: float,
     initial: InitialPopulation,
@@ -426,7 +472,7 @@ def finite_event_intensity(
     component_id = _identifier(model_component_id, "model_component_id")
     group_id = _identifier(population_group_id, "population_group_id", allow_none=True)
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, vertical = _event_phases(query, layer_repeat_A, phase_model)
+    omega, vertical = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
     result = finite_intensity_reduced(layers, f_plus, f_minus, omega, vertical, law, initial)
     return StackingEventIntensityResult(
         query.event_id,
@@ -443,6 +489,7 @@ def finite_population_event_intensity(
     amplitudes: LayerAmplitudeResult,
     populations: tuple[StackingPopulation, ...],
     *,
+    layer_normal_q: LayerNormalQBatch,
     layers: int,
     layer_repeat_A: float,
     population_group_id: str,
@@ -462,7 +509,7 @@ def finite_population_event_intensity(
     if len(set(population_id)) != len(population_id):
         raise ValueError("population_id values must be unique")
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, vertical = _event_phases(query, layer_repeat_A, phase_model)
+    omega, vertical = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
     component = np.stack(
         [
             finite_intensity_reduced(

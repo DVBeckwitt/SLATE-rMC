@@ -8,6 +8,7 @@ from numpy.typing import ArrayLike
 from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
 from rasim_next.stacking.finite_intensity import (
     FiniteIntensity,
+    LayerNormalQBatch,
     _aligned_amplitudes,
     _broadcast_inputs,
     _event_phases,
@@ -29,6 +30,7 @@ def finite_explicit_sequence_intensity(
     states: tuple[StackingState, ...],
     layer_depth_A: ArrayLike,
     *,
+    layer_normal_q: LayerNormalQBatch,
     layers: int,
     layer_repeat_A: float,
     phase_model: RegistryPhaseModel = RegistryPhaseModel.FORWARD_H_PLUS_2K,
@@ -48,7 +50,7 @@ def finite_explicit_sequence_intensity(
     if depths.shape != (count,) or np.any(~np.isfinite(depths)):
         raise ValueError("layer_depth_A must contain one finite depth per layer")
     f_plus, f_minus = _aligned_amplitudes(query, amplitudes)
-    omega, _ = _event_phases(query, layer_repeat_A, phase_model)
+    omega, _ = _event_phases(query, layer_normal_q, layer_repeat_A, phase_model)
     repeat = float(layer_repeat_A)
     if count > 1:
         spacing = np.diff(depths)
@@ -65,9 +67,9 @@ def finite_explicit_sequence_intensity(
         for state_index, depth in zip(state_indices, depths, strict=True):
             orientation_amplitude = f_plus if state_index < 3 else f_minus
             registry_factor = omega ** (state_index % 3)
-            phase_argument = query.qz_Ainv * depth
+            phase_argument = layer_normal_q.layer_normal_q_Ainv * depth
             if np.any(~np.isfinite(phase_argument)):
-                raise ValueError("qz_Ainv * layer_depth_A must be finite")
+                raise ValueError("layer_normal_q_Ainv * layer_depth_A must be finite")
             coherent_amplitude += (
                 orientation_amplitude * registry_factor * np.exp(1j * phase_argument)
             )

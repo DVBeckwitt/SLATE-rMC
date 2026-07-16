@@ -11,8 +11,12 @@ from pathlib import Path
 import numpy as np
 
 from rasim_next.core.contracts import CONTRACT_API_VERSION, LayerAmplitudeResult, RodQueryBatch
-from rasim_next.stacking.enumeration import finite_intensity_by_enumeration
+from rasim_next.stacking.enumeration import (
+    finite_explicit_sequence_intensity,
+    finite_intensity_by_enumeration,
+)
 from rasim_next.stacking.finite_intensity import (
+    LayerNormalQBatch,
     finite_event_intensity,
     finite_intensity_full,
     finite_intensity_reduced,
@@ -23,13 +27,13 @@ from rasim_next.stacking.transition import (
     STATE_ORDER,
     InitialPopulation,
     Parent,
+    StackingState,
     TransitionLaw,
     full_transition_matrix,
     registry_phase,
 )
 
 _ORACLE_ATOL = 5e-13
-_ORACLE_RTOL = 5e-13
 
 
 def _sha256(path: Path) -> str:
@@ -182,7 +186,7 @@ def _near_extinction() -> dict[str, object]:
     }
 
 
-def _event_and_population_errors() -> tuple[bool, float, float, float]:
+def _event_and_population_errors() -> tuple[bool, float, float, float, float, float]:
     query = RodQueryBatch(
         np.array([101, 102], dtype=np.int64),
         np.array([5, 6], dtype=np.int64),
@@ -198,19 +202,49 @@ def _event_and_population_errors() -> tuple[bool, float, float, float]:
         np.array([1.1 + 0.2j, 0.8 - 0.1j]),
         np.array([0.7 - 0.3j, 1.0 + 0.4j]),
     )
+    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
+    event_layers = 9
+    layer_repeat_A = 3.4
     event = finite_event_intensity(
         query,
         amplitudes,
         TransitionLaw.for_parent(Parent.TWO_H),
-        layers=9,
-        layer_repeat_A=3.4,
+        layer_normal_q=layer_normal_q,
+        layers=event_layers,
+        layer_repeat_A=layer_repeat_A,
         initial=InitialPopulation.plus_only(),
         model_component_id="2H",
         population_group_id=None,
     )
     normalization_error = float(
-        np.max(np.abs(event.intensity_electron2 - 9.0 * event.intensity_per_layer_electron2))
+        np.max(
+            np.abs(event.intensity_electron2 - event_layers * event.intensity_per_layer_electron2)
+        )
     )
+    layer_depth_A = np.arange(event_layers) * layer_repeat_A
+    layer_frame_amplitude = amplitudes.f_plus * np.exp(
+        1j * layer_normal_q.layer_normal_q_Ainv[:, np.newaxis] * layer_depth_A
+    ).sum(axis=1)
+    expected = np.abs(layer_frame_amplitude) ** 2
+    explicit = finite_explicit_sequence_intensity(
+        query,
+        amplitudes,
+        (StackingState.REGISTRY_0_PLUS,) * event_layers,
+        layer_depth_A,
+        layer_normal_q=layer_normal_q,
+        layers=event_layers,
+        layer_repeat_A=layer_repeat_A,
+    )
+    frame_error = float(
+        max(
+            np.max(np.abs(event.intensity_electron2 - expected)),
+            np.max(np.abs(explicit.intensity_electron2 - expected)),
+        )
+    )
+    sample_frame_amplitude = amplitudes.f_plus * np.exp(
+        1j * query.qz_Ainv[:, np.newaxis] * layer_depth_A
+    ).sum(axis=1)
+    sample_frame_separation = float(np.max(np.abs(expected - np.abs(sample_frame_amplitude) ** 2)))
     populations = (
         StackingPopulation(
             "2H",
@@ -226,6 +260,7 @@ def _event_and_population_errors() -> tuple[bool, float, float, float]:
     arguments = {
         "query": query,
         "amplitudes": amplitudes,
+        "layer_normal_q": layer_normal_q,
         "layers": 6,
         "layer_repeat_A": 3.4,
         "population_group_id": "parents",
@@ -235,7 +270,7 @@ def _event_and_population_errors() -> tuple[bool, float, float, float]:
         populations=tuple(reversed(populations)), **arguments
     )
     omega = np.asarray(registry_phase(query.h, query.k))
-    vertical_phase = np.exp(1j * query.qz_Ainv * 3.4)
+    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * 3.4)
     direct = np.array(
         [
             [
@@ -269,7 +304,14 @@ def _event_and_population_errors() -> tuple[bool, float, float, float]:
         and not hasattr(components, "weight")
         and not hasattr(components, "weighted_total_intensity_electron2")
     )
-    return aligned_and_unweighted, normalization_error, component_error, order_error
+    return (
+        aligned_and_unweighted,
+        normalization_error,
+        frame_error,
+        sample_frame_separation,
+        component_error,
+        order_error,
+    )
 
 
 def _classifications() -> list[dict[str, object]]:
@@ -305,7 +347,14 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     short_stack = _short_stack_errors()
     single_layer_error = _single_layer_error()
     near_extinction = _near_extinction()
-    aligned, normalization_error, component_error, order_error = _event_and_population_errors()
+    (
+        aligned,
+        normalization_error,
+        frame_error,
+        sample_frame_separation,
+        component_error,
+        order_error,
+    ) = _event_and_population_errors()
     checks = [
         _check(
             "stochastic_transition",
@@ -331,8 +380,14 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         ),
         _check(
             "event_alignment_and_normalization",
-            aligned and normalization_error <= _ORACLE_ATOL,
-            f"raw electron2 event IDs aligned; total/per-layer error {normalization_error:.3e}",
+            aligned
+            and normalization_error <= _ORACLE_ATOL
+            and frame_error <= _ORACLE_ATOL
+            and sample_frame_separation > _ORACLE_ATOL,
+            "raw electron2 event IDs aligned; "
+            f"total/per-layer error {normalization_error:.3e}; "
+            f"layer-normal/direct error {frame_error:.3e}; "
+            f"sample-qz counterfactual separation {sample_frame_separation:.3e}",
         ),
         _check(
             "unweighted_population_components",
@@ -361,6 +416,7 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         "near_extinction": near_extinction,
         "limitations": [
             "homogeneous first-order transition law with one explicit layer repeat per event batch",
+            "integration must supply event-aligned layer-normal q from the declared crystallite/layer frame",
             "raw electron2 remains upstream of universal scattering-scale and per-steradian factors",
         ],
         "contract_requests": [
@@ -368,8 +424,10 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
                 "request_id": "T05-T07-INTEGRATION-BOUNDARY",
                 "owner": "T07 integration",
                 "blocking": False,
-                "reason": "The shared per-steradian result cannot represent T05 raw electron2 without a false unit, and T07 owns population mass.",
+                "reason": "The shared query exposes sample-frame qz rather than layer-normal q, the shared per-steradian result cannot represent T05 raw electron2 without a false unit, and T07 owns population mass.",
                 "required": {
+                    "layer_phase_input": "event_id[E] int64 in exact query order plus finite layer_normal_q_Ainv[E] float64 in inverse angstroms",
+                    "layer_gauge": "T07 projects each real event Q onto its crystallite/layer normal in the same T04 motif and first-layer gauge; sample-frame qz is never substituted",
                     "raw_event_input": "event_id plus total/per-layer electron2 and model/population IDs",
                     "population_weights": "separate ID-aligned finite nonnegative masses summing to one",
                     "ownership": "T07 applies population mass and any r_e^2/per-steradian conversion exactly once",

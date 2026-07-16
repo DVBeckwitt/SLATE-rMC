@@ -7,11 +7,14 @@ from rasim_next.core.contracts import LayerAmplitudeResult, RodQueryBatch
 from rasim_next.stacking import (
     STATE_ORDER,
     InitialPopulation,
+    LayerNormalQBatch,
     Parent,
     PopulationIntensityResult,
     StackingPopulation,
+    StackingState,
     TransitionLaw,
     finite_event_intensity,
+    finite_explicit_sequence_intensity,
     finite_intensity_by_enumeration,
     finite_intensity_full,
     finite_intensity_reduced,
@@ -121,22 +124,50 @@ def test_coherent_extinction_never_erases_nearby_positive_intensity() -> None:
                 np.testing.assert_allclose(observed, direct, rtol=5e-13, atol=5e-13)
 
 
-def test_raw_event_intensity_is_aligned_and_explicitly_normalized() -> None:
+def test_raw_event_intensity_is_aligned_normalized_and_uses_layer_normal_q() -> None:
     query, amplitudes = _query_and_amplitudes()
+    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
+    layers = 9
+    layer_repeat_A = 3.4
     result = finite_event_intensity(
         query,
         amplitudes,
         TransitionLaw.for_parent(Parent.TWO_H),
-        layers=9,
-        layer_repeat_A=3.4,
+        layer_normal_q=layer_normal_q,
+        layers=layers,
+        layer_repeat_A=layer_repeat_A,
         initial=InitialPopulation.plus_only(),
         model_component_id="2H",
         population_group_id=None,
     )
+    direct = finite_explicit_sequence_intensity(
+        query,
+        amplitudes,
+        (StackingState.REGISTRY_0_PLUS,) * layers,
+        np.arange(layers) * layer_repeat_A,
+        layer_normal_q=layer_normal_q,
+        layers=layers,
+        layer_repeat_A=layer_repeat_A,
+    )
+    layer_frame_amplitude = amplitudes.f_plus * np.exp(
+        1j * layer_normal_q.layer_normal_q_Ainv[:, np.newaxis] * np.arange(layers) * layer_repeat_A
+    ).sum(axis=1)
+    expected = np.abs(layer_frame_amplitude) ** 2
     np.testing.assert_array_equal(result.event_id, query.event_id)
+    np.testing.assert_allclose(result.intensity_electron2, expected, rtol=5e-13, atol=5e-13)
+    np.testing.assert_allclose(direct.intensity_electron2, expected, rtol=5e-13, atol=5e-13)
     np.testing.assert_allclose(
         result.intensity_electron2,
-        9.0 * result.intensity_per_layer_electron2,
+        layers * result.intensity_per_layer_electron2,
+        rtol=5e-13,
+        atol=5e-13,
+    )
+    sample_frame_amplitude = amplitudes.f_plus * np.exp(
+        1j * query.qz_Ainv[:, np.newaxis] * np.arange(layers) * layer_repeat_A
+    ).sum(axis=1)
+    assert not np.allclose(
+        result.intensity_electron2,
+        np.abs(sample_frame_amplitude) ** 2,
         rtol=5e-13,
         atol=5e-13,
     )
@@ -147,16 +178,37 @@ def test_raw_event_intensity_is_aligned_and_explicitly_normalized() -> None:
             query,
             misaligned,
             TransitionLaw.for_parent(Parent.TWO_H),
-            layers=9,
-            layer_repeat_A=3.4,
+            layer_normal_q=layer_normal_q,
+            layers=layers,
+            layer_repeat_A=layer_repeat_A,
             initial=InitialPopulation.plus_only(),
             model_component_id="2H",
             population_group_id=None,
         )
+    misaligned_q = LayerNormalQBatch(query.event_id[::-1], layer_normal_q.layer_normal_q_Ainv)
+    with pytest.raises(ValueError, match="event-aligned"):
+        finite_event_intensity(
+            query,
+            amplitudes,
+            TransitionLaw.for_parent(Parent.TWO_H),
+            layer_normal_q=misaligned_q,
+            layers=layers,
+            layer_repeat_A=layer_repeat_A,
+            initial=InitialPopulation.plus_only(),
+            model_component_id="2H",
+            population_group_id=None,
+        )
+    with pytest.raises(ValueError, match="one value per event_id"):
+        LayerNormalQBatch(query.event_id, np.array([0.63]))
+    with pytest.raises(ValueError, match="finite"):
+        LayerNormalQBatch(query.event_id, np.array([0.63, np.nan]))
+    with pytest.raises(ValueError, match="real numeric"):
+        LayerNormalQBatch(query.event_id, np.array([0.63 + 0.1j, -0.28]))
 
 
 def test_population_components_are_unweighted_and_use_individual_initial_states() -> None:
     query, amplitudes = _query_and_amplitudes()
+    layer_normal_q = LayerNormalQBatch(query.event_id, np.array([0.63, -0.28]))
     populations = (
         StackingPopulation(
             "2H",
@@ -172,6 +224,7 @@ def test_population_components_are_unweighted_and_use_individual_initial_states(
     arguments = {
         "query": query,
         "amplitudes": amplitudes,
+        "layer_normal_q": layer_normal_q,
         "layers": 6,
         "layer_repeat_A": 3.4,
         "population_group_id": "parents",
@@ -188,7 +241,7 @@ def test_population_components_are_unweighted_and_use_individual_initial_states(
         reversed_result.component_intensity_electron2,
     )
     omega = np.asarray(registry_phase(query.h, query.k))
-    vertical_phase = np.exp(1j * query.qz_Ainv * 3.4)
+    vertical_phase = np.exp(1j * layer_normal_q.layer_normal_q_Ainv * 3.4)
     expected = np.array(
         [
             [
