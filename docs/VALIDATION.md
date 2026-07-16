@@ -12,8 +12,9 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 
 ## Completed cross-repository audits
 
-The 2026-07-16 audits below started from SLATE-rMC baseline
-`caf7acd649a27dc66c6c0b73a2f66dcd520389f9`. External repositories were consulted read-only;
+The mosaic and initial ordered audits below started from SLATE-rMC baseline
+`caf7acd649a27dc66c6c0b73a2f66dcd520389f9`; the later PbI2 polytype proof started from
+`7bccbd328220345b1a62a588d3b418bf82c1f0a9`. External repositories were consulted read-only;
 `ra_sim` execution was isolated in a separate process, while the `2D_Mosaic_Sim` peak-shape
 equation was evaluated independently in a proof-only harness. Neither production code nor
 permanent tests import either repository. These conclusions apply to the named observable and
@@ -75,9 +76,43 @@ orientation rather than label.
 This isolates the legacy numerical mismatch to the declared atomic-factor choice and proves the
 ordered structure-factor equation and conventions. The accepted scientific default remains the
 existing XrayDB/Chantler path, so no legacy atomic-factor compatibility mode or production change
-is required; the temporary matched-table comparison path is not retained. This result covers
-ordered PbI2/Bi2Se3 structure factors only; it does not claim stacking-disorder, 4H/6H transition,
-or phase-mixture parity.
+is required; the temporary matched-table comparison path is not retained. That earlier audit
+covers ordered PbI2/Bi2Se3 structure factors only; the separate proof below establishes the PbI2
+stacking-disorder, 4H/6H transition, and phase-mixture claims.
+
+### PbI2 2H/4H/6H structure-factor and stacking parity
+
+The polytype proof kept three quantities distinct: file-native whole-cell `F_cell`, physical
+one-layer `F_plus`/`F_minus` derived only from `PbI2_2H.cif`, and finite-stack `I_stack`. This is the
+same 2H motif authority used by the historical stacking path. The 4H and 6H CIFs validate their own
+expanded whole-cell structures and stacking topology; they do not replace the 2H layer pair in the
+homogenized transition model. Legacy plus/minus strings were aligned by physical layer orientation.
+
+The direct three-atom 2H sum and production layer amplitudes differed by at most
+`2.4457182613372133e-14 e`. Sixty direct-sequence checks across 2H, both 4H hands, both 6H hands,
+three period multiples, and four physical-Q events had maximum amplitude error
+`1.2397319609735734e-12 e`. The native 2H/4H/6H files expanded to site/motif counts `3/1`, `6/2`,
+and `9/3`; twelve direct whole-cell sums differed from `unit_cell_amplitude` by at most
+`1.563597684016243e-13 e`. The strict legacy `N=50` finite-per-layer comparison differed by
+`3.2862601528904634e-14 e^2/layer` after removing legacy `AREA` and aligning phase,
+normalization, and initial-state conventions.
+
+An independent full-six-state/direct oracle covered all three parent types at `epsilon` values
+`{0, 0.01, 0.1, 0.5, 0.99}` plus 18 convex binary/ternary mixtures. The largest component and
+mixture errors were both `1.8917489796876907e-10 e^2`; transition-mass error was
+`2.220446049250313e-16`, and linearity and zero-weight errors were exactly zero. The structure-factor
+and aggregate evidence SHA-256 values are respectively
+`6379e6fa3ed3e3ab9da97fc21f9b4d3b07a15e9d8f7f2f34cb41925d96247f8e` and
+`0da8be40686da52c179d8febf1791d332bcb143f12517713218e332ddf028b7f`.
+
+The equations and convention-matched legacy comparisons are `MATCH`. Default atomic-factor
+differences remain intentionally `CORRECTED` first at `ordered.atomic_amplitude`, and the accepted
+registry convention is `CORRECTED` first at `stacking.registry_phase`. Comparing relaxed native
+4H/6H cells directly with ideal 2H-derived parents is `NO_ORACLE` because they are different
+structural models. All assigned mutations were detected, all 29 permanent tests and focused proof
+gates passed, and no production code, API, dependency, CLI, or example changed. The disposable
+proof design, tolerances, exact legacy anchors, performance, and branch disposition are recorded in
+[WORKBRANCH_ARCHIVE_2026-07-16.md](WORKBRANCH_ARCHIVE_2026-07-16.md).
 
 ## Permanent suite
 

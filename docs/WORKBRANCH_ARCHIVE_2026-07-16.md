@@ -5,8 +5,9 @@ It preserves their purpose, files, method, numerical status, and limitations wit
 their worktrees. A recorded proof result is not the same as merged code: unless stated otherwise,
 the retired branch commit was not merged into `main`.
 
-Baseline for the proof branches was `caf7acd649a27dc66c6c0b73a2f66dcd520389f9`.
-At retirement, `main` was `46f5b75b8b0a55f1445177313eb1357fd3f357e8`.
+The initial proof batch used baseline `caf7acd649a27dc66c6c0b73a2f66dcd520389f9` and was
+retired when `main` was `46f5b75b8b0a55f1445177313eb1357fd3f357e8`. The later PbI2
+polytype proof used baseline `7bccbd328220345b1a62a588d3b418bf82c1f0a9`.
 
 ## Lifecycle summary
 
@@ -16,6 +17,7 @@ At retirement, `main` was `46f5b75b8b0a55f1445177313eb1357fd3f357e8`.
 | `codex/sf-equivalence` | `971317426071ca7985483354f8281e309539caec` | Accepted proof; compatibility code/tests not merged | Already deleted; conclusions retained on `main` |
 | `codex/parratt-proof` | `6db62f766c17a62924ddf1e7b1478d7f1122d83f` | Clean `READY` proof commit; not merged or pushed | Retired and deleted |
 | `codex/stacking-disorder-parity` | `e831c67cba8a8b7662991e9c7433f183f02e36c3` | Clean proof commit; handoff omitted explicit final-gate/`READY` statement | Retired and deleted |
+| `codex/pbi2-polytype-sf-proof` | `a652fc315f107f038f4de284044e63c1452dd9d8` | Clean `READY`; no production change; one test assertion not merged | Retired and deleted after proof archival |
 | `fix/complete-degenerate-rod-families` | branch at `caf7acd`; dirty working copy | Unfinished, unverified prototype | Working copy discarded and branch deleted |
 | `codex/ray-geometry-lab` | branch at `caf7acd`; no commit | Useful disposable lab run, no durable branch result | Residual working copy and branch deleted |
 | `feat/hbn-ring-fitter` | `18c6da69067aa05d9814f4a5f0281c3cc27e89a2` | Clean and accepted by the project owner | **Protected; retained untouched** |
@@ -95,8 +97,9 @@ layer labels were aligned by physical orientation.
   reciprocal coordinates, site expansion, occupancy, and displacement handling agreed.
 
 The narrow compatibility implementation and its two regressions were deliberately not merged.
-Only the conclusion survives in `docs/VALIDATION.md` at `46f5b75`. Scope was ordered PbI2/Bi2Se3;
-it did not establish stacking-disorder, 4H/6H, or mixture parity.
+Only the conclusion survives in `docs/VALIDATION.md` at `46f5b75`. That retired branch alone was
+scoped to ordered PbI2/Bi2Se3; the later polytype proof below establishes the separate
+stacking-disorder, 4H/6H, and mixture claims.
 
 ## Parratt reflectivity proof
 
@@ -171,6 +174,88 @@ registry-phase differences were `CORRECTED` at their named stages; stationary ou
 `NO_ORACLE`. No permanent test changed. The clean commit was not merged or pushed. Although every
 execution-plan step was checked, its handoff omitted an explicit final `READY` line and final gate
 command list. A canonical Bi2Se3 quintuple-layer adapter remains the minimum integration request.
+
+## PbI2 2H/4H/6H structure-factor and stacking proof
+
+### Goal and retained change
+
+The later `codex/pbi2-polytype-sf-proof` workbranch proved the PbI2 path from the files historically
+used for 2H, 4H, and 6H without conflating three observables:
+
+- `F_cell`: the raw complex whole-cell amplitude native to one CIF;
+- physical `F_plus` and `F_minus`: the registry-free amplitudes of one Pb-centered I--Pb--I layer,
+  both derived from the tracked 2H CIF; and
+- `I_stack`: deterministic or disordered finite-stack intensity assembled from that 2H layer pair.
+
+The broad oracle, sweeps, traces, and mutation harness were disposable and were removed. Commit
+`a652fc315f107f038f4de284044e63c1452dd9d8` retained exactly one assertion in
+`tests/test_ordered_reflectivity.py`: at signed reciprocal events, the physical negative-orientation
+amplitude at `+L` equals the positive-orientation amplitude at `-L`. No production module, public
+API, dependency, CLI, or example changed. The test-only commit was not merged into `main`; this
+archive retains its conclusion before branch retirement.
+
+### Proof construction and numerical evidence
+
+The layer proof used `examples/pbi2/structures/PbI2_2H.cif` as the single motif authority, matching
+the historical stacking path. A direct three-atom scalar sum was compared with
+`pbi2_layer_amplitudes` at identical Cartesian `Q`, wavelength, occupancy, displacement, and atomic
+factors. The maximum complex error was `2.4457182613372133e-14 e` against a
+`3.3244476461733e-10 e` limit; signed-reflection error was exactly zero and the largest Laue error
+was `1.0658141036401503e-14 e`. Legacy layer names are reversed relative to the manuscript names,
+so comparisons aligned physical orientations rather than the strings `plus` and `minus`.
+
+With the retired ITC-1992/Henke factor table, the exact legacy anchors were:
+
+- whole 2H cell: `72.03163488540059 + 10.486067181091277i e`;
+- physical `F_plus`: `62.02309184119507 + 7.503644555681163i e`; and
+- physical `F_minus`: `-4.469134181424458 - 2.2961006486888493i e`.
+
+The 2H, 4H, and 6H CIFs were also checked independently as whole-cell fixtures. Their exact
+site/motif counts were `3/1`, `6/2`, and `9/3`, with layer repeats `c`, `c/2`, and `c/3`.
+Twelve file-native direct atom sums matched `unit_cell_amplitude` with maximum complex error
+`1.563597684016243e-13 e` against `1.0039447668149997e-9 e`; integer-image gauge error was
+`1.4228607195221903e-13 e`. The complete structure-factor table has SHA-256
+`6379e6fa3ed3e3ab9da97fc21f9b4d3b07a15e9d8f7f2f34cb41925d96247f8e`.
+
+Five 2H-derived ideal parents (`2H`, both `4H` hands, and both `6H` hands), three period multiples,
+and four physical-Q events gave 60 direct-sequence comparisons. Maximum amplitude error was
+`1.2397319609735734e-12 e` against `3.9891680662876425e-8 e`; maximum intensity error was
+`1.3460521586239338e-10 e^2` against `8.748511945050639e-4 e^2`. The strict `N=50` legacy
+finite-per-layer path matched after removing legacy `AREA`, with maximum error
+`3.2862601528904634e-14 e^2/layer` against `2.137399519846063e-9`.
+
+The generalized disorder oracle then covered 15 component cases--each of 2H, 4H, and 6H at
+`epsilon` in `{0, 0.01, 0.1, 0.5, 0.99}`--and 18 convex binary/ternary mixtures. Both the largest
+component error and largest mixture error were `1.8917489796876907e-10 e^2` against
+`7.322474510325397e-3 e^2`. Transition-mass error was `2.220446049250313e-16`; linearity and
+zero-weight errors were zero; permutation error was `1.4551915228366852e-11 e^2`; invalid weights
+were rejected. The aggregate evidence SHA-256 is
+`0da8be40686da52c179d8febf1791d332bcb143f12517713218e332ddf028b7f`.
+
+### Classification, gates, and limits
+
+- `MATCH`: direct CIF sums, the 2H physical layer pair after label alignment, ideal-parent sequence
+  sums, finite legacy curves after declared convention alignment, epsilon mass, and incoherent
+  population mixing.
+- `CORRECTED`: current Waasmaier--Kirfel/XrayDB-Chantler factors intentionally first diverge from
+  ITC-1992/Henke at `ordered.atomic_amplitude`; the accepted `h+2k` registry convention first
+  diverges from the legacy convention at `stacking.registry_phase`.
+- `NO_ORACLE`: relaxed, file-native 4H/6H whole cells are not required to equal ideal 4H/6H parents
+  homogenized from the 2H motif. Those are different structural models; native `F_cell` must not be
+  substituted for 2H-derived `F_plus` or `F_minus`.
+
+The legacy default 2H `epsilon=0.01` witness is symmetry-insensitive because its four alternative
+channels are equal, which is why the asymmetric multi-parent sweep is required. The arbitrary
+epsilon cases are independent full-six-state/direct-oracle evidence, not claimed captured legacy
+outputs. Existing seven stacking controls plus reversed layer labels, registry omission or
+conjugation, wrong repeat, nominal-`L` comparison, implicit `Uiso`, mixed factor tables, maximum
+normalization, and coherent population mixing all failed at their named stages.
+
+All 29 tests, focused formatting and lint, compile, ordered, stacking, and reference proof gates
+passed. Full/reduced equivalent work agreed within `4.263256414560601e-14 e^2`; the reduced path
+was `5.75x` faster (`0.01193 s` versus `0.06863 s`) and used `19,758 B` versus `33,880 B` peak
+traced memory. The known stale seed-manifest warning and repository-wide Ruff findings inside the
+immutable legacy snapshot were unchanged baseline exceptions; scoped gates passed.
 
 ## Complete degenerate rod families prototype
 
