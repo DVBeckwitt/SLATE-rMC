@@ -6,13 +6,12 @@ from rasim_next.stacking.enumeration import (
 )
 from rasim_next.stacking.finite_intensity import (
     FiniteIntensity,
-    FiniteNormalization,
     PopulationIntensityResult,
+    StackingEventIntensityResult,
     finite_event_intensity,
     finite_intensity_full,
     finite_intensity_reduced,
     finite_population_event_intensity,
-    stationary_intensity_reduced,
 )
 from rasim_next.stacking.parent_models import (
     Handedness,
@@ -35,7 +34,6 @@ from rasim_next.stacking.transition import (
 __all__ = [
     "STATE_ORDER",
     "FiniteIntensity",
-    "FiniteNormalization",
     "Handedness",
     "InitialPopulation",
     "Parent",
@@ -43,6 +41,7 @@ __all__ = [
     "ReducedABDModel",
     "RegistryPhaseModel",
     "RichEpsilonModel",
+    "StackingEventIntensityResult",
     "StackingPopulation",
     "StackingState",
     "TransitionLaw",
@@ -55,5 +54,4 @@ __all__ = [
     "full_transition_matrix",
     "reduced_transition_matrix",
     "registry_phase",
-    "stationary_intensity_reduced",
 ]

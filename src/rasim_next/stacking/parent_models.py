@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from numbers import Real
 
 import numpy as np
 
-from rasim_next.stacking.transition import Parent, TransitionLaw
+from rasim_next.stacking.transition import InitialPopulation, Parent, TransitionLaw
 
 
 class Handedness(StrEnum):
@@ -66,16 +65,12 @@ class StackingPopulation:
 
     population_id: str
     model: TransitionLaw
-    weight: float
+    initial: InitialPopulation
 
     def __post_init__(self) -> None:
         if not isinstance(self.population_id, str) or not self.population_id:
             raise ValueError("population_id must be a nonempty string")
         if not isinstance(self.model, TransitionLaw):
             raise TypeError("model must be a TransitionLaw")
-        if isinstance(self.weight, bool) or not isinstance(self.weight, Real):
-            raise ValueError("weight must be a real scalar")
-        weight = float(self.weight)
-        if not np.isfinite(weight) or weight < 0.0 or weight > 1.0:
-            raise ValueError("weight must be finite and between zero and one")
-        object.__setattr__(self, "weight", weight)
+        if not isinstance(self.initial, InitialPopulation):
+            raise TypeError("initial must be an InitialPopulation")

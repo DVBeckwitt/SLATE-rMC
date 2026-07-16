@@ -120,6 +120,10 @@ class InitialPopulation:
     def plus_only(cls) -> InitialPopulation:
         return cls(1.0, 0.0)
 
+    @classmethod
+    def minus_only(cls) -> InitialPopulation:
+        return cls(0.0, 1.0)
+
 
 def registry_phase(
     h: ArrayLike,
