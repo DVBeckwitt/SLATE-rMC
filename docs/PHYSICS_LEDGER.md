@@ -7,7 +7,7 @@ Treatments:
 - `NEW`: no adequate original result, prove independently
 - `DEFERRED`: intentionally outside current scope
 
-Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `stacking`, `integration`, `selection`, or `fitting`.
+Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `stacking`, `integration`, `analysis`, `selection`, or `fitting`.
 
 ## I/O, coordinates, and source
 
@@ -18,7 +18,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-IO-003 | 90-degree measured-image conversion | `runtime_session.py:558-565`; `gui/background.py` | experimental convention | bootstrap/geometry | CORRECTED, centralized |
 | PHY-IO-004 | raw OSC versus detector indices | distributed | n/a | bootstrap | CORRECTED |
 | PHY-IO-005 | continuous detector coordinate | `diffraction.py:2302-2306` | geometry figures | bootstrap/geometry | CORRECTED |
-| PHY-SRC-001 | spatial beam distribution | `simulation/mosaic_profiles.py:15-63` | Methods line 18 | mosaic | CORRECTED, deterministic |
+| PHY-SRC-001 | spatial beam distribution | `simulation/mosaic_profiles.py:15-63` | Methods line 18 | mosaic | CORRECTED, seeded empirical |
 | PHY-SRC-002 | divergence distribution | same | Methods line 18 | mosaic | CORRECTED, normalized |
 | PHY-SRC-003 | wavelength distribution | same and GUI bandwidth settings | `eq:detector_sum_lambda_main` | mosaic | CORRECTED, generic spectrum |
 | PHY-SRC-004 | independent wavelength intensity sum | downstream sample loop | `eq:detector_sum_lambda_main` | mosaic/integration | MATCH |
@@ -76,9 +76,9 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-REC-003 | Bragg-sphere circle construction | same | Methods line 16 | mosaic | MATCH as reference option |
 | PHY-REC-004 | continuous rod/Ewald roots | old code discretizes/uses spheres | rod model in Methods | mosaic | NEW recommended |
 | PHY-REC-005 | tangent and no-root status | `solve_q` statuses | elastic geometry | mosaic | CORRECTED |
-| PHY-REC-006 | event Jacobian and probability mass | implicit `I_Q` | SI line 525 | mosaic | CORRECTED explicit |
-| PHY-REC-007 | deterministic quadrature and convergence | old uniform/adaptive scan | numerical requirement | mosaic | NEW |
-| PHY-REC-008 | no quantile-resampling bias | event resampling paths | n/a | mosaic | CORRECTED |
+| PHY-REC-006 | candidate mosaic/Jacobian mass | implicit `I_Q` | SI line 525 | mosaic | CORRECTED explicit |
+| PHY-REC-007 | valid-support construction and convergence | old uniform/adaptive scan | numerical requirement | mosaic | NEW |
+| PHY-REC-008 | complete-pool inverse-CDF selection without double weighting | event resampling paths | n/a | integration | CORRECTED |
 | PHY-REC-009 | external versus internal Q | inconsistent helper paths | refraction section | bootstrap/mosaic | CORRECTED |
 
 ## Ordered structure and rods
@@ -141,8 +141,8 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|
-| PHY-MEA-001 | intensity-measure declaration | absent | SI lines 523-527 | bootstrap | NEW |
-| PHY-MEA-002 | solid-angle conversion | caking helper `exact_cake_portable.py:866-874` | SI lines 523-527 | integration | CORRECTED explicit |
+| PHY-MEA-001 | sampled raw-detector mass declaration | absent | SI lines 523-527 | bootstrap | NEW |
+| PHY-MEA-002 | solid-angle correction for later caking/analysis | caking helper `exact_cake_portable.py:866-874` | SI lines 523-527 | analysis | CORRECTED, excluded from raw rendering |
 | PHY-MEA-003 | scattering polarization distinct from Fresnel fields | no consistent native path | SI preprocessing and interface notes | integration | NEW explicit model, data-corrected unity, or declared approximation |
 | PHY-MEA-003A | reciprocal event Jacobian versus separate Lorentz factor | implicit old `I_Q` and powder paths | SI event measure | mosaic/integration | CORRECTED, no duplicate factor |
 | PHY-MEA-004 | detector pixel integration | point/bilinear events | detector measurement | integration | NEW convergence proof |
@@ -220,4 +220,3 @@ These rows are future work and begin only after native-detector integration pass
 ## Coverage rule
 
 Every current-phase `MATCH`, `CORRECTED`, or `NEW` row must be named by at least one task and one proof record. Every future or deferred row remains visible and may not be silently implemented under another name. Selection and fitting rows become active only after the integration merge gate.
-
