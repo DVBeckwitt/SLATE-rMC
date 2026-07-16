@@ -2,7 +2,7 @@
 
 ## Goal
 
-Implement T03 completely in this worktree. Produce normalized deterministic source/orientation samples and correct event mass with an independent dense oracle.
+Implement T03 completely in this worktree. Produce equal-mass seeded source samples and physical reciprocal candidates/masses with an independent all-candidate oracle.
 
 ## Context and startup
 
@@ -50,11 +50,11 @@ Read `tasks/03_mosaic_ewald.md` and every referenced shared document, tracked ma
 
 ## Work
 
-Implement only owned paths. Consume synthetic or shared `RodCatalog` inputs. Do not construct reciprocal lattices, detector pixels, optics, or intensities. Prove measure normalization and convergence rather than only reproducing event coordinates.
+Implement only owned paths. Use explicit seeded randomized Latin-hypercube Gaussian source sampling with independent dimensions, antithetic pairs, an odd central ray, and equal empirical row mass; never apply the generating PDF again. Consume synthetic or shared `RodCatalog` inputs and construct candidates, not selected/rasterized events. Deterministic Gauss–Hermite and all-candidate raster paths are oracle/diagnostic only. Do not construct reciprocal lattices, detector pixels, optics, or intensities.
 
 ## Verify
 
-Run the assigned mutations in `docs/ERROR_INJECTION.md` and confirm the expected first failing stages. Run every T03 command, inspect legacy classifications and convergence, rerun permanent tests from the tracked examples, remove temporary files, and review the diff.
+Run the assigned T03 mutations, candidate-oracle comparison, source-distribution checks, permanent tests, classifications, convergence, and benchmark. Remove temporary files and review the diff; T07 owns selection, deposition, and end-image statistical proofs.
 
 ## Done when
 

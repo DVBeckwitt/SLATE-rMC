@@ -2,7 +2,7 @@
 
 ## Goal
 
-Implement T07 by integrating only approved branch SHAs one at a time. Produce the correct native-detector forward model and reusable compiled states.
+Implement T07 from approved local branch SHAs. Produce the seeded statistical raw native-detector image and reusable fixed-geometry states.
 
 ## Context
 
@@ -12,13 +12,16 @@ Read all shared documents, T07, the T06 review, and every branch handoff. Use th
 
 - Integrate through the mandatory vertical sequence.
 - Rerun the smallest proof after each merge.
-- Apply every factor exactly once.
-- Do not implement selection, fitting, caking, `2theta/phi`, or GUI code.
+- Integrate the one T03 source sampler; for each ray+phase stream one complete pool across every individual rod and valid mosaic/Q solution, never one pool per reflection.
+- Add one seeded inverse-CDF selector (configurable count, legacy default 50) and one depositor; preserve each selected candidate's own `Q`, `kf`, rod, and hit.
+- Source/mosaic probability acts through frequency only; selected events receive equal `total_pool_mass / selected_count` and are never candidate-weighted again.
+- Raw pixels exclude solid angle; keep it metadata-only and report bilinear edge clipping.
+- Do not implement PSF, fitting, caking, `2theta/phi`, GUI, backend, generic RNG, or proof frameworks.
 - Profile before recommending an acceleration method.
 
 ## Verify
 
-Run the integration mutations in `docs/ERROR_INJECTION.md`, the full permanent suite, all subsystem proofs, the tiny end-to-end case, mass conservation, legacy trace comparison, clean-tree checks, and performance workloads.
+Run exactly the eight T07 proof obligations in the task, the compact permanent suite, subsystem proofs, clean-tree checks, and fitting-relevant performance workloads. Keep broad sweeps external.
 
 ## Done when
 

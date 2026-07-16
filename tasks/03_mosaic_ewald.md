@@ -6,7 +6,7 @@ Start from `PROOF_BASE_SHA`.
 
 ## Goal
 
-Produce deterministic source/orientation sampling and correct reciprocal-space scattering events with explicit probability mass, event Jacobian, and elastic residual.
+Produce equal-mass seeded source samples and correct reciprocal-space candidates with physical mass, event Jacobian, and elastic residual; do not select or render events.
 
 ## Owned paths
 
@@ -14,6 +14,7 @@ Produce deterministic source/orientation sampling and correct reciprocal-space s
 src/rasim_next/sampling/
 src/rasim_next/reciprocal/ewald.py
 src/rasim_next/reciprocal/events.py
+src/rasim_next/reciprocal/proof.py
 tests/test_mosaic_ewald.py
 this task's execution-plan and handoff sections
 ```
@@ -30,7 +31,7 @@ this task's execution-plan and handoff sections
 - detector geometry or pixels
 - CIF parsing, structure intensity, Parratt, or stacking
 - interface optics
-- branch and `Qr` selection
+- weighted candidate selection or detector deposition
 - fitting or acceleration frameworks
 - shared contract or dependency edits
 
@@ -67,44 +68,43 @@ detector bandwidth sum and wavelength-dependent geometry
 
 ### MOS-01: source samples
 
-Implement deterministic spatial, directional, wavelength, and declared polarization-state samples with explicit joint or independent correlation semantics and integrated probability mass. A unity polarization assumption must be explicit metadata, not absence of data.
+Implement explicit seeded randomized Latin-hypercube Gaussian sampling for position, divergence, and wavelength: independent dimensions, antithetic pairs, an odd central ray, equal empirical row mass, and reproducible count/seed. Use the direct `scipy.special.ndtri` dependency instead of a local inverse-normal approximation. Never multiply samples by their generating PDF. Keep deterministic Gauss–Hermite only as an oracle.
 
 ### MOS-02: orientation distribution
 
 Implement independent Gaussian-like core width, Lorentzian-like tail width, and mixture weight. Normalize probability under the declared spherical measure without evaluating a singular point density at the pole.
+Record `mosaic.wrapped_line_density` as `rad^-1`, frame-free `PROBABILITY_DENSITY`.
 
 ### MOS-03: dense independent oracle
 
-Implement a transparent dense support calculation using direct equations. It must not call the public localized solver.
+Implement a transparent all-candidate support oracle using direct equations. It must not call the public candidate builder or render an image.
 
 ### MOS-04: Ewald support
 
-Construct the valid support for each incident state and rod. The overnight public reference may use the dense deterministic construction when it is converged; a localized/adaptive production solver is an extension unless completed and proved. Handle two-root, tangent, no-root, and specular-family cases. Use real phase wavevectors.
+Construct every physically valid candidate for each incident state and rod. A localized/adaptive builder is an extension unless proved against the all-candidate oracle. Handle two-root, tangent, no-root, and specular-family cases with real phase wavevectors.
 
-### MOS-05: deterministic quadrature
+### MOS-05: candidate mass
 
-Integrate orientation probability and any required geometric Jacobian into `reciprocal_weight`. Do not use secondary random or quantile resampling in proof mode.
+Calculate each candidate's `reciprocal_weight` as its wrapped-mosaic/Jacobian mass for T07's complete pool. Do not select candidates, assign per-selected-event mass, or raster pixels here.
 
-### MOS-06: event contract
+### MOS-06: candidate contract
 
-Emit event-aligned internal `Q`, `Qz`, `L`, outgoing film phase wavevector, weight, residual, IDs, and validity. Do not include source weight, structure intensity, optics, solid angle, or deposition.
+Emit candidate-aligned full sample-frame `Q`, exact sample-normal projection, `L`, outgoing film phase wavevector, `reciprocal_weight`, residual, source/orientation/rod IDs, exact status, and matching validity. Do not include source PDF weight, structure intensity, optics, solid angle, selection, or deposition.
 
 ### MOS-07: convergence and benchmark
 
-Compare the public method to the dense oracle across narrow, broad, tail, tangent, and bandwidth cases. When the public method is the dense reference, record its convergence and baseline timing. Any localized/adaptive method must agree before it replaces the reference path.
+Compare the candidate builder to the all-candidate oracle across narrow, broad, tail, tangent, and bandwidth cases; record construction convergence, timing, and peak memory before any localized replacement.
 
 ## Required proof
 
-- source and spectrum weight normalization
-- preservation of declared source correlations and polarization-state IDs
+- fixed-seed source support, equal empirical row mass, antithetic pairing, and odd central ray
+- source histograms recover declared distributions/correlations and preserve polarization-state IDs
 - orientation normalization and azimuthal periodicity
 - zero-width limit and finite pole behavior
 - exact elastic residual
 - tangent and no-root status
-- dense versus public integrated event mass
-- no quantile-resampling bias
-- legacy support and event cases with classifications
-- convergence of total mass, event centroid, and selected quantiles
+- all-candidate versus public support and total candidate mass
+- legacy candidate cases with classifications and construction convergence
 
 ## Overnight completion rule
 

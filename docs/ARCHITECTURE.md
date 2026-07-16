@@ -11,6 +11,8 @@ src/rasim_next/
         wave_modes.py
         interfaces.py
         contracts.py
+        scattering.py
+        traces.py
         validity.py
 
     io/
@@ -43,6 +45,7 @@ src/rasim_next/
         rods.py
         ewald.py
         events.py
+        proof.py
 
     ordered/
         structure_factor.py
@@ -93,7 +96,8 @@ src/rasim_next/
 
     proof/
         traces.py
-        compare.py
+        tolerances.py
+        stage_tolerances_v1.json
         cli.py
         diagnostics.py
 ```
@@ -125,7 +129,7 @@ Bootstrap implements and proves:
 - normal-wavevector calculation
 - scalar interface amplitude
 - common validity/status codes
-- trace records and event IDs
+- production-neutral trace values, proof-only comparison/tolerances, and event IDs
 - no-physics synthetic plumbing
 
 Geometry and reflectivity consume the same normal-wavevector and interface primitives. They do not reimplement them.
@@ -137,7 +141,7 @@ geometry-optics
     io/osc.py, geometry/, optics/
 
 mosaic-ewald
-    sampling/, reciprocal/ewald.py, reciprocal/events.py
+    sampling/, reciprocal/ewald.py, reciprocal/events.py, reciprocal/proof.py
 
 ordered-reflectivity
     materials/, reciprocal/lattice.py, reciprocal/rods.py,

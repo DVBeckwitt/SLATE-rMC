@@ -155,6 +155,7 @@ source = { editable = "." }
 dependencies = [
     { name = "gemmi" },
     { name = "numpy" },
+    { name = "scipy" },
     { name = "xraydb" },
 ]
 
@@ -168,6 +169,7 @@ dev = [
 requires-dist = [
     { name = "gemmi", specifier = ">=0.7,<0.8" },
     { name = "numpy", specifier = ">=2.0,<3" },
+    { name = "scipy", specifier = ">=1.14,<2" },
     { name = "xraydb", specifier = ">=4.5,<5" },
 ]
 
