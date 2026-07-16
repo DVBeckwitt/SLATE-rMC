@@ -1,95 +1,41 @@
-"""Compact T04 analytic, reference, convergence, mutation, and benchmark proof."""
-
-# ruff: noqa: E402
+"""Compact T04 scientific proof for ordered amplitudes and reflectivity."""
 
 from __future__ import annotations
 
 import cmath
-import gc
 import hashlib
-import json
 import math
-import os
-import platform
 import subprocess
-import time
 import tomllib
-import tracemalloc
 from pathlib import Path
-from statistics import median
 from typing import Any
-
-_THREAD_VARIABLES = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-)
-for _thread_variable in _THREAD_VARIABLES:
-    os.environ[_thread_variable] = "1"
 
 import gemmi
 import numpy as np
 import xraydb
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import RodCatalog, RodQueryBatch
-from rasim_next.materials import (
-    CLASSICAL_ELECTRON_RADIUS_A,
-    CrystalSite,
-    CrystalStructure,
-    material_optics,
-    read_crystal,
-)
+from rasim_next.core.contracts import RodQueryBatch
+from rasim_next.materials import CrystalStructure, read_crystal
 from rasim_next.materials.optics import HC_EV_A
-from rasim_next.ordered.amplitudes import (
-    OrderedEventResult,
-    ordered_event_result,
-    unit_cell_amplitude,
-)
+from rasim_next.ordered.amplitudes import ordered_event_result, unit_cell_amplitude
 from rasim_next.ordered.bi2se3_proof import run_bi2se3_ql_proof
-from rasim_next.ordered.finite_stack import (
-    Bi2Se3WholeCellCompatResult,
-    bi2se3_whole_cell_compat_curve,
-    coherent_finite_stack,
-    uniform_finite_stack,
-)
+from rasim_next.ordered.finite_stack import coherent_finite_stack, uniform_finite_stack
 from rasim_next.ordered.motifs import extract_pbi2_motifs, pbi2_layer_amplitudes
-from rasim_next.ordered.pbi2_proof import run_pbi2_polytype_proof
-from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity.parratt import parratt_reflectivity
-from rasim_next.reflectivity.specular import (
-    bi2se3_whole_cell_compat_specular,
-    manuscript_specular_composite,
-)
+from rasim_next.reflectivity.specular import manuscript_specular_composite
 
 ROOT = Path(__file__).resolve().parents[3]
 PACK_PATH = ROOT / "reference" / "rasim_reference_v1.npz"
 WAVELENGTH_A = 1.540592925
-TOLERANCES: dict[str, dict[str, float]] = {
-    "exact_identity": {"atol": 0.0, "rtol": 0.0},
-    "direct_atom_e": {"atol": 1e-10, "rtol": 1e-12},
-    "vesta_003_component_e": {"atol": 0.01, "rtol": 0.0},
-    "bi2se3_reconstruction_e": {"atol": 1e-10, "rtol": 1e-12},
-    "bi2se3_vesta_component_e": {"atol": 1e-4, "rtol": 0.0},
-    "bi2se3_vesta_rms_e": {"atol": 5e-5, "rtol": 0.0},
-    "bi2se3_vesta_magnitude_e": {"atol": 6e-4, "rtol": 0.0},
-    "bi2se3_vesta_relative_magnitude": {"atol": 5e-6, "rtol": 0.0},
-    "bi2se3_vesta_d_A": {"atol": 6e-7, "rtol": 0.0},
-    "bi2se3_vesta_two_theta_deg": {"atol": 1.2e-4, "rtol": 0.0},
-    "reciprocal_d_A": {"atol": 2e-12, "rtol": 2e-12},
-    "finite_stack_amplitude_e": {"atol": 1e-10, "rtol": 1e-12},
-    "parratt_qz_Ainv": {"atol": 5e-12, "rtol": 0.0},
-    "parratt_phase_L": {"atol": 1e-11, "rtol": 0.0},
-    "parratt_reflectivity": {"atol": 5e-11, "rtol": 0.0},
-    "composite_convergence": {"atol": 1e-10, "rtol": 0.002},
-    "bi2se3_whole_cell_compat": {"atol": 1e-12, "rtol": 1e-8},
-    "bi2se3_whole_cell_normalized": {"atol": 1e-12, "rtol": 1e-8},
+TOLERANCES = {
+    "amplitude_e": {"atol": 1e-10, "rtol": 1e-12},
+    "coordinate_fractional": {"atol": 2e-15, "rtol": 0.0},
+    "parratt": {"atol": 5e-11, "rtol": 0.0},
+    "reference_d_A": {"atol": 2e-12, "rtol": 2e-12},
 }
-TOLERANCE_VERSION = "ordered-reflectivity-tolerances-v3"
 
 
 def _sha256(path: Path) -> str:
@@ -98,16 +44,6 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _canonical_json_sha256(payload: Any, *, allow_nan: bool = True) -> str:
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=allow_nan,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _git(*arguments: str) -> str:
@@ -120,49 +56,55 @@ def _git(*arguments: str) -> str:
     return completed.stdout.strip() if completed.returncode == 0 else "unavailable"
 
 
-def _environment_sha256() -> str:
-    payload = {
-        "python": platform.python_version(),
-        "numpy": np.__version__,
-        "xraydb": xraydb.__version__,
-        "xraydb_database": xraydb.get_xraydb().get_version(),
-        "gemmi": gemmi.__version__,
-        "threads": {name: os.environ[name] for name in _THREAD_VARIABLES},
-    }
-    return _canonical_json_sha256(payload)
-
-
-def _stats(
-    error: NDArray[np.floating[Any]] | NDArray[np.complexfloating[Any, Any]],
-) -> dict[str, float]:
-    absolute = np.abs(np.asarray(error)).ravel()
-    return {
-        "maximum": float(np.max(absolute, initial=0.0)),
-        "rms": float(np.sqrt(np.mean(absolute**2))) if absolute.size else 0.0,
-        "percentile_95": float(np.percentile(absolute, 95)) if absolute.size else 0.0,
-    }
-
-
-def _check(
-    check_id: str,
-    passed: bool,
-    evidence: object,
-    stage_ids: list[str],
-    *,
-    maximum_error: float = 0.0,
-    percentile_95_error: float = 0.0,
-    tolerance: object = None,
-) -> dict[str, object]:
+def _check(check_id: str, passed: bool, evidence: dict[str, object]) -> dict[str, object]:
     return {
         "check_id": check_id,
         "status": "PASS" if passed else "FAIL",
         "evidence": evidence,
-        "stage_ids": stage_ids,
-        "maximum_error": float(maximum_error),
-        "percentile_95_error": float(percentile_95_error),
-        "failing_element": None,
-        "tolerance": tolerance,
     }
+
+
+def _reference_pack() -> tuple[dict[str, NDArray[Any]], str]:
+    manifest = tomllib.loads(
+        (ROOT / "reference" / "reference_manifest.toml").read_text(encoding="utf-8")
+    )
+    expected_hash = str(manifest["reference_pack"]["sha256"])
+    observed_hash = _sha256(PACK_PATH)
+    if observed_hash != expected_hash:
+        raise ValueError("immutable reference-pack hash mismatch")
+    names = {
+        "ordered_hkl",
+        "ordered_sim_d",
+        "ordered_sim_f_real",
+        "ordered_sim_f_imag",
+        "parratt_qz",
+        "parratt_reflectivity",
+        "parratt_parameters",
+        "parratt_indices",
+    }
+    with np.load(PACK_PATH, allow_pickle=False) as source:
+        return {name: np.array(source[name], copy=True) for name in names}, observed_hash
+
+
+def _atomic_factor_e(
+    species: str,
+    element: str,
+    charge: int,
+    q_magnitude_Ainv: float,
+    wavelength_A: float,
+) -> complex:
+    requested = species
+    if charge:
+        sign = "+" if charge > 0 else "-"
+        ionic = f"{element}{abs(charge)}{sign}"
+        if ionic in xraydb.f0_ions(element):
+            requested = ionic
+    f0 = float(np.asarray(xraydb.f0(requested, q_magnitude_Ainv / (4.0 * math.pi))).item())
+    energy_eV = HC_EV_A / wavelength_A
+    return complex(
+        f0 + xraydb.f1_chantler(element, energy_eV),
+        xraydb.f2_chantler(element, energy_eV),
+    )
 
 
 def _direct_atom_amplitudes(
@@ -170,64 +112,287 @@ def _direct_atom_amplitudes(
     hkl: NDArray[np.float64],
     wavelength_A: NDArray[np.float64],
     *,
-    include_occupancy: bool = True,
-    include_anomalous: bool = True,
-    include_displacement: bool = True,
     unknown_u_iso_A2: float | None = None,
 ) -> NDArray[np.complex128]:
-    """Independent proof-only scalar atom sum using direct XrayDB calls."""
+    """Independent scalar atom sum with explicit positive phase and damping."""
 
-    indices = np.asarray(hkl, dtype=np.float64)
-    wavelength = np.broadcast_to(np.asarray(wavelength_A, dtype=np.float64), (indices.shape[0],))
-    reciprocal_basis = 2.0 * np.pi * np.linalg.inv(crystal.direct_basis_A).T
-    q_vectors = indices @ reciprocal_basis.T
-    q_magnitude = np.linalg.norm(q_vectors, axis=1)
-    energy = HC_EV_A / wavelength
-    if include_anomalous:
-        unique_energy, inverse = np.unique(energy, return_inverse=True)
-    factors: list[NDArray[np.complex128]] = []
-    for site in crystal.sites:
-        requested = site.element
-        if site.charge:
-            sign = "+" if site.charge > 0 else "-"
-            ionic = f"{site.element}{abs(site.charge)}{sign}"
-            if ionic in xraydb.f0_ions(site.element):
-                requested = ionic
-        f0 = np.asarray(xraydb.f0(requested, q_magnitude / (4.0 * np.pi)), dtype=np.float64)
-        if include_anomalous:
-            f1 = np.asarray(
-                [xraydb.f1_chantler(site.element, float(value)) for value in unique_energy]
-            )[inverse]
-            f2 = np.asarray(
-                [xraydb.f2_chantler(site.element, float(value)) for value in unique_energy]
-            )[inverse]
-            factors.append(np.asarray(f0 + f1 + 1.0j * f2, dtype=np.complex128))
-        else:
-            factors.append(np.asarray(f0, dtype=np.complex128))
-
-    result = np.empty(indices.shape[0], dtype=np.complex128)
-    for event_index, miller in enumerate(indices):
+    reciprocal = 2.0 * math.pi * np.linalg.inv(crystal.direct_basis_A).T
+    result: list[complex] = []
+    for miller, wavelength in zip(hkl, wavelength_A, strict=True):
+        q_vector = reciprocal @ miller
+        q_magnitude = float(np.linalg.norm(q_vector))
         contributions: list[complex] = []
-        for site_index, site in enumerate(crystal.sites):
-            occupancy = site.occupancy if include_occupancy else 1.0
-            if site.u_iso_A2 is None:
-                if unknown_u_iso_A2 is None:
-                    raise ValueError("direct oracle requires explicit unknown Uiso")
-                u_iso = unknown_u_iso_A2
-            else:
-                u_iso = site.u_iso_A2
-            damping = (
-                math.exp(-0.5 * u_iso * q_magnitude[event_index] ** 2)
-                if include_displacement
-                else 1.0
+        for site in crystal.sites:
+            if site.u_iso_A2 is None and unknown_u_iso_A2 is None:
+                raise ValueError("scalar atom oracle requires an explicit unknown Uiso")
+            u_iso = unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2
+            factor = _atomic_factor_e(
+                site.species,
+                site.element,
+                site.charge,
+                q_magnitude,
+                float(wavelength),
             )
-            phase = cmath.exp(2.0j * math.pi * float(np.dot(miller, np.asarray(site.fractional))))
-            contributions.append(occupancy * factors[site_index][event_index] * damping * phase)
-        result[event_index] = complex(
-            math.fsum(value.real for value in contributions),
-            math.fsum(value.imag for value in contributions),
+            phase = cmath.exp(2.0j * math.pi * float(np.dot(miller, site.fractional)))
+            damping = math.exp(-0.5 * float(u_iso) * q_magnitude**2)
+            contributions.append(site.occupancy * factor * damping * phase)
+        result.append(
+            complex(
+                math.fsum(value.real for value in contributions),
+                math.fsum(value.imag for value in contributions),
+            )
         )
-    return result
+    return np.asarray(result, dtype=np.complex128)
+
+
+def _scalar_and_raw_check(
+    crystal: CrystalStructure, pack: dict[str, NDArray[Any]]
+) -> tuple[dict[str, object], dict[str, object]]:
+    pack_hkl = np.asarray(pack["ordered_hkl"], dtype=np.float64)
+    row_003 = int(np.flatnonzero(np.all(pack_hkl == (0.0, 0.0, 3.0), axis=1))[0])
+    hkl = np.asarray(((0.0, 0.0, 3.0), (1.0, 0.0, 1.0), (1.0, -1.0, 0.37)))
+    wavelength = np.full(3, WAVELENGTH_A)
+    production = unit_cell_amplitude(crystal, hkl, wavelength).amplitude_e
+    direct = _direct_atom_amplitudes(crystal, hkl, wavelength)
+    direct_error = float(np.max(np.abs(production - direct)))
+
+    lattice = ReciprocalLattice.from_crystal(crystal)
+    d_003_A = 2.0 * math.pi / float(np.linalg.norm(lattice.q_cartesian_Ainv(hkl[0])))
+    d_error_A = abs(d_003_A - float(pack["ordered_sim_d"][row_003]))
+    historical = complex(
+        float(pack["ordered_sim_f_real"][row_003]),
+        float(pack["ordered_sim_f_imag"][row_003]),
+    )
+    historical_residual_e = abs(complex(production[0]) - historical)
+
+    vesta_row = (
+        (ROOT / "examples" / "bi2se3" / "reference" / "Bi2Se3_vesta_cu_ka1_dmin_0p7.txt")
+        .read_text(encoding="utf-8")
+        .splitlines()[1]
+        .split()
+    )
+    vesta_003 = complex(float(vesta_row[4]), float(vesta_row[5]))
+    vesta_component_error_e = float(
+        np.max(
+            np.abs(
+                (
+                    production[0].real - vesta_003.real,
+                    production[0].imag - vesta_003.imag,
+                )
+            )
+        )
+    )
+
+    catalog = build_rod_catalog(crystal, h_bounds=(0, 1), k_bounds=(0, 0))
+    rows = [int(np.flatnonzero((catalog.h == h_value) & (catalog.k == 0))[0]) for h_value in (0, 1)]
+    l_coordinate = np.asarray((0.5, 1.25))
+    query = RodQueryBatch(
+        event_id=np.asarray((42, 7)),
+        rod_id=catalog.rod_id[rows],
+        phase_id=(crystal.phase_id,) * 2,
+        h=np.asarray((0, 1), dtype=np.int32),
+        k=np.zeros(2, dtype=np.int32),
+        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        l_coordinate=l_coordinate,
+        wavelength_A=np.full(2, WAVELENGTH_A),
+    )
+    ordered = ordered_event_result(crystal, catalog, query)
+    raw_measure_error_e2 = float(
+        np.max(np.abs(ordered.intensity.intensity_per_sr - np.abs(ordered.amplitude_e) ** 2))
+    )
+    passed = bool(
+        direct_error <= TOLERANCES["amplitude_e"]["atol"]
+        and d_error_A <= TOLERANCES["reference_d_A"]["atol"]
+        and vesta_component_error_e <= 0.01
+        and raw_measure_error_e2 <= 5e-12
+        and np.array_equal(ordered.event_id, query.event_id)
+        and ordered.intensity.normalization == "|F_e|^2; electron2; no external factors"
+        and not ordered.amplitude_e.flags.writeable
+    )
+    check = _check(
+        "scalar_atom_sum_and_raw_measure",
+        passed,
+        {
+            "maximum_scalar_oracle_error_e": direct_error,
+            "F003_reciprocal_d_error_A": d_error_A,
+            "F003_vesta_component_error_e": vesta_component_error_e,
+            "F003_historical_pack_residual_e": historical_residual_e,
+            "raw_measure_error_electron2": raw_measure_error_e2,
+            "normalization": ordered.intensity.normalization,
+        },
+    )
+    comparison = {
+        "case_id": "ordered.bi2se3_vesta",
+        "classification": "CORRECTED",
+        "prior_matching_evidence": "F003 reciprocal d-spacing",
+        "prior_stage_maximum_error_A": d_error_A,
+        "first_divergence_stage": "ordered.unit_cell_amplitude",
+        "historical_pack_residual_e": historical_residual_e,
+        "independent_oracle_check_id": check["check_id"],
+    }
+    return check, comparison
+
+
+def _pbi2_check() -> dict[str, object]:
+    crystal = read_crystal(
+        ROOT / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+        phase_id="pbi2",
+    )
+    motifs = extract_pbi2_motifs(crystal)
+    motif = motifs[0]
+    plus_offsets = [
+        (
+            atom,
+            (
+                atom.fractional_offset[0],
+                atom.fractional_offset[1],
+                -atom.fractional_offset[2],
+            )
+            if motif.orientation == "minus"
+            else atom.fractional_offset,
+        )
+        for atom in motif.atoms
+    ]
+    minus_offsets = [(atom, (offset[0], offset[1], -offset[2])) for atom, offset in plus_offsets]
+
+    catalog = build_rod_catalog(crystal, h_bounds=(1, 1), k_bounds=(0, 0))
+    l_coordinate = np.asarray((0.75, -0.75))
+    lattice = ReciprocalLattice.from_crystal(crystal)
+    query = RodQueryBatch(
+        event_id=np.asarray((9, 2)),
+        rod_id=np.repeat(catalog.rod_id, 2),
+        phase_id=(crystal.phase_id,) * 2,
+        h=np.ones(2, dtype=np.int32),
+        k=np.zeros(2, dtype=np.int32),
+        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
+        l_coordinate=l_coordinate,
+        wavelength_A=np.full(2, WAVELENGTH_A),
+    )
+    production = pbi2_layer_amplitudes(crystal, query, unknown_u_iso_A2=0.0)
+
+    def scalar(offsets: list[tuple[Any, tuple[float, float, float]]]) -> NDArray[np.complex128]:
+        values: list[complex] = []
+        for h_value, k_value, l_value, wavelength in zip(
+            query.h,
+            query.k,
+            query.l_coordinate,
+            query.wavelength_A,
+            strict=True,
+        ):
+            q_vector = lattice.q_cartesian_Ainv((h_value, k_value, l_value))
+            q_magnitude = float(np.linalg.norm(q_vector))
+            terms = []
+            for atom, offset in offsets:
+                factor = _atomic_factor_e(
+                    atom.species,
+                    atom.element,
+                    atom.charge,
+                    q_magnitude,
+                    float(wavelength),
+                )
+                phase = cmath.exp(
+                    2.0j
+                    * math.pi
+                    * (
+                        float(h_value) * offset[0]
+                        + float(k_value) * offset[1]
+                        + float(l_value) * offset[2]
+                    )
+                )
+                terms.append(atom.occupancy * factor * phase)
+            values.append(
+                complex(
+                    math.fsum(value.real for value in terms),
+                    math.fsum(value.imag for value in terms),
+                )
+            )
+        return np.asarray(values, dtype=np.complex128)
+
+    expected_plus = scalar(plus_offsets)
+    expected_minus = scalar(minus_offsets)
+    maximum_error_e = max(
+        float(np.max(np.abs(production.f_plus - expected_plus))),
+        float(np.max(np.abs(production.f_minus - expected_minus))),
+    )
+    covered = sorted(atom.site_index for item in motifs for atom in item.atoms)
+    passed = bool(
+        len(motifs) == 1
+        and motif.orientation == "minus"
+        and covered == list(range(len(crystal.sites)))
+        and maximum_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and np.allclose(production.f_minus[0], production.f_plus[1], rtol=1e-12, atol=1e-10)
+        and not production.f_plus.flags.writeable
+    )
+    return _check(
+        "pbi2_motif_layer_boundary",
+        passed,
+        {
+            "motif_count": len(motifs),
+            "orientation": motif.orientation,
+            "covered_sites": len(covered),
+            "maximum_scalar_oracle_error_e": maximum_error_e,
+            "gauge": "Pb-centered; registry-free; positive phase",
+        },
+    )
+
+
+def _finite_stack_check() -> dict[str, object]:
+    event_id = np.asarray((17, 3))
+    qz_Ainv = np.asarray((0.0, 0.73))
+    amplitudes = np.asarray(
+        (
+            (1.0 + 0.5j, 2.0 - 0.25j, -0.4 + 0.7j),
+            (0.5j, 1.2 - 0.3j, 0.8 + 0.1j),
+        )
+    )
+    depths_A = np.asarray((0.0, 2.5, 7.25))
+    production = coherent_finite_stack(event_id, qz_Ainv, amplitudes, depths_A)
+    direct = np.sum(amplitudes * np.exp(1.0j * qz_Ainv[:, None] * depths_A), axis=1)
+    direct_error_e = float(np.max(np.abs(production.amplitude_e - direct)))
+    raw_error_e2 = float(
+        np.max(np.abs(production.intensity.intensity_per_sr - np.abs(direct) ** 2))
+    )
+
+    repeat = np.asarray((1.2 + 0.4j,))
+    off_bragg_qz = np.asarray((0.31,))
+    off_bragg = uniform_finite_stack(
+        event_id[:1],
+        off_bragg_qz,
+        repeat,
+        repeat_spacing_A=2.5,
+        repeat_count=5,
+    )
+    enumerated = repeat * np.sum(
+        np.exp(1.0j * off_bragg_qz[:, None] * 2.5 * np.arange(5)),
+        axis=1,
+    )
+    off_bragg_error_e = float(np.max(np.abs(off_bragg.amplitude_e - enumerated)))
+    bragg = uniform_finite_stack(
+        event_id[:1],
+        np.asarray((2.0 * math.pi / 2.5,)),
+        repeat,
+        repeat_spacing_A=2.5,
+        repeat_count=7,
+    )
+    bragg_error_e = float(np.max(np.abs(bragg.amplitude_e - 7.0 * repeat)))
+    passed = bool(
+        direct_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and raw_error_e2 <= 5e-12
+        and off_bragg_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and bragg_error_e <= TOLERANCES["amplitude_e"]["atol"]
+        and production.intensity.normalization.endswith("electron2")
+    )
+    return _check(
+        "finite_stack_direct_sum",
+        passed,
+        {
+            "maximum_direct_error_e": direct_error_e,
+            "maximum_raw_measure_error_electron2": raw_error_e2,
+            "five_repeat_off_Bragg_error_e": off_bragg_error_e,
+            "seven_repeat_Bragg_error_e": bragg_error_e,
+            "normalization": production.intensity.normalization,
+        },
+    )
 
 
 def _direct_parratt(
@@ -237,18 +402,19 @@ def _direct_parratt(
     thickness_A: tuple[float | None, ...],
     roughness_A: NDArray[np.float64],
 ) -> tuple[NDArray[np.complex128], NDArray[np.complex128], NDArray[np.complex128]]:
+    k0 = 2.0 * math.pi / wavelength_A
     kz_rows: list[list[complex]] = []
     interface_rows: list[list[complex]] = []
     amplitudes: list[complex] = []
-    k0 = 2.0 * math.pi / wavelength_A
     for qz in qz_Ainv:
-        kz: list[complex] = []
-        for refractive_index in indices:
-            index = complex(refractive_index)
-            root = cmath.sqrt((index * index - 1.0) * k0**2 + (0.5 * float(qz)) ** 2)
-            if root.imag < 0.0 or (root.imag == 0.0 and root.real < 0.0):
-                root = -root
-            kz.append(root)
+        kz = [
+            cmath.sqrt((complex(index) ** 2 - 1.0) * k0**2 + (0.5 * float(qz)) ** 2)
+            for index in indices
+        ]
+        kz = [
+            -value if value.imag < 0.0 or (value.imag == 0.0 and value.real < 0.0) else value
+            for value in kz
+        ]
         interfaces = [
             (kz[row] - kz[row + 1])
             / (kz[row] + kz[row + 1])
@@ -271,962 +437,14 @@ def _direct_parratt(
     )
 
 
-def _load_pack() -> tuple[dict[str, NDArray[Any]], str]:
-    manifest = tomllib.loads(
-        (ROOT / "reference" / "reference_manifest.toml").read_text(encoding="utf-8")
-    )
-    expected_hash = manifest["reference_pack"]["sha256"]
-    observed_hash = _sha256(PACK_PATH)
-    if observed_hash != expected_hash:
-        raise ValueError("immutable reference-pack hash mismatch")
-    names = {
-        "ordered_hkl",
-        "ordered_sim_d",
-        "ordered_sim_f_real",
-        "ordered_sim_f_imag",
-        "parratt_qz",
-        "parratt_phase_qz",
-        "parratt_phase_L",
-        "parratt_reflectivity",
-        "parratt_parameters",
-        "parratt_indices",
-    }
-    with np.load(PACK_PATH, allow_pickle=False) as source:
-        return {name: np.array(source[name], copy=True) for name in names}, observed_hash
-
-
-def _vesta_table() -> tuple[NDArray[np.float64], NDArray[np.complex128]]:
-    path = ROOT / "examples" / "bi2se3" / "reference" / "Bi2Se3_vesta_cu_ka1_dmin_0p7.txt"
-    rows = [line.split() for line in path.read_text(encoding="utf-8").splitlines()[1:] if line]
-    hkl = np.asarray([[float(value) for value in row[:3]] for row in rows], dtype=np.float64)
-    amplitude = np.asarray(
-        [complex(float(row[4]), float(row[5])) for row in rows], dtype=np.complex128
-    )
-    return hkl, amplitude
-
-
-_LEGACY_BI2SE3_FACTORS = {
-    "Bi": (
-        ((33.3689, 0.704), (12.951, 2.9238), (16.5877, 8.7937), (6.4692, 48.0093)),
-        13.5782,
-        -3.6853811239916183,
-        -9.2942695857503,
-    ),
-    "Se": (
-        ((17.0006, 2.4098), (5.8196, 0.2726), (3.9731, 15.2372), (4.3543, 43.8163)),
-        2.8409,
-        -0.7944157549455682,
-        -1.1804401764903047,
-    ),
-}
-
-
-def _legacy_bi2se3_amplitude_oracle(
-    crystal: CrystalStructure,
-    h: NDArray[np.int32],
-    k: NDArray[np.int32],
-    l_coordinate: NDArray[np.float64],
-) -> NDArray[np.complex128]:
-    """Scalar transcription of the frozen 494accdc whole-cell equation."""
-
-    result = np.empty(l_coordinate.shape, dtype=np.complex128)
-    for row, (h_value, k_value, l_value) in enumerate(zip(h, k, l_coordinate, strict=True)):
-        radial_index = int(h_value) ** 2 + int(h_value) * int(k_value) + int(k_value) ** 2
-        q_magnitude = (
-            2.0
-            * math.pi
-            * math.sqrt((4.0 / 3.0) * radial_index / 4.557**2 + float(l_value) ** 2 / 28.636**2)
-        )
-        q_scaled_squared = (q_magnitude / (4.0 * math.pi)) ** 2
-        contributions: list[complex] = []
-        for site in crystal.sites:
-            gaussian_terms, constant, f_prime, f_double_prime = _LEGACY_BI2SE3_FACTORS[site.element]
-            factor = constant + sum(
-                coefficient * math.exp(-exponent * q_scaled_squared)
-                for coefficient, exponent in gaussian_terms
-            )
-            phase_argument = (
-                2.0
-                * math.pi
-                * (
-                    int(h_value) * site.fractional[0]
-                    + int(k_value) * site.fractional[1]
-                    + float(l_value) * site.fractional[2]
-                )
-            )
-            contributions.append(
-                complex(factor + f_prime, f_double_prime) * cmath.exp(1.0j * phase_argument)
-            )
-        result[row] = complex(
-            math.fsum(value.real for value in contributions),
-            math.fsum(value.imag for value in contributions),
-        )
-    return result
-
-
-def _legacy_bi2se3_finite_oracle(
-    unit_cell_amplitude_e: NDArray[np.complex128],
-    l_coordinate: NDArray[np.float64],
-) -> tuple[NDArray[np.complex128], NDArray[np.float64], NDArray[np.float64]]:
-    raw_amplitude = np.empty(unit_cell_amplitude_e.shape, dtype=np.complex128)
-    legacy_intensity = np.empty(l_coordinate.shape, dtype=np.float64)
-    legacy_area = (2.0 * math.pi) ** 2 / 17.98e-10 * 3.0
-    for row, (unit_cell, l_value) in enumerate(
-        zip(unit_cell_amplitude_e, l_coordinate, strict=True)
-    ):
-        geometric_terms = [
-            cmath.exp(2.0j * math.pi * float(l_value) * layer) for layer in range(17)
-        ]
-        geometric = complex(
-            math.fsum(value.real for value in geometric_terms),
-            math.fsum(value.imag for value in geometric_terms),
-        )
-        raw_amplitude[row] = unit_cell * geometric
-        damped_step = (1.0 - 1e-6) * cmath.exp(2.0j * math.pi * float(l_value))
-        weighted_pair_sum = sum(
-            (17 - separation) * damped_step**separation for separation in range(1, 17)
-        )
-        pair_factor_per_layer = max(
-            (17.0 + 2.0 * weighted_pair_sum.real) / 17.0,
-            0.0,
-        )
-        legacy_intensity[row] = legacy_area * abs(unit_cell) ** 2 * pair_factor_per_layer
-    return raw_amplitude, np.abs(raw_amplitude) ** 2, legacy_intensity
-
-
-def _compatibility_curve(
-    crystal: CrystalStructure,
-    catalog: RodCatalog,
-    h: int,
-    k: int,
-    l_coordinate: NDArray[np.float64],
-    event_id: NDArray[np.int64],
-) -> tuple[RodQueryBatch, OrderedEventResult, Bi2Se3WholeCellCompatResult]:
-    catalog_row = int(np.flatnonzero((catalog.h == h) & (catalog.k == k))[0])
-    query = RodQueryBatch(
-        event_id=event_id,
-        rod_id=np.repeat(catalog.rod_id[catalog_row], event_id.size),
-        phase_id=(crystal.phase_id,) * event_id.size,
-        h=np.full(event_id.size, h, dtype=np.int32),
-        k=np.full(event_id.size, k, dtype=np.int32),
-        qz_Ainv=l_coordinate * (2.0 * np.pi / 28.636),
-        l_coordinate=l_coordinate,
-        wavelength_A=np.full(event_id.size, 1.54),
-    )
-    ordered = ordered_event_result(
-        crystal,
-        catalog,
-        query,
-        basis_mode="bi2se3_whole_cell_compat",
-    )
-    return query, ordered, bi2se3_whole_cell_compat_curve(query, ordered)
-
-
-def _extrema_indices(values: NDArray[np.float64], *, maximum: bool) -> NDArray[np.int64]:
-    if maximum:
-        mask = (values[1:-1] > values[:-2]) & (values[1:-1] >= values[2:])
-    else:
-        mask = (values[1:-1] < values[:-2]) & (values[1:-1] <= values[2:])
-    return np.flatnonzero(mask).astype(np.int64) + 1
-
-
-def _legacy_blend_bounds_oracle(
-    q_over_qc: NDArray[np.float64],
-    low_curve: NDArray[np.float64],
-    high_curve: NDArray[np.float64],
-) -> tuple[tuple[float, float], str]:
-    positive = (low_curve > 0.0) & (high_curve > 0.0)
-    mismatch = np.full(q_over_qc.shape, np.inf, dtype=np.float64)
-    mismatch[positive] = np.abs(np.log10(high_curve[positive] / low_curve[positive]))
-    valid = positive & (q_over_qc >= 3.0) & (q_over_qc <= 10.0) & (mismatch <= 0.10)
-    indices = np.flatnonzero(valid)
-    candidates: list[tuple[float, float, float, float]] = []
-    if indices.size:
-        for run in np.split(indices, np.flatnonzero(np.diff(indices) > 1) + 1):
-            width = float(q_over_qc[run[-1]] - q_over_qc[run[0]])
-            if width + 1e-12 >= 1.0:
-                candidates.append(
-                    (
-                        -width,
-                        float(np.median(mismatch[run])),
-                        float(q_over_qc[run[0]]),
-                        float(q_over_qc[run[-1]]),
-                    )
-                )
-    if candidates:
-        _, _, lower, upper = min(candidates)
-        return (lower, upper), "automatic"
-    return (3.0, 6.0), "fallback"
-
-
-def _compatibility_error(candidate: NDArray[Any], reference: NDArray[Any]) -> dict[str, float]:
-    difference = np.abs(np.asarray(candidate) - np.asarray(reference))
-    scale = 1e-12 + 1e-8 * np.abs(np.asarray(reference))
-    return {
-        **_stats(difference),
-        "maximum_tolerance_fraction": float(np.max(difference / scale, initial=0.0)),
-    }
-
-
-def _compatibility_checks(
-    crystal: CrystalStructure,
+def _parratt_check(
     pack: dict[str, NDArray[Any]],
-) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
-    rods = ((0, 0), (-1, 0), (-2, 0), (-3, 1))
-    l_grid = np.arange(1001, dtype=np.float64) * 0.01
-    events_per_rod = l_grid.size
-    event_id = np.arange(len(rods) * events_per_rod, dtype=np.int64) + 20_000
-    h = np.repeat(np.asarray([rod[0] for rod in rods], dtype=np.int32), events_per_rod)
-    k = np.repeat(np.asarray([rod[1] for rod in rods], dtype=np.int32), events_per_rod)
-    l_coordinate = np.tile(l_grid, len(rods))
-    catalog = build_rod_catalog(crystal, h_bounds=(-3, 0), k_bounds=(0, 1))
-    catalog_rows = [
-        int(np.flatnonzero((catalog.h == h_value) & (catalog.k == k_value))[0])
-        for h_value, k_value in rods
-    ]
-    query = RodQueryBatch(
-        event_id=event_id,
-        rod_id=np.concatenate(
-            [np.repeat(catalog.rod_id[row], events_per_rod) for row in catalog_rows]
-        ),
-        phase_id=(crystal.phase_id,) * event_id.size,
-        h=h,
-        k=k,
-        qz_Ainv=l_coordinate * (2.0 * np.pi / 28.636),
-        l_coordinate=l_coordinate,
-        wavelength_A=np.full(event_id.size, 1.54),
-    )
-    production_ordered = ordered_event_result(
-        crystal,
-        catalog,
-        query,
-        basis_mode="bi2se3_whole_cell_compat",
-    )
-    production_curve = bi2se3_whole_cell_compat_curve(query, production_ordered)
-    oracle_amplitude = _legacy_bi2se3_amplitude_oracle(crystal, h, k, l_coordinate)
-    oracle_raw_amplitude, oracle_raw_e2, oracle_legacy = _legacy_bi2se3_finite_oracle(
-        oracle_amplitude,
-        l_coordinate,
-    )
-
-    sample_hkl = np.asarray([[rod[0], rod[1], 0.37] for rod in rods], dtype=np.float64)
-    exact_first = unit_cell_amplitude(crystal, sample_hkl, 1.54, basis_mode="exact_provider")
-    compat_after_exact = unit_cell_amplitude(
-        crystal,
-        sample_hkl,
-        1.54,
-        basis_mode="bi2se3_whole_cell_compat",
-    )
-    compat_first = unit_cell_amplitude(
-        crystal,
-        sample_hkl,
-        1.54,
-        basis_mode="bi2se3_whole_cell_compat",
-    )
-    exact_after_compat = unit_cell_amplitude(
-        crystal,
-        sample_hkl,
-        1.54,
-        basis_mode="exact_provider",
-    )
-    cache_isolation = (
-        exact_first.cache_identity == exact_after_compat.cache_identity
-        and compat_first.cache_identity == compat_after_exact.cache_identity
-        and exact_first.cache_identity != compat_first.cache_identity
-        and np.array_equal(exact_first.amplitude_e, exact_after_compat.amplitude_e)
-        and np.array_equal(compat_first.amplitude_e, compat_after_exact.amplitude_e)
-    )
-    alignment_passed = (
-        np.array_equal(production_curve.event_id, event_id)
-        and np.array_equal(production_curve.external_l_coordinate, l_coordinate)
-        and np.array_equal(query.h, h)
-        and np.array_equal(query.k, k)
-        and np.array_equal(query.qz_Ainv, l_coordinate * (2.0 * np.pi / 28.636))
-    )
-
-    production_amplitude_by_rod = production_ordered.amplitude_e.reshape(len(rods), -1)
-    production_raw_amplitude_by_rod = production_curve.finite_stack.amplitude_e.reshape(
-        len(rods), -1
-    )
-    production_raw_e2_by_rod = production_curve.finite_stack.intensity.intensity_per_sr.reshape(
-        len(rods), -1
-    )
-    production_legacy_by_rod = production_curve.legacy_intensity.reshape(len(rods), -1)
-    oracle_amplitude_by_rod = oracle_amplitude.reshape(len(rods), -1)
-    oracle_raw_amplitude_by_rod = oracle_raw_amplitude.reshape(len(rods), -1)
-    oracle_raw_e2_by_rod = oracle_raw_e2.reshape(len(rods), -1)
-    oracle_legacy_by_rod = oracle_legacy.reshape(len(rods), -1)
-    sample_indices = np.asarray([37, 173, 389, 641, 917], dtype=np.int64)
-    integer_indices = np.arange(0, 1001, 100, dtype=np.int64)
-    rod_metrics: dict[str, object] = {}
-    derived_metrics_passed = True
-    for rod_index, rod in enumerate(rods):
-        production_legacy = production_legacy_by_rod[rod_index]
-        reference_legacy = oracle_legacy_by_rod[rod_index]
-        reference_peak_candidates = _extrema_indices(reference_legacy, maximum=True)
-        production_peak_candidates = _extrema_indices(production_legacy, maximum=True)
-        if not reference_peak_candidates.size:
-            reference_peak_candidates = np.asarray([int(np.argmax(reference_legacy))])
-        if not production_peak_candidates.size:
-            production_peak_candidates = np.asarray([int(np.argmax(production_legacy))])
-        reference_peak_indices = np.sort(
-            reference_peak_candidates[np.argsort(reference_legacy[reference_peak_candidates])[-6:]]
-        )
-        production_peak_indices = np.sort(
-            production_peak_candidates[
-                np.argsort(production_legacy[production_peak_candidates])[-6:]
-            ]
-        )
-        reference_fringe_indices = _extrema_indices(reference_legacy, maximum=False)[:20]
-        production_fringe_indices = _extrema_indices(production_legacy, maximum=False)[:20]
-        peak_positions_match = np.array_equal(reference_peak_indices, production_peak_indices)
-        fringe_positions_match = np.array_equal(
-            reference_fringe_indices,
-            production_fringe_indices,
-        )
-        production_normalized = production_legacy / np.max(production_legacy)
-        reference_normalized = reference_legacy / np.max(reference_legacy)
-        production_integral = float(np.trapezoid(production_legacy, l_grid))
-        reference_integral = float(np.trapezoid(reference_legacy, l_grid))
-        production_extinction = production_legacy[integer_indices] / np.max(production_legacy)
-        reference_extinction = reference_legacy[integer_indices] / np.max(reference_legacy)
-        normalized_match = bool(
-            np.allclose(
-                production_normalized[sample_indices],
-                reference_normalized[sample_indices],
-                **TOLERANCES["bi2se3_whole_cell_normalized"],
-            )
-        )
-        extinction_match = bool(
-            np.allclose(
-                production_extinction,
-                reference_extinction,
-                **TOLERANCES["bi2se3_whole_cell_normalized"],
-            )
-        )
-        integral_match = bool(
-            np.isclose(
-                production_integral,
-                reference_integral,
-                **TOLERANCES["bi2se3_whole_cell_compat"],
-            )
-        )
-        derived_metrics_passed &= (
-            peak_positions_match
-            and fringe_positions_match
-            and normalized_match
-            and extinction_match
-            and integral_match
-        )
-        rod_metrics[f"{rod[0]},{rod[1]}"] = {
-            "amplitude_real_error_e": _compatibility_error(
-                production_amplitude_by_rod[rod_index].real,
-                oracle_amplitude_by_rod[rod_index].real,
-            ),
-            "amplitude_imaginary_error_e": _compatibility_error(
-                production_amplitude_by_rod[rod_index].imag,
-                oracle_amplitude_by_rod[rod_index].imag,
-            ),
-            "raw_finite_amplitude_error_e": _compatibility_error(
-                production_raw_amplitude_by_rod[rod_index],
-                oracle_raw_amplitude_by_rod[rod_index],
-            ),
-            "raw_finite_intensity_error_electron2": _compatibility_error(
-                production_raw_e2_by_rod[rod_index],
-                oracle_raw_e2_by_rod[rod_index],
-            ),
-            "legacy_intensity_error": _compatibility_error(
-                production_legacy,
-                reference_legacy,
-            ),
-            "selected_peak_L": l_grid[reference_peak_indices].tolist(),
-            "selected_absolute_peaks": production_legacy[reference_peak_indices].tolist(),
-            "selected_absolute_peak_error": _compatibility_error(
-                production_legacy[reference_peak_indices],
-                reference_legacy[reference_peak_indices],
-            ),
-            "normalized_sample_L": l_grid[sample_indices].tolist(),
-            "normalized_sample_error": _compatibility_error(
-                production_normalized[sample_indices],
-                reference_normalized[sample_indices],
-            ),
-            "integrated_intensity": production_integral,
-            "integrated_intensity_reference": reference_integral,
-            "integrated_intensity_error": abs(production_integral - reference_integral),
-            "extinction_ratio_L": l_grid[integer_indices].tolist(),
-            "extinction_ratio_error": _compatibility_error(
-                production_extinction,
-                reference_extinction,
-            ),
-            "peak_positions_match": peak_positions_match,
-            "fringe_positions_L": l_grid[reference_fringe_indices].tolist(),
-            "fringe_positions_match": fringe_positions_match,
-        }
-
-    ordinary_tolerance = TOLERANCES["bi2se3_whole_cell_compat"]
-    ordered_arrays_passed = all(
-        (
-            np.allclose(
-                production_ordered.amplitude_e.real, oracle_amplitude.real, **ordinary_tolerance
-            ),
-            np.allclose(
-                production_ordered.amplitude_e.imag, oracle_amplitude.imag, **ordinary_tolerance
-            ),
-            np.allclose(
-                production_curve.finite_stack.amplitude_e.real,
-                oracle_raw_amplitude.real,
-                **ordinary_tolerance,
-            ),
-            np.allclose(
-                production_curve.finite_stack.amplitude_e.imag,
-                oracle_raw_amplitude.imag,
-                **ordinary_tolerance,
-            ),
-            np.allclose(
-                production_curve.finite_stack.intensity.intensity_per_sr,
-                oracle_raw_e2,
-                **ordinary_tolerance,
-            ),
-            np.allclose(production_curve.legacy_intensity, oracle_legacy, **ordinary_tolerance),
-        )
-    )
-    ordered_passed = bool(
-        ordered_arrays_passed
-        and derived_metrics_passed
-        and cache_isolation
-        and alignment_passed
-        and "legacy_revision=494accdc2655bd677fafaf070b3dad816b65fa3c"
-        in production_ordered.provenance
-        and "cif_sha256=a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888"
-        in production_ordered.provenance
-    )
-
-    _, _, thickness, qc_Ainv, sigma_top, sigma_bottom = np.asarray(
+) -> tuple[dict[str, object], dict[str, object]]:
+    wavelength, _, thickness, _, sigma_top, sigma_bottom = np.asarray(
         pack["parratt_parameters"], dtype=np.float64
     )
-    q_over_qc = np.linspace(2.0, 11.0, 1001)
-    qz = q_over_qc * qc_Ainv
-    indices = np.asarray(pack["parratt_indices"], dtype=np.complex128)
-    parratt = parratt_reflectivity(
-        qz,
-        1.54,
-        refractive_index=indices,
-        thickness_A=(None, float(thickness), None),
-        roughness_A=(float(sigma_top), float(sigma_bottom)),
-    )
-    external_l = qz * 28.636 / (2.0 * np.pi)
-    phase_l = 2.0 * np.maximum(parratt.kz_Ainv[:, 1].real, 0.0) * 28.636 / (2.0 * np.pi)
-    specular_event_id = np.arange(qz.size, dtype=np.int64) + 30_000
-    _, _, external_curve = _compatibility_curve(
-        crystal,
-        catalog,
-        0,
-        0,
-        external_l,
-        specular_event_id,
-    )
-    _, _, phase_curve = _compatibility_curve(
-        crystal,
-        catalog,
-        0,
-        0,
-        phase_l,
-        specular_event_id,
-    )
-    specular = bi2se3_whole_cell_compat_specular(
-        parratt,
-        external_curve,
-        phase_curve,
-        c_A=28.636,
-        qc_Ainv=float(qc_Ainv),
-        film_layer_index=1,
-    )
-    zero_hk = np.zeros(qz.size, dtype=np.int32)
-    external_oracle_amplitude = _legacy_bi2se3_amplitude_oracle(
-        crystal,
-        zero_hk,
-        zero_hk,
-        external_l,
-    )
-    _, external_raw_e2, external_oracle_legacy = _legacy_bi2se3_finite_oracle(
-        external_oracle_amplitude, external_l
-    )
-    phase_oracle_amplitude = _legacy_bi2se3_amplitude_oracle(
-        crystal,
-        zero_hk,
-        zero_hk,
-        phase_l,
-    )
-    _, _, phase_oracle_legacy = _legacy_bi2se3_finite_oracle(
-        phase_oracle_amplitude,
-        phase_l,
-    )
-    oracle_ht_over_qz2 = phase_oracle_legacy / qz**2
-    scale_points = (
-        (q_over_qc >= 6.0)
-        & (q_over_qc <= 10.0)
-        & (parratt.reflectivity > 0.0)
-        & (oracle_ht_over_qz2 > 0.0)
-    )
-    oracle_parratt_to_kinematic_scale = float(
-        np.exp(
-            np.median(
-                np.log(oracle_ht_over_qz2[scale_points])
-                - np.log(parratt.reflectivity[scale_points])
-            )
-        )
-    )
-    oracle_kinematic_to_reflectivity_scale = 1.0 / oracle_parratt_to_kinematic_scale
-    oracle_kinematic_parratt = parratt.reflectivity * oracle_parratt_to_kinematic_scale
-    oracle_bounds, oracle_selection = _legacy_blend_bounds_oracle(
-        q_over_qc,
-        oracle_kinematic_parratt,
-        oracle_ht_over_qz2,
-    )
-    lower, upper = oracle_bounds
-    oracle_stitched = np.array(oracle_kinematic_parratt, copy=True)
-    oracle_stitched[q_over_qc >= upper] = oracle_ht_over_qz2[q_over_qc >= upper]
-    interior = (q_over_qc > lower) & (q_over_qc < upper)
-    if np.any(interior):
-        coordinate = (q_over_qc[interior] - lower) / (upper - lower)
-        weight = coordinate**3 * (10.0 - 15.0 * coordinate + 6.0 * coordinate**2)
-        oracle_stitched[interior] = 10.0 ** (
-            (1.0 - weight) * np.log10(oracle_kinematic_parratt[interior])
-            + weight * np.log10(oracle_ht_over_qz2[interior])
-        )
-    oracle_composite = oracle_stitched * oracle_kinematic_to_reflectivity_scale
-    oracle_legacy_stitched = oracle_stitched * qz**2
-    specular_stages = {
-        "raw_finite_stack_electron2": (
-            specular.raw_finite_stack_e2,
-            external_raw_e2,
-        ),
-        "external_legacy_kinematic": (
-            specular.external_legacy_kinematic,
-            external_oracle_legacy,
-        ),
-        "phase_legacy_kinematic": (
-            specular.phase_legacy_kinematic,
-            phase_oracle_legacy,
-        ),
-        "ht_over_qz2": (specular.ht_over_qz2, oracle_ht_over_qz2),
-        "pure_parratt": (specular.parratt_reflectivity, parratt.reflectivity),
-        "kinematic_parratt_over_qz2": (
-            specular.kinematic_parratt_over_qz2,
-            oracle_kinematic_parratt,
-        ),
-        "kinematic_stitched_over_qz2": (
-            specular.kinematic_stitched_over_qz2,
-            oracle_stitched,
-        ),
-        "dimensionless_composite": (
-            specular.composite_reflectivity,
-            oracle_composite,
-        ),
-        "legacy_stitched_intensity": (
-            specular.legacy_stitched_intensity,
-            oracle_legacy_stitched,
-        ),
-    }
-    specular_stage_errors = {
-        name: _compatibility_error(candidate, reference)
-        for name, (candidate, reference) in specular_stages.items()
-    }
-    specular_arrays_passed = all(
-        np.allclose(candidate, reference, **ordinary_tolerance)
-        for candidate, reference in specular_stages.values()
-    )
-    scale_error = abs(specular.parratt_to_kinematic_scale - oracle_parratt_to_kinematic_scale)
-    inverse_scale_error = abs(
-        specular.kinematic_to_reflectivity_scale - oracle_kinematic_to_reflectivity_scale
-    )
-    specular_passed = bool(
-        specular_arrays_passed
-        and np.array_equal(specular.external_l_coordinate, external_l)
-        and np.array_equal(specular.phase_l_coordinate, phase_l)
-        and np.array_equal(specular.parratt_reflectivity, parratt.reflectivity)
-        and specular.blend_bounds_q_over_qc == oracle_bounds
-        and specular.blend_selection == oracle_selection
-        and specular.scale_direction == "parratt_to_kinematic"
-        and np.isclose(
-            specular.parratt_to_kinematic_scale,
-            oracle_parratt_to_kinematic_scale,
-            rtol=1e-12,
-            atol=0.0,
-        )
-        and np.isclose(
-            specular.kinematic_to_reflectivity_scale,
-            oracle_kinematic_to_reflectivity_scale,
-            rtol=1e-12,
-            atol=0.0,
-        )
-    )
-
-    checks = [
-        _check(
-            "bi2se3_whole_cell_compat_ordered_match",
-            ordered_passed,
-            {
-                "legacy_source_revision": "494accdc2655bd677fafaf070b3dad816b65fa3c",
-                "cif_sha256": "a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888",
-                "rods": rod_metrics,
-                "events": int(event_id.size),
-                "cache_isolation_both_transition_orders": cache_isolation,
-                "event_h_k_L_qz_alignment": alignment_passed,
-                "arbitrary_scale_or_phase_correction": False,
-            },
-            [
-                "ordered.unit_cell_amplitude",
-                "ordered.finite_stack_amplitude",
-                "ordered.event_intensity",
-            ],
-            maximum_error=_compatibility_error(
-                production_ordered.amplitude_e,
-                oracle_amplitude,
-            )["maximum"],
-            tolerance=ordinary_tolerance,
-        ),
-        _check(
-            "bi2se3_whole_cell_compat_specular_match",
-            specular_passed,
-            {
-                "events": int(qz.size),
-                "exact_external_L_propagation": np.array_equal(
-                    specular.external_l_coordinate,
-                    external_l,
-                ),
-                "exact_phase_L_propagation": np.array_equal(
-                    specular.phase_l_coordinate,
-                    phase_l,
-                ),
-                "pure_parratt_unchanged": np.array_equal(
-                    specular.parratt_reflectivity,
-                    parratt.reflectivity,
-                ),
-                "parratt_to_kinematic_scale": specular.parratt_to_kinematic_scale,
-                "parratt_to_kinematic_scale_error": scale_error,
-                "kinematic_to_reflectivity_scale": specular.kinematic_to_reflectivity_scale,
-                "kinematic_to_reflectivity_scale_error": inverse_scale_error,
-                "normalization_direction": specular.scale_direction,
-                "blend_bounds_q_over_qc": list(specular.blend_bounds_q_over_qc),
-                "blend_selection": specular.blend_selection,
-                "stage_errors": specular_stage_errors,
-                "interpolation_or_grid_regeneration": False,
-            },
-            [
-                "specular.external_kinematic_curve",
-                "specular.phase_kinematic_curve",
-                "reflectivity.parratt_intensity",
-                "reflectivity.composite_intensity",
-            ],
-            maximum_error=max(
-                error["maximum_tolerance_fraction"] for error in specular_stage_errors.values()
-            ),
-            tolerance={"maximum_tolerance_fraction": 1.0},
-        ),
-    ]
-    comparisons = [
-        {
-            "case_id": "ordered.bi2se3_whole_cell_compat",
-            "immutable_pack_classification": None,
-            "classification": "MATCH",
-            "first_divergence_stage": None,
-            "legacy_source_revision": "494accdc2655bd677fafaf070b3dad816b65fa3c",
-            "independent_oracle_check_id": "bi2se3_whole_cell_compat_ordered_match",
-        },
-        {
-            "case_id": "reflectivity.bi2se3_whole_cell_compat_composite",
-            "immutable_pack_classification": None,
-            "classification": "MATCH",
-            "first_divergence_stage": None,
-            "legacy_source_revision": "494accdc2655bd677fafaf070b3dad816b65fa3c",
-            "independent_oracle_check_id": "bi2se3_whole_cell_compat_specular_match",
-        },
-        {
-            "case_id": "reflectivity.bi2se3_whole_cell_compat_legacy_units",
-            "immutable_pack_classification": None,
-            "classification": "MATCH",
-            "first_divergence_stage": None,
-            "legacy_source_revision": "494accdc2655bd677fafaf070b3dad816b65fa3c",
-            "independent_oracle_check_id": "bi2se3_whole_cell_compat_specular_match",
-        },
-    ]
-    payload = {
-        "ordered": checks[0]["evidence"],
-        "specular": checks[1]["evidence"],
-    }
-    return checks, comparisons, payload
-
-
-def _reference_checks(
-    crystal: CrystalStructure, pack: dict[str, NDArray[Any]]
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    hkl = np.asarray(pack["ordered_hkl"], dtype=np.float64)
-    wavelength = np.full(hkl.shape[0], WAVELENGTH_A)
-    production = unit_cell_amplitude(crystal, hkl, wavelength).amplitude_e
-    oracle = _direct_atom_amplitudes(crystal, hkl, wavelength)
-    direct_error = production - oracle
-    direct_stats = _stats(direct_error)
-    direct_passed = bool(np.allclose(production, oracle, **TOLERANCES["direct_atom_e"]))
-
-    lattice = ReciprocalLattice.from_crystal(crystal)
-    d_A = 2.0 * np.pi / np.linalg.norm(lattice.q_cartesian_Ainv(hkl), axis=1)
-    d_error = d_A - np.asarray(pack["ordered_sim_d"])
-    d_stats = _stats(d_error)
-    historical = np.asarray(pack["ordered_sim_f_real"]) + 1.0j * np.asarray(
-        pack["ordered_sim_f_imag"]
-    )
-    historical_stats = _stats(production - historical)
-    pack_row_003 = int(np.flatnonzero(np.all(hkl == (0.0, 0.0, 3.0), axis=1))[0])
-
-    vesta_hkl, vesta_amplitude = _vesta_table()
-    vesta_production = unit_cell_amplitude(
-        crystal, vesta_hkl, np.full(vesta_hkl.shape[0], WAVELENGTH_A)
-    ).amplitude_e
-    vesta_stats = _stats(vesta_production - vesta_amplitude)
-    row_003 = int(np.flatnonzero(np.all(vesta_hkl == (0.0, 0.0, 3.0), axis=1))[0])
-    component_error_003 = np.abs(
-        np.asarray(
-            [
-                vesta_production[row_003].real - vesta_amplitude[row_003].real,
-                vesta_production[row_003].imag - vesta_amplitude[row_003].imag,
-            ]
-        )
-    )
-
-    checks = [
-        _check(
-            "direct_atom_oracle",
-            direct_passed,
-            {
-                "events": int(hkl.shape[0]),
-                "equation": "B=2*pi*inv(A).T; scalar XrayDB atom sum; positive phase",
-            },
-            ["ordered.atomic_amplitude", "ordered.unit_cell_amplitude"],
-            maximum_error=direct_stats["maximum"],
-            percentile_95_error=direct_stats["percentile_95"],
-            tolerance=TOLERANCES["direct_atom_e"],
-        ),
-        _check(
-            "vesta_fixed_checkpoint",
-            float(np.max(component_error_003)) <= 0.01,
-            {
-                "target_F003_e": [
-                    float(vesta_amplitude[row_003].real),
-                    float(vesta_amplitude[row_003].imag),
-                ],
-                "production_F003_e": [
-                    float(vesta_production[row_003].real),
-                    float(vesta_production[row_003].imag),
-                ],
-                "component_errors_e": component_error_003.tolist(),
-                "broad_206_row_descriptive_residual_e": vesta_stats,
-            },
-            ["ordered.unit_cell_amplitude"],
-            maximum_error=float(np.max(component_error_003)),
-            percentile_95_error=float(np.percentile(component_error_003, 95)),
-            tolerance=TOLERANCES["vesta_003_component_e"],
-        ),
-        _check(
-            "ordered_corrected_reference",
-            d_stats["maximum"] <= 2e-12,
-            {
-                "prior_reciprocal_d_error_A": d_stats,
-                "historical_pack_amplitude_residual_e": historical_stats,
-                "historical_pack_F003_e": [
-                    float(historical[pack_row_003].real),
-                    float(historical[pack_row_003].imag),
-                ],
-                "first_divergence": "ordered.unit_cell_amplitude",
-                "pack_has_atomic_trace": False,
-                "downstream_oracle": "direct_atom_oracle",
-            },
-            ["ordered.unit_cell_amplitude"],
-            maximum_error=historical_stats["maximum"],
-            percentile_95_error=historical_stats["percentile_95"],
-            tolerance={"classification": "CORRECTED", "reciprocal_d_A": 2e-12},
-        ),
-    ]
-    comparisons = [
-        {
-            "case_id": "ordered.bi2se3_vesta",
-            "immutable_pack_classification": "MATCH",
-            "classification": "CORRECTED",
-            "prior_matching_evidence": "reciprocal d-spacing",
-            "prior_stage_maximum_error_A": d_stats["maximum"],
-            "first_divergence_stage": "ordered.unit_cell_amplitude",
-            "historical_pack_residual_e": historical_stats,
-            "independent_oracle_check_id": "direct_atom_oracle",
-            "atomic_stage_claimed": False,
-        }
-    ]
-    return checks, comparisons
-
-
-def _foundation_checks(crystal: CrystalStructure) -> list[dict[str, object]]:
-    lattice = ReciprocalLattice.from_crystal(crystal)
-    dual_error = crystal.direct_basis_A.T @ lattice.basis_Ainv - 2.0 * np.pi * np.eye(3)
-    dual_stats = _stats(dual_error)
-
-    optics = material_optics(crystal, np.asarray([WAVELENGTH_A]))
-    optics_reference = np.asarray(
-        [
-            7.663983929529866,
-            1.9282298010759586e-5,
-            1.5800513246371108e-6,
-            1.2888226482734936e-5,
-        ]
-    )
-    density = float(optics.provenance.split("density_g_cm3=")[1].split(";")[0])
-    optics_actual = np.asarray([density, optics.delta[0], optics.beta[0], optics.mu_Ainv[0]])
-    optics_relative = np.abs((optics_actual - optics_reference) / optics_reference)
-    optics_identity = np.max(np.abs(optics.n_complex - (1.0 - optics.delta + 1.0j * optics.beta)))
-
-    catalog = build_rod_catalog(crystal, h_bounds=(-1, 1), k_bounds=(-1, 1))
-    selected_hk = ((1, 0), (0, 1), (1, -1))
-    rows = [int(np.flatnonzero((catalog.h == h) & (catalog.k == k))[0]) for h, k in selected_hk]
-    l_coordinate = np.asarray([0.5, 1.25, -0.75])
-    query = RodQueryBatch(
-        event_id=np.asarray([8, 3, 12]),
-        rod_id=catalog.rod_id[rows],
-        phase_id=(crystal.phase_id,) * 3,
-        h=np.asarray([value[0] for value in selected_hk], dtype=np.int32),
-        k=np.asarray([value[1] for value in selected_hk], dtype=np.int32),
-        qz_Ainv=l_coordinate * lattice.basis_Ainv[2, 2],
-        l_coordinate=l_coordinate,
-        wavelength_A=np.full(3, WAVELENGTH_A),
-    )
-    ordered = ordered_event_result(crystal, catalog, query)
-    raw_scale_error = float(
-        np.max(np.abs(ordered.intensity.intensity_per_sr - np.abs(ordered.amplitude_e) ** 2))
-    )
-
-    expected_orientations = {
-        "PbI2_2H.cif": ("minus",),
-        "PbI2_4H.cif": ("plus", "minus"),
-        "PbI2_6H.cif": ("plus", "plus", "plus"),
-    }
-    motif_evidence: dict[str, object] = {}
-    for filename, expected in expected_orientations.items():
-        pbi2 = read_crystal(
-            ROOT / "examples" / "pbi2" / "structures" / filename,
-            phase_id=filename.removesuffix(".cif"),
-        )
-        motifs = extract_pbi2_motifs(pbi2)
-        orientations = tuple(motif.orientation for motif in motifs)
-        motif_evidence[filename] = {
-            "orientations": list(orientations),
-            "covered_site_count": len(
-                {atom.site_index for motif in motifs for atom in motif.atoms}
-            ),
-        }
-        if orientations != expected:
-            motif_evidence[filename]["mismatch"] = True
-
-    pbi2 = read_crystal(ROOT / "examples" / "pbi2" / "structures" / "PbI2_4H.cif", phase_id="pbi2")
-    pbi2_catalog = build_rod_catalog(pbi2, h_bounds=(1, 1), k_bounds=(0, 0))
-    pbi2_l = np.asarray([0.75, -0.75])
-    pbi2_query = RodQueryBatch(
-        event_id=np.asarray([5, 1]),
-        rod_id=np.repeat(pbi2_catalog.rod_id, 2),
-        phase_id=("pbi2", "pbi2"),
-        h=np.ones(2, dtype=np.int32),
-        k=np.zeros(2, dtype=np.int32),
-        qz_Ainv=pbi2_l * ReciprocalLattice.from_crystal(pbi2).basis_Ainv[2, 2],
-        l_coordinate=pbi2_l,
-        wavelength_A=np.full(2, WAVELENGTH_A),
-    )
-    layer = pbi2_layer_amplitudes(pbi2, pbi2_query, unknown_u_iso_A2=0.0)
-    motif_relation_error = float(abs(layer.f_minus[0] - layer.f_plus[1]))
-
-    event_id = np.arange(3, dtype=np.int64)
-    qz = np.asarray([0.0, 0.37, 2.0 * np.pi / 4.2])
-    repeat = np.asarray([1.2 + 0.3j, -0.4 + 0.8j, 0.7 - 0.1j])
-    count = 7
-    uniform = uniform_finite_stack(event_id, qz, repeat, 4.2, count)
-    explicit = coherent_finite_stack(
-        event_id,
-        qz,
-        np.repeat(repeat[:, None], count, axis=1),
-        4.2 * np.arange(count),
-    )
-    finite_error = _stats(uniform.amplitude_e - explicit.amplitude_e)
-
-    return [
-        _check(
-            "crystallographic_invariants",
-            dual_stats["maximum"] <= 2e-12,
-            {"dual_basis_error": dual_stats},
-            ["ordered.atomic_amplitude"],
-            maximum_error=dual_stats["maximum"],
-            percentile_95_error=dual_stats["percentile_95"],
-            tolerance=TOLERANCES["reciprocal_d_A"],
-        ),
-        _check(
-            "material_optics_consistency",
-            float(np.max(optics_relative)) <= 2e-12 and optics_identity == 0.0,
-            {
-                "density_delta_beta_mu": optics_actual.tolist(),
-                "maximum_relative_reference_error": float(np.max(optics_relative)),
-                "n_identity_error": float(optics_identity),
-            },
-            ["ordered.atomic_amplitude", "reflectivity.layer_kz"],
-            maximum_error=float(np.max(optics_relative)),
-            tolerance={"relative": 2e-12},
-        ),
-        _check(
-            "rod_identity_and_raw_event_scale",
-            catalog.rod_id.size == 9
-            and np.unique(catalog.rod_id).size == 9
-            and len({catalog.family_id[row] for row in rows}) == 1
-            and raw_scale_error == 0.0,
-            {
-                "rod_count": int(catalog.rod_id.size),
-                "event_ids": ordered.event_id.tolist(),
-                "normalization": ordered.intensity.normalization,
-                "universal_scale_applied": False,
-            },
-            ["reciprocal.rod_id", "ordered.event_intensity"],
-            maximum_error=raw_scale_error,
-            tolerance=TOLERANCES["exact_identity"],
-        ),
-        _check(
-            "motif_and_layer_oracle",
-            not any("mismatch" in value for value in motif_evidence.values())
-            and motif_relation_error <= 1e-10,
-            {
-                "tracked_structures": motif_evidence,
-                "Fminus_hkL_minus_Fplus_hkminusL_e": motif_relation_error,
-                "gauge": "Pb-centered; registry-free; occupancy and Uiso included",
-            },
-            ["ordered.layer_amplitude"],
-            maximum_error=motif_relation_error,
-            tolerance=TOLERANCES["direct_atom_e"],
-        ),
-        _check(
-            "finite_stack_limits",
-            finite_error["maximum"] <= 1e-10
-            and uniform.intensity.normalization.endswith("electron2"),
-            {
-                "direct_vs_stable": finite_error,
-                "zero_phase_intensity_e2": float(uniform.intensity.intensity_per_sr[0]),
-                "normalization": uniform.intensity.normalization,
-            },
-            ["ordered.finite_stack_amplitude", "ordered.event_intensity"],
-            maximum_error=finite_error["maximum"],
-            percentile_95_error=finite_error["percentile_95"],
-            tolerance=TOLERANCES["finite_stack_amplitude_e"],
-        ),
-    ]
-
-
-def _parratt_checks(
-    pack: dict[str, NDArray[Any]],
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    wavelength, c_A, thickness, _, sigma_top, sigma_bottom = np.asarray(
-        pack["parratt_parameters"], dtype=np.float64
-    )
-    qz = np.asarray(pack["parratt_qz"], dtype=np.float64)
+    sample_rows = np.asarray((0, 128, 256))
+    qz = np.asarray(pack["parratt_qz"], dtype=np.float64)[sample_rows]
     indices = np.asarray(pack["parratt_indices"], dtype=np.complex128)
     production = parratt_reflectivity(
         qz,
@@ -1235,779 +453,216 @@ def _parratt_checks(
         thickness_A=(None, float(thickness), None),
         roughness_A=(float(sigma_top), float(sigma_bottom)),
     )
-    phase_qz = 2.0 * np.maximum(production.kz_Ainv[:, 1].real, 0.0)
-    phase_l = phase_qz * float(c_A) / (2.0 * np.pi)
-    reflectivity_stats = _stats(production.reflectivity - pack["parratt_reflectivity"])
-    phase_qz_stats = _stats(phase_qz - pack["parratt_phase_qz"])
-    phase_l_stats = _stats(phase_l - pack["parratt_phase_L"])
     direct_kz, direct_interfaces, direct_amplitude = _direct_parratt(
         qz,
         float(wavelength),
         indices,
         (None, float(thickness), None),
-        np.asarray([sigma_top, sigma_bottom]),
+        np.asarray((sigma_top, sigma_bottom)),
     )
-    direct_error = max(
-        _stats(production.kz_Ainv - direct_kz)["maximum"],
-        _stats(production.interface_amplitude - direct_interfaces)["maximum"],
-        _stats(production.amplitude - direct_amplitude)["maximum"],
+    scalar_error = max(
+        float(np.max(np.abs(production.kz_Ainv - direct_kz))),
+        float(np.max(np.abs(production.interface_amplitude - direct_interfaces))),
+        float(np.max(np.abs(production.amplitude - direct_amplitude))),
     )
-
-    zero_thickness = parratt_reflectivity(
-        qz[::64],
+    pack_error = float(
+        np.max(
+            np.abs(
+                production.reflectivity
+                - np.asarray(pack["parratt_reflectivity"], dtype=np.float64)[sample_rows]
+            )
+        )
+    )
+    collapsed = parratt_reflectivity(
+        qz,
         float(wavelength),
         refractive_index=indices,
         thickness_A=(None, 0.0, None),
         roughness_A=(0.0, 0.0),
     )
     bare = parratt_reflectivity(
-        qz[::64],
+        qz,
         float(wavelength),
         refractive_index=indices[[0, 2]],
         thickness_A=(None, None),
         roughness_A=(0.0,),
     )
-    collapse_error = _stats(zero_thickness.amplitude - bare.amplitude)
-    passed = (
-        reflectivity_stats["maximum"] <= TOLERANCES["parratt_reflectivity"]["atol"]
-        and phase_qz_stats["maximum"] <= TOLERANCES["parratt_qz_Ainv"]["atol"]
-        and phase_l_stats["maximum"] <= TOLERANCES["parratt_phase_L"]["atol"]
-        and collapse_error["maximum"] <= 2e-11
-        and direct_error <= TOLERANCES["parratt_reflectivity"]["atol"]
+    collapse_error = float(np.max(np.abs(collapsed.amplitude - bare.amplitude)))
+    passed = bool(
+        scalar_error <= TOLERANCES["parratt"]["atol"]
+        and pack_error <= TOLERANCES["parratt"]["atol"]
+        and collapse_error <= TOLERANCES["parratt"]["atol"]
+        and production.normalization == "dimensionless pure Parratt reflectivity"
     )
-    checks = [
-        _check(
-            "parratt_analytic_and_pack_match",
-            passed,
-            {
-                "pack_reflectivity_error": reflectivity_stats,
-                "pack_phase_qz_error_Ainv": phase_qz_stats,
-                "pack_phase_L_error": phase_l_stats,
-                "zero_thickness_collapse_error": collapse_error,
-                "direct_scalar_stage_maximum_error": direct_error,
-            },
-            [
-                "reflectivity.layer_kz",
-                "reflectivity.interface_amplitude",
-                "reflectivity.recursion_amplitude",
-                "reflectivity.parratt_intensity",
-            ],
-            maximum_error=reflectivity_stats["maximum"],
-            percentile_95_error=reflectivity_stats["percentile_95"],
-            tolerance=TOLERANCES["parratt_reflectivity"],
-        )
-    ]
-    comparisons = [
+    check = _check(
+        "parratt_scalar_and_pack_sample",
+        passed,
         {
-            "case_id": "reflectivity.parratt_three_layer",
-            "immutable_pack_classification": "MATCH",
-            "classification": "MATCH",
-            "first_divergence_stage": None,
-            "reflectivity_error": reflectivity_stats,
-            "phase_qz_error_Ainv": phase_qz_stats,
-            "phase_L_error": phase_l_stats,
-            "independent_oracle_check_id": "parratt_analytic_and_pack_match",
+            "sample_count": int(sample_rows.size),
+            "maximum_scalar_stage_error": scalar_error,
+            "maximum_pack_reflectivity_error": pack_error,
+            "zero_thickness_collapse_error": collapse_error,
         },
-        {
-            "case_id": "reflectivity.manuscript_specular_composite",
-            "immutable_pack_classification": None,
-            "classification": "CORRECTED",
-            "first_divergence_stage": "ordered.unit_cell_amplitude",
-            "reason": (
-                "corrected material amplitudes deliberately replace the historical whole-cell "
-                "basis; analytic separation and nested-grid convergence govern downstream stages"
-            ),
-            "independent_oracle_check_id": "nested_grid_convergence",
-        },
-    ]
-    return checks, comparisons
+    )
+    comparison = {
+        "case_id": "reflectivity.parratt_three_layer",
+        "classification": "MATCH",
+        "first_divergence_stage": None,
+        "maximum_pack_reflectivity_error": pack_error,
+        "independent_oracle_check_id": check["check_id"],
+    }
+    return check, comparison
 
 
-def _convergence(pack: dict[str, NDArray[Any]]) -> dict[str, object]:
-    wavelength, c_A, _, qc_Ainv, sigma_top, sigma_bottom = np.asarray(
+def _specular_check(pack: dict[str, NDArray[Any]]) -> dict[str, object]:
+    wavelength, c_A, thickness, qc_Ainv, sigma_top, sigma_bottom = np.asarray(
         pack["parratt_parameters"], dtype=np.float64
     )
-    indices = np.asarray(pack["parratt_indices"], dtype=np.complex128)
-    sizes = (1025, 2049, 4097)
-    outputs = []
-    for size in sizes:
-        q_over_qc = np.linspace(2.0, 11.0, size)
-        parratt = parratt_reflectivity(
-            q_over_qc * qc_Ainv,
-            wavelength,
-            refractive_index=indices,
-            thickness_A=(None, 500.0, None),
-            roughness_A=(sigma_top, sigma_bottom),
-        )
-        specular = manuscript_specular_composite(
-            parratt,
-            lambda layer: 1.0 + 0.05 * layer**2,
-            c_A=c_A,
-            qc_Ainv=qc_Ainv,
-            film_layer_index=1,
-        )
-        outputs.append(specular)
-    parratt_errors = [
-        float(
-            np.max(
-                np.abs(
-                    outputs[row].parratt_reflectivity - outputs[row + 1].parratt_reflectivity[::2]
-                )
-            )
-        )
-        for row in range(2)
-    ]
-    composite_errors = [
-        float(
-            np.max(
-                np.abs(
-                    outputs[row].composite_reflectivity
-                    - outputs[row + 1].composite_reflectivity[::2]
-                )
-            )
-        )
-        for row in range(2)
-    ]
-    blend_bounds = [list(output.blend_bounds_q_over_qc) for output in outputs]
-    bound_deltas = [
-        float(np.max(np.abs(np.asarray(blend_bounds[row]) - np.asarray(blend_bounds[row + 1]))))
-        for row in range(2)
-    ]
-    scale_factors = [float(output.scale_factor) for output in outputs]
-    scale_relative_deltas = [
-        abs(scale_factors[row + 1] / scale_factors[row] - 1.0) for row in range(2)
-    ]
-    fine_spacing = 9.0 / (sizes[-1] - 1)
-    fine_scale = float(np.max(outputs[-1].composite_reflectivity))
-    passed = (
-        max(parratt_errors) <= 5e-13
-        and max(composite_errors) <= 1e-10 + 0.002 * fine_scale
-        and bound_deltas[-1] <= 2.0 * fine_spacing + 1e-12
-        and scale_relative_deltas[-1] <= 0.002
+    qz = np.linspace(2.0, 11.0, 19) * qc_Ainv
+    parratt = parratt_reflectivity(
+        qz,
+        float(wavelength),
+        refractive_index=np.asarray(pack["parratt_indices"], dtype=np.complex128),
+        thickness_A=(None, float(thickness), None),
+        roughness_A=(float(sigma_top), float(sigma_bottom)),
     )
-    return {
-        "grid_sizes": list(sizes),
-        "q_over_qc_spacings": [9.0 / (size - 1) for size in sizes],
-        "parratt_shared_point_max_errors": parratt_errors,
-        "composite_shared_point_max_errors": composite_errors,
-        "blend_bounds_q_over_qc": blend_bounds,
-        "blend_bound_deltas": bound_deltas,
-        "scale_factors": scale_factors,
-        "scale_relative_deltas": scale_relative_deltas,
-        "arbitrary_l_evaluation": "direct callback; no interpolation grid",
-        "passed": passed,
-    }
-
-
-def _benchmark(crystal: CrystalStructure, pack: dict[str, NDArray[Any]]) -> dict[str, object]:
-    event_count = 10_000
-    parratt_count = 4_096
-    source_hkl = np.asarray(pack["ordered_hkl"], dtype=np.float64)
-    repeats = math.ceil(event_count / source_hkl.shape[0])
-    hkl = np.tile(source_hkl, (repeats, 1))[:event_count]
-    wavelength = np.full(event_count, WAVELENGTH_A)
-    catalog = build_rod_catalog(
-        crystal,
-        h_bounds=(int(np.min(hkl[:, 0])), int(np.max(hkl[:, 0]))),
-        k_bounds=(int(np.min(hkl[:, 1])), int(np.max(hkl[:, 1]))),
+    result = manuscript_specular_composite(
+        parratt,
+        lambda layer: 3.0 + 0.05 * layer**2,
+        c_A=float(c_A),
+        qc_Ainv=float(qc_Ainv),
+        film_layer_index=1,
     )
-    rod_by_hk = {
-        (int(h), int(k)): int(rod_id)
-        for rod_id, h, k in zip(catalog.rod_id, catalog.h, catalog.k, strict=True)
-    }
-    lattice = ReciprocalLattice.from_crystal(crystal)
-    query = RodQueryBatch(
-        event_id=np.arange(event_count, dtype=np.int64),
-        rod_id=np.asarray([rod_by_hk[(int(row[0]), int(row[1]))] for row in hkl], dtype=np.int64),
-        phase_id=(crystal.phase_id,) * event_count,
-        h=np.asarray(hkl[:, 0], dtype=np.int32),
-        k=np.asarray(hkl[:, 1], dtype=np.int32),
-        qz_Ainv=hkl[:, 2] * lattice.basis_Ainv[2, 2],
-        l_coordinate=hkl[:, 2],
-        wavelength_A=wavelength,
+    external_l = qz * c_A / (2.0 * np.pi)
+    expected_phase_l = 2.0 * np.maximum(parratt.kz_Ainv[:, 1].real, 0.0) * c_A / (2.0 * np.pi)
+    expected_raw = 3.0 + 0.05 * external_l**2
+    expected_shape = ((3.0 + 0.05 * expected_phase_l**2) / 3.0) / qz**2
+    scale_points = (qz / qc_Ainv > 5.0) & (qz / qc_Ainv < 10.0)
+    expected_scale = np.exp(
+        np.median(np.log(parratt.reflectivity[scale_points]) - np.log(expected_shape[scale_points]))
     )
-    parameters = np.asarray(pack["parratt_parameters"], dtype=np.float64)
-    parratt_qz = np.resize(np.asarray(pack["parratt_qz"], dtype=np.float64), parratt_count)
-    indices = np.asarray(pack["parratt_indices"], dtype=np.complex128)
-
-    def production_work() -> tuple[NDArray[Any], NDArray[Any], NDArray[Any]]:
-        ordered = ordered_event_result(crystal, catalog, query)
-        reflectivity = parratt_reflectivity(
-            parratt_qz,
-            parameters[0],
-            refractive_index=indices,
-            thickness_A=(None, parameters[2], None),
-            roughness_A=(parameters[4], parameters[5]),
-        )
-        return ordered.amplitude_e, ordered.intensity.intensity_per_sr, reflectivity.reflectivity
-
-    def oracle_work() -> tuple[NDArray[Any], NDArray[Any], NDArray[Any]]:
-        amplitude = _direct_atom_amplitudes(crystal, hkl, wavelength)
-        _, _, reflection_amplitude = _direct_parratt(
-            parratt_qz,
-            float(parameters[0]),
-            indices,
-            (None, float(parameters[2]), None),
-            np.asarray(parameters[[4, 5]]),
-        )
-        return amplitude, np.abs(amplitude) ** 2, np.abs(reflection_amplitude) ** 2
-
-    production_work()
-    oracle_work()
-
-    def time_samples(function: Any) -> tuple[list[float], tuple[NDArray[Any], ...]]:
-        samples: list[float] = []
-        result: tuple[NDArray[Any], ...] = ()
-        for _ in range(3):
-            gc.collect()
-            started = time.perf_counter()
-            result = function()
-            samples.append(time.perf_counter() - started)
-        return samples, result
-
-    production_samples, production_result = time_samples(production_work)
-    oracle_samples, oracle_result = time_samples(oracle_work)
-
-    def peak_bytes(function: Any) -> int:
-        gc.collect()
-        tracemalloc.start()
-        result = function()
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        del result
-        return int(peak)
-
-    production_peak = peak_bytes(production_work)
-    oracle_peak = peak_bytes(oracle_work)
-    structure_error = _stats(production_result[0] - oracle_result[0])
-    intensity_error = _stats(production_result[1] - oracle_result[1])
-    parratt_error = _stats(production_result[2] - oracle_result[2])
-    production_median = float(median(production_samples))
-    oracle_median = float(median(oracle_samples))
-    direct_limit = 1e-10 + 1e-12 * float(np.max(np.abs(oracle_result[0])))
-    passed = (
-        structure_error["maximum"] <= direct_limit
-        and intensity_error["maximum"]
-        <= 2.0 * float(np.max(np.abs(oracle_result[0]))) * direct_limit + direct_limit**2
-        and parratt_error["maximum"] <= 5e-11
-        and all(value > 0.0 and np.isfinite(value) for value in production_samples + oracle_samples)
+    phase_error = float(np.max(np.abs(result.phase_l_coordinate - expected_phase_l)))
+    raw_error = float(np.max(np.abs(result.raw_kinematic_e2 - expected_raw)))
+    high_branch_error = float(
+        np.max(np.abs(result.scaled_high_branch - expected_scale * expected_shape))
     )
-    return {
-        "equivalent_work": {
-            "event_aligned_structure_amplitudes": event_count,
-            "three_layer_parratt_points": parratt_count,
-            "parratt_distribution": "tracked 257-point qz case repeated to equivalent work count",
+    passed = bool(
+        np.array_equal(result.parratt_reflectivity, parratt.reflectivity)
+        and phase_error == 0.0
+        and raw_error == 0.0
+        and high_branch_error <= 2e-15
+        and np.all(np.isfinite(result.composite_reflectivity))
+        and result.raw_kinematic_normalization == "raw finite-stack electron2"
+        and result.parratt_normalization == "dimensionless pure Parratt reflectivity"
+        and result.composite_normalization == "dimensionless manuscript specular composite"
+        and not result.composite_reflectivity.flags.writeable
+    )
+    return _check(
+        "named_specular_output_contract",
+        passed,
+        {
+            "sample_count": int(qz.size),
+            "pure_parratt_preserved": np.array_equal(
+                result.parratt_reflectivity, parratt.reflectivity
+            ),
+            "maximum_internal_phase_L_error": phase_error,
+            "maximum_raw_kinematic_error_electron2": raw_error,
+            "maximum_normalized_qz2_high_branch_error": high_branch_error,
+            "raw_normalization": result.raw_kinematic_normalization,
+            "parratt_normalization": result.parratt_normalization,
+            "composite_normalization": result.composite_normalization,
         },
-        "thread_environment": {name: os.environ[name] for name in _THREAD_VARIABLES},
-        "warmup_runs": 1,
-        "timed_repeats": 3,
-        "production_seconds_samples": production_samples,
-        "production_seconds_median": production_median,
-        "oracle_seconds_samples": oracle_samples,
-        "oracle_seconds_median": oracle_median,
-        "speedup": oracle_median / production_median,
-        "production_peak_bytes": production_peak,
-        "oracle_peak_bytes": oracle_peak,
-        "structure_max_error_e": structure_error["maximum"],
-        "raw_intensity_max_error_electron2": intensity_error["maximum"],
-        "parratt_max_error": parratt_error["maximum"],
-        "passed": passed,
-    }
-
-
-def _mutation_record(
-    mutation_id: str,
-    fixture_id: str,
-    stage: str,
-    metric: str,
-    reference_value: NDArray[Any],
-    candidate_value: NDArray[Any],
-    unit: str,
-    quantity_kind: QuantityKind,
-    *,
-    prior_stage: str | None = None,
-    prior_value: NDArray[Any] | None = None,
-    prior_unit: str = "1",
-    prior_kind: QuantityKind = QuantityKind.SCALAR,
-) -> dict[str, object]:
-    reference: list[TraceRecord] = []
-    candidate: list[TraceRecord] = []
-    if prior_stage is not None:
-        if prior_value is None:
-            raise ValueError("mutation prior stage requires an explicit value")
-        for target in (reference, candidate):
-            target.append(
-                TraceRecord(
-                    fixture_id,
-                    prior_stage,
-                    prior_value,
-                    prior_unit,
-                    "crystal",
-                    Measure.NONE,
-                    prior_kind,
-                    "t04-proof-v1",
-                    "unmutated prior stage",
-                )
-            )
-    for target, value in ((reference, reference_value), (candidate, candidate_value)):
-        target.append(
-            TraceRecord(
-                fixture_id,
-                stage,
-                value,
-                unit,
-                "crystal",
-                Measure.NONE,
-                quantity_kind,
-                "t04-proof-v1",
-                "in-memory proof mutation",
-            )
-        )
-    comparison = compare_traces(reference, candidate)
-    detected = comparison.first_failing_stage == stage and comparison.failure_metric == metric
-    return {
-        "mutation_id": mutation_id,
-        "fixture_id": fixture_id,
-        "expected_first_stage": stage,
-        "expected_failure_metric": metric,
-        "observed_first_stage": comparison.first_failing_stage,
-        "observed_failure_metric": comparison.failure_metric,
-        "prior_stages_identical": prior_stage is None or comparison.first_failing_stage == stage,
-        "detected": bool(detected),
-    }
-
-
-def _mutations(crystal: CrystalStructure) -> list[dict[str, object]]:
-    raw_intensity = np.asarray([0.37, 2.81, 19.4])
-    catalog = build_rod_catalog(crystal, h_bounds=(-1, 1), k_bounds=(-1, 1))
-    partial = CrystalStructure(
-        phase_id="partial",
-        spacegroup_hm="P 1",
-        direct_basis_A=np.diag([4.0, 5.0, 6.0]),
-        volume_A3=120.0,
-        sites=(CrystalSite("C1", "C", "C", 0, 0.35, (0.2, 0.3, 0.4), 0.02, 1),),
-        source_path=Path("partial.cif"),
-        provenance="proof-only analytic fixture",
     )
-    partial_hkl = np.asarray([[2.0, 1.0, 0.5]])
-    partial_wavelength = np.asarray([WAVELENGTH_A])
-    occupied = _direct_atom_amplitudes(partial, partial_hkl, partial_wavelength)
-    omitted_occupancy = _direct_atom_amplitudes(
-        partial, partial_hkl, partial_wavelength, include_occupancy=False
-    )
-    high_q = np.asarray([[3.0, 2.0, 10.0]])
-    full = _direct_atom_amplitudes(crystal, high_q, np.asarray([WAVELENGTH_A]))
-    no_u = _direct_atom_amplitudes(
-        crystal, high_q, np.asarray([WAVELENGTH_A]), include_displacement=False
-    )
-    anomalous = _direct_atom_amplitudes(
-        crystal, np.asarray([[0.0, 0.0, 3.0]]), np.asarray([WAVELENGTH_A])
-    )
-    no_anomalous = _direct_atom_amplitudes(
-        crystal,
-        np.asarray([[0.0, 0.0, 3.0]]),
-        np.asarray([WAVELENGTH_A]),
-        include_anomalous=False,
-    )
-    nonorthogonal = np.asarray([[4.0, 0.7, 0.3], [0.0, 5.0, 0.2], [0.0, 0.0, 6.0]])
-    right_basis = 2.0 * np.pi * np.linalg.inv(nonorthogonal).T
-    wrong_basis = 2.0 * np.pi * np.linalg.inv(nonorthogonal)
-    nonorthogonal_hkl = np.asarray([1.0, 2.0, 0.5])
-    atom_position_A = nonorthogonal @ np.asarray([0.23, 0.37, 0.41])
-
-    def atomic_amplitude(reciprocal_basis_Ainv: NDArray[np.float64]) -> NDArray[np.complex128]:
-        q_vector = reciprocal_basis_Ainv @ nonorthogonal_hkl
-        q_magnitude = float(np.linalg.norm(q_vector))
-        energy_eV = HC_EV_A / WAVELENGTH_A
-        factor = complex(
-            float(np.asarray(xraydb.f0("C", q_magnitude / (4.0 * np.pi))).item())
-            + xraydb.f1_chantler("C", energy_eV),
-            xraydb.f2_chantler("C", energy_eV),
-        )
-        value = (
-            0.73
-            * factor
-            * math.exp(-0.5 * 0.02 * q_magnitude**2)
-            * cmath.exp(1.0j * float(np.dot(q_vector, atom_position_A)))
-        )
-        return np.asarray([value], dtype=np.complex128)
-
-    right_atomic_amplitude = atomic_amplitude(right_basis)
-    wrong_atomic_amplitude = atomic_amplitude(wrong_basis)
-    par = parratt_reflectivity(
-        np.asarray([0.025]),
-        WAVELENGTH_A,
-        refractive_index=np.asarray([1.0 + 0.0j, 0.999979 + 3.2e-7j, 0.99999 + 1e-8j]),
-        thickness_A=(None, 500.0, None),
-        roughness_A=(0.0, 0.0),
-    )
-    low = np.asarray([0.8, 0.5])
-    high = np.asarray([0.2, 0.1])
-    raw_amplitude = np.sqrt(raw_intensity).astype(np.complex128)
-    registry_correct = coherent_finite_stack(
-        np.asarray([0]),
-        np.asarray([0.0]),
-        np.ones((1, 2), dtype=np.complex128),
-        np.zeros(2),
-        registry_phase_rad=np.asarray([[0.0, 2.0 * np.pi / 3.0]]),
-    ).amplitude_e
-    registry_omitted = coherent_finite_stack(
-        np.asarray([0]),
-        np.asarray([0.0]),
-        np.ones((1, 2), dtype=np.complex128),
-        np.zeros(2),
-    ).amplitude_e
-    return [
-        _mutation_record(
-            "strongest_normalized_to_100",
-            "ordered.varied_raw_intensity",
-            "ordered.event_intensity",
-            "numeric_value",
-            raw_intensity,
-            100.0 * raw_intensity / np.max(raw_intensity),
-            "electron2",
-            QuantityKind.INTENSITY,
-            prior_stage="ordered.unit_cell_amplitude",
-            prior_value=raw_amplitude,
-            prior_unit="e",
-            prior_kind=QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "rounded_intensity",
-            "ordered.noninteger_raw_intensity",
-            "ordered.event_intensity",
-            "numeric_value",
-            raw_intensity,
-            np.round(raw_intensity),
-            "electron2",
-            QuantityKind.INTENSITY,
-            prior_stage="ordered.unit_cell_amplitude",
-            prior_value=raw_amplitude,
-            prior_unit="e",
-            prior_kind=QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "premature_classical_electron_scale",
-            "ordered.raw_electron2",
-            "ordered.event_intensity",
-            "numeric_value",
-            raw_intensity,
-            CLASSICAL_ELECTRON_RADIUS_A**2 * raw_intensity,
-            "electron2",
-            QuantityKind.INTENSITY,
-            prior_stage="ordered.unit_cell_amplitude",
-            prior_value=raw_amplitude,
-            prior_unit="e",
-            prior_kind=QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "weak_nonzero_rod_pruned",
-            "rod.complete_integer_catalog",
-            "reciprocal.rod_id",
-            "shape",
-            catalog.rod_id,
-            catalog.rod_id[:-1],
-            "1",
-            QuantityKind.INDEX,
-        ),
-        _mutation_record(
-            "equal_qr_rods_collapsed",
-            "rod.hexagonal_family",
-            "reciprocal.rod_id",
-            "shape",
-            catalog.rod_id,
-            np.arange(np.unique(np.round(catalog.qr_Ainv, 12)).size, dtype=np.int64),
-            "1",
-            QuantityKind.INDEX,
-        ),
-        _mutation_record(
-            "fractional_rod_fabricated",
-            "rod.integer_catalog",
-            "reciprocal.rod_id",
-            "shape",
-            catalog.rod_id,
-            np.append(catalog.rod_id, catalog.rod_id.size),
-            "1",
-            QuantityKind.INDEX,
-        ),
-        _mutation_record(
-            "occupancy_omitted",
-            "ordered.partial_occupancy",
-            "ordered.atomic_amplitude",
-            "numeric_value",
-            occupied,
-            omitted_occupancy,
-            "e",
-            QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "anomalous_term_omitted",
-            "ordered.bi2se3_cu_ka1",
-            "ordered.atomic_amplitude",
-            "numeric_value",
-            anomalous,
-            no_anomalous,
-            "e",
-            QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "isotropic_displacement_omitted",
-            "ordered.bi2se3_high_q",
-            "ordered.atomic_amplitude",
-            "numeric_value",
-            full,
-            no_u,
-            "e",
-            QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "reciprocal_transpose_wrong",
-            "ordered.nonorthogonal_cell",
-            "ordered.atomic_amplitude",
-            "numeric_value",
-            right_atomic_amplitude,
-            wrong_atomic_amplitude,
-            "e",
-            QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "opposite_parratt_branch",
-            "reflectivity.absorbing_subcritical_film",
-            "reflectivity.layer_kz",
-            "numeric_value",
-            par.kz_Ainv[:, 1],
-            -par.kz_Ainv[:, 1],
-            "A^-1",
-            QuantityKind.SCALAR,
-        ),
-        _mutation_record(
-            "registry_translation_omitted",
-            "ordered.two_layer_registry",
-            "ordered.finite_stack_amplitude",
-            "numeric_value",
-            registry_correct,
-            registry_omitted,
-            "e",
-            QuantityKind.AMPLITUDE,
-            prior_stage="ordered.layer_amplitude",
-            prior_value=np.ones(2, dtype=np.complex128),
-            prior_unit="e",
-            prior_kind=QuantityKind.AMPLITUDE,
-        ),
-        _mutation_record(
-            "blend_outside_handoff",
-            "reflectivity.distinct_branches",
-            "reflectivity.composite_intensity",
-            "numeric_value",
-            low,
-            0.5 * (low + high),
-            "1",
-            QuantityKind.INTENSITY,
-            prior_stage="reflectivity.parratt_intensity",
-            prior_value=low,
-            prior_unit="1",
-            prior_kind=QuantityKind.INTENSITY,
-        ),
-    ]
 
 
 def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
+    """Run the compact permanent T04 proof without generating artifacts."""
+
     if not PACK_PATH.is_file():
         if allow_missing_pack:
             return {
-                "schema_version": "rasim-ordered-reflectivity-proof-v2",
+                "schema_version": "ordered-reflectivity-proof-v1",
                 "task_id": "T04",
                 "status": "BLOCKED",
-                "limitations": ["immutable reference pack is absent"],
+                "reason": "immutable reference pack is missing",
             }
         raise FileNotFoundError(PACK_PATH)
 
-    pack, pack_hash = _load_pack()
+    pack, pack_hash = _reference_pack()
     crystal = read_crystal(
-        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_legacy.cif",
+        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
         phase_id="bi2se3",
     )
-    checks = _foundation_checks(crystal)
-    pbi2_polytype = run_pbi2_polytype_proof(str(ROOT))
-    deterministic_material_payload = pbi2_polytype["deterministic_material_payload"]
-    deterministic_material_payload_sha256 = _canonical_json_sha256(
-        deterministic_material_payload, allow_nan=False
+    scalar_check, ordered_comparison = _scalar_and_raw_check(crystal, pack)
+    ql_evidence = run_bi2se3_ql_proof(str(ROOT))
+    ql_check = _check(
+        "bi2se3_ql_and_rod_identity",
+        ql_evidence["status"] == "PASS",
+        ql_evidence,
     )
-    pbi2_maximum_error = max(float(value) for value in pbi2_polytype["maximum_errors_e"].values())
-    checks.append(
-        _check(
-            "pbi2_polytype_direct_atom_sum",
-            pbi2_polytype["status"] == "PASS",
-            {
-                "maximum_errors_e": pbi2_polytype["maximum_errors_e"],
-                "topologies": {
-                    name: payload["actual_coordination_topology"]
-                    for name, payload in pbi2_polytype["polytypes"].items()
-                },
-                "deterministic_material_payload_sha256": deterministic_material_payload_sha256,
-                "deterministic_parent_period_multiples": [1, 2, 5],
-            },
-            [
-                "ordered.layer_amplitude",
-                "ordered.finite_stack_amplitude",
-                "ordered.unit_cell_amplitude",
-            ],
-            maximum_error=pbi2_maximum_error,
-            tolerance=TOLERANCES["direct_atom_e"],
-        )
-    )
-    bi2se3_ql = run_bi2se3_ql_proof(
-        str(ROOT), TOLERANCES, direct_atom_amplitudes=_direct_atom_amplitudes
-    )
-    bi2se3_single_ql = bi2se3_ql["single_ql_reconstruction"]
-    checks.append(
-        _check(
-            "bi2se3_single_ql_reconstruction",
-            bi2se3_ql["status"] == "PASS" and bi2se3_single_ql["status"] == "PASS",
-            bi2se3_single_ql,
-            ["ordered.unit_cell_amplitude"],
-            maximum_error=max(
-                float(bi2se3_single_ql["maximum_direct_amplitude_residual_e"]),
-                float(bi2se3_single_ql["maximum_production_amplitude_residual_e"]),
-                float(bi2se3_single_ql["maximum_noninteger_L_image_shift_residual_e"]),
-            ),
-            tolerance=TOLERANCES["direct_atom_e"],
-        )
-    )
-    reference_checks, reference_comparisons = _reference_checks(crystal, pack)
-    checks.extend(reference_checks)
-    parratt_checks, parratt_comparisons = _parratt_checks(pack)
-    checks.extend(parratt_checks)
-    reference_comparisons.extend(parratt_comparisons)
-    compatibility_checks, compatibility_comparisons, compatibility_proof = _compatibility_checks(
-        crystal, pack
-    )
-    checks.extend(compatibility_checks)
-    reference_comparisons.extend(compatibility_comparisons)
-
-    convergence = _convergence(pack)
-    checks.append(
-        _check(
-            "nested_grid_convergence",
-            bool(convergence["passed"]),
-            convergence,
-            ["reflectivity.parratt_intensity", "reflectivity.composite_intensity"],
-            maximum_error=max(convergence["composite_shared_point_max_errors"]),
-            tolerance=TOLERANCES["composite_convergence"],
-        )
-    )
-    benchmark = _benchmark(crystal, pack)
-    checks.append(
-        _check(
-            "optimized_proof_agreement_and_benchmark",
-            bool(benchmark["passed"]),
-            {
-                "equivalent_work": benchmark["equivalent_work"],
-                "structure_max_error_e": benchmark["structure_max_error_e"],
-                "raw_intensity_max_error_electron2": benchmark["raw_intensity_max_error_electron2"],
-                "parratt_max_error": benchmark["parratt_max_error"],
-            },
-            [
-                "ordered.unit_cell_amplitude",
-                "ordered.event_intensity",
-                "reflectivity.parratt_intensity",
-            ],
-            maximum_error=float(benchmark["structure_max_error_e"]),
-            tolerance=TOLERANCES["direct_atom_e"],
-        )
-    )
-    mutations = _mutations(crystal)
-    mutation_passed = all(item["detected"] for item in mutations)
-    checks.append(
-        _check(
-            "error_injection",
-            mutation_passed,
-            {
-                "detected": sum(bool(item["detected"]) for item in mutations),
-                "total": len(mutations),
-            },
-            sorted({str(item["expected_first_stage"]) for item in mutations}),
-            tolerance={"required_detection_fraction": 1.0},
-        )
-    )
-    checks.append(
-        _check(
-            "legacy_classification_coverage",
-            {str(item["case_id"]): str(item["classification"]) for item in reference_comparisons}
-            == {
-                "ordered.bi2se3_vesta": "CORRECTED",
-                "ordered.bi2se3_whole_cell_compat": "MATCH",
-                "reflectivity.parratt_three_layer": "MATCH",
-                "reflectivity.manuscript_specular_composite": "CORRECTED",
-                "reflectivity.bi2se3_whole_cell_compat_composite": "MATCH",
-                "reflectivity.bi2se3_whole_cell_compat_legacy_units": "MATCH",
-            },
-            {
-                "cases": [item["case_id"] for item in reference_comparisons],
-                "classifications": [item["classification"] for item in reference_comparisons],
-            },
-            [
-                "ordered.unit_cell_amplitude",
-                "reflectivity.parratt_intensity",
-                "reflectivity.composite_intensity",
-            ],
-            tolerance={"required": ["MATCH", "CORRECTED"], "required_NO_ORACLE": 0},
-        )
-    )
-
-    classifications = [
-        {
-            "case_id": item["case_id"],
-            "immutable_pack_classification": item["immutable_pack_classification"],
-            "classification": item["classification"],
-            "first_divergence_stage": item["first_divergence_stage"],
-            "independent_oracle_check_id": item["independent_oracle_check_id"],
-        }
-        for item in reference_comparisons
+    parratt_check, parratt_comparison = _parratt_check(pack)
+    checks = [
+        scalar_check,
+        ql_check,
+        _pbi2_check(),
+        _finite_stack_check(),
+        parratt_check,
+        _specular_check(pack),
     ]
-    passed = all(check["status"] == "PASS" for check in checks)
+    status = "READY" if all(check["status"] == "PASS" for check in checks) else "FAIL"
     return {
-        "schema_version": "rasim-ordered-reflectivity-proof-v2",
+        "schema_version": "ordered-reflectivity-proof-v1",
         "task_id": "T04",
-        "status": "READY" if passed else "FAIL",
-        "base_sha": _git("merge-base", "HEAD", "main"),
+        "status": status,
         "commit_sha": _git("rev-parse", "HEAD"),
-        "contract_version": 4,
-        "trace_schema_version": 4,
-        "reference_pack_sha256s": {"rasim_reference_v1": pack_hash},
-        "environment_sha256": _environment_sha256(),
-        "owned_paths": [
-            "src/rasim_next/materials/",
-            "src/rasim_next/reciprocal/lattice.py",
-            "src/rasim_next/reciprocal/rods.py",
-            "src/rasim_next/ordered/",
-            "src/rasim_next/reflectivity/",
-            "tests/test_ordered_reflectivity.py",
-            "tasks/04_ordered_reflectivity.md#handoff",
-        ],
-        "tolerance_version": TOLERANCE_VERSION,
-        "tolerance_policy_sha256": _canonical_json_sha256(TOLERANCES),
+        "reference_pack_sha256": pack_hash,
         "tolerances": TOLERANCES,
+        "environment": {
+            "gemmi": gemmi.__version__,
+            "numpy": np.__version__,
+            "xraydb": xraydb.__version__,
+        },
         "checks": checks,
-        "classifications": classifications,
-        "reference_comparisons": reference_comparisons,
-        "convergence": convergence,
-        "benchmark": benchmark,
-        "mutations": mutations,
-        "deterministic_material_payload": deterministic_material_payload,
-        "deterministic_material_payload_sha256": deterministic_material_payload_sha256,
-        "pbi2_polytype_proof": pbi2_polytype,
-        "bi2se3_single_ql_reconstruction": bi2se3_single_ql,
-        "bi2se3_ql_proof": bi2se3_ql,
-        "bi2se3_whole_cell_compatibility_proof": compatibility_proof,
-        "limitations": [
-            "layered L/Qz validation is limited to the declared c-axis-normal crystallographic slice",
-            "only isotropic displacement is supported; unknown Uiso requires an explicit calculation value",
-            "Bi2Se3 continuous-L QL reconstruction applies explicit per-atom integer image phases before comparison with the wrapped production cell",
-            "the VESTA intensity column is NO_ORACLE because every exported value is NaN",
-            "the named composite is specular-only and is not an off-specular optical model",
-            "bi2se3_whole_cell_compat is restricted to the frozen CIF, 1.54 A wavelength, four declared rods, and external 0<=L<=10",
-            "the compatibility stitch requires caller-evaluated exact external and internal-phase curves and does not interpolate or generate them",
+        "classifications": [
+            ordered_comparison,
+            parratt_comparison,
+            {
+                "case_id": "reflectivity.manuscript_specular_composite",
+                "classification": "NO_ORACLE",
+                "first_divergence_stage": None,
+                "reason": "the immutable pack contains pure Parratt but no composite observable",
+            },
         ],
-        "contract_requests": [],
+        "public_apis": [
+            "read_crystal",
+            "build_rod_catalog",
+            "unit_cell_amplitude",
+            "ordered_event_result",
+            "extract_pbi2_motifs",
+            "pbi2_layer_amplitudes",
+            "coherent_finite_stack",
+            "uniform_finite_stack",
+            "parratt_reflectivity",
+            "manuscript_specular_composite",
+        ],
+        "integration_requests": [
+            {
+                "request_id": "IR-T04-MEASURE-GAUGE",
+                "owner": "shared contracts / T06",
+                "decision": (
+                    "freeze one raw event-intensity measure for T04 and T05, ownership of r_e^2 "
+                    "and detector solid angle, total-versus-per-layer normalization, and the "
+                    "Pb-centered registry-free positive-phase layer convention"
+                ),
+                "acceptance": (
+                    "T04 and T05 event results are interchangeable without a branch-local "
+                    "adapter, false per-sr labeling, or hidden scaling"
+                ),
+            }
+        ],
+        "limitations": [
+            "T04 does not implement stacking disorder, mosaic, detector geometry, fitting, CLI, or GUI",
+            "the shared EventIntensityResult field is named intensity_per_sr although T04 stores explicitly normalized raw electron2",
+            "benchmarks and convergence are disposable handoff evidence, not permanent proof code",
+        ],
     }

@@ -45,7 +45,6 @@ Original paths resolve under reference/legacy_source/.
 Manuscript equation labels resolve under reference/manuscript/.
 ```
 
-
 Inventory: `PHY-MAT-*`, `PHY-REC-001`, `PHY-REC-010`, `PHY-ORD-*`, `PHY-MOT-*`, `PHY-REF-001` through `PHY-REF-007`, `PHY-THK-003`, `PHY-THK-004`.
 
 Original:
@@ -136,775 +135,111 @@ git diff --check
 
 Stop `BLOCKED` if species, occupancy, displacement, density, or shared wave-mode conventions cannot be represented without silent approximation. Record the smallest required change.
 
-## Execution plan
+## Compact cleanup execution
+
+State: implementation and compact proof complete; final Git handoff supplies the cleanup commit SHA.
+
+The superseding cleanup order narrows permanent proof to distinct long-term scientific boundaries.
+It removes the unmerged compatibility expansion and assigns cross-material parity and detector
+agreement to T06/T07.
+
+### Retained core scope
+
+- strict CIF ingestion with explicit occupancy, species, displacement, cell, and symmetry handling
+- every individual `(h,k)` rod, with `Qr` and symmetry families retained only as metadata
+- positive-phase raw complex unit-cell amplitudes in electrons and explicit raw `|F|^2` electron²
+- one Bi2Se3 quintuple layer reconstructed by the three exact R-centering translations
+- Pb-centered, registry-free PbI2 `F_plus` and `F_minus` layer amplitudes
+- explicit and uniform finite ordered stacks
+- pure Parratt reflectivity
+- the separately named corrected manuscript specular composite
+
+### Deleted scope and residue
+
+- production `bi2se3_whole_cell_compat`, its public facade, cache identities, hard-coded factors,
+  17-cell/AREA/pole-clamp observable, and legacy specular stitch
+- full VESTA tables, broad material/curve sweeps, deterministic PbI2 parent payloads, generated
+  traces, figures, data, mutation frameworks, convergence frameworks, and benchmark frameworks
+- `ordered/pbi2_proof.py`; its cross-material/repeat parity belongs to T06/T07
+- compatibility and snapshot-style permanent tests
+
+The feature branch ancestry includes quarantined commit `589988d`, but its surviving production
+hunks were not accepted: `ordered/motifs.py`, `reciprocal/lattice.py`, and
+`reciprocal/rods.py` are restored to their pre-quarantine `920fc59` content. No change was
+copied from the separate `wt-post-readiness-quarantine` worktree.
+
+### Compact permanent proof
+
+The ordered proof emits six checks and no artifacts:
+
+1. scalar XrayDB atom sum, tracked F003 boundary, raw event identity, and electron² normalization
+2. one five-atom Bi2Se3 QL reconstruction plus distinct same-family rod identities
+3. one PbI2 2H motif/layer scalar boundary
+4. coherent direct sum, five-repeat off-Bragg enumeration, and seven-repeat Bragg limit
+5. three-point scalar Parratt recursion plus immutable-pack sample and zero-thickness collapse
+6. separate raw kinematic, pure Parratt, and corrected-composite outputs, including direct
+   internal-film phase and normalized `Qz^-2` high-branch equations
+
+Permanent tests retain the same six boundaries. The focused suite passes `6/6`; the full suite
+passes `11/11`. The ordered proof is `READY` at `6/6`; core proof passes `5/5`; reference
+proof passes `7/7`.
+
+### Numerical evidence
+
+- optimized versus scalar atom sum: maximum `1.9335119931946505e-12 e` over 256 equivalent events
+- QL reconstruction: maximum `3.336525901964335e-13 e`; coordinate residual
+  `1.1102230246251565e-16` fractional
+- PbI2 layer scalar boundary: maximum `7.588599744428075e-15 e`
+- uniform finite stack: five-repeat off-Bragg error `1.807312143953211e-15 e`; exact Bragg error
+  `0.0 e`
+- Parratt scalar stages: maximum `1.3877787807814457e-16`; three-point pack reflectivity maximum
+  `4.086730953645201e-13`
+- corrected composite direct internal-phase, raw-kinematic, and normalized-high-branch errors:
+  `0.0`
+- fixed-fit nested composite grids `257/513/1025`: common-node absolute and relative differences
+  are `0.0`
+
+Disposable single-thread timing and memory evidence:
+
+- 256 equivalent amplitudes: optimized median `0.01343220000853762 s`; scalar median
+  `6.099646199989365 s`
+- 10,000 optimized amplitudes: median `0.02356179998605512 s`
+- 4,096 three-layer Parratt points: median `0.0014921999827492982 s`
+- combined 10,000-amplitude plus 4,096-Parratt traced peak: `8.444900512695312 MiB`
+
+No benchmark script, output artifact, or import-time thread mutation is retained.
+
+### Legacy classifications
+
+- `ordered.bi2se3_vesta`: `CORRECTED`. F003 reciprocal d-spacing agrees exactly at the sampled
+  prior stage; `ordered.unit_cell_amplitude` is the first divergence from the immutable historical
+  amplitude (`9.672786160086654 e`). The scalar atom sum is the downstream authority. The single
+  tracked corrected VESTA F003 component check differs by at most `0.0026578549913445215 e`.
+- `reflectivity.parratt_three_layer`: `MATCH`; no divergence.
+- `reflectivity.manuscript_specular_composite`: `NO_ORACLE`; the immutable pack contains pure
+  Parratt arrays but no composite observable.
+
+### Public APIs
+
+`read_crystal`, `build_rod_catalog`, `unit_cell_amplitude`, `ordered_event_result`,
+`extract_pbi2_motifs`, `pbi2_layer_amplitudes`, `coherent_finite_stack`,
+`uniform_finite_stack`, `parratt_reflectivity`, and `manuscript_specular_composite`.
+
+### Minimum integration request
+
+`IR-T04-MEASURE-GAUGE`
+
+- Owner: shared-contract/T06 integration.
+- Problem: `LayerAmplitudeResult` cannot encode the established Pb-centered, registry-free,
+  positive-phase gauge. `EventIntensityResult.intensity_per_sr` currently carries T04's explicitly
+  normalized raw electron², not a true per-steradian observable; T05 uses a neutral
+  `intensity_electron2` field.
+- Decision required: freeze one common raw event-intensity measure, ownership of `r_e^2`, detector
+  solid angle, total-versus-per-layer normalization, and the layer gauge convention.
+- Acceptance: T04 and T05 event results are interchangeable without a branch-local adapter, false
+  per-sr labeling, or hidden scaling. T04 does not change the protected shared contract locally.
 
-State: IMPLEMENTED — AWAITING INDEPENDENT T06; DO NOT MERGE OR FREEZE
+### Limitations
 
-### Pre-compatibility execution result (superseded by the extension handoff below)
-
-- T04-00 through T04-11 are complete. The branch implements strict tracked-CIF expansion, physical
-  reciprocal bases and rods, event-aligned raw amplitudes and intensities, PbI2 layer motifs,
-  finite ordered stacks, material optics, pure Parratt recursion, and named specular outputs.
-- The immutable ordered case is locally `CORRECTED`: reciprocal `d` values still match through
-  `1.3322676295501878e-15 A`, and `ordered.unit_cell_amplitude` is the first evidenced divergence.
-  Independent scalar XrayDB atom sums agree with production to `2.0920868753727402e-12 e`.
-- The mandatory 2H-derived/target-CIF PbI2 polytype oracle passes at arbitrary event coordinates,
-  including exact topology, explicit image unwrapping, both hands, and registry-free `F_plus` and
-  `F_minus`. Its deterministic five-parent, repeats `1/2/5` payload hashes to
-  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`.
-- The mandatory Bi2Se3 R-3m proof expands and deduplicates the corrected CIF, independently parses
-  all 15 P1 atoms, derives one Se1-centered five-atom quintuple layer (QL), and reconstructs the
-  cell only with exact R-centering translations. The QL/direct, QL/production, and noninteger-L
-  image-phase maxima are `2.0896360001747303e-12`, `3.911084367804814e-12`, and
-  `1.7053025658242404e-13 e`.
-- A disposable combined worktree proves T04/T05 parity for `2H`, `4H+`, `4H-`, `6H+`, and `6H-`
-  across all four events and repeats `1/2/5`: `60/60` comparisons pass, with worst error
-  `0.0006061411995276331` of the frozen scale-aware bound. All 20 reduced/full/enumeration fixtures
-  and four integration mutations pass. T05 remains unchanged at
-  `7b20cee7eb80c48523655572bbf318a79e2e7b86`.
-- All 206 VESTA rows now pass proof-only Waasmaier-Kirfel/Cu Kalpha1 parity, including the nuclear
-  Thomson term, while production XrayDB remains separate. Maximum real/imaginary residuals are
-  `1.5103053726761573e-5/6.354053656565384e-5 e`; RMS complex residual is
-  `2.1300349223246674e-5 e`.
-- Pure Parratt remains `MATCH`; the named manuscript composite is `NO_ORACLE` and passes nested-grid
-  convergence. All 15 proof checks, 13 original injections, and five mandatory Bi2Se3 mutations
-  pass.
-
-### Scope and file policy
-
-Implement the approved reference-first T04 slice only. The owned production directories do not
-exist at the proof base, so focused additions are unavoidable. Prefer extending the authoritative
-module and the single permanent test module over adding helpers, adapters, fixtures, or extra test
-files. Delete or fold any exploratory implementation before handoff. Do not create generic
-`tasks/plan.md` or `tasks/todo.md`; this section is the branch-owned plan location.
-
-Fixed decisions:
-
-- Gemmi owns CIF parsing and symmetry expansion. Missing isotropic displacement is preserved as
-  `None`; any anisotropic displacement metadata raises an explicit unsupported-input error.
-- XrayDB owns `f0`, `f1`, `f2`, atomic mass, and atomic number. Its argument is
-  `q=|Q|/(4*pi)`. Ionic `f0` lookup may fall back to the neutral species only with recorded
-  provenance; anomalous factors remain neutral-element data.
-- Raw complex amplitudes use the declared positive phase sign and electron units. Ordered event
-  intensity is `|F|^2` in raw electron squared. No universal scattering-scale factor is applied.
-- Hexagonal family identity uses exact integer `m=h^2+h*k+k^2`. General-cell families use a
-  canonical exact in-plane symmetry orbit plus the reciprocal-cell provenance; floating `Qr` is
-  metadata, never identity.
-- `reciprocal_basis_Ainv` has crystal-frame columns `(b1,b2,b3)`, and reciprocal vectors are
-  `reciprocal_basis_Ainv @ [h,k,L]`. A rod catalog never stores sample-frame or geometry-dependent
-  bases.
-- `RodQueryBatch.l_coordinate` drives crystallographic phase. For the c-axis-normal layered
-  reference slice, `qz_Ainv` is checked against the reciprocal basis. Arbitrarily oriented
-  non-layered event queries remain an extension, not a silent approximation.
-- Pure raw kinematic intensity, pure dimensionless Parratt reflectivity, and the named
-  dimensionless manuscript composite remain separate results.
-
-Dependency graph:
-
-```text
-T04-00 preflight
-  -> T04-01 CIF model
-      -> T04-02 reciprocal lattice
-          -> T04-03 raw structure amplitude
-          -> T04-05 rod catalog
-      -> T04-04 material optics
-      -> T04-07 PbI2 motifs
-  T04-03 + T04-05 -> T04-06 event-aligned ordered result
-  T04-03 + T04-07 -> T04-08 finite ordered stack
-  T04-04 -> T04-09 Parratt
-  T04-08 + T04-09 -> T04-10 named specular outputs
-  T04-01..T04-10 -> T04-11 proof, mutations, convergence, benchmark
-  T04-11 -> T04-12 cleanup, handoff, commit
-```
-
-### T04-00: Reproduce the proof-base preflight
-
-**Files likely touched:** none; read-only setup.
-
-**Intended behavior:** Confirm `feat/ordered-reflectivity`, clean status, and common worktree SHA.
-Set `PROOF_BASE_SHA` process-locally to that verified SHA, run the frozen environment setup, verify
-the seed, then run core and reference proofs before any source edit.
-
-**Tests:**
-
-- `uv sync --frozen --group dev`
-- `uv run --frozen --group dev python scripts/verify_seed.py`
-- `uv run --frozen --group dev python -m rasim_next.proof core --json`
-- `uv run --frozen --group dev python -m rasim_next.proof references --json`
-
-**Dependencies:** none.
-
-**Acceptance criteria:**
-
-- Branch, HEAD, and `PROOF_BASE_SHA` equal the common proof-base SHA; Git status is clean.
-- Seed, core proof, reference proof, contract version, trace version, and reference-pack hash pass.
-- Any mismatch stops the branch before implementation.
-
-### T04-01: Parse one immutable crystallographic model
-
-**Files likely touched:**
-
-- `src/rasim_next/materials/crystal.py`
-- `src/rasim_next/materials/__init__.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Add frozen `CrystalStructure` and expanded-site values. Parse exactly one CIF
-structure with Gemmi; validate finite positive cell volume, finite fractional coordinates,
-occupancy in `[0,1]`, recognized species, and displacement metadata. Expand symmetry once without
-duplicating special positions. Preserve source label, charged species label, neutral element,
-occupancy, fractional position, isotropic `U` or explicit unknown state, multiplicity, and
-provenance. Reject ambiguous or anisotropic metadata explicitly.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_cif_expansion_occupancy_and_displacement_policy`
-
-The test covers tracked Bi2Se3/PbI2 inputs, symmetric Bi2Se3 versus expanded P1 site equivalence,
-a synthetic special position, partial occupancy, malformed occupancy, and anisotropic rejection.
-
-**Dependencies:** T04-00.
-
-**Acceptance criteria:**
-
-- Every tracked reference CIF parses with expected expanded species counts and site multiplicity.
-- Symmetry expansion and explicit P1 input represent the same occupied sites modulo lattice images.
-- Unsupported displacement or invalid crystallographic metadata fails with an informative error.
-
-### T04-02: Establish the reciprocal-lattice authority
-
-**Files likely touched:**
-
-- `src/rasim_next/reciprocal/lattice.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Construct direct basis vectors as columns and the physical reciprocal basis
-as `2*pi*inv(A).T`. Provide batched Miller-to-Cartesian `Q`, the in-plane reciprocal metric,
-`Qr`, and layered `L`/`Qz` consistency checks. Keep all values in angstrom and inverse angstrom;
-never use a hexagonal shortcut in the general calculation.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_general_reciprocal_basis_and_layer_coordinate`
-
-The oracle directly inverts a non-orthogonal synthetic cell and checks `a_i dot b_j=2*pi*delta_ij`,
-then checks the hexagonal manuscript cell and noninteger `L`.
-
-**Dependencies:** T04-01.
-
-**Acceptance criteria:**
-
-- Direct and reciprocal bases satisfy the analytic dual-basis identity at float64 tolerance.
-- General-cell `Q`, in-plane metric, and `Qr` agree with direct matrix evaluation.
-- Inconsistent layered `L` and `Qz` are rejected rather than silently reconciled.
-
-### Checkpoint A: Crystallographic foundation
-
-- Run the two focused tests from T04-01 and T04-02 together.
-- Run Ruff on `materials/`, `reciprocal/lattice.py`, and the permanent test module.
-- Confirm no parser alternative, generated CIF, cache, or temporary fixture exists in the tree.
-
-### T04-03: Evaluate raw complex structure amplitude
-
-**Files likely touched:**
-
-- `src/rasim_next/materials/optics.py`
-- `src/rasim_next/ordered/amplitudes.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Implement the single XrayDB atomic-factor source and the authoritative
-amplitude sum
-`sum occupancy * (f0 + f1 + i*f2) * phase * displacement`. Use physical Cartesian `Q`, positive
-phase sign, isotropic factor `exp(-Uiso*|Q|^2/2)`, per-event wavelength, and complex128 output.
-Expose no normalized, rounded, absolute-value-only, or pruned path.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_raw_structure_amplitude_matches_direct_atom_sum`
-
-The independent oracle contains one-atom, cancelling two-atom, partial-occupancy, isotropic-
-displacement, anomalous-sign, systematic-absence, and noninteger-`L` cases.
-
-**Dependencies:** T04-01, T04-02.
-
-**Acceptance criteria:**
-
-- Atomic and unit-cell amplitudes match direct scalar enumeration as complex values.
-- XrayDB receives `|Q|/(4*pi)` exactly; ionic fallback is explicit in provenance.
-- Near-zero systematic absences use an absolute tolerance and remain unfabricated.
-
-### T04-04: Produce wavelength-consistent material optics
-
-**Files likely touched:**
-
-- `src/rasim_next/materials/optics.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Derive occupied unit-cell composition, mass density, electron/anomalous
-forward sums, `delta`, `beta`, `n_complex=1-delta+i*beta`, and `mu_Ainv=4*pi*beta/lambda` from the
-same species resolution used by T04-03. Return the shared immutable `MaterialOptics` contract in
-the input wavelength order with complete provenance.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_material_optics_matches_atomic_forward_sum`
-
-The test checks density from mass/volume, optical-theorem identities, positive absorption,
-wavelength dependence, anomalous sign, and charged/neutral resolution.
-
-**Dependencies:** T04-01, T04-03.
-
-**Acceptance criteria:**
-
-- `n_complex`, `delta`, `beta`, and `mu_Ainv` satisfy their defining identities at every wavelength.
-- Composition includes symmetry multiplicity and occupancy exactly once.
-- Missing species data or invalid density stops with no fallback material.
-
-### T04-05: Enumerate complete rod identities
-
-**Files likely touched:**
-
-- `src/rasim_next/reciprocal/rods.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Enumerate every integer `(h,k)` in explicit inclusive bounds, sort
-deterministically, and assign unique stable `rod_id`. Compute `Qr` from T04-02. Use exact
-hexagonal `m` or a canonical general-cell in-plane symmetry orbit for `family_key`/`family_id`.
-Record orbit/multiplicity provenance without multiplying intensity, collapsing rods, pruning weak
-members, or creating fractional members.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_rod_catalog_preserves_rods_and_exact_families`
-
-The test includes distinct rods sharing one hexagonal family, a general cell, zero-intensity and
-weak rods, deterministic repeated construction, and checks that every `(h,k)` remains integral.
-
-**Dependencies:** T04-01, T04-02.
-
-**Acceptance criteria:**
-
-- Catalog size equals the exact Cartesian count of requested integer bounds with unique IDs.
-- Equal-family rods remain distinct while exact family metadata and numerical `Qr` agree.
-- Pruning, strongest-peak normalization, rounding, and fabricated fractional rods are absent.
-
-### Checkpoint B: Material and rod authority
-
-- Run focused tests T04-03 through T04-05 together plus Checkpoint A tests.
-- Compare Bi2Se3 raw complex amplitudes with tracked pack arrays using predeclared branch-local
-  tolerances; do not alter tolerances after seeing disagreement.
-- Classify any disagreement by the evidence hierarchy. This checkpoint resolved the historical
-  arrays as `CORRECTED`; no silent compatibility mode was added.
-
-### T04-06: Align ordered results to event identity
-
-**Files likely touched:**
-
-- `src/rasim_next/ordered/amplitudes.py`
-- `src/rasim_next/ordered/__init__.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Validate every `RodQueryBatch` row against its catalog `rod_id`, phase,
-`h`, and `k`; evaluate amplitude in event order; preserve `event_id`; and expose raw amplitude plus
-`EventIntensityResult` with raw `|F|^2` in electron squared and no source, population, optics,
-polarization, solid-angle, deposition, or universal scattering-scale factor.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_event_aligned_ordered_result_preserves_identity_and_scale`
-
-The test uses shuffled events, repeated rods, noninteger `L`, multiple wavelengths, and deliberate
-rod/phase/index mismatches.
-
-**Dependencies:** T04-03, T04-05.
-
-**Acceptance criteria:**
-
-- Output order and IDs exactly match the query; identity mismatch raises before evaluation.
-- Returned model intensity equals raw `|F|^2` electron squared with no hidden normalization or factor.
-- Invalid `L`/`Qz` reference semantics fail explicitly.
-
-### T04-07: Extract validated PbI2 layer motifs
-
-**Files likely touched:**
-
-- `src/rasim_next/ordered/motifs.py`
-- `src/rasim_next/ordered/pbi2_proof.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** From expanded tracked PbI2 structures, associate each Pb with two nearest
-periodic I images, center each I-Pb-I motif on Pb, require one-Pb/two-I stoichiometry, preserve
-occupancy/species, cover each expanded site exactly once, and classify the two orientation-related
-motifs after removing registry translation. Evaluate event-aligned `F+` and `F-` through the same
-atomic-factor authority and return `LayerAmplitudeResult`. Independently enumerate exact 2H-derived
-ideal 4H/6H atoms and tracked target-CIF atoms at arbitrary event coordinates without calling T05;
-return both target canonical images and complete-layer coordinates, lattices, repeats, relaxed
-heights, both hands, and the explicit Pb-centered motif gauge.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_pbi2_motifs_cover_sites_and_preserve_orientation`
-- `uv run --frozen --group dev python -m rasim_next.proof ordered-reflectivity --json`
-
-The compact permanent test covers exact 2H extraction, direct manuscript `F+`/`F-`, ambiguous-
-neighbor rejection, stoichiometry, site coverage, and species/occupancy-preserving orientation.
-The branch proof expands all tracked 2H/4H/6H CIFs, independently sums every atom, checks exact
-topology and image shifts, and emits the larger integration payload without retaining snapshots.
-
-**Dependencies:** T04-01, T04-02, T04-03.
-
-**Acceptance criteria:**
-
-- Every tracked PbI2 site belongs to exactly one validated trilayer with correct stoichiometry.
-- `F- (h,k,L) = F+ (h,k,-L)` holds for the reference orientation convention.
-- Ambiguous assignment or non-rigid species/occupancy mapping raises an informative error.
-- Direct ideal polytype sums factor into registry/depth-phased `F+`/`F-`; target canonical sums
-  match production, and complete-layer image shifts are explicitly proven at arbitrary `qz`.
-
-### T04-08: Sum a finite ordered stack coherently
-
-**Files likely touched:**
-
-- `src/rasim_next/ordered/finite_stack.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Sum complex layer or repeat amplitudes at explicit finite depths before
-squaring. Provide both a transparent direct sum and a stable uniform-repeat geometric sum, using a
-near-Bragg limit that avoids cancellation. Preserve event IDs and expose total finite intensity;
-never silently switch to per-layer normalization. Treat motif-origin shifts as a gauge paired with
-the corresponding registry/depth phase.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_finite_stack_limits_and_motif_gauge`
-
-The test checks `N=1`, `Qz=0` giving `N^2`, exact Bragg and off-Bragg geometric sums, arbitrary
-depths against direct enumeration, total/per-layer distinction, and origin/registry gauge
-invariance.
-
-**Dependencies:** T04-03, T04-07.
-
-**Acceptance criteria:**
-
-- Optimized and direct finite sums agree as complex amplitudes across the analytic fixtures.
-- Total intensity is nonnegative, finite, and explicitly normalized as a finite total.
-- Motif-origin changes leave physical intensity invariant only with the declared phase adjustment.
-
-### Checkpoint C: Ordered vertical slice
-
-- Run all permanent ordered/material/rod tests through T04-08.
-- Verify `RodQueryBatch -> raw amplitude -> EventIntensityResult` and
-  `RodQueryBatch -> LayerAmplitudeResult` boundaries with exact IDs, dtypes, and read-only arrays.
-- Run compileall and Ruff on all current owned modules; remove duplicate direct-sum helpers.
-
-### T04-09: Implement pure Parratt recursion
-
-**Files likely touched:**
-
-- `src/rasim_next/reflectivity/parratt.py`
-- `src/rasim_next/reflectivity/__init__.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Accept explicit ambient/interior/substrate indices, `None` thickness for the
-two semi-infinite media, nonnegative finite interior thicknesses, and one RMS roughness per interface.
-Derive each layer `kz` with the shared complex-normal branch selector; derive the scalar reflection amplitude
-from the shared interface amplitude; apply the declared roughness factor; recurse bottom-up; return
-layer `kz`, interface amplitudes, recursion amplitude, and pure dimensionless reflectivity.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_parratt_matches_analytic_limits`
-
-The independent oracle covers a single interface, equal media, zero-thickness film, absorbing
-thick film, finite substrate, and nonzero roughness.
-
-**Dependencies:** T04-04 and bootstrap shared wave/interface primitives.
-
-**Acceptance criteria:**
-
-- Scalar and batched recursion match analytic/direct scalar results at complex128 tolerance.
-- Every layer uses the shared branch selector; no local square-root branch implementation exists.
-- Invalid media, thickness, shape, or roughness inputs fail before recursion.
-
-### T04-10: Keep all specular outputs named and separate
-
-**Files likely touched:**
-
-- `src/rasim_next/reflectivity/specular.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Expose raw finite-stack kinematic intensity without normalization. Build the
-named manuscript composite separately: map external `Qz` to internal phase `L`, normalize the
-finite-stack term at zero, divide by `Qz^2`, fit the positive log-median scale in the declared
-overlap, select the widest eligible blend interval with deterministic tie-breaking and `[3,6]`
-fallback, then use clipped quintic log blending. Return pure Parratt, pure raw kinematic, scaled
-high branch, blend bounds, and composite as distinct fields.
-
-**Tests:**
-
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py::test_specular_outputs_and_handoff_are_distinct`
-
-The test checks raw-scale preservation, internal-phase coordinate below/above critical edge,
-automatic and fallback windows, exact Parratt equality below the window, exact high-branch equality
-above it, endpoint continuity, and no blend outside the rule.
-
-**Dependencies:** T04-08, T04-09.
-
-**Acceptance criteria:**
-
-- Pure outputs remain unchanged and independently accessible after composite construction.
-- Composite equals its declared branches exactly outside the selected window and remains finite.
-- Nonpositive overlap data fails unless only the documented numerical floor inside a valid blend
-  is needed.
-
-### Checkpoint D: Reflectivity vertical slice
-
-- Run all permanent tests through T04-10.
-- Compare the three-layer Parratt stages with the immutable pack as `MATCH`.
-- Refine nested `Qz/Qc` grids and confirm shared-point Parratt values and selected composite window
-  converge under the predeclared criteria.
-
-### T04-11: Consolidate proof, mutations, convergence, and benchmark
-
-**Files likely touched:**
-
-- `src/rasim_next/ordered/proof.py`
-- `tests/test_ordered_reflectivity.py`
-
-**Intended behavior:** Add the existing proof-dispatch target. Emit one JSON object containing
-analytic/direct-oracle checks, immutable pack hash, `MATCH`/`CORRECTED`/`NO_ORACLE`
-classifications, first divergences, branch-local tolerance hash, optimized-versus-proof agreement,
-nested-grid convergence, equivalent-work wall time, traced peak memory, limitations, and every
-assigned ordered/reflectivity mutation. Mutations remain in-memory proof operations, never
-production switches.
-
-**Proof command:**
-
-- `uv run --frozen --group dev python -m rasim_next.proof ordered-reflectivity --json`
-
-The broad convergence sweep and benchmark stay in this explicit handoff command rather than a
-permanent pytest case.
-
-Benchmark equivalent work is 10,000 event-aligned structure amplitudes plus 4,096 three-layer
-Parratt points, one BLAS/OpenMP thread, warmup followed by repeated timed runs. Compare vectorized
-production paths with scalar atom/layer/Parratt oracles and measure peak memory with `tracemalloc`.
-
-**Dependencies:** T04-01 through T04-10.
-
-**Acceptance criteria:**
-
-- Both tracked T04 pack cases pass their immutable classifications; every correction names its
-  first divergent shared stage and downstream independent oracle.
-- Every assigned mutation is detected at its expected first stage while the unmutated proof passes.
-- Convergence, equivalent-work timing, peak memory, and optimized/proof maximum errors are finite
-  and present in proof JSON.
-
-### T04-12: Remove residue and complete the handoff
-
-**Files likely touched:**
-
-- `tasks/04_ordered_reflectivity.md`
-- Earlier owned files only when deleting or simplifying residue; add no new file.
-
-**Intended behavior:** Review every added function, file, and permanent test. Delete exploratory
-scripts, generated data, duplicate helpers, redundant tests, diagnostic output, dead branches,
-unused imports, and unused abstractions. Populate the existing handoff with exact evidence, make
-one coherent commit, then confirm a clean tree.
-
-**Tests:**
-
-- `uv run --frozen --group dev python -m compileall -q src`
-- `uv run --frozen --group dev ruff check src/rasim_next/materials src/rasim_next/reciprocal/lattice.py src/rasim_next/reciprocal/rods.py src/rasim_next/ordered src/rasim_next/reflectivity tests/test_ordered_reflectivity.py`
-- `uv run --frozen --group dev pytest -q tests/test_ordered_reflectivity.py`
-- `uv run --frozen --group dev python -m rasim_next.proof ordered-reflectivity --json`
-- `uv run --frozen --group dev python -m rasim_next.proof references --json`
-- `git diff --check`
-
-**Dependencies:** T04-11.
-
-**Acceptance criteria:**
-
-- All assigned commands pass; optimized and proof paths agree; benchmark and memory are recorded.
-- Handoff records commit SHA, public APIs, classifications, first divergences, convergence,
-  benchmark, memory, retained tests and rationale, limitations, and minimum contract requests.
-- One coherent commit contains only owned-path changes and `git status --short` is empty afterward.
-
-### Risks and stop rules
-
-- If production and the independent scalar XrayDB atom sum disagree beyond the frozen direct-oracle
-  tolerance, stop and report the exact first divergence.
-- If `RodQueryBatch` cannot represent the layered reference `L`/`Qz` semantics, stop rather than
-  editing shared contracts or inferring orientation.
-- If Gemmi cannot preserve a reference species, occupancy, special position, or displacement
-  field, stop rather than lowering proof coverage.
-- If a consumer cannot accept the frozen raw-electron/raw-electron-squared boundary, record the
-  smallest integration request and stop before creating an adapter or applying a universal scale.
-- Work is sequential for the primary writer. Read-only derivation or evidence review may occur in
-  parallel, but no subagent writes branch files.
-
-## Handoff
-
-Status: IMPLEMENTED — AWAITING INDEPENDENT T06. Do not merge or freeze T04. The final
-compatibility commit SHA is reported externally because a commit cannot embed itself.
-
-### Narrow whole-cell compatibility extension
-
-This extension preserves the corrected XrayDB/VESTA route and the frozen T04/T05 raw-electron
-boundary. It adds only the explicit `bi2se3_whole_cell_compat` literal; there is no implicit
-material selection, fallback, enum, UI control, persisted-state field, interpolation layer, new
-module, dependency, fixture, or snapshot.
-
-Public compatibility APIs:
-
-- `unit_cell_amplitude(..., basis_mode="bi2se3_whole_cell_compat")` and
-  `ordered_event_result(..., basis_mode=...)` expose cache-distinct raw whole-cell amplitudes while
-  the default `exact_provider` numerical output remains bit-for-bit unchanged.
-- `Bi2Se3WholeCellCompatResult` and `bi2se3_whole_cell_compat_curve` expose the raw 17-cell complex
-  amplitude/electron-squared intensity separately from the historical AREA-normalized,
-  pole-clamped intensity. No historical complex phase is invented for that intensity-only stage.
-- `Bi2Se3WholeCellCompatSpecularResult` and `bi2se3_whole_cell_compat_specular` consume separately
-  evaluated external- and internal-phase curves. They require exact coordinates and expose pure
-  Parratt, raw finite-stack electron squared, external/phase legacy kinematic curves, `HT/Qz^2`,
-  both scale directions, blend selection/bounds, dimensionless composite, and downstream legacy
-  units as separate immutable arrays.
-
-Frozen-source evidence:
-
-- Legacy revision: `494accdc2655bd677fafaf070b3dad816b65fa3c`; CIF SHA-256:
-  `a25bc39732a01887faadcfc4b1286044ee98edec67ab7cc2964d7953bfa39888`.
-- A disposable detached legacy worktree reproduced all four 1001-point curves twice with digest
-  `042d1f73bd51d85df31541d7269dd3bea1cdf2c814fb0730c720a97fbaedeb7d`; no generated oracle
-  artifact remains.
-- The permanent proof independently transcribes the scalar historical equations and covers 4,004
-  ordered events. Maximum component-wise whole-cell errors for rods `(0,0)`, `(-1,0)`, `(-2,0)`,
-  and `(-3,1)` are respectively `2.2737367544323206e-13`, `1.1368683772161603e-13`,
-  `1.4210854715202004e-13`, and `1.1368683772161603e-13 e`.
-- Maximum raw 17-cell complex-amplitude residuals for those rods are respectively
-  `4.785887488181624e-10`, `7.38402163543386e-10`, `8.280603384719736e-10`, and
-  `5.736172340872927e-10 e`; electron-squared residuals are `1.4677643775939941e-6`,
-  `4.4405460357666016e-6`, `4.0978193283081055e-6`, and `2.6747584342956543e-6`.
-- Maximum historical-intensity residuals are `256`, `128`, `128`, and `128` legacy units; the
-  largest tolerance fraction is `0.016299251303216793`. Integrated-intensity residuals are
-  `4`, `8`, `0`, and `4` on integrals of order `1e16`; normalized-sample and extinction-ratio
-  maxima are `1.6263032587282567e-17` and `8.326672684688674e-17`. Selected absolute peaks and
-  the first 20 fringe positions match on every rod.
-- The separate 1,001-point specular oracle has maximum stage residuals: raw finite electron squared
-  `3.827153705060482e-9`, external legacy kinematic `10.375`, phase legacy kinematic `14.125`,
-  `HT/Qz^2` `992`, pure Parratt `0`, scaled Parratt `0`, stitched `HT/Qz^2` `275.25`, dimensionless
-  composite `1.5585406229479126e-17`, and downstream legacy units `12.515625`. The largest
-  scale-aware tolerance fraction is `0.04142036517973313`; both scale-factor residuals are zero,
-  the legacy direction is `parratt_to_kinematic`, and the selected fallback bounds are `[3,6]`.
-- External `L`, internal phase `L`, event identity, `h`, `k`, and `qz` propagate exactly. Exact and
-  compatibility identities remain distinct in both call orders. No arbitrary rescaling, phase
-  correction, rounding, interpolation, or grid regeneration occurs.
-
-Current classifications:
-
-- corrected XrayDB/VESTA ordered route: `CORRECTED`, first divergence
-  `ordered.unit_cell_amplitude`;
-- `ordered.bi2se3_whole_cell_compat`: `MATCH`;
-- pure Parratt: `MATCH`;
-- corrected-material manuscript composite: `CORRECTED`, first divergence
-  `ordered.unit_cell_amplitude`;
-- compatibility composite and compatibility downstream legacy-unit curve: `MATCH`.
-
-Proof and cleanup state:
-
-- Compatibility tolerance policy is `ordered-reflectivity-tolerances-v3`, SHA-256
-  `9f113e83a2b4e6e3db16fc3e0018dc638b817358e6afff2ff080110ba55941ff`. Ordinary nonzero legacy
-  values use `rtol=1e-8`; normalized or near-zero values use `atol=1e-12`.
-- The PbI2 deterministic material payload remains
-  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`; corrected direct-atom,
-  VESTA, Parratt, convergence, mutation, and reference-pack checks remain passing.
-- The retained equivalent-work benchmark covers 10,000 amplitudes plus 4,096 three-layer Parratt
-  points. One-thread production/oracle medians are `0.025104700005613267/0.45258539999485947 s`
-  (`18.0279x`); traced peaks are `9,099,213/3,500,323 bytes`. Structure, raw-intensity, and
-  Parratt oracle maxima remain `2.0920868753727402e-12 e`, `4.5838532969355583e-10 electron2`,
-  and `4.440892098500626e-16`.
-- Three permanent tests were retained because each protects one distinct long-term contract:
-  explicit mode/frozen-source/cache separation; raw-versus-legacy finite units; and exact
-  external/phase specular stages. Complete curves, peak/integral/extinction/fringe metrics,
-  benchmarks, and memory remain proof-command evidence rather than permanent tests.
-- Exact changed files for this extension are `ordered/__init__.py`, `amplitudes.py`,
-  `finite_stack.py`, `proof.py`, `reflectivity/__init__.py`, `specular.py`, the existing ordered
-  test module, and this handoff. No file was added.
-- Final extension gates: compile PASS; Ruff lint PASS; Ruff format PASS (`16` files); focused suite
-  PASS (`14`); full suite PASS (`19`); ordered proof `READY` (`17/17` checks and the existing
-  `18/18` mutations); reference proof PASS (`7/7`); `git diff --check` PASS. The post-commit clean
-  status and final SHA are reported externally.
-
-The primary-writer proof being `READY` is not the independent acceptance gate. T04 remains open
-until T06 reruns the frozen legacy oracle against the final commit and reports all ordered and
-specular compatibility stages as `MATCH`.
-
-### Pre-compatibility readiness record
-
-Readiness baseline:
-
-- T04 started at `34a9c04b5b4c2777dedf0a97f5cd3e2e7320b08c`; frozen T05 is
-  `7b20cee7eb80c48523655572bbf318a79e2e7b86`; common `PROOF_BASE_SHA` is
-  `812f896fde5b8365ff5c218fc606df674ad7dcad`.
-- The reference-pack SHA-256 is
-  `e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06`; contract and trace
-  versions are `4/4`.
-- T04/T05 tolerance-policy hashes are
-  `1a669aa24fbfd26c7dee36091b6a715d318d34c64db8d2f20b6134eb875d7ddf` and
-  `66eea64363bc9ad957ed72198890e1279270a45dac09fcbd5d35f0624c850fff`.
-
-Frozen T04/T05 boundary:
-
-- `LayerAmplitudeResult.f_plus` and `f_minus` are raw complex layer structure amplitudes in
-  electrons, evaluated at exact `RodQueryBatch` event coordinates. They use one common motif gauge:
-  in-plane origin at Pb, layer-center `z=0`, shared plus/minus origin, and positive structure-factor
-  phase. Occupancy and atomic displacement are each applied exactly once. Registry-translation
-  phase, source/mosaic/optics/detector/population weights, intensity normalization, rounding, and
-  universal scattering scale are excluded.
-- T05 applies every interlayer registry phase. Ordered and stacking event intensities are raw
-  electron squared; neither T04 nor T05 multiplies by `r_e^2`. Integration applies any universal
-  scattering-scale factor exactly once.
-- Rod identity remains in `RodQueryBatch`, and all alignment is through `event_id`; layer results do
-  not duplicate rod metadata.
-- T04 manuscript field labels remain literal: expanded 2H is `f_minus`. For coordination wording,
-  coordination `+` maps to T04 `minus`, and coordination `-` maps to T04 `plus`.
-- Registry offsets are `A=(0,0)`, `B=(1/3,2/3)`, and `C=(2/3,1/3)` with positive phase;
-  therefore T05 uses `FORWARD_H_PLUS_2K`. The frozen mappings are repeated `plus/A -> 2H`,
-  `plus/A,minus/B -> 4H+`, `plus/A,minus/C -> 4H-`, `plus/A,plus/B,plus/C -> 6H+`, and
-  `plus/A,plus/C,plus/B -> 6H-`.
-- The JSON-native material payload uses sorted compact JSON with finite values only. Its SHA-256 is
-  `ec1a3eb975f7665eaa21ee224fbc62d62b1249b5ae1c481777a57b937f83f1e2`; benchmark, environment,
-  commit, and relaxed-target evidence are excluded from the hash.
-
-Public APIs:
-
-- Materials: `read_crystal`, `CrystalSite`, `CrystalStructure`, `MaterialOptics`,
-  `material_optics`, `mass_density_g_cm3`.
-- Reciprocal/ordered: `ReciprocalLattice`, `RodCatalog`, `build_rod_catalog`,
-  `unit_cell_amplitude`, `ordered_event_result`, `pbi2_layer_amplitudes`,
-  `coherent_finite_stack`, `uniform_finite_stack` and their immutable result models.
-- Reflectivity: `ParrattResult`, `parratt_reflectivity`, `SpecularResult`,
-  `manuscript_specular_composite`.
-
-Exact files changed:
-
-- The readiness-completion commit modifies only `ordered/bi2se3_proof.py`,
-  `ordered/pbi2_proof.py`, `ordered/proof.py`, the existing ordered test module, and this handoff;
-  it adds no file, dependency, fixture, snapshot, production API, or T05 change.
-
-- `src/rasim_next/materials/__init__.py`, `crystal.py`, and `optics.py`.
-- `src/rasim_next/reciprocal/lattice.py` and `rods.py`.
-- `src/rasim_next/ordered/__init__.py`, `amplitudes.py`, `bi2se3_proof.py`, `finite_stack.py`,
-  `motifs.py`, `pbi2_proof.py`, and `proof.py`.
-- `src/rasim_next/reflectivity/__init__.py`, `parratt.py`, and `specular.py`.
-- `tests/test_ordered_reflectivity.py` and `tasks/04_ordered_reflectivity.md`.
-
-Final command results:
-
-- Frozen-base pre-edit seed verification: PASS.
-- `python -m compileall -q src`: PASS.
-- Ruff lint and format checks over all owned Python paths: PASS (`16` files formatted).
-- Focused permanent suite: PASS (`11 passed`); full suite: PASS (`16 passed`).
-- Ordered proof: READY (`15/15` checks; `13/13` original and `5/5` Bi2Se3 injections, `18/18` total); core proof: PASS (`5/5`);
-  reference proof: PASS (`7/7`).
-- `git diff --check`: PASS. Post-commit `git status --short`: empty.
-
-Permanent proof coverage:
-
-- Tolerance policy `ordered-reflectivity-tolerances-v2` was frozen before the Bi2Se3 module was
-  implemented; policy SHA-256 is
-  `1a669aa24fbfd26c7dee36091b6a715d318d34c64db8d2f20b6134eb875d7ddf`. The `1e-4 e`
-  component and `5e-5 e` RMS gates cover source-rounded VESTA coefficients; `6e-4 e` magnitude and
-  `5e-6` relative gates cover the export's six-significant-digit `|F|`; `6e-7 A` covers six-decimal
-  d spacing; and `1.2e-4 deg` retains the required fixed wavelength near backscatter.
-- Eleven focused tests retain one distinct contract/invariant each: CIF expansion/ADP rejection,
-  reciprocal/rod identity, raw atom sums and optics, event alignment/raw scale, PbI2 motif gauge,
-  finite-stack limits and registry phase, Parratt analytic limits, named specular separation, and
-  the Se1-centered single-QL structural/complex-amplitude boundary.
-- `python -m rasim_next.proof ordered-reflectivity --json` returns all integration payloads and
-  passes 15 checks plus 18/18 total mutations. The immutable reference-pack hash remains
-  `e958703426ebea7a3fd62a8bb52447f9a5a8d7d5d4ad0eb0ce3b3706bbca1f06`.
-- Production/direct atom sums differ by at most `2.0920868753727402e-12 e`. Raw intensity differs
-  by at most `4.5838532969355583e-10 electron2` in the equivalent-work benchmark.
-- PbI2 proof expands exact tracked 2H/4H/6H CIFs, returns event `h,k,qz,wavelength`, raw `F_plus` and
-  `F_minus`, direct ideal-atom amplitudes for all five T05 parents at repeats `1/2/5`, direct
-  target-CIF amplitudes, canonical/complete coordinates, lattices, relaxed heights, and integer
-  image shifts. Layer/direct error is `2.4457182613372133e-14 e`; the largest repeated ideal
-  factorization error is `1.2987197418164968e-12 e`; target production cross-check error is
-  `1.596746205780465e-13 e`; complete-layer image integrality error is
-  `2.220446049250313e-16` fractional coordinate.
-- In the disposable combined worktree, T05 consumes only reconstructed `RodQueryBatch` and
-  `LayerAmplitudeResult` values. All `5 parents x 3 repeats x 4 events = 60` total-intensity
-  comparisons pass the predeclared `2|A|*epsilon_A + epsilon_A^2 + epsilon_T05` bound; maximum
-  absolute error is `3.583409124985337e-10 electron2`, only `0.0006061411995276331` of its bound.
-  Twenty one-period reduced/full-six-state/direct-enumeration fixtures pass. Wrong hand, wrong
-  registry convention, swapped `F_plus/F_minus`, and wrong repeat are detected at
-  `stacking.pair_kernel`, `stacking.registry_phase`, `stacking.pair_kernel`, and
-  `stacking.finite_intensity`. The relaxed-target-CIF residual is separately descriptive at
-  `0.9174331892538831 e`; it is neither normalized away nor required to vanish.
-- Bi2Se3 proof constructs each QL around a source-labelled Se1 periodic image. Three identical
-  five-atom QLs cover all 15 VESTA, legacy, and expanded-P1 sites exactly once; the conventional
-  cell is generated only by `(0,0,0)`, `(2/3,1/3,1/3)`, and `(1/3,2/3,2/3)`. Species, charge,
-  occupancy, Uiso, coordinates, and integer image shifts are retained. Its gauge is central Se at
-  `(0,0,0)`, bottom-to-top, xy modulo one, signed z, and positive phase. The QL sites are Se2
-  `(1/3,2/3,-0.12163333333333337)`, Bi
-  `(2/3,1/3,-0.06746666666666667)`, Se1 `(0,0,0)`, Bi
-  `(1/3,2/3,0.06746666666666656)`, and Se2 `(2/3,1/3,0.12163333333333326)`, all with occupancy
-  `1` and `Uiso=0.019 A^2`. QL/direct scalar and QL/production maxima are
-  `2.0896360001747303e-12/3.911084367804814e-12 e`; explicit noninteger-L image shifts reproduce
-  production within `1.7053025658242404e-13 e`, while omitting their phase changes the fixture by
-  `205.41156204335115 e`. The P1 file's 12-decimal coordinates leave a
-  `1.617802490138405e-9 e` exact-absence floor inside its analytic serialization bound.
-- VESTA F(003): direct R-3m `104.9835149797381+14.466756284510423i e`, explicit P1
-  `104.98351497973798+14.46675628451043i e`, canonical five-atom QL motif
-  `34.99450499324617+4.822252094836833i e`, QL-reconstructed conventional cell
-  `104.98351497973846+14.466756284510415i e`, and target
-  `104.983515+14.466758i e`. Full-table max real/imaginary/RMS complex residuals are
-  `1.5103053726761573e-5/6.354053656565384e-5/2.1300349223246674e-5 e`; maximum relative
-  magnitude residual above `1 e` is `4.562285315313092e-6`; d-spacing and finite two-theta maxima
-  are `5.229857156230366e-7 A` and `1.1231884087692379e-4 deg`; absence, hkl, and multiplicity
-  disagreements are zero.
-- Production XrayDB F(003) is `104.98607302019832+14.464100145008656i e`; its full-table
-  maximum/RMS complex difference from VESTA is `0.12640464181321473/0.04375278114665144 e`.
-- Required Bi2Se3 mutations all fail at `ordered.unit_cell_amplitude`: omitted outer Se, wrong
-  R-centering translation, dropped centering phase, ignored noninteger-L image-shift phase, and a
-  duplicated periodic-boundary atom. Their maximum errors are respectively
-  `96.92029147173584`, `389.43777182910827`, `224.84200239814376`, `205.44156093904638`, and
-  `33.11027177492916 e`.
-- Parratt direct scalar stage error is `3.036534414019566e-16`; pack reflectivity max/RMS/p95 is
-  `2.567342172188347e-12/2.032218994038676e-13/3.3277200439662807e-14`. Zero-thickness collapse is
-  `2.0835655249829126e-16`.
-
-Legacy classification and first divergence:
-
-- Material handoff relations are recorded exactly as requested: direct R-3m versus expanded P1 is
-  an independent analytic/numerical proof; direct R-3m versus `single_QL reconstruction` is an
-  independent material reconstruction proof; `single_QL versus VESTA` is `VESTA_PARITY`; and
-  production XrayDB versus VESTA is an independent table comparison. Here `single_QL
-  reconstruction` means the 15-atom conventional-cell observable generated only from one canonical
-  five-atom QL, not the isolated motif amplitude.
-- `ordered.bi2se3_vesta`: `CORRECTED`. Reciprocal d-spacing agrees through
-  `1.3322676295501878e-15 A`; first evidenced divergence is `ordered.unit_cell_amplitude`. No
-  atomic-stage claim is made because the immutable pack has no atomic trace. Its historical F(003)
-  is `95.31913590782447+14.127768516741025i e`. Independent production/direct-XrayDB agreement and
-  proof-only legacy-convention QL/VESTA parity are the downstream authorities; production factors
-  are not changed to fit VESTA.
-- `reflectivity.parratt_three_layer`: `MATCH`; no divergent stage.
-- `reflectivity.manuscript_specular_composite`: `NO_ORACLE`; no divergent stage. The pack contains
-  no composite arrays, so analytic separation and convergence are the proof.
-
-Convergence and benchmark:
-
-- Nested grids `1025/2049/4097` give Parratt shared-point error `0/0` and composite errors
-  `1.2141353628603306e-7` then `5.442864600864461e-10`; blend bounds remain `[3,6]`, and final scale
-  relative delta is `9.818399835936908e-6`.
-- Equivalent work is 10,000 event-aligned amplitudes plus 4,096 three-layer Parratt points. Current
-  production/oracle medians are `0.03161740000359714/0.5999908999947365 s` (`18.9766x`). Peak
-  traced memory is `9,099,504/3,502,395 bytes`. Thread counts are pinned to one.
-
-Known limitations and integration requests:
-
-- Layered `L/qz` validation is limited to the declared c-axis-normal crystallographic slice.
-  Unknown isotropic displacement requires an explicit calculation value; nonzero anisotropic
-  displacement is rejected. VESTA's intensity column is `NO_ORACLE` because all 206 values are
-  NaN. Bi2Se3 noninteger-L reconstruction records and applies explicit per-atom integer image
-  phases before comparing with the wrapped production cell. The named composite is specular-only.
-- No shared contract, T05 interface, T05 commit, unresolved interface question, or minimum
-  integration request remains.
+T04 does not implement stacking disorder, cross-material parity, mosaic, detector geometry,
+detector agreement, fitting, CLI, GUI, or acceleration. Those remain T06/T07 or later work.

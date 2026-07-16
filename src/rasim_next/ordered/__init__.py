@@ -7,9 +7,7 @@ from rasim_next.ordered.amplitudes import (
     unit_cell_amplitude,
 )
 from rasim_next.ordered.finite_stack import (
-    Bi2Se3WholeCellCompatResult,
     FiniteStackResult,
-    bi2se3_whole_cell_compat_curve,
     coherent_finite_stack,
     uniform_finite_stack,
 )
@@ -21,13 +19,11 @@ from rasim_next.ordered.motifs import (
 )
 
 __all__ = [
-    "Bi2Se3WholeCellCompatResult",
     "FiniteStackResult",
     "MotifAtom",
     "OrderedEventResult",
     "PbI2Motif",
     "StructureAmplitudeResult",
-    "bi2se3_whole_cell_compat_curve",
     "coherent_finite_stack",
     "extract_pbi2_motifs",
     "ordered_event_result",

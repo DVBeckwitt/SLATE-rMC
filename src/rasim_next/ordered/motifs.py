@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from itertools import combinations, product
 
 import numpy as np
@@ -185,13 +185,19 @@ def _reflected_atoms(
     atoms: tuple[MotifAtom, MotifAtom, MotifAtom],
 ) -> tuple[MotifAtom, MotifAtom, MotifAtom]:
     return tuple(
-        replace(
-            atom,
+        MotifAtom(
+            site_index=atom.site_index,
+            source_label=atom.source_label,
+            species=atom.species,
+            element=atom.element,
+            charge=atom.charge,
+            occupancy=atom.occupancy,
             fractional_offset=(
                 atom.fractional_offset[0],
                 atom.fractional_offset[1],
                 -atom.fractional_offset[2],
             ),
+            u_iso_A2=atom.u_iso_A2,
         )
         for atom in atoms
     )

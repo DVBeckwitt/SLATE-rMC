@@ -49,6 +49,8 @@ class ReciprocalLattice:
         if determinant <= 0.0:
             raise ValueError("direct_basis_A must be nonsingular and right-handed")
         reciprocal = 2.0 * np.pi * np.linalg.inv(direct).T
+        direct.setflags(write=False)
+        reciprocal.setflags(write=False)
         return cls(direct_basis_A=direct, basis_Ainv=reciprocal, volume_A3=determinant)
 
     @classmethod
