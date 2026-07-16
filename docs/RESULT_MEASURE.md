@@ -37,7 +37,8 @@ w_pop
     declared incoherent crystalline-phase or parent-population mass
 
 I_model
-    ordered or stacking differential scattering intensity for the event
+    unweighted, polarization-neutral ordered or stacking differential intensity:
+    r_e^2 times raw electron^2 in angstrom^2 sr^-1
 
 W_opt
     scalar entrance/exit field intensity factor times attenuation
@@ -56,6 +57,7 @@ D_ep
 ```
 
 Every factor has one owner and is multiplied exactly once in integration.
+T04 or T05 owns the `r_e²` conversion through `core.scattering`; T07 never reapplies it and alone owns future incoherent population weights.
 
 ## Optical model for the first reference core
 

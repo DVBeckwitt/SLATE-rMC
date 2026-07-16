@@ -29,9 +29,10 @@ T02 hits + T04 or T05 intensities
 | `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | wavelength grid, complex index convention, `delta`, `beta`, and absorption are identical |
 | `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | frames, real phase wavevector, complex normal mode, source ID, and validity are explicit |
 | `RodCatalog` | T04 ordered | T03 Ewald, T08 selection | every `(h,k)` rod remains distinct; exact family metadata is preserved |
-| `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | event IDs, internal `Q`, `Qz`, `L`, wavelength, outgoing film phase wavevector, and reciprocal mass agree |
+| `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | event IDs retain exact status and map to repeatable orientation IDs; full sample-frame `Q`, sample-normal projection, `L`, wavelength, outgoing film phase wavevector, and reciprocal mass agree |
 | `LayerAmplitudeResult` | T04 ordered motifs | T05 stacking | event/rod alignment, phase convention, motif gauge, and normalization are explicit |
-| `EventIntensityResult` | T04 ordered or T05 stacking | T07 integration | same event IDs and declared differential-intensity measure; one model selected per event contribution |
+| `LayerNormalQBatch` | future T07 projection | T05 stacking | exact event/rod/phase/gauge alignment; projection comes from event `Q` and T04 metadata with no sample-`Qz` fallback |
+| `EventIntensityResult` | T04 ordered or T05 stacking | T07 integration | unweighted polarization-neutral `r_e² × electron²` in `angstrom²/sr`; typed unit-cell, finite-total, or finite-per-layer normalization |
 | `OutgoingWaveBatch` | T02 optics | T02 detector and T07 integration | exit amplitude, attenuation, phase direction, and validity are separate fields |
 | `DetectorHitBatch` | T02 geometry | T07 measurement/render | continuous `(column_px,row_px)`, solid angle, and event IDs only; no deposition |
 | `PixelContributionBatch` | T07 render | T07 image reduction | deposition weights conserve event mass under the declared clipping rule |
@@ -42,7 +43,7 @@ T02 hits + T04 or T05 intensities
 source and wavelength mass       T03
 footprint acceptance             T02
 mosaic/Ewald mass and Jacobian   T03
-ordered or stacking intensity    T04 or T05
+ordered or stacking intensity    T04 or T05, including r_e^2 exactly once
 phase/parent population mass     T07 from T04/T05 metadata
 Fresnel and attenuation          T02
 scattering polarization          T07 from source state and event direction
@@ -79,7 +80,7 @@ Before a branch is accepted for integration, prove:
 1. T04 RodCatalog -> T03 with synthetic IncidentStateBatch
 2. T03 IncidentSampleBatch -> T02 -> T03 events
 3. T03 RodQueryBatch -> T04 ordered intensity
-4. T04 LayerAmplitudeResult + T03 query -> T05 stacking intensity
+4. T04 LayerAmplitudeResult + T07 LayerNormalQBatch -> T05 stacking intensity
 5. T03 outgoing film wavevector -> T02 exit transport and hits
 6. T02 hits + T04 intensity -> T07 detector mass
 7. substitute T05 intensity under the same interface

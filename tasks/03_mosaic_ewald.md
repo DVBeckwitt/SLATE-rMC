@@ -14,6 +14,7 @@ Produce deterministic source/orientation sampling and correct reciprocal-space s
 src/rasim_next/sampling/
 src/rasim_next/reciprocal/ewald.py
 src/rasim_next/reciprocal/events.py
+src/rasim_next/reciprocal/proof.py
 tests/test_mosaic_ewald.py
 this task's execution-plan and handoff sections
 ```
@@ -72,6 +73,7 @@ Implement deterministic spatial, directional, wavelength, and declared polarizat
 ### MOS-02: orientation distribution
 
 Implement independent Gaussian-like core width, Lorentzian-like tail width, and mixture weight. Normalize probability under the declared spherical measure without evaluating a singular point density at the pole.
+Record `mosaic.wrapped_line_density` as `rad^-1`, frame-free `PROBABILITY_DENSITY`.
 
 ### MOS-03: dense independent oracle
 
@@ -87,7 +89,7 @@ Integrate orientation probability and any required geometric Jacobian into `reci
 
 ### MOS-06: event contract
 
-Emit event-aligned internal `Q`, `Qz`, `L`, outgoing film phase wavevector, weight, residual, IDs, and validity. Do not include source weight, structure intensity, optics, solid angle, or deposition.
+Emit event-aligned full sample-frame `Q`, exact sample-normal projection, `L`, outgoing film phase wavevector, weight, residual, event/incident/orientation/rod IDs, exact status, and matching validity. Do not include source weight, structure intensity, optics, solid angle, or deposition.
 
 ### MOS-07: convergence and benchmark
 

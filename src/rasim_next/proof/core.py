@@ -16,6 +16,7 @@ from numpy.typing import NDArray
 from rasim_next.core.contracts import (
     CONTRACT_API_VERSION,
     DetectorHitBatch,
+    EventIntensityNormalization,
     EventIntensityResult,
     IncidentSampleBatch,
     IncidentStateBatch,
@@ -26,7 +27,9 @@ from rasim_next.core.contracts import (
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.interfaces import scalar_interface_amplitude
+from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.core.transforms import RigidTransform
+from rasim_next.core.validity import ValidityCode
 from rasim_next.core.wave_modes import normal_wavevector, select_normal_wavevector
 from rasim_next.io.orientation import (
     OscRawIndex,
@@ -36,7 +39,7 @@ from rasim_next.io.orientation import (
     raw_to_detector_native,
 )
 from rasim_next.proof.diagnostics import write_diagnostic
-from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
+from rasim_next.proof.traces import compare_traces
 
 
 def _readonly(value: NDArray[np.generic]) -> NDArray[np.generic]:
@@ -90,35 +93,37 @@ def run_synthetic_plumbing() -> SyntheticPlumbingResult:
         ("identity",),
     )
     events = ScatteringEventBatch(
-        np.array([100], dtype=np.int64),
-        states.incident_state_id,
-        rods.rod_id,
-        samples.wavelength_A,
-        np.array([[1.0, 0.0, 0.2]]),
-        np.array([0.2]),
-        np.array([0.2]),
-        np.array([[1.0, 0.0, 0.2]]),
-        np.array([0.5]),
-        np.zeros(1),
-        np.array([True]),
+        event_id=np.array([100], dtype=np.int64),
+        incident_state_id=states.incident_state_id,
+        orientation_id=np.array([40], dtype=np.int64),
+        rod_id=rods.rod_id,
+        wavelength_A=samples.wavelength_A,
+        q_internal_sample_Ainv=np.array([[1.0, 0.0, 0.2]]),
+        q_sample_normal_Ainv=np.array([0.2]),
+        l_coordinate=np.array([0.2]),
+        kf_film_phase_sample_Ainv=np.array([[1.0, 0.0, 0.2]]),
+        reciprocal_weight=np.array([0.5]),
+        ewald_residual_Ainv=np.zeros(1),
+        status=(ValidityCode.VALID,),
+        valid=np.array([True]),
     )
     query = RodQueryBatch(
-        events.event_id,
-        events.rod_id,
-        rods.phase_id,
-        rods.h,
-        rods.k,
-        events.qz_Ainv,
-        events.l_coordinate,
-        events.wavelength_A,
+        event_id=events.event_id,
+        rod_id=events.rod_id,
+        phase_id=rods.phase_id,
+        h=rods.h,
+        k=rods.k,
+        q_sample_normal_Ainv=events.q_sample_normal_Ainv,
+        l_coordinate=events.l_coordinate,
+        wavelength_A=events.wavelength_A,
     )
     intensity = EventIntensityResult(
-        query.event_id,
-        np.array([2.0]),
-        "synthetic-no-physics",
-        "identity",
-        "population",
-        "declared differential intensity",
+        event_id=query.event_id,
+        intensity_per_sr=np.array([2.0]),
+        model_id="synthetic-no-physics",
+        model_component_id="identity",
+        population_group_id="population",
+        normalization=EventIntensityNormalization.UNIT_CELL,
     )
     outgoing = OutgoingWaveBatch(
         events.event_id,

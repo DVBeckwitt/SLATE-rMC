@@ -1,6 +1,6 @@
 # Shared contracts
 
-Bootstrap owns these contracts. Parallel physics branches treat them as read-only.
+Bootstrap owns contract API v5. Parallel physics branches treat these contracts as read-only.
 
 ## Coordinate and transform types
 
@@ -123,17 +123,22 @@ Every physical `(h,k)` rod remains separate.
 ScatteringEventBatch
     event_id[E] int64
     incident_state_id[E] int64
+    orientation_id[E] int64
     rod_id[E] int64
+    wavelength_A[E] float64
     q_internal_sample_Ainv[E,3] float64
-    qz_Ainv[E] float64
+    q_sample_normal_Ainv[E] float64
     l_coordinate[E] float64
     kf_film_phase_sample_Ainv[E,3] float64
     reciprocal_weight[E] float64
     ewald_residual_Ainv[E] float64
+    status[E] tuple[ValidityCode, ...]
     valid[E] bool
 ```
 
 `reciprocal_weight` is integrated mosaic/Ewald probability mass and does not include source weight, structure intensity, optics, solid angle, or detector deposition.
+`orientation_id` is a repeatable foreign key, not an array index. `event_id` maps uniquely to it.
+`q_sample_normal_Ainv` equals `q_internal_sample_Ainv[:,2]`, and `valid` is true exactly where `status` is `VALID`; failures retain their exact status.
 
 ## Event-aligned rod query
 
@@ -144,7 +149,7 @@ RodQueryBatch
     phase_id[E]
     h[E] int32
     k[E] int32
-    qz_Ainv[E] float64
+    q_sample_normal_Ainv[E] float64
     l_coordinate[E] float64
     wavelength_A[E] float64
 ```
@@ -156,8 +161,22 @@ Grid evaluation and interpolation may be internal optimizations. The integration
 ```text
 LayerAmplitudeResult
     event_id[E] int64
-    f_plus[E] complex128
-    f_minus[E] complex128 or absent
+    rod_id[E] int64
+    phase_id[E]
+    f_plus_e[E] complex128
+    f_minus_e[E] complex128 or absent
+    normalization = ONE_REGISTRY_FREE_LAYER
+    phase_sign = POSITIVE_Q_DOT_R
+    gauge_id = pbi2.pb_centered.v1
+    layer_normal_crystal[3] float64 unit vector
+    layer_repeat_A positive float64
+
+LayerNormalQBatch
+    event_id[E] int64
+    rod_id[E] int64
+    phase_id[E]
+    layer_normal_q_Ainv[E] float64
+    gauge_id
 
 EventIntensityResult
     event_id[E] int64
@@ -165,7 +184,7 @@ EventIntensityResult
     model_id
     model_component_id
     population_group_id or absent
-    normalization
+    normalization = UNIT_CELL | FINITE_TOTAL | FINITE_PER_LAYER
 
 PopulationWeightTable
     population_group_id
@@ -176,6 +195,9 @@ PopulationWeightTable
 ```
 
 Ordered and stacking models implement the same event-intensity result contract.
+`LayerNormalQBatch` is produced by future T07 from full event `Q`, `orientation_id`, and T04 layer metadata; T05 requires exact event/rod/phase/gauge alignment and uses `exp(+i Q·R)` with no sample-`Qz` fallback.
+`intensity_per_sr` is unweighted, polarization-neutral `r_e²` times raw electron² in `angstrom² sr^-1`; it excludes population, optics, polarization, solid angle, and deposition. T04 and T05 use the single core conversion helper exactly once; T07 does not apply `r_e²`.
+`PopulationWeightTable` remains a declared incoherent-intensity contract but is deferred to reviewed T07 preparation; T02--T05 do not implement or apply it.
 
 ## Outgoing transport and detector hits
 

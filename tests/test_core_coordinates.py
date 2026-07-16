@@ -3,15 +3,20 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from rasim_next.core import contracts
 from rasim_next.core.contracts import IncidentSampleBatch
 from rasim_next.core.frames import FrameId
 from rasim_next.core.interfaces import scalar_interface_amplitude
+from rasim_next.core.scattering import electron_squared_to_intensity_per_sr
+from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.core.transforms import RigidTransform
+from rasim_next.core.validity import ValidityCode
 from rasim_next.core.wave_modes import normal_wavevector, select_normal_wavevector
 from rasim_next.io.orientation import (
     DetectorIndex,
@@ -21,9 +26,10 @@ from rasim_next.io.orientation import (
     raw_to_detector_index,
     raw_to_detector_native,
 )
+from rasim_next.proof import tolerances as stage_tolerances
 from rasim_next.proof.core import run_synthetic_plumbing
 from rasim_next.proof.diagnostics import write_diagnostic
-from rasim_next.proof.traces import Measure, QuantityKind, TraceRecord, compare_traces
+from rasim_next.proof.traces import Tolerance, compare_traces
 
 
 def test_shared_coordinate_and_optical_primitives() -> None:
@@ -77,6 +83,64 @@ def test_minimal_contract_flow_preserves_event_identity_and_mass() -> None:
     assert len(result.factor_names) == 8
 
 
+def test_scattering_event_contract_is_explicit() -> None:
+    q_internal = np.array([[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]])
+    events = contracts.ScatteringEventBatch(
+        event_id=np.array([100, 200]),
+        incident_state_id=np.array([10, 20]),
+        orientation_id=np.array([40, 40]),
+        rod_id=np.array([30, 40]),
+        wavelength_A=np.ones(2),
+        q_internal_sample_Ainv=q_internal,
+        q_sample_normal_Ainv=q_internal[:, 2],
+        l_coordinate=np.zeros(2),
+        kf_film_phase_sample_Ainv=q_internal,
+        reciprocal_weight=np.array([0.5, 0.0]),
+        ewald_residual_Ainv=np.array([0.0, 1e-6]),
+        status=(ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED),
+        valid=np.array([True, False]),
+    )
+    assert events.status == (ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED)
+    with pytest.raises(ValueError, match="status"):
+        replace(events, status=(ValidityCode.VALID,))
+    with pytest.raises(ValueError, match="status"):
+        replace(events, valid=np.array([True, True]))
+    with pytest.raises(ValueError, match="sample-normal"):
+        replace(events, q_sample_normal_Ainv=np.array([0.1, 0.3]))
+
+
+def test_layer_phase_and_intensity_conversion_contracts_are_explicit() -> None:
+    amplitudes = contracts.LayerAmplitudeResult(
+        event_id=np.array([100]),
+        rod_id=np.array([30]),
+        phase_id=("phase-a",),
+        f_plus_e=np.array([1.0 + 2.0j]),
+        f_minus_e=None,
+        normalization=contracts.LayerAmplitudeNormalization.ONE_REGISTRY_FREE_LAYER,
+        phase_sign=contracts.LayerPhaseSign.POSITIVE_Q_DOT_R,
+        gauge_id="pbi2.pb_centered.v1",
+        layer_normal_crystal=np.array([0.0, 0.0, 1.0]),
+        layer_repeat_A=3.4,
+    )
+    for changes, message in (
+        ({"layer_normal_crystal": np.array([0.0, 0.0, 2.0])}, "unit vector"),
+        ({"layer_repeat_A": 0.0}, "positive"),
+        ({"gauge_id": "pbi2.pb_centered"}, "versioned"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            replace(amplitudes, **changes)
+
+    contracts.LayerNormalQBatch(
+        event_id=amplitudes.event_id,
+        rod_id=amplitudes.rod_id,
+        phase_id=amplitudes.phase_id,
+        layer_normal_q_Ainv=np.array([0.63]),
+        gauge_id=amplitudes.gauge_id,
+    )
+    converted = electron_squared_to_intensity_per_sr(np.array([1.0]))
+    np.testing.assert_allclose(converted, [7.940787682024163e-10], rtol=0.0, atol=0.0)
+
+
 def test_first_stage_comparator_and_single_external_diagnostic(tmp_path: Path) -> None:
     def trace(stage: str, value: np.ndarray) -> TraceRecord:
         return TraceRecord(
@@ -115,6 +179,14 @@ def test_first_stage_comparator_and_single_external_diagnostic(tmp_path: Path) -
     assert list(tmp_path.iterdir()) == [output]
     with np.load(output, allow_pickle=False) as data:
         assert json.loads(bytes(data["manifest_json"]).decode()) == {"case_id": "core"}
+
+
+def test_stage_tolerance_artifact_is_versioned_hashed_and_bindable() -> None:
+    stages = stage_tolerances.load_stage_tolerances()
+    bound = stages["measurement.pixel_solid_angle"].bind(1e-6)
+    assert isinstance(bound, Tolerance) and bound.scale == 1e-6
+    with pytest.raises(ValueError, match="nonnegative"):
+        stages["measurement.pixel_solid_angle"].bind(-1.0)
 
 
 def test_core_proof_cli_emits_one_passing_json_object() -> None:

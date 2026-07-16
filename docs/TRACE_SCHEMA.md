@@ -1,6 +1,7 @@
 # Stage-trace schema
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not invent branch-specific names for shared quantities.
+The frozen trace schema remains v4; contract API v5 does not renumber it.
 
 ## Stage IDs
 
@@ -35,6 +36,8 @@ reciprocal.quadrature_coordinate
 reciprocal.event_q_internal
 reciprocal.ewald_residual
 reciprocal.event_weight
+
+mosaic.wrapped_line_density
 
 ordered.atomic_amplitude
 ordered.unit_cell_amplitude
@@ -121,3 +124,4 @@ The common comparator:
 5. accepts downstream disagreement only for a declared `CORRECTED` case with an independent proof record
 
 The comparator must not hide missing stages by comparing only final outputs.
+`mosaic.wrapped_line_density` has unit `rad^-1`, no coordinate frame, and `PROBABILITY_DENSITY` measure.
