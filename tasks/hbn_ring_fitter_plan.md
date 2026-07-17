@@ -18,7 +18,8 @@ one T10 solve, result inspection, and accepted-result export.
 - Session persistence remains deferred.
 - Beam center is estimated by T10; the first UI has no separate center-pick mode.
 - T16 depends on completed, accepted T10, not merely a draft contract.
-- The copied `feat/hbn-ring-fitter` branch is evidence only and is never merged or copied.
+- The retired copied `feat/hbn-ring-fitter` tip is recorded evidence only and is never merged or
+  copied.
 - Exactly two hBN-specific production modules and two permanent hBN test functions are allowed.
 - The hBN-specific production cap is 800 physical Python lines across both modules.
 

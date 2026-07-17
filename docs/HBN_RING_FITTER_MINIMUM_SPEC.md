@@ -2,9 +2,10 @@
 
 Status: accepted planning baseline; runtime feature `BLOCKED` pending accepted T10.
 
-This specification was derived from committed `main` and committed
-`feat/hbn-ring-fitter` (`18c6da69067aa05d9814f4a5f0281c3cc27e89a2`). Uncommitted files in either
-worktree are intentionally outside its evidence base.
+This specification was derived from committed `main` and the reviewed historical
+`feat/hbn-ring-fitter` tip (`18c6da69067aa05d9814f4a5f0281c3cc27e89a2`). Uncommitted files in either
+worktree were intentionally outside its evidence base. The copied workbranch was retired after
+its intended workflow and provenance were captured here and in the T16 plan.
 
 ## Problem statement
 
@@ -40,9 +41,10 @@ provenance, and instrument revision. The hBN feature is a later optional fronten
 4. calls the accepted T10 detector-calibration API; and
 5. displays and exports the T10-owned result without interpreting legacy tilt fields.
 
-The committed `feat/hbn-ring-fitter` branch remains behavior/provenance evidence. It is not an
-implementation base and is not merged into this design. No production or permanent-test code may
-be copied from it or from `reference/legacy_source`.
+The reviewed historical tip is behavior/provenance evidence recorded by this specification and
+the workbranch archive. Its copied implementation was not merged and is not an implementation
+base. No production or permanent-test code may be copied from it or from
+`reference/legacy_source`.
 
 ## Planning handoff status
 
@@ -52,8 +54,8 @@ be copied from it or from `reference/legacy_source`.
   support, or proof. T16 must remain blocked rather than create private calibration physics.
 - **Bug/error:** no runtime defect was fixed or introduced; the failed prerequisite is a feature
   dependency, not a suppressed test or known numerical error.
-- **Migration/deprecation:** none. The copied workbranch remains read-only evidence and has no
-  supported migration path into the greenfield package.
+- **Migration/deprecation:** none. The retired copied workbranch has no supported migration path
+  into the greenfield package.
 - **Launch:** documentation is reviewable, but the feature is not implemented or shippable.
 
 ## Assumptions to validate

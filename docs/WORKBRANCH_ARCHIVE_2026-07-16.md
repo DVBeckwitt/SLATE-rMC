@@ -20,7 +20,7 @@ polytype proof used baseline `7bccbd328220345b1a62a588d3b418bf82c1f0a9`.
 | `codex/pbi2-polytype-sf-proof` | `a652fc315f107f038f4de284044e63c1452dd9d8` | Clean `READY`; no production change; one test assertion not merged | Retired and deleted after proof archival |
 | `fix/complete-degenerate-rod-families` | branch at `caf7acd`; dirty working copy | Unfinished, unverified prototype | Working copy discarded and branch deleted |
 | `codex/ray-geometry-lab` | branch at `caf7acd`; no commit | Useful disposable lab run, no durable branch result | Residual working copy and branch deleted |
-| `feat/hbn-ring-fitter` | `18c6da69067aa05d9814f4a5f0281c3cc27e89a2` | Clean and accepted by the project owner | **Protected; retained untouched** |
+| `feat/hbn-ring-fitter` | `18c6da69067aa05d9814f4a5f0281c3cc27e89a2` | Clean preservation branch; implementation rejected by the accepted T16 design | Retired after intended workflow and provenance were captured on `main` |
 | stitch worktree `379c` | clean detached `46f5b75` | Active scope/design task | **Protected; retained untouched** |
 
 `main` is retained. Its unrelated pre-existing working changes were not staged or modified by this
@@ -297,11 +297,12 @@ full detector-frame oracle for nonzero `gamma/Gamma`, exact signed `zS` translat
 request handling. Final repository gates and a clean commit were never completed before the task
 was stopped. The branch result was therefore disposable evidence, not a merge candidate.
 
-## Protected hBN ring fitter
+## Retired hBN ring fitter
 
-Branch `feat/hbn-ring-fitter` is intentionally retained at `18c6da6` and was not modified during
-cleanup. It is one commit above `caf7acd`, adding an isolated GPL nested project that preserves the
-legacy GUI and `hbn-fit` CLI around the `hbn_ellipse_bundle.npz` boundary.
+Branch `feat/hbn-ring-fitter` was reviewed at `18c6da6` and retired without modification after its
+intended workflow and provenance were captured in `docs/HBN_RING_FITTER_MINIMUM_SPEC.md` and the
+T16 plan. It was one commit above `caf7acd`, adding an isolated GPL nested project that preserved
+the legacy GUI and `hbn-fit` CLI around the `hbn_ellipse_bundle.npz` boundary.
 
 Changed files versus `caf7acd` were `.gitattributes`, `README.md`, `RUN_HBN_RING_FITTER.bat`,
 `docs/HBN_RING_FITTER_SIMPLIFICATION_SPEC.md`, `tools/check_docs.py`, and these nested-project files:
@@ -318,9 +319,11 @@ The final simplification reduced production Python from 6,984 to 6,648 lines (`-
 permanent test delta to `+116` lines, removed both temporary task files and `user_paths.py`, added no
 production file/dependency during simplification, and corrected source provenance. Reported final
 gates were 11 hBN tests, 29 repository tests, references, core, docs, and Ruff, all passing. The
-worktree was tracked/untracked clean. It remains standalone, requires a future importer into
-`rasim_next`, retains GPL-3.0-only/legacy-namespace constraints, and uses its pinned Python/Tkinter
-stack. No cleanup action, including ignored-cache removal, was performed there.
+worktree was tracked/untracked clean. The copied implementation was not merged: its duplicate
+physics, legacy artifact, GPL-3.0-only/legacy-namespace constraints, and pinned Python/Tkinter
+stack conflict with the accepted greenfield design. T16 instead records the intended five-ring
+observation workflow as a thin post-T10 frontend using canonical OSC coordinates and the shared
+calibration result boundary.
 
 ## Protected stitch worktree
 
