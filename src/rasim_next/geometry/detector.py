@@ -48,6 +48,16 @@ class _DetectorProjectionArrays:
     status: NDArray[np.str_]
 
 
+@dataclass(frozen=True, slots=True)
+class _DetectorPlaneIntersections:
+    point_detector_m: NDArray[np.float64]
+    direction_detector: NDArray[np.float64]
+    distance_m: NDArray[np.float64]
+    column_px: NDArray[np.float64]
+    row_px: NDArray[np.float64]
+    status: NDArray[np.str_]
+
+
 def _ray(
     detector_point_lab_m: ArrayLike,
     direction_lab: ArrayLike,
@@ -67,11 +77,36 @@ def _inside(column_px: float, row_px: float, shape_rc: tuple[int, int]) -> bool:
     return -0.5 <= column_px <= columns - 0.5 and -0.5 <= row_px <= rows - 0.5
 
 
-def _project_detector_rays(
+def _detector_coordinates_to_lab_points(
+    column_px: ArrayLike,
+    row_px: ArrayLike,
+    instrument: CompiledInstrument,
+) -> NDArray[np.float64]:
+    """Map broadcast-compatible continuous detector coordinates to lab points."""
+
+    columns, rows = np.broadcast_arrays(
+        np.asarray(column_px, dtype=np.float64),
+        np.asarray(row_px, dtype=np.float64),
+    )
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
+    point_detector_m = np.stack(
+        (
+            (columns - reference_column) * instrument.detector_column_pitch_m,
+            (rows - reference_row) * instrument.detector_row_pitch_m,
+            np.zeros_like(columns),
+        ),
+        axis=-1,
+    )
+    return instrument.lab_from_detector.apply_point(point_detector_m)
+
+
+def _intersect_detector_plane(
     origin_lab_m: ArrayLike,
     direction_lab: ArrayLike,
     instrument: CompiledInstrument,
-) -> _DetectorProjectionArrays:
+) -> _DetectorPlaneIntersections:
+    """Return unbounded detector-plane intersections in native continuous coordinates."""
+
     origins = finite_vectors3(origin_lab_m, "origin_lab_m")
     directions = finite_vectors3(direction_lab, "direction_lab")
     if origins.shape != directions.shape:
@@ -106,12 +141,45 @@ def _project_detector_rays(
     reference_column, reference_row = instrument.detector_reference_coordinate_px
     column_px = reference_column + point_detector_m[:, 0] / instrument.detector_column_pitch_m
     row_px = reference_row + point_detector_m[:, 1] / instrument.detector_row_pitch_m
+    return _DetectorPlaneIntersections(
+        point_detector_m=point_detector_m,
+        direction_detector=direction_detector,
+        distance_m=distance_m,
+        column_px=column_px,
+        row_px=row_px,
+        status=status,
+    )
+
+
+def _project_detector_rays(
+    origin_lab_m: ArrayLike,
+    direction_lab: ArrayLike,
+    instrument: CompiledInstrument,
+    *,
+    support_tolerance_px: float = 0.0,
+) -> _DetectorProjectionArrays:
+    support_tolerance = float(support_tolerance_px)
+    if not math.isfinite(support_tolerance) or support_tolerance < 0.0:
+        raise ValueError("support_tolerance_px must be finite and nonnegative")
+    intersections = _intersect_detector_plane(origin_lab_m, direction_lab, instrument)
+    point_detector_m = intersections.point_detector_m
+    direction_detector = intersections.direction_detector
+    distance_m = intersections.distance_m
+    column_px = np.array(intersections.column_px, copy=True)
+    row_px = np.array(intersections.row_px, copy=True)
+    status = np.array(intersections.status, copy=True)
+    origin_count = point_detector_m.shape[0]
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
     rows, columns = instrument.detector_shape_rc
     active = status == ValidityCode.VALID
-    column_lower_m = (-0.5 - reference_column) * instrument.detector_column_pitch_m
-    column_upper_m = (columns - 0.5 - reference_column) * instrument.detector_column_pitch_m
-    row_lower_m = (-0.5 - reference_row) * instrument.detector_row_pitch_m
-    row_upper_m = (rows - 0.5 - reference_row) * instrument.detector_row_pitch_m
+    column_lower_m = (
+        -0.5 - support_tolerance - reference_column
+    ) * instrument.detector_column_pitch_m
+    column_upper_m = (
+        columns - 0.5 + support_tolerance - reference_column
+    ) * instrument.detector_column_pitch_m
+    row_lower_m = (-0.5 - support_tolerance - reference_row) * instrument.detector_row_pitch_m
+    row_upper_m = (rows - 0.5 + support_tolerance - reference_row) * instrument.detector_row_pitch_m
     outside = active & (
         (point_detector_m[:, 0] < column_lower_m)
         | (point_detector_m[:, 0] > column_upper_m)
@@ -119,8 +187,11 @@ def _project_detector_rays(
         | (point_detector_m[:, 1] > row_upper_m)
     )
     status[outside] = ValidityCode.OUTSIDE_SUPPORT
+    active = status == ValidityCode.VALID
+    column_px[active] = np.clip(column_px[active], -0.5, columns - 0.5)
+    row_px[active] = np.clip(row_px[active], -0.5, rows - 0.5)
 
-    solid_angle_sr = np.zeros(origins.shape[0], dtype=np.float64)
+    solid_angle_sr = np.zeros(origin_count, dtype=np.float64)
     positive_distance = (status == ValidityCode.VALID) & (distance_m > 0.0)
     pixel_area_m2 = instrument.detector_column_pitch_m * instrument.detector_row_pitch_m
     solid_angle_sr[positive_distance] = (
@@ -134,11 +205,11 @@ def _project_detector_rays(
     status[numeric_failure] = ValidityCode.NUMERIC_FAILURE
     valid = status == ValidityCode.VALID
 
-    point_lab_output = np.zeros_like(origins)
-    column_output = np.zeros(origins.shape[0], dtype=np.float64)
-    row_output = np.zeros(origins.shape[0], dtype=np.float64)
-    distance_output = np.zeros(origins.shape[0], dtype=np.float64)
-    solid_angle_output = np.zeros(origins.shape[0], dtype=np.float64)
+    point_lab_output = np.zeros((origin_count, 3), dtype=np.float64)
+    column_output = np.zeros(origin_count, dtype=np.float64)
+    row_output = np.zeros(origin_count, dtype=np.float64)
+    distance_output = np.zeros(origin_count, dtype=np.float64)
+    solid_angle_output = np.zeros(origin_count, dtype=np.float64)
     point_lab_output[valid] = instrument.lab_from_detector.apply_point(point_detector_m[valid])
     column_output[valid] = column_px[valid]
     row_output[valid] = row_px[valid]
@@ -202,15 +273,7 @@ def detector_coordinate_to_ray(
             ValidityCode.OUTSIDE_SUPPORT,
         )
 
-    reference_column, reference_row = instrument.detector_reference_coordinate_px
-    point_detector_m = np.array(
-        [
-            (column - reference_column) * instrument.detector_column_pitch_m,
-            (row - reference_row) * instrument.detector_row_pitch_m,
-            0.0,
-        ]
-    )
-    detector_point_lab_m = instrument.lab_from_detector.apply_point(point_detector_m)
+    detector_point_lab_m = _detector_coordinates_to_lab_points(column, row, instrument)
     displacement = detector_point_lab_m - origin
     distance_m = float(np.linalg.norm(displacement))
     if not math.isfinite(distance_m) or distance_m == 0.0:

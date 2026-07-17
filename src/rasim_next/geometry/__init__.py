@@ -1,5 +1,12 @@
 """Rigid instrument geometry and ray transport."""
 
+from rasim_next.geometry.angles import (
+    AngleFrame,
+    DetectorAngles,
+    DetectorCoordinates,
+    angles_to_detector_coordinates,
+    detector_coordinates_to_angles,
+)
 from rasim_next.geometry.detector import (
     DetectorProjection,
     DetectorRay,
@@ -21,17 +28,22 @@ from rasim_next.geometry.transport import (
 )
 
 __all__ = [
+    "AngleFrame",
     "AxisRotation",
     "CompiledInstrument",
+    "DetectorAngles",
+    "DetectorCoordinates",
     "DetectorProjection",
     "DetectorRay",
     "EventTransportResult",
     "IncidentTransportResult",
     "InstrumentConfiguration",
     "SampleIntersection",
+    "angles_to_detector_coordinates",
     "build_incident_states",
     "compile_instrument",
     "detector_coordinate_to_ray",
+    "detector_coordinates_to_angles",
     "intersect_sample_ray",
     "project_detector_ray",
     "transport_scattering_events",

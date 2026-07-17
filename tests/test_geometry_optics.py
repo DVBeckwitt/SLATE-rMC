@@ -17,11 +17,15 @@ from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry import (
+    AngleFrame,
     AxisRotation,
+    DetectorAngles,
     InstrumentConfiguration,
+    angles_to_detector_coordinates,
     build_incident_states,
     compile_instrument,
     detector_coordinate_to_ray,
+    detector_coordinates_to_angles,
     intersect_sample_ray,
     project_detector_ray,
     transport_scattering_events,
@@ -68,6 +72,16 @@ def _material(wavelength_A: float = 1.54) -> MaterialOptics:
         beta=np.array([3.2e-7]),
         mu_Ainv=np.array([1.0e-5]),
         provenance="compact permanent fixture",
+    )
+
+
+def _angle_frame(origin_lab_m: np.ndarray | list[float] | None = None) -> AngleFrame:
+    return AngleFrame(
+        origin_lab_m=np.zeros(3) if origin_lab_m is None else origin_lab_m,
+        row_down_lab=np.array([0.0, 1.0, 0.0]),
+        column_right_lab=np.array([1.0, 0.0, 0.0]),
+        direct_beam_lab=np.array([0.0, 0.0, 1.0]),
+        revision="flat-reference-v1",
     )
 
 
@@ -203,6 +217,246 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
     )
     assert near.status is ValidityCode.VALID
     assert 0.0 < near.ray_distance_m <= 1e-12
+
+
+def test_detector_angles_cardinals_wrap_and_direct_beam() -> None:
+    instrument = compile_instrument(_configuration())
+    frame = _angle_frame()
+    columns = np.array([3.0, 3.0, 5.0, 3.0, 1.0])
+    rows = np.array([5.0, 4.0, 5.0, 6.0, 5.0])
+
+    angles = detector_coordinates_to_angles(
+        columns,
+        rows,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    radial_angle = np.arctan2(2.0e-4, 1.0)
+    np.testing.assert_allclose(
+        angles.two_theta_rad,
+        [0.0, radial_angle, radial_angle, radial_angle, radial_angle],
+        rtol=0.0,
+        atol=2e-15,
+    )
+    np.testing.assert_allclose(
+        angles.chi_raw_rad,
+        [0.0, -np.pi / 2.0, 0.0, np.pi / 2.0, -np.pi],
+        rtol=0.0,
+        atol=2e-15,
+    )
+    np.testing.assert_allclose(
+        angles.phi_rad,
+        [0.0, 0.0, -np.pi / 2.0, -np.pi, np.pi / 2.0],
+        rtol=0.0,
+        atol=2e-15,
+    )
+    np.testing.assert_array_equal(angles.valid, np.ones(5, dtype=bool))
+    np.testing.assert_array_equal(angles.azimuth_valid, [False, True, True, True, True])
+    np.testing.assert_array_equal(
+        angles.status,
+        np.full(5, ValidityCode.VALID, dtype="U16"),
+    )
+
+    recovered = angles_to_detector_coordinates(
+        angles.two_theta_rad,
+        angles.phi_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_allclose(recovered.column_px, columns, rtol=0.0, atol=2e-12)
+    np.testing.assert_allclose(recovered.row_px, rows, rtol=0.0, atol=2e-12)
+    np.testing.assert_array_equal(recovered.valid, np.ones(5, dtype=bool))
+
+    across_seam = detector_coordinates_to_angles(
+        [3.0 - 1e-6, 3.0 + 1e-6],
+        [6.0, 6.0],
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    assert 0.0 < across_seam.phi_rad[0] < np.pi
+    assert -np.pi < across_seam.phi_rad[1] < 0.0
+    assert not angles.two_theta_rad.flags.writeable
+    assert not recovered.column_px.flags.writeable
+
+
+def test_detector_angles_tilted_forward_inverse_oracles() -> None:
+    tilt_rad = 0.37
+    cosine = np.cos(tilt_rad)
+    sine = np.sin(tilt_rad)
+    detector_rotation = np.array([[cosine, 0.0, sine], [0.0, 1.0, 0.0], [-sine, 0.0, cosine]])
+    detector_translation_m = np.array([0.12, -0.04, 0.8])
+    configuration = replace(
+        _configuration(),
+        lab_from_detector=RigidTransform(
+            detector_rotation,
+            detector_translation_m,
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+    )
+    instrument = compile_instrument(configuration)
+    frame = _angle_frame()
+    columns = np.array([[-0.5, 1.25, 6.5], [3.0, -0.5, 6.5]])
+    rows = np.array([[-0.5, 8.75, -0.5], [5.0, 10.5, 10.5]])
+
+    local_points_m = np.stack(
+        (
+            (columns - 3.0) * 1.0e-4,
+            (rows - 5.0) * 2.0e-4,
+            np.zeros_like(columns),
+        ),
+        axis=-1,
+    )
+    lab_points_m = local_points_m @ detector_rotation.T + detector_translation_m
+    directions_lab = lab_points_m / np.linalg.norm(lab_points_m, axis=-1, keepdims=True)
+    oracle_two_theta = np.arctan2(
+        np.hypot(directions_lab[..., 0], directions_lab[..., 1]),
+        directions_lab[..., 2],
+    )
+    oracle_chi = np.arctan2(directions_lab[..., 1], directions_lab[..., 0])
+    oracle_phi = (-np.pi / 2.0 - oracle_chi + np.pi) % (2.0 * np.pi) - np.pi
+
+    angles = detector_coordinates_to_angles(
+        columns,
+        rows,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_allclose(angles.two_theta_rad, oracle_two_theta, rtol=0.0, atol=2e-14)
+    np.testing.assert_allclose(angles.chi_raw_rad, oracle_chi, rtol=0.0, atol=2e-14)
+    np.testing.assert_allclose(angles.phi_rad, oracle_phi, rtol=0.0, atol=2e-14)
+
+    recovered = angles_to_detector_coordinates(
+        angles.two_theta_rad,
+        angles.phi_rad + 4.0 * np.pi,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_allclose(recovered.column_px, columns, rtol=0.0, atol=8e-12)
+    np.testing.assert_allclose(recovered.row_px, rows, rtol=0.0, atol=8e-12)
+    np.testing.assert_array_equal(recovered.valid, np.ones(columns.shape, dtype=bool))
+
+    reconstructed = detector_coordinates_to_angles(
+        recovered.column_px,
+        recovered.row_px,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_allclose(
+        reconstructed.two_theta_rad,
+        angles.two_theta_rad,
+        rtol=0.0,
+        atol=2e-14,
+    )
+    circular_phi_error = np.arctan2(
+        np.sin(reconstructed.phi_rad - angles.phi_rad),
+        np.cos(reconstructed.phi_rad - angles.phi_rad),
+    )
+    np.testing.assert_allclose(circular_phi_error, 0.0, rtol=0.0, atol=2e-14)
+
+
+def test_detector_angle_support_frame_and_inverse_statuses() -> None:
+    instrument = compile_instrument(_configuration())
+    frame = _angle_frame()
+    columns = np.array(
+        [
+            -0.5,
+            6.5,
+            np.nextafter(-0.5, -np.inf),
+            np.nextafter(6.5, np.inf),
+            3.0,
+            3.0,
+        ]
+    )
+    rows = np.array(
+        [
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            np.nextafter(-0.5, -np.inf),
+            np.nextafter(10.5, np.inf),
+        ]
+    )
+    forward = detector_coordinates_to_angles(
+        columns,
+        rows,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_array_equal(
+        forward.status,
+        [
+            ValidityCode.VALID,
+            ValidityCode.VALID,
+            ValidityCode.OUTSIDE_SUPPORT,
+            ValidityCode.OUTSIDE_SUPPORT,
+            ValidityCode.OUTSIDE_SUPPORT,
+            ValidityCode.OUTSIDE_SUPPORT,
+        ],
+    )
+
+    edge_theta = np.arctan2(3.5e-4, 1.0)
+    inverse = angles_to_detector_coordinates(
+        [np.pi / 2.0, np.pi, edge_theta, np.arctan2(3.500001e-4, 1.0)],
+        [-np.pi / 2.0, 0.0, -np.pi / 2.0, -np.pi / 2.0],
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_array_equal(
+        inverse.status,
+        [
+            ValidityCode.PARALLEL,
+            ValidityCode.BACKWARD,
+            ValidityCode.VALID,
+            ValidityCode.OUTSIDE_SUPPORT,
+        ],
+    )
+    assert inverse.column_px[2] == pytest.approx(6.5, abs=2e-12)
+
+    coplanar_frame = _angle_frame(np.array([0.0, 0.0, 1.0]))
+    coplanar_forward = detector_coordinates_to_angles(
+        [3.0],
+        [5.0],
+        instrument=instrument,
+        angle_frame=coplanar_frame,
+    )
+    coplanar_inverse = angles_to_detector_coordinates(
+        [0.1],
+        [0.0],
+        instrument=instrument,
+        angle_frame=coplanar_frame,
+    )
+    assert coplanar_forward.status[0] == ValidityCode.NO_SOLUTION
+    assert coplanar_inverse.status[0] == ValidityCode.NO_SOLUTION
+
+    with pytest.raises(ValueError, match="right-handed detector-image basis"):
+        AngleFrame(
+            origin_lab_m=np.zeros(3),
+            row_down_lab=[0.0, 1.0, 0.0],
+            column_right_lab=[-1.0, 0.0, 0.0],
+            direct_beam_lab=[0.0, 0.0, 1.0],
+            revision="wrong-handed",
+        )
+    with pytest.raises(ValueError, match="two_theta_rad"):
+        angles_to_detector_coordinates(
+            [-1e-12],
+            [0.0],
+            instrument=instrument,
+            angle_frame=frame,
+        )
+
+    retained_status = DetectorAngles(
+        [0.0],
+        [0.0],
+        [0.0],
+        [False],
+        [False],
+        [ValidityCode.RESIDUAL_EXCEEDED],
+    )
+    assert retained_status.status[0] == ValidityCode.RESIDUAL_EXCEEDED
+    with pytest.raises(ValueError, match="unknown validity"):
+        replace(retained_status, status=np.array(["BOGUS"]))
 
 
 def test_refraction_and_attenuation_equations() -> None:
