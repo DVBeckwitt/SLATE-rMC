@@ -215,6 +215,21 @@ def _positive_count(value: int, name: str) -> int:
     return int(value)
 
 
+def _nested_azimuth_turns(count: int) -> FloatArray:
+    """Return a prefix-nested sequence that is uniform at every dyadic count."""
+
+    turns = np.empty(count, dtype=np.float64)
+    turns[0] = 0.0
+    filled = 1
+    denominator = 2.0
+    while filled < count:
+        added = min(filled, count - filled)
+        turns[filled : filled + added] = (2.0 * np.arange(added) + 1.0) / denominator
+        filled += added
+        denominator *= 2.0
+    return turns
+
+
 def _scale_resolved_panels(width_rad: float, requested_count: int) -> tuple[FloatArray, FloatArray]:
     """Return direct-alpha panels, resolving every dyadic interval from width to pi."""
 
@@ -264,16 +279,28 @@ def manuscript_axisymmetric_v1_orientation_quadrature(
     reciprocal_basis_Ainv: ArrayLike,
     alpha_cell_count: int,
     azimuth_cell_count: int,
+    azimuth_phase_rad: float = np.pi,
 ) -> MosaicOrientationBatch:
-    """Integrate folded tilt mass and uniform powder azimuth without pole density.
+    """Integrate folded tilt mass and nested uniform powder azimuth.
 
     ``alpha_cell_count`` is the requested minimum panel count per active continuous
     component. Narrow profiles retain at least one direct-alpha panel per dyadic
     width interval, so the actual work count can be larger.
+
+    Azimuth prefixes are nested, and powers of two form exact shifted uniform grids.
+    ``azimuth_phase_rad`` rotates the whole rule for an independent phase check.
     """
 
     alpha_count = _positive_count(alpha_cell_count, "alpha_cell_count")
     azimuth_count = _positive_count(azimuth_cell_count, "azimuth_cell_count")
+    _reject_complex(azimuth_phase_rad, "azimuth_phase_rad")
+    supplied_phase = np.asarray(azimuth_phase_rad)
+    if supplied_phase.shape != () or supplied_phase.dtype.kind not in "iuf":
+        raise ValueError("azimuth_phase_rad must be a finite scalar")
+    phase_rad = float(supplied_phase)
+    if not np.isfinite(phase_rad):
+        raise ValueError("azimuth_phase_rad must be a finite scalar")
+    phase_rad = float(np.remainder(phase_rad, 2.0 * np.pi))
     _reject_complex(reciprocal_basis_Ainv, "reciprocal_basis_Ainv")
     basis = np.array(reciprocal_basis_Ainv, dtype=np.float64, copy=True)
     if (
@@ -321,7 +348,10 @@ def manuscript_axisymmetric_v1_orientation_quadrature(
     if not np.isclose(tilt_mass.sum(), 1.0, rtol=0.0, atol=1.0e-10):
         raise ValueError("integrated folded tilt mass does not sum to one")
 
-    azimuth_nodes = 2.0 * np.pi * (np.arange(azimuth_count) + 0.5) / azimuth_count
+    azimuth_nodes = np.remainder(
+        phase_rad + 2.0 * np.pi * _nested_azimuth_turns(azimuth_count),
+        2.0 * np.pi,
+    )
     alpha = np.repeat(alpha_nodes, azimuth_count)
     azimuth = np.tile(azimuth_nodes, alpha_nodes.size)
     probability_mass = np.repeat(tilt_mass / azimuth_count, azimuth_count)
