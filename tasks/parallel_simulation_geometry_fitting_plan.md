@@ -637,10 +637,20 @@ Acceptance criteria:
 
 ## Fitting gauge ownership required before Phase 2
 
-Phase 2 may begin only after T09--T11 encode and validate the following active-pack contract:
+Phase 2 acceptance requires the following active-pack contract. T09 and accepted T10 are entry
+prerequisites; T11 owns the sample/goniometer active-pack seam implemented within Phase 2.
 
+- T09 compiles material coverage for every exact unique wavelength in the complete parent
+  `IncidentSampleBatch`, including rows invalid under baseline geometry, and rejects missing
+  wavelengths before objective evaluation. It consumes owner-provided source, sample, and material
+  revisions plus the incident model ID and never rehashes that scientific state.
 - The LAB beam frame is fixed. One minimal beam-frame rotation may describe the beam relative to
   LAB, but no active pack may expose a compensating common beam/sample pose.
+- T10 fixes one named physical source reference plane in LAB—fixed point, accepted nominal LAB
+  beam-axis normal, and ordered orthonormal in-plane basis—before exposing any transverse
+  position-direction correlation. The active pack has no longitudinal source-origin coordinate;
+  trial beam rotation cannot move the plane, and changing reference plane is an explicit
+  moment/correlation reparameterization rather than a fit degree of freedom.
 - Beam roll is inactive whenever both the spatial-width pair and divergence-width pair are
   isotropic; an unobservable roll is never retained as a fitted coordinate.
 - Each fitted rotation axis has exactly two tangent coordinates. Its pivot has exactly two
@@ -648,16 +658,20 @@ Phase 2 may begin only after T09--T11 encode and validate the following active-p
 - Exactly one parameter block owns the zero-pose/sample-mount transform; the other representation
   is fixed rather than jointly fitted.
 - A finite sample-support extent is inactive until observations reach its edge and uses a positive
-  transform when activated. Unbounded support and `sample_from_crystal` translation at the incident
-  stage expose no fitted coordinate.
+  transform when activated. Unbounded support exposes exactly one signed plane-normal offset and
+  no in-plane translation; `sample_from_crystal` translation remains fixed. Finite-support tangent
+  translations activate only when edge-reaching observations identify them.
 - Detector calibration is a downstream revision: it invalidates projection, selection,
   deposition, and measurement products, never the detector-independent incident `ki` realization.
 
 Future fitting proof must show a full-column-rank Jacobian for every accepted active pack; reject
 deliberately redundant packs deterministically; deactivate isotropic beam roll; reconstruct the
-two perpendicular pivot components; activate finite support only from edge-reaching observations;
-and prove the stated incident-versus-detector invalidation boundary. These are future test
-obligations in the owning fitting tasks, not tests or fitting code in this remediation.
+two perpendicular pivot components; cover a baseline-invalid wavelength that becomes valid and a
+missing-wavelength preflight failure; prove source-reference-plane shift equivalence; recover the
+unbounded signed normal offset while rejecting both tangent translations; contrast finite support
+under edge-reaching observations; and prove the stated incident-versus-detector invalidation
+boundary. These are future `tests/test_fitting.py` obligations in the owning fitting tasks, not
+tests or fitting code in this specification slice.
 
 ## Goal
 

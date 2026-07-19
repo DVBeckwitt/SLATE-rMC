@@ -39,9 +39,15 @@ manuscript
 - parameterize every fitted rotation axis by two tangent coordinates and every pivot by only the
   two components perpendicular to that axis; never expose an axis-parallel pivot component
 - choose exactly one owner for the zero-pose/sample-mount transform and keep the other fixed
-- keep finite sample-support extents inactive unless observations reach the corresponding edge;
-  when active, use a positive transform. Never fit an unbounded support dimension or a
-  `sample_from_crystal` translation at the incident stage.
+- for `unbounded_plane.v1`, expose exactly one entrance-geometry translation coordinate: the signed
+  LAB plane offset
+  `dot(lab_from_sample.rotation[:, 2], lab_from_sample.translation_m)`; reject both tangent
+  translations before objective evaluation, expose no support dimensions, keep
+  `sample_from_crystal` translation fixed, and let this offset solely own the incident-intersection
+  coordinate
+- for finite support retain the causal normal offset, but activate a tangent translation or
+  positive support extent only when corresponding edge-reaching observations identify it;
+  otherwise reject that direction as inactive rather than regularizing a gauge
 - evaluate only the forward stages invalidated by geometry
 - report invalid topology without reassignment
 - support an outer selection audit after convergence
@@ -56,7 +62,11 @@ manuscript
 - Jacobian rank, conditioning, bounds, and correlations
 - full-rank recovery for the two-tangent-axis/two-perpendicular-pivot parameterization, including
   perpendicular-pivot reconstruction and deterministic rejection of axis-parallel, duplicate
-  zero-pose/mount, and inactive/unbounded-support directions
+  zero-pose/mount, inactive finite-support, and unbounded tangent directions
+- full-rank recovery of the unbounded plane's signed normal offset, deterministic rejection of its
+  two tangent translations, a changed physical intersection under normal-offset perturbation, and
+  a finite-support contrast where edge-reaching data activate the identifiable tangent
+  translation/extent coordinates while an otherwise equivalent non-edge case leaves them inactive
 - support-edge activation and downstream-only detector-revision invalidation
 - stable selection after the outer audit
 - original-RASIM selected-case comparison under identical associations

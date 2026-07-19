@@ -37,6 +37,13 @@ manuscript
 
 - direct-beam observations at several detector distances
 - beam size, angular divergence, wavelength/bandwidth, and declared correlation parameters
+- one named, immutable physical source reference plane in LAB, defined by a fixed point, the
+  accepted nominal LAB beam-axis normal, and an ordered orthonormal in-plane basis, before any
+  position-direction correlation is exposed; source position has only two in-plane coordinates
+  and no fitted longitudinal origin coordinate
+- express each accepted position-direction correlation at that plane and prove the deterministic
+  transport of its moments to another plane; do not add an unrestricted covariance unless data or
+  a prior make every added coordinate identifiable
 - one minimal beam-frame rotation relative to the fixed LAB beam frame; beam roll is fixed when both
   the spatial-width pair and divergence-width pair are isotropic
 - normalized source distribution and compiled deterministic source samples
@@ -55,6 +62,14 @@ manuscript
 - Do not use sample structure intensities to compensate detector error.
 - The LAB beam frame is fixed and source-owned. No fit pack may expose a compensating common
   beam/sample pose transform.
+- The source reference plane location is fixed for one fit context. A plane shift is a declared
+  reparameterization with transformed transverse moments/correlations, not a longitudinal source
+  degree of freedom.
+- The minimal beam-frame rotation changes the source direction/basis relative to fixed LAB; it does
+  not rotate or translate the physical LAB source reference plane or its ordered in-plane basis.
+  Keep the fixed reference-plane basis distinct from the trial beam-tangent basis.
+- Include the reference-plane declaration and accepted correlation parameters in canonical source
+  provenance and its owner-computed revision.
 - Keep source size and divergence identifiable through multiple distances or priors.
 - Report parameter rank, conditioning, active bounds, and correlations.
 - A detector calibration change creates a downstream detector revision. It invalidates detector
@@ -68,6 +83,9 @@ manuscript
 - held-out distance/ring prediction
 - direct-beam and calibrant coordinate invariants
 - isotropic-width beam-roll deactivation and rejection of a redundant common beam/sample pose pack
+- source-reference-plane shift equivalence, full-rank recovery of the accepted transverse
+  position/direction correlations, and deterministic rejection of a longitudinal origin coordinate
+- deterministic rejection of underdetermined or non-positive-semidefinite correlation declarations
 - multi-start consistency
 - declared failure when the problem is underdetermined
 
