@@ -90,6 +90,7 @@ def material_optics(crystal: CrystalStructure, wavelength_A: ArrayLike) -> Mater
     wavelength = np.asarray(wavelength_A, dtype=np.float64)
     if wavelength.ndim != 1 or not np.all(np.isfinite(wavelength)) or np.any(wavelength <= 0.0):
         raise ValueError("wavelength_A must be a finite positive one-dimensional array")
+    wavelength = np.unique(wavelength)
     forward_factor_e = np.zeros(wavelength.size, dtype=np.complex128)
     mappings: list[str] = []
     groups = sorted({(site.species, site.element, site.charge) for site in crystal.sites})

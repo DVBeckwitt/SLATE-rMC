@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
+from rasim_next.core.contracts import IncidentSampleBatch
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry.instrument import (
@@ -27,11 +28,7 @@ from rasim_next.sampling.mosaic import (
 from rasim_next.sampling.source import sample_gaussian_source_rays
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = (
-    Path(tempfile.gettempdir())
-    / "rasim-next"
-    / "slice6b_bi2se3_detector_101x32.png"
-)
+OUTPUT = Path(tempfile.gettempdir()) / "rasim-next" / "slice6b_bi2se3_detector_101x32.png"
 FWHM_TO_SIGMA = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
 
 
@@ -48,15 +45,25 @@ def configure_matplotlib() -> None:
     matplotlib.use("Agg")
 
 
-def build_default_instrument() -> CompiledInstrument:
-    """Compile the fixed detector-native instrument used by the canonical image."""
+def build_default_case_inputs() -> tuple[IncidentSampleBatch, CompiledInstrument]:
+    """Build the single source/instrument authority for the canonical image."""
 
     identity = np.eye(3)
     zero = np.zeros(3)
-    detector_rotation = np.array(
-        [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+    detector_rotation = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])
+    samples = sample_gaussian_source_rays(
+        mean_origin_lab_m=np.array([0.0, -0.020, 0.0]),
+        mean_direction_lab=np.array([0.0, 1.0, 0.0]),
+        transverse_axes_lab=np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+        spatial_sigma_m=np.full(2, 0.05e-3 * FWHM_TO_SIGMA),
+        divergence_sigma_rad=np.full(2, 0.0008726646259971648 * FWHM_TO_SIGMA),
+        mean_wavelength_A=1.540592925,
+        wavelength_sigma_A=1.540592925 * 0.007,
+        sample_count=20,
+        seed=1729,
+        polarization_state_id="UNITY_APPROXIMATION",
     )
-    return compile_instrument(
+    instrument = compile_instrument(
         InstrumentConfiguration(
             axis_rotations=(
                 AxisRotation(
@@ -93,11 +100,13 @@ def build_default_instrument() -> CompiledInstrument:
             detector_row_pitch_m=1.0e-4,
             detector_column_pitch_m=1.0e-4,
             detector_reference_coordinate_px=(1453.12, 1596.422),
-            sample_width_m=2.0e-4,
-            sample_length_m=5.0e-4,
+            sample_support_model_id="unbounded_plane.v1",
+            sample_width_m=None,
+            sample_length_m=None,
             film_thickness_A=500.0,
         )
     )
+    return samples, instrument
 
 
 def write_detector_image(image_A2: NDArray[np.float64]) -> None:
@@ -132,18 +141,7 @@ def write_detector_image(image_A2: NDArray[np.float64]) -> None:
 
 def main() -> None:
     configure_matplotlib()
-    samples = sample_gaussian_source_rays(
-        mean_origin_lab_m=np.array([0.0, -0.020, 0.0]),
-        mean_direction_lab=np.array([0.0, 1.0, 0.0]),
-        transverse_axes_lab=np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
-        spatial_sigma_m=np.full(2, 0.05e-3 * FWHM_TO_SIGMA),
-        divergence_sigma_rad=np.full(2, 0.0008726646259971648 * FWHM_TO_SIGMA),
-        mean_wavelength_A=1.540592925,
-        wavelength_sigma_A=1.540592925 * 0.007,
-        sample_count=20,
-        seed=1729,
-        polarization_state_id="UNITY_APPROXIMATION",
-    )
+    samples, instrument = build_default_case_inputs()
     crystal = read_crystal(
         ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
         phase_id="bi2se3",
@@ -164,7 +162,7 @@ def main() -> None:
         crystal=crystal,
         incident_samples=samples,
         material=material,
-        instrument=build_default_instrument(),
+        instrument=instrument,
         orientations=orientations,
         phase_population_weight=1.0,
         polarization_policy_id="UNITY_APPROXIMATION",

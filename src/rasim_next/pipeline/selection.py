@@ -340,19 +340,13 @@ def select_candidates(
         cumulative = np.cumsum(state_mass, dtype=np.float64)
         total_mass = float(cumulative[-1])
         mass_per_draw = total_mass / draws_per_ray
-        if (
-            not np.isfinite(total_mass)
-            or total_mass <= 0.0
-            or mass_per_draw <= 0.0
-        ):
+        if not np.isfinite(total_mass) or total_mass <= 0.0 or mass_per_draw <= 0.0:
             raise ValueError(f"incident_state_id {state_id} has no finite positive cumulative mass")
         targets = np.minimum(
             generator.random(draws_per_ray) * total_mass,
             np.nextafter(total_mass, -np.inf),
         )
-        selected_pool_row = positive_pool_row[
-            np.searchsorted(cumulative, targets, side="right")
-        ]
+        selected_pool_row = positive_pool_row[np.searchsorted(cumulative, targets, side="right")]
         selected_event_row = pool.event_row[selected_pool_row]
         stop = cursor + draws_per_ray
         candidate_row[cursor:stop] = selected_event_row

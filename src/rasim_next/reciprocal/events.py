@@ -9,7 +9,6 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.contracts import (
-    IncidentSampleBatch,
     IncidentStateBatch,
     RodCatalog,
     ScatteringEventBatch,
@@ -137,7 +136,6 @@ class EventBuildResult:
 def _iter_attempt_contexts(
     *,
     incident_states: IncidentStateBatch,
-    sample_wavelength: dict[int, float],
     rods: RodCatalog,
     basis_b1_crystal: FloatArray,
     basis_b2_crystal: FloatArray,
@@ -149,9 +147,8 @@ def _iter_attempt_contexts(
         if not valid:
             continue
         state_id = int(incident_states.incident_state_id[state_index])
-        sample_id = int(incident_states.incident_sample_id[state_index])
         incident = incident_states.k_film_phase_sample_Ainv[state_index]
-        wavelength = sample_wavelength[sample_id]
+        wavelength = float(incident_states.wavelength_A[state_index])
         for rod_index, rod_id_value in enumerate(rods.rod_id):
             rod_id = int(rod_id_value)
             rod_q0_crystal = (
@@ -228,7 +225,6 @@ def _classify_attempts(
 
 def build_scattering_events(
     *,
-    incident_samples: IncidentSampleBatch,
     incident_states: IncidentStateBatch,
     rods: RodCatalog,
     orientations: MosaicOrientationBatch,
@@ -236,6 +232,8 @@ def build_scattering_events(
 ) -> EventBuildResult:
     """Build elastic events; reciprocal weight is orientation mass times coarea Jacobian."""
 
+    if not isinstance(incident_states, IncidentStateBatch):
+        raise TypeError("incident_states must be an IncidentStateBatch")
     if (
         sample_from_crystal.source_frame is not FrameId.CRYSTAL
         or sample_from_crystal.target_frame is not FrameId.SAMPLE
@@ -243,18 +241,6 @@ def build_scattering_events(
         raise ValueError("sample_from_crystal must map CRYSTAL to SAMPLE")
     if not np.array_equal(orientations.reciprocal_basis_Ainv, rods.reciprocal_basis_Ainv):
         raise ValueError("orientations and rods must use the same reciprocal basis")
-
-    sample_wavelength = {
-        int(sample_id): float(wavelength)
-        for sample_id, wavelength in zip(
-            incident_samples.incident_sample_id,
-            incident_samples.wavelength_A,
-            strict=True,
-        )
-    }
-    missing = sorted(set(map(int, incident_states.incident_sample_id)) - sample_wavelength.keys())
-    if missing:
-        raise ValueError(f"incident states reference unknown incident_sample_id values: {missing}")
 
     basis = rods.reciprocal_basis_Ainv
     crystal_to_sample_rotation = sample_from_crystal.rotation
@@ -275,7 +261,6 @@ def build_scattering_events(
     ) = _classify_attempts(
         _iter_attempt_contexts(
             incident_states=incident_states,
-            sample_wavelength=sample_wavelength,
             rods=rods,
             basis_b1_crystal=basis[:, 0],
             basis_b2_crystal=basis[:, 1],
@@ -309,7 +294,6 @@ def build_scattering_events(
     next_event = 0
     contexts = _iter_attempt_contexts(
         incident_states=incident_states,
-        sample_wavelength=sample_wavelength,
         rods=rods,
         basis_b1_crystal=basis[:, 0],
         basis_b2_crystal=basis[:, 1],

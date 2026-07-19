@@ -3,6 +3,11 @@
 Status: proposed implementation strategy. This document does not change the result measure, rod
 contract, accepted mosaic measure, or post-integration fitting branch convention.
 
+The detector-unconditioned component measure is governed by
+[the active replacement plan](../tasks/continuous_ewald_coating_replacement_plan.md) and
+[RESULT_MEASURE.md](RESULT_MEASURE.md). Detector projection is a post-sampling rejection boundary;
+it never conditions component masses or CDFs.
+
 ## Outcome
 
 For each incident ray, construct one continuous Ewald-surface intensity measure containing every
@@ -368,7 +373,7 @@ For incident state \(i\), define component \(c=(m,b)\), with \(b=1,2\) for \(m\n
 after physical direct-beam support is declared, \(b=0\) for \(m=0\). Let \(z\) be the accepted
 nonredundant orientation coordinate and let \(dP_M(z)\) contain the mosaic measure exactly once.
 
-The general detector-conditioned component measure is
+The general detector-unconditioned component measure is
 
 \[
 d\mu^{\mathrm{cand}}_{i,m,b}(z)=
@@ -379,8 +384,9 @@ W^{\mathrm{once}}_{i,r,b}(z)
 dP_M(z).
 \]
 
-The indicator for a valid regular root and the physical support mask are included in
-\(W^{\mathrm{once}}\). When the common-root and common-kernel proof passes, this reduces to
+The indicator for a valid regular root and every pre-detector physical support condition are
+included in \(W^{\mathrm{once}}\). Detector acceptance is excluded. When the common-root and
+common-kernel proof passes, this reduces to
 
 \[
 d\mu^{\mathrm{cand}}_{i,m,b}(z)=
@@ -390,9 +396,10 @@ W^{\mathrm{once}}_{i,m,b}(z)
 dP_M(z).
 \]
 
-Every downstream factor that changes selection probability, including exit transport and detector
-validity, must be evaluated or reused while preparing this measure. It cannot be postponed until
-after an unweighted draw.
+Every pre-detector factor that changes selection probability, including outgoing propagation and
+optical validity, must be evaluated or reused while preparing this measure. Detector validity is
+evaluated only after the draw and contributes rejected mass without changing component masses or
+CDFs.
 
 Define
 
@@ -424,11 +431,13 @@ bounding its error in the detector observable; no event may be silently quantize
 
 ## 5. Detector measure
 
-The sampler feeds the unchanged complete-pool ledger in
-[RESULT_MEASURE.md](RESULT_MEASURE.md). Source mass, phase/parent population, scattering strength,
-mosaic/coarea mass, optics, attenuation, footprint, polarization, and detector validity each
-enter once before selection; conservative deposition follows selection. Pixel solid angle remains
-metadata, and no sampled factor or selection probability is reapplied after the draw.
+The sampler replaces the current finite detector-valid pool with the continuous ledger described
+in [RESULT_MEASURE.md](RESULT_MEASURE.md). The replacement preserves once-only factor ownership:
+source mass, phase/parent population, scattering strength, mosaic/coarea mass, optics, attenuation,
+footprint, and polarization each enter once before selection. Detector validity moves to a
+post-draw projection/rejection boundary, and conservative deposition follows for accepted hits.
+Pixel solid angle remains metadata, and no sampled factor or selection probability is reapplied
+after the draw.
 
 The current result is scattering mass in \(\mathrm{\mathring A}^2\) per detector-native pixel. If
 \(N\) events are drawn from a complete pool of mass \(T_i\), each carries \(T_i/N\). Literal

@@ -32,3 +32,16 @@ equivalent complex amplitudes. VESTA tables are parity references, not absolute 
 `reference/rasim_reference_v1.npz` contains compact stage intermediates for geometry, optics,
 mosaic/Ewald, ordered/Parratt, stacking, and OSC. Its embedded manifest declares which legacy
 outputs must match and where corrected implementations intentionally diverge.
+
+## Canonical Bi2Se3 runtime inputs
+
+`scripts/generate_bi2se3_detector_image.py` owns one pure `build_default_case_inputs()` boundary
+for the exact source request, PCG64 seed/model provenance, transforms, detector calibration,
+support model, and film thickness. The immutable `examples/bi2se3/experiment/forward_case.toml`
+remains legacy provenance and is neither parsed as runtime configuration nor edited.
+
+The legacy zero sample dimensions meant that finite footprint clipping was disabled. The runtime
+maps that meaning to `unbounded_plane.v1` with absent width/length; zero is not a dimension
+sentinel. This is `CORRECTED` relative to the former script-only finite rectangle, with the first
+possible divergence at `geometry.footprint_acceptance`. Nothing under `examples/` or `reference/`
+is regenerated to encode the correction.

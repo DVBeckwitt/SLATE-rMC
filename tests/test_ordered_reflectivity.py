@@ -10,7 +10,7 @@ import pytest
 import xraydb
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import RodQueryBatch
+from rasim_next.core.contracts import MaterialOptics, RodQueryBatch
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.materials import (
     CrystalStructure,
@@ -169,6 +169,36 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
     np.testing.assert_allclose(optics.mu_Ainv, 4.0 * np.pi * optics.beta / optical_wavelength_A)
     np.testing.assert_allclose(optics.n_complex, 1.0 - optics.delta + 1.0j * optics.beta)
     assert np.all(optics.beta > 0.0)
+
+    repeated = material_optics(
+        crystal,
+        np.asarray((1.8, 1.1, WAVELENGTH_A, 1.8, 1.1, WAVELENGTH_A)),
+    )
+    np.testing.assert_array_equal(repeated.wavelength_A, optical_wavelength_A)
+    for name in ("n_complex", "delta", "beta", "mu_Ainv"):
+        np.testing.assert_allclose(
+            getattr(repeated, name), getattr(optics, name), rtol=0.0, atol=0.0
+        )
+    with pytest.raises(ValueError, match="wavelength"):
+        MaterialOptics(
+            material_id="invalid-duplicate",
+            wavelength_A=optics.wavelength_A[[0, 0]],
+            n_complex=optics.n_complex[[0, 0]],
+            delta=optics.delta[[0, 0]],
+            beta=optics.beta[[0, 0]],
+            mu_Ainv=optics.mu_Ainv[[0, 0]],
+            provenance="invalid duplicate fixture",
+        )
+    with pytest.raises(ValueError, match="wavelength"):
+        MaterialOptics(
+            material_id="invalid-unsorted",
+            wavelength_A=optics.wavelength_A[::-1],
+            n_complex=optics.n_complex[::-1],
+            delta=optics.delta[::-1],
+            beta=optics.beta[::-1],
+            mu_Ainv=optics.mu_Ainv[::-1],
+            provenance="invalid unsorted fixture",
+        )
 
     catalog = build_rod_catalog(crystal, h_bounds=(0, 1), k_bounds=(0, 0))
     rows = [int(np.flatnonzero((catalog.h == h_value) & (catalog.k == 0))[0]) for h_value in (0, 1)]

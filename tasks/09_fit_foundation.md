@@ -37,6 +37,8 @@ manuscript
 ## Required work
 
 - typed parameters, units, bounds, transforms, active/fixed status, and dependency stages
+- an active-parameter-pack contract that records gauge ownership, excludes fixed or inactive null
+  directions, and rejects redundant packs before objective evaluation
 - detector-native datasets, masks, variance/noise model, exposure metadata, preprocessing revisions, and a data/model correction ledger
 - immutable compiled fit context
 - explicit invalidation graph over compiled forward states
@@ -56,6 +58,8 @@ manuscript
 - rejection of duplicate data/model polarization or solid-angle corrections
 - result provenance and hash stability
 - no forward equation in the fitting package
+- full column rank for each accepted active pack and deterministic rejection of deliberately
+  redundant common-pose, isotropic-roll, pivot-axis, zero-pose/mount, and inactive-support packs
 
 ## Commands
 

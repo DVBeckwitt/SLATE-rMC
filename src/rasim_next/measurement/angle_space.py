@@ -687,6 +687,13 @@ def _instrument_fingerprint(instrument: CompiledInstrument) -> str:
         _hash_array(digest, f"{name}.rotation", transform.rotation, "<f8")
         _hash_array(digest, f"{name}.translation_m", transform.translation_m, "<f8")
     _hash_array(digest, "detector_shape_rc", instrument.detector_shape_rc, "<i8")
+    _hash_text(digest, instrument.sample_support_model_id)
+    support_dimensions_m = (
+        ()
+        if instrument.sample_support_model_id == "unbounded_plane.v1"
+        else (instrument.sample_width_m, instrument.sample_length_m)
+    )
+    _hash_array(digest, "sample_support_dimensions_m", support_dimensions_m, "<f8")
     _hash_array(
         digest,
         "detector_calibration",
@@ -694,8 +701,6 @@ def _instrument_fingerprint(instrument: CompiledInstrument) -> str:
             instrument.detector_row_pitch_m,
             instrument.detector_column_pitch_m,
             *instrument.detector_reference_coordinate_px,
-            instrument.sample_width_m,
-            instrument.sample_length_m,
             instrument.film_thickness_A,
         ),
         "<f8",

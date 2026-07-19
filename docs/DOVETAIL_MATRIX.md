@@ -5,9 +5,10 @@ This document is the authoritative producer-consumer map for the four forward wo
 ## Runtime data flow
 
 ```text
-T03 source samples
+one complete canonical T03 `IncidentSampleBatch`
     -> T02 incident geometry and entrance optics
-    -> T03 mosaic and Ewald event support
+    -> self-contained `IncidentStateBatch`
+    -> T03 mosaic and Ewald event support (no raw-source rejoin)
 
 T04 rod catalog ----------------------^
 T04 material optics -> T02 optics
@@ -25,9 +26,9 @@ T02 hits + T04 or T05 strengths
 
 | Contract or factor | Producer | Consumer | Acceptance rule |
 |---|---|---|---|
-| `IncidentSampleBatch` | T03 sampling | T02 geometry | every row has exact empirical mass `1/N`; no generating PDF weight |
-| `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | wavelength grid, complex index convention, `delta`, `beta`, and absorption are identical |
-| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | one phase/parent batch preserves exact `1/N` source mass; frames, wavevectors, source ID, and validity are explicit |
+| `IncidentSampleBatch` | T03 sampling | T02 geometry | one complete PCG64/v2 realization; every row has exact empirical mass `1/N`; no generating PDF weight or worker-local generation |
+| `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | one sorted unique exact wavelength grid; complex index convention, `delta`, `beta`, and absorption are identical |
+| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | sole incident authority with exact state/sample identity, wavelength, polarization, status, mass, `ki`, optics, and source/sample/material revisions; no companion source join |
 | `RodCatalog` | T04 ordered | T03 Ewald, T08 selection | every `(h,k)` rod remains distinct; exact family metadata is preserved |
 | `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | pre-selection candidates retain exact rod/orientation/`Q`/`kf` identity and mosaic/Jacobian mass for one all-rod pool; no per-reflection normalization or post-selection reweighting |
 | `LayerAmplitudeResult` | T04 ordered motifs | T05 stacking | event/rod alignment, phase convention, motif gauge, and normalization are explicit |
@@ -79,7 +80,8 @@ Before a branch is accepted for integration, prove:
 
 ```text
 1. T04 RodCatalog -> T03 with synthetic IncidentStateBatch
-2. T03 IncidentSampleBatch -> T02 -> T03 events
+2. generate one complete T03 `IncidentSampleBatch` -> T02 `IncidentStateBatch` -> T03 events;
+   reciprocal construction consumes only the state batch
 3. T03 RodQueryBatch -> T04 ordered strength
 4. T04 LayerAmplitudeResult + T07 LayerNormalQBatch -> T05 stacking strength
 5. T03 outgoing film wavevector -> T02 exit transport and hits
@@ -107,3 +109,8 @@ ordered or stacking intensity fit
 ```
 
 Selection and fitting consume the integrated identities and compiled states. They do not create alternate forward paths.
+Parallel Task 1.1 introduces no runtime packet layout. Any private packet layouts introduced by
+future staged execution belong to parallel Task 1.4, after the Task 1.3 numeric boundary, and are
+row-index views of the canonical incident ledger. They inherit parent revisions and restore
+canonical order before comparison or reduction; worker count, tile size, and completion order
+cannot change source generation, incident status, or numeric payload.

@@ -106,6 +106,31 @@ def _material(wavelength_A: float, index: complex, material_id: str) -> Material
     )
 
 
+def _explicit_source_batch(
+    *,
+    incident_sample_id: np.ndarray,
+    origin_lab_m: np.ndarray,
+    direction_lab: np.ndarray,
+    wavelength_A: np.ndarray,
+    polarization_state_id: tuple[str, ...],
+    provenance: str,
+) -> IncidentSampleBatch:
+    size = incident_sample_id.size
+    source_weight = np.full(size, 1.0 / size)
+    return IncidentSampleBatch(
+        incident_sample_id=incident_sample_id,
+        origin_lab_m=origin_lab_m,
+        direction_lab=direction_lab,
+        wavelength_A=wavelength_A,
+        source_weight=source_weight,
+        polarization_state_id=polarization_state_id,
+        source_sampling_model_id="explicit_proof_source.v1",
+        source_rng_model_id="no_rng.v1",
+        source_seed=0,
+        source_parameter_provenance=provenance,
+    )
+
+
 def _instrument(
     *,
     lab_from_detector: RigidTransform | None = None,
@@ -135,6 +160,7 @@ def _instrument(
             detector_row_pitch_m=2.0e-4,
             detector_column_pitch_m=1.0e-4,
             detector_reference_coordinate_px=(3.0, 5.0),
+            sample_support_model_id="finite_rectangle.v1",
             sample_width_m=sample_width_m,
             sample_length_m=sample_length_m,
             film_thickness_A=500.0,
@@ -170,9 +196,11 @@ def _classified_cases() -> list[dict[str, Any]]:
         },
         {
             "case_id": "geometry.line_plane",
-            "classification": "MATCH",
+            "classification": "CORRECTED",
             "ledger_ids": ["PHY-GEO-005", "PHY-GEO-006", "PHY-THK-001"],
-            "first_divergence_stage": None,
+            "first_divergence_stage": "geometry.sample_intersection",
+            "pack_first_divergence_stage": "geometry.sample_intersection",
+            "last_matching_stage": "declared ray and sample plane",
         },
         {
             "case_id": "geometry.sample_origin_nonrigid",
@@ -282,12 +310,25 @@ def _classification_check(
             "optics.external_exit",
         }
     }
+    expected["geometry.line_plane"] = ("MATCH", None)
     observed = {
         item["case_id"]: (item["classification"], item["first_divergence"])
         for item in manifest["cases"]
         if item["subsystem"] == "geometry_optics"
     }
     differences = {
+        "legacy_coplanar_acceptance_count": float(
+            sum(
+                bool(output[3])
+                and abs(float(inputs[1, 2])) <= 1e-14
+                and abs(float(inputs[0, 2])) <= 1e-12
+                for inputs, output in zip(
+                    arrays["geometry_line_plane_inputs"],
+                    arrays["geometry_line_plane_outputs"],
+                    strict=True,
+                )
+            )
+        ),
         "nonrigid_origin_m": float(
             np.linalg.norm(
                 arrays["geometry_sample_origin_rigid"] - arrays["geometry_sample_origin_legacy"]
@@ -313,7 +354,7 @@ def _classification_check(
     return _check(
         "classification_and_first_divergence",
         observed == expected and all(difference > 0.0 for difference in differences.values()),
-        "all T02 pack labels agree and each corrected legacy path visibly diverges",
+        "immutable T02 labels agree and every live corrected path visibly diverges",
         correction_differences=differences,
     )
 
@@ -881,6 +922,7 @@ def _osc_checks(root: Path, arrays: Any, manifest: dict[str, Any]) -> list[dict[
 def _line_plane_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     identity = RigidTransform(np.eye(3), np.zeros(3), FrameId.SAMPLE, FrameId.LAB)
     maximum_error = 0.0
+    corrected_coplanar_rows = 0
     passed = True
     for inputs, expected in zip(
         arrays["geometry_line_plane_inputs"],
@@ -891,12 +933,20 @@ def _line_plane_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> 
             inputs[0],
             inputs[1],
             lab_from_sample=identity,
+            sample_support_model_id="finite_rectangle.v1",
             sample_width_m=10.0,
             sample_length_m=10.0,
         )
         expected_valid = bool(expected[3])
-        passed &= (result.status is ValidityCode.VALID) == expected_valid
-        if expected_valid:
+        coplanar = abs(float(inputs[1, 2])) <= 1e-14 and abs(float(inputs[0, 2])) <= 1e-12
+        if coplanar:
+            corrected_coplanar_rows += 1
+            passed &= result.status is ValidityCode.PARALLEL
+            passed &= result.footprint_acceptance == 0.0
+            passed &= np.array_equal(result.point_lab_m, np.zeros(3))
+        else:
+            passed &= (result.status is ValidityCode.VALID) == expected_valid
+        if expected_valid and not coplanar:
             maximum_error = max(
                 maximum_error,
                 float(np.max(np.abs(result.point_lab_m - expected[:3]))),
@@ -905,7 +955,8 @@ def _line_plane_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> 
     return _check(
         "geometry_line_plane_reference",
         passed,
-        "public sample intersection matches the tracked analytic line-plane cases",
+        "unique intersections match the tracked oracle; legacy coplanar acceptance is corrected",
+        corrected_coplanar_rows=corrected_coplanar_rows,
         maximum_error_m=maximum_error,
     )
 
@@ -960,6 +1011,7 @@ def _rigid_instrument_check(
             detector_row_pitch_m=2e-4,
             detector_column_pitch_m=1e-4,
             detector_reference_coordinate_px=(3.0, 5.0),
+            sample_support_model_id="finite_rectangle.v1",
             sample_width_m=4e-4,
             sample_length_m=6e-4,
             film_thickness_A=100.0,
@@ -1176,14 +1228,13 @@ def _transport_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]
     wavelength_A = 1.54
     instrument = _instrument()
     material = _material(wavelength_A, 0.999979 + 3.2e-7j, "transport-film")
-    samples = IncidentSampleBatch(
+    samples = _explicit_source_batch(
         incident_sample_id=np.array([7, 3]),
         origin_lab_m=np.array([[0.0, 0.0, 1.0], [2.1e-4, 0.0, 1.0]]),
         direction_lab=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]),
         wavelength_A=np.full(2, wavelength_A),
-        source_weight=np.array([0.5, 0.5]),
         polarization_state_id=("p7", "p3"),
-        correlation_model="independent",
+        provenance="T02 transport proof explicit source.v1",
     )
     incident = build_incident_states(
         samples,
@@ -1238,7 +1289,7 @@ def _transport_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]
     stage_ids = {record.stage_id for record in (*incident.traces, *transported.traces)}
     passed = all(
         (
-            incident.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
+            incident.states.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
             transported.outgoing_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
             transported.detector_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
             np.array_equal(transported.outgoing_waves.event_id, events.event_id),
@@ -1279,6 +1330,7 @@ def _convergence_checks() -> list[dict[str, Any]]:
             [0.0, 0.0, epsilon],
             direction,
             lab_from_sample=identity,
+            sample_support_model_id="finite_rectangle.v1",
             sample_width_m=4.0,
             sample_length_m=4.0,
         )
@@ -1372,14 +1424,11 @@ def _scalar_incident_oracle(
     denominator = float(direction_sample[2])
     offset_m = float(origin_sample_m[2])
     if abs(denominator) <= 1e-14:
-        if abs(offset_m) > 1e-12:
-            return np.zeros(3), 0.0j, 0.0j, ValidityCode.PARALLEL
-        distance_m = 0.0
-    else:
-        distance_m = -offset_m / denominator
-        if distance_m < -1e-12:
-            return np.zeros(3), 0.0j, 0.0j, ValidityCode.BACKWARD
-        distance_m = max(distance_m, 0.0)
+        return np.zeros(3), 0.0j, 0.0j, ValidityCode.PARALLEL
+    distance_m = -offset_m / denominator
+    if distance_m < -1e-12:
+        return np.zeros(3), 0.0j, 0.0j, ValidityCode.BACKWARD
+    distance_m = max(distance_m, 0.0)
 
     point_sample_m = origin_sample_m + distance_m * direction_sample
     if (
@@ -1416,14 +1465,13 @@ def _benchmark(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     material = _material(wavelength_A, 0.999979 + 3.2e-7j, "benchmark-film")
     x = np.linspace(-1e-3, 1e-3, size)
     directions = np.column_stack((x, np.zeros(size), -np.sqrt(1.0 - x**2)))
-    samples = IncidentSampleBatch(
+    samples = _explicit_source_batch(
         incident_sample_id=np.arange(size),
         origin_lab_m=np.tile([0.0, 0.0, 1.0], (size, 1)),
         direction_lab=directions,
         wavelength_A=np.full(size, wavelength_A),
-        source_weight=np.full(size, 1.0 / size),
         polarization_state_id=("benchmark",) * size,
-        correlation_model="independent",
+        provenance="T02 equivalent-work benchmark explicit source.v1",
     )
 
     scalar_points = np.empty((size, 3))
@@ -1459,7 +1507,7 @@ def _benchmark(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
     point_error = float(np.max(np.abs(vector.states.sample_intersection_lab_m - scalar_points)))
     kz_error = float(np.max(np.abs(vector.states.kz_film_Ainv - scalar_kz)))
     amplitude_error = float(np.max(np.abs(vector.states.entrance_amplitude - scalar_amplitude)))
-    status_agreement = vector.status == tuple(scalar_status)
+    status_agreement = vector.states.status == tuple(scalar_status)
     passed = (
         status_agreement
         and point_error <= tolerances["geometry.sample_intersection"].bind(4.0).limit
@@ -1479,7 +1527,7 @@ def _benchmark(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
         "status_agreement": status_agreement,
         "memory": {
             "input_numeric_bytes": _numeric_bytes(samples),
-            "output_numeric_bytes": _numeric_bytes(measured.states) + measured.wavelength_A.nbytes,
+            "output_numeric_bytes": _numeric_bytes(measured.states),
             "incremental_tracemalloc_peak_bytes": max(0, peak - baseline),
             "method": "untimed call; retained numeric output is reported separately",
         },

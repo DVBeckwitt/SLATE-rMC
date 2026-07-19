@@ -5,7 +5,6 @@
 ```text
 src/rasim_next/
     core/
-        units.py
         frames.py
         transforms.py
         wave_modes.py
@@ -73,7 +72,7 @@ src/rasim_next/
         detector_image.py
 
     pipeline/
-        compile.py
+        intersections.py
         simulate.py
 
     selection/          # post-integration
@@ -95,10 +94,12 @@ src/rasim_next/
         result.py
 
     proof/
+        __main__.py
+        core.py
+        reference.py
         traces.py
         tolerances.py
         stage_tolerances_v1.json
-        cli.py
         diagnostics.py
 ```
 
@@ -168,21 +169,41 @@ The forward model exposes immutable state boundaries:
 
 ```text
 CompiledInstrument
-CompiledSourceSamples
-CompiledIncidentStates
-CompiledRodCatalog
-CompiledScatteringEvents
-CompiledDetectorHits
-CompiledDetectorResponse
+IncidentSampleBatch
+IncidentStateBatch
+RodCatalog
+ScatteringEventBatch
+OutgoingWaveBatch
+DetectorHitBatch
 ```
 
 They are not optimizer objects. They are dependency and reuse boundaries.
+
+`IncidentSampleBatch` is generated once as one complete canonical source realization. Its derived
+parameter and realization revisions are each hashed once by the batch's sole construction path.
+The compiled instrument owns hashed `lab_from_sample` and internally derives its once-computed
+inverse `sample_from_lab`; no caller can supply a competing inverse.
+`IncidentStateBatch` is the sole reciprocal-space incident authority: reciprocal construction does
+not rejoin a raw source batch for wavelength, polarization, status, mass, or provenance. Any
+Parallel Task 1.1 remains a scalar-reference task and introduces no runtime worker packets. Any
+private worker packets introduced by future staged execution belong to parallel Task 1.4, after
+Task 1.3 freezes the narrow numeric boundaries. They must carry canonical row indices, inherit the
+full parent revision envelope, and never regenerate source rows or hash packet slices.
 
 Invalidation rules:
 
 ```text
 geometry parameter change
     invalidates incident states, events, hits, and response
+
+source parameter, model, RNG, seed, or realized-row change
+    invalidates the complete source revision and all downstream incident/event state
+
+material optical change
+    invalidates incident optical modes and downstream event state
+
+detector calibration, sample_from_crystal, or film-thickness-only change
+    does not invalidate incident states or their source/sample/material revisions
 
 mosaic parameter change
     invalidates reciprocal weights and possibly event support, but not instrument compilation

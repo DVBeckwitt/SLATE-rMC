@@ -47,20 +47,13 @@ def _material_indices(
 ) -> NDArray[np.intp]:
     if not isinstance(material, MaterialOptics):
         raise TypeError("material must be MaterialOptics")
-    unique, first_indices, counts = np.unique(
-        material.wavelength_A,
-        return_index=True,
-        return_counts=True,
-    )
-    positions = np.searchsorted(unique, wavelength_A)
-    bounded = positions < unique.size
+    positions = np.searchsorted(material.wavelength_A, wavelength_A)
+    bounded = positions < material.wavelength_A.size
     matched = np.zeros(wavelength_A.size, dtype=np.bool_)
-    matched[bounded] = unique[positions[bounded]] == wavelength_A[bounded]
-    unique_match = np.zeros(wavelength_A.size, dtype=np.bool_)
-    unique_match[bounded] = counts[positions[bounded]] == 1
-    if not np.all(matched & unique_match):
-        raise ValueError("material must contain the exact wavelength exactly once")
-    return np.asarray(first_indices[positions], dtype=np.intp)
+    matched[bounded] = material.wavelength_A[positions[bounded]] == wavelength_A[bounded]
+    if not np.all(matched):
+        raise ValueError("material must contain the exact wavelength for every requested row")
+    return np.asarray(positions, dtype=np.intp)
 
 
 def _normal_wavevectors(

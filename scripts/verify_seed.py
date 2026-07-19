@@ -10,6 +10,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as handle:
@@ -17,10 +18,20 @@ def sha256(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+
 errors: list[str] = []
 
 file_manifest = json.loads((ROOT / "FILE_MANIFEST.json").read_text())
-for item in file_manifest["files"]:
+manifest_files = file_manifest["files"]
+manifest_paths = [item["path"] for item in manifest_files]
+if file_manifest.get("file_count") != len(manifest_files):
+    errors.append("file manifest count")
+if len(set(manifest_paths)) != len(manifest_paths):
+    errors.append("file manifest duplicate paths")
+if manifest_paths != sorted(manifest_paths):
+    errors.append("file manifest path order")
+
+for item in manifest_files:
     path = ROOT / item["path"]
     if not path.is_file():
         errors.append(f"missing: {item['path']}")
@@ -59,4 +70,13 @@ if forbidden:
 if errors:
     print(json.dumps({"status": "FAIL", "errors": errors}, indent=2))
     raise SystemExit(1)
-print(json.dumps({"status": "PASS", "files": len(file_manifest["files"]), "reference_cases": len(manifest["cases"])}, indent=2))
+print(
+    json.dumps(
+        {
+            "status": "PASS",
+            "files": len(manifest_files),
+            "reference_cases": len(manifest["cases"]),
+        },
+        indent=2,
+    )
+)

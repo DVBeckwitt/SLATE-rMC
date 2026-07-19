@@ -35,7 +35,13 @@ manuscript
 
 - consume one immutable `SelectionManifest`
 - use measured continuous detector centroids and covariance
-- select an explicit active parameter subset
+- select an explicit active parameter subset with no compensating common beam/sample pose
+- parameterize every fitted rotation axis by two tangent coordinates and every pivot by only the
+  two components perpendicular to that axis; never expose an axis-parallel pivot component
+- choose exactly one owner for the zero-pose/sample-mount transform and keep the other fixed
+- keep finite sample-support extents inactive unless observations reach the corresponding edge;
+  when active, use a positive transform. Never fit an unbounded support dimension or a
+  `sample_from_crystal` translation at the incident stage.
 - evaluate only the forward stages invalidated by geometry
 - report invalid topology without reassignment
 - support an outer selection audit after convergence
@@ -48,6 +54,10 @@ manuscript
 - held-out peak prediction
 - multi-start consistency
 - Jacobian rank, conditioning, bounds, and correlations
+- full-rank recovery for the two-tangent-axis/two-perpendicular-pivot parameterization, including
+  perpendicular-pivot reconstruction and deterministic rejection of axis-parallel, duplicate
+  zero-pose/mount, and inactive/unbounded-support directions
+- support-edge activation and downstream-only detector-revision invalidation
 - stable selection after the outer audit
 - original-RASIM selected-case comparison under identical associations
 - first divergence for corrected rigid-transform behavior

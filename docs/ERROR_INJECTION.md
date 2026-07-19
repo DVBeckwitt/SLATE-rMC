@@ -60,6 +60,17 @@ Expected result: the comparator fails at the first affected OSC or geometry stag
 
 Expected result: interface, attenuation, dispersion, or detector-coordinate proofs fail before deposition.
 
+### Canonical incident-boundary controls
+
+- duplicate or omit one source stratum while preserving plausible marginal statistics
+- hash a worker slice as a new source realization instead of inheriting the full parent revision
+- let detector calibration, `sample_from_crystal`, or film thickness invalidate incident `ki`
+- erase accepted source or geometry evidence when a later geometry/optical stage first fails
+
+Expected result: the exact-strata, canonical-revision ownership, invalidation, or
+status-dependent-payload proof fails at its first affected boundary. These are one-shot mutations in
+the compact source/incident proofs, not permanent allocation tests or packet-layout snapshots.
+
 ### Mosaic and Ewald controls
 
 - remove the declared spherical measure

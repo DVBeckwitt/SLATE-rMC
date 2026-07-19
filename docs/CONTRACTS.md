@@ -1,6 +1,6 @@
 # Shared contracts
 
-Bootstrap owns contract API v5. Parallel physics branches treat these contracts as read-only.
+Bootstrap owns contract API v7. Parallel physics branches treat these contracts as read-only.
 
 ## Coordinate and transform types
 
@@ -38,13 +38,18 @@ InstrumentConfiguration
     commanded angles
     static misalignment rotations
     sample offsets and surface normal
-    crystal_from_sample transform
+    sample_support_model_id
+    sample_width_m and sample_length_m only for finite_rectangle.v1
+    sample_from_crystal transform (CRYSTAL -> SAMPLE)
     detector origin, row axis, column axis, normal, and pivot
     detector shape and row/column pitch
     beam center in detector-native continuous coordinates
 ```
 
 User-facing parameters compile once into explicit transforms. Kernels never reconstruct rotation chains independently.
+`CompiledInstrument` stores hashed `lab_from_sample` and internally derives its immutable exact
+inverse `sample_from_lab`; callers cannot supply a second inverse authority, and batched incident
+construction never inverts or transforms the same direction a second time.
 
 ## Source samples
 
@@ -63,11 +68,32 @@ IncidentSampleBatch
     wavelength_A[N] float64
     source_weight[N] float64
     polarization_state_id[N]
-    correlation_model
+    source_sampling_model_id
+    source_rng_model_id
+    source_seed unsigned 64-bit integer
+    source_parameter_provenance canonical text
+    source_parameter_revision SHA-256
+    source_revision SHA-256
 ```
 
 A Cartesian product is allowed only when source variables are declared independent.
 In both source and incident-state batches, `source_weight` is exactly uniform empirical mass `1/N` and sums to one; it is never the sampled PDF. An incident-state batch covers one source-ray batch for one phase/parent.
+The Gaussian source declaration consists of a mean LAB origin in metres, a unit mean LAB direction,
+two orthonormal LAB transverse axes, two spatial sigmas in metres, two divergence sigmas in radians,
+mean wavelength and wavelength sigma in angstroms, sample count, and polarization-state ID. The
+five independent random coordinates are two transverse positions, two tangent-plane divergences,
+and wavelength. `independent_gaussian_antithetic_lhs.v2` uses `numpy_pcg64.v1`: every `N`-stratum
+is occupied exactly once in every dimension, adjacent rows are exact antithetic complements, and
+an odd final row is exactly `0.5`.
+`IncidentSampleBatch` derives both revisions through its sole construction path. One parameter
+hash covers the
+canonical `frames`, `units`, and `values` text for only the declared
+means/axes/sigmas/wavelength/count/polarization inputs. Sampling-model ID, RNG-model ID, and seed are
+separate and are not duplicated in that parameter text. The realization revision covers those
+three fields, the parameter revision,
+IDs, rays, wavelengths, weights, and polarization IDs. A merely
+well-shaped hexadecimal string cannot be supplied in place of either derived revision. Canonical revision fields are
+length-prefixed and typed; numeric arrays use fixed little-endian dtype/rank/shape/C-order bytes.
 
 ## Material optics
 
@@ -82,7 +108,21 @@ MaterialOptics
     provenance
 ```
 
-The ordered/materials branch produces this contract. Geometry consumes it without parsing CIF files.
+The ordered/materials branch produces this contract. `wavelength_A` is nonempty, finite, positive,
+strictly increasing, and exact. The producer applies one sorted exact `unique` operation before
+optical evaluation, so repeated requested wavelengths share one authoritative material row.
+Manually constructed duplicate or unsorted grids fail. Geometry consumes the contract without
+parsing CIF files, interpolation, or tolerance-based matching.
+
+## Sample support
+
+The compiled instrument carries exactly one `sample_support_model_id`. `finite_rectangle.v1`
+requires finite positive width and length and retains the closed-edge footprint test.
+`unbounded_plane.v1` requires both dimensions to be absent and accepts every unique forward plane
+intersection with footprint acceptance one. Zero or placeholder dimensions are invalid.
+Every ray with `abs(direction_sample_z) <= 1e-14`, including a coplanar ray, is `PARALLEL` because
+the plane intersection is not unique. Such a row has no intersection, footprint mass, or optical
+payload.
 
 ## Incident states
 
@@ -98,8 +138,35 @@ IncidentStateBatch
     entrance_amplitude[N] complex128
     footprint_acceptance[N] float64
     source_weight[N] float64
+    wavelength_A[N] float64
+    polarization_state_id[N]
+    status[N] tuple[ValidityCode, ...]
     valid[N] bool
+    source_sampling_model_id
+    source_rng_model_id
+    source_seed unsigned 64-bit integer
+    source_parameter_provenance canonical text
+    source_parameter_revision SHA-256
+    source_revision SHA-256
+    sample_geometry_revision SHA-256
+    material_revision SHA-256
+    incident_model_id
 ```
+
+For `one_transmitted_channel.v1`, `incident_state_id` and `incident_sample_id` form a one-to-one
+identity relation and `valid` equals `status == VALID` exactly. Geometry failures retain source ID,
+wavelength, empirical mass, polarization, and every revision but expose zero intersection,
+direction, air-side, film-side, amplitude, and footprint payload. Optical failures retain their
+accepted intersection, SAMPLE direction, air-side `ki`, footprint, source fields, and revisions,
+but expose zero film-side `ki`, complex normal mode, and entrance amplitude. Valid rows enforce
+`k_air=(2*pi/wavelength)*direction`, tangential conservation, and equality between the phase-vector
+normal component and `real(kz_film)`.
+
+The sample-geometry revision covers only the SAMPLE-to-LAB entrance pose, explicit support model,
+finite dimensions when applicable, and intersection model. The material revision covers the exact
+canonical optical grid and its provenance. Detector calibration, `sample_from_crystal`, and film
+thickness are deliberately excluded. Revisions are computed once for the complete canonical batch;
+worker row views inherit parent revisions and canonical row indices and never rehash a slice.
 
 ## Rod catalog
 

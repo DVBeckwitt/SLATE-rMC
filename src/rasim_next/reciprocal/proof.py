@@ -22,6 +22,7 @@ from rasim_next.core.contracts import (
     IncidentSampleBatch,
     IncidentStateBatch,
     RodCatalog,
+    canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
@@ -281,14 +282,22 @@ def _build_fixture(
     sample_count = wavelengths_A.size
     sample_ids = np.arange(sample_count, dtype=np.int64)
     wavevector_norm = 2.0 * np.pi / wavelengths_A
+    provenance = "T03 analytic reciprocal fixture.v1"
+    source_weight = np.full(sample_count, 1.0 / sample_count)
+    origin_lab_m = np.zeros((sample_count, 3))
+    direction_lab = np.tile([0.0, 0.0, 1.0], (sample_count, 1))
+    polarization_ids = ("proof_state",) * sample_count
     samples = IncidentSampleBatch(
         incident_sample_id=sample_ids,
-        origin_lab_m=np.zeros((sample_count, 3)),
-        direction_lab=np.tile([0.0, 0.0, 1.0], (sample_count, 1)),
+        origin_lab_m=origin_lab_m,
+        direction_lab=direction_lab,
         wavelength_A=wavelengths_A,
-        source_weight=np.full(sample_count, 1.0 / sample_count),
-        polarization_state_id=("proof_state",) * sample_count,
-        correlation_model="proof_fixture",
+        source_weight=source_weight,
+        polarization_state_id=polarization_ids,
+        source_sampling_model_id="explicit_proof_source.v1",
+        source_rng_model_id="no_rng.v1",
+        source_seed=0,
+        source_parameter_provenance=provenance,
     )
     incident = np.column_stack((np.zeros((sample_count, 2)), wavevector_norm))
     states = IncidentStateBatch(
@@ -302,7 +311,23 @@ def _build_fixture(
         entrance_amplitude=np.ones(sample_count, dtype=np.complex128),
         footprint_acceptance=np.ones(sample_count),
         source_weight=np.full(sample_count, 1.0 / sample_count),
+        wavelength_A=wavelengths_A,
+        polarization_state_id=polarization_ids,
+        status=(ValidityCode.VALID,) * sample_count,
         valid=np.ones(sample_count, dtype=np.bool_),
+        source_sampling_model_id=samples.source_sampling_model_id,
+        source_rng_model_id=samples.source_rng_model_id,
+        source_seed=samples.source_seed,
+        source_parameter_provenance=samples.source_parameter_provenance,
+        source_parameter_revision=samples.source_parameter_revision,
+        source_revision=samples.source_revision,
+        sample_geometry_revision=canonical_revision_sha256(
+            ("sample_geometry", "T03 analytic reciprocal fixture.v1")
+        ),
+        material_revision=canonical_revision_sha256(
+            ("material", "T03 analytic reciprocal fixture.v1")
+        ),
+        incident_model_id="one_transmitted_channel.v1",
     )
     basis = np.diag([b1_Ainv, 1.0, 2.0])
     rods = RodCatalog(
@@ -341,7 +366,6 @@ def _build_fixture(
 
 
 def _dense_events(
-    samples: IncidentSampleBatch,
     states: IncidentStateBatch,
     rods: RodCatalog,
     orientations: MosaicOrientationBatch,
@@ -350,9 +374,6 @@ def _dense_events(
     basis = rods.reciprocal_basis_Ainv
     b3_norm = float(np.linalg.norm(basis[:, 2]))
     b3_hat = basis[:, 2] / b3_norm
-    wavelength_by_sample = dict(
-        zip(map(int, samples.incident_sample_id), map(float, samples.wavelength_A), strict=True)
-    )
     event_rows: list[tuple[Any, ...]] = []
     attempt_rows: list[tuple[Any, ...]] = []
     for state_index, valid in enumerate(states.valid):
@@ -360,7 +381,7 @@ def _dense_events(
             continue
         state_id = int(states.incident_state_id[state_index])
         incident = states.k_film_phase_sample_Ainv[state_index]
-        wavelength = wavelength_by_sample[int(states.incident_sample_id[state_index])]
+        wavelength = float(states.wavelength_A[state_index])
         for rod_id, h, k in zip(rods.rod_id, rods.h, rods.k, strict=True):
             q0_crystal = int(h) * basis[:, 0] + int(k) * basis[:, 1]
             for orientation_index, mass_value in enumerate(orientations.probability_mass):
@@ -536,15 +557,14 @@ def _oracle_evidence(tolerances: Any) -> tuple[list[dict[str, object]], list[dic
             b1_Ainv=b1_Ainv,
             analytic_zero_tilt=analytic_tangent,
         )
-        samples, states, rods, orientations, transform = batches
+        _, states, rods, orientations, transform = batches
         public = build_scattering_events(
-            incident_samples=samples,
             incident_states=states,
             rods=rods,
             orientations=orientations,
             sample_from_crystal=transform,
         )
-        dense = _dense_events(samples, states, rods, orientations, transform)
+        dense = _dense_events(states, rods, orientations, transform)
         incident_norm = float(np.max(np.linalg.norm(states.k_film_phase_sample_Ainv, axis=1)))
         _compare_public_dense(
             public,
@@ -651,7 +671,7 @@ def _oracle_evidence(tolerances: Any) -> tuple[list[dict[str, object]], list[dic
 def _benchmark_evidence(tolerances: Any) -> dict[str, object]:
     h = np.arange(5, 4101, dtype=np.int32)
     h[2047:2050] = (0, 1, 4)
-    samples, states, rods, orientations, transform = _build_fixture(
+    _, states, rods, orientations, transform = _build_fixture(
         h,
         np.array([np.pi / 2.0]),
         WrappedMosaicParameters(0.0, 0.0, 0.0),
@@ -662,7 +682,6 @@ def _benchmark_evidence(tolerances: Any) -> dict[str, object]:
     tracemalloc.start()
     start = time.perf_counter()
     public = build_scattering_events(
-        incident_samples=samples,
         incident_states=states,
         rods=rods,
         orientations=orientations,
@@ -672,7 +691,7 @@ def _benchmark_evidence(tolerances: Any) -> dict[str, object]:
     current_bytes, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     start = time.perf_counter()
-    dense = _dense_events(samples, states, rods, orientations, transform)
+    dense = _dense_events(states, rods, orientations, transform)
     dense_wall_seconds = time.perf_counter() - start
     _compare_public_dense(
         public,
@@ -768,7 +787,11 @@ def _scientific_evidence(
         source_mass_error <= tolerances["sampling.source_empirical_mass"].bind(1.0).limit
         and np.array_equal(source.source_weight, np.full(4097, 1.0 / 4097))
         and source.polarization_state_id == ("proof_state",) * 4097
-        and source.correlation_model == "independent_gaussian_lhs.v1"
+        and source.source_sampling_model_id == "independent_gaussian_antithetic_lhs.v2"
+        and source.source_rng_model_id == "numpy_pcg64.v1"
+        and source.source_seed == 1729
+        and len(source.source_parameter_revision) == 64
+        and len(source.source_revision) == 64
         and np.max(np.abs(np.mean(standardized, axis=0))) < 1.0e-12
         and np.max(np.abs(source_variance - 1.0)) < 0.25
         and np.max(np.abs(source_correlation - np.eye(5))) < 0.05
@@ -784,15 +807,14 @@ def _scientific_evidence(
         alpha_cell_count=5,
         azimuth_cell_count=1,
     )
-    samples, states, rods, orientations, transform = control
+    _, states, rods, orientations, transform = control
     public = build_scattering_events(
-        incident_samples=samples,
         incident_states=states,
         rods=rods,
         orientations=orientations,
         sample_from_crystal=transform,
     )
-    dense = _dense_events(samples, states, rods, orientations, transform)
+    dense = _dense_events(states, rods, orientations, transform)
     incident_norm = float(np.linalg.norm(states.k_film_phase_sample_Ainv[0]))
     b3_norm = float(np.linalg.norm(rods.reciprocal_basis_Ainv[:, 2]))
     _compare_public_dense(public, dense, tolerances, incident_norm, b3_norm)

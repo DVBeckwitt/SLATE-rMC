@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import cmath
 import gzip
-from dataclasses import replace
+import json
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 
 from rasim_next.core.contracts import (
     IncidentSampleBatch,
+    IncidentStateBatch,
     MaterialOptics,
     ScatteringEventBatch,
 )
@@ -32,6 +34,7 @@ from rasim_next.geometry import (
 )
 from rasim_next.io.orientation import detector_native_to_raw
 from rasim_next.io.osc import OscFormatError, read_osc
+from rasim_next.materials import material_optics, read_crystal
 from rasim_next.optics import (
     mode_decay_constant,
     path_attenuation,
@@ -40,6 +43,7 @@ from rasim_next.optics import (
     solve_incident_mode,
     uniform_depth_attenuation,
 )
+from rasim_next.sampling.source import sample_gaussian_source_rays
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,6 +61,7 @@ def _configuration() -> InstrumentConfiguration:
         detector_row_pitch_m=2.0e-4,
         detector_column_pitch_m=1.0e-4,
         detector_reference_coordinate_px=(3.0, 5.0),
+        sample_support_model_id="finite_rectangle.v1",
         sample_width_m=4.0e-4,
         sample_length_m=6.0e-4,
         film_thickness_A=500.0,
@@ -72,6 +77,31 @@ def _material(wavelength_A: float = 1.54) -> MaterialOptics:
         beta=np.array([3.2e-7]),
         mu_Ainv=np.array([1.0e-5]),
         provenance="compact permanent fixture",
+    )
+
+
+def _explicit_source_batch(
+    *,
+    incident_sample_id: np.ndarray,
+    origin_lab_m: np.ndarray,
+    direction_lab: np.ndarray,
+    wavelength_A: np.ndarray,
+    polarization_state_id: tuple[str, ...],
+) -> IncidentSampleBatch:
+    size = incident_sample_id.size
+    weights = np.full(size, 1.0 / size)
+    provenance = "geometry transport permanent fixture.v1"
+    return IncidentSampleBatch(
+        incident_sample_id=incident_sample_id,
+        origin_lab_m=origin_lab_m,
+        direction_lab=direction_lab,
+        wavelength_A=wavelength_A,
+        source_weight=weights,
+        polarization_state_id=polarization_state_id,
+        source_sampling_model_id="explicit_test_source.v1",
+        source_rng_model_id="no_rng.v1",
+        source_seed=0,
+        source_parameter_provenance=provenance,
     )
 
 
@@ -151,6 +181,77 @@ def test_rigid_sample_and_detector_geometry() -> None:
         rtol=0.0,
         atol=2e-12,
     )
+    expected_inverse = ordered.lab_from_sample.inverse()
+    np.testing.assert_array_equal(ordered.sample_from_lab.rotation, expected_inverse.rotation)
+    np.testing.assert_array_equal(
+        ordered.sample_from_lab.translation_m,
+        expected_inverse.translation_m,
+    )
+    for identity in (
+        ordered.lab_from_sample.compose(ordered.sample_from_lab),
+        ordered.sample_from_lab.compose(ordered.lab_from_sample),
+    ):
+        np.testing.assert_allclose(identity.rotation, np.eye(3), rtol=0.0, atol=1e-12)
+        np.testing.assert_allclose(identity.translation_m, np.zeros(3), rtol=0.0, atol=1e-12)
+    with pytest.raises(TypeError, match="init=False"):
+        replace(
+            ordered,
+            sample_from_lab=RigidTransform(
+                np.eye(3),
+                np.zeros(3),
+                FrameId.LAB,
+                FrameId.SAMPLE,
+            ),
+        )
+
+    origins_sample_m = np.array(
+        [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 0.0, 0.0], [2.1e-4, 0.0, 1.0]]
+    )
+    directions_sample = np.array(
+        [[0.0, 0.0, -1.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]]
+    )
+    origins_lab_m = ordered.lab_from_sample.apply_point(origins_sample_m)
+    directions_lab = ordered.lab_from_sample.apply_vector(directions_sample)
+    samples = _explicit_source_batch(
+        incident_sample_id=np.array([11, 7, 19, 3]),
+        origin_lab_m=origins_lab_m,
+        direction_lab=directions_lab,
+        wavelength_A=np.full(4, 1.54),
+        polarization_state_id=("a", "b", "c", "d"),
+    )
+    batch = build_incident_states(samples, _material(), ordered).states
+    scalar = tuple(
+        intersect_sample_ray(
+            origin,
+            direction,
+            lab_from_sample=ordered.lab_from_sample,
+            sample_support_model_id=ordered.sample_support_model_id,
+            sample_width_m=ordered.sample_width_m,
+            sample_length_m=ordered.sample_length_m,
+        )
+        for origin, direction in zip(origins_lab_m, directions_lab, strict=True)
+    )
+    assert batch.status == tuple(result.status for result in scalar)
+    np.testing.assert_allclose(
+        batch.sample_intersection_lab_m,
+        np.stack([result.point_lab_m for result in scalar]),
+        rtol=0.0,
+        atol=1e-12,
+    )
+    assert batch.status == (
+        ValidityCode.VALID,
+        ValidityCode.BACKWARD,
+        ValidityCode.PARALLEL,
+        ValidityCode.OUTSIDE_SUPPORT,
+    )
+    np.testing.assert_allclose(batch.direction_sample[0], directions_sample[0], atol=1e-12)
+    scalar_mode = solve_incident_mode(directions_sample[0], 1.54, _material())
+    np.testing.assert_allclose(
+        batch.k_film_phase_sample_Ainv[0],
+        scalar_mode.k_film_phase_sample_Ainv,
+        rtol=0.0,
+        atol=2e-15,
+    )
 
 
 def test_sample_and_detector_statuses_and_round_trip() -> None:
@@ -160,6 +261,7 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
         [0.0, 0.0, 1.0],
         [0.0, 0.0, -1.0],
         lab_from_sample=instrument.lab_from_sample,
+        sample_support_model_id=instrument.sample_support_model_id,
         sample_width_m=instrument.sample_width_m,
         sample_length_m=instrument.sample_length_m,
     )
@@ -167,20 +269,70 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
     assert valid.ray_distance_m == pytest.approx(1.0)
     np.testing.assert_array_equal(valid.point_lab_m, np.zeros(3))
 
+    threshold_outside = np.nextafter(1e-14, np.inf)
+    threshold_inside = 1e-14
+    near_positive = np.array([np.sqrt(1.0 - threshold_outside**2), 0.0, threshold_outside])
+    near_negative = np.array([np.sqrt(1.0 - threshold_outside**2), 0.0, -threshold_outside])
     for origin, direction, status in (
         ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
+        ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
+        ([1.0, 0.0, 0.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
+        ([0.0, 0.0, 0.0], [1.0, 0.0, threshold_inside], ValidityCode.PARALLEL),
         ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], ValidityCode.BACKWARD),
         ([2.1e-4, 0.0, 1.0], [0.0, 0.0, -1.0], ValidityCode.OUTSIDE_SUPPORT),
+        ([0.0, 0.0, -threshold_outside * 1e-5], near_positive, ValidityCode.VALID),
+        ([0.0, 0.0, threshold_outside * 1e-5], near_negative, ValidityCode.VALID),
     ):
+        direction = np.asarray(direction, dtype=np.float64)
+        direction /= np.linalg.norm(direction)
         result = intersect_sample_ray(
             origin,
             direction,
             lab_from_sample=instrument.lab_from_sample,
+            sample_support_model_id=instrument.sample_support_model_id,
             sample_width_m=instrument.sample_width_m,
             sample_length_m=instrument.sample_length_m,
         )
         assert result.status is status
-        assert result.footprint_acceptance == 0.0
+        assert result.footprint_acceptance == float(status is ValidityCode.VALID)
+        if status is ValidityCode.PARALLEL:
+            np.testing.assert_array_equal(result.point_lab_m, np.zeros(3))
+            np.testing.assert_array_equal(result.point_sample_m, np.zeros(3))
+            assert result.ray_distance_m == 0.0
+
+    unbounded = compile_instrument(
+        replace(
+            configuration,
+            sample_support_model_id="unbounded_plane.v1",
+            sample_width_m=None,
+            sample_length_m=None,
+        )
+    )
+    unbounded_hit = intersect_sample_ray(
+        [2.1e-4, 0.0, 1.0],
+        [0.0, 0.0, -1.0],
+        lab_from_sample=unbounded.lab_from_sample,
+        sample_support_model_id=unbounded.sample_support_model_id,
+        sample_width_m=unbounded.sample_width_m,
+        sample_length_m=unbounded.sample_length_m,
+    )
+    assert unbounded_hit.status is ValidityCode.VALID
+    assert unbounded_hit.footprint_acceptance == 1.0
+    assert (unbounded.sample_width_m, unbounded.sample_length_m) == (None, None)
+
+    for support_model_id, width_m, length_m in (
+        ("finite_rectangle.v1", None, 1.0),
+        ("finite_rectangle.v1", 0.0, 1.0),
+        ("unbounded_plane.v1", 1.0, None),
+        ("unknown.v1", None, None),
+    ):
+        with pytest.raises(ValueError, match=r"sample|finite_rectangle|unbounded_plane"):
+            replace(
+                configuration,
+                sample_support_model_id=support_model_id,
+                sample_width_m=width_m,
+                sample_length_m=length_m,
+            )
 
     direct = project_detector_ray(np.zeros(3), [0.0, 0.0, 1.0], instrument)
     assert direct.status is ValidityCode.VALID
@@ -528,14 +680,48 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
     wavelength_A = 1.54
     instrument = compile_instrument(_configuration())
     material = _material(wavelength_A)
-    samples = IncidentSampleBatch(
+    mixed_samples = _explicit_source_batch(
+        incident_sample_id=np.array([42, 8]),
+        origin_lab_m=np.array([[0.0, 0.0, 1.0], [2.1e-4, 0.0, 1.0]]),
+        direction_lab=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]),
+        wavelength_A=np.array([wavelength_A, 1.73]),
+        polarization_state_id=("mixed-valid", "mixed-missed"),
+    )
+    mixed = build_incident_states(mixed_samples, material, instrument).states
+    assert mixed.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT)
+    np.testing.assert_array_equal(mixed.incident_state_id, [42, 8])
+    np.testing.assert_array_equal(mixed.wavelength_A, [wavelength_A, 1.73])
+    np.testing.assert_array_equal(mixed.source_weight, [0.5, 0.5])
+    np.testing.assert_array_equal(mixed.k_film_phase_sample_Ainv[1], np.zeros(3))
+
+    all_invalid_samples = _explicit_source_batch(
+        incident_sample_id=np.array([91, 17]),
+        origin_lab_m=np.array([[2.1e-4, 0.0, 1.0], [0.0, 0.0, 0.0]]),
+        direction_lab=np.array([[0.0, 0.0, -1.0], [1.0, 0.0, 0.0]]),
+        wavelength_A=np.array([1.71, 1.73]),
+        polarization_state_id=("missed", "coplanar"),
+    )
+    all_invalid = build_incident_states(all_invalid_samples, material, instrument).states
+    assert all_invalid.status == (ValidityCode.OUTSIDE_SUPPORT, ValidityCode.PARALLEL)
+    np.testing.assert_array_equal(all_invalid.incident_state_id, [91, 17])
+    np.testing.assert_array_equal(all_invalid.wavelength_A, [1.71, 1.73])
+    np.testing.assert_array_equal(all_invalid.source_weight, [0.5, 0.5])
+    for payload in (
+        all_invalid.sample_intersection_lab_m,
+        all_invalid.direction_sample,
+        all_invalid.k_air_sample_Ainv,
+        all_invalid.k_film_phase_sample_Ainv,
+        all_invalid.kz_film_Ainv,
+        all_invalid.entrance_amplitude,
+        all_invalid.footprint_acceptance,
+    ):
+        assert np.all(payload == 0.0)
+    samples = _explicit_source_batch(
         incident_sample_id=np.array([30, 10]),
         origin_lab_m=np.array([[0.0, 0.0, 1.0], [2.1e-4, 0.0, 1.0]]),
         direction_lab=np.array([[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]),
         wavelength_A=np.full(2, wavelength_A),
-        source_weight=np.array([0.5, 0.5]),
         polarization_state_id=("p30", "p10"),
-        correlation_model="independent",
     )
     incident = build_incident_states(
         samples,
@@ -543,12 +729,36 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         instrument,
         trace_case_id="transport",
     )
-    assert incident.status == (
+    assert incident.states.status == (
         ValidityCode.VALID,
         ValidityCode.OUTSIDE_SUPPORT,
     )
     np.testing.assert_array_equal(incident.states.incident_state_id, [30, 10])
     np.testing.assert_array_equal(incident.states.source_weight, [0.5, 0.5])
+    assert incident.states.wavelength_A[1] == wavelength_A
+    assert incident.states.polarization_state_id[1] == "p10"
+    for payload in (
+        incident.states.sample_intersection_lab_m[1],
+        incident.states.direction_sample[1],
+        incident.states.k_air_sample_Ainv[1],
+        incident.states.k_film_phase_sample_Ainv[1],
+        incident.states.kz_film_Ainv[1],
+        incident.states.entrance_amplitude[1],
+        incident.states.footprint_acceptance[1],
+    ):
+        assert np.all(payload == 0.0)
+    incident_parallel_records = tuple(
+        record for record in incident.traces if record.stage_id == "optics.ki_parallel_sample"
+    )
+    expected_parallel = incident.states.k_air_sample_Ainv.copy()
+    expected_parallel[:, 2] = 0.0
+    np.testing.assert_array_equal(
+        np.stack([record.value for record in incident_parallel_records]),
+        expected_parallel,
+    )
+    assert {(record.unit, record.frame) for record in incident_parallel_records} == {
+        ("angstrom^-1", FrameId.SAMPLE)
+    }
 
     film_normal_Ainv = abs(float(incident.states.kz_film_Ainv[0].real))
     events = ScatteringEventBatch(
@@ -645,3 +855,198 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         "sampling.source_empirical_mass",
         "geometry.detector_pixel_solid_angle",
     } <= {record.stage_id for record in (*incident.traces, *transported.traces)}
+
+
+def test_public_monochromatic_multi_ray_source_uses_one_exact_material_row() -> None:
+    wavelength_A = 1.540592925
+    samples = sample_gaussian_source_rays(
+        mean_origin_lab_m=np.array([0.0, 0.0, 1.0]),
+        mean_direction_lab=np.array([0.0, 0.0, -1.0]),
+        transverse_axes_lab=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        spatial_sigma_m=np.zeros(2),
+        divergence_sigma_rad=np.zeros(2),
+        mean_wavelength_A=wavelength_A,
+        wavelength_sigma_A=0.0,
+        sample_count=3,
+        seed=17,
+        polarization_state_id="UNITY_APPROXIMATION",
+    )
+    crystal = read_crystal(
+        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3-monochromatic",
+    )
+    material = material_optics(crystal, samples.wavelength_A)
+    assert material.wavelength_A.tolist() == [wavelength_A]
+
+    incident = build_incident_states(samples, material, compile_instrument(_configuration()))
+    assert incident.states.status == (ValidityCode.VALID,) * 3
+    np.testing.assert_array_equal(incident.states.wavelength_A, np.full(3, wavelength_A))
+    assert np.all(incident.states.valid)
+
+
+def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
+    wavelength_A = 1.540592925
+    source_arguments = {
+        "mean_origin_lab_m": np.array([0.0, 0.0, 1.0]),
+        "mean_direction_lab": np.array([0.0, 0.0, -1.0]),
+        "transverse_axes_lab": np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        "spatial_sigma_m": np.zeros(2),
+        "divergence_sigma_rad": np.zeros(2),
+        "mean_wavelength_A": wavelength_A,
+        "wavelength_sigma_A": 0.0,
+        "sample_count": 3,
+        "polarization_state_id": "UNITY_APPROXIMATION",
+    }
+    samples = sample_gaussian_source_rays(**source_arguments, seed=17)
+    material = _material(wavelength_A)
+    configuration = _configuration()
+
+    baseline = build_incident_states(
+        samples,
+        material,
+        compile_instrument(configuration),
+        trace_case_id="revision",
+    ).states
+    repeated = build_incident_states(samples, material, compile_instrument(configuration)).states
+
+    def revisions(states: IncidentStateBatch) -> tuple[str, ...]:
+        return (
+            states.source_parameter_revision,
+            states.source_revision,
+            states.sample_geometry_revision,
+            states.material_revision,
+            states.incident_model_id,
+        )
+
+    assert revisions(repeated) == revisions(baseline)
+    np.testing.assert_array_equal(
+        repeated.k_film_phase_sample_Ainv, baseline.k_film_phase_sample_Ainv
+    )
+    assert baseline.source_revision == samples.source_revision
+    assert baseline.incident_sample_id.tolist() == samples.incident_sample_id.tolist()
+    assert baseline.polarization_state_id == samples.polarization_state_id
+
+    changed_source = build_incident_states(
+        sample_gaussian_source_rays(**source_arguments, seed=18),
+        material,
+        compile_instrument(configuration),
+    ).states
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(revisions(baseline), revisions(changed_source), strict=True)
+        )
+        if before != after
+    } == {1}
+    np.testing.assert_array_equal(
+        changed_source.k_film_phase_sample_Ainv, baseline.k_film_phase_sample_Ainv
+    )
+
+    shifted_sample = build_incident_states(
+        samples,
+        material,
+        compile_instrument(
+            replace(
+                configuration,
+                goniometer_from_sample=RigidTransform(
+                    np.eye(3),
+                    np.array([1.0e-5, 0.0, 0.0]),
+                    FrameId.SAMPLE,
+                    FrameId.GONIOMETER,
+                ),
+            )
+        ),
+    ).states
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(revisions(baseline), revisions(shifted_sample), strict=True)
+        )
+        if before != after
+    } == {2}
+
+    unbounded = build_incident_states(
+        samples,
+        material,
+        compile_instrument(
+            replace(
+                configuration,
+                sample_support_model_id="unbounded_plane.v1",
+                sample_width_m=None,
+                sample_length_m=None,
+            )
+        ),
+    ).states
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(revisions(baseline), revisions(unbounded), strict=True)
+        )
+        if before != after
+    } == {2}
+
+    changed_material = build_incident_states(
+        samples,
+        replace(material, n_complex=material.n_complex + (1.0e-8 + 2.0e-9j)),
+        compile_instrument(configuration),
+    ).states
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(revisions(baseline), revisions(changed_material), strict=True)
+        )
+        if before != after
+    } == {3}
+
+    excluded_configurations = (
+        replace(configuration, detector_reference_coordinate_px=(4.0, 6.0)),
+        replace(
+            configuration,
+            sample_from_crystal=RigidTransform(
+                np.eye(3),
+                np.array([1.0e-4, 0.0, 0.0]),
+                FrameId.CRYSTAL,
+                FrameId.SAMPLE,
+            ),
+        ),
+        replace(configuration, film_thickness_A=900.0),
+    )
+    for excluded_configuration in excluded_configurations:
+        excluded = build_incident_states(
+            samples,
+            material,
+            compile_instrument(excluded_configuration),
+        ).states
+        assert revisions(excluded) == revisions(baseline)
+        np.testing.assert_array_equal(
+            excluded.k_film_phase_sample_Ainv, baseline.k_film_phase_sample_Ainv
+        )
+
+    untraced = build_incident_states(
+        samples,
+        material,
+        compile_instrument(configuration),
+    )
+    assert untraced.traces == ()
+
+    traced = build_incident_states(
+        samples,
+        material,
+        compile_instrument(configuration),
+        trace_case_id="revision",
+    )
+    for field in fields(IncidentStateBatch):
+        untraced_value = getattr(untraced.states, field.name)
+        traced_value = getattr(traced.states, field.name)
+        if isinstance(untraced_value, np.ndarray):
+            np.testing.assert_array_equal(traced_value, untraced_value)
+        else:
+            assert traced_value == untraced_value
+    provenance = json.loads(traced.traces[0].provenance)
+    assert provenance["source_revision"] == baseline.source_revision
+    assert provenance["sample_geometry_revision"] == baseline.sample_geometry_revision
+    assert provenance["material_revision"] == baseline.material_revision
+    assert provenance["incident_model_id"] == "one_transmitted_channel.v1"
+    assert provenance["scientific_provenance"] == (
+        "T02 detector-native geometry and planar-interface optics"
+    )
