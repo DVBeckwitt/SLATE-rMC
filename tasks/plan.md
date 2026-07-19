@@ -495,11 +495,11 @@ checklist without retaining temporary diagnostics.
 
 ### Checkpoint K: shared beam-to-ki boundary
 
-- [ ] MAT-01 through MANIFEST-01 are accepted in one coherent shared-contract branch.
-- [ ] Focused geometry/material/integration tests and all registered scientific proofs pass.
-- [ ] Existing source-to-`ki` numeric outputs remain accepted; only named revision/API digests
+- [x] MAT-01 through MANIFEST-01 are accepted in one coherent shared-contract branch.
+- [x] Focused geometry/material/integration tests and all registered scientific proofs pass.
+- [x] Existing source-to-`ki` numeric outputs remain accepted; only named revision/API digests
       intentionally rebaseline.
-- [ ] Static scans find no deleted material fields, dead transform, transport hash, raw-source
+- [x] Static scans find no deleted material fields, dead transform, transport hash, raw-source
       rejoin, worker RNG, sliced public batch, or duplicate incident equation.
 - [ ] Human approves the public contract and revision changes before deterministic/parallel/fitting
       consumers freeze their records.

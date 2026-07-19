@@ -1,6 +1,6 @@
 # Beam-to-`ki` Audit Follow-up Checklist
 
-Status: **IN PROGRESS — CHECKPOINT K AWAITS MANIFEST AND HUMAN CONTRACT APPROVAL**
+Status: **IN PROGRESS — CHECKPOINT K AWAITS HUMAN CONTRACT APPROVAL**
 
 Detailed behavior, file ownership, tests, and acceptance criteria are in
 [the implementation plan](plan.md). Completed BKI remediation history remains in commit
@@ -44,14 +44,14 @@ Detailed behavior, file ownership, tests, and acceptance criteria are in
       Dependencies: GEO-02 and Checkpoint K0.
 - [x] **SYNC-02** — Record compact validation, error-injection, performance, and task evidence.
       Dependencies: SYNC-01 and Checkpoint K0.
-- [ ] **MANIFEST-01** — Refresh `FILE_MANIFEST.json` once and run the seed verifier.
+- [x] **MANIFEST-01** — Refresh `FILE_MANIFEST.json` once and run the seed verifier.
       Dependencies: SYNC-02.
 
 ### Checkpoint K
 
-- [ ] Focused material/geometry/integration tests and all scientific proofs pass.
-- [ ] Source-to-`ki` numeric results remain accepted; only named API/revision digests rebaseline.
-- [ ] Deleted-field, dead-transform, transport-hash, raw-source-rejoin, and duplicate-equation scans
+- [x] Focused material/geometry/integration tests and all scientific proofs pass.
+- [x] Source-to-`ki` numeric results remain accepted; only named API/revision digests rebaseline.
+- [x] Deleted-field, dead-transform, transport-hash, raw-source-rejoin, and duplicate-equation scans
       are clean.
 - [ ] Human approves the shared contract before downstream records freeze.
 
