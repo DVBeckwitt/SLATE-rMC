@@ -160,6 +160,25 @@ def source_realization_revision(
     )
 
 
+SAMPLE_INTERSECTION_MODEL_ID = "unique_forward_plane_intersection.v1"
+_SAMPLE_PLANE_OFFSET_RESOLUTION_M = 1.0e-12
+
+
+def _canonical_sample_plane_offset_m(
+    rotation: NDArray[np.float64],
+    translation_m: NDArray[np.float64],
+) -> float:
+    """Return the signed plane offset at the frozen geometry position resolution."""
+
+    offset_m = float(np.dot(rotation[:, 2], translation_m))
+    if not np.isfinite(offset_m):
+        raise ValueError("sample plane offset must be finite")
+    scaled_offset = offset_m / _SAMPLE_PLANE_OFFSET_RESOLUTION_M
+    if np.isfinite(scaled_offset) and abs(scaled_offset) < 2**52:
+        offset_m = float(round(scaled_offset)) * _SAMPLE_PLANE_OFFSET_RESOLUTION_M
+    return 0.0 if offset_m == 0.0 else offset_m
+
+
 def sample_geometry_revision_sha256(
     *,
     lab_from_sample_rotation: ArrayLike,
@@ -167,16 +186,27 @@ def sample_geometry_revision_sha256(
     sample_support_model_id: str,
     sample_width_m: float | None,
     sample_length_m: float | None,
-    intersection_model_id: str,
 ) -> str:
     """Return the canonical sample-entrance geometry revision."""
 
+    rotation = _array(
+        lab_from_sample_rotation,
+        np.float64,
+        (3, 3),
+        "lab_from_sample_rotation",
+    )
+    translation_m = _array(
+        lab_from_sample_translation_m,
+        np.float64,
+        (3,),
+        "lab_from_sample_translation_m",
+    )
     fields: list[tuple[str, object]] = [
-        ("intersection_model_id", intersection_model_id),
-        ("lab_from_sample_rotation", lab_from_sample_rotation),
+        ("intersection_model_id", SAMPLE_INTERSECTION_MODEL_ID),
+        ("lab_from_sample_rotation", rotation),
         ("lab_from_sample_source_frame", "sample"),
         ("lab_from_sample_target_frame", "lab"),
-        ("lab_from_sample_translation_m", lab_from_sample_translation_m),
+        ("sample_entrance_revision_schema", "sample_entrance_revision.v2"),
         ("sample_support_model_id", sample_support_model_id),
     ]
     if sample_support_model_id == "finite_rectangle.v1":
@@ -184,6 +214,7 @@ def sample_geometry_revision_sha256(
             raise ValueError("finite sample geometry revision requires width and length")
         fields.extend(
             (
+                ("lab_from_sample_translation_m", translation_m),
                 ("sample_length_m", sample_length_m),
                 ("sample_width_m", sample_width_m),
             )
@@ -191,6 +222,12 @@ def sample_geometry_revision_sha256(
     elif sample_support_model_id == "unbounded_plane.v1":
         if sample_width_m is not None or sample_length_m is not None:
             raise ValueError("unbounded sample geometry revision requires absent dimensions")
+        fields.append(
+            (
+                "sample_plane_signed_normal_offset_lab_m",
+                _canonical_sample_plane_offset_m(rotation, translation_m),
+            )
+        )
     else:
         raise ValueError("sample geometry revision requires a supported model ID")
     return canonical_revision_sha256(*fields)

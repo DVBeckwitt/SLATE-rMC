@@ -10,10 +10,12 @@ import numpy as np
 import pytest
 
 from rasim_next.core.contracts import (
+    SAMPLE_INTERSECTION_MODEL_ID,
     IncidentSampleBatch,
     IncidentStateBatch,
     MaterialOptics,
     ScatteringEventBatch,
+    canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
@@ -878,6 +880,146 @@ def test_public_monochromatic_multi_ray_source_uses_one_exact_material_row() -> 
     assert np.all(incident.states.valid)
 
 
+def test_compiled_sample_geometry_revision_contract_and_transport_ownership() -> None:
+    configuration = _configuration()
+    instrument = compile_instrument(configuration)
+    expected_revision = canonical_revision_sha256(
+        ("intersection_model_id", SAMPLE_INTERSECTION_MODEL_ID),
+        ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
+        ("lab_from_sample_source_frame", "sample"),
+        ("lab_from_sample_target_frame", "lab"),
+        ("lab_from_sample_translation_m", instrument.lab_from_sample.translation_m),
+        ("sample_entrance_revision_schema", "sample_entrance_revision.v2"),
+        ("sample_length_m", instrument.sample_length_m),
+        ("sample_support_model_id", instrument.sample_support_model_id),
+        ("sample_width_m", instrument.sample_width_m),
+    )
+    assert instrument.sample_geometry_revision == expected_revision
+
+    samples = _explicit_source_batch(
+        incident_sample_id=np.array([0]),
+        origin_lab_m=np.array([[0.0, 0.0, 1.0]]),
+        direction_lab=np.array([[0.0, 0.0, -1.0]]),
+        wavelength_A=np.array([1.54]),
+        polarization_state_id=("UNITY_APPROXIMATION",),
+    )
+    states = build_incident_states(samples, _material(), instrument).states
+    assert states.sample_geometry_revision == instrument.sample_geometry_revision
+    assert states.status == (ValidityCode.VALID,)
+
+    shifted_instrument = compile_instrument(
+        replace(
+            configuration,
+            goniometer_from_sample=RigidTransform(
+                np.eye(3),
+                np.array([3.0e-4, 0.0, 0.0]),
+                FrameId.SAMPLE,
+                FrameId.GONIOMETER,
+            ),
+        )
+    )
+    shifted_states = build_incident_states(samples, _material(), shifted_instrument).states
+    assert shifted_instrument.sample_geometry_revision != instrument.sample_geometry_revision
+    assert shifted_states.sample_geometry_revision == shifted_instrument.sample_geometry_revision
+    assert shifted_states.status == (ValidityCode.OUTSIDE_SUPPORT,)
+
+
+def test_unbounded_sample_revision_ignores_only_tangent_origin_translation() -> None:
+    rotation = np.column_stack(
+        (
+            np.array([1.0, 1.0, 0.0]) / np.sqrt(2.0),
+            np.array([-1.0, 1.0, 2.0]) / np.sqrt(6.0),
+            np.array([1.0, -1.0, 1.0]) / np.sqrt(3.0),
+        )
+    )
+    normal_lab = rotation[:, 2]
+    plane_offset_m = 1.0e-8
+    base_translation_m = plane_offset_m * normal_lab
+    configuration = replace(
+        _configuration(),
+        goniometer_from_sample=RigidTransform(
+            rotation,
+            base_translation_m,
+            FrameId.SAMPLE,
+            FrameId.GONIOMETER,
+        ),
+        sample_support_model_id="unbounded_plane.v1",
+        sample_width_m=None,
+        sample_length_m=None,
+    )
+    tangent_configurations = tuple(
+        replace(
+            configuration,
+            goniometer_from_sample=RigidTransform(
+                rotation,
+                base_translation_m + shift_m,
+                FrameId.SAMPLE,
+                FrameId.GONIOMETER,
+            ),
+        )
+        for shift_m in (0.23456789 * rotation[:, 0], -0.34567891 * rotation[:, 1])
+    )
+    normal_configuration = replace(
+        configuration,
+        goniometer_from_sample=RigidTransform(
+            rotation,
+            base_translation_m + 2.0e-12 * normal_lab,
+            FrameId.SAMPLE,
+            FrameId.GONIOMETER,
+        ),
+    )
+    instrument = compile_instrument(configuration)
+    tangent_instruments = tuple(compile_instrument(item) for item in tangent_configurations)
+    normal_instrument = compile_instrument(normal_configuration)
+
+    expected_revision = canonical_revision_sha256(
+        ("intersection_model_id", SAMPLE_INTERSECTION_MODEL_ID),
+        ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
+        ("lab_from_sample_source_frame", "sample"),
+        ("lab_from_sample_target_frame", "lab"),
+        ("sample_entrance_revision_schema", "sample_entrance_revision.v2"),
+        ("sample_plane_signed_normal_offset_lab_m", plane_offset_m),
+        ("sample_support_model_id", instrument.sample_support_model_id),
+    )
+    assert instrument.sample_geometry_revision == expected_revision
+    assert all(item.sample_geometry_revision == expected_revision for item in tangent_instruments)
+    assert normal_instrument.sample_geometry_revision != expected_revision
+
+    samples = _explicit_source_batch(
+        incident_sample_id=np.array([0]),
+        origin_lab_m=np.asarray([normal_lab]),
+        direction_lab=np.asarray([-normal_lab]),
+        wavelength_A=np.array([1.54]),
+        polarization_state_id=("UNITY_APPROXIMATION",),
+    )
+    material = _material()
+    states = build_incident_states(samples, material, instrument).states
+    tangent_states = tuple(
+        build_incident_states(samples, material, item).states for item in tangent_instruments
+    )
+    normal_states = build_incident_states(samples, material, normal_instrument).states
+
+    assert states.status == normal_states.status == (ValidityCode.VALID,)
+    for tangent_state in tangent_states:
+        assert tangent_state.status == states.status
+        np.testing.assert_allclose(
+            tangent_state.sample_intersection_lab_m,
+            states.sample_intersection_lab_m,
+            rtol=0.0,
+            atol=1.0e-12,
+        )
+        np.testing.assert_array_equal(
+            tangent_state.k_film_phase_sample_Ainv,
+            states.k_film_phase_sample_Ainv,
+        )
+    assert not np.allclose(
+        normal_states.sample_intersection_lab_m,
+        states.sample_intersection_lab_m,
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+
+
 def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
     wavelength_A = 1.540592925
     source_arguments = {
@@ -938,29 +1080,6 @@ def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
     np.testing.assert_array_equal(
         changed_source.k_film_phase_sample_Ainv, baseline.k_film_phase_sample_Ainv
     )
-
-    shifted_sample = build_incident_states(
-        samples,
-        material,
-        compile_instrument(
-            replace(
-                configuration,
-                goniometer_from_sample=RigidTransform(
-                    np.eye(3),
-                    np.array([1.0e-5, 0.0, 0.0]),
-                    FrameId.SAMPLE,
-                    FrameId.GONIOMETER,
-                ),
-            )
-        ),
-    ).states
-    assert {
-        index
-        for index, (before, after) in enumerate(
-            zip(revisions(baseline), revisions(shifted_sample), strict=True)
-        )
-        if before != after
-    } == {2}
 
     unbounded = build_incident_states(
         samples,

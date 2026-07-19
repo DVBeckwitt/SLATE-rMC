@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from rasim_next.core.contracts import sample_geometry_revision_sha256
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry._vectors import finite_vector3
@@ -166,6 +167,7 @@ class CompiledInstrument:
     sample_support_model_id: str
     sample_width_m: float | None
     sample_length_m: float | None
+    sample_geometry_revision: str = field(init=False)
     film_thickness_A: float
 
     def __post_init__(self) -> None:
@@ -199,6 +201,17 @@ class CompiledInstrument:
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
         object.__setattr__(self, "film_thickness_A", thickness)
+        object.__setattr__(
+            self,
+            "sample_geometry_revision",
+            sample_geometry_revision_sha256(
+                lab_from_sample_rotation=self.lab_from_sample.rotation,
+                lab_from_sample_translation_m=self.lab_from_sample.translation_m,
+                sample_support_model_id=self.sample_support_model_id,
+                sample_width_m=self.sample_width_m,
+                sample_length_m=self.sample_length_m,
+            ),
+        )
 
 
 def _rotation_matrix(rotation: AxisRotation) -> NDArray[np.float64]:

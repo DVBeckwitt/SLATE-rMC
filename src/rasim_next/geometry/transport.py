@@ -17,7 +17,6 @@ from rasim_next.core.contracts import (
     MaterialOptics,
     OutgoingWaveBatch,
     ScatteringEventBatch,
-    sample_geometry_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
@@ -38,7 +37,6 @@ from rasim_next.optics.refraction import (
 _MODEL_VERSION = "geometry-optics-v1"
 _PROVENANCE = "T02 detector-native geometry and planar-interface optics"
 _INCIDENT_MODEL_ID = "one_transmitted_channel.v1"
-_INTERSECTION_MODEL_ID = "unique_forward_plane_intersection.v1"
 
 type _TraceStage = tuple[
     str,
@@ -197,14 +195,6 @@ def build_incident_states(
     valid = status == ValidityCode.VALID
     footprint_acceptance = intersections.footprint_acceptance
 
-    sample_geometry_revision = sample_geometry_revision_sha256(
-        lab_from_sample_rotation=instrument.lab_from_sample.rotation,
-        lab_from_sample_translation_m=instrument.lab_from_sample.translation_m,
-        sample_support_model_id=instrument.sample_support_model_id,
-        sample_width_m=instrument.sample_width_m,
-        sample_length_m=instrument.sample_length_m,
-        intersection_model_id=_INTERSECTION_MODEL_ID,
-    )
     states = IncidentStateBatch(
         incident_state_id=samples.incident_sample_id,
         incident_sample_id=samples.incident_sample_id,
@@ -226,7 +216,7 @@ def build_incident_states(
         source_parameter_provenance=samples.source_parameter_provenance,
         source_parameter_revision=samples.source_parameter_revision,
         source_revision=samples.source_revision,
-        sample_geometry_revision=sample_geometry_revision,
+        sample_geometry_revision=instrument.sample_geometry_revision,
         material_revision=material.material_revision,
         incident_model_id=_INCIDENT_MODEL_ID,
     )
