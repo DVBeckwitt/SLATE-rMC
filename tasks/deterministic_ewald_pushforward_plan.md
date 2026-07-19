@@ -26,6 +26,14 @@ At this audit, that ref points to unique unmerged commit
 `8681b01aa476a96ad6e53529c3ff0a249a6720f5`; DP-00 must verify the ref or record an owner-approved
 successor disposition rather than assuming it disappeared.
 
+Before DP-00C freezes the nominal fixture, DP-01 freezes pointwise coating records, or DP-06 freezes
+internal/projection cache keys, the shared beam-to-`ki`
+[Checkpoint K](plan.md#checkpoint-k-shared-beam-to-ki-boundary) must be accepted. The complete
+source realization and its `IncidentStateBatch` are built once and serially before any downstream
+component tiling. Any later private parallel record retains `parent_row_index` into that immutable
+parent; `incident_state_id` remains verified identity payload and is never a sorting key. Workers
+never regenerate source rows or construct/hash public batch slices.
+
 Because these two plan files were absent from BKI-15's precomputed manifest delta and its old
 successor graph, the BKI owner must import the corrected planning commit, replace both stale
 successor edges, and recompute the declared file count, path set, hashes, and manifest delta before
@@ -177,6 +185,9 @@ combined with the canonical detector geometry. It intentionally does **not** mea
   goniometer, or crystal-mount rotation.
 - The one-row source batch must pass through `build_incident_states`; production must not inject an
   internal `ki` directly.
+- The one-row `IncidentSampleBatch` is ordinary empirical source mass with
+  `source_weight == 1.0`. Only its component-tag output is zero-assigned-mass metadata: it has no
+  assigned or deposited mass and cannot enter any photon or detector ledger.
 - The resulting accepted internal reference is
   `ki_film_sample_Ainv = (0.0, 4.062900581047559, -0.3545543022596421)` within the frozen stage
   tolerance. This is an assertion on the input boundary, not an alternate source of truth.
@@ -506,6 +517,12 @@ reciprocal kernel, composes source/population/footprint and ordered strength, ca
 exit/detector seams, and passes already evaluated cells to the pure accumulators. This makes factor
 ownership explicit without a stateful callback or a second physics implementation.
 
+The pipeline validates one complete `IncidentSampleBatch`, builds its complete
+`IncidentStateBatch` once and serially, and then tiles deterministic component work. Private rows
+carry `parent_row_index` and preserve input alignment; reassembly scatters through that index,
+never an `incident_state_id` sort. Every source/incident proof field and owner-provided revision
+passes through unchanged.
+
 DP-02 freezes one canonical detector-independent internal partition, reduction order, and
 `EwaldCoatingResult`. DP-04 may refine descendants of those cells for exit/detector classification
 and pixel allocation, but those descendants cannot be reduced back into or otherwise change the
@@ -557,7 +574,8 @@ refinement heuristics. `DetectorPushforwardResult` replaces `DepositionResult` a
 native image, separate pre-optics exit classification, post-optics detector categories, closure
 residuals, independently certified numerical upper bounds, and separately labelled refinement
 heuristics.
-`CoatingComponentTagBatch` is immutable and every row has zero mass.
+`CoatingComponentTagBatch` is immutable. Its rows have no assigned or deposited event mass and do
+not alter `source_weight` or any photon/detector ledger.
 
 No compatibility aliases are retained for the removed contracts.
 
@@ -626,6 +644,7 @@ committed approved plan + completed BKI-15 + warning-free clean approved main
   -> DP-00 isolated workbranch
   -> DP-00A tolerance contract
   -> DP-00B proof-base repair + Checkpoint 0 approval
+  -> shared beam-to-ki Checkpoint K
   -> DP-00C single frozen-fixture authority
   -> DP-01 frozen fixture + pointwise coating
   -> DP-02 adaptive coating + sphere conservation
@@ -805,7 +824,7 @@ dimensions, detector/frame contracts, CIF/material hashes, and importability wit
 **Acceptance:** every subsequent proof, test, and image tool names this builder; no deterministic
 fixture literal block is copied elsewhere, and the old script has no permanent-test caller.
 
-**Dependencies:** Checkpoint 0.
+**Dependencies:** Checkpoint 0 and shared beam-to-`ki` Checkpoint K.
 
 ### DP-01: Freeze the one-ray fixture and pointwise coating equation
 
@@ -823,6 +842,10 @@ and values, exact source-derived internal `ki`, 121/120 rod counts, 240 ordered 
 `(rod_id,root_label)` slots, root ordering, residuals, and one coarea factor. Keep the old enumerator
 only as a temporary oracle.
 
+Construct the one-row source and complete `IncidentStateBatch` once and serially before coating
+records are tiled. DP-01 consumes the sole DP-00C/NOM-01 fixture authority; no script, parallel
+task, worker, or coating kernel may construct a competing nominal ray.
+
 **Verify:** analytic roots, direct delta/coarea evaluation, mosaic normalization, beta periodicity,
 tangent/no-root classification, and mutation detection for missing/doubled coarea and added
 `sin(alpha)`.
@@ -830,7 +853,7 @@ tangent/no-root classification, and mutation detection for missing/doubled coare
 **Acceptance:** pointwise values are finite/nonnegative on regular support; every rod/root identity
 is exact; no ordered, optics, detector, render, or pipeline import enters `coating.py`.
 
-**Dependencies:** DP-00C.
+**Dependencies:** DP-00C and shared beam-to-`ki` Checkpoint K.
 
 ### DP-02: Add bounded adaptive cells and the Ewald-sphere accumulator
 
@@ -989,6 +1012,12 @@ into this sole production owner; delete temporary orchestration that is not an i
 Reject nonhexagonal catalogs, a nonzero Lorentzian mixture, and active zero-width mosaic atoms
 before allocating cells.
 
+The cutover preserves the complete incident predecessor rather than replacing it with sampled-event
+payload: intersection points, SAMPLE directions, air and film wavevectors, complex film normal
+components, entrance amplitudes, footprint factors, wavelength, polarization, source weights,
+status/valid flags, IDs, model IDs, and source/sample/material/incident revisions remain available
+to their distinct proof and provenance consumers.
+
 Add the final script path initially as a Matplotlib-free `--numeric-only --json` CLI over the sole
 fixture and production pipeline. Time exactly the `simulate_ordered` call with `perf_counter` and
 report `wall_time_s` plus process `peak_rss_bytes`; on the named Windows handoff machine, peak RSS
@@ -1044,7 +1073,9 @@ LAB ray; invalid rows remain cached; branch-0 rows use only the non-direct root,
 physical mass, and carry `M0_INTENSITY_EXCLUDED`; no adaptive integration node is tagged merely
 because it was sampled by the quadrature.
 
-**Dependencies:** DP-05.
+**Dependencies:** DP-05 and shared beam-to-`ki` Checkpoint K. DP-06 is the sole representative-tag
+owner; parallel Task 1.8 may consume its accepted rows but cannot implement another nominal source
+or representative solver.
 
 ### Checkpoint B: authorize runtime deletion
 
@@ -1163,11 +1194,16 @@ transport proof/tests to the narrow deterministic internal-wave contract; DP-07B
 event builder. Delete the now-unused event-shaped transport entry point, remove its public package
 imports/`__all__` entries, and update the final core proof and constructor tests atomically.
 
-**Verify:** core contract/frame proof, full tests, all proof commands, and a static scan for the
-removed class/fields.
+Do not delete or collapse the upstream source/incident proof surface with the sampled-event
+contract. Retain `IncidentSampleBatch` and the incident intersection, SAMPLE direction, air and
+film wavevectors, complex film normal component, entrance amplitude, footprint, wavelength,
+polarization, source weight, status/valid flags, IDs, model IDs, and revision envelope.
+
+**Verify:** core contract/frame proof, full tests, all proof commands, a static scan for the removed
+class/fields, and exact before/after comparison of the protected source/incident evidence.
 
 **Acceptance:** no placeholder, deprecated property, or compatibility contract preserves sampled
-event semantics.
+event semantics, while every distinct source/incident proof and provenance field remains.
 
 **Dependencies:** DP-07B.
 
@@ -1271,7 +1307,8 @@ speckled, or used as the scientific proof oracle.
 but replace the continuous sampler with direct deterministic pushforward. Update invalidation and
 fitting reuse around canonical internal cells and the component-tag cache. Remove outgoing-event
 RNG, sampled-event batching, candidate assumptions, and every Markdown link to files DP-13 will
-delete; retain the upstream source sampler and its accepted center-row semantics.
+delete; retain the upstream source sampler, its accepted center-row semantics, and the complete
+incident proof/provenance schema consumed at the reciprocal boundary.
 
 **Verify:** `tools/check_docs.py` passes before deletion, and an inbound-link scan proves no retained
 document points at `03_mosaic_ewald.md`, `07_integration.md`, or

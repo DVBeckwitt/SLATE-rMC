@@ -20,6 +20,9 @@ Authoritative specification:
 - [ ] DP-00: resolve the current dirty main checkout without overwriting user work; require
       warning-free status with every untracked path visible and no permission errors.
 - [ ] Record the approved post-BKI `PUSHFORWARD_BASE_SHA` and reference hashes.
+- [ ] Require the shared beam-to-`ki` Checkpoint K before DP-00C/DP-01 freeze nominal/pointwise
+      records or DP-06 freezes cache keys; build the complete source and `IncidentStateBatch` once
+      serially, and forbid worker-local source construction or sliced public-batch hashing.
 - [ ] Re-audit the exact post-BKI API/import/fixture tree; any material mismatch returns to human
       plan review before branch creation.
 - [ ] Create a separate worktree on `codex/deterministic-ewald-pushforward`; do not reuse the old
@@ -38,12 +41,17 @@ Authoritative specification:
 - [ ] DP-00C: add the sole pure 5-degree fixture authority, migrate the BKI permanent builder
       invariant away from the old image script, relabel that old builder as legacy-only, and prove
       the new authority imports without Matplotlib.
+- [ ] Prove its one-row source has `source_weight == 1`; only the component tag has zero
+      assigned/deposited mass, and neither the source row nor its revision is exempted from the
+      ordinary source contract.
 
 ## Internal coating
 
 - [ ] DP-01: consume the sole fixture authority and freeze the centered source, default wavelength,
       +5-degree sample pose, VESTA CIF/hash, material-optics values/provenance, pure 2-degree
       Gaussian mosaic, detector transform, explicit unbounded support, and 121/120 rod counts.
+- [ ] Construct the complete one-row `IncidentStateBatch` once and serially before coating tiling;
+      no worker, script, or parallel task may build another nominal ray.
 - [ ] Derive the internal `ki` through the source/intersection/entrance-refraction boundary; never
       inject it by hand.
 - [ ] Add the pure continuous reciprocal rod/root kernel with exactly one Ewald coarea factor and
@@ -85,6 +93,10 @@ Authoritative specification:
 
 - [ ] DP-05: compose the temporary deterministic path beside the old runtime; production consumes
       the fixture's explicit one-row `IncidentSampleBatch` and never samples a source itself.
+- [ ] Preserve incident intersection, SAMPLE direction, air/film wavevectors, complex film normal
+      component, entrance amplitude, footprint, wavelength, polarization, source weight,
+      status/valid flags, IDs, model IDs, and source/sample/material/incident revisions through
+      sampled-event deletion.
 - [ ] Move accepted orchestration from private proof helpers into the sole pipeline owner; reject
       nonhexagonal catalogs, nonzero Lorentzian mixtures, and active zero-width atoms before work.
 - [ ] Add the final image-script path first as a Matplotlib-free numeric-only CLI; its JSON reports
@@ -95,6 +107,8 @@ Authoritative specification:
 - [ ] Compare factor ledgers through the declared first divergence and run the independent latent
       oracle.
 - [ ] DP-06: add the immutable zero-mass peak-mosaic component-tag cache.
+- [ ] Keep DP-00C/DP-01/DP-06 as the sole nominal-fixture and representative-tag owners; parallel
+      Task 1.8 consumes accepted rows only and adds no representative solver.
 - [ ] For every nonempty `(incident_state_id,family_id,intersection_branch_id)` support closure,
       emit exactly one internal row holding `(L_peak,m,intersection_branch_id)`.
 - [ ] Globally certify the pure-Gaussian maximum on every closed support, including all interior,
@@ -130,6 +144,10 @@ Authoritative specification:
 - [ ] DP-07B: migrate reciprocal proof/tests and then delete `reciprocal/events.py`.
 - [ ] DP-08: delete `ScatteringEventBatch` and event transport, repair `geometry/__init__.py`,
       `proof/core.py`, and core contract tests atomically in exactly five files.
+- [ ] Preserve `IncidentSampleBatch` plus incident intersections, SAMPLE directions, air/film
+      wavevectors, complex film normal components, entrance amplitudes, footprint, wavelength,
+      polarization, source weight, statuses/validity, IDs, model IDs, and the complete revision
+      envelope; compare them unchanged across sampled-event deletion.
 - [ ] DP-09: delete fixed mosaic-orientation construction, `render/deposition.py`, and obsolete
       mosaic/Monte Carlo/bilinear implementation-detail tests.
 
@@ -167,7 +185,8 @@ Authoritative specification:
 - [ ] DP-13B: update the stale bootstrap dataflow, import every package initializer, and run exact
       production plus reviewed historical-text scans including event transport symbols.
 - [ ] Confirm no active instruction can recreate candidates, CDF sampling, `T/N`, sampled outgoing
-      events, or bilinear points; retain upstream source characterization.
+      events, or bilinear points; retain upstream source characterization and the complete incident
+      proof/provenance schema at the reciprocal boundary.
 
 ## Final gate
 
