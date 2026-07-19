@@ -8,6 +8,7 @@ import pytest
 from numpy.polynomial.legendre import leggauss
 from scipy.special import ndtr
 
+from painted_ewald import MosaicParameters, Rod, build_mosaic_space
 from rasim_next.core.contracts import (
     IncidentSampleBatch,
     IncidentStateBatch,
@@ -26,6 +27,14 @@ from rasim_next.sampling.mosaic import (
     wrapped_mosaic_line_density_rad_inv,
 )
 from rasim_next.sampling.source import sample_gaussian_source_rays
+
+BI2SE3_RECIPROCAL_BASIS_AINV = np.array(
+    [
+        [1.516578640400576, 0.0, 0.0],
+        [0.8755970862825088, 1.7511941725650182, 0.0],
+        [0.0, 0.0, 0.2194156064806393],
+    ]
+)
 
 
 @pytest.mark.parametrize("count", (6, 7))
@@ -180,6 +189,12 @@ def test_axisymmetric_mosaic_integrates_direct_alpha_probability_mass() -> None:
         alpha_cell_count=4,
         azimuth_cell_count=4,
     )
+    mixed_parameters = WrappedMosaicParameters(0.0, 0.3, 0.25)
+    mixed_density = wrapped_mosaic_line_density_rad_inv(angle, mixed_parameters)
+    continuous_mass = mixed_density.sum() * (2.0 * np.pi / angle.size)
+    assert continuous_mass + mixed_parameters.zero_tilt_probability_mass == pytest.approx(
+        1.0, abs=1.0e-10
+    )
     assert mixed.probability_mass[mixed.alpha_rad == 0.0].sum() == pytest.approx(0.75)
     assert mixed.probability_mass[mixed.alpha_rad > 0.0].sum() == pytest.approx(0.25)
     assert mixed.probability_mass.sum() == pytest.approx(1.0, abs=1.0e-10)
@@ -190,6 +205,161 @@ def test_axisymmetric_mosaic_integrates_direct_alpha_probability_mass() -> None:
             alpha_cell_count=4,
             azimuth_cell_count=4,
         )
+
+
+def test_painted_ewald_mixed_mosaic_space_matches_analytic_probability() -> None:
+    gaussian_sigma_rad = np.deg2rad(5.0)
+    lorentzian_half_width_rad = np.deg2rad(2.0)
+    lorentzian_probability = 0.1
+    space = build_mosaic_space(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=np.eye(3),
+        parameters=MosaicParameters(
+            gaussian_sigma_rad=gaussian_sigma_rad,
+            lorentzian_half_width_rad=lorentzian_half_width_rad,
+            lorentzian_probability=lorentzian_probability,
+            alpha_panel_count=8,
+            alpha_gauss_order=12,
+            azimuth_count=16,
+            azimuth_phase_rad=0.371,
+        ),
+    )
+
+    assert np.all(np.isfinite(space.probability_mass))
+    assert np.all(space.probability_mass > 0.0)
+    assert space.probability_mass.sum() == pytest.approx(1.0, abs=1.0e-12)
+    for harmonic in (1, 2, 3):
+        beta_moment = np.sum(space.probability_mass * np.exp(1j * harmonic * space.beta_rad))
+        assert abs(beta_moment) <= 2.0e-15
+
+    for harmonic in (1, 2):
+        expected = (1.0 - lorentzian_probability) * np.exp(
+            -0.5 * (harmonic * gaussian_sigma_rad) ** 2
+        ) + lorentzian_probability * np.exp(-harmonic * lorentzian_half_width_rad)
+        observed = np.sum(space.probability_mass * np.cos(harmonic * space.alpha_rad))
+        assert observed == pytest.approx(expected, abs=2.0e-13)
+
+    shifted = build_mosaic_space(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=np.eye(3),
+        parameters=replace(space.parameters, azimuth_phase_rad=0.917),
+    )
+    assert not np.array_equal(space.beta_rad, shifted.beta_rad)
+    np.testing.assert_array_equal(space.alpha_rad, shifted.alpha_rad)
+    np.testing.assert_array_equal(space.probability_mass, shifted.probability_mass)
+
+
+@pytest.mark.parametrize("half_width_rad", (1.0e-4, 1.0e-7))
+def test_painted_ewald_narrow_lorentzian_remains_normalized(half_width_rad: float) -> None:
+    space = build_mosaic_space(
+        reciprocal_basis_Ainv=np.eye(3),
+        crystal_to_sample=np.eye(3),
+        parameters=MosaicParameters(
+            gaussian_sigma_rad=0.0,
+            lorentzian_half_width_rad=half_width_rad,
+            lorentzian_probability=1.0,
+            alpha_panel_count=8,
+            alpha_gauss_order=12,
+            azimuth_count=4,
+        ),
+    )
+
+    assert space.probability_mass.sum() == pytest.approx(1.0, abs=1.0e-12)
+    observed = np.sum(space.probability_mass * np.cos(space.alpha_rad))
+    assert observed == pytest.approx(np.exp(-half_width_rad), abs=2.0e-13)
+
+
+def test_painted_ewald_mosaic_space_rejects_invalid_public_inputs() -> None:
+    with pytest.raises(ValueError, match="nonnegative"):
+        MosaicParameters(-0.1, 0.2, 0.1)
+    with pytest.raises(ValueError, match="between zero and one"):
+        MosaicParameters(0.1, 0.2, 1.1)
+    with pytest.raises(ValueError, match="positive integer"):
+        MosaicParameters(0.1, 0.2, 0.1, alpha_gauss_order=0)
+    with pytest.raises(ValueError, match="nonsingular"):
+        build_mosaic_space(
+            reciprocal_basis_Ainv=np.zeros((3, 3)),
+            crystal_to_sample=np.eye(3),
+            parameters=MosaicParameters(0.1, 0.2, 0.1),
+        )
+    with pytest.raises(ValueError, match="proper orthogonal rotation"):
+        build_mosaic_space(
+            reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+            crystal_to_sample=np.diag([1.0, 1.0, 2.0]),
+            parameters=MosaicParameters(0.1, 0.2, 0.1),
+        )
+
+
+def test_painted_ewald_mosaic_slice_conserves_caps_rings_and_rigid_rotation() -> None:
+    sample_angle_rad = 0.23
+    crystal_to_sample = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, np.cos(sample_angle_rad), -np.sin(sample_angle_rad)],
+            [0.0, np.sin(sample_angle_rad), np.cos(sample_angle_rad)],
+        ]
+    )
+    space = build_mosaic_space(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=crystal_to_sample,
+        parameters=MosaicParameters(
+            gaussian_sigma_rad=np.deg2rad(5.0),
+            lorentzian_half_width_rad=np.deg2rad(2.0),
+            lorentzian_probability=0.1,
+            alpha_panel_count=8,
+            alpha_gauss_order=12,
+            azimuth_count=16,
+        ),
+    )
+    c_hat = BI2SE3_RECIPROCAL_BASIS_AINV[:, 2]
+    c_hat = c_hat / np.linalg.norm(c_hat)
+
+    for rod, u_Ainv in (
+        (Rod(0, 0), 3.0 * np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])),
+        (Rod(0, 0), -2.0 * np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])),
+        (Rod(1, 0), 3.0 * np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])),
+    ):
+        mosaic_slice = space.mosaic_slice(rod=rod, u_Ainv=u_Ainv)
+        q_parallel = (
+            rod.h * BI2SE3_RECIPROCAL_BASIS_AINV[:, 0] + rod.k * BI2SE3_RECIPROCAL_BASIS_AINV[:, 1]
+        )
+        unrotated_q = q_parallel + u_Ainv * c_hat
+        expected_q = np.einsum(
+            "ij,njk,k->ni",
+            crystal_to_sample,
+            space.rotation_crystal,
+            unrotated_q,
+            optimize=True,
+        )
+
+        assert mosaic_slice.probability_mass.sum() == pytest.approx(1.0, abs=1.0e-12)
+        np.testing.assert_allclose(
+            mosaic_slice.q_sample_Ainv,
+            expected_q,
+            rtol=2.0e-15,
+            atol=2.0e-15,
+        )
+        np.testing.assert_allclose(
+            np.linalg.norm(mosaic_slice.q_sample_Ainv, axis=1),
+            np.linalg.norm(unrotated_q),
+            rtol=2.0e-15,
+            atol=2.0e-15,
+        )
+
+        if rod.family_m == 0:
+            expected_cosine = 0.9 * np.exp(-0.5 * np.deg2rad(5.0) ** 2) + 0.1 * np.exp(
+                -np.deg2rad(2.0)
+            )
+            weighted_mean = np.sum(
+                mosaic_slice.probability_mass[:, None] * mosaic_slice.q_sample_Ainv,
+                axis=0,
+            )
+            np.testing.assert_allclose(
+                weighted_mean,
+                crystal_to_sample @ (u_Ainv * expected_cosine * c_hat),
+                rtol=0.0,
+                atol=2.0e-13,
+            )
 
 
 def test_ewald_roots_preserve_line_geometry_and_unclipped_jacobian() -> None:

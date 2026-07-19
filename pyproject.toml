@@ -22,7 +22,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rasim_next"]
+packages = ["src/painted_ewald", "src/rasim_next"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
