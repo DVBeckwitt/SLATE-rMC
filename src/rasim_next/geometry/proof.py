@@ -99,9 +99,6 @@ def _material(wavelength_A: float, index: complex, material_id: str) -> Material
         material_id=material_id,
         wavelength_A=np.array([wavelength_A]),
         n_complex=np.array([index]),
-        delta=np.array([1.0 - index.real]),
-        beta=np.array([max(index.imag, 0.0)]),
-        mu_Ainv=np.array([0.0]),
         provenance="T02 compact analytic fixture",
     )
 

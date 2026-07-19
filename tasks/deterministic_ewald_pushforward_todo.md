@@ -1,7 +1,7 @@
 # Deterministic Ewald pushforward checklist
 
-Status: **CORRECTED PLANNING ONLY — re-baselined after the completed BKI merge; implementation is
-blocked pending human re-review and the post-merge reconciliation/base/certification gates below.**
+Status: **SHARED CHECKPOINT K ACCEPTED — API v8 is merged; deterministic pushforward remains gated
+by its owning workbranch and the remaining base/certification checkpoints below.**
 
 Authoritative specification: `tasks/deterministic_ewald_pushforward_plan.md`.
 
@@ -14,11 +14,11 @@ file only in DP-06J and DP-15, and check an item only when its named evidence pa
 - [ ] Record that merged `main` `3af2f4f61d3bc73d8d54891eb867a964240f46cd` incorporates completed
       BKI implementation `d5eed2524a636c7c190b8f9be300d1d73728884e`; never claim this correction
       preceded BKI-15.
-- [ ] Record planning-only beam findings commits
+- [x] Record the owner-approved beam findings sequence beginning with
       `af456b5988076c400eea972fb4f2ac2d647891dc` and
-      `0953cab668b489fd4c4d5a1d4de070fcab165295` (or their approved replacement), and reconcile their
-      committed BKI/deterministic/parallel-plan paths plus the observed dirty T09/T10/T11/parallel-
-      plan patch by exact hash; never overwrite the sibling worktree.
+      `0953cab668b489fd4c4d5a1d4de070fcab165295` and ending at accepted Checkpoint K head
+      `6267301421e6dba1b0d121fa26585c24eae05f3d`; preserve this newer deterministic checklist while
+      reconciling the committed BKI/deterministic/parallel/fitting paths.
 - [ ] DP-00R: preserve BKI-00--BKI-17 completion history, replace stale parallel/coating successor
       edges with the sole overlapping sequence “implemented/accepted shared Checkpoint K, then this
       deterministic plan,” and record the exact corrected-planning and approved rebase/merge hashes.
@@ -32,10 +32,11 @@ file only in DP-06J and DP-15, and check an item only when its named evidence pa
       require warning-free status with every untracked path visible before DP-00.
 - [ ] Preserve the unique coating-validation ref/commit until its owner approves a port/archive
       disposition; never reuse or silently delete it.
-- [ ] Require the shared beam-to-`ki` branch to implement and accept Checkpoint K on approved main;
-      a planning commit is not acceptance. Build/hash the complete source once, build the complete
-      incident table once and serially, retain `parent_row_index`, never ID-sort/rejoin or hash a
-      public slice, and preserve `source_weight=1` for the nominal one-row source.
+- [x] Accept the shared beam-to-`ki` API-v8 Checkpoint K on approved main. It builds/hashes the
+      complete source once and the complete incident table once and serially, never ID-sorts/rejoins
+      or hashes a public slice, and preserves `source_weight=1` for the nominal one-row source.
+      Checkpoint K does not implement `parent_row_index`; PAR-01/DP-06C retain that downstream
+      ownership.
 - [ ] DP-00: record `PUSHFORWARD_BASE_SHA`, reference hashes, current API/trace/reference versions,
       accepted Checkpoint K commit/API/revision hashes, accepted-domain inventory inputs, and a clean exclusive worktree on
       `codex/deterministic-ewald-pushforward`.

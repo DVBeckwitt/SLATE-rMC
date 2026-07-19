@@ -676,36 +676,39 @@ def _hash_array(digest: object, name: str, value: ArrayLike, dtype: str) -> None
 
 def _instrument_fingerprint(instrument: CompiledInstrument) -> str:
     digest = hashlib.sha256()
-    for name in (
-        "lab_from_goniometer",
-        "lab_from_sample",
-        "sample_from_crystal",
-        "lab_from_crystal",
-        "lab_from_detector",
-    ):
-        transform = getattr(instrument, name)
-        _hash_array(digest, f"{name}.rotation", transform.rotation, "<f8")
-        _hash_array(digest, f"{name}.translation_m", transform.translation_m, "<f8")
-    _hash_array(digest, "detector_shape_rc", instrument.detector_shape_rc, "<i8")
-    _hash_text(digest, instrument.sample_support_model_id)
-    support_dimensions_m = (
-        ()
-        if instrument.sample_support_model_id == "unbounded_plane.v1"
-        else (instrument.sample_width_m, instrument.sample_length_m)
-    )
-    _hash_array(digest, "sample_support_dimensions_m", support_dimensions_m, "<f8")
+    _hash_text(digest, "detector_angle_instrument_fingerprint.v2")
     _hash_array(
         digest,
-        "detector_calibration",
-        (
-            instrument.detector_row_pitch_m,
-            instrument.detector_column_pitch_m,
-            *instrument.detector_reference_coordinate_px,
-            instrument.film_thickness_A,
-        ),
+        "lab_from_detector.rotation",
+        instrument.lab_from_detector.rotation,
         "<f8",
     )
-    return f"sha256-{digest.hexdigest()}.v1"
+    _hash_array(
+        digest,
+        "lab_from_detector.translation_m",
+        instrument.lab_from_detector.translation_m,
+        "<f8",
+    )
+    _hash_array(digest, "detector_shape_rc", instrument.detector_shape_rc, "<i8")
+    _hash_array(
+        digest,
+        "detector_row_pitch_m",
+        (instrument.detector_row_pitch_m,),
+        "<f8",
+    )
+    _hash_array(
+        digest,
+        "detector_column_pitch_m",
+        (instrument.detector_column_pitch_m,),
+        "<f8",
+    )
+    _hash_array(
+        digest,
+        "detector_reference_coordinate_px",
+        instrument.detector_reference_coordinate_px,
+        "<f8",
+    )
+    return f"sha256-{digest.hexdigest()}.v2"
 
 
 def _cache_key(

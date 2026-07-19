@@ -1,6 +1,7 @@
 # T09: fit foundation
 
-Status: FUTURE. Begin only after T07 passes.
+Status: FUTURE. Begin only after shared beam-to-`ki` Checkpoint K and the accepted deterministic
+detector-native Phase 1 boundary.
 
 Branch: `feat/fit-foundation`
 
@@ -41,8 +42,16 @@ manuscript
   directions, and rejects redundant packs before objective evaluation
 - detector-native datasets, masks, variance/noise model, exposure metadata, preprocessing revisions, and a data/model correction ledger
 - immutable compiled fit context
+- fit-context material coverage for every exact unique wavelength in the complete parent
+  `IncidentSampleBatch`, including rows that are invalid under the baseline geometry but may become
+  valid in a later trial; each value matches exactly one `MaterialOptics` wavelength row, with no
+  tolerance match, interpolation, or geometry-filtered subset
+- the immutable owner-provided `source_parameter_revision`, `source_revision`,
+  `sample_geometry_revision`, and `material_revision` envelope plus `incident_model_id`; validate
+  the context's declared envelope before objective evaluation, require rebuilt trial objects to
+  carry owner-derived revisions consistent with the invalidation graph, and never recompute these
+  scientific hashes in fitting code
 - explicit invalidation graph over compiled forward states
-- deterministic sample revisions
 - objective value, invalid-evaluation, convergence, and provenance records
 - analytic elimination interface for exact linear nuisance scales/backgrounds
 - synthetic objective harness independent of RASIM physics
@@ -60,6 +69,13 @@ manuscript
 - no forward equation in the fitting package
 - full column rank for each accepted active pack and deterministic rejection of deliberately
   redundant common-pose, isotropic-roll, pivot-axis, zero-pose/mount, and inactive-support packs
+- a baseline-invalid source row whose wavelength becomes geometry-valid later has material optics
+  available without rebuilding the context
+- deterministic preflight rejection when any exact parent wavelength is absent or when an
+  owner-provided source/sample/material revision or incident model ID mismatches the compiled
+  context; the forward objective is not entered
+- geometry-only trials reuse material state, while detector-only trials reuse both material state
+  and the detector-independent incident realization
 
 ## Commands
 

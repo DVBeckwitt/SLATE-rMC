@@ -27,8 +27,9 @@ T02 hits + T04 or T05 strengths
 | Contract or factor | Producer | Consumer | Acceptance rule |
 |---|---|---|---|
 | `IncidentSampleBatch` | T03 sampling | T02 geometry | one complete PCG64/v2 realization; every row has exact empirical mass `1/N`; no generating PDF weight or worker-local generation |
-| `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | one sorted unique exact wavelength grid; complex index convention, `delta`, `beta`, and absorption are identical |
-| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | sole incident authority with exact state/sample identity, wavelength, polarization, status, mass, `ki`, optics, and source/sample/material revisions; no companion source join |
+| `CompiledInstrument` | geometry compilation | T02 geometry, T03 reciprocal orientation, T07 measurement | retained causal transforms/calibration/support plus owner-computed `sample_geometry_revision` under schema `sample_entrance_revision.v2`; local goniometer composition and dead transform derivatives are not stored |
+| `MaterialOptics` | T04 materials | T02 optics and T04 Parratt | one sorted unique exact wavelength grid; `n_complex` is the sole optical-array authority and the owner supplies `material_revision` under schema `material_optics_revision.v2` |
+| `IncidentStateBatch` | T02 geometry/optics | T03 Ewald | sole incident authority with exact state/sample identity, wavelength, polarization, status, mass, `ki`, optics, source-parameter/source/sample/material revisions, and incident-model ID; no companion source join or downstream rehash |
 | `RodCatalog` | T04 ordered | T03 Ewald, T08 selection | every `(h,k)` rod remains distinct; exact family metadata is preserved |
 | `ScatteringEventBatch` | T03 Ewald | T02 exit transport, T04 ordered, T05 stacking, T07 integration | pre-selection candidates retain exact rod/orientation/`Q`/`kf` identity and mosaic/Jacobian mass for one all-rod pool; no per-reflection normalization or post-selection reweighting |
 | `LayerAmplitudeResult` | T04 ordered motifs | T05 stacking | event/rod alignment, phase convention, motif gauge, and normalization are explicit |
@@ -111,6 +112,6 @@ ordered or stacking intensity fit
 Selection and fitting consume the integrated identities and compiled states. They do not create alternate forward paths.
 Parallel Task 1.1 introduces no runtime packet layout. Any private packet layouts introduced by
 future staged execution belong to parallel Task 1.4, after the Task 1.3 numeric boundary, and are
-row-index views of the canonical incident ledger. They inherit parent revisions and restore
-canonical order before comparison or reduction; worker count, tile size, and completion order
-cannot change source generation, incident status, or numeric payload.
+row-index views of the canonical incident ledger. They inherit the complete parent revision/model
+envelope and restore canonical order before comparison or reduction; worker count, tile size, and
+completion order cannot change source generation, incident status, or numeric payload.

@@ -120,9 +120,6 @@ def material_optics(crystal: CrystalStructure, wavelength_A: ArrayLike) -> Mater
         material_id=crystal.phase_id,
         wavelength_A=wavelength,
         n_complex=1.0 - delta + 1.0j * beta,
-        delta=delta,
-        beta=beta,
-        mu_Ainv=4.0 * np.pi * beta / wavelength,
         provenance=(
             f"Gemmi-expanded occupied structure; XrayDB {xraydb.__version__}; "
             f"database={xraydb.get_xraydb().get_version().split(',')[0].removeprefix('XrayDB Version: ')}; "

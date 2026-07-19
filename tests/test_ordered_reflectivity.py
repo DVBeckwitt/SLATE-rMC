@@ -10,7 +10,11 @@ import pytest
 import xraydb
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import MaterialOptics, RodQueryBatch
+from rasim_next.core.contracts import (
+    MaterialOptics,
+    RodQueryBatch,
+    canonical_revision_sha256,
+)
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.materials import (
     CrystalStructure,
@@ -164,29 +168,43 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
     prefactor = (
         CLASSICAL_ELECTRON_RADIUS_A * optical_wavelength_A**2 / (2.0 * np.pi * crystal.volume_A3)
     )
-    np.testing.assert_allclose(optics.delta, prefactor * forward.real, rtol=1e-12, atol=0.0)
-    np.testing.assert_allclose(optics.beta, prefactor * forward.imag, rtol=1e-12, atol=0.0)
-    np.testing.assert_allclose(optics.mu_Ainv, 4.0 * np.pi * optics.beta / optical_wavelength_A)
-    np.testing.assert_allclose(optics.n_complex, 1.0 - optics.delta + 1.0j * optics.beta)
-    assert np.all(optics.beta > 0.0)
+    expected_delta = prefactor * forward.real
+    expected_beta = prefactor * forward.imag
+    np.testing.assert_allclose(optics.n_complex.real, 1.0 - expected_delta, rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(optics.n_complex.imag, expected_beta, rtol=1e-12, atol=0.0)
+    assert np.all(expected_beta > 0.0)
 
     repeated = material_optics(
         crystal,
         np.asarray((1.8, 1.1, WAVELENGTH_A, 1.8, 1.1, WAVELENGTH_A)),
     )
     np.testing.assert_array_equal(repeated.wavelength_A, optical_wavelength_A)
-    for name in ("n_complex", "delta", "beta", "mu_Ainv"):
-        np.testing.assert_allclose(
-            getattr(repeated, name), getattr(optics, name), rtol=0.0, atol=0.0
-        )
+    np.testing.assert_allclose(repeated.n_complex, optics.n_complex, rtol=0.0, atol=0.0)
+
+    expected_revision = canonical_revision_sha256(
+        ("material_id", optics.material_id),
+        ("material_optics_revision_schema", "material_optics_revision.v2"),
+        ("n_complex", optics.n_complex),
+        ("provenance", optics.provenance),
+        ("wavelength_A", optics.wavelength_A),
+    )
+    assert optics.material_revision == expected_revision
+    assert repeated.material_revision == expected_revision
+
+    changed_wavelength = optics.wavelength_A * 1.01
+    changed_materials = (
+        replace(optics, material_id=f"{optics.material_id}-changed"),
+        replace(optics, wavelength_A=changed_wavelength),
+        replace(optics, n_complex=optics.n_complex + (-1.0e-9 + 2.0e-10j)),
+        replace(optics, provenance=f"{optics.provenance}; changed"),
+    )
+    assert all(item.material_revision != expected_revision for item in changed_materials)
+
     with pytest.raises(ValueError, match="wavelength"):
         MaterialOptics(
             material_id="invalid-duplicate",
             wavelength_A=optics.wavelength_A[[0, 0]],
             n_complex=optics.n_complex[[0, 0]],
-            delta=optics.delta[[0, 0]],
-            beta=optics.beta[[0, 0]],
-            mu_Ainv=optics.mu_Ainv[[0, 0]],
             provenance="invalid duplicate fixture",
         )
     with pytest.raises(ValueError, match="wavelength"):
@@ -194,10 +212,14 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
             material_id="invalid-unsorted",
             wavelength_A=optics.wavelength_A[::-1],
             n_complex=optics.n_complex[::-1],
-            delta=optics.delta[::-1],
-            beta=optics.beta[::-1],
-            mu_Ainv=optics.mu_Ainv[::-1],
             provenance="invalid unsorted fixture",
+        )
+    with pytest.raises(ValueError, match="absorption"):
+        MaterialOptics(
+            material_id="invalid-negative-absorption",
+            wavelength_A=np.array([WAVELENGTH_A]),
+            n_complex=np.array([1.0 - 1.0e-12j]),
+            provenance="invalid absorption fixture",
         )
 
     catalog = build_rod_catalog(crystal, h_bounds=(0, 1), k_bounds=(0, 0))

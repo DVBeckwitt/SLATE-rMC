@@ -104,3 +104,21 @@ Source phase space, detector calibration, and sample/goniometer alignment are se
 ## D026: Explicit data likelihood
 
 Raw counts, dark-subtracted data, and variance-weighted continuous observations are not interchangeable. Every fit records its data model, mask, variance, background, and scale semantics.
+
+## D027: Owner-derived beam-to-ki revisions
+
+`n_complex` is the sole stored material optical array. `MaterialOptics` derives `material_revision`
+under schema `material_optics_revision.v2`, `CompiledInstrument` derives
+`sample_geometry_revision` under schema `sample_entrance_revision.v2`, and transport copies both
+revisions into the complete incident envelope without rehashing. The v2 digests are
+provenance/cache rebaselines rather than numerical corrections; contract API v8 records the
+structural field removal.
+
+## D028: Causal geometry identity
+
+An unbounded sample plane is identified by its full orientation and signed LAB normal offset at the
+frozen `1e-12 m` position resolution, not by two arbitrary tangent-origin coordinates. Compiled state
+retains only transforms with numerical or proof consumers; ordered goniometer composition remains a
+local step and no `lab_from_crystal` derivative is stored. Detector-angle fingerprint v2 hashes only
+the detector transform, shape, pitches, and reference coordinate, while `AngleFrame` remains a
+separate cache-key owner.

@@ -280,6 +280,134 @@ def _dense_projector(projector: object) -> np.ndarray:
     return dense
 
 
+def test_angle_projector_fingerprint_tracks_only_detector_geometry() -> None:
+    instrument = _instrument(shape_rc=(2, 3))
+    frame = _frame([4.0e-3, -0.7e-3, 0.0])
+    grid = _full_grid(instrument, frame, radial_bins=4)
+    baseline = compile_detector_angle_projector(
+        instrument=instrument,
+        angle_frame=frame,
+        grid=grid,
+    )
+    assert baseline.instrument_fingerprint.endswith(".v2")
+
+    detector = instrument.lab_from_detector
+    angle_rad = np.deg2rad(3.0)
+    detector_rotation = np.array(
+        [
+            [np.cos(angle_rad), -np.sin(angle_rad), 0.0],
+            [np.sin(angle_rad), np.cos(angle_rad), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    detector_causal_instruments = (
+        replace(
+            instrument,
+            lab_from_detector=RigidTransform(
+                detector_rotation,
+                detector.translation_m,
+                FrameId.DETECTOR,
+                FrameId.LAB,
+            ),
+        ),
+        replace(
+            instrument,
+            lab_from_detector=RigidTransform(
+                detector.rotation,
+                detector.translation_m + np.array([1.0e-4, 0.0, 0.0]),
+                FrameId.DETECTOR,
+                FrameId.LAB,
+            ),
+        ),
+        replace(instrument, detector_shape_rc=(3, 3)),
+        replace(instrument, detector_row_pitch_m=instrument.detector_row_pitch_m * 1.01),
+        replace(
+            instrument,
+            detector_column_pitch_m=instrument.detector_column_pitch_m * 1.01,
+        ),
+        replace(
+            instrument,
+            detector_reference_coordinate_px=(
+                instrument.detector_reference_coordinate_px[0] + 0.25,
+                instrument.detector_reference_coordinate_px[1],
+            ),
+        ),
+    )
+    causal_projectors = tuple(
+        compile_detector_angle_projector(
+            instrument=item,
+            angle_frame=frame,
+            grid=grid,
+        )
+        for item in detector_causal_instruments
+    )
+    causal_fingerprints = {item.instrument_fingerprint for item in causal_projectors}
+    assert baseline.instrument_fingerprint not in causal_fingerprints
+    assert len(causal_fingerprints) == len(causal_projectors)
+    assert all(item.cache_key != baseline.cache_key for item in causal_projectors)
+
+    sample_rotation = np.array(
+        [
+            [np.cos(angle_rad), 0.0, np.sin(angle_rad)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(angle_rad), 0.0, np.cos(angle_rad)],
+        ]
+    )
+    excluded_instruments = (
+        replace(
+            instrument,
+            lab_from_sample=RigidTransform(
+                sample_rotation,
+                np.array([1.0e-4, -2.0e-4, 3.0e-4]),
+                FrameId.SAMPLE,
+                FrameId.LAB,
+            ),
+        ),
+        replace(
+            instrument,
+            sample_from_crystal=RigidTransform(
+                sample_rotation,
+                np.array([2.0e-4, 0.0, 0.0]),
+                FrameId.CRYSTAL,
+                FrameId.SAMPLE,
+            ),
+        ),
+        replace(instrument, sample_width_m=instrument.sample_width_m * 1.1),
+        replace(
+            instrument,
+            sample_support_model_id="unbounded_plane.v1",
+            sample_width_m=None,
+            sample_length_m=None,
+        ),
+        replace(instrument, film_thickness_A=instrument.film_thickness_A * 1.2),
+    )
+    for excluded_instrument in excluded_instruments:
+        candidate = compile_detector_angle_projector(
+            instrument=excluded_instrument,
+            angle_frame=frame,
+            grid=grid,
+        )
+        assert candidate.instrument_fingerprint == baseline.instrument_fingerprint
+        assert candidate.cache_key == baseline.cache_key
+        for name in (
+            "detector_valid_mask",
+            "angle_bin_valid_mask",
+            "coverage_pixel_index",
+            "coverage_bin_index",
+            "weight",
+            "lost_support",
+        ):
+            np.testing.assert_array_equal(getattr(candidate, name), getattr(baseline, name))
+
+    changed_frame = compile_detector_angle_projector(
+        instrument=instrument,
+        angle_frame=replace(frame, revision="separate-angle-frame-owner.v2"),
+        grid=grid,
+    )
+    assert changed_frame.instrument_fingerprint == baseline.instrument_fingerprint
+    assert changed_frame.cache_key != baseline.cache_key
+
+
 def test_sparse_projector_matches_independent_polygon_oracle_across_seam() -> None:
     angle = np.deg2rad(7.0)
     rotation = np.array(

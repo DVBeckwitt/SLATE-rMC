@@ -1,6 +1,6 @@
 # Shared contracts
 
-Bootstrap owns contract API v7. Parallel physics branches treat these contracts as read-only.
+Bootstrap owns contract API v8. Parallel physics branches treat these contracts as read-only.
 
 ## Coordinate and transform types
 
@@ -46,10 +46,13 @@ InstrumentConfiguration
     beam center in detector-native continuous coordinates
 ```
 
-User-facing parameters compile once into explicit transforms. Kernels never reconstruct rotation chains independently.
-`CompiledInstrument` stores hashed `lab_from_sample` and internally derives its immutable exact
-inverse `sample_from_lab`; callers cannot supply a second inverse authority, and batched incident
-construction never inverts or transforms the same direction a second time.
+User-facing parameters compile once into explicit transforms. Kernels never reconstruct rotation
+chains independently. `lab_from_goniometer` is a local ordered-compilation intermediate, not stored
+compiled state. `CompiledInstrument` retains only `lab_from_sample`, its immutable derived inverse
+`sample_from_lab`, `sample_from_crystal`, `lab_from_detector`, detector calibration, sample support,
+film thickness, and its derived `sample_geometry_revision`; `lab_from_crystal` is not stored.
+Callers cannot supply the inverse or revision, and batched incident construction neither inverts the
+same transform nor rebuilds the revision.
 
 ## Source samples
 
@@ -102,17 +105,19 @@ MaterialOptics
     material_id
     wavelength_A[M] float64
     n_complex[M] complex128
-    delta[M] float64
-    beta[M] float64
-    mu_Ainv[M] float64
     provenance
+    material_revision SHA-256 (derived, init=False)
 ```
 
 The ordered/materials branch produces this contract. `wavelength_A` is nonempty, finite, positive,
 strictly increasing, and exact. The producer applies one sorted exact `unique` operation before
 optical evaluation, so repeated requested wavelengths share one authoritative material row.
 Manually constructed duplicate or unsorted grids fail. Geometry consumes the contract without
-parsing CIF files, interpolation, or tolerance-based matching.
+parsing CIF files, interpolation, or tolerance-based matching. `n_complex` is the sole optical-array
+authority and its imaginary part is nonnegative; any real decrement, absorptive part, or attenuation
+coefficient needed by an equation is derived locally rather than stored as a second representation.
+The owner-computed `material_optics_revision.v2` digest hashes exactly `material_id`, the schema tag,
+`wavelength_A`, `n_complex`, and `provenance`. No caller supplies it and transport only copies it.
 
 ## Sample support
 
@@ -123,6 +128,17 @@ intersection with footprint acceptance one. Zero or placeholder dimensions are i
 Every ray with `abs(direction_sample_z) <= 1e-14`, including a coplanar ray, is `PARALLEL` because
 the plane intersection is not unique. Such a row has no intersection, footprint mass, or optical
 payload.
+
+`CompiledInstrument` owns the init-disabled `sample_geometry_revision`. The
+`sample_entrance_revision.v2` payload always includes the full SAMPLE-to-LAB rotation, explicit
+source/target frames, `unique_forward_plane_intersection.v1`, and the support model. Finite support
+also includes the full translation and width/length. Unbounded support replaces the arbitrary two
+tangent-origin coordinates with the signed LAB normal offset
+`dot(lab_from_sample.rotation[:,2], lab_from_sample.translation_m)`, canonicalized at the frozen
+`1e-12 m` geometry position resolution by nearest-integer ties-to-even rounding while
+`abs(offset / 1e-12) < 2**52`, with signed zero normalized. Once float spacing reaches that
+resolution, the exact finite float is retained. This makes in-plane origin changes cache-equivalent
+without changing the full transforms used by numerical transport.
 
 ## Incident states
 
@@ -162,11 +178,14 @@ but expose zero film-side `ki`, complex normal mode, and entrance amplitude. Val
 `k_air=(2*pi/wavelength)*direction`, tangential conservation, and equality between the phase-vector
 normal component and `real(kz_film)`.
 
-The sample-geometry revision covers only the SAMPLE-to-LAB entrance pose, explicit support model,
-finite dimensions when applicable, and intersection model. The material revision covers the exact
-canonical optical grid and its provenance. Detector calibration, `sample_from_crystal`, and film
-thickness are deliberately excluded. Revisions are computed once for the complete canonical batch;
-worker row views inherit parent revisions and canonical row indices and never rehash a slice.
+The sample and material revisions are copied from their owning compiled objects. Detector
+calibration, `sample_from_crystal`, and film thickness are deliberately excluded from incident
+identity. `IncidentStateBatch` is the complete reciprocal-space incident authority: downstream
+consumers use its wavelength, polarization, status, empirical mass, `ki`, optical evidence, and full
+revision envelope and never rejoin raw source rows. Future worker row views inherit owner revisions
+and canonical parent indices and never hash a slice. Contract-v8 digest changes are provenance
+rebaselines caused by the explicit v2 payloads; accepted statuses and numerical observables are not
+corrected by this cutover.
 
 ## Rod catalog
 
@@ -288,6 +307,14 @@ DetectorHitBatch
 ```
 
 `pixel_solid_angle_sr` is immutable geometry metadata for optional later analysis; it is never an input to raw rendering.
+
+The detector-angle projector's `instrument_fingerprint` uses
+`detector_angle_instrument_fingerprint.v2` and hashes exactly the full `lab_from_detector`
+transform, detector shape, row pitch, column pitch, and detector reference coordinate. `AngleFrame`
+has its own cache-key contribution. Sample/goniometer/crystal transforms, sample support, film
+thickness, and incident revisions do not affect `instrument_fingerprint`; they invalidate a
+projector only when they also change the separately keyed `AngleFrame` consumed by its numerical
+kernel.
 
 ## Pixel contributions
 

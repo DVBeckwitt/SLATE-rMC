@@ -1,8 +1,8 @@
 # Specification and atomic plan: deterministic Ewald-coating pushforward
 
-Status: **CORRECTED PLAN — re-baselined after the completed BKI merge against the current branch
-and working tree. Human re-review is required, and implementation remains blocked until the
-post-merge reconciliation/base gates below are satisfied. No implementation has started.**
+Status: **SHARED CHECKPOINT K ACCEPTED — the owner-approved API-v8 beam-to-`ki` boundary is
+merged; deterministic pushforward remains gated by its separate implementation and certification
+checkpoints.**
 
 This is the authoritative replacement proposal for the Monte Carlo coating and detector-integration
 framework. It supersedes the production direction in:
@@ -22,15 +22,13 @@ commit `d5eed2524a636c7c190b8f9be300d1d73728884e`. The checked-in BKI plan and c
 BKI-00--BKI-17 complete, so the earlier requirement to import this correction before BKI-15 is
 historically impossible and is not retained. This planning commit is a post-merge addendum.
 
-The completed BKI files still route from BKI-15 to parallel Task 1.1 and continuous-coating
-validation. Before a deterministic implementation branch is created, DP-00R must reconcile that
-stale successor text to the sole overlapping sequence “shared beam-to-`ki` Checkpoint K, then the
-deterministic plan,” record the exact BKI
-merge/implementation/corrected-planning hashes, refresh the manifest for its exact file set, and
-rerun the affected BKI-15 documentation, proof, and seed-integrity commands. Documentation/seed
-must pass; any existing reciprocal/stacking proof-base-only failure is recorded exactly and remains
-owned by DP-00B rather than being misreported as a new scientific regression. It must preserve BKI
-completion evidence as history rather than pretending the reconciliation occurred before BKI-15.
+Before the accepted Checkpoint K merge, the completed BKI files still routed from BKI-15 to
+parallel Task 1.1 and continuous-coating validation. The merge replaces that live successor with
+the sole overlapping sequence “shared beam-to-`ki` Checkpoint K, then the deterministic plan” while
+preserving BKI completion as history. DP-00R still owns the broader historical process audit,
+remaining owner/status dispositions, and its exact BKI-15 documentation/proof/seed rerun; it must
+not pretend the reconciliation occurred before BKI-15. Any reciprocal/stacking proof-base-only
+failure remains owned by DP-00B rather than being misreported as a new scientific regression.
 BKI-16 and BKI-17 are already landed; their remaining obligations, if any, must be recorded rather
 than projected as future prerequisites.
 
@@ -40,38 +38,32 @@ must record an owner-approved audit disposition for both deviations and independ
 full affected validation; neither an exception nor a successful rerun may describe those historical
 tasks as <=5-file compliant. Every deterministic task below remains <=5 files.
 
-At revalidation, local `main` was four commits ahead of `origin/main` (`063b034`), so DP-00 must
-record an owner-approved local-versus-remote authority/synchronization disposition rather than
-assuming either ref is canonical. Main also showed owner-controlled untracked `examples.zip` and
-permission-denied paths `pytest-of-Kenpo/`, `tmp0p_i8jt4/`, and `tmpjc1vjoa6/`. This planning commit
-must not stage, overwrite, delete, or imply disposition of them.
+Local `main` remains ahead of `origin/main`, so DP-00 must record an owner-approved local-versus-
+remote authority/synchronization disposition rather than assuming either ref is canonical. The
+main checkout also retains owner-controlled untracked `examples.zip` and
+`tasks/incident_beam_parallelization_plan.md`, plus permission-warning paths. This merge does not
+stage, overwrite, delete, or imply disposition of them.
 
-At final plan-freeze revalidation, active sibling worktree
-`../SLATE-rMC-beam-ki-findings-plan` was on `codex/beam-ki-findings-plan` at planning-only commit
-`0953cab668b489fd4c4d5a1d4de070fcab165295`, a descendant of current `main` not yet incorporated
-there. Its parent `af456b5988076c400eea972fb4f2ac2d647891dc` changes `FILE_MANIFEST.json`,
-`tasks/plan.md`, and `tasks/todo.md`; `0953cab` changes this deterministic plan/checklist and
-`tasks/parallel_simulation_geometry_fitting_plan.md`. The worktree then had additional uncommitted
-changes to `tasks/09_fit_foundation.md`, `tasks/10_instrument_calibration.md`,
-`tasks/11_sample_geometry_fit.md`, and the parallel plan. Those paths directly overlap DP-00R or
-later instruction synchronization. DP-00R cannot start until the owner lands, transfers by exact
-patch hash, or explicitly supersedes both commits and the remaining dirty changes; it must
-reconcile rather than overwrite them and must record the approved rebase/merge order. A separate clean detached worktree
-`C:/Users/Kenpo/.codex/worktrees/791a/SLATE-rMC` at
-`55dc336ec0d65d22c49cf7ee9bb96d2105405a82` also requires an owner disposition in the active-
-worktree audit, but must not be pruned merely to manufacture cleanliness. DP-00 requires a warning-
-free status in which every untracked path is visible before recording the implementation base.
+On 2026-07-19 the owner approved `codex/beam-ki-findings-plan` at
+`6267301421e6dba1b0d121fa26585c24eae05f3d` as the shared Checkpoint K authority. Its sequence from
+`af456b5988076c400eea972fb4f2ac2d647891dc` through that accepted head implements contract API v8,
+owner-derived material/sample revisions, causal unbounded-plane identity, dead-transform pruning,
+detector-only angle identity, exact source-to-`ki` parity evidence, and the final manifest. The
+post-BKI repaired deterministic plan/checklist remains the structural authority while all accepted
+Checkpoint K semantics from the feature branch are imported.
 
-The `af456b5..0953cab` planning sequence defines a future shared beam-to-`ki` Checkpoint K; it does not implement or accept
-that checkpoint. The deterministic workbranch must start only after the owner-reconciled shared
-contract branch lands and Checkpoint K passes on approved `main`. The accepted boundary constructs
-and hashes one complete `IncidentSampleBatch`, builds its complete `IncidentStateBatch` once and
-serially, and then tiles downstream work. Private rows retain explicit `parent_row_index`; reassembly
-scatters through that index, while `incident_state_id` remains verified identity payload and is
-never a sorting key. Workers never regenerate source rows or construct/hash public batch slices.
-The one-row nominal source retains empirical `source_weight=1`; only tag metadata has no assigned
-or deposited event mass. DP-00 records the accepted Checkpoint K commit/API/revision hashes and
-revalidates every frozen fixture field before branch creation.
+The accepted boundary constructs and hashes one complete `IncidentSampleBatch`, builds its
+complete `IncidentStateBatch` once and serially, and then permits only downstream tiling. Checkpoint
+K adds no private packet runtime: `parent_row_index` remains owned by PAR-01/DP-06C.
+`incident_state_id` is verified identity payload and never a sorting key; workers never regenerate
+source rows or construct/hash public batch slices. The one-row nominal source retains empirical
+`source_weight=1`; only tag metadata has no assigned or deposited event mass.
+
+Any deterministic or incident-beam worktree forked from pre-merge `58a1ad6` must explicitly
+reconcile its public API, revision payloads, normal-offset canonicalization, and projector identity
+against accepted API v8 before integration. It must not be blindly rebased or merged. The separate
+clean detached worktree at `55dc336ec0d65d22c49cf7ee9bb96d2105405a82` remains owner-controlled
+and is not pruned to manufacture cleanliness.
 
 Any existing `codex/continuous-ewald-coating-validation` ref remains
 owner-controlled provenance unless its unique work is explicitly ported or archived; it is never
@@ -916,13 +908,11 @@ instructions. Indexed numbered tasks are rewritten as routing/history stubs rath
 not delete `reciprocal/ewald.py`, source/incident transport, exit refraction, detector geometry, or
 the independent scalar proofs; they are validated authorities, not legacy residue.
 
-Current `main` still carries the completed BKI `tasks/plan.md` and `tasks/todo.md` with a stale
-successor graph; the unmerged planning sequence through `0953cab` proposes their shared beam-to-
-`ki` replacement and deterministic/parallel ownership amendments. DP-00R
-reconciles both histories without rewriting completion evidence or treating planning as an accepted
-implementation. All unrelated dirty/untracked files remain owner-controlled. DP-00 is blocked
-until DP-00R lands, shared Checkpoint K is implemented and accepted on `main`, its affected gates
-pass, status is warning-free, and no parallel/coating writer owns overlapping paths. Later
+Current `main` carries the completed BKI history and the accepted shared Checkpoint K sequence
+through `6267301`. This repaired deterministic plan/checklist remains the structural authority;
+the merge imports the beam implementation without regressing its later certification and domain
+work. All unrelated dirty/untracked files remain owner-controlled. Any pre-merge deterministic or
+incident workbranch must reopen its integration audit against API v8 before it can land. Later
 retirement tasks reconcile remaining live text only on that approved base.
 
 ## Dependency graph
@@ -1001,15 +991,14 @@ the final status/check reconciliation. No other task ticks boxes opportunistical
 - `tasks/todo.md`
 - `FILE_MANIFEST.json`
 
-**Work:** Preserve BKI-00--BKI-17 as completed historical work. Reconcile the stale BKI-15 successor
-edges with the planning-only `af456b5..0953cab` beam findings and this deterministic correction. The sole
-active overlapping sequence is shared beam-to-`ki` implementation through accepted Checkpoint K,
-then this deterministic implementation; do not claim either correction preceded BKI-15 or that a
-planning commit satisfies Checkpoint K. Record merge
+**Work:** Preserve BKI-00--BKI-17 as completed historical work and treat the owner-approved sequence
+through `6267301421e6dba1b0d121fa26585c24eae05f3d` as the accepted Checkpoint K authority before this
+deterministic implementation. Complete the remaining historical process audit and owner/status
+dispositions without claiming either correction preceded BKI-15. Record merge
 `3af2f4f61d3bc73d8d54891eb867a964240f46cd`, incorporated implementation
 `d5eed2524a636c7c190b8f9be300d1d73728884e`, beam-planning commit
 `af456b5988076c400eea972fb4f2ac2d647891dc`, ownership-amendment commit
-`0953cab668b489fd4c4d5a1d4de070fcab165295` (or their approved replacement), this corrected
+`0953cab668b489fd4c4d5a1d4de070fcab165295`, accepted Checkpoint K head `6267301`, this corrected
 planning commit's exact hash, and the approved rebase/merge order. Record BKI-04A/BKI-14 as historical >5-
 file process deviations with owner-approved audit dispositions; a successful rerun is revalidation,
 not retroactive atomicity compliance. Recompute the exact manifest entries for the two changed
@@ -1029,9 +1018,8 @@ through Checkpoint K and then the deterministic successor, passes docs/seed and 
 BKI integrity gate, carries only the explicit DP-00B proof-base repair, and does not describe BKI-
 04A or BKI-14 as <=5-file compliant.
 
-**Dependencies:** this committed corrected plan/checklist and owner disposition of unrelated
-working-tree/status-warning paths, including exact reconciliation of the overlapping beam-findings
-worktree's commit and dirty planning patch.
+**Dependencies:** the accepted Checkpoint K sequence and explicit owner disposition of every
+remaining unrelated working-tree/status-warning path.
 
 ### DP-00: Create the isolated workbranch
 

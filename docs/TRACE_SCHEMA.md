@@ -1,7 +1,7 @@
 # Stage-trace schema
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not invent branch-specific names for shared quantities.
-The frozen trace schema remains v4; contract API v7 does not renumber it.
+The frozen trace schema remains v4; contract API v8 does not renumber it.
 
 ## Stage IDs
 
@@ -126,6 +126,10 @@ revision, and incident-model ID. Geometry-failure stages emit zero geometry/opti
 failures preserve accepted intersection, direction, air-side `ki`, and footprint evidence while
 zeroing film-side values. `optics.ki_parallel_sample` follows the same canonical row order without a
 trace-only full-batch scientific scratch array.
+Every source, sample, and material revision in this envelope is copied unchanged from its owning
+immutable object. Trace construction never rejoins raw source rows or recomputes a revision. The
+v2 material/sample digest rebaseline changes provenance identifiers only; trace stage IDs and
+accepted numeric values remain unchanged.
 
 ## Comparator
 

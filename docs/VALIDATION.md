@@ -10,7 +10,10 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## BKI-15 incident-boundary proof
+## Historical BKI-15 incident-boundary proof
+
+This subsection records the contract-v7 predecessor. Its material/sample revision hashes are
+historical evidence, not current cache keys; the contract-v8 rebaseline is recorded below.
 
 The 2026-07-18 proof freezes the corrected v2 source realization, explicit sample support, and
 self-contained incident boundary as the common predecessor of the corrected parallel Task 1.1
@@ -57,7 +60,7 @@ used seed `1729`, LAB mean origin `[0,0,1] m`, LAB mean direction `[0,0,-1]`, tr
 `[8e-4,1.2e-3] rad`, wavelength `1.54 +/- 0.01 angstrom`, and polarization
 `UNITY_APPROXIMATION`. Material ID `external-bki15` and provenance
 `external BKI-15 harness.v1` named rows at the exact unique realized wavelengths with
-`n=0.999979+3.2e-7j`, `delta=2.1e-5`, `beta=3.2e-7`, and `mu=1e-5 angstrom^-1`. The instrument
+`n=0.999979+3.2e-7j`; contract v7 also carried derivative optical arrays removed by API v8. The instrument
 used identity SAMPLE/GONIOMETER/LAB transforms, an internally derived LAB-to-SAMPLE inverse,
 `unbounded_plane.v1`, detector shape `(11,7)`, row/column pitches `2e-4/1e-4 m`, reference
 coordinate `(3,5) px`, detector LAB translation `[0,0,1] m`, and film thickness `500 angstrom`.
@@ -160,6 +163,81 @@ final cleanup also sorts exact path strings with Python's ordinal ordering and m
 verification reject count mismatches, duplicate paths, or noncanonical order. That corrected
 223-path rewrite is the BKI-15-only state and does not include BKI-16/BKI-17 work. The final
 222-path manifest and coherent commit additionally include completed BKI-16 and BKI-17.
+
+## Beam-to-`ki` authority cutover
+
+The 2026-07-19 contract-v8 cutover removes redundant optical/transform state without changing the
+accepted incident observable. `MaterialOptics.material_revision` now uses schema
+`material_optics_revision.v2`; `CompiledInstrument.sample_geometry_revision` uses
+`sample_entrance_revision.v2`; and detector-angle instrument identity uses
+`detector_angle_instrument_fingerprint.v2`. Transport copies owner revisions into the complete
+`IncidentStateBatch` and reciprocal consumers never rejoin raw source rows.
+
+### Exact parity and revision rebaseline
+
+A discarded external harness ran the same three-row normal-incidence fixture from merge
+`3af2f4f` and clean cutover commit `f106c45`. Status, intersections, SAMPLE direction, air and film
+`ki`, complex film-normal mode, entrance amplitude, footprint, IDs, wavelength, source mass, and
+validity produced the same typed byte digest
+`046b0d9916d0521e36afba2b6dc97e6776328cf6184f777adaa039ee51cbf232`.
+All rows remained `VALID`; film `ki` remained exactly
+`[0,0,-4.0799047794078795] angstrom^-1`. Only the parity fixture's material revision changed from
+`c67d6c50e6ddee94f95c2d198fca7555b80fe32a5a511d6523eea43a77dc5243` to
+`b6966a011cc3cd9ca9c769656689e40df4993fca43d6585b53337c5201b55492`, and its finite sample
+revision changed from `c780f155ac3d9328bcd31ce9b099db17c36cd119d9c69808b3d6b49e2d6fedbc`
+to `ad22fbc9273cd0e0eec0f9b02dc30126c6c7c52698726ff5254a30fd00058eca`.
+
+The historical BKI source parameter and realization revisions remain unchanged. Their current v2
+material rebaselines are:
+
+| Rows | Source-parameter revision | Complete source revision | Material revision v2 |
+|---:|---|---|---|
+| 1 | `7e7add00fe28b9e5d7f5d02dc58974c63eebf52999de6e85043ed69d6700d8bc` | `2738c08208823af030d9dfc7fbd502a492672e2beca18f635926d854f2041da8` | `1ab8d75f638e251f7add59064042a5581cd1e306d5892022347c905a8ef20dd3` |
+| 33 | `65bbf0320a236bffb1f76f9270fd74d48faf0e1d7afc13c591f6ab464b541ca9` | `a0000f48750bd8f460de923e694860acf99f6a85d7a3aa27b710d50b7be2568a` | `67e32574e3b5b4c50cf9385bf0a2d005aa3a1ed605d97ef8b9c255e47c9f9194` |
+| 129 | `40fc17228b05f24b65a675d67cfb063095862359dde84e34ffb37e6bd3c08a25` | `f378ee40fa5f5abd7d4a627a804b9371fb6ac499a12ddd2639bc040e78ede7c6` | `fc39d94a2da7489d975caf41359092f91c3bbcb875f45433d96f8bd26423cab7` |
+
+The identity unbounded-plane fixture has sample revision
+`42eb54b4ae6dd02ba252e76c3622d4a684067f50645af2aa432dba4a4a30383a`.
+The compact angle-projector fixture has detector-only fingerprint
+`sha256-34d44adf4f0d65bd8994ff087f3b96da8c2a73b74f93539adb22a48989feb7f4.v2`.
+These digest changes are provenance/cache rebaselines, not numerical corrections.
+
+Classification is `MATCH` for the declared source-to-`ki` observable. Accepting mutually
+inconsistent stored material representations was `CORRECTED` first at `MaterialOptics`
+construction and then made unrepresentable. Unbounded tangent-origin over-invalidation is
+`CORRECTED` first at `sample_geometry_revision`, while intersection/status/`ki` remain `MATCH`.
+Noncausal angle-cache invalidation is `CORRECTED` first at the detector-angle fingerprint/cache,
+while projector arrays remain `MATCH`. Removing the two consumer-zero compiled transforms is an
+API-v8 state cutover with no scientific-stage divergence.
+
+### Ownership controls and retained proof
+
+The transitional MAT-01 test independently perturbed each duplicate optical representation and
+observed construction-time rejection; MAT-02 then removed that obsolete representation and test.
+A one-shot guard replaced all material/sample revision helpers with raising sentinels after owner
+construction: `build_incident_states` completed with zero guarded calls and exact inherited
+revisions. The permanent rotated unbounded-plane test applies independent shifts along both
+tangent basis vectors, preserving revision, status, intersection within `1e-12 m`, and film `ki`;
+a `2e-12 m` normal shift changes revision and intersection. The permanent angle test changes every
+detector-causal field and observes distinct fingerprint/cache keys, while sample/crystal/support/
+film-only changes preserve fingerprint, cache, and every numeric projector array. Sorting private
+packets by arbitrary state ID remains an explicitly unexecuted PAR-01 control because that runtime
+path does not yet exist.
+
+Retained tests each protect a distinct boundary: the CIF/material test protects analytic
+`n_complex`, exact v2 revision, unique wavelengths, and nonnegative absorption; the incident owner
+test protects revision inheritance and exclusions; the finite and unbounded compiled-revision tests
+protect their different canonical payloads; the rigid-transform test protects axis order through
+the retained final transform and absence of aliases; and the angle test protects causal cache
+identity plus separate `AngleFrame` ownership. No allocation-count, monkeypatch, snapshot, or
+duplicate relational test is retained.
+
+Checkpoint K0 ran 44 focused permanent tests and all six registered proofs on clean `f106c45`.
+Core, references, geometry/optics, ordered/reflectivity, and stacking/transition reported `PASS`;
+mosaic/Ewald reported `READY` with its declared historical `PROOF_BASE_SHA`. Geometry/optics passed
+11 checks and 17 injected controls under contract API v8. Ruff, formatting, documentation links,
+diff checks, and zero-consumer/stale-symbol scans also passed. Full seed verification is deferred
+only until the single final manifest refresh.
 
 ## Completed cross-repository audits
 

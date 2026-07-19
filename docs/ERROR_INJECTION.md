@@ -71,6 +71,26 @@ Expected result: the exact-strata, canonical-revision ownership, invalidation, o
 status-dependent-payload proof fails at its first affected boundary. These are one-shot mutations in
 the compact source/incident proofs, not permanent allocation tests or packet-layout snapshots.
 
+### Beam-to-`ki` owner controls
+
+The contract-v8 cutover executed four additional bounded controls:
+
+- perturb each redundant material relation independently during the transitional MAT-01 contract;
+  construction must reject every inconsistent object, after which MAT-02 removes those inputs
+- replace the material/sample revision helpers with raising sentinels after their owners are built;
+  incident transport must complete with zero helper calls and copy both revisions exactly
+- translate a non-axis-aligned unbounded plane independently along either tangent basis vector;
+  including either arbitrary origin coordinate in `sample_geometry_revision` must fail the exact
+  revision/status/intersection/`ki` equivalence check, while a resolved normal shift must invalidate
+- include sample/crystal transforms, support, or film thickness in the detector-angle instrument
+  fingerprint; the mutation must fail exact fingerprint/cache/projector-array equality, while each
+  detector-causal input must change both fingerprint and cache key
+
+All four controls were detected at their owner/construction or cache boundary and left no runtime
+feature flag or diagnostic. Sorting a future private packet by `incident_state_id` instead of
+scattering by `parent_row_index` remains an unchecked PAR-01 obligation; no mutation is claimed for
+a packet runtime that does not exist.
+
 ### Mosaic and Ewald controls
 
 - remove the declared spherical measure

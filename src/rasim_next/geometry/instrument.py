@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from rasim_next.core.contracts import sample_geometry_revision_sha256
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry._vectors import finite_vector3
@@ -153,11 +154,9 @@ class CompiledInstrument:
     corresponds to ``detector_reference_coordinate_px`` in ``(column_px, row_px)`` order.
     """
 
-    lab_from_goniometer: RigidTransform
     lab_from_sample: RigidTransform
     sample_from_lab: RigidTransform = field(init=False)
     sample_from_crystal: RigidTransform
-    lab_from_crystal: RigidTransform
     lab_from_detector: RigidTransform
     detector_shape_rc: tuple[int, int]
     detector_row_pitch_m: float
@@ -166,14 +165,13 @@ class CompiledInstrument:
     sample_support_model_id: str
     sample_width_m: float | None
     sample_length_m: float | None
+    sample_geometry_revision: str = field(init=False)
     film_thickness_A: float
 
     def __post_init__(self) -> None:
         expected_frames = (
-            ("lab_from_goniometer", FrameId.GONIOMETER, FrameId.LAB),
             ("lab_from_sample", FrameId.SAMPLE, FrameId.LAB),
             ("sample_from_crystal", FrameId.CRYSTAL, FrameId.SAMPLE),
-            ("lab_from_crystal", FrameId.CRYSTAL, FrameId.LAB),
             ("lab_from_detector", FrameId.DETECTOR, FrameId.LAB),
         )
         for name, source, target in expected_frames:
@@ -199,6 +197,17 @@ class CompiledInstrument:
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
         object.__setattr__(self, "film_thickness_A", thickness)
+        object.__setattr__(
+            self,
+            "sample_geometry_revision",
+            sample_geometry_revision_sha256(
+                lab_from_sample_rotation=self.lab_from_sample.rotation,
+                lab_from_sample_translation_m=self.lab_from_sample.translation_m,
+                sample_support_model_id=self.sample_support_model_id,
+                sample_width_m=self.sample_width_m,
+                sample_length_m=self.sample_length_m,
+            ),
+        )
 
 
 def _rotation_matrix(rotation: AxisRotation) -> NDArray[np.float64]:
@@ -244,12 +253,9 @@ def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstru
 
     lab_from_goniometer = lab_motion.compose(configuration.lab_from_goniometer_zero)
     lab_from_sample = lab_from_goniometer.compose(configuration.goniometer_from_sample)
-    lab_from_crystal = lab_from_sample.compose(configuration.sample_from_crystal)
     return CompiledInstrument(
-        lab_from_goniometer=lab_from_goniometer,
         lab_from_sample=lab_from_sample,
         sample_from_crystal=configuration.sample_from_crystal,
-        lab_from_crystal=lab_from_crystal,
         lab_from_detector=configuration.lab_from_detector,
         detector_shape_rc=configuration.detector_shape_rc,
         detector_row_pitch_m=configuration.detector_row_pitch_m,
