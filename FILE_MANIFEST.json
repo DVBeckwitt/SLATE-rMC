@@ -988,8 +988,8 @@
     },
     {
       "path": "tasks/plan.md",
-      "sha256": "aef57ebbb78ee48545eb6cecf05f7d9f926dce6c72aaa2c6be5827edc140d6bc",
-      "size_bytes": 50523
+      "sha256": "22f6e414dbe62ada5c0224c6ce0475916e9372b0e020f757cbfb9f5cbfb7194e",
+      "size_bytes": 38211
     },
     {
       "path": "tasks/prompts/bootstrap.md",
@@ -1068,8 +1068,8 @@
     },
     {
       "path": "tasks/todo.md",
-      "sha256": "3944eea543cf1a34caaa63b033c6c967d54157ae1bd31013baafb5becbbe919b",
-      "size_bytes": 23548
+      "sha256": "a4e6b4f80ba1303341a8c76825ba0df04bdaa475d8a8c9c5d0d76ddfa6bf99e1",
+      "size_bytes": 5235
     },
     {
       "path": "tests/README.md",
