@@ -315,26 +315,17 @@ class MaterialOptics:
     material_id: str
     wavelength_A: NDArray[np.float64]
     n_complex: NDArray[np.complex128]
-    delta: NDArray[np.float64]
-    beta: NDArray[np.float64]
-    mu_Ainv: NDArray[np.float64]
     provenance: str
     material_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
         wavelength = _array(self.wavelength_A, np.float64, (None,), "wavelength_A", True)
         object.__setattr__(self, "wavelength_A", wavelength)
-        for name, dtype, nonnegative in (
-            ("n_complex", np.complex128, False),
-            ("delta", np.float64, False),
-            ("beta", np.float64, True),
-            ("mu_Ainv", np.float64, True),
-        ):
-            object.__setattr__(
-                self,
-                name,
-                _array(getattr(self, name), dtype, (wavelength.size,), name, nonnegative),
-            )
+        object.__setattr__(
+            self,
+            "n_complex",
+            _array(self.n_complex, np.complex128, (wavelength.size,), "n_complex"),
+        )
         if (
             wavelength.size == 0
             or np.any(wavelength == 0)
@@ -343,12 +334,8 @@ class MaterialOptics:
             or not self.provenance
         ):
             raise ValueError("material identity, provenance, and positive wavelengths are required")
-        if not np.array_equal(self.n_complex.real, 1.0 - self.delta):
-            raise ValueError("n_complex.real must equal 1 - delta exactly")
-        if not np.array_equal(self.n_complex.imag, self.beta):
-            raise ValueError("n_complex.imag must equal beta exactly")
-        if not np.array_equal(self.mu_Ainv, 4.0 * np.pi * self.beta / self.wavelength_A):
-            raise ValueError("mu_Ainv must equal 4*pi*beta/wavelength_A exactly")
+        if np.any(self.n_complex.imag < 0.0):
+            raise ValueError("n_complex imaginary part must be nonnegative for absorption")
         object.__setattr__(
             self,
             "material_revision",

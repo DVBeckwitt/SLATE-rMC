@@ -69,14 +69,10 @@ def _configuration() -> InstrumentConfiguration:
 
 
 def _material(wavelength_A: float = 1.54) -> MaterialOptics:
-    beta = np.array([3.2e-7])
     return MaterialOptics(
         material_id="absorbing-film",
         wavelength_A=np.array([wavelength_A]),
         n_complex=np.array([0.999979 + 3.2e-7j]),
-        delta=np.array([2.1e-5]),
-        beta=beta,
-        mu_Ainv=4.0 * np.pi * beta / wavelength_A,
         provenance="compact permanent fixture",
     )
 
@@ -644,9 +640,6 @@ def test_refraction_and_attenuation_equations() -> None:
         material_id="vacuum",
         wavelength_A=np.array([wavelength_A]),
         n_complex=np.array([1.0 + 0.0j]),
-        delta=np.array([0.0]),
-        beta=np.array([0.0]),
-        mu_Ainv=np.array([0.0]),
         provenance="analytic n=1 fixture",
     )
     equal_medium = solve_incident_mode([0.6, 0.0, -0.8], wavelength_A, vacuum)
@@ -989,14 +982,9 @@ def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
         if before != after
     } == {2}
 
-    changed_delta = material.delta + 1.0e-8
-    changed_beta = material.beta + 2.0e-9
     changed_material_contract = replace(
         material,
-        n_complex=1.0 - changed_delta + 1.0j * changed_beta,
-        delta=changed_delta,
-        beta=changed_beta,
-        mu_Ainv=4.0 * np.pi * changed_beta / material.wavelength_A,
+        n_complex=material.n_complex + (-1.0e-8 + 2.0e-9j),
     )
     changed_material = build_incident_states(
         samples,
