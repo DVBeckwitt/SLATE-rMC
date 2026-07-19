@@ -83,6 +83,22 @@ fit-geometry
 
 Record wall time, peak memory, transfer time if applicable, setup/compile time, reuse time, hardware, precision, and error versus the reference path.
 
+## Beam-to-`ki` authority-cutover evidence
+
+The clean `f106c45` geometry/optics proof ran 512 equivalent float64/complex128 work items on
+Windows 11, Python 3.13.13, NumPy 2.2.6, SciPy 1.15.1, and Intel64 Family 6 Model 183. The vector
+path took `0.9387 ms`, the scalar oracle took `16.8892 ms` (ratio `17.99`), and the untimed vector
+call had an incremental `tracemalloc` peak of `451,425` bytes for `36,864` input and `86,528`
+retained-output numeric bytes. Maximum point and complex-normal-wavevector errors were zero;
+maximum amplitude error was `2.22e-16`.
+
+The contract cleanup does not claim that timing as a new optimization. It removes three stored
+float64 material arrays (`24*M` numeric bytes for `M` wavelengths), two consumer-zero compiled
+transform payloads, repeated transport revision hashing, and noncausal angle-cache invalidation.
+The guarded reuse check observed zero revision-helper calls during incident transport. PERF-01
+remains future and must record `NO_CHANGE` unless representative all-valid, mixed, all-invalid, and
+repeated-geometry profiling justifies the optional allocation cleanup.
+
 ## Selection rule
 
 Choose the production path after integration. One subsystem may use a different internal method if it preserves the same public contracts and does not create a general backend abstraction.

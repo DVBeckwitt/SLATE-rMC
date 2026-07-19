@@ -179,9 +179,9 @@ existing T09-T11 specifications before fitting code exists.
 
 ### Checkpoint P
 
-- [ ] PLAN-01 and PLAN-02 pass docs/link/diff checks.
-- [ ] Human confirms deterministic, parallel, and fitting ownership before shared-contract edits.
-- [ ] No production file has changed.
+- [x] PLAN-01 and PLAN-02 pass docs/link/diff checks.
+- [x] Human confirms deterministic, parallel, and fitting ownership before shared-contract edits.
+- [x] No production file has changed.
 
 ## Phase 1: make material optics one immutable authority
 
@@ -304,8 +304,10 @@ plane coordinate origin, and compute it once during instrument compilation.
 - For `finite_rectangle.v1`, hash the complete SAMPLE-to-LAB rotation and translation plus finite
   width/length, support model, and intersection model.
 - For `unbounded_plane.v1`, hash the complete rotation and signed LAB plane offset
-  `dot(lab_from_sample.rotation[:, 2], lab_from_sample.translation)`, plus support/intersection
-  model. Exclude both translation components tangent to the plane.
+  `dot(lab_from_sample.rotation[:, 2], lab_from_sample.translation_m)`, plus
+  support/intersection model. Canonicalize at `1e-12 m` with nearest-integer ties-to-even rounding
+  while `abs(offset / 1e-12) < 2**52`, preserve the exact float beyond that range, and normalize
+  signed zero. Exclude both translation components tangent to the plane.
 - Continue excluding detector geometry, `sample_from_crystal`, film thickness, and downstream
   response data.
 - Preserve full `lab_from_sample` and `sample_from_lab` for numeric transport; revision
@@ -315,7 +317,8 @@ plane coordinate origin, and compute it once during instrument compilation.
 
 - Two rotated unbounded instruments differing only by in-plane origin translation have identical
   revisions, statuses, intersections within frozen tolerance, and incident `ki`.
-- A normal translation changes the revision and physical intersection.
+- A normal translation that changes the canonical offset changes the revision and physical
+  intersection.
 - A finite-support tangent translation changes the revision and can change support acceptance.
 - Detector, crystal-mount, and thickness-only changes leave the revision and `ki` unchanged.
 - Repeated incident builds inherit the exact compiled revision without rehash instrumentation on
@@ -328,7 +331,7 @@ plane coordinate origin, and compute it once during instrument compilation.
 **Acceptance criteria:**
 
 - Unbounded tangent translations cause neither cache invalidation nor a future fitted coordinate.
-- Every causal entrance-geometry change invalidates the revision.
+- Every entrance-geometry change resolved by the canonical contract invalidates the revision.
 - `CompiledInstrument` truthfully owns the documented revision.
 
 **Estimated scope:** M, four existing files.
@@ -382,11 +385,11 @@ preserving named goniometer provenance and future fitting evidence.
 
 ### Checkpoint K0: implementation proof before documentation
 
-- [ ] Focused material, geometry, reciprocal, and integration tests pass.
-- [ ] All registered scientific proofs pass with the new material/sample owners.
-- [ ] Source-to-`ki` statuses and numeric fields remain accepted; named revision digests alone
+- [x] Focused material, geometry, reciprocal, and integration tests pass.
+- [x] All registered scientific proofs pass with the new material/sample owners.
+- [x] Source-to-`ki` statuses and numeric fields remain accepted; named revision digests alone
       intentionally rebaseline.
-- [ ] Consumer and stale-symbol scans confirm the intended deletion set before documentation
+- [x] Consumer and stale-symbol scans confirm the intended deletion set before documentation
       freezes.
 
 ## Task SYNC-01: Synchronize live contracts and architecture
@@ -780,7 +783,7 @@ not an automatic refactor.
 |---|---|---|
 | Revision cleanup silently preserves obsolete digests | High | Use explicit v2 payload tags, record a provenance-only rebaseline, and never force old hashes to match. |
 | Derived optical arrays disagree before deletion | Critical | MAT-01 rejects inconsistent objects before MAT-02 removes the redundant inputs. |
-| Unbounded tangent origin enters cache/fitting state | High | Hash and fit only full orientation plus signed normal offset. |
+| Unbounded tangent origin enters cache/fitting state | High | Hash and fit only full orientation plus the resolved canonical signed normal offset. |
 | Worker merge sorts arbitrary state IDs | Critical | Carry parent indices, scatter by parent slot, and test nonmonotonic IDs/reversed completion. |
 | Fit material is compiled from baseline survivors | Critical | Preflight exact coverage of all parent wavelengths. |
 | Source correlation depends on an arbitrary longitudinal plane | High | Freeze a named physical reference plane and reject longitudinal origin parameters. |

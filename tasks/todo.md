@@ -1,6 +1,6 @@
 # Beam-to-`ki` Audit Follow-up Checklist
 
-Status: **PROPOSED — NO IMPLEMENTATION STARTS BEFORE HUMAN APPROVAL**
+Status: **IN PROGRESS — CHECKPOINT K AWAITS MANIFEST AND HUMAN CONTRACT APPROVAL**
 
 Detailed behavior, file ownership, tests, and acceptance criteria are in
 [the implementation plan](plan.md). Completed BKI remediation history remains in commit
@@ -8,41 +8,41 @@ Detailed behavior, file ownership, tests, and acceptance criteria are in
 
 ## Phase 0: plan ownership
 
-- [ ] **PLAN-01** — Reconcile deterministic/parallel ownership, serial incident compilation,
+- [x] **PLAN-01** — Reconcile deterministic/parallel ownership, serial incident compilation,
       parent-row identity, and nominal source/tag mass semantics. Dependencies: none.
-- [ ] **PLAN-02** — Add full-source wavelength coverage, fixed source reference plane, and
+- [x] **PLAN-02** — Add full-source wavelength coverage, fixed source reference plane, and
       unbounded-plane translation rules to T09-T11. Dependencies: PLAN-01.
 
 ### Checkpoint P
 
-- [ ] Docs, links, and focused stale-claim scans pass.
-- [ ] Human approves execution and fitting ownership.
-- [ ] No production file has changed.
+- [x] Docs, links, and focused stale-claim scans pass.
+- [x] Human approves execution and fitting ownership.
+- [x] No production file has changed.
 
 ## Phase 1: material authority
 
-- [ ] **MAT-01** — Make `MaterialOptics` own a v2 revision, reject inconsistent
+- [x] **MAT-01** — Make `MaterialOptics` own a v2 revision, reject inconsistent
       `n/delta/beta/mu`, and remove transport-time hashing. Dependencies: Checkpoint P.
-- [ ] **MAT-02** — Delete stored/constructor `delta`, `beta`, and `mu_Ainv`; retain
+- [x] **MAT-02** — Delete stored/constructor `delta`, `beta`, and `mu_Ainv`; retain
       `n_complex` as the sole authority. Dependencies: MAT-01.
 
 ## Phase 2: sample entrance authority
 
-- [ ] **GEO-01** — Make `CompiledInstrument` own the v2 sample-entrance revision; canonicalize
+- [x] **GEO-01** — Make `CompiledInstrument` own the v2 sample-entrance revision; canonicalize
       unbounded support to orientation plus signed normal offset. Dependencies: MAT-02.
-- [ ] **GEO-02** — After a fresh consumer scan, delete stored `lab_from_goniometer` and
+- [x] **GEO-02** — After a fresh consumer scan, delete stored `lab_from_goniometer` and
       `lab_from_crystal`, retain the ordered local compilation step, and narrow the angle
       fingerprint to detector-causal inputs. Dependencies: GEO-01.
 
 ### Checkpoint K0
 
-- [ ] Focused material/geometry/reciprocal/integration tests and all scientific proofs pass.
-- [ ] Numeric source-to-`ki` fields remain accepted; only named revision digests rebaseline.
-- [ ] Consumer and stale-symbol scans confirm the intended deletion set.
+- [x] Focused material/geometry/reciprocal/integration tests and all scientific proofs pass.
+- [x] Numeric source-to-`ki` fields remain accepted; only named revision digests rebaseline.
+- [x] Consumer and stale-symbol scans confirm the intended deletion set.
 
-- [ ] **SYNC-01** — Synchronize contracts, architecture, decisions, dovetail, and trace documents.
+- [x] **SYNC-01** — Synchronize contracts, architecture, decisions, dovetail, and trace documents.
       Dependencies: GEO-02 and Checkpoint K0.
-- [ ] **SYNC-02** — Record compact validation, error-injection, performance, and task evidence.
+- [x] **SYNC-02** — Record compact validation, error-injection, performance, and task evidence.
       Dependencies: SYNC-01 and Checkpoint K0.
 - [ ] **MANIFEST-01** — Refresh `FILE_MANIFEST.json` once and run the seed verifier.
       Dependencies: SYNC-02.

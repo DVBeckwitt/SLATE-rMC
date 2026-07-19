@@ -64,6 +64,7 @@ src/rasim_next/
         parent_models.py
 
     measurement/
+        angle_space.py
         factors.py
         solid_angle.py
 
@@ -181,10 +182,16 @@ They are not optimizer objects. They are dependency and reuse boundaries.
 
 `IncidentSampleBatch` is generated once as one complete canonical source realization. Its derived
 parameter and realization revisions are each hashed once by the batch's sole construction path.
-The compiled instrument owns hashed `lab_from_sample` and internally derives its once-computed
-inverse `sample_from_lab`; no caller can supply a competing inverse.
+`MaterialOptics` owns one sorted wavelength grid, sole `n_complex` optical state, and its derived
+`material_revision` under schema `material_optics_revision.v2`; transport consumes all three
+without reconstructing the material.
+The compiled instrument retains the causal `lab_from_sample`, derives `sample_from_lab` once, and
+owns `sample_geometry_revision` under schema `sample_entrance_revision.v2`. Its ordered
+`lab_from_goniometer` exists only while compiling `lab_from_sample`; no derived `lab_from_crystal`
+is stored because reciprocal construction consumes the retained `sample_from_crystal` directly. No
+caller can supply a competing inverse or revision.
 `IncidentStateBatch` is the sole reciprocal-space incident authority: reciprocal construction does
-not rejoin a raw source batch for wavelength, polarization, status, mass, or provenance. Any
+not rejoin a raw source batch for wavelength, polarization, status, mass, or provenance.
 Parallel Task 1.1 remains a scalar-reference task and introduces no runtime worker packets. Any
 private worker packets introduced by future staged execution belong to parallel Task 1.4, after
 Task 1.3 freezes the narrow numeric boundaries. They must carry canonical row indices, inherit the
@@ -200,10 +207,22 @@ source parameter, model, RNG, seed, or realized-row change
     invalidates the complete source revision and all downstream incident/event state
 
 material optical change
-    invalidates incident optical modes and downstream event state
+    rebuilds owner material_revision under material_optics_revision.v2 and invalidates incident optical modes and downstream event state
+
+finite sample entrance translation, rotation, support, or dimension change
+    rebuilds owner sample_geometry_revision under sample_entrance_revision.v2 and invalidates incident geometry
+
+unbounded sample rotation or canonical signed-normal-offset change
+    rebuilds owner sample_geometry_revision and invalidates incident geometry
+
+unbounded sample tangent-origin-only change
+    changes neither the canonical plane revision nor accepted incident geometry within 1e-12 m
 
 detector calibration, sample_from_crystal, or film-thickness-only change
     does not invalidate incident states or their source/sample/material revisions
+
+detector transform, shape, pitch, or reference-coordinate change
+    invalidates detector-angle fingerprint v2; sample/support/film-only changes do not
 
 mosaic parameter change
     invalidates reciprocal weights and possibly event support, but not instrument compilation
@@ -216,6 +235,8 @@ scale/background nuisance change
 ```
 
 This is the central performance requirement for later fitting.
+The contract-v8 material/sample digests are provenance-only rebaselines; the implementation cutover
+does not alter accepted source-to-`ki` statuses or numeric fields.
 
 ## Production acceleration
 
