@@ -953,13 +953,13 @@
     },
     {
       "path": "tasks/deterministic_ewald_pushforward_plan.md",
-      "sha256": "402351e86dec31ba25e2d6aa52e225b1f91eb51ab5c18cbdec2c26e0ecf51273",
-      "size_bytes": 87079
+      "sha256": "273cc90a2084ad79b21af8045e71ed8a4c2051321337158c0482cf8b162d0b23",
+      "size_bytes": 167517
     },
     {
       "path": "tasks/deterministic_ewald_pushforward_todo.md",
-      "sha256": "1dc8cfc825e63f082414830903021c1fadd4c7857c745ee689d5dd0179559e2a",
-      "size_bytes": 13396
+      "sha256": "4976151f669c805050ddd91b83a9d55b542620383df891bc9289a2b2de7a9963",
+      "size_bytes": 26435
     },
     {
       "path": "tasks/hbn_ring_fitter_plan.md",
