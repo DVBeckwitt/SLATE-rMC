@@ -166,7 +166,8 @@ Proof:
 - normalization of the joint source distribution
 - identifiability between source size and divergence
 
-The result freezes `CompiledSourceSamples` for downstream geometry and mosaic stages.
+The result freezes one complete `IncidentSampleBatch` and its source revision for downstream
+geometry and mosaic stages.
 
 ### Stage G1: detector geometry calibration
 

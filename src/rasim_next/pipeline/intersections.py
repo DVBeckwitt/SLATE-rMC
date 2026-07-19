@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.core.contracts import IncidentSampleBatch, IncidentStateBatch, RodCatalog
+from rasim_next.core.contracts import IncidentStateBatch, RodCatalog
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.materials.crystal import CrystalStructure
 from rasim_next.reciprocal.events import EventBuildResult, build_scattering_events
@@ -52,9 +52,7 @@ def _outward_hk_extent(
 ) -> float:
     diagonal_mantissa, diagonal_exponent = math.frexp(diagonal_upper)
     determinant_mantissa, determinant_exponent = math.frexp(determinant_lower)
-    ratio_mantissa = float(
-        np.nextafter(diagonal_mantissa / determinant_mantissa, np.inf)
-    )
+    ratio_mantissa = float(np.nextafter(diagonal_mantissa / determinant_mantissa, np.inf))
     ratio_exponent = diagonal_exponent - determinant_exponent - metric_scale_exponent
     if ratio_exponent % 2:
         ratio_mantissa *= 2.0
@@ -129,8 +127,7 @@ def _symmetric_hk_bounds(
         raise ValueError("in-plane reciprocal metric is not certifiable in float64")
     determinant_lower = float(
         np.nextafter(
-            np.nextafter(diagonal_product, -np.inf)
-            - np.nextafter(off_diagonal_squared, np.inf),
+            np.nextafter(diagonal_product, -np.inf) - np.nextafter(off_diagonal_squared, np.inf),
             -np.inf,
         )
     )
@@ -263,14 +260,12 @@ def _slice_rods(rods: RodCatalog, start: int, stop: int) -> RodCatalog:
 
 def _build_intersection_support_for_rods(
     *,
-    incident_samples: IncidentSampleBatch,
     incident_states: IncidentStateBatch,
     rods: RodCatalog,
     orientations: MosaicOrientationBatch,
     sample_from_crystal: RigidTransform,
 ) -> IntersectionSupport:
     event_build = build_scattering_events(
-        incident_samples=incident_samples,
         incident_states=incident_states,
         rods=rods,
         orientations=orientations,
@@ -286,7 +281,6 @@ def _build_intersection_support_for_rods(
 def build_intersection_support(
     *,
     crystal: CrystalStructure,
-    incident_samples: IncidentSampleBatch,
     incident_states: IncidentStateBatch,
     orientations: MosaicOrientationBatch,
     sample_from_crystal: RigidTransform,
@@ -295,7 +289,6 @@ def build_intersection_support(
 
     rods = _detector_complete_rods(crystal, incident_states)
     return _build_intersection_support_for_rods(
-        incident_samples=incident_samples,
         incident_states=incident_states,
         rods=rods,
         orientations=orientations,

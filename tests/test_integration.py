@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
+import runpy
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -49,11 +52,39 @@ def _instrument(
         detector_row_pitch_m=3.1e-4,
         detector_column_pitch_m=1.7e-4,
         detector_reference_coordinate_px=reference_cr,
+        sample_support_model_id="finite_rectangle.v1",
         sample_width_m=4.0e-4,
         sample_length_m=6.0e-4,
         film_thickness_A=500.0,
     )
     return compile_instrument(configuration)
+
+
+def test_default_case_inputs_have_one_explicit_source_and_support_authority() -> None:
+    namespace = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
+    )
+    samples, instrument = namespace["build_default_case_inputs"]()
+    provenance = json.loads(samples.source_parameter_provenance)
+    values = provenance["values"]
+
+    assert samples.source_sampling_model_id == "independent_gaussian_antithetic_lhs.v2"
+    assert samples.source_rng_model_id == "numpy_pcg64.v1"
+    assert samples.source_seed == 1729
+    assert set(provenance) == {"frames", "units", "values"}
+    assert values["sample_count"] == 20
+    assert values["mean_origin_lab_m"] == [(0.0).hex(), (-0.020).hex(), (0.0).hex()]
+    assert values["mean_direction_lab"] == [(0.0).hex(), (1.0).hex(), (0.0).hex()]
+    assert values["mean_wavelength_A"] == (1.540592925).hex()
+    assert instrument.sample_support_model_id == "unbounded_plane.v1"
+    assert instrument.sample_width_m is None and instrument.sample_length_m is None
+    assert instrument.lab_from_sample.source_frame is FrameId.SAMPLE
+    assert instrument.lab_from_sample.target_frame is FrameId.LAB
+    assert instrument.sample_from_crystal.source_frame is FrameId.CRYSTAL
+    assert instrument.sample_from_crystal.target_frame is FrameId.SAMPLE
+    assert instrument.detector_shape_rc == (3000, 3000)
+    assert instrument.detector_reference_coordinate_px == (1453.12, 1596.422)
+    assert instrument.film_thickness_A == 500.0
 
 
 def _frame(origin_lab_m: np.ndarray | list[float] | None = None) -> AngleFrame:

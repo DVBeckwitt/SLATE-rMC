@@ -54,7 +54,14 @@ def compare_traces(
             metric = "dtype"
         elif any(
             getattr(expected, field) != getattr(observed, field)
-            for field in ("unit", "frame", "measure", "quantity_kind", "model_version", "provenance")
+            for field in (
+                "unit",
+                "frame",
+                "measure",
+                "quantity_kind",
+                "model_version",
+                "provenance",
+            )
         ):
             metric = "metadata"
         elif expected.value.dtype.kind in "biuSU":
@@ -62,7 +69,9 @@ def compare_traces(
         else:
             error = np.abs(observed.value - expected.value).astype(np.float64, copy=False)
             limit = (tolerances or {}).get(expected.stage_id, Tolerance()).limit
-            metric = "numeric_value" if np.any(~np.isfinite(error)) or np.any(error > limit) else None
+            metric = (
+                "numeric_value" if np.any(~np.isfinite(error)) or np.any(error > limit) else None
+            )
         if metric:
             return TraceComparison(
                 False,

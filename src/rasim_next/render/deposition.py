@@ -59,7 +59,9 @@ def deposit_bilinear(
         raise ValueError("detector_shape_rc must contain two positive integers") from error
     if (
         len(shape) != 2
-        or any(isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in shape)
+        or any(
+            isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in shape
+        )
         or any(value <= 0 for value in shape)
     ):
         raise ValueError("detector_shape_rc must contain two positive integers")

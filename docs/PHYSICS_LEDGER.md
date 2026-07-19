@@ -24,6 +24,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-SRC-004 | independent wavelength intensity sum | downstream sample loop | `eq:detector_sum_lambda_main` | mosaic/integration | MATCH |
 | PHY-SRC-005 | stable sample identity and weights | distributed runtime arrays | n/a | bootstrap/mosaic | NEW |
 | PHY-SRC-006 | joint source-variable correlations | separate old arrays imply factorization | source phase-space definition | mosaic | NEW explicit |
+| PHY-SRC-007 | endpoint-safe independent Gaussian antithetic N-stratum realization | prior pair-stratified sampler | source phase-space definition | mosaic | CORRECTED v2; first divergence `geometry.lab_ray` |
 
 ## Geometry
 
@@ -33,7 +34,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-GEO-002 | sample pivot and offsets | same | sample geometry figure | geometry | CORRECTED |
 | PHY-GEO-003 | remove `P0_rot[0]=0` | `diffraction.py:1740-1741` | none | geometry | CORRECTED |
 | PHY-GEO-004 | detector plane and basis | `diffraction.py`; `intersection_analysis.py:80-122` | detector geometry figure | geometry | CORRECTED, single source |
-| PHY-GEO-005 | ray-plane intersection | `diffraction.py:285-325` | geometric construction | geometry | MATCH/conditioned |
+| PHY-GEO-005 | unique ray-plane intersection; reject parallel and coplanar rays | `diffraction.py:285-325` | geometric construction | geometry | CORRECTED for coplanar; first divergence `geometry.sample_intersection` |
 | PHY-GEO-006 | sample footprint clipping | `diffraction.py:1807-1874` | Methods line 18; SI line 525 | geometry | MATCH as accepted beam mass |
 | PHY-GEO-007 | internal-to-lab outgoing vector | `diffraction.py:2260-2264` | Methods | geometry | CORRECTED |
 | PHY-GEO-008 | detector intersection | `diffraction.py:2266-2299` | Methods | geometry | MATCH after frame correction |
@@ -172,7 +173,7 @@ Every non-deferred row must have one proof case or a documented reason that it i
 | PHY-MOT-002 | stoichiometry and complete site coverage | same | motif definition | ordered | NEW proof |
 | PHY-MOT-003 | species/occupancy-preserving orientation relation | same | `F+`, `F-` construction | ordered | CORRECTED explicit |
 | PHY-MOT-004 | motif-origin and registry-phase gauge invariance | `motif_form_factor.py` plus stacking phase paths | Fourier convention | ordered/stacking | NEW proof |
-| PHY-THK-001 | sample footprint dimensions | instrument configuration | geometry | geometry | CORRECTED typed |
+| PHY-THK-001 | explicit finite rectangle or legacy-unbounded sample support | instrument configuration | geometry | geometry | CORRECTED; first possible divergence `geometry.footprint_acceptance` |
 | PHY-THK-002 | optical film thickness | instrument configuration and attenuation | optics section | geometry | CORRECTED typed |
 | PHY-THK-003 | coherent layer depths and repeat | `gui/controllers.py:336-351` | finite-stack equations | ordered/stacking | CORRECTED explicit |
 | PHY-THK-004 | Parratt layer thickness and substrate infinity | `utils/calculations.py:328-480` | Parratt equations | ordered | CORRECTED typed |

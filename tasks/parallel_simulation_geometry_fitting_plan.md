@@ -1,27 +1,31 @@
-# CPU/GPU-compatible simulation and staged geometry fitting plan
+# CPU/GPU-compatible simulation, representative detector labels, and staged geometry fitting plan
 
 Status: PROPOSED
 
-Entry gate: begin after the stitch/integration work is accepted and the T07 detector-native
-observable is proven.
+Entry gate: BKI-15 first branches into the corrected Task 1.1 scalar reference and continuous-
+coating validation. Task 1.2 begins only after both branches are accepted and the T07 detector-
+native observable is proven.
 
 This plan records the agreed path for:
 
 1. making the detector simulation efficient on the CPU and compatible with measured GPU
    acceleration;
-2. recovering known geometry blindly from detector-native expected peak centroids; and
-3. recovering the same geometry from expected angle-space `(2theta, phi)` peak centroids.
+2. placing one stable zero-mass `(branch, m, L)` representative label for every coating component
+   with detector support;
+3. recovering known geometry blindly from detector-native expected peak centroids; and
+4. recovering the same geometry from expected angle-space `(2theta, phi)` peak centroids.
 
 The work must preserve one authoritative physics path. CPU rendering, GPU execution,
-detector-space fitting, and angle-space fitting are consumers of the same candidate masses and
-candidate-specific detector hits; none may implement alternate scattering physics.
+detector-space fitting, and angle-space fitting are consumers of the same continuous coating
+measure, sampled event masses, and event-specific detector hits; none may implement alternate
+scattering physics.
 
 ## Governing constraints
 
 - Complete and prove the detector-native simulation before fitting.
 - Prove detector-native fitting before adding angle-space fitting.
-- Parallelize over rays and bounded candidate tiles, not over the number of selected peaks, rods,
-  or HKL groups.
+- Parallelize bounded bulk batches of incident states, continuous-component integration records,
+  and sampled detector events, not the number of selected peaks, rods, or HKL groups.
 - Keep fixed-seed source and mosaic sampling during every fit.
 - Do not use randomly generated geometric truth values, random optimizer starts, or random
   geometric proposals for the current fitting proof.
@@ -35,17 +39,187 @@ candidate-specific detector hits; none may implement alternate scattering physic
   orientation, branch identity, event mass, or normalization.
 - Use one exact full-pixel-splitting detector-to-angle transform and one normalized angle-space
   observable.
+- Keep representative detector labels separate from Monte Carlo photon mass. They are computed
+  from one nominal incident ray, never deposited, and never require retained provenance for every
+  sampled event.
+- Generate and hash the complete canonical source realization once before Stage-A dispatch.
+  Workers receive canonical row-index views plus inherited parent revisions and never regenerate
+  or rehash source slices.
+- `geometry/transport.py` is owned by the BKI remediation through BKI-15 and is frozen again after
+  that gate; later edits require a separately reviewed scientific need.
 - Keep raw azimuth `chi_raw` and fitting/display azimuth `phi` as separately named quantities.
 - Select CPU/GPU technology only after the accepted integrated workload is profiled, as required
   by [the performance strategy](../docs/PERFORMANCE.md).
 
+## Continuous-coating compatibility amendment
+
+### Problem and decision
+
+How might the complete forward and fitting workload use the continuous mosaic--Ewald coating
+without discarding the accepted transport, detector, RNG, and angle-space work or creating a
+second simulation architecture?
+
+Use one narrow pivot: replace the finite orientation/candidate-pool work unit in Tasks 1.2--1.7
+with the accepted continuous component measure from
+[the coating replacement plan](continuous_ewald_coating_replacement_plan.md), evaluated as a
+bounded staged dataflow. Batch active incident-state/component/node records together, then flatten
+all sampled draws into large event batches for exact transport, detector projection, and
+deposition. This plan remains `PROPOSED`; the amendment does not promote either implementation.
+
+“Parallelize the whole thing” means that every expensive numerical stage is eligible for bounded
+bulk execution: incident transport, coating root and density evaluation, exact rod strength,
+outgoing optics, continuous sampling, sampled-event transport, detector projection, deposition or
+moment partials, representative-label component evaluation, and downstream sparse angle
+projection. Small control
+operations may remain serial where required for correctness: deterministic adaptive refinement
+decisions, prefix construction, canonical segmented reduction, and optimizer coordination.
+
+### Smallest useful scope
+
+1. Accept the continuous coating cutover and its scalar oracle before defining the optimized batch
+   boundary. The accepted finite-pool implementation remains temporary comparison evidence, not a
+   future runtime interface.
+2. Stage A batches work from the self-contained incident batch accepted after BKI-08. One logical controller
+   owns each `(incident_state, coating_component)` mass/error/CDF, while pure density rows may be
+   packed across states/components when profiling justifies it. This batches the beam sample; it
+   does not replace it with a different global incident-state sampler.
+3. Stage B generates canonical state/draw samples with physical-keyed randomness, flattens them into
+   bounded exact-event-to-detector batches, and reduces contributions in stable state/draw or
+   pixel/event order. Coating mass is detector-unconditioned: outgoing propagation and optical
+   factors apply once before selection, while detector projection occurs after exact sampled `kf`.
+   Detector misses are retained as rejected mass and are never resampled or used to renormalize
+   survivors.
+4. Exit transport, deposition, and T18 stay unchanged consumers. The initial nonzero-`m` coating is
+   only an intermediate milestone; full completion still requires an accepted physical `m=0`
+   support contract, with no legacy fallback or arbitrary epsilon.
+5. A compact representative-label pass uses one nominal incident ray and returns at most one
+   zero-mass detector label per exact `(family_id, intersection_branch_id)`. It reuses Stage A/B
+   equations and execution seams without retaining per-photon branch, `m`, or `L` after deposition.
+
+### Objectives
+
+- Preserve one continuous mosaic measure and one implementation of every physics equation.
+- Scale one forward evaluation across all available incident states, component-node records, and
+  sampled events even when few peaks are selected.
+- Bound memory by the active state tile, integration-record batch, compact component/CDF state, and
+  sampled-event batch, never by a retained ray-by-rod-by-orientation product.
+- Make stochastic images and deterministic detector/angle moments invariant to execution layout.
+- Make representative label coordinates and `(branch, m, L)` values invariant to Monte Carlo seed,
+  draw count, batch layout, and worker completion order.
+- Keep GPU work limited to measured regular batches while retaining the same scalar oracle and
+  robust boundary classification.
+
+### Non-goals
+
+- Do not retain or generalize `MosaicOrientationBatch`, `AttemptBatch`, `CandidatePool`, or a finite
+  state-to-rod-to-orientation execution contract.
+- Do not add a backend framework, scheduler API, plugin registry, compatibility facade, permanent
+  old/new switch, or second coating implementation.
+- Do not launch one task per draw, rod, adaptive panel, or fitted peak, and do not create nested CPU
+  pools. Parallelism comes from contiguous stage batches.
+- Do not move, duplicate, approximate, or re-normalize source, mosaic, coarea, structure, optical,
+  assigned-mass, or deposition factors. Detector validity is a post-sampling classification, not a
+  coating factor.
+- Do not change the accepted detector-native observable, T18 projector/profile contract, fitting
+  residuals, or physical branch convention.
+- Do not require a GPU when the measured crossover favors the CPU.
+- Do not add a per-pixel tag raster, retain provenance for every sampled ray, group by continuous
+  `L`, or let a diagnostic label ray contribute detector mass.
+
+### Affected files
+
+This planning change edits this file plus one conflicting execution sentence in
+`continuous_ewald_coating_replacement_plan.md`. A later implementation slice is expected to touch
+the smallest subset of:
+
+- `src/rasim_next/pipeline/simulate.py` for staged batch orchestration and canonical reduction;
+- `src/rasim_next/reciprocal/coating.py` for bounded component-point evaluation, without executor
+  ownership;
+- `src/rasim_next/sampling/mosaic.py` only for the accepted continuous density contract;
+- `src/rasim_next/pipeline/proof.py` for compact equivalence and performance evidence;
+- `tests/test_mosaic_ewald.py` and `tests/test_integration.py` for unique permanent invariants.
+- `scripts/generate_bi2se3_detector_image.py` for the one retained annotated default figure.
+
+After BKI-15, `geometry/transport.py` is a frozen consumer. Task 1.1 still owns
+`render/deposition.py` and `measurement/angle_space.py`; those two files freeze only after Task 1.1
+acceptance. Any later edit to a frozen consumer requires separate profiling evidence and scope
+approval.
+
+No new production module is planned for parallel execution. A new file requires evidence that the
+existing pipeline orchestration cannot remain cohesive.
+
+### Interfaces
+
+The implementation freezes only four narrow internal seams:
+
+1. **Continuous density batch:** contiguous `(state, component, node, alpha, beta)` work records
+   plus canonical ragged-rod offsets enter the accepted coating equations and return node-level
+   exact roots, rod-summed strengths, once-only source/reciprocal/outgoing factors, physical
+   validity, and detector-unconditioned density in the same row order. It owns no scheduler state.
+2. **Component state:** canonical density results enter one component's private adaptive state;
+   component mass/error/CDF support exits under a complete revision key. It is deterministic
+   orchestration, not a backend or executor interface.
+3. **Sampled-event batch:** canonical `(state, draw)` records enter exact event reconstruction,
+   transport, and detector projection; compact event geometry, detector contributions, and
+   separately aligned assigned mass exit in the same row order.
+4. **Representative-label batch:** canonical `(family, intersection branch)` rows use one nominal
+   incident ray to find the detector-valid continuous orientation nearest the mosaic mode. Exact
+   branch `0/1/2`, displayed `m`, `L`, mosaic coordinates, and detector coordinates exit in the
+   same row order with no assigned photon mass.
+Stochastic deposition, deterministic moments, and T18 consume the merged contributions without
+calling coating equations or reinterpreting identities. The accepted ordered/stacking intensity
+seam remains unchanged and receives exact event-aligned `q`/`L`.
+
+The existing canonical incident-state batch remains the input to Stage A. “All `ki` together”
+means vectorizing/batching that accepted row set and preserving its identities, source weights,
+refraction, attenuation, validity, and order; it does not introduce another public beam contract.
+
+### Tests and proof cadence
+
+- A one-state tiny proof compares scalar and packed density/CDF/event rows, once-only factors,
+  exact identities, per-state `T_i/N_draw,i`, and detector contributions.
+- A 33-state checkpoint permutes packet/worker layouts and compares component ledgers, RNG draws,
+  images, deterministic `M/S/H`, and T18 outputs under predeclared exact/tolerance policies.
+- One clean 129-ray/full-catalog milestone records equivalent work, wall time, utilization, and peak
+  memory. Broad sweeps and convergence grids remain external proof artifacts.
+- One nominal-ray proof checks exact center and nearest-supported labels for branches `0`, `1`, and
+  `2`, unchanged raw detector pixels, and serial/parallel label equality.
+
+### Amendment acceptance criteria
+
+- [ ] The continuous coating is the sole production path; serial and packed layouts preserve exact
+      identities/order and reproduce mass, draws, detector/T18 outputs, and moments under frozen
+      policies.
+- [ ] Both expensive stages scale under bounded memory, while deterministic control/reduction stays
+      execution-order invariant and a GPU is retained only above its measured crossover.
+- [ ] Independent continuous integrals and stochastic convergence prove detector and angle moments.
+- [ ] Full completion includes physical `m=0` and leaves no duplicate physics, executor framework,
+      compatibility facade, or unnecessary production module.
+- [ ] Every detector-supported coating component has one stable zero-mass `(branch, m, L)` label;
+      unsupported components have no fabricated detector coordinate, and the raw image is
+      unchanged.
+
+### Directions considered
+
+| Direction | Decision | Reason |
+|---|---|---|
+| One end-to-end worker per ray block | Retain only as baseline/fallback | Simple ownership, but scaling is capped by ray count and adaptive tails fragment SIMD/GPU work |
+| Per-node/draw tasks or interchangeable backends | Reject | Scheduling overhead and duplicate lifecycle/invalidation surfaces add bloat and nondeterminism |
+| Pivot Task 1.3 to staged continuous work records after coating acceptance | Choose | It batches all `ki`/component math and all sampled detector events while preserving the useful physics seams |
+
 ## Dependency graph
 
 ```text
-accepted stitch/T07 detector reference
-    -> profiled and optimized candidate work count
-    -> CPU ray-block execution
-    -> measured GPU proof path
+BKI-15 accepted incident boundary
+    |-> corrected Task 1.1 stitch/T07 scalar reference -----------\
+    `-> accepted continuous-coating validation -------------------> Task 1.2 profiled work reduction
+    -> profiled and optimized continuous component work count
+    -> narrow staged continuous batch boundary
+    -> CPU bulk state/component/event execution
+    -> stochastic rendering and deterministic continuous moments
+    -> measured eligible GPU proof path
+    -> nonzero-m parallel milestone --------------------\
+accepted physical m=0 contract and implementation ------> full Phase 1 checkpoint
     -> T08 frozen selection identities
     -> T09 fit contracts and invalidation
     -> T10 accepted detector calibration
@@ -57,10 +231,12 @@ accepted stitch/T07 detector reference
     -> exact normalized-angle-field proof
 ```
 
-Phase 1 follows [T07](07_integration.md) and a subsequent performance-focused change after T07 is
-accepted. Phase 2 dovetails with [T09](09_fit_foundation.md), [T10](10_instrument_calibration.md),
-and [T11](11_sample_geometry_fit.md). Phase 3 extends the later detector-to-angle transform in T15;
-its owned fitting paths must be approved before implementation.
+Task 1.1 and coating validation branch independently from BKI-15 and join at Task 1.2. The rest of
+Phase 1 follows [T07](07_integration.md), the accepted continuous-coating cutover, and a
+performance-focused change after the replacement workload is re-profiled. Phase 2 dovetails with
+[T09](09_fit_foundation.md), [T10](10_instrument_calibration.md), and
+[T11](11_sample_geometry_fit.md). Phase 3 consumes the accepted finite-bin detector-to-angle
+producer; its owned fitting paths must be approved before implementation.
 
 ## Shared simulation boundary
 
@@ -68,25 +244,29 @@ Every execution mode consumes the same authoritative sequence:
 
 ```text
 fixed source rays
-    -> individual rods
-    -> all valid m=0 and m!=0 mosaic/Q candidates
-    -> complete physical candidate mass
-    -> candidate-specific outgoing wave
-    -> candidate-specific continuous detector hit
+    -> continuous family/root coating components
+    -> exact per-rod detector-unconditioned density with once-only outgoing factors
+    -> component mass, error, and continuous CDF support
+    -> exact sampled rod/root/mosaic event with assigned T_i/N_draw,i mass
+    -> event-aligned outgoing wave and continuous detector hit
 ```
 
-The complete candidate mass includes every applicable source, phase/parent, reciprocal/mosaic,
-scattering-strength, optical, polarization, attenuation, and population factor exactly once. It
-does not include detector solid angle for the raw image.
+The complete continuous measure includes every applicable source, phase/parent,
+reciprocal/mosaic/coarea, scattering-strength, optical, polarization, attenuation, population, and
+outgoing-propagation factor exactly once. Detector projection is post-sampling and detector misses
+are retained as `detector_rejected_mass_A2`; neither detector validity nor detector solid angle is
+part of the raw coating mass. Recomputing exact sampled geometry or a detector hit does not reapply
+a factor already represented in the draw probability or assigned mass.
 
 From this boundary, explicit consumers may:
 
-- select stochastic outgoing events and render an image;
-- accumulate deterministic detector expected moments; or
-- construct the deterministic normalized angle-space field and its matched expected moments.
+- sample stochastic outgoing events and render an image;
+- integrate deterministic detector expected moments over the same measure; or
+- pass detector contributions to T18 and consume its deterministic normalized angle-space profile
+  and matched expected moments.
 
-No fitting module may reimplement source sampling, mosaic support, Ewald geometry, optical
-transport, detector intersection, or candidate mass.
+No fitting module may reimplement source sampling, continuous coating support, Ewald geometry,
+optical transport, detector intersection, or event mass.
 
 ## Shared centroid-and-line objective
 
@@ -297,143 +477,230 @@ Verification:
 - [ ] Run the eight T07 proof obligations in [T07](07_integration.md).
 - [ ] Record the reference trace and benchmark artifacts outside the repository root.
 
-Dependencies: accepted stitch work.
+Dependencies: accepted BKI-15 incident boundary and stitch work. Continuous-coating validation
+runs as the sibling BKI-15 branch and does not gate this scalar-reference task.
 
 Likely owned paths: T07 `measurement/`, `render/`, `pipeline/`, and `tests/test_integration.py`.
 
 ## Task 1.2: reduce mathematical work
 
-Description: profile the accepted reference and remove avoidable work before adding executors or a
-GPU path.
+Description: retain the accepted finite-pool result only as a comparison oracle, then profile the
+accepted continuous coating and remove avoidable work before adding executors or a GPU path.
 
 Required order:
 
 1. compile instrument transforms once;
-2. localize Ewald/mosaic support;
-3. avoid impossible rod-orientation combinations;
-4. stream or use two passes instead of materializing the full Cartesian product;
-5. separate candidate geometry from scattering strength; and
-6. profile candidate generation, transport, detector intersection, selection, and deposition.
+2. compile family/rod metadata and invariant reciprocal geometry once;
+3. localize continuous component support and split declared physical boundaries;
+4. batch exact component-density evaluations in bounded point tiles;
+5. reuse immutable root/transport node data only under a complete revision key;
+6. retain one state/component CDF at a time instead of a Cartesian product; and
+7. profile root, strength, optics, post-sampling detector projection/rejection, integration,
+   sampling, deposition, and moment work separately.
 
 Acceptance criteria:
 
-- [ ] A dense scalar enumerator remains the independent proof path.
-- [ ] Localized support reproduces the accepted observable within frozen tolerance.
+- [ ] The accepted scalar coating integral and the temporary finite-pool comparison remain proof
+      evidence until coating deletion authorization; neither becomes a second production path.
+- [ ] Localized support and bounded point tiles reproduce the accepted continuous observable within
+      frozen tolerance.
 - [ ] Peak memory is bounded for the large-forward benchmark.
 
 Verification:
 
-- [ ] Compare equivalent candidate work, wall time, peak memory, and final output.
+- [ ] Compare equivalent density evaluations, component masses/errors, sampled events, wall time,
+      peak memory, and detector output.
 
-Dependencies: Task 1.1.
+Dependencies: the BKI-15 join of accepted Task 1.1 and accepted continuous-coating validation.
 
-## Task 1.3: define the narrow numeric batch boundary
+## Task 1.3: define the narrow staged numeric boundaries
 
-Description: expose compact contiguous inputs and outputs for the measured hot kernel without
+Description: expose two row-stable numeric batches for the measured continuous hot path without
 creating a general backend framework.
 
 ```text
-input:
-    ray block
-    phase/parent
-    rod block
-    localized mosaic/Q support
-    compiled instrument and material state
+density batch input rows:
+    incident-state identity and compiled ki state
+    family/coating-component identity
+    canonical adaptive-node identity and continuous alpha/beta
+    phase/parent, exact ragged rod catalog/offsets, and accepted intensity state/seam
+    compiled instrument/material state and revision envelope
 
-output:
-    validity/status
-    candidate identity
-    candidate mass
-    outgoing direction
-    continuous detector hit
+density batch output rows:
+    exact root/L/q/kf and once-only factor ledger
+    validity/exclusion/first-failure
+    detector-unconditioned density with outgoing propagation/optical validity
+
+sampled-event batch input rows:
+    canonical state/draw identity
+    selected component and continuous alpha/beta
+    physical-keyed rod-choice uniform and exact ragged rod catalog/offsets
+    separately aligned assigned draw mass
+
+sampled-event batch output rows:
+    exact sampled event geometry and mosaic coordinates
+    exact conditional rod identity and contribution
+    algebraic-side, intersection-root, coating-component, and physical group provenance
+    event-aligned outgoing state and continuous detector hit/contribution
 ```
 
-Direct, tangent, or numerically uncertain cases retain a scalar robust fallback.
+The algebraic sphere side, continuous-rod `intersection_root_id`, stable coating-component identity,
+and physical fitting `BranchKey.branch_id` are separately typed and never numerically
+interchangeable. Tangent algebraic sides coalesce under the accepted boundary policy. After its
+physical support is accepted, `m=0` uses its declared intersection root while the selection manifest
+retains `branch_id=None/COLLAPSED_00L`. The accepted selection layer derives nonzero physical branch
+from exact event geometry and freezes it in its own manifest. Direct, tangent, or numerically
+uncertain rows retain the accepted scalar robust classification. Both batches preserve input row
+order exactly. Adaptive CDFs/panel trees and executor/device objects remain private orchestration
+state and never enter either numeric contract.
+
+Invalidation is explicit:
+
+| Change | Minimum invalidation |
+|---|---|
+| sample/incident geometry or material/instrument optics | roots, support, outgoing state, affected factors, masses, CDFs |
+| detector placement/shape | detector hits, representative labels, deposition/moments; never coating masses/CDFs |
+| continuous mosaic parameters/measure | component support, masses, errors, CDFs |
+| intensity model/structure | strengths, masses, errors, CDFs; reuse geometry only under its exact revision |
+| source/phase/population/optics | every affected once-only factor, mass, and CDF |
+| detector-to-angle grid/projector/ROI | downstream T18 projection/profile only; never coating physics |
 
 Acceptance criteria:
 
-- [ ] The full diagnostic wrapper and streaming integration wrapper consume the same internal
-      equations.
-- [ ] Canonical state -> rod -> orientation candidate ordering is preserved.
+- [ ] Scalar, diagnostic, stochastic, and deterministic-moment consumers call the same continuous
+      density/root/intensity/transport equations.
+- [ ] Canonical component order is state -> family -> coating component; canonical sampled-event
+      order is state -> draw. No orientation-node identity enters either order.
+- [ ] Density results scatter into canonical component/node slots without depending on how rows were
+      batched or where they executed.
+- [ ] The sampled-event batch evaluates exact per-rod conditional strengths, performs the keyed rod
+      choice, and reconstructs the chosen exact event without a per-draw task.
+- [ ] Assigned draw mass is separate from sampled geometry and cannot be reapplied as a reciprocal
+      or mosaic weight.
+- [ ] Existing incident-state batch and scalar construction agree on identity, `ki`, source weight,
+      incident refraction/attenuation, validity, and row order.
 - [ ] No public generic backend or arbitrary callback layer is added.
 
 Verification:
 
-- [ ] Compare batch and scalar validity, roots, masses, hits, identities, and first divergence.
+- [ ] Compare staged batches and scalar execution for row alignment, component masses/errors,
+      exclusions, roots, sampled coordinates, conditional rod frequencies, assigned masses, hits,
+      identities, and first divergence.
 
 Dependencies: Task 1.2.
 
-## Task 1.4: implement CPU ray-block execution
+## Task 1.4: implement staged CPU bulk execution
 
-Description: benchmark serial tiled execution before adding the smallest justified fused/parallel
-CPU path.
+Description: benchmark serial staged batches before adding the smallest justified fused/parallel
+CPU execution.
 
 Benchmark order:
 
 1. scalar reference;
-2. serial tiled/vectorized execution;
-3. fused compiled CPU execution if profiling justifies it; and
-4. increasing ray-block worker counts.
+2. serial vectorized density and sampled-event batches;
+3. the smallest CPU path: bounded complete-component jobs plus one flattened sampled-event path;
+4. cross-component adaptive-frontier coalescing only if density integration remains dominant;
+5. fused compiled CPU execution only if profiling justifies it; and
+6. selected worker and batch sizes under equivalent work.
 
-The implementation uses coarse ray batches, a bounded producer, explicit maximum in-flight
-workspace, per-worker output ownership, no atomic image writes, and deterministic canonical
-merging.
+The first CPU implementation schedules a bounded set of complete components drawn from many fixed
+incident states. After convergence, it generates draws in canonical `(state, draw)` order and
+flattens them into large exact-event, transport, detector-projection, and deposition batches. Fixed
+event tiles or stable segmented pixel records reduce in canonical order. If density integration
+remains dominant, component controllers may coalesce pending node rows into shared batches and
+scatter results back by canonical `(state, component, node)` identity. There is no task per ray,
+draw, rod, node, or adaptive panel; workers never mutate shared CDFs or images, and no unordered
+atomic reduction is allowed.
 
 Acceptance criteria:
 
-- [ ] CPU utilization scales over rays even when one or two peaks are active.
-- [ ] Worker count does not change candidate identities, selected events, assigned mass, or image.
-- [ ] Peak memory remains under the declared limit.
+- [ ] CPU utilization scales across the available state/component/node and sampled-event rows even
+      when one or two fitted peaks are active.
+- [ ] State-tile, density-batch, event-batch, worker count, and completion order do not change
+      component ledgers, sampled identities/coordinates, assigned mass, detector output, or
+      expected moments beyond the declared exact/tolerance policy.
+- [ ] Peak memory remains under the declared bound for active component controllers/CDFs plus fixed
+      density and sampled-event batches and outputs.
+- [ ] No task-level parallelism remains inside a batch when vectorized/compiled execution already
+      saturates the eligible hardware.
 
 Verification:
 
-- [ ] Benchmark serial and selected worker counts on small, medium, and large forward workloads.
+- [ ] Use a one-ray inner proof, a 33-ray scaling checkpoint, and one clean 129-ray/full-catalog
+      milestone benchmark; measure density/event batch sizes and broad worker/tile sweeps only as
+      external artifacts.
 
 Dependencies: Task 1.3.
 
 ## Task 1.5: preserve stochastic semantics
 
-Description: key randomness to physical identity instead of execution order.
+Description: key continuous draws to physical identity instead of execution or adaptive order.
 
-RNG keys depend on source sample, phase/parent, selection pool, and draw index. They do not depend
-on worker count, chunk size, scheduling, or backend.
+The component-choice uniform is keyed by seed, source/incident-state identity, phase/parent, draw
+index, purpose tag, and measure/algorithm revision. Conditional alpha, beta, and rod uniforms add
+the already selected physical family and coating-component identities. No key depends on
+state-tile size, density/event-batch size, worker count, adaptive nodes/panels, completion order,
+or backend.
 
 Acceptance criteria:
 
-- [ ] Fixed-seed rendering is invariant to CPU chunking and worker count.
-- [ ] Complete-pool candidate order and cumulative selection are stable.
+- [ ] Fixed-seed rendering is invariant to state/density/event batching and CPU worker count.
+- [ ] Across CPU/GPU, host-controlled scans and boundary arbitration preserve discrete component,
+      root, rod, and draw identities; floating coordinates and observables use frozen tolerances.
+- [ ] Component-mass order, continuous inverse-CDF results, and conditional rod draws are stable.
 - [ ] A changed sample revision changes provenance explicitly.
 
 Verification:
 
-- [ ] Hash selected candidate IDs and final pixels for multiple execution layouts.
+- [ ] Hash component ledgers, sampled physical identities/coordinates, assigned masses, and final
+      pixels for multiple execution layouts.
 
 Dependencies: Tasks 1.3-1.4.
 
 ## Task 1.6: expose stochastic rendering and deterministic moments
 
-Description: feed two explicit consumers from the common candidate kernel.
+Description: feed two explicit consumers from the same continuous component measure.
 
-The stochastic renderer retains complete-pool selection, configured outgoing-event count,
-selected mass `T/N`, and conservative detector deposition.
+The stochastic renderer samples the complete per-state continuous measure. For state `i`, freeze
+integrated total mass `T_i` and draw count `N_draw,i`; every draw receives
+`m_id = T_i/N_draw,i`. `N_draw,i` is unrelated to T18's angle-bin normalization field `N_b`.
+For a valid positive-mass state, `N_draw,i` must be positive. A zero-support state remains in the
+canonical ledger with `T_i=0`, no draws, and a typed invalid/excluded status; no division or silent
+row removal occurs. Conservative detector deposition follows.
 
-The deterministic reducer accumulates
+The deterministic reducer integrates
 
 \[
-M=\sum_i m_i,
+M=\int d\mu(\xi),
 \qquad
-\mathbf S=\sum_i m_i\mathbf x_i,
+\mathbf S=\int \mathbf x(\xi)\,d\mu(\xi),
 \qquad
-\mathbf H=\sum_i m_i\mathbf x_i\mathbf x_i^{\mathsf T}.
+\mathbf H=\int \mathbf x(\xi)\mathbf x(\xi)^{\mathsf T}\,d\mu(\xi).
 \]
 
-This reducer establishes simulation capability; it is not yet a fitter.
+Each deterministic state tile returns canonical per-state `M`, `S`, and `H` partials; the parent
+reduces states in canonical order. This reducer establishes simulation capability; it is not yet a
+fitter.
+
+Adaptive acceptance is observable-specific. Stochastic CDF construction declares a mass/CDF error
+policy. Detector moments refine the vector integrand `[M, S, H]` until every scaled component meets
+its frozen tolerance. A deterministic detector image or T18 profile similarly declares error for
+the required detector or active finite-bin `S` contributions. Converged component mass alone never
+certifies moment, image, or profile convergence.
 
 Acceptance criteria:
 
-- [ ] Moments equal direct complete-candidate enumeration.
+- [ ] Moments equal an independently converged direct continuous integral within frozen integration
+      and observable tolerances.
 - [ ] High-count stochastic image centroids converge to expected moments.
-- [ ] `m=0`, `m!=0`, and combined pools are each proven.
+- [ ] For each incident state, `sum_d m_id = T_i`, and deposited plus edge-clipped plus
+      detector-rejected mass equals the assigned sum. Detector misses are retained and never
+      resampled; an outgoing-propagation classification disagreement is a typed consistency
+      failure.
+- [ ] The ledger keeps integrated exclusions, detector consistency failures, edge clipping, and
+      deposited mass as separate fields/statuses; none is silently folded into another.
+- [ ] Nonzero-`m`, accepted `m=0`, and combined continuous measures are each proven before full
+      Phase 1 completion.
 
 Verification:
 
@@ -443,25 +710,34 @@ Dependencies: Tasks 1.1-1.5.
 
 ## Task 1.7: add and evaluate GPU execution
 
-Description: prototype only the sufficiently large, regular numeric kernel identified by CPU
-profiling.
+Description: prototype only sufficiently large regular component-point, transport, deposition, or
+moment batches identified by CPU profiling.
 
 Requirements:
 
 - keep immutable compiled states resident during repeated work;
 - use float64 for proof;
+- keep adaptive refinement, robust fallback, and canonical merge under deterministic host control;
+- keep component scans, inverse-CDF decisions, rod choice, and all discrete identity decisions on
+  the host;
+- recompute a GPU row on the CPU whenever its error interval can change validity, refinement,
+  compaction, scan ownership, inverse-CDF selection, or rod choice;
 - avoid unordered atomic reductions;
 - preserve stable compaction and reduction order;
 - record compile, transfer, execution, and reduction time separately; and
 - define a measured CPU/GPU crossover.
 
-The production path may remain CPU-based when strict-float64 branch-heavy geometry is faster on
-the CPU. GPU compatibility means the same numeric contract executes and reproduces the accepted
-observable; it does not require forcing every workload onto the GPU.
+The GPU may evaluate the same regular density and sampled-event rows while the host owns adaptive
+control and deterministic reductions. It receives large work-record arrays gathered across many
+`ki` and components, not one launch per component or event. The production path may remain
+CPU-based when strict-float64 branch-heavy geometry is faster on the CPU. GPU compatibility means
+the same continuous work contracts reproduce the accepted observable; it does not require forcing
+every workload onto the GPU.
 
 Acceptance criteria:
 
 - [ ] GPU and CPU reproduce the proof observable within frozen tolerance.
+- [ ] GPU batching cannot change a discrete identity; decision-boundary rows use the CPU result.
 - [ ] Near-boundary cases use the declared robust fallback or satisfy the same classification.
 - [ ] A measured crossover determines automatic or explicit backend choice.
 
@@ -471,15 +747,272 @@ Verification:
 
 Dependencies: Tasks 1.3-1.6.
 
+## Task 1.8: add stable representative detector labels
+
+Description: add one deterministic, zero-mass label for every exact coating component
+`(family_id, intersection_branch_id)` that has detector support. This is a compact diagnostic pass
+over the accepted continuous coating, not photon provenance and not another scattering path.
+
+Entry gate: the continuous Ewald-coating replacement must first be accepted with its final branch
+`0/1/2`, LINE_M0 support, exact event reconstruction, and production replay contracts. This task
+consumes those contracts and must not depend on temporary adaptive nodes, CDF storage layout, root
+batches, or a finite candidate-pool oracle.
+
+Frozen rules:
+
+- Group by exact canonical `(family_id, intersection_branch_id)`, never floating `m` or `L`.
+- Preserve branch `0` for the retained catalog-derived LINE_M0 root, branch `1` for the lower-`L`
+  regular nonzero root, and branch `2` for the upper-`L` regular nonzero root.
+- Store exact representative `L` as label payload; do not use it as identity.
+- Construct one separate nominal incident ray from the declared mean beam position, mean direction,
+  and mean wavelength. Never append it to the Monte Carlo source batch.
+- Try the exact mosaic mode first. If it is not detector-valid, choose the nearest physically
+  supported, detector-valid continuous orientation under the accepted coating and detector
+  contracts.
+- Resolve exact distance ties by greater coating density, then canonical wrapped azimuth, then
+  canonical component identity.
+- Emit no row for a component without detector support; keep its typed absence in proof output.
+- Label rays carry no assigned mass and never enter deposition, edge-clipped mass, or
+  detector-rejected photon mass.
+- Reuse the accepted coating, structure-factor, outgoing-transport, detector, batch, and parallel
+  implementations. Add no executor, optimizer framework, tag raster, retained event pool, or new
+  production module.
+
+### Task 1.8.1: freeze the compact label contract
+
+Files likely touched:
+
+- `src/rasim_next/pipeline/simulate.py`
+- `tests/test_integration.py`
+
+Exact intended behavior: define the smallest aligned immutable batch with canonical rows and these
+fields:
+
+```text
+component_id[K]
+family_id[K]
+m_value[K]
+intersection_branch_id[K]
+l_coordinate[K]
+mosaic_alpha_rad[K]
+mosaic_azimuth_rad[K]
+detector_column_px[K]
+detector_row_px[K]
+```
+
+Arrays are aligned, contiguous, read-only, and finite. `(family_id, branch)` is unique; branch is
+restricted to `0/1/2`; rows use canonical family-then-branch order. No mass or deposition-weight
+field is permitted, and missing components use typed omission rather than sentinel coordinates.
+
+Tests: extend `tests/test_integration.py` with one contract test covering field alignment,
+uniqueness, branch range, finite coordinates, canonical order, and absence of photon-mass semantics.
+
+Dependencies: accepted coating boundary and Task 1.3.
+
+Acceptance criteria: one row means one detector-supported component, identity is explicit rather
+than positional, and no new module or test file is added.
+
+### Task 1.8.2: construct the nominal incident ray
+
+Files likely touched:
+
+- `scripts/generate_bi2se3_detector_image.py`
+- `tests/test_integration.py`
+
+Exact intended behavior: construct a separate one-row nominal `IncidentSampleBatch` from the
+script's declared mean source position, direction, and wavelength, with wavelength-matched material
+optics. Reuse an existing exact central-ray constructor where possible. Do not change source
+weights, Monte Carlo sample count, seed mapping, random sequence, or detector image.
+
+Tests: different seeds produce the same nominal ray; origin/direction/wavelength equal their
+declared means; the ordinary Monte Carlo batch and source weights remain array-identical.
+
+Dependencies: Task 1.8.1.
+
+Acceptance criteria: exactly one seed-independent diagnostic incident state exists, has zero
+photon mass, and introduces no second source-physics implementation.
+
+### Task 1.8.3: evaluate exact mosaic-center representatives
+
+Files likely touched:
+
+- `src/rasim_next/reciprocal/coating.py`
+- `src/rasim_next/pipeline/simulate.py`
+- `tests/test_mosaic_ewald.py`
+
+Exact intended behavior: for every authoritative `(family, branch)`, evaluate
+`mosaic_alpha_rad=0` and canonical azimuth `0`; invoke the accepted root evaluator; preserve the
+exact branch; reconstruct exact `L`, `q`, and `kf`; and apply the accepted structure strength and
+outgoing-propagation classification. Keep a physically valid center candidate, otherwise pass the
+component to Task 1.8.4. Do not integrate a mass, sample a CDF, or enumerate individual family rods
+for label provenance.
+
+Tests: a compact fixture covers branches `0/1/2`, zero tilt, canonical azimuth, `kf=ki+q`, Ewald
+residual, lower/upper `L` ordering for branches `1/2`, and suppressed LINE_M0 direct root.
+
+Dependencies: Task 1.8.2 and the accepted coating root seam.
+
+Acceptance criteria: each center-valid component yields exactly one massless candidate with exact
+family/branch identity and no copied coating or structure-factor equation.
+
+### Task 1.8.4: select the nearest supported continuous orientation
+
+Files likely touched:
+
+- `src/rasim_next/reciprocal/coating.py`
+- `src/rasim_next/pipeline/simulate.py`
+- `tests/test_mosaic_ewald.py`
+
+Exact intended behavior: for a center-invalid component, minimize spherical mosaic distance to the
+mode subject to accepted component support, its exact branch, LINE_M0 boundary semantics, a regular
+valid root, finite positive strength, and valid outgoing propagation. Apply the frozen tie order.
+Branch `0` never enters nonzero branch-pair logic. Reuse the accepted support/classification
+evaluator; do not expose quadrature nodes as candidates, build a painted-sphere grid, invent an
+epsilon, or add a general optimizer. If the final coating seam cannot support this without copied
+physics, stop and request one narrow interface.
+
+Tests: an analytic nearest-boundary case, a center-valid case, a symmetric tie case, LINE_M0 cutoff
+equality, and repeatability. Compare mosaic distance with an independently converged temporary
+reference.
+
+Dependencies: Task 1.8.3.
+
+Acceptance criteria: orientation and identities meet frozen tolerances/exactness, no node or random
+sample identity affects the result, and physical absence is typed rather than fabricated.
+
+### Task 1.8.5: constrain the representative to detector support
+
+Files likely touched:
+
+- `src/rasim_next/pipeline/simulate.py`
+- `tests/test_integration.py`
+- `src/rasim_next/reciprocal/coating.py` only if one narrow accepted classification seam is needed
+
+Exact intended behavior: project physical candidates through unchanged outgoing transport and
+detector geometry. If the physical minimum misses the detector, continue the same minimum-distance
+selection with detector validity as a constraint. Use accepted detector-edge inclusivity and
+continuous `(column_px, row_px)`. Emit at most one row per component; classify no-hit components as
+`NO_DETECTOR_SUPPORT`. Never deposit a label or include it in photon rejection mass.
+
+Tests: center hit, center miss with known nearest detector-valid support, no detector support, exact
+winning `L` and identities, and unchanged image/mass ledgers.
+
+Dependencies: Task 1.8.4 and the existing detector projection seam.
+
+Acceptance criteria: every emitted row is detector-valid, no component has more than one row, no
+sentinel coordinate is used, and raw image/mass output is bitwise unchanged.
+
+### Task 1.8.6: reuse the staged parallel execution seam
+
+Files likely touched:
+
+- `src/rasim_next/pipeline/simulate.py`
+- `tests/test_integration.py`
+
+Exact intended behavior: pack requests in canonical `(family, branch)` order and evaluate them
+through the existing coating/event batches. If the accepted parallel path owns a persistent worker
+pool, use it; otherwise use one vectorized batch rather than adding multiprocessing for this small
+table. Workers return aligned candidate rows and the parent merges by canonical identity, never
+completion order. Bound output by `K <= 1 + 2*F_nonzero`, independent of rays and draws.
+
+Tests: compare scalar, packed serial, one/two workers, odd tiles, and reversed completion order;
+require exact fields and row order. Vary source sample count, draw count, selection seed, and event
+tile size without changing labels.
+
+Dependencies: Task 1.8.5 and Tasks 1.3-1.5.
+
+Acceptance criteria: execution layout cannot alter a label, no worker retains photon provenance or
+mutates pixels, no new executor is introduced, and workspace is one bounded component tile plus
+the compact label table.
+
+### Task 1.8.7: annotate the default detector figure
+
+Files likely touched:
+
+- `scripts/generate_bi2se3_detector_image.py`
+
+Exact intended behavior: calculate labels from the nominal ray, place markers at their continuous
+detector coordinates, use stable colors for branches `0/1/2`, and display
+`b=<branch>, m=<m>, L=<L>`. If direct text overlaps, use deterministic numeric marker IDs and one
+canonical side legend instead of a layout framework. Do not alter raw image values or color scale,
+and do not retain another sidecar or generated artifact outside an already accepted deliverable.
+
+Tests: run the retained image script, compare marker and contract coordinates, assert raw
+`image_A2` is unchanged, and inspect one temporary external PNG before cleanup.
+
+Dependencies: Task 1.8.6.
+
+Acceptance criteria: every detector-supported component has one readable tag at its exact
+coordinate, the scientific image is unchanged, and no tag raster or per-photon identity remains.
+
+### Task 1.8.8: prove, benchmark, document, and clean up
+
+Files likely touched:
+
+- the existing proof owner, preferably `src/rasim_next/pipeline/proof.py`
+- `docs/CONTRACTS.md`, `docs/RESULT_MEASURE.md`, `docs/TRACE_SCHEMA.md`, and `docs/EXAMPLES.md`
+- existing tests modified above; no new source or test file
+
+Exact intended behavior: report component, center-valid, fallback, detector-supported, and omitted
+counts plus coating/root evaluations, detector projections, wall time, and peak workspace. Document
+grouping, exact `L` payload, nominal-ray provenance, nearest-mode/tie rules, zero-mass semantics,
+and execution-layout invariance. Retain only compact tests protecting the label contract,
+center/nearest-support correctness, detector noninterference, and parallel invariance if a distinct
+parallel path remains. Delete dense searches, sweeps, visual snapshots, profiling logs, debug
+counters, and temporary output.
+
+Tests: run the compact integration/coating proofs and the default script; verify work is independent
+of ray/draw count, scales with component count, and scalar/packed results agree. Large timing and
+convergence sweeps remain external and temporary.
+
+Dependencies: Task 1.8.7.
+
+Acceptance criteria: label time is at most 10% of the accepted default forward simulation on the
+designated host; additional memory is bounded by compact component work; one implementation owns
+selection; every retained test protects a unique invariant; and no generated residue, duplicate
+helper, unused dependency, or stale per-photon labeling requirement remains.
+
 ## Phase 1 checkpoint
 
 - [ ] T07 remains fully passing.
-- [ ] CPU execution uses ray/candidate parallelism rather than peak parallelism.
-- [ ] RNG, candidate order, selected events, and reductions are reproducible.
-- [ ] Expected moments match direct enumeration and stochastic convergence.
+- [ ] The accepted coating cutover is the sole production mosaic--Ewald path; the finite pool is
+      proof-only until deletion and is absent afterward.
+- [ ] CPU execution covers incident-state/component/node evaluation and sampled-event
+      coating-to-detector work through staged bulk batches rather than peak parallelism.
+- [ ] RNG, component order, sampled events, assigned masses, and reductions are reproducible.
+- [ ] Expected moments match an independent continuous integral and stochastic convergence.
+- [ ] The physical `m=0` contract is accepted and proven; otherwise Phase 1 is explicitly partial.
+- [ ] Every detector-supported exact `(family, branch)` component has one stable zero-mass
+      `(branch, m, L)` label; unsupported components have typed absence and no fabricated point.
+- [ ] Representative labels are invariant to seed, ray/draw count, batching, workers, and
+      completion order, while raw pixels and all photon-mass ledgers are unchanged.
 - [ ] CPU/GPU agreement, crossover, wall time, and peak memory are recorded.
 
 # Phase 2: detector-space geometry fitter
+
+## Fitting gauge ownership required before Phase 2
+
+Phase 2 may begin only after T09--T11 encode and validate the following active-pack contract:
+
+- The LAB beam frame is fixed. One minimal beam-frame rotation may describe the beam relative to
+  LAB, but no active pack may expose a compensating common beam/sample pose.
+- Beam roll is inactive whenever both the spatial-width pair and divergence-width pair are
+  isotropic; an unobservable roll is never retained as a fitted coordinate.
+- Each fitted rotation axis has exactly two tangent coordinates. Its pivot has exactly two
+  perpendicular components, with no axis-parallel pivot coordinate.
+- Exactly one parameter block owns the zero-pose/sample-mount transform; the other representation
+  is fixed rather than jointly fitted.
+- A finite sample-support extent is inactive until observations reach its edge and uses a positive
+  transform when activated. Unbounded support and `sample_from_crystal` translation at the incident
+  stage expose no fitted coordinate.
+- Detector calibration is a downstream revision: it invalidates projection, selection,
+  deposition, and measurement products, never the detector-independent incident `ki` realization.
+
+Future fitting proof must show a full-column-rank Jacobian for every accepted active pack; reject
+deliberately redundant packs deterministically; deactivate isotropic beam roll; reconstruct the
+two perpendicular pivot components; activate finite support only from edge-reaching observations;
+and prove the stated incident-versus-detector invalidation boundary. These are future test
+obligations in the owning fitting tasks, not tests or fitting code in this remediation.
 
 ## Goal
 
@@ -516,21 +1049,21 @@ Dependencies: Phase 1 and T08-T10.
 
 ## Task 2.2: compute expected detector moments
 
-Description: replace stochastic second-stage event selection with complete-pool conditional
-expectation for every locked peak.
+Description: integrate the accepted continuous coating measure for every locked peak instead of
+using stochastic second-stage draws.
 
 When deposition, masks, or clipping matter, accumulate
 
 \[
-M_i=\sum_{j,p}m_jD_{jp},
+M_i=\int\sum_pD_p(\xi)\,d\mu_i(\xi),
 \]
 
 \[
-\mathbf S_i=\sum_{j,p}m_jD_{jp}\mathbf x_p,
+\mathbf S_i=\int\sum_pD_p(\xi)\mathbf x_p\,d\mu_i(\xi),
 \]
 
 \[
-\mathbf H_i=\sum_{j,p}m_jD_{jp}\mathbf x_p\mathbf x_p^{\mathsf T},
+\mathbf H_i=\int\sum_pD_p(\xi)\mathbf x_p\mathbf x_p^{\mathsf T}\,d\mu_i(\xi),
 \]
 
 and
@@ -540,12 +1073,12 @@ and
 \]
 
 Use continuous-hit moments only after proving equivalence for unclipped interior bilinear
-deposition. Each ray block returns partial `M`, `S`, and `H` for every active observation, so the
-number of peaks does not control CPU utilization.
+deposition. Each state tile returns canonical per-state partial `M`, `S`, and `H` for every active
+observation, so the number of peaks does not control CPU utilization.
 
 Acceptance criteria:
 
-- [ ] Detector moments match direct candidate enumeration.
+- [ ] Detector moments match an independently converged direct continuous integral.
 - [ ] Edge clipping and masks use their actual deposited support.
 - [ ] Zero or negligible mass produces an explicit invalid observation.
 
@@ -680,12 +1213,16 @@ Dependencies: Tasks 2.1-2.5.
 Recover the same known geometry cases from expected angle-space peak moments while preserving the
 detector-proven physics and identities.
 
+Phase 3 consumes the accepted T18 immutable detector-to-angle projector, finite-bin `S/N/I`
+profiles, masks, losses, identities, and revision envelope. It does not construct another `D -> M`
+operator, choose a second grid/seam policy, or rebuild profile normalization.
+
 ## Angle-space coordinate contract
 
-Use one exact full-pixel-splitting detector-to-angle transform for angle-space images and fitting.
-Construct the sparse splitting operator from the accepted `CompiledInstrument` physical pixel
-corners, including rectangular row/column pitch and the declared detector pose. Simulation-native
-hits remain in the native detector frame and receive no display rotation.
+Use T18's one exact full-pixel-splitting detector-to-angle transform for angle-space images and
+fitting. T18 constructs the sparse splitting operator from the accepted `CompiledInstrument`
+physical pixel corners, including rectangular row/column pitch and the declared detector pose.
+Simulation-native hits remain in the native detector frame and receive no display rotation.
 
 For each detector pixel, transform all four physical corners into `(2theta, chi_raw)`, unwrap its
 angular footprint across the fixed azimuth seam, and distribute its signal and normalization over
@@ -697,9 +1234,13 @@ out of scope for this phase. If required later, add one typed
 detector-coordinate-to-physical-corner calibration boundary before `M`; never absorb distortion
 into beam center, pitch, or Euler angles.
 
-## Task 3.1: freeze the angular coordinate contract
+## Task 3.1: consume the accepted T18 angular coordinate contract
 
-Description: define the exact polar transform and fitting view before using either in an objective.
+Description: validate and freeze the accepted T18 handoff before using its profiles in an
+objective. The fitter records the handoff revisions and cannot redefine the transform.
+
+The detailed coordinate requirements below are a consumer-side handoff checklist. T18 owns their
+implementation and direct proof; Phase 3 retains only the integration evidence unique to fitting.
 
 Let `(t1, t2, t3)` be the vector from the nominal sample/beam origin to a detector point in the
 declared beam basis: `t1` follows detector row-down on the flat reference detector, `t2` follows
@@ -761,17 +1302,20 @@ Verification:
       direct-beam invalidation, and accepted reference points.
 - [ ] Compare full physical-corner geometry rather than only center-angle arrays.
 
-Dependencies: accepted Phase 2 and T15 coordinate ownership.
+Dependencies: accepted Phase 2 and accepted T18 coordinate/profile ownership.
 
-## Task 3.2: transform each candidate before reduction
+## Task 3.2: apply the accepted T18 sparse transfer before reduction
 
-Description: construct one exact sparse detector-to-angle operator and apply it to
-candidate-specific hits before any angular reduction.
+Description: apply T18's immutable sparse detector-to-angle operator to event-specific detector
+contributions before any angular reduction; do not construct a fitter-owned operator.
+
+The operator conservation and polygon-enumeration items below are T18 acceptance evidence. Phase 3
+checks the accepted proof metadata and keeps one continuous-measure-to-profile integration test.
 
 Let `D_ki` be the same bilinear deposition weight used by the detector renderer from continuous
-candidate hit `i` to detector pixel `k`. Let `M_bk` be the seam-safe full-pixel-splitting weight
+event contribution `i` to detector pixel `k`. Let `M_bk` be the seam-safe full-pixel-splitting weight
 from the four physical corners of detector pixel `k` to angle-space bin `b`. Do not materialize
-their Cartesian product. In bounded tiles, the angular footprint of candidate `i` is
+their Cartesian product. In bounded tiles, the angular footprint of contribution `i` is
 
 \[
 a_{bi}=\sum_k M_{bk}D_{ki}.
@@ -786,17 +1330,17 @@ pixel's four raw-`chi` corners across the seam exactly once so the footprint rem
 then wrap bin ownership back to the frozen interval. Record boundary/tie policy because exact
 seam and beam-center ties can otherwise become order- or dtype-dependent.
 
-The authoritative order is candidate deposition, detector-signal summation, application of `M`,
+The authoritative order is event deposition, detector-signal summation, application of `M`,
 normalization, and then the matched bin moment. Detector centroids remain detector-space
-observables. Cache `M` by the complete instrument,
-nominal angle-space origin, direct-beam/transverse basis, detector shape, physical pixel-corner
-calibration, bin edges, seam, dtype, and summation-engine revisions. If a later fit varies any
-parameter that changes those quantities, rebuild or select the correctly keyed operator for that
-trial; a stale LUT is an invalid evaluation.
+observables. T18 keys `M` by the complete instrument, nominal angle-space origin,
+direct-beam/transverse basis, detector shape, physical pixel-corner calibration, bin edges, seam,
+dtype, and summation-engine revisions. If a later fit varies any quantity that changes `M`, it
+requests the correctly revised T18 operator/profile or returns an invalid evaluation; the fitter
+never silently rebuilds or reuses a stale LUT.
 
 Acceptance criteria:
 
-- [ ] Every angular moment comes from candidate contributions passed through `D` and `M`.
+- [ ] Every angular moment comes from continuous-measure contributions passed through `D` and `M`.
 - [ ] `D` is bitwise/order-equivalent to accepted detector image deposition.
 - [ ] `M` is a sparse full-pixel-splitting operator built from physical corners with deterministic
       seam handling and canonical bin ordering.
@@ -818,14 +1362,16 @@ Verification:
       support from `S` and `N`, and angular clipping reports the exact lost support.
 - [ ] Compare `M` and angle-space fields with an independent direct full-pixel-splitting oracle.
 
-Dependencies: Task 3.1 and the Phase 2 candidate/moment boundary.
+Dependencies: Task 3.1, accepted T18 sparse-transfer proof, and the Phase 2
+continuous-measure/moment boundary.
 
-## Task 3.3: freeze the normalized angle-space observable
+## Task 3.3: consume the normalized T18 finite-bin profile
 
-Description: define the one angle-space field and moment that observation and prediction may
-compare.
+Description: accept T18's one finite-bin `S/N/I` profile and define only the fitter moment that
+observation and prediction compare.
 
-Construct expected detector signal
+The `S/N/I`, mask, clipping, and correction rules below are immutable T18 inputs, not a second
+profile implementation in the fitter. T18 constructs expected detector signal
 
 \[
 s_k=\sum_i m_iD_{ki},
@@ -874,7 +1420,7 @@ Verification:
 - [ ] Test negative bins, signed cancellation, zero total weight, and a modeled nonnegative
       background; silent clipping must be detected.
 
-Dependencies: Tasks 3.1-3.2 and the accepted T15 angle-space measure.
+Dependencies: Tasks 3.1-3.2 and the accepted T18 finite-bin measure/profile.
 
 ## Task 3.4: accumulate expected angular moments
 
@@ -1066,26 +1612,26 @@ Dependencies: Tasks 3.1-3.7 and accepted Phase 2 recovery matrix.
 
 ## Task 3.9: evaluate GPU angular fitting
 
-Description: reuse the Phase 1 device-resident candidate kernel, the fixed sparse splitting
-operator, and deterministic signal/normalization/moment reductions.
+Description: reuse the Phase 1 device-resident continuous component kernel, the accepted T18 fixed
+sparse splitting operator, and deterministic signal/normalization/moment reductions.
 
 For the first angle-space fit, keep `M`, bin centers, masks, normalization state, and immutable
 simulation state device-resident across optimizer evaluations. Stream only bounded
-candidate/deposition tiles and the small residual vector. Batch independent trial points or
+component-point/deposition tiles and the small residual vector. Batch independent trial points or
 finite-difference/Jacobian columns when memory permits. Do not build a giant
-candidate-by-angle-bin matrix.
+event-by-angle-bin matrix.
 
-Because detector calibration, masks, corrections, grid, and peak supports are frozen, precompute
-`N` once and derive a CSR row view containing only the union of active angle-space fit bins. Retain
-the full-field proof path, and permit the active-row path only after it reproduces the same `S`,
+Because detector calibration, masks, corrections, grid, and peak supports are frozen, consume
+T18's fixed `N_b` once and derive a CSR row view containing only the union of active angle-space fit
+bins. Retain the full-field proof path, and permit the active-row path only after it reproduces the same `S`,
 `I`, moments, and residuals. This avoids recomputing irrelevant angle-space regions on every trial
 while preserving the frozen angle-space measure.
 
 The initial fit freezes detector calibration and the nominal angle-space origin/basis, so `M` is
 constant. If a later fit varies that origin/basis, distance, beam center, detector pitch/pose,
 physical corners, shape, or another splitting-transform parameter, that trial must use a newly
-built or correctly keyed `M`. Benchmark that rebuild cost separately; never silently reuse the
-frozen operator.
+built or correctly keyed `M` requested from T18. Benchmark that request/rebuild cost separately;
+never silently reuse the frozen operator.
 
 Acceptance criteria:
 
@@ -1104,7 +1650,8 @@ Dependencies: Phase 1 GPU proof and Tasks 3.1-3.8.
 
 ## Phase 3 checkpoint
 
-- [ ] Every candidate is transformed before angular reduction.
+- [ ] Phase 3 consumes T18's projector/profile/revisions and owns no detector-to-angle producer.
+- [ ] Every weighted continuous-measure contribution is transformed before angular reduction.
 - [ ] `chi_raw` and fitting/display `phi` are never conflated.
 - [ ] The center/edge adapter produces no half-pixel shift or downstream display rotation.
 - [ ] The nominal angle-space origin/basis and component masks remain frozen, keyed, and independent
@@ -1125,19 +1672,19 @@ Every relevant implementation path must report:
 
 | Workload | Required comparison |
 |---|---|
-| Tiny scalar | analytic identities and direct enumeration |
-| CPU tiled | scalar proof path |
-| CPU parallel | serial tiled path under equivalent work |
+| Tiny scalar | analytic identities and independently converged continuous integration |
+| CPU staged batches | scalar proof path |
+| CPU parallel | serial staged batches under equivalent work |
 | GPU | accepted CPU path, including boundary classifications |
-| Detector moments | direct candidate sums and stochastic convergence |
+| Detector moments | direct continuous integrals and stochastic convergence |
 | Detector fit | hidden known truth and held-out detector observations |
 | Angular moments | direct sparse-transfer and normalized-bin enumeration |
 | Angle-space fit | same hidden truth used by detector-space fit |
 | Binned angle field | independent direct `S`, `N`, valid mask, `I`, axes, and centroid |
 
-Record wall time, peak memory, setup/compile time, transfer time where applicable, candidate and
-selected counts, precision, hardware, code/data/configuration revisions, and error versus the
-accepted reference.
+Record wall time, peak memory, setup/compile time, transfer time where applicable, incident-state,
+component, density-evaluation, adaptive-panel, and sampled-event counts, precision, hardware,
+code/data/configuration revisions, and error versus the accepted reference.
 
 ## Risks and mitigations
 
@@ -1145,8 +1692,15 @@ accepted reference.
 |---|---|---|
 | CPU parallelism is limited by Python overhead | High | Localize/vectorize first; benchmark fused execution before selecting workers |
 | GPU is slow for branch-heavy float64 work | High | Record crossover and retain CPU production path |
-| Candidate order changes with chunking | Critical | Canonical keyed ordering and deterministic merge |
-| Parallel reduction changes complete-pool selection | Critical | Stable compaction, scan, and reduction order; proof hashes |
+| Adaptive or event batches exhaust memory, fragment on ragged rods, or develop a long tail | High | Bound active rows by bytes, use canonical ragged offsets, and finish small tails without a global barrier or nested pool |
+| Batching changes refinement, RNG choices, or reductions | Critical | One logical component controller, physical counter keys, canonical slots/ties/scans/reductions, and proof hashes |
+| Once-only factors are reapplied or sampled reconstruction disagrees with outgoing propagation | Critical | Separate assigned mass from geometry, prove the output ledger, and treat disagreement as a typed consistency failure |
+| Intersection roots, coating components, and physical fitting branches are conflated | Critical | Separate typed identities and explicit mapping proofs |
+| Initial nonzero-m coating is mistaken for complete simulation | Critical | Keep Phase 1 partial until a physical m=0 contract passes; never use a hidden legacy fallback |
+| Labels are grouped by floating `m` or `L` | Critical | Group by exact family and intersection-branch identity; keep `L` as payload only |
+| Diagnostic label rays alter the Monte Carlo image or mass | Critical | Use a separate nominal ray and a contract with no mass field; prove pixels and ledgers unchanged |
+| Nearest-label support duplicates coating physics | Critical | Reuse one narrow accepted support evaluator or stop; never add a grid, epsilon, or second solver |
+| Parallel completion reorders representative branches | High | Canonical component merge and exact scalar/packed/worker-layout comparisons |
 | Monte Carlo noise destabilizes geometry | High | Fixed samples and conditional expected moments |
 | Line residual double-counts centroid data | Medium | Label it dependent guidance, use coordinate-unit scaling, freeze weight, and run point-only audit |
 | Trial collapses a line to evade angle penalty | High | Use fixed target span in the half-angle residual |
@@ -1169,9 +1723,10 @@ accepted reference.
 
 ## Permanent proof and cleanup policy
 
-- Retain only compact tests protecting unique contracts: once-only mass, deterministic selection,
-  candidate order, detector moments, line grouping, angular wrapping, and one representative blind
-  recovery per distinct long-term failure mode.
+- Retain only compact tests protecting unique contracts: once-only continuous mass, deterministic
+  physical-keyed sampling, canonical state/component order, the zero-mass representative-label
+  contract/noninterference, detector moments, line grouping, angular wrapping, and one
+  representative blind recovery per distinct long-term failure mode.
 - Keep broad truth matrices, large images, GPU sweeps, convergence studies, and profiling output as
   external proof artifacts.
 - Remove temporary benchmarks, exploratory scripts, generated dumps, redundant tests, and unused
@@ -1181,9 +1736,14 @@ accepted reference.
 
 ## Final completion gate
 
-- [ ] One authoritative candidate-physics implementation serves all paths.
-- [ ] Individual images use full CPU capacity through ray/candidate work.
+- [ ] One authoritative continuous coating implementation serves all paths.
+- [ ] Individual images use full CPU capacity through staged incident/component/node and
+      sampled-event batch work.
 - [ ] GPU acceleration is available only where measured and scientifically equivalent.
+- [ ] One stable zero-mass `(branch, m, L)` label exists for every detector-supported exact coating
+      component, with canonical branch `0/1/2` identity and no per-photon tag retention.
+- [ ] Label generation leaves raw detector pixels, draw counts, and every photon-mass ledger
+      unchanged across serial and parallel execution layouts.
 - [ ] Detector expected moments and detector blind recovery pass first.
 - [ ] Exact normalized angle-space expected moments and angle-space blind recovery pass second.
 - [ ] Chosen known geometric combinations recover blindly without random truth or starts.

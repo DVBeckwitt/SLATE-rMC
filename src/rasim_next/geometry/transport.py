@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
@@ -16,6 +17,8 @@ from rasim_next.core.contracts import (
     MaterialOptics,
     OutgoingWaveBatch,
     ScatteringEventBatch,
+    material_optics_revision_sha256,
+    sample_geometry_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
@@ -35,6 +38,8 @@ from rasim_next.optics.refraction import (
 
 _MODEL_VERSION = "geometry-optics-v1"
 _PROVENANCE = "T02 detector-native geometry and planar-interface optics"
+_INCIDENT_MODEL_ID = "one_transmitted_channel.v1"
+_INTERSECTION_MODEL_ID = "unique_forward_plane_intersection.v1"
 
 type _TraceStage = tuple[
     str,
@@ -57,33 +62,14 @@ def _statuses(value: Iterable[object], size: int) -> tuple[ValidityCode, ...]:
 
 @dataclass(frozen=True, slots=True)
 class IncidentTransportResult:
-    """Shared incident states plus aligned first-failure codes and opt-in traces."""
+    """Authoritative incident states plus opt-in traces."""
 
     states: IncidentStateBatch
-    status: tuple[ValidityCode, ...]
-    wavelength_A: NDArray[np.float64]
     traces: tuple[TraceRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.states, IncidentStateBatch):
             raise TypeError("states must be an IncidentStateBatch")
-        size = self.states.incident_state_id.size
-        status = _statuses(self.status, size)
-        if not np.array_equal(
-            self.states.valid,
-            np.asarray(status, dtype="U16") == ValidityCode.VALID,
-        ):
-            raise ValueError("incident valid flags must agree with status")
-        object.__setattr__(self, "status", status)
-        wavelength = np.array(self.wavelength_A, dtype=np.float64, copy=True, order="C")
-        if (
-            wavelength.shape != (size,)
-            or not np.all(np.isfinite(wavelength))
-            or np.any(wavelength <= 0.0)
-        ):
-            raise ValueError(f"wavelength_A must contain {size} finite positive values")
-        wavelength.setflags(write=False)
-        object.__setattr__(self, "wavelength_A", wavelength)
         traces = tuple(self.traces)
         if any(not isinstance(record, TraceRecord) for record in traces):
             raise TypeError("traces must contain TraceRecord values")
@@ -129,6 +115,7 @@ def _trace_records(
     identity_name: str,
     identities: NDArray[np.int64],
     stages: tuple[_TraceStage, ...],
+    provenance: str = _PROVENANCE,
 ) -> tuple[TraceRecord, ...]:
     if case_prefix is None:
         return ()
@@ -148,7 +135,7 @@ def _trace_records(
                     measure=measure,
                     quantity_kind=quantity_kind,
                     model_version=_MODEL_VERSION,
-                    provenance=_PROVENANCE,
+                    provenance=provenance,
                 )
             )
     return tuple(records)
@@ -175,37 +162,59 @@ def build_incident_states(
         samples.origin_lab_m,
         samples.direction_lab,
         lab_from_sample=instrument.lab_from_sample,
+        sample_from_lab=instrument.sample_from_lab,
+        sample_support_model_id=instrument.sample_support_model_id,
         sample_width_m=instrument.sample_width_m,
         sample_length_m=instrument.sample_length_m,
     )
     status = intersections.status.copy()
     geometry_valid = status == ValidityCode.VALID
-    direction_sample = instrument.lab_from_sample.inverse().apply_vector(samples.direction_lab)
-
-    modes = _solve_incident_mode_arrays(
-        direction_sample,
-        samples.wavelength_A,
-        material,
-    )
-    optical_failure = geometry_valid & (modes.status != ValidityCode.VALID)
-    status[optical_failure] = modes.status[optical_failure]
-    valid = status == ValidityCode.VALID
+    geometry_rows = np.flatnonzero(geometry_valid)
 
     intersection_lab_m = np.zeros((size, 3), dtype=np.float64)
     direction_output = np.zeros((size, 3), dtype=np.float64)
     k_air_output = np.zeros((size, 3), dtype=np.float64)
-    k_parallel_output = np.zeros((size, 3), dtype=np.float64)
     k_film_output = np.zeros((size, 3), dtype=np.float64)
     kz_film_output = np.zeros(size, dtype=np.complex128)
     entrance_output = np.zeros(size, dtype=np.complex128)
-    intersection_lab_m[geometry_valid] = intersections.point_lab_m[geometry_valid]
-    direction_output[geometry_valid] = direction_sample[geometry_valid]
-    k_air_output[geometry_valid] = modes.k_air_sample_Ainv[geometry_valid]
-    k_parallel_output[geometry_valid] = modes.k_parallel_sample_Ainv[geometry_valid]
-    k_film_output[geometry_valid] = modes.k_film_phase_sample_Ainv[geometry_valid]
-    kz_film_output[geometry_valid] = modes.kz_film_Ainv[geometry_valid]
-    entrance_output[valid] = modes.entrance_amplitude[valid]
+    modes = None
+    if geometry_rows.size:
+        modes = _solve_incident_mode_arrays(
+            intersections.direction_sample[geometry_rows],
+            samples.wavelength_A[geometry_rows],
+            material,
+        )
+        optical_valid = modes.status == ValidityCode.VALID
+        status[geometry_rows[~optical_valid]] = modes.status[~optical_valid]
+        valid_mode_rows = np.flatnonzero(optical_valid)
+        valid_rows = geometry_rows[valid_mode_rows]
+
+        intersection_lab_m[geometry_rows] = intersections.point_lab_m[geometry_rows]
+        direction_output[geometry_rows] = intersections.direction_sample[geometry_rows]
+        k_air_output[geometry_rows] = modes.k_air_sample_Ainv
+        k_film_output[valid_rows] = modes.k_film_phase_sample_Ainv[valid_mode_rows]
+        kz_film_output[valid_rows] = modes.kz_film_Ainv[valid_mode_rows]
+        entrance_output[valid_rows] = modes.entrance_amplitude[valid_mode_rows]
+    valid = status == ValidityCode.VALID
     footprint_acceptance = intersections.footprint_acceptance
+
+    sample_geometry_revision = sample_geometry_revision_sha256(
+        lab_from_sample_rotation=instrument.lab_from_sample.rotation,
+        lab_from_sample_translation_m=instrument.lab_from_sample.translation_m,
+        sample_support_model_id=instrument.sample_support_model_id,
+        sample_width_m=instrument.sample_width_m,
+        sample_length_m=instrument.sample_length_m,
+        intersection_model_id=_INTERSECTION_MODEL_ID,
+    )
+    material_revision = material_optics_revision_sha256(
+        material_id=material.material_id,
+        wavelength_A=material.wavelength_A,
+        n_complex=material.n_complex,
+        delta=material.delta,
+        beta=material.beta,
+        mu_Ainv=material.mu_Ainv,
+        provenance=material.provenance,
+    )
 
     states = IncidentStateBatch(
         incident_state_id=samples.incident_sample_id,
@@ -218,77 +227,115 @@ def build_incident_states(
         entrance_amplitude=entrance_output,
         footprint_acceptance=footprint_acceptance,
         source_weight=samples.source_weight,
+        wavelength_A=samples.wavelength_A,
+        polarization_state_id=samples.polarization_state_id,
+        status=tuple(map(ValidityCode, status)),
         valid=valid,
+        source_sampling_model_id=samples.source_sampling_model_id,
+        source_rng_model_id=samples.source_rng_model_id,
+        source_seed=samples.source_seed,
+        source_parameter_provenance=samples.source_parameter_provenance,
+        source_parameter_revision=samples.source_parameter_revision,
+        source_revision=samples.source_revision,
+        sample_geometry_revision=sample_geometry_revision,
+        material_revision=material_revision,
+        incident_model_id=_INCIDENT_MODEL_ID,
     )
-    traces = _trace_records(
-        trace_case_id,
-        "incident_sample_id",
-        states.incident_sample_id,
-        (
-            (
-                "geometry.sample_intersection",
-                states.sample_intersection_lab_m,
-                "m",
-                FrameId.LAB,
-                Measure.NONE,
-                QuantityKind.POINT,
-            ),
-            (
-                "geometry.footprint_acceptance",
-                states.footprint_acceptance,
-                "1",
-                FrameId.NONE,
-                Measure.NONE,
-                QuantityKind.SCALAR,
-            ),
-            (
-                "optics.ki_air_sample",
-                states.k_air_sample_Ainv,
-                "angstrom^-1",
-                FrameId.SAMPLE,
-                Measure.NONE,
-                QuantityKind.VECTOR,
-            ),
-            (
-                "optics.ki_parallel_sample",
-                k_parallel_output,
-                "angstrom^-1",
-                FrameId.SAMPLE,
-                Measure.NONE,
-                QuantityKind.VECTOR,
-            ),
-            (
-                "optics.kz_incident_film",
-                states.kz_film_Ainv,
-                "angstrom^-1",
-                FrameId.SAMPLE,
-                Measure.NONE,
-                QuantityKind.SCALAR,
-            ),
-            (
-                "optics.entrance_amplitude",
-                states.entrance_amplitude,
-                "1",
-                FrameId.SAMPLE,
-                Measure.NONE,
-                QuantityKind.AMPLITUDE,
-            ),
-            (
-                "sampling.source_empirical_mass",
-                states.source_weight,
-                "1",
-                FrameId.NONE,
-                Measure.PROBABILITY_MASS,
-                QuantityKind.SCALAR,
-            ),
-        ),
-    )
-    return IncidentTransportResult(
-        states,
-        tuple(status),
-        samples.wavelength_A,
-        traces,
-    )
+    traces: tuple[TraceRecord, ...] = ()
+    if trace_case_id is not None:
+        trace_provenance = json.dumps(
+            {
+                "incident_model_id": states.incident_model_id,
+                "material_revision": states.material_revision,
+                "sample_geometry_revision": states.sample_geometry_revision,
+                "scientific_provenance": _PROVENANCE,
+                "source_parameter_revision": states.source_parameter_revision,
+                "source_revision": states.source_revision,
+                "source_rng_model_id": states.source_rng_model_id,
+                "source_sampling_model_id": states.source_sampling_model_id,
+                "source_seed": states.source_seed,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        trace_records: list[TraceRecord] = []
+        zero_parallel = np.zeros(3, dtype=np.float64)
+        compact_row = 0
+        for row in range(size):
+            if compact_row < geometry_rows.size and row == int(geometry_rows[compact_row]):
+                assert modes is not None
+                parallel_value = modes.k_parallel_sample_Ainv[compact_row]
+                compact_row += 1
+            else:
+                parallel_value = zero_parallel
+            trace_records.extend(
+                _trace_records(
+                    trace_case_id,
+                    "incident_sample_id",
+                    states.incident_sample_id[row : row + 1],
+                    (
+                        (
+                            "geometry.sample_intersection",
+                            states.sample_intersection_lab_m[row : row + 1],
+                            "m",
+                            FrameId.LAB,
+                            Measure.NONE,
+                            QuantityKind.POINT,
+                        ),
+                        (
+                            "geometry.footprint_acceptance",
+                            states.footprint_acceptance[row : row + 1],
+                            "1",
+                            FrameId.NONE,
+                            Measure.NONE,
+                            QuantityKind.SCALAR,
+                        ),
+                        (
+                            "optics.ki_air_sample",
+                            states.k_air_sample_Ainv[row : row + 1],
+                            "angstrom^-1",
+                            FrameId.SAMPLE,
+                            Measure.NONE,
+                            QuantityKind.VECTOR,
+                        ),
+                        (
+                            "optics.ki_parallel_sample",
+                            parallel_value[None, :],
+                            "angstrom^-1",
+                            FrameId.SAMPLE,
+                            Measure.NONE,
+                            QuantityKind.VECTOR,
+                        ),
+                        (
+                            "optics.kz_incident_film",
+                            states.kz_film_Ainv[row : row + 1],
+                            "angstrom^-1",
+                            FrameId.SAMPLE,
+                            Measure.NONE,
+                            QuantityKind.SCALAR,
+                        ),
+                        (
+                            "optics.entrance_amplitude",
+                            states.entrance_amplitude[row : row + 1],
+                            "1",
+                            FrameId.SAMPLE,
+                            Measure.NONE,
+                            QuantityKind.AMPLITUDE,
+                        ),
+                        (
+                            "sampling.source_empirical_mass",
+                            states.source_weight[row : row + 1],
+                            "1",
+                            FrameId.NONE,
+                            Measure.PROBABILITY_MASS,
+                            QuantityKind.SCALAR,
+                        ),
+                    ),
+                    trace_provenance,
+                )
+            )
+        traces = tuple(trace_records)
+    return IncidentTransportResult(states, traces)
 
 
 def _join_incident_states(
@@ -306,7 +353,7 @@ def _join_incident_states(
         missing = int(events.incident_state_id[np.flatnonzero(~matched)[0]])
         raise ValueError(f"event references unknown incident_state_id {missing}")
     rows = np.asarray(order[positions], dtype=np.intp)
-    if not np.array_equal(events.wavelength_A, incident.wavelength_A[rows]):
+    if not np.array_equal(events.wavelength_A, incident.states.wavelength_A[rows]):
         raise ValueError("event wavelength must exactly match its incident state wavelength")
     return rows
 
@@ -339,7 +386,7 @@ def transport_scattering_events(
         material,
     )
 
-    outgoing_status = np.asarray(incident.status, dtype=object)[incident_rows]
+    outgoing_status = np.asarray(incident.states.status, dtype=object)[incident_rows]
     incident_valid = outgoing_status == ValidityCode.VALID
     outgoing_status[incident_valid] = np.asarray(events.status, dtype=object)[incident_valid]
     candidate = (outgoing_status == ValidityCode.VALID) & (exit_modes.status != ValidityCode.VALID)

@@ -86,8 +86,7 @@ class RigidTransform:
 
         if self.source_frame != source_transform.target_frame:
             raise ValueError(
-                "frame mismatch: "
-                f"{source_transform.target_frame} cannot feed {self.source_frame}"
+                f"frame mismatch: {source_transform.target_frame} cannot feed {self.source_frame}"
             )
         return RigidTransform(
             self.rotation @ source_transform.rotation,

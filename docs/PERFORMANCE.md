@@ -23,12 +23,11 @@ Later optimization should keep these states resident or cached:
 
 ```text
 CompiledInstrument
-CompiledSourceSamples
-CompiledIncidentStates
-CompiledRodCatalog
-CompiledScatteringEvents
-CompiledDetectorHits
-CompiledDetectorResponse
+IncidentSampleBatch
+IncidentStateBatch
+RodCatalog
+ScatteringEventBatch
+DetectorHitBatch
 ```
 
 Parameter dependency:
@@ -43,11 +42,20 @@ ordered or stacking parameters
 mosaic parameters
     reciprocal weights and possibly event support
 
-optical constants or thickness
-    refraction, optical weight, and downstream reduction
+optical constants
+    incident refraction, optical weight, and downstream reduction
 
-sample or detector geometry
+film thickness
+    attenuation, optical weight, and downstream reduction; not incident-state revisions
+
+sample entrance pose or support
     full incident states, events, hits, and response
+
+sample_from_crystal
+    reciprocal events, hits, and response; not incident states
+
+detector geometry
+    detector hits and response only; not incident states or coating masses/CDFs
 ```
 
 Batch parameter evaluation is desirable for multi-start, finite differences, profile likelihoods, and population methods.

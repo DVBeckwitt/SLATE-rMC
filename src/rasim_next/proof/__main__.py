@@ -15,7 +15,6 @@ _COMMANDS = {
     "mosaic-ewald": ("rasim_next.reciprocal.proof", "run_proof"),
     "ordered-reflectivity": ("rasim_next.ordered.proof", "run_proof"),
     "stacking-transition": ("rasim_next.stacking.proof", "run_proof"),
-    "integration": ("rasim_next.pipeline.proof", "run_proof"),
 }
 
 

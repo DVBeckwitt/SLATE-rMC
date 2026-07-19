@@ -15,7 +15,11 @@ class OscRawIndex:
     column: int
 
     def __post_init__(self) -> None:
-        if type(self.row) is not int or type(self.column) is not int or min(self.row, self.column) < 0:
+        if (
+            type(self.row) is not int
+            or type(self.column) is not int
+            or min(self.row, self.column) < 0
+        ):
             raise ValueError("OSC raw indices must be nonnegative integers")
 
 
@@ -25,7 +29,11 @@ class DetectorIndex:
     column: int
 
     def __post_init__(self) -> None:
-        if type(self.row) is not int or type(self.column) is not int or min(self.row, self.column) < 0:
+        if (
+            type(self.row) is not int
+            or type(self.column) is not int
+            or min(self.row, self.column) < 0
+        ):
             raise ValueError("detector indices must be nonnegative integers")
 
 
@@ -49,9 +57,7 @@ def _raw_shape(raw_shape: tuple[int, int]) -> tuple[int, int]:
     return raw_shape
 
 
-def raw_to_detector_index(
-    raw_index: OscRawIndex, raw_shape: tuple[int, int]
-) -> DetectorIndex:
+def raw_to_detector_index(raw_index: OscRawIndex, raw_shape: tuple[int, int]) -> DetectorIndex:
     if not isinstance(raw_index, OscRawIndex):
         raise TypeError("raw_index must be an OscRawIndex")
     height, width = _raw_shape(raw_shape)
@@ -60,14 +66,14 @@ def raw_to_detector_index(
     return DetectorIndex(row=raw_index.column, column=height - 1 - raw_index.row)
 
 
-def detector_to_raw_index(
-    detector_index: DetectorIndex, raw_shape: tuple[int, int]
-) -> OscRawIndex:
+def detector_to_raw_index(detector_index: DetectorIndex, raw_shape: tuple[int, int]) -> OscRawIndex:
     if not isinstance(detector_index, DetectorIndex):
         raise TypeError("detector_index must be a DetectorIndex")
     height, width = _raw_shape(raw_shape)
     if not (0 <= detector_index.row < width and 0 <= detector_index.column < height):
-        raise ValueError(f"detector index {detector_index} is outside native shape {(width, height)}")
+        raise ValueError(
+            f"detector index {detector_index} is outside native shape {(width, height)}"
+        )
     return OscRawIndex(row=height - 1 - detector_index.column, column=detector_index.row)
 
 

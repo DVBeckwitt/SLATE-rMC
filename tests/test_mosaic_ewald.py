@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
+from scipy.special import ndtr
 
-from rasim_next.core.contracts import IncidentSampleBatch, IncidentStateBatch, RodCatalog
+from rasim_next.core.contracts import (
+    IncidentSampleBatch,
+    IncidentStateBatch,
+    RodCatalog,
+    canonical_revision_sha256,
+)
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
@@ -19,8 +28,8 @@ from rasim_next.sampling.mosaic import (
 from rasim_next.sampling.source import sample_gaussian_source_rays
 
 
-def test_seeded_gaussian_source_has_equal_mass_independent_moments() -> None:
-    count = 4097
+@pytest.mark.parametrize("count", (6, 7))
+def test_seeded_gaussian_source_has_exact_antithetic_lhs_strata(count: int) -> None:
     mean_origin = np.array([0.1, -0.2, 0.3])
     mean_direction = np.array([1.0, 0.0, 0.0])
     axes = np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
@@ -51,9 +60,26 @@ def test_seeded_gaussian_source_has_equal_mass_independent_moments() -> None:
     assert not np.array_equal(sampled.origin_lab_m, changed.origin_lab_m)
     np.testing.assert_array_equal(sampled.source_weight, np.full(count, 1.0 / count))
     assert sampled.polarization_state_id == ("tabulated_state_7",) * count
-    assert sampled.correlation_model == "independent_gaussian_lhs.v1"
+    assert sampled.source_sampling_model_id == "independent_gaussian_antithetic_lhs.v2"
+    assert sampled.source_rng_model_id == "numpy_pcg64.v1"
+    assert sampled.source_seed == 1729
+    assert sampled.source_parameter_revision == repeated.source_parameter_revision
+    assert sampled.source_revision == repeated.source_revision
+    assert changed.source_parameter_revision == sampled.source_parameter_revision
+    assert changed.source_revision != sampled.source_revision
+    assert '"mean_origin_lab_m":"m"' in sampled.source_parameter_provenance
+    assert {
+        "source_parameter_revision",
+        "source_revision",
+    }.isdisjoint(inspect.signature(IncidentSampleBatch).parameters)
+    changed_provenance = replace(
+        sampled,
+        source_parameter_provenance=sampled.source_parameter_provenance + " ",
+    )
+    assert changed_provenance.source_parameter_revision != sampled.source_parameter_revision
+    assert changed_provenance.source_revision != sampled.source_revision
 
-    paired_stop = count - 1
+    paired_stop = 2 * (count // 2)
     np.testing.assert_allclose(
         sampled.origin_lab_m[:paired_stop:2] + sampled.origin_lab_m[1:paired_stop:2],
         np.broadcast_to(2.0 * mean_origin, (count // 2, 3)),
@@ -73,9 +99,10 @@ def test_seeded_gaussian_source_has_equal_mass_independent_moments() -> None:
         rtol=0.0,
         atol=5.0e-16,
     )
-    np.testing.assert_array_equal(sampled.origin_lab_m[-1], mean_origin)
-    np.testing.assert_array_equal(sampled.direction_lab[-1], mean_direction)
-    assert sampled.wavelength_A[-1] == 1.24
+    if count % 2:
+        np.testing.assert_array_equal(sampled.origin_lab_m[-1], mean_origin)
+        np.testing.assert_array_equal(sampled.direction_lab[-1], mean_direction)
+        assert sampled.wavelength_A[-1] == 1.24
 
     spatial = ((sampled.origin_lab_m - mean_origin) @ axes.T) / spatial_sigma
     cosine = np.clip(sampled.direction_lab @ mean_direction, -1.0, 1.0)
@@ -84,14 +111,21 @@ def test_seeded_gaussian_source_has_equal_mass_independent_moments() -> None:
     angular = sampled.direction_lab @ axes.T * inverse_sine[:, None] / divergence_sigma
     wavelength = (sampled.wavelength_A - 1.24) / 0.01
     standardized = np.column_stack((spatial, angular, wavelength))
-    variance = np.mean(standardized**2, axis=0)
-    np.testing.assert_allclose(np.mean(standardized, axis=0), 0.0, atol=2.0e-13)
-    np.testing.assert_allclose(variance, 1.0, rtol=0.03, atol=0.0)
-    correlation = np.corrcoef(standardized, rowvar=False)
-    assert np.max(np.abs(correlation - np.eye(5))) < 0.05
-    sampled_pdf = np.exp(-0.5 * np.sum(standardized**2, axis=1))
-    double_weighted_variance = np.average(standardized**2, axis=0, weights=sampled_pdf)
-    assert np.max(double_weighted_variance / variance) < 0.7
+    unit = ndtr(standardized)
+    strata = np.floor(unit * count).astype(np.int64)
+    assert np.all(unit > strata / count)
+    assert np.all(unit < (strata + 1) / count)
+    np.testing.assert_array_equal(
+        np.sort(strata, axis=0), np.broadcast_to(np.arange(count)[:, None], (count, 5))
+    )
+    np.testing.assert_allclose(
+        unit[:paired_stop:2] + unit[1:paired_stop:2],
+        np.ones((count // 2, 5)),
+        rtol=0.0,
+        atol=2.0e-15,
+    )
+    if count % 2:
+        np.testing.assert_array_equal(unit[-1], np.full(5, 0.5))
 
 
 def test_axisymmetric_mosaic_integrates_direct_alpha_probability_mass() -> None:
@@ -244,27 +278,61 @@ def test_ewald_roots_preserve_line_geometry_and_unclipped_jacobian() -> None:
 
 
 def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> None:
+    sample_ids = np.array([10, 20, 30])
+    origin_lab_m = np.zeros((3, 3))
+    direction_lab = np.tile([0.0, 0.0, 1.0], (3, 1))
+    wavelength_A = np.array([1.1, 1.3, 1.5])
+    source_weight = np.full(3, 1.0 / 3.0)
+    polarization_ids = ("linear_s", "circular_plus", "unused_invalid")
+    provenance = "sparse event-builder permanent fixture.v1"
     samples = IncidentSampleBatch(
-        incident_sample_id=np.array([10, 20]),
-        origin_lab_m=np.zeros((2, 3)),
-        direction_lab=np.tile([0.0, 0.0, 1.0], (2, 1)),
-        wavelength_A=np.array([1.1, 1.3]),
-        source_weight=np.full(2, 0.5),
-        polarization_state_id=("linear_s", "circular_plus"),
-        correlation_model="explicit_joint",
+        incident_sample_id=sample_ids,
+        origin_lab_m=origin_lab_m,
+        direction_lab=direction_lab,
+        wavelength_A=wavelength_A,
+        source_weight=source_weight,
+        polarization_state_id=polarization_ids,
+        source_sampling_model_id="explicit_test_source.v1",
+        source_rng_model_id="no_rng.v1",
+        source_seed=0,
+        source_parameter_provenance=provenance,
     )
+    state_wavelength_A = np.array([1.3, 1.1, 1.5])
+    k0_Ainv = 2.0 * np.pi / state_wavelength_A
+    direction_sample = np.zeros((3, 3))
+    direction_sample[:2, 0] = 4.0 / k0_Ainv[:2]
+    direction_sample[:2, 2] = np.sqrt(1.0 - direction_sample[:2, 0] ** 2)
+    k_air_sample_Ainv = k0_Ainv[:, None] * direction_sample
+    k_film_phase_sample_Ainv = np.zeros((3, 3))
+    k_film_phase_sample_Ainv[:2, 0] = 4.0
     states = IncidentStateBatch(
         incident_state_id=np.array([101, 100, 999]),
-        incident_sample_id=np.array([20, 10, 10]),
+        incident_sample_id=np.array([20, 10, 30]),
         sample_intersection_lab_m=np.zeros((3, 3)),
-        direction_sample=np.tile([1.0, 0.0, 0.0], (3, 1)),
-        k_air_sample_Ainv=np.tile([7.0, 0.0, 0.0], (3, 1)),
-        k_film_phase_sample_Ainv=np.tile([4.0, 0.0, 0.0], (3, 1)),
-        kz_film_Ainv=np.full(3, 4.0 + 0.0j),
-        entrance_amplitude=np.array([2.0 + 0.0j, 3.0 + 0.0j, 100.0 + 0.0j]),
-        footprint_acceptance=np.array([0.2, 0.9, 1.0]),
+        direction_sample=direction_sample,
+        k_air_sample_Ainv=k_air_sample_Ainv,
+        k_film_phase_sample_Ainv=k_film_phase_sample_Ainv,
+        kz_film_Ainv=np.zeros(3, dtype=np.complex128),
+        entrance_amplitude=np.array([2.0 + 0.0j, 3.0 + 0.0j, 0.0 + 0.0j]),
+        footprint_acceptance=np.array([0.2, 0.9, 0.0]),
         source_weight=np.full(3, 1.0 / 3.0),
+        wavelength_A=state_wavelength_A,
+        polarization_state_id=("circular_plus", "linear_s", "unused_invalid"),
+        status=(ValidityCode.VALID, ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
         valid=np.array([True, True, False]),
+        source_sampling_model_id=samples.source_sampling_model_id,
+        source_rng_model_id=samples.source_rng_model_id,
+        source_seed=samples.source_seed,
+        source_parameter_provenance=samples.source_parameter_provenance,
+        source_parameter_revision=samples.source_parameter_revision,
+        source_revision=samples.source_revision,
+        sample_geometry_revision=canonical_revision_sha256(
+            ("sample_geometry", "sparse event-builder permanent fixture.v1")
+        ),
+        material_revision=canonical_revision_sha256(
+            ("material", "sparse event-builder permanent fixture.v1")
+        ),
+        incident_model_id="one_transmitted_channel.v1",
     )
     basis = np.diag([1.0, 1.0, 2.0])
     h = np.array([1, 4, 5, 6, 7, 8, 9, 10], dtype=np.int32)
@@ -297,7 +365,6 @@ def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> No
         FrameId.SAMPLE,
     )
     result = build_scattering_events(
-        incident_samples=samples,
         incident_states=states,
         rods=rods,
         orientations=orientations,
@@ -371,7 +438,6 @@ def test_event_builder_preserves_sparse_order_frames_and_factor_boundary() -> No
     np.testing.assert_array_equal(events.valid, np.ones(4, dtype=np.bool_))
     with pytest.raises(ValueError, match="CRYSTAL to SAMPLE"):
         build_scattering_events(
-            incident_samples=samples,
             incident_states=states,
             rods=rods,
             orientations=orientations,

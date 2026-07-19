@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+import struct
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -12,7 +14,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.validity import ValidityCode
 
-CONTRACT_API_VERSION = 5
+CONTRACT_API_VERSION = 7
 _ArraySpec = tuple[str, np.dtype[Any] | type[np.generic], tuple[int, ...], bool]
 
 
@@ -72,6 +74,151 @@ def _versioned_id(value: str, name: str) -> str:
     return value
 
 
+def _sha256_revision(value: str, name: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError(f"{name} must be a lowercase SHA-256 revision")
+    return value
+
+
+def canonical_revision_sha256(*fields: tuple[str, object]) -> str:
+    """Hash named canonical values with one typed, length-prefixed encoding."""
+
+    if not fields:
+        raise ValueError("canonical revision requires at least one field")
+    names = tuple(name for name, _ in fields)
+    if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(
+        names
+    ):
+        raise ValueError("canonical revision field names must be unique nonempty strings")
+
+    digest = hashlib.sha256()
+
+    def update_bytes(value: bytes) -> None:
+        digest.update(struct.pack("<Q", len(value)))
+        digest.update(value)
+
+    update_bytes(b"rasim_next.canonical_typed_sha256.v1")
+    for name, value in sorted(fields, key=lambda item: item[0]):
+        update_bytes(name.encode("utf-8"))
+        if isinstance(value, str):
+            update_bytes(b"text")
+            update_bytes(value.encode("utf-8"))
+            continue
+        if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+            integer = int(value)
+            if integer < -(2**63) or integer > 2**64 - 1:
+                raise ValueError(f"canonical integer field {name!r} is outside 64-bit range")
+            value = np.asarray(integer, dtype=np.int64 if integer < 0 else np.uint64)
+        if isinstance(value, tuple) and all(isinstance(item, str) for item in value):
+            update_bytes(b"text-sequence")
+            update_bytes(struct.pack("<Q", len(value)))
+            for item in value:
+                update_bytes(item.encode("utf-8"))
+            continue
+
+        supplied = np.asarray(value)
+        if supplied.dtype.kind not in "biufc" or supplied.dtype.hasobject:
+            raise ValueError(f"canonical numeric field {name!r} has unsupported dtype")
+        if supplied.dtype.kind in "fc" and not np.all(np.isfinite(supplied)):
+            raise ValueError(f"canonical numeric field {name!r} must be finite")
+        dtype = supplied.dtype.newbyteorder("<")
+        array = np.ascontiguousarray(supplied, dtype=dtype)
+        update_bytes(b"numeric-array")
+        update_bytes(dtype.str.encode("ascii"))
+        update_bytes(struct.pack("<Q", array.ndim))
+        update_bytes(struct.pack(f"<{array.ndim}Q", *array.shape))
+        update_bytes(array.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def source_realization_revision(
+    *,
+    source_sampling_model_id: str,
+    source_rng_model_id: str,
+    source_seed: int,
+    source_parameter_revision: str,
+    incident_sample_id: ArrayLike,
+    origin_lab_m: ArrayLike,
+    direction_lab: ArrayLike,
+    wavelength_A: ArrayLike,
+    source_weight: ArrayLike,
+    polarization_state_id: tuple[str, ...],
+) -> str:
+    """Return the complete canonical source-realization revision."""
+
+    return canonical_revision_sha256(
+        ("direction_lab", direction_lab),
+        ("incident_sample_id", incident_sample_id),
+        ("origin_lab_m", origin_lab_m),
+        ("polarization_state_id", polarization_state_id),
+        ("source_parameter_revision", source_parameter_revision),
+        ("source_rng_model_id", source_rng_model_id),
+        ("source_sampling_model_id", source_sampling_model_id),
+        ("source_seed", source_seed),
+        ("source_weight", source_weight),
+        ("wavelength_A", wavelength_A),
+    )
+
+
+def sample_geometry_revision_sha256(
+    *,
+    lab_from_sample_rotation: ArrayLike,
+    lab_from_sample_translation_m: ArrayLike,
+    sample_support_model_id: str,
+    sample_width_m: float | None,
+    sample_length_m: float | None,
+    intersection_model_id: str,
+) -> str:
+    """Return the canonical sample-entrance geometry revision."""
+
+    fields: list[tuple[str, object]] = [
+        ("intersection_model_id", intersection_model_id),
+        ("lab_from_sample_rotation", lab_from_sample_rotation),
+        ("lab_from_sample_source_frame", "sample"),
+        ("lab_from_sample_target_frame", "lab"),
+        ("lab_from_sample_translation_m", lab_from_sample_translation_m),
+        ("sample_support_model_id", sample_support_model_id),
+    ]
+    if sample_support_model_id == "finite_rectangle.v1":
+        if sample_width_m is None or sample_length_m is None:
+            raise ValueError("finite sample geometry revision requires width and length")
+        fields.extend(
+            (
+                ("sample_length_m", sample_length_m),
+                ("sample_width_m", sample_width_m),
+            )
+        )
+    elif sample_support_model_id == "unbounded_plane.v1":
+        if sample_width_m is not None or sample_length_m is not None:
+            raise ValueError("unbounded sample geometry revision requires absent dimensions")
+    else:
+        raise ValueError("sample geometry revision requires a supported model ID")
+    return canonical_revision_sha256(*fields)
+
+
+def material_optics_revision_sha256(
+    *,
+    material_id: str,
+    wavelength_A: ArrayLike,
+    n_complex: ArrayLike,
+    delta: ArrayLike,
+    beta: ArrayLike,
+    mu_Ainv: ArrayLike,
+    provenance: str,
+) -> str:
+    """Return the canonical exact material-optics revision."""
+
+    return canonical_revision_sha256(
+        ("beta", beta),
+        ("delta", delta),
+        ("material_id", material_id),
+        ("mu_Ainv", mu_Ainv),
+        ("n_complex", n_complex),
+        ("provenance", provenance),
+        ("wavelength_A", wavelength_A),
+    )
+
+
 def _batch(
     instance: object,
     identity_name: str,
@@ -101,7 +248,12 @@ class IncidentSampleBatch:
     wavelength_A: NDArray[np.float64]
     source_weight: NDArray[np.float64]
     polarization_state_id: tuple[str, ...]
-    correlation_model: str
+    source_sampling_model_id: str
+    source_rng_model_id: str
+    source_seed: int
+    source_parameter_provenance: str
+    source_parameter_revision: str = field(init=False)
+    source_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
         size = _batch(
@@ -121,8 +273,46 @@ class IncidentSampleBatch:
             raise ValueError("wavelengths must be positive and directions unit length")
         if size == 0 or not np.all(self.source_weight == 1.0 / size):
             raise ValueError("source_weight must be uniform empirical mass 1/N")
-        if not self.correlation_model:
-            raise ValueError("correlation_model is required")
+        object.__setattr__(
+            self,
+            "source_sampling_model_id",
+            _versioned_id(self.source_sampling_model_id, "source_sampling_model_id"),
+        )
+        object.__setattr__(
+            self,
+            "source_rng_model_id",
+            _versioned_id(self.source_rng_model_id, "source_rng_model_id"),
+        )
+        if (
+            isinstance(self.source_seed, bool)
+            or not isinstance(self.source_seed, (int, np.integer))
+            or self.source_seed < 0
+            or self.source_seed > 2**64 - 1
+        ):
+            raise ValueError("source_seed must be a nonnegative unsigned 64-bit integer")
+        object.__setattr__(self, "source_seed", int(self.source_seed))
+        if (
+            not isinstance(self.source_parameter_provenance, str)
+            or not self.source_parameter_provenance
+        ):
+            raise ValueError("source_parameter_provenance must be nonempty canonical text")
+        parameter_revision = canonical_revision_sha256(
+            ("source_parameter_provenance", self.source_parameter_provenance),
+        )
+        object.__setattr__(self, "source_parameter_revision", parameter_revision)
+        source_revision = source_realization_revision(
+            source_sampling_model_id=self.source_sampling_model_id,
+            source_rng_model_id=self.source_rng_model_id,
+            source_seed=self.source_seed,
+            source_parameter_revision=parameter_revision,
+            incident_sample_id=self.incident_sample_id,
+            origin_lab_m=self.origin_lab_m,
+            direction_lab=self.direction_lab,
+            wavelength_A=self.wavelength_A,
+            source_weight=self.source_weight,
+            polarization_state_id=self.polarization_state_id,
+        )
+        object.__setattr__(self, "source_revision", source_revision)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,9 +335,17 @@ class MaterialOptics:
             ("mu_Ainv", np.float64, True),
         ):
             object.__setattr__(
-                self, name, _array(getattr(self, name), dtype, (wavelength.size,), name, nonnegative)
+                self,
+                name,
+                _array(getattr(self, name), dtype, (wavelength.size,), name, nonnegative),
             )
-        if np.any(wavelength == 0) or not self.material_id or not self.provenance:
+        if (
+            wavelength.size == 0
+            or np.any(wavelength == 0)
+            or np.any(np.diff(wavelength) <= 0.0)
+            or not self.material_id
+            or not self.provenance
+        ):
             raise ValueError("material identity, provenance, and positive wavelengths are required")
 
 
@@ -163,7 +361,19 @@ class IncidentStateBatch:
     entrance_amplitude: NDArray[np.complex128]
     footprint_acceptance: NDArray[np.float64]
     source_weight: NDArray[np.float64]
+    wavelength_A: NDArray[np.float64]
+    polarization_state_id: tuple[str, ...]
+    status: tuple[ValidityCode, ...]
     valid: NDArray[np.bool_]
+    source_sampling_model_id: str
+    source_rng_model_id: str
+    source_seed: int
+    source_parameter_provenance: str
+    source_parameter_revision: str
+    source_revision: str
+    sample_geometry_revision: str
+    material_revision: str
+    incident_model_id: str
 
     def __post_init__(self) -> None:
         size = _batch(
@@ -179,11 +389,138 @@ class IncidentStateBatch:
                 ("entrance_amplitude", np.complex128, (), False),
                 ("footprint_acceptance", np.float64, (), True),
                 ("source_weight", np.float64, (), True),
+                ("wavelength_A", np.float64, (), True),
                 ("valid", np.bool_, (), False),
             ),
+            ("polarization_state_id",),
         )
         if size == 0 or not np.all(self.source_weight == 1.0 / size):
             raise ValueError("source_weight must be uniform empirical mass 1/N")
+        if np.any(self.wavelength_A == 0):
+            raise ValueError("wavelength_A must be positive")
+
+        status = tuple(ValidityCode(item) for item in self.status)
+        if len(status) != size:
+            raise ValueError(f"status must contain {size} ValidityCode values")
+        object.__setattr__(self, "status", status)
+        status_valid = np.fromiter(
+            (item is ValidityCode.VALID for item in status), dtype=np.bool_, count=size
+        )
+        if not np.array_equal(self.valid, status_valid):
+            raise ValueError("valid must agree exactly with status == ValidityCode.VALID")
+
+        for name in ("source_sampling_model_id", "source_rng_model_id", "incident_model_id"):
+            object.__setattr__(self, name, _versioned_id(getattr(self, name), name))
+        if (
+            isinstance(self.source_seed, bool)
+            or not isinstance(self.source_seed, (int, np.integer))
+            or self.source_seed < 0
+            or self.source_seed > 2**64 - 1
+        ):
+            raise ValueError("source_seed must be a nonnegative unsigned 64-bit integer")
+        object.__setattr__(self, "source_seed", int(self.source_seed))
+        if (
+            not isinstance(self.source_parameter_provenance, str)
+            or not self.source_parameter_provenance
+        ):
+            raise ValueError("source_parameter_provenance must be nonempty canonical text")
+        for name in (
+            "source_parameter_revision",
+            "source_revision",
+            "sample_geometry_revision",
+            "material_revision",
+        ):
+            object.__setattr__(self, name, _sha256_revision(getattr(self, name), name))
+        expected_parameter_revision = canonical_revision_sha256(
+            ("source_parameter_provenance", self.source_parameter_provenance),
+        )
+        if self.source_parameter_revision != expected_parameter_revision:
+            raise ValueError("source_parameter_revision does not match canonical provenance")
+
+        if self.incident_model_id != "one_transmitted_channel.v1":
+            raise ValueError("unsupported incident_model_id")
+        if np.unique(self.incident_sample_id).size != size:
+            raise ValueError(
+                "one_transmitted_channel.v1 requires one state per unique source sample"
+            )
+
+        geometry_failure = np.fromiter(
+            (
+                item
+                in (
+                    ValidityCode.PARALLEL,
+                    ValidityCode.BACKWARD,
+                    ValidityCode.OUTSIDE_SUPPORT,
+                )
+                for item in status
+            ),
+            dtype=np.bool_,
+            count=size,
+        )
+        optical_failure = np.fromiter(
+            (item in (ValidityCode.NO_SOLUTION, ValidityCode.NUMERIC_FAILURE) for item in status),
+            dtype=np.bool_,
+            count=size,
+        )
+        if not np.all(status_valid | geometry_failure | optical_failure):
+            raise ValueError("status is not valid at the incident boundary")
+
+        geometry_zero_arrays = (
+            self.sample_intersection_lab_m,
+            self.direction_sample,
+            self.k_air_sample_Ainv,
+            self.k_film_phase_sample_Ainv,
+            self.kz_film_Ainv,
+            self.entrance_amplitude,
+            self.footprint_acceptance,
+        )
+        if any(np.any(array[geometry_failure] != 0) for array in geometry_zero_arrays):
+            raise ValueError("geometry-failure payload must be zero after source provenance")
+
+        accepted_geometry = status_valid | optical_failure
+        if np.any((self.footprint_acceptance < 0.0) | (self.footprint_acceptance > 1.0)):
+            raise ValueError("footprint_acceptance must lie in [0, 1]")
+        if not np.allclose(
+            np.linalg.norm(self.direction_sample[accepted_geometry], axis=1),
+            1.0,
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError("accepted geometry requires unit direction_sample")
+        expected_k_air = (2.0 * np.pi / self.wavelength_A[accepted_geometry])[
+            :, None
+        ] * self.direction_sample[accepted_geometry]
+        wavevector_atol = 1.4210854715202206e-14
+        wavevector_rtol = 2.2737367544328376e-13
+        if not np.allclose(
+            self.k_air_sample_Ainv[accepted_geometry],
+            expected_k_air,
+            rtol=wavevector_rtol,
+            atol=wavevector_atol,
+        ):
+            raise ValueError("k_air_sample_Ainv must equal (2*pi/wavelength_A)*direction_sample")
+
+        optical_zero_arrays = (
+            self.k_film_phase_sample_Ainv,
+            self.kz_film_Ainv,
+            self.entrance_amplitude,
+        )
+        if any(np.any(array[optical_failure] != 0) for array in optical_zero_arrays):
+            raise ValueError("optical-failure film payload must be zero")
+        if not np.allclose(
+            self.k_film_phase_sample_Ainv[status_valid, :2],
+            self.k_air_sample_Ainv[status_valid, :2],
+            rtol=wavevector_rtol,
+            atol=wavevector_atol,
+        ):
+            raise ValueError("valid incident modes must conserve tangential wavevector")
+        if not np.allclose(
+            self.k_film_phase_sample_Ainv[status_valid, 2],
+            self.kz_film_Ainv[status_valid].real,
+            rtol=wavevector_rtol,
+            atol=wavevector_atol,
+        ):
+            raise ValueError("film phase normal must equal real(kz_film_Ainv)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +539,11 @@ class RodCatalog:
         _batch(
             self,
             "rod_id",
-            (("h", np.int32, (), False), ("k", np.int32, (), False), ("qr_Ainv", np.float64, (), True)),
+            (
+                ("h", np.int32, (), False),
+                ("k", np.int32, (), False),
+                ("qr_Ainv", np.float64, (), True),
+            ),
             ("phase_id", "family_id", "family_key", "symmetry_metadata"),
         )
         basis = _array(self.reciprocal_basis_Ainv, np.float64, (3, 3), "reciprocal_basis_Ainv")

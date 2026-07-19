@@ -2,15 +2,20 @@
 
 Status: proposed. No implementation has started.
 
+Entry gate: the beam-sampling-to-reciprocal-`ki` remediation must pass BKI-15 before this plan
+validates or freezes a continuous coating measure. BKI-15 branches independently into this
+validation and the corrected parallel Task 1.1 scalar reference; both join at parallel Task 1.2.
+
 ## Objective
 
 Replace the discrete mosaic-orientation and finite Ewald-candidate machinery between internal
 incident ki and compact outgoing kf events. Preserve incident transport, ordered structure-factor
 physics, exit transport, detector projection, and mass-conserving deposition.
 
-The replacement samples one continuous detector-conditioned Ewald measure per incident state. It
-retains every physical (h,k) rod, exact m-family metadata, and intersection labels 1 and 2 for
-m != 0.
+The replacement samples one continuous detector-unconditioned Ewald measure per accepted,
+self-contained incident state. Detector projection follows exact event sampling; detector misses
+retain rejected mass and never alter component masses or CDFs. The measure retains every physical
+(h,k) rod, exact m-family metadata, and intersection labels 1 and 2 for m != 0.
 
 Only one new production file is planned:
 
@@ -41,6 +46,10 @@ after a separate measure-preserving proof.
 
 No Ewald matrix, reciprocal voxel field, fixed orientation batch, or retained
 incident-by-rod-by-orientation Cartesian product is allowed.
+
+The complete canonical source realization is generated and hashed once before Stage-A dispatch.
+Bounded work packets carry canonical row indices and inherit the parent revision envelope; they
+never regenerate source rows or hash a slice as a new physical realization.
 
 ## m = 0 boundary
 
@@ -192,7 +201,7 @@ Acceptance:
 
 ## Phase 2: continuous joint measure
 
-### T03: Evaluate one detector-conditioned component density
+### T03: Evaluate one detector-unconditioned component density
 
 Files likely touched:
 
@@ -203,22 +212,23 @@ Intended behavior:
 
 - Evaluate one incident state, family, branch, and alpha/beta batch.
 - Use T02 roots and exact RodQueryBatch rows.
-- Call existing ordered strength, outgoing transport, and detector projection.
+- Call existing ordered strength and outgoing transport. Project only exact events after sampling.
 - Apply source, mosaic, coarea, population, structure, optics, footprint, polarization, support,
-  and detector validity exactly once.
+  and outgoing-propagation factors exactly once.
 - Sum rods as intensities and retain per-rod conditional contributions.
 
 Tests:
 
 - test_component_density_matches_direct_once_only_factor_product
-- test_detector_invalid_points_have_zero_component_density
+- test_detector_misses_retain_post_sampling_rejected_mass
 - test_family_density_is_sum_of_distinct_rod_intensities
 
 Dependencies: T01 and T02.
 
 Acceptance:
 
-- Detector validity and optical weight affect the measure before sampling.
+- Optical and outgoing-propagation weights affect the measure before sampling; detector validity
+  does not.
 - Rods are never summed coherently.
 - No family multiplicity is reapplied.
 - Factor omission or duplication is detected.
@@ -234,7 +244,7 @@ Intended behavior:
 
 - Integrate each incident/family/branch component without a surface matrix.
 - Use conditional beta integration inside the alpha marginal.
-- Split support at detected root, tangent, and detector-validity boundaries.
+- Split support at detected root, tangent, and other physical coating-support boundaries.
 - Return mass, error, evaluation count, and reusable continuous CDF support.
 - Keep adaptive nodes private.
 
@@ -504,7 +514,7 @@ Files likely touched:
 
 Intended behavior:
 
-- Replace discrete candidate-pool language with continuous detector-conditioned sampling.
+- Replace discrete candidate-pool language with continuous detector-unconditioned sampling.
 - Document continuous event fields and equal T/N mass.
 - Assign root/coating ownership to reciprocal/coating.py.
 - Remove or rename obsolete trace stages.
@@ -551,19 +561,23 @@ Acceptance:
 - No document claims complex F recovery.
 - No document claims m = 0 validation.
 
-### T14: Delete retired T03 instructions
+### T14: Remove retired T03 instructions from live routing
 
 Files likely touched:
 
-- tasks/03_mosaic_ewald.md, delete.
-- tasks/prompts/mosaic_ewald.md, delete.
 - tasks/index.yaml
 - tasks/06_parallel_review.md
 - tasks/07_integration.md
 
+Historical evidence protected from modification or deletion:
+
+- tasks/03_mosaic_ewald.md
+- tasks/prompts/mosaic_ewald.md
+
 Intended behavior:
 
-- Remove obsolete implementation instructions and branch entries.
+- Remove obsolete implementation instructions and branch entries only from live routing/indexing.
+- Preserve the retired T03 task and prompt byte-for-byte as historical evidence.
 - Update review and integration tasks for continuous sampling.
 
 Tests:
@@ -577,6 +591,7 @@ Acceptance:
 
 - No active task directs work toward the retired branch or APIs.
 - Historical archive prose may retain provenance but no executable instruction does.
+- The retired T03 task and prompt remain present and unchanged.
 
 ### T15: Update active simulation and fitting plans
 
@@ -590,11 +605,13 @@ Files likely touched:
 Intended behavior:
 
 - Replace finite candidate-pool assumptions with reusable continuous component masses and CDFs.
-- Preserve incident-ray block parallelization.
+- Preserve bounded staged batching over fixed incident states, component-evaluation records, and
+  sampled detector events.
 - Record invalidation:
   - geometry changes invalidate roots and hits;
   - mosaic changes invalidate component measures;
   - intensity changes invalidate strengths, masses, and CDFs.
+  - detector changes invalidate hits and downstream deposition only, never component masses/CDFs.
 - Remove fixed orientation-node and finite-candidate-order requirements.
 
 Tests:
@@ -626,12 +643,13 @@ Final acceptance:
 
 - The legacy-symbol search returns no matches from live files.
 - reciprocal/coating.py is the only new production module.
-- Four obsolete runtime modules and two obsolete task files are deleted.
+- Four obsolete runtime modules are deleted; the two retired T03 instruction files remain
+  unchanged historical evidence and are absent only from live routing.
 - Temporary comparisons, broad sweeps, diagnostics, benchmarks, and generated images are absent.
 - Every retained test protects a unique scientific invariant or integration boundary.
 - Optimized and proof paths agree within frozen tolerances.
-- Handoff reports proof state, benchmark, peak memory, m = 0 limitation, retained tests, and
-  deletion inventory.
+- Handoff reports proof state, benchmark, peak memory, m = 0 limitation, retained tests, the
+  runtime deletion inventory, and protected historical T03 files.
 - Git status contains only intended changes before one coherent commit and is clean afterward.
 
 ## Execution policy

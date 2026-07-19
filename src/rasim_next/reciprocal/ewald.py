@@ -43,9 +43,7 @@ def _exactly_collinear(left: FloatArray, right: FloatArray) -> bool:
         first_product = float(left[first_index]) * float(right[second_index])
         second_product = float(left[second_index]) * float(right[first_index])
         if abs(first_product - second_product) > (
-            8.0
-            * np.finfo(np.float64).eps
-            * (abs(first_product) + abs(second_product))
+            8.0 * np.finfo(np.float64).eps * (abs(first_product) + abs(second_product))
         ):
             return False
     anchor = int(np.argmax(np.abs(right)))

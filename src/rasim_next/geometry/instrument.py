@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
@@ -38,6 +38,26 @@ def _positive(value: float, name: str) -> float:
     if not math.isfinite(result) or result <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
     return result
+
+
+def _sample_support(
+    model_id: str,
+    sample_width_m: float | None,
+    sample_length_m: float | None,
+) -> tuple[str, float | None, float | None]:
+    if model_id == "finite_rectangle.v1":
+        if sample_width_m is None or sample_length_m is None:
+            raise ValueError("finite_rectangle.v1 requires sample width and length")
+        return (
+            model_id,
+            _positive(sample_width_m, "sample_width_m"),
+            _positive(sample_length_m, "sample_length_m"),
+        )
+    if model_id == "unbounded_plane.v1":
+        if sample_width_m is not None or sample_length_m is not None:
+            raise ValueError("unbounded_plane.v1 requires absent sample width and length")
+        return model_id, None, None
+    raise ValueError("sample_support_model_id must be finite_rectangle.v1 or unbounded_plane.v1")
 
 
 def _detector_reference(value: tuple[float, float]) -> tuple[float, float]:
@@ -84,8 +104,9 @@ class InstrumentConfiguration:
     detector_row_pitch_m: float
     detector_column_pitch_m: float
     detector_reference_coordinate_px: tuple[float, float]
-    sample_width_m: float
-    sample_length_m: float
+    sample_support_model_id: str
+    sample_width_m: float | None
+    sample_length_m: float | None
     film_thickness_A: float
 
     def __post_init__(self) -> None:
@@ -108,13 +129,16 @@ class InstrumentConfiguration:
             "detector_reference_coordinate_px",
             _detector_reference(self.detector_reference_coordinate_px),
         )
-        for name in (
-            "detector_row_pitch_m",
-            "detector_column_pitch_m",
-            "sample_width_m",
-            "sample_length_m",
-        ):
+        for name in ("detector_row_pitch_m", "detector_column_pitch_m"):
             object.__setattr__(self, name, _positive(getattr(self, name), name))
+        support = _sample_support(
+            self.sample_support_model_id,
+            self.sample_width_m,
+            self.sample_length_m,
+        )
+        object.__setattr__(self, "sample_support_model_id", support[0])
+        object.__setattr__(self, "sample_width_m", support[1])
+        object.__setattr__(self, "sample_length_m", support[2])
         thickness = float(self.film_thickness_A)
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
@@ -131,6 +155,7 @@ class CompiledInstrument:
 
     lab_from_goniometer: RigidTransform
     lab_from_sample: RigidTransform
+    sample_from_lab: RigidTransform = field(init=False)
     sample_from_crystal: RigidTransform
     lab_from_crystal: RigidTransform
     lab_from_detector: RigidTransform
@@ -138,8 +163,9 @@ class CompiledInstrument:
     detector_row_pitch_m: float
     detector_column_pitch_m: float
     detector_reference_coordinate_px: tuple[float, float]
-    sample_width_m: float
-    sample_length_m: float
+    sample_support_model_id: str
+    sample_width_m: float | None
+    sample_length_m: float | None
     film_thickness_A: float
 
     def __post_init__(self) -> None:
@@ -152,19 +178,23 @@ class CompiledInstrument:
         )
         for name, source, target in expected_frames:
             _transform(getattr(self, name), name, source, target)
+        object.__setattr__(self, "sample_from_lab", self.lab_from_sample.inverse())
         object.__setattr__(self, "detector_shape_rc", _shape_rc(self.detector_shape_rc))
         object.__setattr__(
             self,
             "detector_reference_coordinate_px",
             _detector_reference(self.detector_reference_coordinate_px),
         )
-        for name in (
-            "detector_row_pitch_m",
-            "detector_column_pitch_m",
-            "sample_width_m",
-            "sample_length_m",
-        ):
+        for name in ("detector_row_pitch_m", "detector_column_pitch_m"):
             object.__setattr__(self, name, _positive(getattr(self, name), name))
+        support = _sample_support(
+            self.sample_support_model_id,
+            self.sample_width_m,
+            self.sample_length_m,
+        )
+        object.__setattr__(self, "sample_support_model_id", support[0])
+        object.__setattr__(self, "sample_width_m", support[1])
+        object.__setattr__(self, "sample_length_m", support[2])
         thickness = float(self.film_thickness_A)
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
@@ -225,6 +255,7 @@ def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstru
         detector_row_pitch_m=configuration.detector_row_pitch_m,
         detector_column_pitch_m=configuration.detector_column_pitch_m,
         detector_reference_coordinate_px=configuration.detector_reference_coordinate_px,
+        sample_support_model_id=configuration.sample_support_model_id,
         sample_width_m=configuration.sample_width_m,
         sample_length_m=configuration.sample_length_m,
         film_thickness_A=configuration.film_thickness_A,

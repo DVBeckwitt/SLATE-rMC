@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -12,6 +11,7 @@ from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry._vectors import finite_vector3, finite_vectors3
+from rasim_next.geometry.instrument import _sample_support
 
 _PARALLEL_TOL = 1e-14
 _POSITION_TOL_M = 1e-12
@@ -34,6 +34,7 @@ class _SampleIntersectionArrays:
     point_sample_m: NDArray[np.float64]
     ray_distance_m: NDArray[np.float64]
     footprint_acceptance: NDArray[np.float64]
+    direction_sample: NDArray[np.float64]
     status: NDArray[np.str_]
 
 
@@ -42,8 +43,10 @@ def _intersect_sample_rays(
     direction_lab: ArrayLike,
     *,
     lab_from_sample: RigidTransform,
-    sample_width_m: float,
-    sample_length_m: float,
+    sample_from_lab: RigidTransform,
+    sample_support_model_id: str,
+    sample_width_m: float | None,
+    sample_length_m: float | None,
 ) -> _SampleIntersectionArrays:
     origins = finite_vectors3(origin_lab_m, "origin_lab_m")
     directions = finite_vectors3(direction_lab, "direction_lab")
@@ -63,22 +66,26 @@ def _intersect_sample_rays(
         or lab_from_sample.target_frame != FrameId.LAB
     ):
         raise ValueError("lab_from_sample must map sample to lab")
-    width = float(sample_width_m)
-    length = float(sample_length_m)
-    if not math.isfinite(width) or width <= 0.0:
-        raise ValueError("sample_width_m must be finite and positive")
-    if not math.isfinite(length) or length <= 0.0:
-        raise ValueError("sample_length_m must be finite and positive")
+    if not isinstance(sample_from_lab, RigidTransform):
+        raise TypeError("sample_from_lab must be a RigidTransform")
+    if (
+        sample_from_lab.source_frame != FrameId.LAB
+        or sample_from_lab.target_frame != FrameId.SAMPLE
+    ):
+        raise ValueError("sample_from_lab must map lab to sample")
+    support_model_id, width, length = _sample_support(
+        sample_support_model_id,
+        sample_width_m,
+        sample_length_m,
+    )
 
-    sample_from_lab = lab_from_sample.inverse()
     origin_sample_m = sample_from_lab.apply_point(origins)
     direction_sample = sample_from_lab.apply_vector(directions)
     denominator = direction_sample[:, 2]
     offset_m = origin_sample_m[:, 2]
     parallel = np.abs(denominator) <= _PARALLEL_TOL
-    coplanar = parallel & (np.abs(offset_m) <= _POSITION_TOL_M)
     status = np.full(origins.shape[0], ValidityCode.VALID, dtype="U16")
-    status[parallel & ~coplanar] = ValidityCode.PARALLEL
+    status[parallel] = ValidityCode.PARALLEL
 
     distance_m = np.zeros(origins.shape[0], dtype=np.float64)
     nonparallel = ~parallel
@@ -88,9 +95,13 @@ def _intersect_sample_rays(
     distance_m = np.maximum(distance_m, 0.0)
     point_sample_m = origin_sample_m + distance_m[:, None] * direction_sample
     active = status == ValidityCode.VALID
-    outside = active & (
-        (np.abs(point_sample_m[:, 0]) > 0.5 * width) | (np.abs(point_sample_m[:, 1]) > 0.5 * length)
-    )
+    outside = np.zeros(origins.shape[0], dtype=np.bool_)
+    if support_model_id == "finite_rectangle.v1":
+        assert width is not None and length is not None
+        outside = active & (
+            (np.abs(point_sample_m[:, 0]) > 0.5 * width)
+            | (np.abs(point_sample_m[:, 1]) > 0.5 * length)
+        )
     status[outside] = ValidityCode.OUTSIDE_SUPPORT
     valid = status == ValidityCode.VALID
 
@@ -105,6 +116,7 @@ def _intersect_sample_rays(
         point_sample_output,
         distance_output,
         valid.astype(np.float64),
+        direction_sample,
         status,
     )
 
@@ -114,8 +126,9 @@ def intersect_sample_ray(
     direction_lab: ArrayLike,
     *,
     lab_from_sample: RigidTransform,
-    sample_width_m: float,
-    sample_length_m: float,
+    sample_support_model_id: str,
+    sample_width_m: float | None,
+    sample_length_m: float | None,
 ) -> SampleIntersection:
     """Intersect a forward unit ray with local sample ``z=0`` and its rectangular footprint."""
 
@@ -125,6 +138,8 @@ def intersect_sample_ray(
         origin[None, :],
         direction[None, :],
         lab_from_sample=lab_from_sample,
+        sample_from_lab=lab_from_sample.inverse(),
+        sample_support_model_id=sample_support_model_id,
         sample_width_m=sample_width_m,
         sample_length_m=sample_length_m,
     )

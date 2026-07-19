@@ -18,12 +18,12 @@ from rasim_next.core.contracts import (
     DetectorHitBatch,
     EventIntensityNormalization,
     EventIntensityResult,
-    IncidentSampleBatch,
     IncidentStateBatch,
     OutgoingWaveBatch,
     RodCatalog,
     RodQueryBatch,
     ScatteringEventBatch,
+    canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.interfaces import scalar_interface_amplitude
@@ -40,6 +40,7 @@ from rasim_next.io.orientation import (
 )
 from rasim_next.proof.diagnostics import write_diagnostic
 from rasim_next.proof.traces import compare_traces
+from rasim_next.sampling.source import sample_gaussian_source_rays
 
 
 def _readonly(value: NDArray[np.generic]) -> NDArray[np.generic]:
@@ -59,27 +60,44 @@ class SyntheticPlumbingResult:
 def run_synthetic_plumbing(*, pixel_solid_angle_sr: float = 0.1) -> SyntheticPlumbingResult:
     """Pass one candidate through the trivial one-candidate selection case."""
 
-    samples = IncidentSampleBatch(
-        np.array([10], dtype=np.int64),
-        np.zeros((1, 3)),
-        np.array([[1.0, 0.0, 0.0]]),
-        np.array([1.0]),
-        np.array([1.0]),
-        ("linear",),
-        "explicit_joint",
+    samples = sample_gaussian_source_rays(
+        mean_origin_lab_m=np.zeros(3),
+        mean_direction_lab=np.array([1.0, 0.0, 0.0]),
+        transverse_axes_lab=np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        spatial_sigma_m=np.zeros(2),
+        divergence_sigma_rad=np.zeros(2),
+        mean_wavelength_A=1.0,
+        wavelength_sigma_A=0.0,
+        sample_count=1,
+        seed=0,
+        polarization_state_id="linear",
     )
     states = IncidentStateBatch(
-        np.array([20], dtype=np.int64),
-        samples.incident_sample_id,
-        np.zeros((1, 3)),
-        samples.direction_lab,
-        np.array([[1.0, 0.0, 0.0]]),
-        np.array([[1.0, 0.0, 0.0]]),
-        np.array([1.0 + 0.0j]),
-        np.array([1.0 + 0.0j]),
-        np.array([1.0]),
-        samples.source_weight,
-        np.array([True]),
+        incident_state_id=np.array([20], dtype=np.int64),
+        incident_sample_id=samples.incident_sample_id,
+        sample_intersection_lab_m=np.zeros((1, 3)),
+        direction_sample=samples.direction_lab,
+        k_air_sample_Ainv=np.array([[2.0 * np.pi, 0.0, 0.0]]),
+        k_film_phase_sample_Ainv=np.array([[2.0 * np.pi, 0.0, 0.0]]),
+        kz_film_Ainv=np.array([0.0 + 0.0j]),
+        entrance_amplitude=np.array([1.0 + 0.0j]),
+        footprint_acceptance=np.array([1.0]),
+        source_weight=samples.source_weight,
+        wavelength_A=samples.wavelength_A,
+        polarization_state_id=samples.polarization_state_id,
+        status=(ValidityCode.VALID,),
+        valid=np.array([True]),
+        source_sampling_model_id=samples.source_sampling_model_id,
+        source_rng_model_id=samples.source_rng_model_id,
+        source_seed=samples.source_seed,
+        source_parameter_provenance=samples.source_parameter_provenance,
+        source_parameter_revision=samples.source_parameter_revision,
+        source_revision=samples.source_revision,
+        sample_geometry_revision=canonical_revision_sha256(
+            ("sample_geometry", "core synthetic plumbing.v1")
+        ),
+        material_revision=canonical_revision_sha256(("material", "core synthetic plumbing.v1")),
+        incident_model_id="one_transmitted_channel.v1",
     )
     rods = RodCatalog(
         np.array([30], dtype=np.int64),
@@ -190,9 +208,21 @@ def _mutations() -> list[dict[str, object]]:
     pairs = (
         ("osc_wrong_rotation", "osc.detector_native_array", native, np.rot90(raw, 1), True),
         ("osc_transpose", "osc.detector_native_array", native, raw.T, True),
-        ("swap_row_column", "osc.beam_center_native", np.array([2.0, 3.0]), np.array([3.0, 2.0]), False),
+        (
+            "swap_row_column",
+            "osc.beam_center_native",
+            np.array([2.0, 3.0]),
+            np.array([3.0, 2.0]),
+            False,
+        ),
         ("half_pixel", "osc.beam_center_native", np.array([2.0, 3.0]), np.array([2.5, 3.5]), False),
-        ("transform_order", "geometry.instrument_transforms", np.array([0.0, 2.0]), np.array([-1.0, 1.0]), False),
+        (
+            "transform_order",
+            "geometry.instrument_transforms",
+            np.array([0.0, 2.0]),
+            np.array([-1.0, 1.0]),
+            False,
+        ),
         ("translate_vector", "geometry.lab_ray", np.array([1.0, 0.0]), np.array([2.0, 2.0]), False),
         ("opposite_root", "optics.kz_incident_film", np.array([2.0j]), np.array([-2.0j]), False),
     )
@@ -234,17 +264,27 @@ def _checks() -> tuple[list[dict[str, str]], list[dict[str, object]]]:
     checks = [
         {
             "check_id": "coordinates",
-            "status": "PASS" if np.array_equal(detector_native_to_raw(native), raw) and detector_to_raw_index(mapped, raw.shape) == raw_index else "FAIL",
+            "status": "PASS"
+            if np.array_equal(detector_native_to_raw(native), raw)
+            and detector_to_raw_index(mapped, raw.shape) == raw_index
+            else "FAIL",
             "evidence": "clockwise 7x11 array and index mapping invert",
         },
         {
             "check_id": "shared_primitives",
-            "status": "PASS" if np.allclose(transform.inverse().apply_point(transform.apply_point(point)), point) and abs(kz**2 + 1.0 - 4.0) < 1e-14 and select_normal_wavevector(-1e-32, -1) == -1e-16j and scalar_interface_amplitude(2.0, 2.0) == 1.0 else "FAIL",
+            "status": "PASS"
+            if np.allclose(transform.inverse().apply_point(transform.apply_point(point)), point)
+            and abs(kz**2 + 1.0 - 4.0) < 1e-14
+            and select_normal_wavevector(-1e-32, -1) == -1e-16j
+            and scalar_interface_amplitude(2.0, 2.0) == 1.0
+            else "FAIL",
             "evidence": "rigid inverse, dispersion, decay branch, and equal-medium amplitude",
         },
         {
             "check_id": "contract_flow",
-            "status": "PASS" if np.isclose(flow.detector_image.sum(), flow.event_mass.sum()) else "FAIL",
+            "status": "PASS"
+            if np.isclose(flow.detector_image.sum(), flow.event_mass.sum())
+            else "FAIL",
             "evidence": "stable event ID and seven factors conserve synthetic mass",
         },
     ]
@@ -259,7 +299,12 @@ def _checks() -> tuple[list[dict[str, str]], list[dict[str, object]]]:
     root = Path(__file__).resolve().parents[3]
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / "core.ra_diag.npz"
-        write_diagnostic(output, arrays={"value": np.array([1.0])}, manifest={"case_id": "core"}, repository_root=root)
+        write_diagnostic(
+            output,
+            arrays={"value": np.array([1.0])},
+            manifest={"case_id": "core"},
+            repository_root=root,
+        )
         diagnostic_passed = output.is_file() and len(list(Path(directory).iterdir())) == 1
     checks.append(
         {
@@ -283,9 +328,15 @@ def run_core_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     del allow_missing_pack
     root = Path(__file__).resolve().parents[3]
     checks, mutations = _checks()
-    base = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
-    ).stdout.strip() or "uncommitted"
+    base = (
+        subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        or "uncommitted"
+    )
     environment = json.dumps(
         {"python": platform.python_version(), "numpy": np.__version__}, sort_keys=True
     ).encode()

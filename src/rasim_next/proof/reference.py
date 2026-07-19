@@ -39,7 +39,10 @@ def _require(condition: bool, message: str) -> None:
 
 def _path(root: Path, relative: str) -> Path:
     candidate = (root / relative).resolve()
-    _require(not Path(relative).is_absolute() and candidate.is_relative_to(root.resolve()), "path escapes repository")
+    _require(
+        not Path(relative).is_absolute() and candidate.is_relative_to(root.resolve()),
+        "path escapes repository",
+    )
     return candidate
 
 
@@ -96,9 +99,7 @@ def _decode_tiny_osc(path: Path) -> tuple[int, NDArray[np.int32]]:
     return version, decoded
 
 
-def _stream_gzip_osc(
-    path: Path, positions: NDArray[np.int32] | None = None
-) -> dict[str, Any]:
+def _stream_gzip_osc(path: Path, positions: NDArray[np.int32] | None = None) -> dict[str, Any]:
     digest = hashlib.sha256()
     with gzip.open(path, "rb") as handle:
         header = handle.read(_HEADER_BYTES)
@@ -119,7 +120,9 @@ def _stream_gzip_osc(
             row, column = int(row_value), int(column_value)
             requests.setdefault(row * width + column, []).append(("raw", index))
             raw_index = detector_to_raw_index(DetectorIndex(row, column), (height, width))
-            requests.setdefault(raw_index.row * width + raw_index.column, []).append(("native", index))
+            requests.setdefault(raw_index.row * width + raw_index.column, []).append(
+                ("native", index)
+            )
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
             total += len(chunk)
@@ -142,7 +145,9 @@ def _stream_gzip_osc(
                 local = linear - offset
                 if 0 <= local < decoded.size:
                     for target, index in targets:
-                        (selected_raw if target == "raw" else selected_native)[index] = decoded[local]
+                        (selected_raw if target == "raw" else selected_native)[index] = decoded[
+                            local
+                        ]
             offset += decoded.size
     expected_size = _HEADER_BYTES + 2 * height * width
     _require(total == expected_size, f"invalid decompressed size for {path.name}")
@@ -168,7 +173,9 @@ def _stream_gzip_osc(
 def _verify_source_snapshot(root: Path, archive_sha256: str) -> int:
     snapshot = root / "reference" / "legacy_source"
     manifest = json.loads((snapshot / "MANIFEST.json").read_text(encoding="utf-8"))
-    _require(manifest["schema_version"] == "rasim-legacy-source-snapshot-v1", "source schema mismatch")
+    _require(
+        manifest["schema_version"] == "rasim-legacy-source-snapshot-v1", "source schema mismatch"
+    )
     _require(manifest["original_archive_sha256"] == archive_sha256, "source archive mismatch")
     declared: set[str] = set()
     for item in manifest["files"]:
@@ -176,19 +183,38 @@ def _verify_source_snapshot(root: Path, archive_sha256: str) -> int:
         _require(relative not in declared, "duplicate source path")
         declared.add(relative)
         path = _path(snapshot, relative)
-        _require(path.stat().st_size == item["size_bytes"] and _sha256(path) == item["sha256"], f"source hash mismatch: {relative}")
+        _require(
+            path.stat().st_size == item["size_bytes"] and _sha256(path) == item["sha256"],
+            f"source hash mismatch: {relative}",
+        )
     actual = {
         path.relative_to(snapshot).as_posix()
         for path in snapshot.rglob("*")
         if path.is_file() and path.name != "MANIFEST.json" and path.suffix.lower() != ".md"
     }
     _require(actual == declared, "source snapshot file set mismatch")
-    osc_lines = (snapshot / "ra_sim" / "io" / "osc_reader.py").read_text(encoding="utf-8").splitlines()
+    osc_lines = (
+        (snapshot / "ra_sim" / "io" / "osc_reader.py").read_text(encoding="utf-8").splitlines()
+    )
     osc_citation = "\n".join(osc_lines[17:66])
-    _require(all(token in osc_citation for token in ("header[796:800]", "endian", "reshape", "0x8000", "*= 32")), "OSC source citation mismatch")
-    runtime_lines = (snapshot / "ra_sim" / "gui" / "_runtime" / "runtime_session.py").read_text(encoding="utf-8").splitlines()
+    _require(
+        all(
+            token in osc_citation
+            for token in ("header[796:800]", "endian", "reshape", "0x8000", "*= 32")
+        ),
+        "OSC source citation mismatch",
+    )
+    runtime_lines = (
+        (snapshot / "ra_sim" / "gui" / "_runtime" / "runtime_session.py")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     rotation_citation = "\n".join(runtime_lines[557:565])
-    _require("DISPLAY_ROTATE_K = -1" in rotation_citation and "SIM_DISPLAY_ROTATE_K = 0" in rotation_citation, "orientation source citation mismatch")
+    _require(
+        "DISPLAY_ROTATE_K = -1" in rotation_citation
+        and "SIM_DISPLAY_ROTATE_K = 0" in rotation_citation,
+        "orientation source citation mismatch",
+    )
     return len(declared)
 
 
@@ -211,7 +237,10 @@ def _verify_pack(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     }
     with np.load(pack, allow_pickle=False) as data:
         manifest_array = data["manifest_json"]
-        _require(manifest_array.dtype == np.uint8 and manifest_array.ndim == 1, "invalid embedded manifest")
+        _require(
+            manifest_array.dtype == np.uint8 and manifest_array.ndim == 1,
+            "invalid embedded manifest",
+        )
         embedded = json.loads(manifest_array.tobytes().decode("utf-8"))
         array_names = set(data.files) - {"manifest_json"}
         _require(needed <= array_names, "required OSC intermediates are missing")
@@ -224,16 +253,30 @@ def _verify_pack(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     case_ids = [case["case_id"] for case in cases]
     _require(len(case_ids) == len(set(case_ids)), "duplicate reference case")
     classifications = Counter(case["classification"] for case in cases)
-    _require(classifications == Counter({"MATCH": 8, "CORRECTED": 4}), "case classification mismatch")
+    _require(
+        classifications == Counter({"MATCH": 8, "CORRECTED": 4}), "case classification mismatch"
+    )
     for case in cases:
         divergence = case["first_divergence"]
-        _require((case["classification"] == "CORRECTED") == isinstance(divergence, str), f"invalid divergence metadata: {case['case_id']}")
+        _require(
+            (case["classification"] == "CORRECTED") == isinstance(divergence, str),
+            f"invalid divergence metadata: {case['case_id']}",
+        )
     references = [name for case in cases for name in case["arrays"]]
     counts = Counter(references)
-    _require(set(references) == array_names and all(count == 1 for count in counts.values()), "pack array ownership mismatch")
+    _require(
+        set(references) == array_names and all(count == 1 for count in counts.values()),
+        "pack array ownership mismatch",
+    )
     source = embedded["source"]
-    _require(source["original_archive_sha256"] == manifest["original_rasim"]["archive_sha256"], "pack source hash mismatch")
-    _require(source["manuscript_archive_sha256"] == manifest["manuscript"]["archive_sha256"], "pack manuscript hash mismatch")
+    _require(
+        source["original_archive_sha256"] == manifest["original_rasim"]["archive_sha256"],
+        "pack source hash mismatch",
+    )
+    _require(
+        source["manuscript_archive_sha256"] == manifest["manuscript"]["archive_sha256"],
+        "pack manuscript hash mismatch",
+    )
     return {
         "arrays": arrays,
         "case_counts": dict(sorted(classifications.items())),
@@ -251,10 +294,15 @@ def _verify_examples(root: Path) -> list[dict[str, Any]]:
     declared: set[str] = set()
     for item in entries:
         relative = str(item["path"])
-        _require(relative.startswith("examples/") and relative not in declared, "invalid example path")
+        _require(
+            relative.startswith("examples/") and relative not in declared, "invalid example path"
+        )
         declared.add(relative)
         path = _path(root, relative)
-        _require(path.stat().st_size == item["size_bytes"] and _sha256(path) == item["sha256"], f"example hash mismatch: {relative}")
+        _require(
+            path.stat().st_size == item["size_bytes"] and _sha256(path) == item["sha256"],
+            f"example hash mismatch: {relative}",
+        )
     actual = {
         path.relative_to(root).as_posix()
         for path in (root / "examples").rglob("*")
@@ -279,36 +327,80 @@ def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, 
     for index, (name, metadata) in enumerate(expected.items()):
         result = observed[name]
         _require(result["sha256"] == metadata["sha256"], f"decompressed hash mismatch: {name}")
-        _require(np.array_equal(result["summary"], arrays["osc_summary"][index, :6]), f"summary mismatch: {name}")
-        _require(np.array_equal(result["selected_raw"], arrays["osc_selected_raw_values"][index]), f"raw sample mismatch: {name}")
-        _require(np.array_equal(result["selected_native"], arrays["osc_selected_native_values"][index]), f"native sample mismatch: {name}")
-        _require(np.array_equal(result["argmax_raw"], arrays["osc_argmax_raw_row_col"][index]), f"raw argmax mismatch: {name}")
-        _require(np.array_equal(result["argmax_native"], arrays["osc_argmax_native_row_col"][index]), f"native argmax mismatch: {name}")
+        _require(
+            np.array_equal(result["summary"], arrays["osc_summary"][index, :6]),
+            f"summary mismatch: {name}",
+        )
+        _require(
+            np.array_equal(result["selected_raw"], arrays["osc_selected_raw_values"][index]),
+            f"raw sample mismatch: {name}",
+        )
+        _require(
+            np.array_equal(result["selected_native"], arrays["osc_selected_native_values"][index]),
+            f"native sample mismatch: {name}",
+        )
+        _require(
+            np.array_equal(result["argmax_raw"], arrays["osc_argmax_raw_row_col"][index]),
+            f"raw argmax mismatch: {name}",
+        )
+        _require(
+            np.array_equal(result["argmax_native"], arrays["osc_argmax_native_row_col"][index]),
+            f"native argmax mismatch: {name}",
+        )
     return len(osc_entries)
 
 
-def _verify_synthetic_osc(root: Path, arrays: dict[str, NDArray[Any]]) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float64]]:
-    big_version, big = _decode_tiny_osc(root / "examples" / "common" / "osc" / "non_square_big_endian.osc")
-    little_version, little = _decode_tiny_osc(root / "examples" / "common" / "osc" / "non_square_little_endian.osc")
-    _require((big_version, little_version) == (1, 20) and np.array_equal(big, little), "endian decoding mismatch")
+def _verify_synthetic_osc(
+    root: Path, arrays: dict[str, NDArray[Any]]
+) -> tuple[NDArray[np.int32], NDArray[np.int32], NDArray[np.float64]]:
+    big_version, big = _decode_tiny_osc(
+        root / "examples" / "common" / "osc" / "non_square_big_endian.osc"
+    )
+    little_version, little = _decode_tiny_osc(
+        root / "examples" / "common" / "osc" / "non_square_little_endian.osc"
+    )
+    _require(
+        (big_version, little_version) == (1, 20) and np.array_equal(big, little),
+        "endian decoding mismatch",
+    )
     native = raw_to_detector_native(big)
     _require(big.shape == (7, 11) and native.shape == (11, 7), "non-square orientation mismatch")
-    _require(np.array_equal(big, arrays["osc_synthetic_big_endian_raw"]) and np.array_equal(little, arrays["osc_synthetic_little_endian_raw"]), "synthetic raw intermediate mismatch")
-    _require(np.array_equal(native, arrays["osc_synthetic_big_endian_native"]) and np.array_equal(native, arrays["osc_synthetic_little_endian_native"]), "synthetic native intermediate mismatch")
+    _require(
+        np.array_equal(big, arrays["osc_synthetic_big_endian_raw"])
+        and np.array_equal(little, arrays["osc_synthetic_little_endian_raw"]),
+        "synthetic raw intermediate mismatch",
+    )
+    _require(
+        np.array_equal(native, arrays["osc_synthetic_big_endian_native"])
+        and np.array_equal(native, arrays["osc_synthetic_little_endian_native"]),
+        "synthetic native intermediate mismatch",
+    )
     _require(np.array_equal(detector_native_to_raw(native), big), "OSC inverse mismatch")
     _require(64 in big and 1_048_544 in big, "high-range OSC decoding mismatch")
     marker = raw_to_detector_index(OscRawIndex(4, 3), big.shape)
     coordinate = index_to_coordinate(marker)
     _require(big[4, 3] == 2222 and (marker.row, marker.column) == (3, 2), "marker index mismatch")
-    _require((coordinate.column_px, coordinate.row_px) == (2.0, 3.0), "pixel-center mapping mismatch")
+    _require(
+        (coordinate.column_px, coordinate.row_px) == (2.0, 3.0), "pixel-center mapping mismatch"
+    )
     return big, native, np.array([2.0, 3.0])
 
 
 def _verify_bi2se3_coordinates(root: Path) -> int:
-    case = tomllib.loads((root / "examples" / "bi2se3" / "experiment" / "forward_case.toml").read_text(encoding="utf-8"))
+    case = tomllib.loads(
+        (root / "examples" / "bi2se3" / "experiment" / "forward_case.toml").read_text(
+            encoding="utf-8"
+        )
+    )
     detector, legacy = case["detector"], case["legacy_provenance"]
-    _require(detector["center_column_px"] == legacy["legacy_center_y_meant_native_column_px"], "beam-center column mismatch")
-    _require(detector["center_row_px"] == legacy["legacy_center_x_meant_native_row_px"], "beam-center row mismatch")
+    _require(
+        detector["center_column_px"] == legacy["legacy_center_y_meant_native_column_px"],
+        "beam-center column mismatch",
+    )
+    _require(
+        detector["center_row_px"] == legacy["legacy_center_x_meant_native_row_px"],
+        "beam-center row mismatch",
+    )
     rows = 0
     csv_path = root / "examples" / "bi2se3" / "observations" / "legacy_peak_selections.csv"
     with csv_path.open(encoding="utf-8", newline="") as handle:
@@ -316,7 +408,10 @@ def _verify_bi2se3_coordinates(root: Path) -> int:
             expected_column = Decimal(detector["columns"] - 1) - Decimal(row["legacy_raw_x"])
             column_error = abs(Decimal(row["observed_column_px"]) - expected_column)
             _require(column_error <= Decimal("5e-13"), "legacy column mapping mismatch")
-            _require(Decimal(row["observed_row_px"]) == Decimal(row["legacy_raw_y"]), "legacy row mapping mismatch")
+            _require(
+                Decimal(row["observed_row_px"]) == Decimal(row["legacy_raw_y"]),
+                "legacy row mapping mismatch",
+            )
             rows += 1
     _require(rows == 82, "legacy coordinate row count mismatch")
     return rows
@@ -336,16 +431,48 @@ def _trace(stage: str, value: NDArray[Any], kind: QuantityKind) -> TraceRecord:
     )
 
 
-def _mutations(raw: NDArray[np.int32], native: NDArray[np.int32], center: NDArray[np.float64]) -> list[dict[str, object]]:
+def _mutations(
+    raw: NDArray[np.int32], native: NDArray[np.int32], center: NDArray[np.float64]
+) -> list[dict[str, object]]:
     pairs = (
-        ("osc_counterclockwise", "osc.detector_native_array", native, np.rot90(raw, 1), QuantityKind.IMAGE, "exact_value"),
-        ("osc_transpose", "osc.detector_native_array", native, raw.T.copy(), QuantityKind.IMAGE, "exact_value"),
-        ("osc_swap_coordinate_order", "osc.beam_center_native", center, center[::-1].copy(), QuantityKind.POINT, "numeric_value"),
-        ("osc_half_pixel", "osc.beam_center_native", center, center + 0.5, QuantityKind.POINT, "numeric_value"),
+        (
+            "osc_counterclockwise",
+            "osc.detector_native_array",
+            native,
+            np.rot90(raw, 1),
+            QuantityKind.IMAGE,
+            "exact_value",
+        ),
+        (
+            "osc_transpose",
+            "osc.detector_native_array",
+            native,
+            raw.T.copy(),
+            QuantityKind.IMAGE,
+            "exact_value",
+        ),
+        (
+            "osc_swap_coordinate_order",
+            "osc.beam_center_native",
+            center,
+            center[::-1].copy(),
+            QuantityKind.POINT,
+            "numeric_value",
+        ),
+        (
+            "osc_half_pixel",
+            "osc.beam_center_native",
+            center,
+            center + 0.5,
+            QuantityKind.POINT,
+            "numeric_value",
+        ),
     )
     results: list[dict[str, object]] = []
     for mutation_id, stage, expected, candidate, kind, metric in pairs:
-        comparison = compare_traces((_trace(stage, expected, kind),), (_trace(stage, candidate, kind),))
+        comparison = compare_traces(
+            (_trace(stage, expected, kind),), (_trace(stage, candidate, kind),)
+        )
         results.append(
             {
                 "mutation_id": mutation_id,
@@ -354,7 +481,8 @@ def _mutations(raw: NDArray[np.int32], native: NDArray[np.int32], center: NDArra
                 "expected_failure_metric": metric,
                 "observed_first_stage": comparison.first_failing_stage,
                 "observed_failure_metric": comparison.failure_metric,
-                "detected": comparison.first_failing_stage == stage and comparison.failure_metric == metric,
+                "detected": comparison.first_failing_stage == stage
+                and comparison.failure_metric == metric,
             }
         )
     return results
@@ -362,10 +490,22 @@ def _mutations(raw: NDArray[np.int32], native: NDArray[np.int32], center: NDArra
 
 def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     root = Path(__file__).resolve().parents[3]
-    manifest = tomllib.loads((root / "reference" / "reference_manifest.toml").read_text(encoding="utf-8"))
-    _require(manifest["schema_version"] == "rasim-reference-manifest-v4", "reference schema mismatch")
-    _require(manifest["trace_schema_version"] == "rasim-stage-trace-v4" and manifest["contract_api_version"] == "rasim-contracts-v4", "shared version mismatch")
-    _require(manifest["reference_pack"]["read_only"] is True and manifest["reference_pack"]["committed"] is True, "reference pack must be immutable")
+    manifest = tomllib.loads(
+        (root / "reference" / "reference_manifest.toml").read_text(encoding="utf-8")
+    )
+    _require(
+        manifest["schema_version"] == "rasim-reference-manifest-v4", "reference schema mismatch"
+    )
+    _require(
+        manifest["trace_schema_version"] == "rasim-stage-trace-v4"
+        and manifest["contract_api_version"] == "rasim-contracts-v4",
+        "shared version mismatch",
+    )
+    _require(
+        manifest["reference_pack"]["read_only"] is True
+        and manifest["reference_pack"]["committed"] is True,
+        "reference pack must be immutable",
+    )
     pack_path = _path(root, manifest["reference_pack"]["path"])
     if allow_missing_pack and not pack_path.is_file():
         return {
@@ -377,7 +517,9 @@ def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object
             "trace_schema_version": 4,
             "reference_pack_sha256s": {},
             "environment_sha256": _environment_sha256(),
-            "checks": [{"check_id": "reference_pack", "status": "PASS", "evidence": "pack absence allowed"}],
+            "checks": [
+                {"check_id": "reference_pack", "status": "PASS", "evidence": "pack absence allowed"}
+            ],
             "classifications": [],
             "limitations": ["reference pack was not present"],
         }
@@ -390,13 +532,41 @@ def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object
     mutations = _mutations(raw, native, center)
     _require(all(item["detected"] for item in mutations), "reference negative control escaped")
     checks = [
-        {"check_id": "source_citations", "status": "PASS", "evidence": f"{source_count} tracked source files and exact OSC/orientation lines verified"},
-        {"check_id": "reference_pack", "status": "PASS", "evidence": f"SHA-256, embedded manifest, {pack['array_count']} arrays, and 12 classifications verified"},
-        {"check_id": "example_inputs", "status": "PASS", "evidence": f"{len(entries)} declared input hashes and file-set coverage verified"},
-        {"check_id": "gzip_osc", "status": "PASS", "evidence": f"{gzip_count} files streamed; three decompressed hashes and selected intermediates verified"},
-        {"check_id": "synthetic_osc", "status": "PASS", "evidence": "big/little endian, high range, clockwise inverse, and pixel center verified"},
-        {"check_id": "bi2se3_coordinates", "status": "PASS", "evidence": f"native beam center and {coordinate_rows} legacy rows mapped exactly once"},
-        {"check_id": "negative_controls", "status": "PASS", "evidence": f"{len(mutations)}/{len(mutations)} in-memory mutations detected at first stage"},
+        {
+            "check_id": "source_citations",
+            "status": "PASS",
+            "evidence": f"{source_count} tracked source files and exact OSC/orientation lines verified",
+        },
+        {
+            "check_id": "reference_pack",
+            "status": "PASS",
+            "evidence": f"SHA-256, embedded manifest, {pack['array_count']} arrays, and 12 classifications verified",
+        },
+        {
+            "check_id": "example_inputs",
+            "status": "PASS",
+            "evidence": f"{len(entries)} declared input hashes and file-set coverage verified",
+        },
+        {
+            "check_id": "gzip_osc",
+            "status": "PASS",
+            "evidence": f"{gzip_count} files streamed; three decompressed hashes and selected intermediates verified",
+        },
+        {
+            "check_id": "synthetic_osc",
+            "status": "PASS",
+            "evidence": "big/little endian, high range, clockwise inverse, and pixel center verified",
+        },
+        {
+            "check_id": "bi2se3_coordinates",
+            "status": "PASS",
+            "evidence": f"native beam center and {coordinate_rows} legacy rows mapped exactly once",
+        },
+        {
+            "check_id": "negative_controls",
+            "status": "PASS",
+            "evidence": f"{len(mutations)}/{len(mutations)} in-memory mutations detected at first stage",
+        },
     ]
     return {
         "schema_version": 1,
@@ -412,6 +582,8 @@ def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object
         "classifications": [],
         "case_counts": pack["case_counts"],
         "source_archive_sha256": manifest["original_rasim"]["archive_sha256"],
-        "limitations": ["the v1 pack authenticates arrays as one file and has no per-array tolerance metadata"],
+        "limitations": [
+            "the v1 pack authenticates arrays as one file and has no per-array tolerance metadata"
+        ],
         "mutations": mutations,
     }

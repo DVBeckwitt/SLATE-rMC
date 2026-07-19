@@ -185,7 +185,6 @@ def _ordered_intensity(
 def _candidate_chunk(
     *,
     crystal: CrystalStructure,
-    incident_samples: IncidentSampleBatch,
     incident: IncidentTransportResult,
     material: MaterialOptics,
     instrument: CompiledInstrument,
@@ -194,7 +193,6 @@ def _candidate_chunk(
     population: float,
 ) -> CandidatePool:
     support = _build_intersection_support_for_rods(
-        incident_samples=incident_samples,
         incident_states=incident.states,
         rods=rods,
         orientations=orientations,
@@ -320,17 +318,13 @@ def _merge_compact_chunks(
         q_internal_sample_Ainv=np.concatenate(
             [piece.q_internal_sample_Ainv for piece in event_pieces]
         ),
-        q_sample_normal_Ainv=np.concatenate(
-            [piece.q_sample_normal_Ainv for piece in event_pieces]
-        ),
+        q_sample_normal_Ainv=np.concatenate([piece.q_sample_normal_Ainv for piece in event_pieces]),
         l_coordinate=np.concatenate([piece.l_coordinate for piece in event_pieces]),
         kf_film_phase_sample_Ainv=np.concatenate(
             [piece.kf_film_phase_sample_Ainv for piece in event_pieces]
         ),
         reciprocal_weight=np.concatenate([piece.reciprocal_weight for piece in event_pieces]),
-        ewald_residual_Ainv=np.concatenate(
-            [piece.ewald_residual_Ainv for piece in event_pieces]
-        ),
+        ewald_residual_Ainv=np.concatenate([piece.ewald_residual_Ainv for piece in event_pieces]),
         status=tuple(status for piece in event_pieces for status in piece.status),
         valid=np.concatenate([piece.valid for piece in event_pieces]),
     )
@@ -339,9 +333,7 @@ def _merge_compact_chunks(
     transport = EventTransportResult(
         outgoing_waves=OutgoingWaveBatch(
             event_id=event_id,
-            kf_air_lab_Ainv=np.concatenate(
-                [piece.kf_air_lab_Ainv for piece in outgoing_pieces]
-            ),
+            kf_air_lab_Ainv=np.concatenate([piece.kf_air_lab_Ainv for piece in outgoing_pieces]),
             exit_amplitude=np.concatenate([piece.exit_amplitude for piece in outgoing_pieces]),
             attenuation_weight=np.concatenate(
                 [piece.attenuation_weight for piece in outgoing_pieces]
@@ -436,7 +428,6 @@ def simulate_ordered(
         chunk_rods = _slice_rods(rods, start, stop)
         pool = _candidate_chunk(
             crystal=crystal,
-            incident_samples=incident_samples,
             incident=incident,
             material=material,
             instrument=instrument,
@@ -462,7 +453,9 @@ def simulate_ordered(
     cumulative_chunk_mass = np.cumsum(chunk_mass, axis=0, dtype=np.float64)
     total_mass = cumulative_chunk_mass[-1]
     if not np.all(np.isfinite(total_mass)) or np.any(total_mass <= 0.0):
-        bad_state = int(valid_state_id[np.flatnonzero(~np.isfinite(total_mass) | (total_mass <= 0.0))[0]])
+        bad_state = int(
+            valid_state_id[np.flatnonzero(~np.isfinite(total_mass) | (total_mass <= 0.0))[0]]
+        )
         raise ValueError(
             f"incident_state_id {bad_state} has no detector-valid positive candidate mass"
         )
@@ -506,7 +499,6 @@ def simulate_ordered(
         chunk_rods = _slice_rods(rods, start, stop)
         pool = _candidate_chunk(
             crystal=crystal,
-            incident_samples=incident_samples,
             incident=incident,
             material=material,
             instrument=instrument,
@@ -571,9 +563,7 @@ def simulate_ordered(
 
     if np.any(compact_row < 0) or np.any(selected_event_id < 0) or np.any(selected_branch < 0):
         raise RuntimeError("streamed selection did not resolve every RNG draw")
-    selected_events, selected_transport, compact_branch = _merge_compact_chunks(
-        compact_pieces
-    )
+    selected_events, selected_transport, compact_branch = _merge_compact_chunks(compact_pieces)
     selection = SelectedCandidateBatch(
         candidate_row=compact_row,
         event_id=selected_event_id,

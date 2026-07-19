@@ -37,6 +37,8 @@ manuscript
 
 - direct-beam observations at several detector distances
 - beam size, angular divergence, wavelength/bandwidth, and declared correlation parameters
+- one minimal beam-frame rotation relative to the fixed LAB beam frame; beam roll is fixed when both
+  the spatial-width pair and divergence-width pair are isotropic
 - normalized source distribution and compiled deterministic source samples
 - held-out-distance prediction
 
@@ -51,9 +53,13 @@ manuscript
 ## Rules
 
 - Do not use sample structure intensities to compensate detector error.
+- The LAB beam frame is fixed and source-owned. No fit pack may expose a compensating common
+  beam/sample pose transform.
 - Keep source size and divergence identifiable through multiple distances or priors.
 - Report parameter rank, conditioning, active bounds, and correlations.
-- A detector calibration change creates a new instrument revision and invalidates downstream selection.
+- A detector calibration change creates a downstream detector revision. It invalidates detector
+  projection, selection, deposition, and measurement products, but does not invalidate an already
+  compiled detector-independent incident `ki` realization.
 
 ## Proof
 
@@ -61,6 +67,7 @@ manuscript
 - synthetic detector recovery with non-square pixels and tilted detector
 - held-out distance/ring prediction
 - direct-beam and calibrant coordinate invariants
+- isotropic-width beam-roll deactivation and rejection of a redundant common beam/sample pose pack
 - multi-start consistency
 - declared failure when the problem is underdetermined
 

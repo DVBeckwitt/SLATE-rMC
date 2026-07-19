@@ -1,7 +1,7 @@
 # Stage-trace schema
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not invent branch-specific names for shared quantities.
-The frozen trace schema remains v4; contract API v5 does not renumber it.
+The frozen trace schema remains v4; contract API v7 does not renumber it.
 
 ## Stage IDs
 
@@ -118,6 +118,14 @@ amplitude, intensity, density, or mass measure
 model version
 source provenance
 ```
+
+Incident trace provenance is diagnostic-only and allocated only when tracing is requested. Its
+canonical JSON envelope retains the T02 scientific provenance and adds sampling-model ID, RNG-model
+ID, seed, source-parameter revision, complete source revision, sample-geometry revision, material
+revision, and incident-model ID. Geometry-failure stages emit zero geometry/optical values; optical
+failures preserve accepted intersection, direction, air-side `ki`, and footprint evidence while
+zeroing film-side values. `optics.ki_parallel_sample` follows the same canonical row order without a
+trace-only full-batch scientific scratch array.
 
 ## Comparator
 
