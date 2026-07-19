@@ -169,17 +169,19 @@ def test_rigid_sample_and_detector_geometry() -> None:
     ordered = compile_instrument(replace(configuration, axis_rotations=rotations))
     reversed_order = compile_instrument(replace(configuration, axis_rotations=rotations[::-1]))
     np.testing.assert_allclose(
-        ordered.lab_from_goniometer.apply_point(point),
+        ordered.lab_from_sample.apply_point(point),
         expected,
         rtol=0.0,
         atol=2e-12,
     )
     assert not np.allclose(
-        reversed_order.lab_from_goniometer.apply_point(point),
+        reversed_order.lab_from_sample.apply_point(point),
         expected,
         rtol=0.0,
         atol=2e-12,
     )
+    assert not hasattr(ordered, "lab_from_goniometer")
+    assert not hasattr(ordered, "lab_from_crystal")
     expected_inverse = ordered.lab_from_sample.inverse()
     np.testing.assert_array_equal(ordered.sample_from_lab.rotation, expected_inverse.rotation)
     np.testing.assert_array_equal(

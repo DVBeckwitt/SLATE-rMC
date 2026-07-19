@@ -154,11 +154,9 @@ class CompiledInstrument:
     corresponds to ``detector_reference_coordinate_px`` in ``(column_px, row_px)`` order.
     """
 
-    lab_from_goniometer: RigidTransform
     lab_from_sample: RigidTransform
     sample_from_lab: RigidTransform = field(init=False)
     sample_from_crystal: RigidTransform
-    lab_from_crystal: RigidTransform
     lab_from_detector: RigidTransform
     detector_shape_rc: tuple[int, int]
     detector_row_pitch_m: float
@@ -172,10 +170,8 @@ class CompiledInstrument:
 
     def __post_init__(self) -> None:
         expected_frames = (
-            ("lab_from_goniometer", FrameId.GONIOMETER, FrameId.LAB),
             ("lab_from_sample", FrameId.SAMPLE, FrameId.LAB),
             ("sample_from_crystal", FrameId.CRYSTAL, FrameId.SAMPLE),
-            ("lab_from_crystal", FrameId.CRYSTAL, FrameId.LAB),
             ("lab_from_detector", FrameId.DETECTOR, FrameId.LAB),
         )
         for name, source, target in expected_frames:
@@ -257,12 +253,9 @@ def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstru
 
     lab_from_goniometer = lab_motion.compose(configuration.lab_from_goniometer_zero)
     lab_from_sample = lab_from_goniometer.compose(configuration.goniometer_from_sample)
-    lab_from_crystal = lab_from_sample.compose(configuration.sample_from_crystal)
     return CompiledInstrument(
-        lab_from_goniometer=lab_from_goniometer,
         lab_from_sample=lab_from_sample,
         sample_from_crystal=configuration.sample_from_crystal,
-        lab_from_crystal=lab_from_crystal,
         lab_from_detector=configuration.lab_from_detector,
         detector_shape_rc=configuration.detector_shape_rc,
         detector_row_pitch_m=configuration.detector_row_pitch_m,
