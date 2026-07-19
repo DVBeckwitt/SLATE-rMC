@@ -69,13 +69,14 @@ def _configuration() -> InstrumentConfiguration:
 
 
 def _material(wavelength_A: float = 1.54) -> MaterialOptics:
+    beta = np.array([3.2e-7])
     return MaterialOptics(
         material_id="absorbing-film",
         wavelength_A=np.array([wavelength_A]),
         n_complex=np.array([0.999979 + 3.2e-7j]),
         delta=np.array([2.1e-5]),
-        beta=np.array([3.2e-7]),
-        mu_Ainv=np.array([1.0e-5]),
+        beta=beta,
+        mu_Ainv=4.0 * np.pi * beta / wavelength_A,
         provenance="compact permanent fixture",
     )
 
@@ -919,9 +920,12 @@ def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
         )
 
     assert revisions(repeated) == revisions(baseline)
+    assert baseline.material_revision == material.material_revision
+    assert repeated.status == baseline.status
     np.testing.assert_array_equal(
         repeated.k_film_phase_sample_Ainv, baseline.k_film_phase_sample_Ainv
     )
+    np.testing.assert_array_equal(repeated.entrance_amplitude, baseline.entrance_amplitude)
     assert baseline.source_revision == samples.source_revision
     assert baseline.incident_sample_id.tolist() == samples.incident_sample_id.tolist()
     assert baseline.polarization_state_id == samples.polarization_state_id
@@ -985,9 +989,18 @@ def test_incident_revision_ownership_and_excluded_instrument_fields() -> None:
         if before != after
     } == {2}
 
+    changed_delta = material.delta + 1.0e-8
+    changed_beta = material.beta + 2.0e-9
+    changed_material_contract = replace(
+        material,
+        n_complex=1.0 - changed_delta + 1.0j * changed_beta,
+        delta=changed_delta,
+        beta=changed_beta,
+        mu_Ainv=4.0 * np.pi * changed_beta / material.wavelength_A,
+    )
     changed_material = build_incident_states(
         samples,
-        replace(material, n_complex=material.n_complex + (1.0e-8 + 2.0e-9j)),
+        changed_material_contract,
         compile_instrument(configuration),
     ).states
     assert {

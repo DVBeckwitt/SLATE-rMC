@@ -95,13 +95,14 @@ def _check(check_id: str, passed: bool, evidence: str, **details: object) -> dic
 
 
 def _material(wavelength_A: float, index: complex, material_id: str) -> MaterialOptics:
+    beta = np.array([max(index.imag, 0.0)])
     return MaterialOptics(
         material_id=material_id,
         wavelength_A=np.array([wavelength_A]),
         n_complex=np.array([index]),
         delta=np.array([1.0 - index.real]),
-        beta=np.array([max(index.imag, 0.0)]),
-        mu_Ainv=np.array([0.0]),
+        beta=beta,
+        mu_Ainv=4.0 * np.pi * beta / wavelength_A,
         provenance="T02 compact analytic fixture",
     )
 

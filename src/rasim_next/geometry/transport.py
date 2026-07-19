@@ -17,7 +17,6 @@ from rasim_next.core.contracts import (
     MaterialOptics,
     OutgoingWaveBatch,
     ScatteringEventBatch,
-    material_optics_revision_sha256,
     sample_geometry_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
@@ -206,16 +205,6 @@ def build_incident_states(
         sample_length_m=instrument.sample_length_m,
         intersection_model_id=_INTERSECTION_MODEL_ID,
     )
-    material_revision = material_optics_revision_sha256(
-        material_id=material.material_id,
-        wavelength_A=material.wavelength_A,
-        n_complex=material.n_complex,
-        delta=material.delta,
-        beta=material.beta,
-        mu_Ainv=material.mu_Ainv,
-        provenance=material.provenance,
-    )
-
     states = IncidentStateBatch(
         incident_state_id=samples.incident_sample_id,
         incident_sample_id=samples.incident_sample_id,
@@ -238,7 +227,7 @@ def build_incident_states(
         source_parameter_revision=samples.source_parameter_revision,
         source_revision=samples.source_revision,
         sample_geometry_revision=sample_geometry_revision,
-        material_revision=material_revision,
+        material_revision=material.material_revision,
         incident_model_id=_INCIDENT_MODEL_ID,
     )
     traces: tuple[TraceRecord, ...] = ()

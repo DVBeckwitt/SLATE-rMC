@@ -10,7 +10,11 @@ import pytest
 import xraydb
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import MaterialOptics, RodQueryBatch
+from rasim_next.core.contracts import (
+    MaterialOptics,
+    RodQueryBatch,
+    canonical_revision_sha256,
+)
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.materials import (
     CrystalStructure,
@@ -179,6 +183,48 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
         np.testing.assert_allclose(
             getattr(repeated, name), getattr(optics, name), rtol=0.0, atol=0.0
         )
+
+    expected_revision = canonical_revision_sha256(
+        ("material_id", optics.material_id),
+        ("material_optics_revision_schema", "material_optics_revision.v2"),
+        ("n_complex", optics.n_complex),
+        ("provenance", optics.provenance),
+        ("wavelength_A", optics.wavelength_A),
+    )
+    assert optics.material_revision == expected_revision
+    assert repeated.material_revision == expected_revision
+
+    changed_wavelength = optics.wavelength_A * 1.01
+    changed_delta = optics.delta + 1.0e-9
+    changed_beta = optics.beta + 2.0e-10
+    changed_materials = (
+        replace(optics, material_id=f"{optics.material_id}-changed"),
+        replace(
+            optics,
+            wavelength_A=changed_wavelength,
+            mu_Ainv=4.0 * np.pi * optics.beta / changed_wavelength,
+        ),
+        replace(
+            optics,
+            n_complex=1.0 - changed_delta + 1.0j * changed_beta,
+            delta=changed_delta,
+            beta=changed_beta,
+            mu_Ainv=4.0 * np.pi * changed_beta / optics.wavelength_A,
+        ),
+        replace(optics, provenance=f"{optics.provenance}; changed"),
+    )
+    assert all(item.material_revision != expected_revision for item in changed_materials)
+
+    inconsistent_fields = (
+        ("delta", {"delta": optics.delta + 1.0e-12}),
+        ("beta", {"beta": optics.beta + 1.0e-12}),
+        ("mu_Ainv", {"mu_Ainv": optics.mu_Ainv + 1.0e-12}),
+        ("n_complex", {"n_complex": optics.n_complex + (1.0e-12 + 1.0e-12j)}),
+    )
+    for field_name, changes in inconsistent_fields:
+        with pytest.raises(ValueError, match=field_name):
+            replace(optics, **changes)
+
     with pytest.raises(ValueError, match="wavelength"):
         MaterialOptics(
             material_id="invalid-duplicate",

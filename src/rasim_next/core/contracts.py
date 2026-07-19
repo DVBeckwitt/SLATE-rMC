@@ -201,18 +201,13 @@ def material_optics_revision_sha256(
     material_id: str,
     wavelength_A: ArrayLike,
     n_complex: ArrayLike,
-    delta: ArrayLike,
-    beta: ArrayLike,
-    mu_Ainv: ArrayLike,
     provenance: str,
 ) -> str:
     """Return the canonical exact material-optics revision."""
 
     return canonical_revision_sha256(
-        ("beta", beta),
-        ("delta", delta),
         ("material_id", material_id),
-        ("mu_Ainv", mu_Ainv),
+        ("material_optics_revision_schema", "material_optics_revision.v2"),
         ("n_complex", n_complex),
         ("provenance", provenance),
         ("wavelength_A", wavelength_A),
@@ -324,6 +319,7 @@ class MaterialOptics:
     beta: NDArray[np.float64]
     mu_Ainv: NDArray[np.float64]
     provenance: str
+    material_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
         wavelength = _array(self.wavelength_A, np.float64, (None,), "wavelength_A", True)
@@ -347,6 +343,22 @@ class MaterialOptics:
             or not self.provenance
         ):
             raise ValueError("material identity, provenance, and positive wavelengths are required")
+        if not np.array_equal(self.n_complex.real, 1.0 - self.delta):
+            raise ValueError("n_complex.real must equal 1 - delta exactly")
+        if not np.array_equal(self.n_complex.imag, self.beta):
+            raise ValueError("n_complex.imag must equal beta exactly")
+        if not np.array_equal(self.mu_Ainv, 4.0 * np.pi * self.beta / self.wavelength_A):
+            raise ValueError("mu_Ainv must equal 4*pi*beta/wavelength_A exactly")
+        object.__setattr__(
+            self,
+            "material_revision",
+            material_optics_revision_sha256(
+                material_id=self.material_id,
+                wavelength_A=self.wavelength_A,
+                n_complex=self.n_complex,
+                provenance=self.provenance,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
