@@ -362,85 +362,646 @@ def test_painted_ewald_mosaic_slice_conserves_caps_rings_and_rigid_rotation() ->
             )
 
 
-def test_ewald_roots_preserve_line_geometry_and_unclipped_jacobian() -> None:
-    incident = np.array([0.0, 0.0, 4.0])
+def test_painted_ewald_roots_match_reference_and_classification_contract() -> None:
+    from painted_ewald.ewald import RootStatus, solve_infinite_rod_ewald
+
+    incident = np.array([0.0, 0.0, -10.0])
     direction = np.array([0.0, 0.0, 1.0])
-    regular = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
+    solve_arguments = {
+        "ki_sample_Ainv": incident,
+        "d_hat_sample": direction,
+        "b3_norm_Ainv": 0.2,
+        "root_tolerance_rel": 256.0 * np.finfo(np.float64).eps,
+        "residual_tolerance_rel": 512.0 * np.finfo(np.float64).eps,
+    }
+
+    direct_line = solve_infinite_rod_ewald(
+        **solve_arguments,
+        q0_sample_Ainv=np.zeros(3),
+        rod_is_m0=True,
+    )
+    assert direct_line.status is RootStatus.REGULAR
+    assert direct_line.direct_root_count == 1
+    assert len(direct_line.emittable_roots) == 1
+    direct_root = direct_line.emittable_roots[0]
+    assert direct_root.branch == 0
+    assert direct_root.u_Ainv == pytest.approx(20.0)
+    assert pytest.approx(100.0) == direct_root.L
+    assert direct_root.coarea_jacobian == pytest.approx(1.0)
+    np.testing.assert_allclose(direct_root.q_sample_Ainv, [0.0, 0.0, 20.0])
+    np.testing.assert_allclose(direct_root.kf_sample_Ainv, [0.0, 0.0, 10.0])
+
+    for parallel_anchor, b3_norm in ((0.0, 0.2), (1.0e16, 0.2), (0.0, 1.0e16)):
+        with pytest.raises(ValueError, match="must contain q=0"):
+            solve_infinite_rod_ewald(
+                **{**solve_arguments, "b3_norm_Ainv": b3_norm},
+                q0_sample_Ainv=np.array([1.0, 0.0, parallel_anchor]),
+                rod_is_m0=True,
+            )
+    with pytest.raises(ValueError, match="must contain q=0"):
+        solve_infinite_rod_ewald(
+            **{
+                **solve_arguments,
+                "ki_sample_Ainv": np.array([0.0, 0.0, -1.0e16]),
+            },
+            q0_sample_Ainv=np.array([1.0, 0.0, 0.0]),
+            rod_is_m0=True,
+        )
+    oblique_direction = np.array([1.0, 2.0, 3.0])
+    oblique_direction /= np.linalg.norm(oblique_direction)
+    oblique_arguments = {**solve_arguments, "d_hat_sample": oblique_direction}
+    centered_oblique = solve_infinite_rod_ewald(
+        **oblique_arguments,
+        q0_sample_Ainv=np.zeros(3),
+        rod_is_m0=True,
+    )
+    shifted_oblique = solve_infinite_rod_ewald(
+        **oblique_arguments,
+        q0_sample_Ainv=1.0e4 * oblique_direction,
+        rod_is_m0=True,
+    )
+    np.testing.assert_array_equal(
+        shifted_oblique.emittable_roots[0].q_sample_Ainv,
+        centered_oblique.emittable_roots[0].q_sample_Ainv,
+    )
+    np.testing.assert_array_equal(
+        shifted_oblique.emittable_roots[0].kf_sample_Ainv,
+        centered_oblique.emittable_roots[0].kf_sample_Ainv,
+    )
+
+    regular = solve_infinite_rod_ewald(
+        **solve_arguments,
         q0_sample_Ainv=np.array([1.0, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
+        rod_is_m0=False,
     )
-    expected_u = np.array([-4.0 - np.sqrt(15.0), -4.0 + np.sqrt(15.0)])
-    assert regular.status is EwaldRootStatus.TWO_ROOT
+    expected_u = np.array([10.0 - np.sqrt(99.0), 10.0 + np.sqrt(99.0)])
+    assert regular.status is RootStatus.REGULAR
+    assert regular.direct_root_count == 0
     np.testing.assert_allclose([root.u_Ainv for root in regular.emittable_roots], expected_u)
+    np.testing.assert_allclose([root.L for root in regular.emittable_roots], expected_u / 0.2)
+    assert [root.branch for root in regular.emittable_roots] == [1, 2]
     for root in regular.emittable_roots:
-        np.testing.assert_allclose(root.q_sample_Ainv, [1.0, 0.0, root.u_Ainv])
-        np.testing.assert_allclose(root.kf_sample_Ainv, incident + root.q_sample_Ainv)
-        assert root.l_coordinate == pytest.approx(root.u_Ainv / 2.0)
-        assert root.coarea_jacobian == pytest.approx(4.0 / np.sqrt(15.0))
-        assert root.ewald_residual_Ainv <= 64.0 * np.finfo(np.float64).eps * 4.0
+        assert root.coarea_jacobian == pytest.approx(10.0 / np.sqrt(99.0))
+        assert root.ewald_residual_Ainv <= solve_arguments["residual_tolerance_rel"] * 10.0
+        assert np.linalg.norm(root.q_sample_Ainv) <= 20.0
 
-    tangent = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([4.0, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
+    anchor_shift = float(2**26)
+    shifted = solve_infinite_rod_ewald(
+        **solve_arguments,
+        q0_sample_Ainv=np.array([1.0, 0.0, anchor_shift]),
+        rod_is_m0=False,
     )
-    no_root = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([4.1, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
-    )
-    direct = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.zeros(3),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
-    )
-    direct_tangent = solve_continuous_rod_ewald(
-        ki_sample_Ainv=np.array([4.0, 0.0, 0.0]),
-        q0_sample_Ainv=np.zeros(3),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
-    )
-    assert tangent.status is EwaldRootStatus.TANGENT and tangent.emittable_roots == ()
-    assert no_root.status is EwaldRootStatus.NO_ROOT and no_root.emittable_roots == ()
-    assert direct.status is EwaldRootStatus.TWO_ROOT
-    assert direct.direct_beam_root_count == 1 and len(direct.emittable_roots) == 1
-    np.testing.assert_array_equal(direct.emittable_roots[0].q_sample_Ainv, [0.0, 0.0, -8.0])
-    assert direct_tangent.status is EwaldRootStatus.TANGENT
-    assert direct_tangent.direct_beam_root_count == 1 and direct_tangent.emittable_roots == ()
-
-    qx = np.nextafter(4.0, 0.0)
-    line_shift = 1050.0
-    original = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([qx, 0.0, 0.0]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
-    )
-    shifted = solve_continuous_rod_ewald(
-        ki_sample_Ainv=incident,
-        q0_sample_Ainv=np.array([qx, 0.0, line_shift]),
-        d_hat_sample=direction,
-        b3_norm_Ainv=2.0,
-    )
+    assert shifted.status is RootStatus.REGULAR
     for original_root, shifted_root in zip(
-        original.emittable_roots, shifted.emittable_roots, strict=True
+        regular.emittable_roots, shifted.emittable_roots, strict=True
     ):
+        assert shifted_root.branch == original_root.branch
+        assert shifted_root.u_Ainv == pytest.approx(original_root.u_Ainv - anchor_shift)
         np.testing.assert_array_equal(shifted_root.q_sample_Ainv, original_root.q_sample_Ainv)
         np.testing.assert_array_equal(shifted_root.kf_sample_Ainv, original_root.kf_sample_Ainv)
-        assert shifted_root.ewald_residual_Ainv == original_root.ewald_residual_Ainv == 0.0
-        assert shifted_root.coarea_jacobian == original_root.coarea_jacobian == 2.0**26
-        assert shifted_root.u_Ainv == pytest.approx(
-            original_root.u_Ainv - line_shift,
-            abs=2.0 * abs(np.spacing(line_shift)),
+        assert shifted_root.ewald_residual_Ainv == original_root.ewald_residual_Ainv
+        assert shifted_root.coarea_jacobian == original_root.coarea_jacobian
+
+    tangent = solve_infinite_rod_ewald(
+        **solve_arguments,
+        q0_sample_Ainv=np.array([10.0, 0.0, 0.0]),
+        rod_is_m0=False,
+    )
+    no_root = solve_infinite_rod_ewald(
+        **solve_arguments,
+        q0_sample_Ainv=np.array([10.1, 0.0, 0.0]),
+        rod_is_m0=False,
+    )
+    collapsed = solve_infinite_rod_ewald(
+        **{**solve_arguments, "ki_sample_Ainv": np.array([10.0, 0.0, 0.0])},
+        q0_sample_Ainv=np.zeros(3),
+        rod_is_m0=True,
+    )
+    assert tangent.status is RootStatus.TANGENT and tangent.emittable_roots == ()
+    assert no_root.status is RootStatus.NO_ROOT and no_root.emittable_roots == ()
+    assert collapsed.status is RootStatus.COLLAPSED_DIRECT
+    assert collapsed.direct_root_count == 1 and collapsed.emittable_roots == ()
+
+    numerical_collapse = solve_infinite_rod_ewald(
+        **{
+            **solve_arguments,
+            "ki_sample_Ainv": np.array([1.0e-15, 0.0, 10.0]),
+            "d_hat_sample": np.array([1.0, 0.0, 0.0]),
+        },
+        q0_sample_Ainv=np.zeros(3),
+        rod_is_m0=True,
+    )
+    assert numerical_collapse.status is RootStatus.COLLAPSED_DIRECT
+
+    near_forward_direction = np.array([np.sqrt(1.0 - 1.0e-24), 0.0, 1.0e-12])
+    near_forward = solve_infinite_rod_ewald(
+        **{**solve_arguments, "d_hat_sample": near_forward_direction},
+        q0_sample_Ainv=np.zeros(3),
+        rod_is_m0=True,
+    )
+    assert near_forward.status is RootStatus.REGULAR
+    near_forward_root = near_forward.emittable_roots[0]
+    assert 0.0 < np.linalg.norm(near_forward_root.q_sample_Ainv) < 1.0e-9
+    assert near_forward_root.coarea_jacobian > 1.0e10
+
+
+def test_painted_ewald_painter_and_equal_solid_angle_texture_conserve_mass() -> None:
+    from painted_ewald import (
+        BranchCoatingSummary,
+        EwaldSpherePainter,
+        MassLedger,
+        PainterConfig,
+        RasterParameters,
+        RodCoatingSummary,
+    )
+
+    config = PainterConfig(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=np.eye(3),
+        rods=(Rod(0, 0), Rod(1, 0), Rod(0, 1)),
+        mosaic=MosaicParameters(
+            gaussian_sigma_rad=0.0,
+            lorentzian_half_width_rad=0.0,
+            lorentzian_probability=0.1,
+            azimuth_count=1,
+            azimuth_phase_rad=-np.pi,
+        ),
+        raster=RasterParameters(mu_bin_count=4, phi_bin_count=8),
+    )
+    painter = EwaldSpherePainter(config)
+    incident = np.array([0.0, 0.0, -10.0])
+    result = painter.paint(incident)
+
+    np.testing.assert_array_equal(result.center_q_sample_Ainv, [0.0, 0.0, 10.0])
+    assert result.radius_Ainv == pytest.approx(10.0)
+    assert [point.branch for point in result.points] == [0, 1, 2, 1, 2]
+    np.testing.assert_array_equal([point.weight for point in result.points], np.ones(5))
+    assert all(point.coarea_jacobian is None for point in result.points)
+    assert all(not point.q_sample_Ainv.flags.writeable for point in result.points)
+    assert result.ledger.painted_weight == pytest.approx(5.0)
+    assert result.ledger.collapsed_direct_base_mass == 0.0
+    assert result.ledger.tangent_base_mass == 0.0
+    assert result.ledger.no_root_base_mass == 0.0
+    assert result.ledger.forward_excluded_base_mass == 0.0
+    assert result.ledger.suppressed_algebraic_direct_root_count == 1
+
+    texture = result.texture
+    np.testing.assert_allclose(np.diff(texture.mu_edges), 0.5, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(np.diff(texture.phi_edges_rad), np.pi / 4.0)
+    assert np.sum(texture.mass) == pytest.approx(5.0)
+    solid_angle = np.diff(texture.mu_edges)[:, None] * np.diff(texture.phi_edges_rad)[None, :]
+    np.testing.assert_allclose(texture.density_per_sr * solid_angle, texture.mass)
+    for point in result.points:
+        assert point.ewald_residual_Ainv <= config.residual_tolerance_rel * 10.0
+        assert np.linalg.norm(point.q_sample_Ainv) <= 20.0
+
+    coating = painter.paint_coating(incident)
+    assert coating.retained_root_count == len(result.points)
+    assert coating.maximum_ewald_residual_Ainv == max(
+        point.ewald_residual_Ainv for point in result.points
+    )
+    assert coating.ledger == result.ledger
+    np.testing.assert_array_equal(coating.texture.mass, result.texture.mass)
+    np.testing.assert_array_equal(coating.texture.density_per_sr, result.texture.density_per_sr)
+    assert [summary.rod for summary in coating.rod_summaries] == list(config.rods)
+    assert [
+        tuple(
+            (branch.branch, branch.retained_root_count, branch.painted_weight)
+            for branch in summary.branches
         )
+        for summary in coating.rod_summaries
+    ] == [
+        ((0, 1, 1.0),),
+        ((1, 1, 1.0), (2, 1, 1.0)),
+        ((1, 1, 1.0), (2, 1, 1.0)),
+    ]
+    assert [summary.family_m for summary in coating.family_summaries] == [0, 1]
+    assert [
+        (branch.branch, branch.retained_root_count, branch.painted_weight)
+        for branch in coating.family_summaries[1].branches
+    ] == [(1, 2, 2.0), (2, 2, 2.0)]
+    assert coating.family_summaries[1].ledger.painted_weight == 4.0
+    assert coating.measure is config.measure
+    assert coating.forward_policy == config.forward_policy
+    assert coating.family_summaries[0].is_complete_hexagonal_family is True
+    assert coating.family_summaries[1].is_complete_hexagonal_family is False
+    with pytest.raises(ValueError, match="full integer shell"):
+        replace(coating.family_summaries[1], is_complete_hexagonal_family=True)
+    repeated_rod = coating.family_summaries[1].rod_summaries[0]
+    with pytest.raises(ValueError, match="repeat a physical rod"):
+        replace(coating.family_summaries[1], rod_summaries=(repeated_rod, repeated_rod))
+
+    nonhexagonal_full_shell = PainterConfig(
+        reciprocal_basis_Ainv=np.diag([1.0e-7, 1.0e-7, 0.2]),
+        crystal_to_sample=np.eye(3),
+        rods=tuple(Rod(h, k) for h, k in ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))),
+        mosaic=config.mosaic,
+        raster=config.raster,
+    )
+    nonhexagonal_coating = EwaldSpherePainter(nonhexagonal_full_shell).paint_coating(incident)
+    assert nonhexagonal_coating.family_summaries[0].is_complete_hexagonal_family is False
+
+    with pytest.raises(ValueError, match="zero retained roots"):
+        BranchCoatingSummary(branch=1, retained_root_count=0, painted_weight=1.0)
+    empty_branches = (
+        BranchCoatingSummary(branch=1, retained_root_count=0, painted_weight=0.0),
+        BranchCoatingSummary(branch=2, retained_root_count=0, painted_weight=0.0),
+    )
+    with pytest.raises(ValueError, match="nonzero rods cannot"):
+        RodCoatingSummary(
+            rod=Rod(1, 0),
+            branches=empty_branches,
+            ledger=MassLedger(0.0, 1.0, 0.0, 0.0, 1.0, 7),
+            maximum_ewald_residual_Ainv=0.0,
+        )
+    with pytest.raises(ValueError, match="zero retained roots"):
+        RodCoatingSummary(
+            rod=Rod(1, 0),
+            branches=empty_branches,
+            ledger=MassLedger(0.0, 0.0, 0.0, 0.0, 0.0, 0),
+            maximum_ewald_residual_Ainv=123.0,
+        )
+    with pytest.raises(ValueError, match="zero-population"):
+        RodCoatingSummary(
+            rod=Rod(1, 0, population=0.0),
+            branches=(
+                BranchCoatingSummary(branch=1, retained_root_count=1, painted_weight=2.0),
+                BranchCoatingSummary(branch=2, retained_root_count=1, painted_weight=3.0),
+            ),
+            ledger=MassLedger(5.0, 0.0, 0.0, 0.0, 0.0, 0),
+            maximum_ewald_residual_Ainv=0.0,
+        )
+    with pytest.raises(ValueError, match="equal retained-root counts"):
+        RodCoatingSummary(
+            rod=Rod(1, 0),
+            branches=(
+                BranchCoatingSummary(branch=1, retained_root_count=1, painted_weight=0.0),
+                BranchCoatingSummary(branch=2, retained_root_count=2, painted_weight=0.0),
+            ),
+            ledger=MassLedger(0.0, 0.0, 0.0, 0.0, 0.0, 0),
+            maximum_ewald_residual_Ainv=0.0,
+        )
+    with pytest.raises(ValueError, match="suppressed direct-root count"):
+        RodCoatingSummary(
+            rod=Rod(0, 0),
+            branches=(BranchCoatingSummary(branch=0, retained_root_count=2, painted_weight=0.0),),
+            ledger=MassLedger(0.0, 0.0, 0.0, 0.0, 0.0, 1),
+            maximum_ewald_residual_Ainv=0.0,
+        )
+    with pytest.raises(ValueError, match="zero-population"):
+        RodCoatingSummary(
+            rod=Rod(1, 0, population=0.0),
+            branches=empty_branches,
+            ledger=MassLedger(0.0, 0.0, 0.0, 1.0, 0.0, 0),
+            maximum_ewald_residual_Ainv=0.0,
+        )
+
+    with pytest.raises(ValueError, match="nonzero"):
+        painter.paint(np.zeros(3))
+    with pytest.raises(ValueError, match="real"):
+        EwaldSpherePainter(config).paint(np.array([0.0, 0.0, -10.0 + 0.0j]))
+
+
+def test_painted_ewald_measure_and_mass_ledger_are_explicit() -> None:
+    from painted_ewald import (
+        EwaldSpherePainter,
+        ForwardPolicy,
+        PainterConfig,
+        PaintMeasure,
+        RasterParameters,
+    )
+
+    class ConstantStrength:
+        def __init__(self, value: float) -> None:
+            self.value = value
+
+        def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+            return self.value
+
+    zero_mosaic = MosaicParameters(0.0, 0.0, 0.1, azimuth_count=1, azimuth_phase_rad=-np.pi)
+    regular_config = PainterConfig(
+        reciprocal_basis_Ainv=np.diag([1.0, 1.0, 0.2]),
+        crystal_to_sample=np.eye(3),
+        rods=(Rod(1, 0, population=3.0),),
+        mosaic=zero_mosaic,
+        raster=RasterParameters(2, 4),
+    )
+    incident = np.array([0.0, 0.0, -10.0])
+    pushforward = EwaldSpherePainter(regular_config, ConstantStrength(2.0)).paint(incident)
+    np.testing.assert_allclose([point.weight for point in pushforward.points], [6.0, 6.0])
+    assert all(point.coarea_jacobian is None for point in pushforward.points)
+    pushforward_coating = EwaldSpherePainter(regular_config, ConstantStrength(2.0)).paint_coating(
+        incident
+    )
+    assert pushforward_coating.ledger == pushforward.ledger
+    np.testing.assert_array_equal(pushforward_coating.texture.mass, pushforward.texture.mass)
+
+    coarea = EwaldSpherePainter(
+        replace(regular_config, measure=PaintMeasure.COAREA_INTENSITY),
+        ConstantStrength(2.0),
+    ).paint(incident)
+    expected_jacobian = 10.0 / np.sqrt(99.0)
+    np.testing.assert_allclose(
+        [point.weight for point in coarea.points],
+        [6.0 * expected_jacobian, 6.0 * expected_jacobian],
+    )
+    np.testing.assert_allclose(
+        [point.coarea_jacobian for point in coarea.points],
+        [expected_jacobian, expected_jacobian],
+    )
+    coarea_coating = EwaldSpherePainter(
+        replace(regular_config, measure=PaintMeasure.COAREA_INTENSITY),
+        ConstantStrength(2.0),
+    ).paint_coating(incident)
+    assert coarea_coating.ledger.painted_weight == pytest.approx(
+        coarea.ledger.painted_weight, abs=2.0e-15
+    )
+    np.testing.assert_allclose(
+        coarea_coating.texture.mass,
+        coarea.texture.mass,
+        rtol=0.0,
+        atol=2.0e-15,
+    )
+
+    with pytest.raises(ValueError, match="requires a physical q_min_Ainv"):
+        PainterConfig(
+            reciprocal_basis_Ainv=np.diag([1.0, 1.0, 0.2]),
+            crystal_to_sample=np.eye(3),
+            rods=(Rod(0, 0, population=3.0),),
+            mosaic=zero_mosaic,
+            measure=PaintMeasure.COAREA_INTENSITY,
+        )
+    cutoff_config = PainterConfig(
+        reciprocal_basis_Ainv=np.diag([1.0, 1.0, 0.2]),
+        crystal_to_sample=np.eye(3),
+        rods=(Rod(0, 0, population=3.0),),
+        mosaic=zero_mosaic,
+        raster=RasterParameters(2, 4),
+        measure=PaintMeasure.COAREA_INTENSITY,
+        forward_policy=ForwardPolicy(q_min_Ainv=21.0),
+    )
+    excluded = EwaldSpherePainter(cutoff_config, ConstantStrength(2.0)).paint(incident)
+    excluded_coating = EwaldSpherePainter(cutoff_config, ConstantStrength(2.0)).paint_coating(
+        incident
+    )
+    assert excluded.points == ()
+    assert excluded.ledger.painted_weight == 0.0
+    assert excluded.ledger.forward_excluded_base_mass == pytest.approx(6.0)
+    assert excluded.ledger.suppressed_algebraic_direct_root_count == 1
+    assert excluded_coating.retained_root_count == 0
+    assert excluded_coating.ledger == excluded.ledger
+    with pytest.raises(ValueError, match="pushforward coating cannot"):
+        replace(excluded_coating, measure=PaintMeasure.MOSAIC_PUSHFORWARD)
+
+    retained_cutoff_config = replace(
+        cutoff_config,
+        forward_policy=ForwardPolicy(q_min_Ainv=19.0),
+    )
+    retained_cutoff = EwaldSpherePainter(retained_cutoff_config, ConstantStrength(2.0)).paint(
+        incident
+    )
+    retained_cutoff_coating = EwaldSpherePainter(
+        retained_cutoff_config, ConstantStrength(2.0)
+    ).paint_coating(incident)
+    assert len(retained_cutoff.points) == retained_cutoff_coating.retained_root_count == 1
+    assert np.linalg.norm(retained_cutoff.points[0].q_sample_Ainv) >= 19.0
+    assert retained_cutoff.points[0].coarea_jacobian == pytest.approx(1.0)
+    assert retained_cutoff.ledger.forward_excluded_base_mass == 0.0
+    assert retained_cutoff_coating.ledger == retained_cutoff.ledger
+    np.testing.assert_array_equal(
+        retained_cutoff_coating.texture.mass,
+        retained_cutoff.texture.mass,
+    )
+
+    ledger_config = PainterConfig(
+        reciprocal_basis_Ainv=np.diag([4.0, 1.0, 0.2]),
+        crystal_to_sample=np.eye(3),
+        rods=(Rod(0, 0, 2.0), Rod(-1, 0, 3.0), Rod(-2, 0, 5.0)),
+        mosaic=zero_mosaic,
+        raster=RasterParameters(2, 4),
+    )
+    ledger_result = EwaldSpherePainter(ledger_config).paint(np.array([2.0, 0.0, 0.0]))
+    ledger_coating = EwaldSpherePainter(ledger_config).paint_coating(np.array([2.0, 0.0, 0.0]))
+    assert ledger_result.points == ()
+    assert ledger_result.ledger.collapsed_direct_base_mass == pytest.approx(2.0)
+    assert ledger_result.ledger.tangent_base_mass == pytest.approx(3.0)
+    assert ledger_result.ledger.no_root_base_mass == pytest.approx(5.0)
+    assert ledger_result.ledger.suppressed_algebraic_direct_root_count == 1
+    assert ledger_coating.ledger == ledger_result.ledger
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        EwaldSpherePainter(regular_config, ConstantStrength(-1.0)).paint(incident)
+
+
+def test_painted_ewald_streaming_matches_exact_rod_strengths_within_m() -> None:
+    from math import cos, fsum, sin
+
+    from painted_ewald import EwaldSpherePainter, PainterConfig, RasterParameters
+
+    direction = np.array([1.0, 2.0, 3.0])
+    direction /= np.linalg.norm(direction)
+    first_perpendicular = np.array([2.0, -1.0, 0.0])
+    first_perpendicular -= np.dot(first_perpendicular, direction) * direction
+    first_perpendicular *= 1.5 / np.linalg.norm(first_perpendicular)
+    second_perpendicular = cos(np.pi / 3.0) * first_perpendicular + sin(np.pi / 3.0) * np.cross(
+        direction, first_perpendicular
+    )
+    reciprocal_basis = np.column_stack(
+        (
+            first_perpendicular + 1.0e4 * direction,
+            second_perpendicular - 3.0e3 * direction,
+            0.3 * direction,
+        )
+    )
+
+    class ExactStrength:
+        def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+            return 1.0 + 0.03 * rod.h + 0.05 * rod.k + 1.0e-10 * L * L + 0.02 * k_norm_Ainv
+
+    config = PainterConfig(
+        reciprocal_basis_Ainv=reciprocal_basis,
+        crystal_to_sample=np.eye(3),
+        rods=(Rod(1, 0), Rod(0, 1)),
+        mosaic=MosaicParameters(
+            gaussian_sigma_rad=np.deg2rad(1.0),
+            lorentzian_half_width_rad=np.deg2rad(0.5),
+            lorentzian_probability=0.2,
+            alpha_panel_count=8,
+            alpha_gauss_order=8,
+            azimuth_count=8,
+        ),
+        raster=RasterParameters(8, 16),
+    )
+    incident = np.array([0.2, 4.062900581047559, -0.3545543022596421])
+    strength = ExactStrength()
+    painter = EwaldSpherePainter(config, strength)
+    scalar = painter.paint(incident)
+    coating = painter.paint_coating(incident)
+
+    assert coating.retained_root_count == len(scalar.points)
+    assert coating.measure is config.measure
+    assert coating.family_summaries[0].family_m == 1
+    assert coating.family_summaries[0].is_complete_hexagonal_family is False
+    np.testing.assert_allclose(coating.texture.mass, scalar.texture.mass, rtol=0.0, atol=3.0e-14)
+    np.testing.assert_allclose(
+        [
+            coating.ledger.painted_weight,
+            coating.ledger.no_root_base_mass,
+            coating.ledger.tangent_base_mass,
+        ],
+        [
+            scalar.ledger.painted_weight,
+            scalar.ledger.no_root_base_mass,
+            scalar.ledger.tangent_base_mass,
+        ],
+        rtol=0.0,
+        atol=3.0e-14,
+    )
+    for point in scalar.points:
+        expected = strength.evaluate(
+            rod=Rod(point.rod_h, point.rod_k),
+            L=point.L,
+            k_norm_Ainv=np.linalg.norm(incident),
+        )
+        assert point.rod_strength == pytest.approx(expected, rel=0.0, abs=2.0e-15)
+    scalar_groups = {
+        key: (
+            sum(
+                point.rod_h == key[0] and point.rod_k == key[1] and point.branch == key[2]
+                for point in scalar.points
+            ),
+            fsum(
+                point.weight
+                for point in scalar.points
+                if (point.rod_h, point.rod_k, point.branch) == key
+            ),
+        )
+        for key in ((1, 0, 1), (1, 0, 2), (0, 1, 1), (0, 1, 2))
+    }
+    for rod_summary in coating.rod_summaries:
+        for branch in rod_summary.branches:
+            count, weight = scalar_groups[(rod_summary.rod.h, rod_summary.rod.k, branch.branch)]
+            assert branch.retained_root_count == count
+            assert branch.painted_weight == pytest.approx(weight, rel=0.0, abs=3.0e-14)
+
+    full_m1_shell = ((1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1))
+    complete_skew_coating = EwaldSpherePainter(
+        replace(config, rods=tuple(Rod(h, k) for h, k in full_m1_shell)),
+        strength,
+    ).paint_coating(incident)
+    assert complete_skew_coating.family_summaries[0].is_complete_hexagonal_family is True
+    higher_shear_basis = np.column_stack(
+        (
+            first_perpendicular + 1.0e5 * direction,
+            second_perpendicular - 3.0e4 * direction,
+            0.3 * direction,
+        )
+    )
+    higher_shear_coating = EwaldSpherePainter(
+        replace(
+            config,
+            reciprocal_basis_Ainv=higher_shear_basis,
+            rods=tuple(Rod(h, k) for h, k in full_m1_shell),
+        ),
+        strength,
+    ).paint_coating(incident)
+    assert higher_shear_coating.family_summaries[0].is_complete_hexagonal_family is True
+
+
+def test_painted_ewald_bi2se3_catalog_includes_every_family_that_fits() -> None:
+    from painted_ewald import (
+        EwaldSpherePainter,
+        PainterConfig,
+        RasterParameters,
+        enumerate_rods_within_ewald_sphere,
+    )
+
+    k_norm_Ainv = 4.078341560576728
+    rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        k_norm_Ainv=k_norm_Ainv,
+    )
+
+    c_hat = BI2SE3_RECIPROCAL_BASIS_AINV[:, 2]
+    c_hat /= np.linalg.norm(c_hat)
+    tolerance = 256.0 * np.finfo(np.float64).eps * max(2.0 * k_norm_Ainv, 1.0)
+    expected: set[tuple[int, int]] = set()
+    for h in range(-10, 11):
+        for k in range(-10, 11):
+            q_parallel = (
+                h * BI2SE3_RECIPROCAL_BASIS_AINV[:, 0] + k * BI2SE3_RECIPROCAL_BASIS_AINV[:, 1]
+            )
+            line_distance = np.linalg.norm(q_parallel - np.dot(q_parallel, c_hat) * c_hat)
+            if line_distance <= 2.0 * k_norm_Ainv + tolerance:
+                expected.add((h, k))
+    assert all(abs(h) < 10 and abs(k) < 10 for h, k in expected)
+    assert {(rod.h, rod.k) for rod in rods} == expected
+    assert len(rods) == 85
+    assert sorted({rod.family_m for rod in rods}) == [0, 1, 3, 4, 7, 9, 12, 13, 16, 19, 21]
+    assert [(rod.family_m, rod.h, rod.k) for rod in rods] == sorted(
+        (rod.family_m, rod.h, rod.k) for rod in rods
+    )
+
+    config = PainterConfig(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=np.eye(3),
+        rods=rods,
+        mosaic=MosaicParameters(0.0, 0.0, 0.1, azimuth_count=1),
+        raster=RasterParameters(2, 4),
+    )
+    coating = EwaldSpherePainter(config).paint_coating(np.array([0.0, k_norm_Ainv, 0.0]))
+    assert all(family.is_complete_hexagonal_family for family in coating.family_summaries)
+
+
+def test_legacy_ewald_adapter_preserves_authoritative_status_and_payload() -> None:
+    from painted_ewald.ewald import RootStatus, solve_infinite_rod_ewald
+
+    direction = np.array([0.0, 0.0, 1.0])
+    cases = (
+        (np.array([0.0, 0.0, 4.0]), np.array([1.0, 0.0, 0.0]), False),
+        (np.array([0.0, 0.0, 4.0]), np.array([4.0, 0.0, 0.0]), False),
+        (np.array([0.0, 0.0, 4.0]), np.array([4.1, 0.0, 0.0]), False),
+        (np.array([0.0, 0.0, 4.0]), np.zeros(3), True),
+        (np.array([4.0, 0.0, 0.0]), np.zeros(3), True),
+    )
+    status_map = {
+        RootStatus.REGULAR: EwaldRootStatus.TWO_ROOT,
+        RootStatus.TANGENT: EwaldRootStatus.TANGENT,
+        RootStatus.NO_ROOT: EwaldRootStatus.NO_ROOT,
+        RootStatus.COLLAPSED_DIRECT: EwaldRootStatus.TANGENT,
+    }
+    for incident, q0, rod_is_m0 in cases:
+        authority = solve_infinite_rod_ewald(
+            ki_sample_Ainv=incident,
+            q0_sample_Ainv=q0,
+            d_hat_sample=direction,
+            b3_norm_Ainv=2.0,
+            rod_is_m0=rod_is_m0,
+            root_tolerance_rel=0.0,
+            residual_tolerance_rel=64.0 * np.finfo(np.float64).eps,
+        )
+        adapter = solve_continuous_rod_ewald(
+            ki_sample_Ainv=incident,
+            q0_sample_Ainv=q0,
+            d_hat_sample=direction,
+            b3_norm_Ainv=2.0,
+        )
+        assert adapter.status is status_map[authority.status]
+        assert adapter.direct_beam_root_count == authority.direct_root_count
+        assert len(adapter.emittable_roots) == len(authority.emittable_roots)
+        for legacy_root, root in zip(
+            adapter.emittable_roots, authority.emittable_roots, strict=True
+        ):
+            assert legacy_root.u_Ainv == root.u_Ainv
+            assert legacy_root.l_coordinate == root.L
+            np.testing.assert_array_equal(legacy_root.q_sample_Ainv, root.q_sample_Ainv)
+            np.testing.assert_array_equal(legacy_root.kf_sample_Ainv, root.kf_sample_Ainv)
+            assert legacy_root.ewald_residual_Ainv == root.ewald_residual_Ainv
+            assert legacy_root.coarea_jacobian == root.coarea_jacobian
+
     with pytest.raises(ValueError, match="real"):
         solve_continuous_rod_ewald(
-            ki_sample_Ainv=incident.astype(np.complex128),
+            ki_sample_Ainv=cases[0][0].astype(np.complex128),
             q0_sample_Ainv=np.array([1.0, 0.0, 0.0]),
             d_hat_sample=direction,
             b3_norm_Ainv=2.0,

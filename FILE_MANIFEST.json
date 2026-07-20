@@ -1,5 +1,5 @@
 {
-  "file_count": 232,
+  "file_count": 236,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -543,8 +543,13 @@
     },
     {
       "path": "src/painted_ewald/__init__.py",
-      "sha256": "bd3b0e66492372a1ab1d634289fe5fc7817cb9dcad492cfea08a59f175050dce",
-      "size_bytes": 405
+      "sha256": "43684f733e9e05ea2b130db7153e660d3290f00c2d2f75ca542d83774fd24cc7",
+      "size_bytes": 1231
+    },
+    {
+      "path": "src/painted_ewald/ewald.py",
+      "sha256": "2c48004b002ccdfa8a44d2d48e10b97e5c6b5f6229a8e6a3a9f1f2fab1ff9657",
+      "size_bytes": 14512
     },
     {
       "path": "src/painted_ewald/mosaic.py",
@@ -552,9 +557,24 @@
       "size_bytes": 13317
     },
     {
+      "path": "src/painted_ewald/painter.py",
+      "sha256": "43282feab41b1af87ee56eb7e24e366f3d4a54cf637a8560025fed7cbfdaafec",
+      "size_bytes": 20827
+    },
+    {
       "path": "src/painted_ewald/py.typed",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "size_bytes": 0
+    },
+    {
+      "path": "src/painted_ewald/raster.py",
+      "sha256": "4f698d4d2a92f7b169a442a6a3cd9ae2340c5147e373cf4251d4ae39b0ab7eef",
+      "size_bytes": 4334
+    },
+    {
+      "path": "src/painted_ewald/rods.py",
+      "sha256": "762be930be77d5ffea812a48165b4ea53bbf58f3b54d8206833715f93c89f0b9",
+      "size_bytes": 2281
     },
     {
       "path": "src/painted_ewald/rotations.py",
@@ -563,8 +583,8 @@
     },
     {
       "path": "src/painted_ewald/types.py",
-      "sha256": "05be1c69c7c22405e41e720e803501ebcea90a8bd6d2bf7605b0fdaeb4efa1bb",
-      "size_bytes": 4392
+      "sha256": "6bd0a343d566abd64dfd3bb28042a802b56df340e3554d3bc48f37cdac2929f8",
+      "size_bytes": 35551
     },
     {
       "path": "src/painted_ewald/validation.py",
@@ -813,8 +833,8 @@
     },
     {
       "path": "src/rasim_next/reciprocal/ewald.py",
-      "sha256": "efd288f9578950d4ee81d7afeabe33406609c6c6e403a1c4a4c8829e54b64957",
-      "size_bytes": 8817
+      "sha256": "3610280a5eeee4bb3d8040eac2dbb325be35276fc922cefc6331b41fe796d2a6",
+      "size_bytes": 5297
     },
     {
       "path": "src/rasim_next/reciprocal/lattice.py",
@@ -823,8 +843,8 @@
     },
     {
       "path": "src/rasim_next/reciprocal/proof.py",
-      "sha256": "ee1da9e385b912bf3c17ef884ebe271ffac4e150347eb4b21e122e5cc37b1f71",
-      "size_bytes": 39839
+      "sha256": "2e78634bcb77dc2edbbbd19a8a65ff3f381be994f15331c35ff589d6ea4ea3c5",
+      "size_bytes": 68498
     },
     {
       "path": "src/rasim_next/reciprocal/rods.py",
@@ -1133,8 +1153,8 @@
     },
     {
       "path": "tests/test_mosaic_ewald.py",
-      "sha256": "3ffababc3282fddaa9ba05e6adff7cd58486359f193eb8ee8828f5e75bb2581b",
-      "size_bytes": 25390
+      "sha256": "4a21ca46bbf0d9e1cf649172e4bca435c84b8073c18eaeec42938c4977b0dcb0",
+      "size_bytes": 49147
     },
     {
       "path": "tests/test_ordered_reflectivity.py",

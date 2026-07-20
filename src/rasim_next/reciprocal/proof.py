@@ -9,14 +9,35 @@ import platform
 import subprocess
 import time
 import tracemalloc
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
+from math import fsum
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from painted_ewald import (
+    EwaldSpherePainter,
+    PaintMeasure,
+    enumerate_rods_within_ewald_sphere,
+)
+from painted_ewald import (
+    ForwardPolicy as PaintedForwardPolicy,
+)
+from painted_ewald import (
+    MosaicParameters as PaintedMosaicParameters,
+)
+from painted_ewald import (
+    PainterConfig as PaintedPainterConfig,
+)
+from painted_ewald import (
+    RasterParameters as PaintedRasterParameters,
+)
+from painted_ewald import (
+    Rod as PaintedRod,
+)
 from rasim_next.core.contracts import (
     CONTRACT_API_VERSION,
     IncidentSampleBatch,
@@ -925,6 +946,656 @@ def _scientific_evidence(
     return mutations
 
 
+class _PaintedProofStrength:
+    __slots__ = ()
+
+    def evaluate(self, *, rod: PaintedRod, L: float, k_norm_Ainv: float) -> float:
+        return 1.0 + 0.03 * rod.h + 0.05 * rod.k + 1.0e-10 * L * L + 0.02 * k_norm_Ainv
+
+
+def _painted_skew_config(*, azimuth_count: int, azimuth_phase_rad: float) -> PaintedPainterConfig:
+    direction = np.array([1.0, 2.0, 3.0])
+    direction /= np.linalg.norm(direction)
+    first_perpendicular = np.array([2.0, -1.0, 0.0])
+    first_perpendicular -= np.dot(first_perpendicular, direction) * direction
+    first_perpendicular *= 1.5 / np.linalg.norm(first_perpendicular)
+    second_perpendicular = np.cos(np.pi / 3.0) * first_perpendicular + np.sin(
+        np.pi / 3.0
+    ) * np.cross(direction, first_perpendicular)
+    reciprocal_basis = np.column_stack(
+        (
+            first_perpendicular + 1.0e4 * direction,
+            second_perpendicular - 3.0e3 * direction,
+            0.3 * direction,
+        )
+    )
+    return PaintedPainterConfig(
+        reciprocal_basis_Ainv=reciprocal_basis,
+        crystal_to_sample=np.eye(3),
+        rods=(PaintedRod(1, 0), PaintedRod(0, 1)),
+        mosaic=PaintedMosaicParameters(
+            gaussian_sigma_rad=np.deg2rad(1.0),
+            lorentzian_half_width_rad=np.deg2rad(0.5),
+            lorentzian_probability=0.2,
+            alpha_panel_count=8,
+            alpha_gauss_order=8,
+            azimuth_count=azimuth_count,
+            azimuth_phase_rad=azimuth_phase_rad,
+        ),
+        raster=PaintedRasterParameters(8, 16),
+    )
+
+
+def _painted_tilted_config(*, azimuth_count: int, azimuth_phase_rad: float) -> PaintedPainterConfig:
+    reciprocal_basis = np.array(
+        [
+            [1.0, 0.5, 0.0],
+            [0.0, np.sqrt(3.0) / 2.0, 0.0],
+            [0.0, 0.0, 0.2],
+        ]
+    )
+    return PaintedPainterConfig(
+        reciprocal_basis_Ainv=reciprocal_basis,
+        crystal_to_sample=np.eye(3),
+        rods=(PaintedRod(1, 0),),
+        mosaic=PaintedMosaicParameters(
+            gaussian_sigma_rad=np.deg2rad(5.0),
+            lorentzian_half_width_rad=np.deg2rad(2.0),
+            lorentzian_probability=0.1,
+            alpha_panel_count=8,
+            alpha_gauss_order=8,
+            azimuth_count=azimuth_count,
+            azimuth_phase_rad=azimuth_phase_rad,
+        ),
+        raster=PaintedRasterParameters(16, 32),
+    )
+
+
+def _painted_point_moments(points: tuple[Any, ...]) -> tuple[list[float], list[float]]:
+    weights = np.fromiter((point.weight for point in points), dtype=np.float64, count=len(points))
+    total = fsum(float(value) for value in weights)
+    _require(total > 0.0, "painted point coating has no retained mass")
+    directions = np.stack([point.kf_sample_Ainv for point in points])
+    directions /= np.linalg.norm(directions, axis=1)[:, None]
+    first = np.einsum("i,ij->j", weights, directions, optimize=True) / total
+    second = np.einsum("i,ij,ik->jk", weights, directions, directions, optimize=True) / total
+    return first.tolist(), second[np.triu_indices(3)].tolist()
+
+
+def _symmetric_relative_difference(left: NDArray[np.float64], right: NDArray[np.float64]) -> float:
+    scale = np.maximum(0.5 * (np.abs(left) + np.abs(right)), np.finfo(np.float64).tiny)
+    return float(np.max(np.abs(left - right) / scale, initial=0.0))
+
+
+def _painted_convergence_evidence() -> dict[str, object]:
+    incident = np.array([0.2, 0.4, -10.0])
+    phases = (0.371, 1.137)
+    levels = (8, 16, 32)
+    rows: list[dict[str, object]] = []
+    numerical: dict[tuple[float, int], tuple[NDArray[np.float64], NDArray[np.float64]]] = {}
+    for phase in phases:
+        for level in levels:
+            painter = EwaldSpherePainter(
+                _painted_tilted_config(
+                    azimuth_count=level,
+                    azimuth_phase_rad=phase,
+                ),
+                _PaintedProofStrength(),
+            )
+            painted = painter.paint(incident)
+            branch_mass = np.asarray(
+                [
+                    fsum(point.weight for point in painted.points if point.branch == branch)
+                    for branch in (1, 2)
+                ]
+            )
+            branch_moments: list[float] = []
+            for branch in (1, 2):
+                first, second = _painted_point_moments(
+                    tuple(point for point in painted.points if point.branch == branch)
+                )
+                branch_moments.extend(first + second)
+            moments = np.asarray(branch_moments)
+            numerical[(phase, level)] = (branch_mass, moments)
+            rows.append(
+                {
+                    "azimuth_phase_rad": phase,
+                    "azimuth_count": level,
+                    "orientation_count": painter.mosaic_space.orientation_id.size,
+                    "branch_mass": branch_mass.tolist(),
+                    "per_branch_normalized_first_and_second_direction_moments": moments.tolist(),
+                }
+            )
+
+    refinements: list[dict[str, float]] = []
+    changes_by_phase: dict[float, list[tuple[float, float]]] = {}
+    for phase in phases:
+        phase_changes: list[tuple[float, float]] = []
+        for coarse, fine in pairwise(levels):
+            coarse_branch, coarse_moments = numerical[(phase, coarse)]
+            fine_branch, fine_moments = numerical[(phase, fine)]
+            branch_change = _symmetric_relative_difference(coarse_branch, fine_branch)
+            moment_change = float(np.max(np.abs(coarse_moments - fine_moments)))
+            phase_changes.append((branch_change, moment_change))
+            refinements.append(
+                {
+                    "azimuth_phase_rad": phase,
+                    "coarse_azimuth_count": coarse,
+                    "fine_azimuth_count": fine,
+                    "branch_mass_change": branch_change,
+                    "moment_change": moment_change,
+                }
+            )
+        changes_by_phase[phase] = phase_changes
+
+    left_branch, left_moments = numerical[(phases[0], levels[-1])]
+    right_branch, right_moments = numerical[(phases[1], levels[-1])]
+    final_phase_branch = _symmetric_relative_difference(left_branch, right_branch)
+    final_phase_moment = float(np.max(np.abs(left_moments - right_moments)))
+    _require(
+        all(
+            changes[1][0] <= 0.3 * changes[0][0]
+            and changes[1][1] <= 0.3 * changes[0][1]
+            and changes[1][0] <= 1.0e-5
+            and changes[1][1] <= 1.0e-5
+            for changes in changes_by_phase.values()
+        )
+        and final_phase_branch <= 1.0e-5
+        and final_phase_moment <= 1.0e-5,
+        "painted coating failed azimuth phase/refinement convergence",
+    )
+    return {
+        "case_id": "painted_ewald.azimuth_phase_refinement",
+        "refinement_variable": "azimuth_count",
+        "levels": list(levels),
+        "phases_rad": list(phases),
+        "observables": rows,
+        "successive_per_phase_refinements": refinements,
+        "final_cross_phase_discrepancy": {
+            "azimuth_count": levels[-1],
+            "branch_mass": final_phase_branch,
+            "low_order_moments": final_phase_moment,
+        },
+        "criterion": (
+            "for each phase, the 16->32 change is <=0.3 of the 8->16 change and <=1e-5; "
+            "the final cross-phase branch and low-order-moment discrepancies are <=1e-5"
+        ),
+        "assessment": "PASS",
+    }
+
+
+def _painted_texture_direction_moments(texture: Any) -> NDArray[np.float64]:
+    mu = 0.5 * (texture.mu_edges[:-1] + texture.mu_edges[1:])
+    phi = 0.5 * (texture.phi_edges_rad[:-1] + texture.phi_edges_rad[1:])
+    radial = np.sqrt(np.maximum(0.0, 1.0 - mu * mu))[:, None]
+    directions = np.stack(
+        (
+            radial * np.cos(phi)[None, :],
+            radial * np.sin(phi)[None, :],
+            np.broadcast_to(mu[:, None], texture.mass.shape),
+        ),
+        axis=-1,
+    )
+    total = fsum(float(value) for value in texture.mass.ravel())
+    _require(total > 0.0, "painted Bi2Se3 texture has no retained mass")
+    normalized_mass = texture.mass / total
+    first = np.einsum("ij,ijk->k", normalized_mass, directions, optimize=True)
+    second = np.einsum(
+        "ij,ijk,ijl->kl",
+        normalized_mass,
+        directions,
+        directions,
+        optimize=True,
+    )
+    return np.concatenate((first, second[np.triu_indices(3)]))
+
+
+def _painted_bi2se3_convergence_evidence() -> dict[str, object]:
+    reciprocal_basis = np.array(
+        [
+            [1.516578640400576, 0.0, 0.0],
+            [0.8755970862825088, 1.7511941725650182, 0.0],
+            [0.0, 0.0, 0.2194156064806393],
+        ]
+    )
+    k_norm_Ainv = 4.078341560576728
+    grazing_angle_rad = np.deg2rad(5.0)
+    incident = np.array(
+        [
+            0.0,
+            k_norm_Ainv * np.cos(grazing_angle_rad),
+            -k_norm_Ainv * np.sin(grazing_angle_rad),
+        ]
+    )
+    rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=reciprocal_basis,
+        k_norm_Ainv=k_norm_Ainv,
+    )
+    _require(len(rods) == 85, "Bi2Se3 convergence fixture lost its complete rod catalog")
+    phases = (0.371, 1.137)
+    levels = (256, 512, 1024)
+    rows: list[dict[str, object]] = []
+    numerical: dict[
+        tuple[float, int],
+        tuple[NDArray[np.float64], NDArray[np.float64], float, NDArray[np.float64]],
+    ] = {}
+    branch_keys: tuple[tuple[int, int], ...] | None = None
+
+    for phase in phases:
+        for level in levels:
+            painter = EwaldSpherePainter(
+                PaintedPainterConfig(
+                    reciprocal_basis_Ainv=reciprocal_basis,
+                    crystal_to_sample=np.eye(3),
+                    rods=rods,
+                    mosaic=PaintedMosaicParameters(
+                        gaussian_sigma_rad=np.deg2rad(5.0),
+                        lorentzian_half_width_rad=np.deg2rad(2.0),
+                        lorentzian_probability=0.1,
+                        alpha_panel_count=64,
+                        alpha_gauss_order=12,
+                        azimuth_count=level,
+                        azimuth_phase_rad=phase,
+                    ),
+                    raster=PaintedRasterParameters(),
+                )
+            )
+            coating = painter.paint_coating(incident)
+            keys = tuple(
+                (family.family_m, branch.branch)
+                for family in coating.family_summaries
+                for branch in family.branches
+            )
+            if branch_keys is None:
+                branch_keys = keys
+            _require(keys == branch_keys, "Bi2Se3 convergence branch ordering changed")
+            branch_weight = np.asarray(
+                [
+                    branch.painted_weight
+                    for family in coating.family_summaries
+                    for branch in family.branches
+                ]
+            )
+            moments = _painted_texture_direction_moments(coating.texture)
+            total = coating.ledger.painted_weight
+            normalized_texture = coating.texture.mass / total
+            numerical[(phase, level)] = (branch_weight, moments, total, normalized_texture)
+            rows.append(
+                {
+                    "azimuth_phase_rad": phase,
+                    "azimuth_count": level,
+                    "orientation_count": painter.mosaic_space.orientation_id.size,
+                    "retained_root_count": coating.retained_root_count,
+                    "total_painted_weight": total,
+                    "family_branch_keys": [list(key) for key in keys],
+                    "family_branch_weights": branch_weight.tolist(),
+                    "raster_center_first_and_second_direction_moments": moments.tolist(),
+                    "maximum_ewald_residual_Ainv": coating.maximum_ewald_residual_Ainv,
+                }
+            )
+
+    refinements: list[dict[str, float]] = []
+    changes_by_phase: dict[float, list[tuple[float, float, float, float]]] = {}
+    for phase in phases:
+        phase_changes: list[tuple[float, float, float, float]] = []
+        for coarse, fine in pairwise(levels):
+            coarse_branch, coarse_moments, coarse_total, coarse_texture = numerical[(phase, coarse)]
+            fine_branch, fine_moments, fine_total, fine_texture = numerical[(phase, fine)]
+            changes = (
+                _symmetric_relative_difference(coarse_branch, fine_branch),
+                float(np.max(np.abs(coarse_moments - fine_moments))),
+                _symmetric_relative_difference(
+                    np.asarray([coarse_total]),
+                    np.asarray([fine_total]),
+                ),
+                float(np.sum(np.abs(coarse_texture - fine_texture), dtype=np.float64)),
+            )
+            phase_changes.append(changes)
+            refinements.append(
+                {
+                    "azimuth_phase_rad": phase,
+                    "coarse_azimuth_count": coarse,
+                    "fine_azimuth_count": fine,
+                    "maximum_family_branch_relative_change": changes[0],
+                    "moment_change": changes[1],
+                    "total_weight_relative_change": changes[2],
+                    "hard_bin_normalized_texture_l1_change_not_gated": changes[3],
+                }
+            )
+        changes_by_phase[phase] = phase_changes
+
+    left_branch, left_moments, left_total, left_texture = numerical[(phases[0], levels[-1])]
+    right_branch, right_moments, right_total, right_texture = numerical[(phases[1], levels[-1])]
+    final_phase = {
+        "azimuth_count": levels[-1],
+        "maximum_family_branch_relative_difference": _symmetric_relative_difference(
+            left_branch,
+            right_branch,
+        ),
+        "moment_difference": float(np.max(np.abs(left_moments - right_moments))),
+        "total_weight_relative_difference": _symmetric_relative_difference(
+            np.asarray([left_total]),
+            np.asarray([right_total]),
+        ),
+        "hard_bin_normalized_texture_l1_difference_not_gated": float(
+            np.sum(np.abs(left_texture - right_texture), dtype=np.float64)
+        ),
+    }
+    _require(
+        all(
+            changes[1][0] <= 0.85 * changes[0][0]
+            and changes[1][1] <= 0.85 * changes[0][1]
+            and changes[1][0] <= 2.0e-3
+            and changes[1][1] <= 4.0e-4
+            and changes[1][2] <= 1.0e-4
+            for changes in changes_by_phase.values()
+        )
+        and final_phase["maximum_family_branch_relative_difference"] <= 5.0e-4
+        and final_phase["moment_difference"] <= 1.5e-4
+        and final_phase["total_weight_relative_difference"] <= 1.0e-4,
+        "full Bi2Se3 coating failed integrated azimuth convergence",
+    )
+    return {
+        "case_id": "painted_ewald.bi2se3_5deg_full_catalog",
+        "refinement_variable": "azimuth_count",
+        "levels": list(levels),
+        "phases_rad": list(phases),
+        "rod_count": len(rods),
+        "observables": rows,
+        "successive_per_phase_refinements": refinements,
+        "final_cross_phase_discrepancy": final_phase,
+        "criterion": (
+            "each 512->1024 family/branch and moment change contracts by >=15%; fine "
+            "family/branch <=2e-3, moment <=4e-4, and total <=1e-4; final cross-phase "
+            "family/branch <=5e-4, moment <=1.5e-4, and total <=1e-4"
+        ),
+        "hard_bin_texture_is_not_a_pointwise_acceptance_observable": True,
+        "assessment": "PASS",
+    }
+
+
+def _painted_coating_evidence(tolerances: Any) -> dict[str, object]:
+    incident = np.array([0.2, 4.062900581047559, -0.3545543022596421])
+    config = _painted_skew_config(azimuth_count=8, azimuth_phase_rad=0.371)
+    painter = EwaldSpherePainter(config, _PaintedProofStrength())
+
+    tracemalloc.start()
+    start = time.perf_counter()
+    scalar = painter.paint(incident)
+    scalar_wall_seconds = time.perf_counter() - start
+    _, scalar_peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    tracemalloc.start()
+    start = time.perf_counter()
+    coating = painter.paint_coating(incident)
+    streaming_wall_seconds = time.perf_counter() - start
+    _, streaming_peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    texture_error = float(np.max(np.abs(scalar.texture.mass - coating.texture.mass), initial=0.0))
+    ledger_fields = (
+        "painted_weight",
+        "collapsed_direct_base_mass",
+        "tangent_base_mass",
+        "no_root_base_mass",
+        "forward_excluded_base_mass",
+    )
+    ledger_error = max(
+        abs(getattr(scalar.ledger, name) - getattr(coating.ledger, name)) for name in ledger_fields
+    )
+    branch_error = 0.0
+    branch_counts_match = True
+    branch_equivalence: list[dict[str, object]] = []
+    for rod_summary in coating.rod_summaries:
+        for branch in rod_summary.branches:
+            scalar_count = sum(
+                1
+                for point in scalar.points
+                if (point.rod_h, point.rod_k, point.branch)
+                == (rod_summary.rod.h, rod_summary.rod.k, branch.branch)
+            )
+            scalar_weight = fsum(
+                point.weight
+                for point in scalar.points
+                if (point.rod_h, point.rod_k, point.branch)
+                == (rod_summary.rod.h, rod_summary.rod.k, branch.branch)
+            )
+            branch_error = max(branch_error, abs(scalar_weight - branch.painted_weight))
+            branch_counts_match &= scalar_count == branch.retained_root_count
+            branch_equivalence.append(
+                {
+                    "rod_h": rod_summary.rod.h,
+                    "rod_k": rod_summary.rod.k,
+                    "branch": branch.branch,
+                    "scalar_retained_root_count": scalar_count,
+                    "streaming_retained_root_count": branch.retained_root_count,
+                }
+            )
+    scalar_stream_error = max(texture_error, ledger_error, branch_error)
+    scalar_stream_limit = 5.0e-12
+    _require(
+        scalar_stream_error <= scalar_stream_limit
+        and branch_counts_match
+        and coating.retained_root_count == len(scalar.points)
+        and coating.ledger.suppressed_algebraic_direct_root_count
+        == scalar.ledger.suppressed_algebraic_direct_root_count,
+        "painted scalar and streaming paths disagree",
+    )
+
+    complete_family_rods = tuple(
+        PaintedRod(h, k) for h, k in ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))
+    )
+    complete_coating = EwaldSpherePainter(
+        replace(config, rods=complete_family_rods),
+        _PaintedProofStrength(),
+    ).paint_coating(incident)
+    family = complete_coating.family_summaries[0]
+    _require(
+        len(complete_coating.family_summaries) == 1
+        and family.family_m == 1
+        and family.is_complete_hexagonal_family,
+        "representative-rod mutation fixture is not one complete m=1 family",
+    )
+    family_sum_error = abs(
+        fsum(summary.ledger.painted_weight for summary in family.rod_summaries)
+        - family.ledger.painted_weight
+    )
+    first_rod_weight = family.rod_summaries[0].ledger.painted_weight
+    representative_mutant = len(family.rod_summaries) * first_rod_weight
+    representative_error = abs(representative_mutant - family.ledger.painted_weight)
+    representative_limit = 1.0e-8 * max(family.ledger.painted_weight, 1.0)
+
+    direction_slice = painter.mosaic_slice(rod=PaintedRod(0, 0), u_Ainv=1.0)
+    direction_by_id = {
+        int(orientation_id): direction / np.linalg.norm(direction)
+        for orientation_id, direction in zip(
+            painter.mosaic_space.orientation_id,
+            direction_slice.q_sample_Ainv,
+            strict=True,
+        )
+    }
+    root_displacement_Ainv = 1.0e-3
+    correct_root_error = max(point.ewald_residual_Ainv for point in scalar.points)
+    displaced_root_error = max(
+        abs(
+            np.linalg.norm(
+                point.kf_sample_Ainv
+                + root_displacement_Ainv * direction_by_id[point.orientation_id]
+            )
+            - scalar.radius_Ainv
+        )
+        for point in scalar.points
+    )
+    displaced_q_error = max(
+        np.linalg.norm(root_displacement_Ainv * direction_by_id[point.orientation_id])
+        for point in scalar.points
+    )
+    displaced_root_limit = tolerances["reciprocal.ewald_residual"].bind(scalar.radius_Ainv).limit
+    displaced_L_delta = root_displacement_Ainv / float(
+        np.linalg.norm(config.reciprocal_basis_Ainv[:, 2])
+    )
+
+    cutoff_mosaic = PaintedMosaicParameters(
+        gaussian_sigma_rad=np.deg2rad(5.0),
+        lorentzian_half_width_rad=np.deg2rad(2.0),
+        lorentzian_probability=0.1,
+        alpha_panel_count=8,
+        alpha_gauss_order=8,
+        azimuth_count=16,
+        azimuth_phase_rad=0.371,
+    )
+    cutoff_arguments = {
+        "reciprocal_basis_Ainv": np.diag([1.0, 1.0, 0.2]),
+        "crystal_to_sample": np.eye(3),
+        "rods": (PaintedRod(0, 0),),
+        "mosaic": cutoff_mosaic,
+        "raster": PaintedRasterParameters(8, 16),
+    }
+    pushforward = EwaldSpherePainter(
+        PaintedPainterConfig(
+            **cutoff_arguments,
+            measure=PaintMeasure.MOSAIC_PUSHFORWARD,
+        )
+    ).paint(incident)
+    target_cutoff_Ainv = 0.7
+    intended_painter = EwaldSpherePainter(
+        PaintedPainterConfig(
+            **cutoff_arguments,
+            measure=PaintMeasure.COAREA_INTENSITY,
+            forward_policy=PaintedForwardPolicy(q_min_Ainv=target_cutoff_Ainv),
+        )
+    )
+    intended_scalar = intended_painter.paint(incident)
+    intended_stream = intended_painter.paint_coating(incident)
+    q_norm_and_point = tuple(
+        (float(np.linalg.norm(point.q_sample_Ainv)), point) for point in pushforward.points
+    )
+    retained_weight = fsum(
+        point.base_weight * (2.0 * pushforward.radius_Ainv / q_norm)
+        for q_norm, point in q_norm_and_point
+        if q_norm >= target_cutoff_Ainv
+    )
+    reversed_weight = fsum(
+        point.base_weight * (2.0 * pushforward.radius_Ainv / q_norm)
+        for q_norm, point in q_norm_and_point
+        if q_norm < target_cutoff_Ainv
+    )
+    retained_base_weight = fsum(
+        point.base_weight for q_norm, point in q_norm_and_point if q_norm >= target_cutoff_Ainv
+    )
+    excluded_base_weight = fsum(
+        point.base_weight for q_norm, point in q_norm_and_point if q_norm < target_cutoff_Ainv
+    )
+    partition_error = abs(
+        retained_base_weight + excluded_base_weight - pushforward.ledger.painted_weight
+    )
+    pushforward_total_error = abs(
+        pushforward.ledger.painted_weight + pushforward.ledger.collapsed_direct_base_mass - 1.0
+    )
+    cutoff_error = max(
+        abs(intended_scalar.ledger.painted_weight - intended_stream.ledger.painted_weight),
+        abs(retained_weight - intended_stream.ledger.painted_weight),
+        abs(excluded_base_weight - intended_stream.ledger.forward_excluded_base_mass),
+        partition_error,
+        pushforward_total_error,
+    )
+    reversed_cutoff_error = max(
+        abs(reversed_weight - intended_stream.ledger.painted_weight),
+        abs(retained_base_weight - intended_stream.ledger.forward_excluded_base_mass),
+    )
+    cutoff_limit = 1.0e-10 * max(intended_stream.ledger.painted_weight, 1.0)
+
+    _require(
+        family_sum_error <= representative_limit < representative_error
+        and correct_root_error <= displaced_root_limit < displaced_root_error
+        and cutoff_error <= cutoff_limit < reversed_cutoff_error,
+        "one or more painted coating mutations escaped detection",
+    )
+    _require(
+        retained_weight > 0.0
+        and reversed_weight > 0.0
+        and retained_base_weight > 0.0
+        and excluded_base_weight > 0.0
+        and pushforward.ledger.tangent_base_mass == 0.0
+        and pushforward.ledger.no_root_base_mass == 0.0
+        and streaming_peak_bytes < scalar_peak_bytes,
+        "painted cutoff or bounded-memory benchmark lost sensitivity",
+    )
+    _require(
+        streaming_wall_seconds <= 0.75 * scalar_wall_seconds,
+        "streaming coating benchmark lost its wall-time margin",
+    )
+    mutations = [
+        {
+            "mutation_id": "representative_rod_replaces_exact_family_sum",
+            "fixture_id": "painted_ewald.complete_m1_subtotal.v1",
+            "observed_first_stage": "painted_ewald.family_weight",
+            "observed_failure_metric": "absolute_family_weight_error",
+            "gate_limit": representative_limit,
+            "correct_error": family_sum_error,
+            "correct_status": "PASS",
+            "mutant_error": representative_error,
+            "mutant_status": "FAIL",
+            "detected": True,
+        },
+        {
+            "mutation_id": "reversed_m0_forward_cutoff",
+            "fixture_id": "painted_ewald.forward_cutoff.v1",
+            "observed_first_stage": "painted_ewald.forward_policy",
+            "observed_failure_metric": "absolute_cutoff_weight_error",
+            "gate_limit": cutoff_limit,
+            "correct_error": cutoff_error,
+            "correct_status": "PASS",
+            "mutant_error": reversed_cutoff_error,
+            "mutant_status": "FAIL",
+            "detected": True,
+        },
+        {
+            "mutation_id": "displaced_batched_ewald_roots",
+            "fixture_id": "painted_ewald.scalar_stream.v1",
+            "observed_first_stage": "painted_ewald.ewald_residual",
+            "observed_failure_metric": "maximum_unsquared_shell_residual_Ainv",
+            "gate_limit": displaced_root_limit,
+            "correct_error": correct_root_error,
+            "correct_status": "PASS",
+            "mutant_error": displaced_root_error,
+            "mutant_status": "FAIL",
+            "detected": True,
+        },
+    ]
+    return {
+        "equivalence": {
+            "orientation_count": painter.mosaic_space.orientation_id.size,
+            "rod_count": len(config.rods),
+            "retained_root_count": coating.retained_root_count,
+            "maximum_scalar_stream_error": scalar_stream_error,
+            "error_limit": scalar_stream_limit,
+            "per_rod_strength_at_exact_L": True,
+            "configured_m_subtotal_after_rod_evaluation": True,
+            "per_rod_branch_counts": branch_equivalence,
+        },
+        "mutations": mutations,
+        "benchmark": {
+            "workload": "identical two-rod skew-basis exact-strength coating",
+            "orientation_count": painter.mosaic_space.orientation_id.size,
+            "scalar_wall_seconds_with_memory_tracing": scalar_wall_seconds,
+            "streaming_wall_seconds_with_memory_tracing": streaming_wall_seconds,
+            "scalar_traced_peak_bytes": scalar_peak_bytes,
+            "streaming_traced_peak_bytes": streaming_peak_bytes,
+            "streaming_wall_gate_ratio": 0.75,
+            "per_rod_branch_counts_match": branch_counts_match,
+            "equivalent_observable_match": True,
+        },
+        "mutation_details": {
+            "displaced_root_q_delta_Ainv": displaced_q_error,
+            "displaced_root_u_delta_Ainv": root_displacement_Ainv,
+            "displaced_root_L_delta": displaced_L_delta,
+            "cutoff_regular_pushforward_partition_error": partition_error,
+        },
+    }
+
+
 def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     """Run the compact T03 proof without writing diagnostics."""
     del allow_missing_pack
@@ -938,11 +1609,20 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
     mutations = _scientific_evidence(tolerances)
     oracle_matrix, convergence = _oracle_evidence(tolerances)
     benchmark = _benchmark_evidence(tolerances)
+    painted = _painted_coating_evidence(tolerances)
+    mutations.extend(painted["mutations"])
+    convergence.append(_painted_convergence_evidence())
+    convergence.append(_painted_bi2se3_convergence_evidence())
+    benchmark["painted_coating"] = painted["benchmark"]
     checks = [
         {
             "check_id": "mosaic_ewald_science",
             "status": "PASS",
-            "evidence": "shared gates, dense oracle, convergence, memory, and 7/7 controls pass",
+            "evidence": (
+                "shared gates, dense and scalar coating oracles, full Bi2Se3 integrated "
+                "phase convergence, memory, "
+                f"and {len(mutations)}/{len(mutations)} controls pass"
+            ),
         },
         {
             "check_id": "worktree_clean",
@@ -969,13 +1649,18 @@ def run_proof(*, allow_missing_pack: bool = False) -> dict[str, object]:
         "reference_pack_sha256s": {"rasim_reference_v1": _REFERENCE_PACK_SHA256},
         "environment_sha256": _environment_sha256(),
         "checks": checks,
-        "metrics": {"oracle_matrix": oracle_matrix},
+        "metrics": {
+            "oracle_matrix": oracle_matrix,
+            "painted_coating_equivalence": painted["equivalence"],
+        },
         "classifications": classifications,
         "convergence": convergence,
         "mutations": mutations,
         "benchmark": benchmark,
         "tolerance_artifact_sha256": STAGE_TOLERANCE_SHA256,
         "limitations": [
-            "T03 preserves polarization IDs; reciprocal_weight is orientation mass times one coarea Jacobian, with all downstream factors excluded"
+            "T03 preserves polarization IDs; reciprocal_weight is orientation mass times one coarea Jacobian, with all downstream factors excluded",
+            "The full Bi2Se3 visualization uses the specification's unit-strength geometry mode; material structure factors enter only through the exact-L StrengthModel boundary",
+            "The conservative hard-bin texture is not a pointwise convergence oracle: acceptance uses integrated family/branch totals and low-order moments, while the continuous visualization is a periodic reconstruction of equal-solid-angle cell averages",
         ],
     }

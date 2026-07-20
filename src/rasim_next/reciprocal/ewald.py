@@ -1,14 +1,16 @@
-"""Analytic continuous-rod intersections with the elastic Ewald sphere."""
+"""Compatibility contract for analytic continuous-rod Ewald intersections."""
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+from painted_ewald.ewald import RootStatus, solve_infinite_rod_ewald
+from painted_ewald.validation import readonly_float_array
 
 FloatArray = NDArray[np.float64]
 
@@ -20,20 +22,7 @@ class EwaldRootStatus(StrEnum):
 
 
 def _vector(value: ArrayLike, name: str) -> FloatArray:
-    supplied = np.asarray(value)
-    if np.iscomplexobj(supplied) or (
-        supplied.dtype.kind == "O" and any(np.iscomplexobj(item) for item in supplied.flat)
-    ):
-        raise ValueError(f"{name} must be real")
-    array = np.array(supplied, dtype=np.float64, copy=True)
-    if array.shape != (3,) or not np.all(np.isfinite(array)):
-        raise ValueError(f"{name} must be a finite length-3 vector")
-    array.setflags(write=False)
-    return array
-
-
-def _compensated_dot(left: FloatArray, right: FloatArray) -> float:
-    return math.fsum(float(a) * float(b) for a, b in zip(left, right, strict=True))
+    return readonly_float_array(value, (3,), name)
 
 
 def _exactly_collinear(left: FloatArray, right: FloatArray) -> bool:
@@ -114,102 +103,37 @@ def solve_continuous_rod_ewald(
     d_hat_sample: ArrayLike,
     b3_norm_Ainv: float,
 ) -> EwaldRootResult:
-    """Solve ``|ki + q0 + u*d_hat| = |ki|`` and validate unsquared residuals."""
+    """Preserve the accepted strict-status API using the shared root authority."""
 
-    incident = _vector(ki_sample_Ainv, "ki_sample_Ainv")
     q0 = _vector(q0_sample_Ainv, "q0_sample_Ainv")
     direction = _vector(d_hat_sample, "d_hat_sample")
-    incident_norm = math.sqrt(_compensated_dot(incident, incident))
-    if incident_norm == 0.0:
-        raise ValueError("ki_sample_Ainv must be nonzero")
-    direction_norm = math.sqrt(_compensated_dot(direction, direction))
-    if not np.isclose(direction_norm, 1.0, rtol=0.0, atol=1.0e-12):
-        raise ValueError("d_hat_sample must be unit length")
-    line_contains_direct_root = _exactly_collinear(q0, direction)
-    direction = direction / direction_norm
-    if np.iscomplexobj(np.asarray(b3_norm_Ainv)):
-        raise ValueError("b3_norm_Ainv must be real")
-    b3_norm = float(b3_norm_Ainv)
-    if not np.isfinite(b3_norm) or b3_norm <= 0.0:
-        raise ValueError("b3_norm_Ainv must be positive")
-
-    seed = np.zeros(3)
-    seed[int(np.argmin(np.abs(direction)))] = 1.0
-    perpendicular_1 = np.cross(direction, seed)
-    perpendicular_1 /= np.linalg.norm(perpendicular_1)
-    perpendicular_2 = np.cross(direction, perpendicular_1)
-    perpendicular_2 /= np.linalg.norm(perpendicular_2)
-
-    incident_perpendicular_1 = _compensated_dot(incident, perpendicular_1)
-    incident_perpendicular_2 = _compensated_dot(incident, perpendicular_2)
-    incident_parallel = _compensated_dot(incident, direction)
-    q0_perpendicular_1 = _compensated_dot(q0, perpendicular_1)
-    q0_perpendicular_2 = _compensated_dot(q0, perpendicular_2)
-    q0_parallel = _compensated_dot(q0, direction)
-    sphere_parallel_offset = math.fsum((incident_parallel, q0_parallel))
-    if line_contains_direct_root:
-        sphere_perpendicular_1 = incident_perpendicular_1
-        sphere_perpendicular_2 = incident_perpendicular_2
-        sphere_coordinate_magnitude = abs(incident_parallel)
-    else:
-        sphere_perpendicular_1 = math.fsum((incident_perpendicular_1, q0_perpendicular_1))
-        sphere_perpendicular_2 = math.fsum((incident_perpendicular_2, q0_perpendicular_2))
-        radicand = math.fsum(
-            (
-                incident_norm * incident_norm,
-                -sphere_perpendicular_1 * sphere_perpendicular_1,
-                -sphere_perpendicular_2 * sphere_perpendicular_2,
-            )
-        )
-        if radicand < 0.0:
-            return EwaldRootResult(EwaldRootStatus.NO_ROOT, (), 0)
-        sphere_coordinate_magnitude = math.sqrt(radicand)
-    if sphere_coordinate_magnitude == 0.0:
-        return EwaldRootResult(
-            EwaldRootStatus.TANGENT,
-            (),
-            int(line_contains_direct_root),
-        )
-
-    sphere_coordinates = (-sphere_coordinate_magnitude, sphere_coordinate_magnitude)
-    emittable: list[EwaldRoot] = []
-    residual_limit = 64.0 * np.finfo(np.float64).eps * max(incident_norm, 1.0)
-    for sphere_coordinate in sphere_coordinates:
-        if line_contains_direct_root and sphere_coordinate == incident_parallel:
-            continue
-        u_Ainv = sphere_coordinate - sphere_parallel_offset
-        kf = np.array(
-            [
-                math.fsum(
-                    (
-                        sphere_perpendicular_1 * perpendicular_1[index],
-                        sphere_perpendicular_2 * perpendicular_2[index],
-                        sphere_coordinate * direction[index],
-                    )
-                )
-                for index in range(3)
-            ]
-        )
-        q = kf - incident
-        kf_norm = math.sqrt(_compensated_dot(kf, kf))
-        residual = abs(kf_norm - incident_norm)
-        if residual > residual_limit:
-            raise FloatingPointError("quadratic Ewald root failed the unsquared residual")
-        derivative = abs(sphere_coordinate) / kf_norm
-        if derivative == 0.0:
-            raise FloatingPointError("regular Ewald root has zero coarea derivative")
-        emittable.append(
-            EwaldRoot(
-                u_Ainv=u_Ainv,
-                l_coordinate=u_Ainv / b3_norm,
-                q_sample_Ainv=q,
-                kf_sample_Ainv=kf,
-                ewald_residual_Ainv=residual,
-                coarea_jacobian=1.0 / derivative,
-            )
-        )
-    return EwaldRootResult(
-        EwaldRootStatus.TWO_ROOT,
-        tuple(emittable),
-        int(line_contains_direct_root),
+    result = solve_infinite_rod_ewald(
+        ki_sample_Ainv=ki_sample_Ainv,
+        q0_sample_Ainv=q0,
+        d_hat_sample=direction,
+        b3_norm_Ainv=b3_norm_Ainv,
+        rod_is_m0=_exactly_collinear(q0, direction),
+        root_tolerance_rel=0.0,
+        residual_tolerance_rel=64.0 * np.finfo(np.float64).eps,
     )
+    status = {
+        RootStatus.NO_ROOT: EwaldRootStatus.NO_ROOT,
+        RootStatus.TANGENT: EwaldRootStatus.TANGENT,
+        RootStatus.COLLAPSED_DIRECT: EwaldRootStatus.TANGENT,
+        RootStatus.REGULAR: EwaldRootStatus.TWO_ROOT,
+    }[result.status]
+    roots = tuple(
+        EwaldRoot(
+            u_Ainv=root.u_Ainv,
+            l_coordinate=root.L,
+            q_sample_Ainv=root.q_sample_Ainv,
+            kf_sample_Ainv=root.kf_sample_Ainv,
+            ewald_residual_Ainv=root.ewald_residual_Ainv,
+            coarea_jacobian=root.coarea_jacobian,
+        )
+        for root in result.emittable_roots
+    )
+    return EwaldRootResult(status, roots, result.direct_root_count)
+
+
+__all__ = ["EwaldRoot", "EwaldRootResult", "EwaldRootStatus", "solve_continuous_rod_ewald"]
