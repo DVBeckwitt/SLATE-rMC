@@ -10,6 +10,7 @@ from scipy.special import ndtr
 
 from painted_ewald import (
     BraggSpaceConfig,
+    ContinuousEwaldCoating,
     MosaicBraggSpace,
     MosaicParameters,
     Rod,
@@ -18,6 +19,7 @@ from painted_ewald import (
 from painted_ewald import (
     wrapped_mosaic_line_density_rad_inv as painted_mosaic_density,
 )
+from painted_ewald.ewald import solve_infinite_rod_ewald
 from rasim_next.core.contracts import (
     IncidentSampleBatch,
     IncidentStateBatch,
@@ -52,25 +54,24 @@ class _UnequalSameFamilyStrength:
     def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
         return float((2 if (rod.h, rod.k) == (1, 0) else 5) * (1.0 + 0.1 * L))
 
-    def evaluate_profile(
-        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
-    ) -> np.ndarray:
+    def evaluate_profile(self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float) -> np.ndarray:
         multiplier = 2 if (rod.h, rod.k) == (1, 0) else 5
         return multiplier * (1.0 + 0.1 * np.asarray(L))
 
 
 class _ComplexProfileStrength(_UnequalSameFamilyStrength):
-    def evaluate_profile(
-        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
-    ) -> np.ndarray:
+    def evaluate_profile(self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float) -> np.ndarray:
         return np.full(np.shape(L), 1.0 + 2.0j)
 
 
 class _WrongShapeProfileStrength(_UnequalSameFamilyStrength):
-    def evaluate_profile(
-        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
-    ) -> np.ndarray:
+    def evaluate_profile(self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float) -> np.ndarray:
         return np.ravel(L)
+
+
+class _WavenumberTaggedStrength(_UnequalSameFamilyStrength):
+    def evaluate_profile(self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float) -> np.ndarray:
+        return np.full(np.shape(L), k_norm_Ainv + 0.01 * rod.h + 0.02 * rod.k)
 
 
 def test_pre_ewald_bragg_space_weights_rods_before_exact_family_sum() -> None:
@@ -117,12 +118,9 @@ def test_pre_ewald_bragg_space_weights_rods_before_exact_family_sum() -> None:
         beta_rad=np.asarray((0.22, 1.91)),
         u_Ainv=np.asarray((-0.4, 0.7)),
     )
-    unrotated = (
-        BI2SE3_RECIPROCAL_BASIS_AINV[:, 0]
-        + np.asarray((-0.4, 0.7))[:, None]
-        * BI2SE3_RECIPROCAL_BASIS_AINV[:, 2]
-        / np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])
-    )
+    unrotated = BI2SE3_RECIPROCAL_BASIS_AINV[:, 0] + np.asarray((-0.4, 0.7))[
+        :, None
+    ] * BI2SE3_RECIPROCAL_BASIS_AINV[:, 2] / np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])
     np.testing.assert_allclose(
         np.linalg.norm(mapped, axis=1),
         np.linalg.norm(unrotated, axis=1),
@@ -196,6 +194,116 @@ def test_pre_ewald_bragg_space_weights_rods_before_exact_family_sum() -> None:
             replace(config, reciprocal_basis_Ainv=1.001 * BI2SE3_RECIPROCAL_BASIS_AINV),
             _UnequalSameFamilyStrength(),
         )
+
+
+def test_continuous_ewald_coating_matches_scalar_roots_and_latent_oracle() -> None:
+    rods = tuple(Rod(h, k) for h, k in ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)))
+    air_k0_Ainv = 2.0 * np.pi / 1.540592925
+    internal_ki_Ainv = np.array([0.0, 4.062900581047559, -0.3545543022596421])
+    space = MosaicBraggSpace(
+        BraggSpaceConfig(
+            reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+            crystal_to_sample=np.eye(3),
+            rods=rods,
+            mosaic=MosaicParameters(
+                gaussian_sigma_rad=np.deg2rad(5.0),
+                lorentzian_half_width_rad=np.deg2rad(2.0),
+                lorentzian_probability=0.1,
+                alpha_panel_count=12,
+                alpha_gauss_order=6,
+                azimuth_count=32,
+            ),
+            k_norm_Ainv=air_k0_Ainv,
+        ),
+        _WavenumberTaggedStrength(),
+    )
+    coating = ContinuousEwaldCoating(space, ki_sample_Ainv=internal_ki_Ainv)
+    with pytest.raises(ValueError, match="zero-tilt Dirac"):
+        ContinuousEwaldCoating(
+            MosaicBraggSpace(
+                replace(
+                    space.config,
+                    mosaic=replace(space.config.mosaic, gaussian_sigma_rad=0.0),
+                ),
+                _WavenumberTaggedStrength(),
+            ),
+            ki_sample_Ainv=internal_ki_Ainv,
+        )
+    alpha = np.deg2rad(np.array([[1.0, 3.0], [8.0, 15.0]]))
+    beta = np.array([[0.1, 0.2], [0.3, 0.4]])
+    rod = rods[0]
+
+    evaluated = coating.evaluate_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=alpha,
+        beta_rad=beta,
+    )
+
+    assert evaluated.geometry.alpha_rad.shape == alpha.shape
+    assert np.all(evaluated.geometry.valid)
+    assert np.all(evaluated.geometry.branch == 2)
+    for index in np.ndindex(alpha.shape):
+        q0 = space.map_latent(
+            rod=rod,
+            alpha_rad=alpha[index],
+            beta_rad=beta[index],
+            u_Ainv=0.0,
+        )
+        q1 = space.map_latent(
+            rod=rod,
+            alpha_rad=alpha[index],
+            beta_rad=beta[index],
+            u_Ainv=1.0,
+        )
+        root = solve_infinite_rod_ewald(
+            ki_sample_Ainv=internal_ki_Ainv,
+            q0_sample_Ainv=q0,
+            d_hat_sample=q1 - q0,
+            b3_norm_Ainv=np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2]),
+            rod_is_m0=False,
+            root_tolerance_rel=coating.root_tolerance_rel,
+            residual_tolerance_rel=coating.residual_tolerance_rel,
+        ).emittable_roots[1]
+        latent = space.evaluate_latent(
+            rod=rod,
+            alpha_rad=alpha[index],
+            beta_rad=beta[index],
+            u_Ainv=root.u_Ainv,
+        )
+        assert evaluated.geometry.u_Ainv[index] == pytest.approx(root.u_Ainv, abs=2.0e-15)
+        np.testing.assert_allclose(
+            evaluated.geometry.q_sample_Ainv[index], root.q_sample_Ainv, rtol=0.0, atol=2.0e-15
+        )
+        np.testing.assert_allclose(
+            evaluated.geometry.kf_sample_Ainv[index],
+            root.kf_sample_Ainv,
+            rtol=0.0,
+            atol=2.0e-15,
+        )
+        assert evaluated.rod_strength_A2[index] == pytest.approx(
+            air_k0_Ainv + 0.01 * rod.h + 0.02 * rod.k,
+            abs=2.0e-15,
+        )
+        assert evaluated.latent_intensity_density_A2_rad2_inv[index] == pytest.approx(
+            latent.intensity_density_A2_rad2_inv,
+            abs=2.0e-14,
+        )
+        assert evaluated.coating_intensity_density_A2_rad2_inv[index] == pytest.approx(
+            latent.intensity_density_A2_rad2_inv * root.coarea_jacobian,
+            abs=2.0e-14,
+        )
+
+    with pytest.raises(ValueError, match="branch must be 1 or 2"):
+        coating.evaluate_latent(rod=rod, branch=0, alpha_rad=0.1, beta_rad=0.2)
+    with pytest.raises(ValueError, match="m=0 intensity is excluded"):
+        ContinuousEwaldCoating(
+            MosaicBraggSpace(
+                replace(space.config, rods=(Rod(0, 0),)),
+                _WavenumberTaggedStrength(),
+            ),
+            ki_sample_Ainv=internal_ki_Ainv,
+        ).evaluate_latent(rod=Rod(0, 0), branch=2, alpha_rad=0.1, beta_rad=0.2)
 
 
 @pytest.mark.parametrize("count", (6, 7))

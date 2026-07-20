@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -26,6 +26,60 @@ class DetectorProjection:
     ray_distance_m: float
     pixel_solid_angle_sr: float
     status: ValidityCode
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorProjectionBatch:
+    """Aligned immutable results for a batch of detector-ray projections."""
+
+    point_lab_m: NDArray[np.float64]
+    column_px: NDArray[np.float64]
+    row_px: NDArray[np.float64]
+    ray_distance_m: NDArray[np.float64]
+    pixel_solid_angle_sr: NDArray[np.float64]
+    status: NDArray[np.str_]
+    valid: NDArray[np.bool_] = field(init=False)
+
+    def __post_init__(self) -> None:
+        points = np.array(self.point_lab_m, dtype=np.float64, copy=True)
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError("point_lab_m must have shape (N, 3)")
+        size = points.shape[0]
+        arrays: dict[str, NDArray[np.float64]] = {}
+        for name in (
+            "column_px",
+            "row_px",
+            "ray_distance_m",
+            "pixel_solid_angle_sr",
+        ):
+            value = np.array(getattr(self, name), dtype=np.float64, copy=True)
+            if value.shape != (size,):
+                raise ValueError(f"{name} must have shape {(size,)}")
+            arrays[name] = value
+        if not np.all(np.isfinite(points)) or any(
+            not np.all(np.isfinite(value)) for value in arrays.values()
+        ):
+            raise ValueError("detector projection values must be finite")
+        if np.any(arrays["ray_distance_m"] < 0.0):
+            raise ValueError("ray_distance_m must be nonnegative")
+        if np.any(arrays["pixel_solid_angle_sr"] < 0.0):
+            raise ValueError("pixel_solid_angle_sr must be nonnegative")
+
+        supplied_status = np.asarray(self.status)
+        if supplied_status.shape != (size,):
+            raise ValueError(f"status must have shape {(size,)}")
+        status = np.asarray(
+            [ValidityCode(item).value for item in supplied_status],
+            dtype="U32",
+        )
+        valid = status == ValidityCode.VALID
+        for value in (points, *arrays.values(), status, valid):
+            value.setflags(write=False)
+        object.__setattr__(self, "point_lab_m", points)
+        for name, value in arrays.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "valid", valid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,15 +181,16 @@ def _intersect_detector_plane(
     denominator = direction_detector[:, 2]
     offset_m = origin_detector_m[:, 2]
     parallel = np.abs(denominator) <= _PARALLEL_TOL
-    coplanar = parallel & (np.abs(offset_m) <= _POSITION_TOL_M)
     status = np.full(origins.shape[0], ValidityCode.VALID, dtype="U16")
-    status[parallel & ~coplanar] = ValidityCode.PARALLEL
+    status[parallel] = ValidityCode.PARALLEL
 
     distance_m = np.zeros(origins.shape[0], dtype=np.float64)
     nonparallel = ~parallel
     distance_m[nonparallel] = -offset_m[nonparallel] / denominator[nonparallel]
     backward = nonparallel & (distance_m < -_POSITION_TOL_M)
     status[backward] = ValidityCode.BACKWARD
+    no_forward_distance = nonparallel & ~backward & (distance_m <= 0.0)
+    status[no_forward_distance] = ValidityCode.NO_SOLUTION
     distance_m = np.maximum(distance_m, 0.0)
     point_detector_m = origin_detector_m + distance_m[:, None] * direction_detector
     reference_column, reference_row = instrument.detector_reference_coordinate_px
@@ -246,6 +301,24 @@ def project_detector_ray(
         float(projections.ray_distance_m[0]),
         float(projections.pixel_solid_angle_sr[0]),
         ValidityCode(projections.status[0]),
+    )
+
+
+def project_detector_rays(
+    origin_lab_m: ArrayLike,
+    direction_lab: ArrayLike,
+    instrument: CompiledInstrument,
+) -> DetectorProjectionBatch:
+    """Project aligned forward unit rays without applying detector solid angle."""
+
+    projections = _project_detector_rays(origin_lab_m, direction_lab, instrument)
+    return DetectorProjectionBatch(
+        point_lab_m=projections.point_lab_m,
+        column_px=projections.column_px,
+        row_px=projections.row_px,
+        ray_distance_m=projections.ray_distance_m,
+        pixel_solid_angle_sr=projections.pixel_solid_angle_sr,
+        status=projections.status,
     )
 
 

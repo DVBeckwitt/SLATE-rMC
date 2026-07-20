@@ -127,12 +127,16 @@ class LatentBraggIntensity:
         strength = validated["rod_strength_A2"]
         intensity = validated["intensity_density_A2_rad2_inv"]
         if np.any(density < 0.0) or np.any(strength < 0.0) or np.any(intensity < 0.0):
-            raise ValueError("mosaic density, rod strength, and intensity density must be nonnegative")
+            raise ValueError(
+                "mosaic density, rod strength, and intensity density must be nonnegative"
+            )
         expected = density * self.rod.population * strength
         scale = max(float(np.max(expected, initial=0.0)), 1.0)
         tolerance = 512.0 * np.finfo(np.float64).eps * scale
         if not np.allclose(intensity, expected, rtol=0.0, atol=tolerance):
-            raise ValueError("intensity density must equal mosaic density times population and strength")
+            raise ValueError(
+                "intensity density must equal mosaic density times population and strength"
+            )
         alpha.setflags(write=False)
         points.setflags(write=False)
         object.__setattr__(self, "alpha_rad", alpha)
@@ -450,9 +454,7 @@ class MosaicBraggSpace:
             q_sample_Ainv=points,
             mosaic_probability_density_rad2_inv=mosaic_density,
             rod_strength_A2=strength,
-            intensity_density_A2_rad2_inv=(
-                mosaic_density * configured.population * strength
-            ),
+            intensity_density_A2_rad2_inv=(mosaic_density * configured.population * strength),
         )
 
     def weighted_mosaic_slice(self, *, rod: Rod, L: float) -> WeightedMosaicSlice:
@@ -483,9 +485,7 @@ class MosaicBraggSpace:
             q_sample_Ainv=mosaic_slice.q_sample_Ainv,
             probability_mass=mosaic_slice.probability_mass,
             rod_strength_A2=strength,
-            intensity_weight_A2=(
-                mosaic_slice.probability_mass * configured.population * strength
-            ),
+            intensity_weight_A2=(mosaic_slice.probability_mass * configured.population * strength),
         )
 
     def weighted_family_slice(self, *, family_m: int, L: float) -> BraggFamilySlice:
@@ -500,9 +500,7 @@ class MosaicBraggSpace:
         return BraggFamilySlice(
             family_m=int(family_m),
             rod_slices=slices,
-            total_intensity_weight_A2=fsum(
-                fsum(item.intensity_weight_A2) for item in slices
-            ),
+            total_intensity_weight_A2=fsum(fsum(item.intensity_weight_A2) for item in slices),
         )
 
 

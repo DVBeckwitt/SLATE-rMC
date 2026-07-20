@@ -10,15 +10,18 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull, QhullError
 
-from rasim_next.core.contracts import DetectorHitBatch
+from rasim_next.core.contracts import DetectorHitBatch, EventIntensityNormalization
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry import (
     AngleFrame,
     InstrumentConfiguration,
+    build_incident_states,
     compile_instrument,
     detector_coordinates_to_angles,
+    project_detector_rays,
 )
+from rasim_next.materials import material_optics, read_crystal
 from rasim_next.measurement import (
     AngleBinGrid,
     compile_detector_angle_projector,
@@ -26,6 +29,612 @@ from rasim_next.measurement import (
     to_increasing_phi,
 )
 from rasim_next.render.deposition import deposit_bilinear
+
+
+def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from painted_ewald import (
+        BraggSpaceConfig,
+        ContinuousEwaldCoating,
+        MosaicBraggSpace,
+        MosaicParameters,
+        Rod,
+    )
+    from rasim_next.geometry import project_detector_ray
+    from rasim_next.optics.attenuation import (
+        mode_decay_constant,
+        scalar_optical_weight,
+        uniform_depth_attenuation,
+    )
+    from rasim_next.optics.refraction import solve_exit_mode
+    from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+    from rasim_next.pipeline.continuous_detector import (
+        DetectorEwaldMeasure,
+        DetectorQuadrature,
+        IntensityStatus,
+        PixelIntegrationMethod,
+    )
+    from rasim_next.reciprocal.lattice import ReciprocalLattice
+
+    namespace = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
+    )
+    samples, instrument = namespace["build_default_case_inputs"](
+        sample_count=1,
+        sample_angle_rad=math.radians(5.0),
+    )
+    crystal = read_crystal(
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "bi2se3"
+        / "structures"
+        / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    material = material_optics(crystal, samples.wavelength_A)
+    incident = build_incident_states(samples, material, instrument)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    rods = tuple(
+        Rod(h, k)
+        for h, k in (
+            (0, 0),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+        )
+    )
+    air_k0_Ainv = 2.0 * np.pi / samples.wavelength_A[0]
+    bragg = MosaicBraggSpace(
+        BraggSpaceConfig(
+            reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+            crystal_to_sample=instrument.sample_from_crystal.rotation,
+            rods=rods,
+            mosaic=MosaicParameters(
+                gaussian_sigma_rad=math.radians(5.0),
+                lorentzian_half_width_rad=math.radians(2.0),
+                lorentzian_probability=0.1,
+                alpha_panel_count=12,
+                alpha_gauss_order=6,
+                azimuth_count=32,
+            ),
+            k_norm_Ainv=air_k0_Ainv,
+        ),
+        Bi2Se3TwoHStrength(
+            crystal=crystal,
+            layers=7,
+            normalization=EventIntensityNormalization.FINITE_TOTAL,
+        ),
+    )
+    coating = ContinuousEwaldCoating(
+        bragg,
+        ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
+    )
+    detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    rod = Rod(-1, 1)
+    alpha_rad = math.radians(15.0)
+    beta_rad = 2.21704764194
+
+    mapped = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=alpha_rad,
+        beta_rad=beta_rad,
+    )
+
+    assert mapped.intensity_status is IntensityStatus.INCLUDED
+    assert bool(mapped.geometry.valid)
+    assert mapped.geometry.column_px == pytest.approx(1267.56918, abs=2.0e-5)
+    assert mapped.geometry.row_px == pytest.approx(577.77153, abs=2.0e-5)
+    latent = coating.evaluate_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=alpha_rad,
+        beta_rad=beta_rad,
+    )
+    exit_mode = solve_exit_mode(
+        latent.geometry.kf_sample_Ainv,
+        samples.wavelength_A[0],
+        material,
+    )
+    incident_kappa = mode_decay_constant(
+        incident.states.kz_film_Ainv[0],
+        -1,
+    )
+    exit_kappa = mode_decay_constant(exit_mode.kz_film_Ainv, 1)
+    attenuation = uniform_depth_attenuation(
+        incident_kappa,
+        exit_kappa,
+        instrument.film_thickness_A,
+    )
+    optical = scalar_optical_weight(
+        incident.states.entrance_amplitude[0],
+        exit_mode.exit_amplitude,
+        attenuation,
+    )
+    expected_kf_air_lab = instrument.lab_from_sample.apply_vector(exit_mode.k_air_phase_sample_Ainv)
+    projection = project_detector_ray(
+        incident.states.sample_intersection_lab_m[0],
+        expected_kf_air_lab / air_k0_Ainv,
+        instrument,
+    )
+    np.testing.assert_allclose(
+        mapped.geometry.kf_air_lab_Ainv,
+        expected_kf_air_lab,
+        rtol=0.0,
+        atol=3.0e-15,
+    )
+    assert mapped.geometry.column_px == pytest.approx(projection.column_px, abs=2.0e-12)
+    assert mapped.geometry.row_px == pytest.approx(projection.row_px, abs=2.0e-12)
+    assert mapped.attenuation_weight == pytest.approx(attenuation, abs=2.0e-15)
+    assert mapped.optical_weight == pytest.approx(optical, abs=2.0e-15)
+    assert mapped.postoptical_density_A2_rad2_inv == pytest.approx(
+        latent.coating_intensity_density_A2_rad2_inv * optical,
+        rel=0.0,
+        abs=2.0e-20,
+    )
+    assert mapped.postoptical_density_A2_rad2_inv != pytest.approx(
+        latent.coating_intensity_density_A2_rad2_inv
+        * optical
+        * mapped.geometry.pixel_solid_angle_sr,
+        rel=1.0e-6,
+        abs=0.0,
+    )
+
+    caustic_density = detector.evaluate_detector_coordinates(
+        mapped.geometry.column_px,
+        mapped.geometry.row_px,
+        rods=(rod,),
+    )
+    assert bool(caustic_density.caustic)
+    assert np.isinf(caustic_density.density_A2_per_px2)
+    zero_weight_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        polarization_weight=0.0,
+    )
+    zero_caustic_density = zero_weight_detector.evaluate_detector_coordinates(
+        mapped.geometry.column_px,
+        mapped.geometry.row_px,
+        rods=(rod,),
+    )
+    assert bool(zero_caustic_density.caustic)
+    assert zero_caustic_density.density_A2_per_px2 == 0.0
+    tiny_weight_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        polarization_weight=1.0e-300,
+    )
+    tiny_caustic_density = tiny_weight_detector.evaluate_detector_coordinates(
+        mapped.geometry.column_px,
+        mapped.geometry.row_px,
+        rods=(rod,),
+    )
+    assert bool(tiny_caustic_density.caustic)
+    assert np.isinf(tiny_caustic_density.density_A2_per_px2)
+
+    regular_alpha = math.radians(2.0)
+    regular_beta = math.radians(178.0)
+    regular_mapped = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=regular_alpha,
+        beta_rad=regular_beta,
+    )
+    assert bool(regular_mapped.geometry.valid)
+    step = 1.0e-6
+    alpha_pair = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=np.array([regular_alpha - step, regular_alpha + step]),
+        beta_rad=regular_beta,
+    )
+    beta_pair = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=regular_alpha,
+        beta_rad=np.array([regular_beta - step, regular_beta + step]),
+    )
+    d_column_d_alpha = np.diff(alpha_pair.geometry.column_px)[0] / (2.0 * step)
+    d_row_d_alpha = np.diff(alpha_pair.geometry.row_px)[0] / (2.0 * step)
+    d_column_d_beta = np.diff(beta_pair.geometry.column_px)[0] / (2.0 * step)
+    d_row_d_beta = np.diff(beta_pair.geometry.row_px)[0] / (2.0 * step)
+    detector_jacobian = abs(d_column_d_alpha * d_row_d_beta - d_column_d_beta * d_row_d_alpha)
+    regular_density = detector.evaluate_detector_coordinates(
+        regular_mapped.geometry.column_px,
+        regular_mapped.geometry.row_px,
+        rods=(rod,),
+    )
+    internal_k = np.linalg.norm(incident.states.k_film_phase_sample_Ainv[0])
+    expected_surface_jacobian = (
+        internal_k
+        * air_k0_Ainv
+        * regular_density.geometry.kf_air_sample_Ainv[2]
+        / regular_density.geometry.kf_film_sample_Ainv[2]
+        * regular_mapped.geometry.pixel_solid_angle_sr
+    )
+    assert regular_density.geometry.q_surface_jacobian_Ainv2_per_px2 == pytest.approx(
+        expected_surface_jacobian,
+        rel=2.0e-14,
+    )
+    assert np.linalg.norm(
+        regular_density.geometry.q_sample_Ainv + incident.states.k_film_phase_sample_Ainv[0]
+    ) == pytest.approx(internal_k, abs=3.0e-15)
+    assert regular_density.per_rod_inverse_branch_count == 1
+    assert not bool(regular_density.caustic)
+    assert regular_density.density_A2_per_px2 == pytest.approx(
+        regular_mapped.postoptical_density_A2_rad2_inv / detector_jacobian,
+        rel=2.0e-8,
+    )
+    two_branch_seed = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=math.radians(10.0),
+        beta_rad=2.0,
+    )
+    two_branch_density = detector.evaluate_detector_coordinates(
+        two_branch_seed.geometry.column_px,
+        two_branch_seed.geometry.row_px,
+        rods=(rod,),
+    )
+    assert two_branch_density.per_rod_inverse_branch_count == 2
+    oracle_contributions = []
+    for inverse_alpha, inverse_beta in (
+        (0.17453292519943342, 2.000000000000001),
+        (0.34730205158064265, 2.3814947269767046),
+    ):
+        inverse_forward = detector.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=inverse_alpha,
+            beta_rad=inverse_beta,
+        )
+        assert inverse_forward.geometry.column_px == pytest.approx(
+            two_branch_seed.geometry.column_px, abs=5.0e-10
+        )
+        assert inverse_forward.geometry.row_px == pytest.approx(
+            two_branch_seed.geometry.row_px, abs=5.0e-10
+        )
+        alpha_pair = detector.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=np.array([inverse_alpha - step, inverse_alpha + step]),
+            beta_rad=inverse_beta,
+        )
+        beta_pair = detector.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=inverse_alpha,
+            beta_rad=np.remainder(
+                np.array([inverse_beta - step, inverse_beta + step]),
+                2.0 * np.pi,
+            ),
+        )
+        dc_da = np.diff(alpha_pair.geometry.column_px)[0] / (2.0 * step)
+        dr_da = np.diff(alpha_pair.geometry.row_px)[0] / (2.0 * step)
+        dc_db = np.diff(beta_pair.geometry.column_px)[0] / (2.0 * step)
+        dr_db = np.diff(beta_pair.geometry.row_px)[0] / (2.0 * step)
+        forward_jacobian = abs(dc_da * dr_db - dc_db * dr_da)
+        oracle_contributions.append(
+            float(inverse_forward.postoptical_density_A2_rad2_inv / forward_jacobian)
+        )
+    assert two_branch_density.density_A2_per_px2 == pytest.approx(
+        math.fsum(oracle_contributions),
+        rel=5.0e-8,
+        abs=0.0,
+    )
+    mixed_density = detector.evaluate_detector_coordinates(
+        np.array([regular_mapped.geometry.column_px, 0.0]),
+        np.array([regular_mapped.geometry.row_px, 0.0]),
+        rods=(rod,),
+    )
+    np.testing.assert_array_equal(
+        mixed_density.per_rod_inverse_branch_count[0],
+        regular_density.per_rod_inverse_branch_count,
+    )
+    np.testing.assert_allclose(
+        mixed_density.density_A2_per_px2[0],
+        regular_density.density_A2_per_px2,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    proof_column = np.array(
+        [
+            regular_mapped.geometry.column_px,
+            two_branch_seed.geometry.column_px,
+            mapped.geometry.column_px,
+            -1.0,
+        ]
+    )
+    proof_row = np.array(
+        [
+            regular_mapped.geometry.row_px,
+            two_branch_seed.geometry.row_px,
+            mapped.geometry.row_px,
+            -1.0,
+        ]
+    )
+    m1_rods = tuple(candidate for candidate in rods if candidate.family_m == 1)
+    numpy_proof = detector.evaluate_detector_coordinates(
+        proof_column,
+        proof_row,
+        rods=m1_rods,
+    )
+    compiled_density, compiled_count, compiled_caustic = (
+        detector._evaluate_compiled_coordinates_for_proof(
+            proof_column,
+            proof_row,
+            rods=m1_rods,
+            branch=2,
+        )
+    )
+    np.testing.assert_allclose(
+        compiled_density,
+        numpy_proof.per_rod_density_A2_per_px2,
+        rtol=3.0e-12,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(compiled_count, numpy_proof.per_rod_inverse_branch_count)
+    np.testing.assert_array_equal(compiled_caustic, numpy_proof.caustic)
+
+    # The production pixel kernel must integrate the same arbitrary continuous
+    # detector-coordinate density as the independent NumPy point evaluator.
+    detector_columns = detector.instrument.detector_shape_rc[1]
+    fused_pixel_row = np.asarray(
+        [
+            round(float(regular_mapped.geometry.row_px)),
+            round(float(two_branch_seed.geometry.row_px)),
+        ],
+        dtype=np.int64,
+    )
+    fused_pixel_column = np.asarray(
+        [
+            round(float(regular_mapped.geometry.column_px)),
+            round(float(two_branch_seed.geometry.column_px)),
+        ],
+        dtype=np.int64,
+    )
+    fused_flat_index = fused_pixel_row * detector_columns + fused_pixel_column
+    fused_offset = np.asarray((-0.25, 0.25), dtype=np.float64)
+    fused_weight = np.asarray((0.5, 0.5), dtype=np.float64)
+    fused = detector._compiled_evaluator(m1_rods).integrate_pixel_boxes(
+        fused_flat_index,
+        offset_px=fused_offset,
+        one_dimensional_weight=fused_weight,
+        branch=2,
+        include_center_diagnostics=False,
+    )
+    oracle_column, oracle_row = np.broadcast_arrays(
+        fused_pixel_column[:, None, None] + fused_offset[None, None, :],
+        fused_pixel_row[:, None, None] + fused_offset[None, :, None],
+    )
+    oracle_density = detector.evaluate_detector_coordinates(
+        oracle_column,
+        oracle_row,
+        rods=m1_rods,
+        branch=2,
+    ).per_rod_density_A2_per_px2
+    oracle_mass = np.sum(
+        oracle_density * (fused_weight[:, None] * fused_weight[None, :])[None, :, :, None],
+        axis=(1, 2),
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(
+        fused.per_rod_mass_A2,
+        oracle_mass,
+        rtol=3.0e-12,
+        atol=2.0e-24,
+    )
+    assert fused.center_per_rod_density_A2_per_px2.size == 0
+    assert fused.per_rod_inverse_count_min.size == 0
+    assert fused.per_rod_inverse_count_max.size == 0
+    assert fused.per_rod_caustic.size == 0
+    assert fused.valid_any.size == 0
+    assert fused.valid_all.size == 0
+    assert fused.center_valid.size == 0
+
+    specular = detector.map_specular_geometry(
+        rod=Rod(0, 0),
+        alpha_rad=0.0,
+        beta_rad=0.0,
+    )
+    assert specular.intensity_status is IntensityStatus.SPECULAR_INTENSITY_EXCLUDED
+    assert bool(specular.geometry.valid)
+    assert not hasattr(specular, "postoptical_density_A2_rad2_inv")
+
+    tiny_instrument = replace(
+        instrument,
+        detector_shape_rc=(3, 3),
+        detector_reference_coordinate_px=(
+            instrument.detector_reference_coordinate_px[0]
+            + 1.0
+            - regular_mapped.geometry.column_px,
+            instrument.detector_reference_coordinate_px[1] + 1.0 - regular_mapped.geometry.row_px,
+        ),
+    )
+    tiny_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=tiny_instrument,
+    )
+    quadrature = DetectorQuadrature(pixel_gauss_order=2, row_chunk_size=2)
+    pixels = tiny_detector.integrate_native_pixels(
+        rods=m1_rods,
+        branch=2,
+        quadrature=quadrature,
+    )
+    assert pixels.image_A2.shape == (3, 3)
+    assert pixels.image_A2.flags.writeable is False
+    assert pixels.rods == m1_rods
+    assert pixels.branch == 2
+    assert pixels.total_detector_mass_A2 == pytest.approx(
+        np.sum(pixels.per_rod_detector_mass_A2),
+        rel=0.0,
+        abs=2.0e-20,
+    )
+    assert np.sum(pixels.image_A2, dtype=np.float64) == pytest.approx(
+        pixels.total_detector_mass_A2,
+        rel=0.0,
+        abs=2.0e-20,
+    )
+    assert pixels.total_detector_mass_A2 > 0.0
+    assert pixels.sampled_valid_pixel_center is None
+    assert not hasattr(pixels, "alpha_rad")
+    assert not hasattr(pixels, "beta_rad")
+
+    accelerated_quadrature = DetectorQuadrature(
+        method=PixelIntegrationMethod.ADAPTIVE_COMPILED,
+        pixel_gauss_order=2,
+        relative_tolerance=1.0e-6,
+        max_depth=3,
+        row_chunk_size=2,
+        worker_count=1,
+    )
+    accelerated = tiny_detector.integrate_native_pixels(
+        rods=m1_rods,
+        branch=2,
+        quadrature=accelerated_quadrature,
+    )
+    parallel = tiny_detector.integrate_native_pixels(
+        rods=m1_rods,
+        branch=2,
+        quadrature=replace(accelerated_quadrature, worker_count=2),
+    )
+    np.testing.assert_allclose(
+        accelerated.image_A2,
+        pixels.image_A2,
+        rtol=2.0e-5,
+        atol=2.0e-20,
+    )
+    np.testing.assert_array_equal(parallel.image_A2, accelerated.image_A2)
+    np.testing.assert_array_equal(
+        parallel.per_rod_detector_mass_A2,
+        accelerated.per_rod_detector_mass_A2,
+    )
+    center_column, center_row = np.meshgrid(
+        np.arange(3, dtype=np.float64),
+        np.arange(3, dtype=np.float64),
+    )
+    expected_center_valid = tiny_detector.evaluate_detector_geometry(
+        center_column,
+        center_row,
+    ).valid
+    assert accelerated.sampled_valid_pixel_center is not None
+    assert accelerated.sampled_valid_pixel_center.flags.writeable is False
+    np.testing.assert_array_equal(
+        accelerated.sampled_valid_pixel_center,
+        expected_center_valid,
+    )
+    np.testing.assert_array_equal(
+        parallel.sampled_valid_pixel_center,
+        accelerated.sampled_valid_pixel_center,
+    )
+    assert parallel.adaptive_refined_pixel_count == accelerated.adaptive_refined_pixel_count
+    assert parallel.adaptive_unresolved_pixel_count == accelerated.adaptive_unresolved_pixel_count
+    assert parallel.sampled_invalid_pixel_count == accelerated.sampled_invalid_pixel_count
+    assert parallel.coordinate_evaluation_count == accelerated.coordinate_evaluation_count
+    assert parallel.estimated_l1_error_A2 == accelerated.estimated_l1_error_A2
+    assert accelerated.coordinate_evaluation_count > 0
+    assert accelerated.execution_backend == "numba_nogil_thread_tiles.v1"
+
+    from rasim_next.pipeline._continuous_detector_kernel import CompiledDetectorEvaluator
+
+    def reject_node_field_materialization(*args: object, **kwargs: object) -> None:
+        raise AssertionError("adaptive pixel integration materialized a node-scale field")
+
+    monkeypatch.setattr(CompiledDetectorEvaluator, "evaluate", reject_node_field_materialization)
+    fused_only = tiny_detector.integrate_native_pixels(
+        rods=m1_rods,
+        branch=2,
+        quadrature=accelerated_quadrature,
+    )
+    np.testing.assert_array_equal(fused_only.image_A2, accelerated.image_A2)
+    np.testing.assert_array_equal(
+        fused_only.per_rod_detector_mass_A2,
+        accelerated.per_rod_detector_mass_A2,
+    )
+    np.testing.assert_array_equal(
+        fused_only.sampled_valid_pixel_center,
+        accelerated.sampled_valid_pixel_center,
+    )
+
+    caustic_instrument = replace(
+        instrument,
+        detector_shape_rc=(3, 3),
+        detector_reference_coordinate_px=(
+            instrument.detector_reference_coordinate_px[0] + 1.0 - mapped.geometry.column_px,
+            instrument.detector_reference_coordinate_px[1] + 1.0 - mapped.geometry.row_px,
+        ),
+    )
+    caustic_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=caustic_instrument,
+    )
+    caustic_pixels = caustic_detector.integrate_native_pixels(
+        rods=(rod,),
+        branch=2,
+        quadrature=DetectorQuadrature(
+            pixel_gauss_order=2,
+            fold_gauss_order=4,
+            fold_subdivision_count=8,
+            row_chunk_size=2,
+        ),
+    )
+    assert caustic_pixels.fold_refined_pixel_count > 0
+    assert np.all(np.isfinite(caustic_pixels.image_A2))
+    assert caustic_pixels.fold_refinement_l1_A2 / caustic_pixels.total_detector_mass_A2 < 2.0e-2
+    assert caustic_pixels.fold_refinement_centroid_shift_px < 5.0e-2
+    compiled_caustic_pixels = caustic_detector.integrate_native_pixels(
+        rods=(rod,),
+        branch=2,
+        quadrature=replace(
+            accelerated_quadrature,
+            relative_tolerance=1.0e-3,
+            worker_count=2,
+        ),
+    )
+    assert np.all(np.isfinite(compiled_caustic_pixels.image_A2))
+    assert compiled_caustic_pixels.adaptive_refined_pixel_count > 0
+    assert compiled_caustic_pixels.adaptive_unresolved_pixel_count > 0
+    assert not compiled_caustic_pixels.adaptive_tolerance_satisfied
+    zero_caustic_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=caustic_instrument,
+        polarization_weight=0.0,
+    )
+    zero_pixels = zero_caustic_detector.integrate_native_pixels(
+        rods=(rod,),
+        branch=2,
+        quadrature=DetectorQuadrature(
+            pixel_gauss_order=2,
+            fold_gauss_order=4,
+            fold_subdivision_count=8,
+            row_chunk_size=2,
+        ),
+    )
+    assert zero_pixels.total_detector_mass_A2 == 0.0
+    np.testing.assert_array_equal(zero_pixels.per_rod_detector_mass_A2, 0.0)
+    assert not np.any(zero_pixels.image_A2)
+    assert zero_pixels.fold_refinement_l1_A2 == 0.0
+    assert zero_pixels.fold_refinement_centroid_shift_px == 0.0
 
 
 def _instrument(
@@ -75,7 +684,15 @@ def test_default_case_inputs_have_one_explicit_source_and_support_authority() ->
     assert values["sample_count"] == 20
     assert values["mean_origin_lab_m"] == [(0.0).hex(), (-0.020).hex(), (0.0).hex()]
     assert values["mean_direction_lab"] == [(0.0).hex(), (1.0).hex(), (0.0).hex()]
+    assert values["transverse_axes_lab"] == [
+        [(1.0).hex(), (0.0).hex(), (0.0).hex()],
+        [(0.0).hex(), (0.0).hex(), (1.0).hex()],
+    ]
+    fwhm_to_sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+    assert values["spatial_sigma_m"] == [(0.05e-3 * fwhm_to_sigma).hex()] * 2
+    assert values["divergence_sigma_rad"] == [(0.0008726646259971648 * fwhm_to_sigma).hex()] * 2
     assert values["mean_wavelength_A"] == (1.540592925).hex()
+    assert values["wavelength_sigma_A"] == (1.540592925 * 0.007).hex()
     assert instrument.sample_support_model_id == "unbounded_plane.v1"
     assert instrument.sample_width_m is None and instrument.sample_length_m is None
     assert instrument.lab_from_sample.source_frame is FrameId.SAMPLE
@@ -84,7 +701,145 @@ def test_default_case_inputs_have_one_explicit_source_and_support_authority() ->
     assert instrument.sample_from_crystal.target_frame is FrameId.SAMPLE
     assert instrument.detector_shape_rc == (3000, 3000)
     assert instrument.detector_reference_coordinate_px == (1453.12, 1596.422)
+    np.testing.assert_array_equal(
+        instrument.lab_from_detector.rotation,
+        np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
+    )
+    np.testing.assert_array_equal(
+        instrument.lab_from_detector.translation_m,
+        np.array([0.0, 0.075, 0.0]),
+    )
+    assert instrument.detector_row_pitch_m == 1.0e-4
+    assert instrument.detector_column_pitch_m == 1.0e-4
     assert instrument.film_thickness_A == 500.0
+
+
+def test_actual_initial_beam_projects_1000_equal_mass_ki_to_untilted_detector() -> None:
+    namespace = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
+    )
+    samples, instrument = namespace["build_default_case_inputs"](
+        sample_count=1000,
+        sample_angle_rad=math.radians(5.0),
+    )
+    sample_angle_rad = math.radians(5.0)
+    cosine = math.cos(sample_angle_rad)
+    sine = math.sin(sample_angle_rad)
+    expected_lab_from_sample_rotation = np.array(
+        [[1.0, 0.0, 0.0], [0.0, cosine, -sine], [0.0, sine, cosine]]
+    )
+    np.testing.assert_allclose(
+        instrument.lab_from_sample.rotation,
+        expected_lab_from_sample_rotation,
+        rtol=0.0,
+        atol=2.0e-16,
+    )
+    crystal = read_crystal(
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "bi2se3"
+        / "structures"
+        / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    incident = build_incident_states(
+        samples,
+        material_optics(crystal, samples.wavelength_A),
+        instrument,
+    ).states
+    sample_normal_lab = expected_lab_from_sample_rotation[:, 2]
+    source_to_sample_m = -(
+        (samples.origin_lab_m - instrument.lab_from_sample.translation_m) @ sample_normal_lab
+    ) / (samples.direction_lab @ sample_normal_lab)
+    expected_sample_intersection_lab_m = (
+        samples.origin_lab_m + source_to_sample_m[:, None] * samples.direction_lab
+    )
+    np.testing.assert_allclose(
+        incident.sample_intersection_lab_m,
+        expected_sample_intersection_lab_m,
+        rtol=0.0,
+        atol=2.0e-16,
+    )
+    k_air_norm_Ainv = 2.0 * np.pi / incident.wavelength_A
+    direction_lab = instrument.lab_from_sample.apply_vector(incident.k_air_sample_Ainv)
+    direction_lab /= k_air_norm_Ainv[:, None]
+    np.testing.assert_allclose(direction_lab, samples.direction_lab, rtol=0.0, atol=5.0e-16)
+    projection = project_detector_rays(
+        incident.sample_intersection_lab_m,
+        direction_lab,
+        instrument,
+    )
+
+    assert samples.incident_sample_id.size == 1000
+    np.testing.assert_array_equal(samples.source_weight, np.full(1000, 0.001))
+    assert np.all(incident.valid)
+    assert np.all(projection.valid)
+    detector_normal_lab = instrument.lab_from_detector.apply_vector([0.0, 0.0, 1.0])
+    np.testing.assert_array_equal(detector_normal_lab, np.array([0.0, 1.0, 0.0]))
+
+    weights = incident.source_weight
+    center_column, center_row = instrument.detector_reference_coordinate_px
+    centroid = np.asarray(
+        (
+            np.sum(weights * projection.column_px),
+            np.sum(weights * projection.row_px),
+        )
+    )
+    np.testing.assert_allclose(
+        centroid,
+        np.asarray((center_column, center_row)),
+        rtol=0.0,
+        atol=3.0e-12,
+    )
+    detector_plane_y_m = 0.075
+    plane_distance_m = (detector_plane_y_m - samples.origin_lab_m[:, 1]) / samples.direction_lab[
+        :, 1
+    ]
+    expected_point_lab_m = samples.origin_lab_m + plane_distance_m[:, None] * samples.direction_lab
+    np.testing.assert_allclose(
+        projection.column_px,
+        center_column + expected_point_lab_m[:, 0] / 1.0e-4,
+        rtol=0.0,
+        atol=2.0e-12,
+    )
+    np.testing.assert_allclose(
+        projection.row_px,
+        center_row - expected_point_lab_m[:, 2] / 1.0e-4,
+        rtol=0.0,
+        atol=2.0e-12,
+    )
+    fwhm_to_sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+    source_to_detector_m = 0.020 + 0.075
+    position_sigma_m = 0.05e-3 * fwhm_to_sigma
+    divergence_sigma_rad = 0.0008726646259971648 * fwhm_to_sigma
+    expected_sigma_px = (
+        math.hypot(
+            position_sigma_m,
+            source_to_detector_m * divergence_sigma_rad,
+        )
+        / 1.0e-4
+    )
+    observed_sigma_px = np.sqrt(
+        np.asarray(
+            (
+                np.sum(weights * (projection.column_px - centroid[0]) ** 2),
+                np.sum(weights * (projection.row_px - centroid[1]) ** 2),
+            )
+        )
+    )
+    np.testing.assert_allclose(
+        observed_sigma_px,
+        np.full(2, expected_sigma_px),
+        rtol=0.05,
+        atol=0.0,
+    )
+    wavelength_mean_A = float(np.sum(weights * incident.wavelength_A))
+    wavelength_sigma_A = math.sqrt(
+        float(np.sum(weights * (incident.wavelength_A - wavelength_mean_A) ** 2))
+    )
+    assert wavelength_mean_A == pytest.approx(1.540592925, abs=2.0e-15)
+    assert wavelength_sigma_A == pytest.approx(1.540592925 * 0.007, rel=0.005)
+    assert np.sum(weights[projection.valid]) == pytest.approx(1.0, abs=2.0e-15)
 
 
 def _frame(origin_lab_m: np.ndarray | list[float] | None = None) -> AngleFrame:

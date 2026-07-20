@@ -45,8 +45,12 @@ def configure_matplotlib() -> None:
     matplotlib.use("Agg")
 
 
-def build_default_case_inputs() -> tuple[IncidentSampleBatch, CompiledInstrument]:
-    """Build the single source/instrument authority for the canonical image."""
+def build_default_case_inputs(
+    *,
+    sample_count: int = 20,
+    sample_angle_rad: float = 0.20943951023931953,
+) -> tuple[IncidentSampleBatch, CompiledInstrument]:
+    """Build the source/instrument authority for the canonical Bi2Se3 case."""
 
     identity = np.eye(3)
     zero = np.zeros(3)
@@ -59,7 +63,7 @@ def build_default_case_inputs() -> tuple[IncidentSampleBatch, CompiledInstrument
         divergence_sigma_rad=np.full(2, 0.0008726646259971648 * FWHM_TO_SIGMA),
         mean_wavelength_A=1.540592925,
         wavelength_sigma_A=1.540592925 * 0.007,
-        sample_count=20,
+        sample_count=sample_count,
         seed=1729,
         polarization_state_id="UNITY_APPROXIMATION",
     )
@@ -68,7 +72,7 @@ def build_default_case_inputs() -> tuple[IncidentSampleBatch, CompiledInstrument
             axis_rotations=(
                 AxisRotation(
                     axis_lab=np.array([1.0, 0.0, 0.0]),
-                    angle_rad=0.20943951023931953,
+                    angle_rad=sample_angle_rad,
                     pivot_lab_m=zero,
                 ),
             ),

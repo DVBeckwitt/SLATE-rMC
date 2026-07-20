@@ -14,6 +14,11 @@ from painted_ewald.mosaic import (
 )
 from painted_ewald.painter import EwaldSpherePainter
 from painted_ewald.rods import enumerate_rods_within_ewald_sphere
+from painted_ewald.surface import (
+    ContinuousEwaldCoating,
+    EwaldLatentGeometry,
+    EwaldLatentIntensity,
+)
 from painted_ewald.types import (
     BasisBoundStrengthModel,
     BranchCoatingSummary,
@@ -40,6 +45,9 @@ __all__ = [
     "BraggFamilySlice",
     "BraggSpaceConfig",
     "BranchCoatingSummary",
+    "ContinuousEwaldCoating",
+    "EwaldLatentGeometry",
+    "EwaldLatentIntensity",
     "EwaldSpherePainter",
     "FamilyCoatingSummary",
     "ForwardPolicy",

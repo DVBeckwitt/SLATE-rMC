@@ -24,6 +24,7 @@ from rasim_next.geometry import (
     AngleFrame,
     AxisRotation,
     DetectorAngles,
+    DetectorProjectionBatch,
     InstrumentConfiguration,
     angles_to_detector_coordinates,
     build_incident_states,
@@ -32,6 +33,7 @@ from rasim_next.geometry import (
     detector_coordinates_to_angles,
     intersect_sample_ray,
     project_detector_ray,
+    project_detector_rays,
     transport_scattering_events,
 )
 from rasim_next.io.orientation import detector_native_to_raw
@@ -342,6 +344,8 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
 
     for origin, direction, status in (
         ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
+        ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], ValidityCode.NO_SOLUTION),
         ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], ValidityCode.BACKWARD),
         ([1.0e-3, 0.0, 0.0], [0.0, 0.0, 1.0], ValidityCode.OUTSIDE_SUPPORT),
     ):
@@ -370,6 +374,61 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
     )
     assert near.status is ValidityCode.VALID
     assert 0.0 < near.ray_distance_m <= 1e-12
+
+
+def test_batched_detector_projection_matches_scalar_rays() -> None:
+    instrument = compile_instrument(_configuration())
+    origins = np.zeros((4, 3), dtype=np.float64)
+    directions = np.asarray(
+        (
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, -1.0),
+            (1.0e-3, 0.0, 1.0),
+        ),
+        dtype=np.float64,
+    )
+    directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+
+    batch = project_detector_rays(origins, directions, instrument)
+    scalar = tuple(
+        project_detector_ray(origin, direction, instrument)
+        for origin, direction in zip(origins, directions, strict=True)
+    )
+
+    assert tuple(batch.status) == tuple(item.status for item in scalar)
+    np.testing.assert_array_equal(
+        batch.valid,
+        np.asarray([item.status is ValidityCode.VALID for item in scalar]),
+    )
+    np.testing.assert_allclose(batch.point_lab_m, [item.point_lab_m for item in scalar])
+    np.testing.assert_allclose(batch.column_px, [item.column_px for item in scalar])
+    np.testing.assert_allclose(batch.row_px, [item.row_px for item in scalar])
+    np.testing.assert_allclose(batch.ray_distance_m, [item.ray_distance_m for item in scalar])
+    np.testing.assert_allclose(
+        batch.pixel_solid_angle_sr,
+        [item.pixel_solid_angle_sr for item in scalar],
+    )
+    for value in (
+        batch.point_lab_m,
+        batch.column_px,
+        batch.row_px,
+        batch.ray_distance_m,
+        batch.pixel_solid_angle_sr,
+        batch.valid,
+        batch.status,
+    ):
+        assert not value.flags.writeable
+
+    preserved_status = DetectorProjectionBatch(
+        point_lab_m=np.zeros((1, 3)),
+        column_px=np.zeros(1),
+        row_px=np.zeros(1),
+        ray_distance_m=np.zeros(1),
+        pixel_solid_angle_sr=np.zeros(1),
+        status=np.asarray([ValidityCode.RESIDUAL_EXCEEDED]),
+    )
+    assert preserved_status.status[0] == ValidityCode.RESIDUAL_EXCEEDED
 
 
 def test_detector_angles_cardinals_wrap_and_direct_beam() -> None:

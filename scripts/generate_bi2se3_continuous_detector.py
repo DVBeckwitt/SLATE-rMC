@@ -1,0 +1,487 @@
+"""Generate the one-ki, m=1 upper-root Bi2Se3 detector pushforward."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import sys
+from pathlib import Path
+from time import perf_counter
+
+import numpy as np
+from generate_bi2se3_detector_image import build_default_case_inputs
+
+from painted_ewald import (
+    BraggSpaceConfig,
+    ContinuousEwaldCoating,
+    MosaicBraggSpace,
+    MosaicParameters,
+    Rod,
+)
+from rasim_next.core.contracts import EventIntensityNormalization
+from rasim_next.geometry import build_incident_states
+from rasim_next.materials import material_optics, read_crystal
+from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.continuous_detector import (
+    DetectorEwaldMeasure,
+    DetectorQuadrature,
+    PixelIntegrationMethod,
+)
+from rasim_next.proof.diagnostics import write_diagnostic
+from rasim_next.reciprocal.lattice import ReciprocalLattice
+
+ROOT = Path(__file__).resolve().parents[1]
+M1_ROD_KEYS = ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))
+
+
+def _peak_working_set_bytes() -> int | None:
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    counters = ProcessMemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.GetProcessMemoryInfo.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(ProcessMemoryCounters),
+        wintypes.DWORD,
+    )
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+    process = kernel32.GetCurrentProcess()
+    succeeded = psapi.GetProcessMemoryInfo(
+        process,
+        ctypes.byref(counters),
+        counters.cb,
+    )
+    return int(counters.PeakWorkingSetSize) if succeeded else None
+
+
+def build_default_detector_measure() -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
+    """Build the accepted 5-degree, seven-layer finite-total fixture."""
+
+    samples, instrument = build_default_case_inputs(
+        sample_count=1,
+        sample_angle_rad=math.radians(5.0),
+    )
+    crystal = read_crystal(
+        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    material = material_optics(crystal, samples.wavelength_A)
+    incident = build_incident_states(samples, material, instrument)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    m0_rod = Rod(0, 0)
+    m1_rods = tuple(Rod(h, k) for h, k in M1_ROD_KEYS)
+    bragg = MosaicBraggSpace(
+        BraggSpaceConfig(
+            reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+            crystal_to_sample=instrument.sample_from_crystal.rotation,
+            rods=(m0_rod, *m1_rods),
+            mosaic=MosaicParameters(
+                gaussian_sigma_rad=math.radians(5.0),
+                lorentzian_half_width_rad=math.radians(2.0),
+                lorentzian_probability=0.1,
+                alpha_panel_count=12,
+                alpha_gauss_order=6,
+                azimuth_count=32,
+            ),
+            k_norm_Ainv=2.0 * np.pi / samples.wavelength_A[0],
+        ),
+        Bi2Se3TwoHStrength(
+            crystal=crystal,
+            layers=7,
+            normalization=EventIntensityNormalization.FINITE_TOTAL,
+        ),
+    )
+    coating = ContinuousEwaldCoating(
+        bragg,
+        ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
+    )
+    return (
+        DetectorEwaldMeasure(
+            coating=coating,
+            incident=incident,
+            material=material,
+            instrument=instrument,
+        ),
+        m1_rods,
+        m0_rod,
+    )
+
+
+def _center_valid_mask(detector: DetectorEwaldMeasure, *, row_chunk_size: int) -> np.ndarray:
+    rows, columns = detector.instrument.detector_shape_rc
+    valid = np.zeros((rows, columns), dtype=np.bool_)
+    column = np.arange(columns, dtype=np.float64)
+    for start in range(0, rows, row_chunk_size):
+        stop = min(start + row_chunk_size, rows)
+        row = np.arange(start, stop, dtype=np.float64)
+        column_grid, row_grid = np.broadcast_arrays(column[None, :], row[:, None])
+        # Reuse the authoritative ray geometry while omitting optical and
+        # surface-Jacobian arrays that the display mask does not consume.
+        geometry, _ = detector._detector_coordinate_state(
+            column_grid,
+            row_grid,
+            include_optical=False,
+            include_surface_jacobian=False,
+        )
+        valid[start:stop] = geometry.valid
+    return valid
+
+
+def _write_figure(
+    *,
+    image_A2: np.ndarray,
+    valid_center: np.ndarray,
+    direct_beam_column_row: tuple[float, float],
+    specular_column_row: tuple[float, float],
+    unresolved_pixel_count: int,
+    output_path: Path,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.colors import LogNorm
+
+    positive = image_A2[image_A2 > 0.0]
+    if not positive.size:
+        raise RuntimeError("detector image contains no positive m=1 mass")
+    linear_max = float(np.quantile(positive, 0.9995))
+    log_min = float(np.quantile(positive, 0.005))
+    log_max = float(np.max(positive))
+    del positive
+    log_cmap = matplotlib.colormaps["magma"].copy()
+    log_cmap.set_bad(log_cmap(0.0))
+    rows, columns = image_A2.shape
+    extent = (-0.5, columns - 0.5, rows - 0.5, -0.5)
+    figure, axes = plt.subplots(1, 2, figsize=(15.5, 7.2), constrained_layout=True)
+    linear = axes[0].imshow(
+        image_A2,
+        origin="upper",
+        extent=extent,
+        cmap="magma",
+        vmin=0.0,
+        vmax=linear_max,
+        interpolation="nearest",
+        rasterized=True,
+    )
+    logarithmic = axes[1].imshow(
+        np.ma.array(image_A2, mask=image_A2 <= 0.0, copy=False),
+        origin="upper",
+        extent=extent,
+        cmap=log_cmap,
+        norm=LogNorm(vmin=log_min, vmax=log_max),
+        interpolation="nearest",
+        rasterized=True,
+    )
+    invalid_overlay = np.ma.masked_where(
+        valid_center,
+        np.ones(image_A2.shape, dtype=np.uint8),
+    )
+    for axis in axes:
+        axis.imshow(
+            invalid_overlay,
+            origin="upper",
+            extent=extent,
+            cmap="gray",
+            vmin=0.0,
+            vmax=2.0,
+            alpha=0.32,
+            interpolation="nearest",
+            rasterized=True,
+        )
+        axis.scatter(
+            *direct_beam_column_row,
+            marker="+",
+            s=110,
+            linewidths=1.5,
+            color="#00e5ff",
+            label="direct-beam coordinate",
+        )
+        axis.scatter(
+            *specular_column_row,
+            marker="x",
+            s=75,
+            linewidths=1.4,
+            color="#7cff6b",
+            label="m=0 geometry (intensity excluded)",
+        )
+        axis.set_xlabel("detector column (pixel coordinate)")
+        axis.set_ylabel("detector row (pixel coordinate)")
+        axis.set_xlim(-0.5, columns - 0.5)
+        axis.set_ylim(rows - 0.5, -0.5)
+        axis.legend(loc="lower right", fontsize=8, framealpha=0.85)
+    axes[0].set_title("Linear m=1 upper-root mass (99.95% display clip)")
+    axes[1].set_title("Logarithmic m=1 upper-root mass")
+    figure.colorbar(linear, ax=axes[0], label=r"raw detector mass ($\AA^2$/pixel)")
+    figure.colorbar(logarithmic, ax=axes[1], label=r"raw detector mass ($\AA^2$/pixel)")
+    status_prefix = (
+        ""
+        if unresolved_pixel_count == 0
+        else f"UNRESOLVED QUADRATURE DIAGNOSTIC ({unresolved_pixel_count:,} pixels) — "
+    )
+    figure.suptitle(
+        status_prefix + "Bi$_2$Se$_3$, one 5° incident state: detector point → $k_f$ → Q → "
+        "mosaic * 2H SF → integrated native pixels"
+    )
+    figure.savefig(output_path, dpi=220)
+    plt.close(figure)
+
+
+def main() -> None:
+    overall_start = perf_counter()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pixel-gauss-order", type=int, default=2)
+    parser.add_argument("--fold-gauss-order", type=int, default=4)
+    parser.add_argument("--fold-subdivision-count", type=int, default=8)
+    parser.add_argument("--row-chunk-size", type=int, default=8)
+    parser.add_argument(
+        "--integration-method",
+        choices=tuple(method.value for method in PixelIntegrationMethod),
+        default=PixelIntegrationMethod.FIXED_NUMPY.value,
+    )
+    parser.add_argument("--relative-tolerance", type=float, default=1.0e-4)
+    parser.add_argument("--absolute-tolerance-a2", type=float, default=0.0)
+    parser.add_argument("--max-depth", type=int, default=4)
+    parser.add_argument("--worker-count", type=int, default=1)
+    parser.add_argument("--reference-diagnostic", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--numeric-only", action="store_true")
+    parser.add_argument("--allow-unresolved-diagnostic", action="store_true")
+    args = parser.parse_args()
+    if args.numeric_only and args.output_dir is not None:
+        parser.error("--numeric-only and --output-dir are mutually exclusive")
+    if not args.numeric_only and args.output_dir is None:
+        parser.error("provide --output-dir or --numeric-only")
+
+    fixture_start = perf_counter()
+    detector, m1_rods, m0_rod = build_default_detector_measure()
+    fixture_elapsed = perf_counter() - fixture_start
+    start = perf_counter()
+    result = detector.integrate_native_pixels(
+        rods=m1_rods,
+        branch=2,
+        quadrature=DetectorQuadrature(
+            pixel_gauss_order=args.pixel_gauss_order,
+            fold_gauss_order=args.fold_gauss_order,
+            fold_subdivision_count=args.fold_subdivision_count,
+            row_chunk_size=args.row_chunk_size,
+            method=PixelIntegrationMethod(args.integration_method),
+            relative_tolerance=args.relative_tolerance,
+            absolute_tolerance_A2=args.absolute_tolerance_a2,
+            max_depth=args.max_depth,
+            worker_count=args.worker_count,
+        ),
+    )
+    elapsed = perf_counter() - start
+    if (
+        args.output_dir is not None
+        and not result.adaptive_tolerance_satisfied
+        and not args.allow_unresolved_diagnostic
+    ):
+        raise RuntimeError(
+            "adaptive quadrature left unresolved pixels; increase convergence or pass "
+            "--allow-unresolved-diagnostic to emit an explicitly labelled non-accepted image"
+        )
+    specular = detector.map_specular_geometry(
+        rod=m0_rod,
+        alpha_rad=0.0,
+        beta_rad=0.0,
+    )
+    specular_coordinate = (
+        float(specular.geometry.column_px),
+        float(specular.geometry.row_px),
+    )
+    direct_beam = tuple(
+        float(value) for value in detector.instrument.detector_reference_coordinate_px
+    )
+    bragg_config = detector.coating.bragg_space.config
+    mosaic = bragg_config.mosaic
+    strength_model = detector.coating.bragg_space.strength_model
+    if not isinstance(strength_model, Bi2Se3TwoHStrength):
+        raise TypeError("the default fixture must use Bi2Se3TwoHStrength")
+    hash_start = perf_counter()
+    image_hash = hashlib.sha256(
+        memoryview(np.ascontiguousarray(result.image_A2)).cast("B")
+    ).hexdigest()
+    hash_elapsed = perf_counter() - hash_start
+    summary = {
+        "branch": 2,
+        "cif_path": "examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        "detector_column_pitch_m": detector.instrument.detector_column_pitch_m,
+        "detector_distance_m": float(
+            np.linalg.norm(
+                detector.instrument.lab_from_detector.translation_m
+                - detector.instrument.lab_from_sample.translation_m
+            )
+        ),
+        "detector_reference_column_row_px": list(direct_beam),
+        "detector_row_pitch_m": detector.instrument.detector_row_pitch_m,
+        "detector_shape_rc": list(result.image_A2.shape),
+        "direct_beam_column_row_px": list(direct_beam),
+        "image_sha256": image_hash,
+        "ki_sample_Ainv": detector.coating.ki_sample_Ainv.tolist(),
+        "m0_intensity_status": specular.intensity_status.value,
+        "m0_specular_column_row_px": list(specular_coordinate),
+        "m1_rod_keys": [[rod.h, rod.k] for rod in m1_rods],
+        "mosaic_gaussian_sigma_deg": math.degrees(mosaic.gaussian_sigma_rad),
+        "mosaic_lorentzian_hwhm_deg": math.degrees(mosaic.lorentzian_half_width_rad),
+        "mosaic_lorentzian_probability": mosaic.lorentzian_probability,
+        "nonzero_pixel_count": int(np.count_nonzero(result.image_A2)),
+        "fold_gauss_order": args.fold_gauss_order,
+        "fold_subdivision_count": args.fold_subdivision_count,
+        "fold_refined_pixel_count": result.fold_refined_pixel_count,
+        "fold_refinement_centroid_shift_px": result.fold_refinement_centroid_shift_px,
+        "fold_refinement_l1_A2": result.fold_refinement_l1_A2,
+        "fold_refinement_relative_l1": (
+            result.fold_refinement_l1_A2 / result.total_detector_mass_A2
+        ),
+        "adaptive_refined_pixel_count": result.adaptive_refined_pixel_count,
+        "adaptive_tolerance_satisfied": result.adaptive_tolerance_satisfied,
+        "adaptive_unresolved_pixel_count": result.adaptive_unresolved_pixel_count,
+        "artifact_status": (
+            "CONVERGED" if result.adaptive_tolerance_satisfied else "UNRESOLVED_ADAPTIVE_DIAGNOSTIC"
+        ),
+        "sampled_invalid_pixel_count": result.sampled_invalid_pixel_count,
+        "coordinate_evaluation_count": result.coordinate_evaluation_count,
+        "estimated_l1_error_A2": result.estimated_l1_error_A2,
+        "execution_backend": result.execution_backend,
+        "fixture_build_wall_time_s": fixture_elapsed,
+        "image_hash_wall_time_s": hash_elapsed,
+        "integration_method": args.integration_method,
+        "relative_tolerance": args.relative_tolerance,
+        "absolute_tolerance_A2": args.absolute_tolerance_a2,
+        "max_depth": args.max_depth,
+        "worker_count": args.worker_count,
+        "integration_peak_working_set_bytes": _peak_working_set_bytes(),
+        "per_rod_detector_mass_A2": result.per_rod_detector_mass_A2.tolist(),
+        "pixel_gauss_order": args.pixel_gauss_order,
+        "strength_layer_count": strength_model.layers,
+        "strength_normalization": strength_model.normalization.value,
+        "total_detector_mass_A2": result.total_detector_mass_A2,
+        "integration_wall_time_s": elapsed,
+        "wavelength_A": float(2.0 * np.pi / bragg_config.k_norm_Ainv),
+    }
+    if args.reference_diagnostic is not None:
+        reference_start = perf_counter()
+        reference_path = args.reference_diagnostic.resolve()
+        with np.load(reference_path) as reference:
+            reference_image = np.asarray(reference["image_A2"], dtype=np.float64)
+            reference_per_rod = np.asarray(reference["per_rod_detector_mass_A2"], dtype=np.float64)
+        if reference_image.shape != result.image_A2.shape:
+            raise ValueError("reference detector image shape does not match")
+        reference_total = float(np.sum(reference_image, dtype=np.float64))
+        total_relative_error = (
+            abs(result.total_detector_mass_A2 - reference_total) / reference_total
+        )
+        normalized_l1 = 0.0
+        for row_start in range(0, result.image_A2.shape[0], 64):
+            row_stop = min(row_start + 64, result.image_A2.shape[0])
+            normalized_l1 += float(
+                np.sum(
+                    np.abs(
+                        result.image_A2[row_start:row_stop] / result.total_detector_mass_A2
+                        - reference_image[row_start:row_stop] / reference_total
+                    ),
+                    dtype=np.float64,
+                )
+            )
+        row_coordinate = np.arange(result.image_A2.shape[0], dtype=np.float64)
+        column_coordinate = np.arange(result.image_A2.shape[1], dtype=np.float64)
+        result_centroid = np.asarray(
+            (
+                np.dot(np.sum(result.image_A2, axis=0), column_coordinate)
+                / result.total_detector_mass_A2,
+                np.dot(np.sum(result.image_A2, axis=1), row_coordinate)
+                / result.total_detector_mass_A2,
+            )
+        )
+        reference_centroid = np.asarray(
+            (
+                np.dot(np.sum(reference_image, axis=0), column_coordinate) / reference_total,
+                np.dot(np.sum(reference_image, axis=1), row_coordinate) / reference_total,
+            )
+        )
+        per_rod_relative_error = (
+            np.abs(result.per_rod_detector_mass_A2 - reference_per_rod) / reference_per_rod
+        )
+        summary["frozen_reference"] = {
+            "centroid_shift_px": float(np.linalg.norm(result_centroid - reference_centroid)),
+            "maximum_per_rod_relative_error": float(np.max(per_rod_relative_error)),
+            "normalized_image_l1": normalized_l1,
+            "path": os.fspath(reference_path),
+            "total_relative_error": total_relative_error,
+        }
+        del reference_image
+        summary["reference_comparison_wall_time_s"] = perf_counter() - reference_start
+    if args.output_dir is not None:
+        output_dir = args.output_dir.resolve()
+        if output_dir == ROOT or output_dir.is_relative_to(ROOT):
+            raise ValueError("output directory must be outside the repository")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        figure_path = output_dir / "bi2se3-5deg-m01-continuous-detector.png"
+        diagnostic_path = output_dir / "bi2se3-5deg-m01-continuous-detector.ra_diag.npz"
+        validity_start = perf_counter()
+        valid_center = result.sampled_valid_pixel_center
+        if valid_center is None:
+            valid_center = _center_valid_mask(detector, row_chunk_size=args.row_chunk_size)
+            summary["validity_mask_source"] = "postintegration_geometry_evaluation.v1"
+        else:
+            summary["validity_mask_source"] = "compiled_center_sample_reuse.v1"
+        summary["validity_mask_wall_time_s"] = perf_counter() - validity_start
+        figure_start = perf_counter()
+        _write_figure(
+            image_A2=result.image_A2,
+            valid_center=valid_center,
+            direct_beam_column_row=direct_beam,
+            specular_column_row=specular_coordinate,
+            unresolved_pixel_count=result.adaptive_unresolved_pixel_count,
+            output_path=figure_path,
+        )
+        summary["figure_wall_time_s"] = perf_counter() - figure_start
+        summary["diagnostic_path"] = os.fspath(diagnostic_path)
+        summary["figure_path"] = os.fspath(figure_path)
+        summary["diagnostic_storage"] = "atomic_compressed_npz_embedded_manifest.v1"
+        diagnostic_start = perf_counter()
+        write_diagnostic(
+            diagnostic_path,
+            arrays={
+                "image_A2": result.image_A2,
+                "valid_pixel_center": valid_center,
+                "ki_sample_Ainv": detector.coating.ki_sample_Ainv,
+                "per_rod_detector_mass_A2": result.per_rod_detector_mass_A2,
+            },
+            manifest=summary,
+            repository_root=ROOT,
+        )
+        summary["diagnostic_write_wall_time_s"] = perf_counter() - diagnostic_start
+        summary["diagnostic_size_bytes"] = diagnostic_path.stat().st_size
+        summary["end_to_end_peak_working_set_bytes"] = _peak_working_set_bytes()
+        summary["end_to_end_wall_time_s"] = perf_counter() - overall_start
+    print(json.dumps(summary, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

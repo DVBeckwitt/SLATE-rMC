@@ -9,9 +9,11 @@ from rasim_next.geometry.angles import (
 )
 from rasim_next.geometry.detector import (
     DetectorProjection,
+    DetectorProjectionBatch,
     DetectorRay,
     detector_coordinate_to_ray,
     project_detector_ray,
+    project_detector_rays,
 )
 from rasim_next.geometry.instrument import (
     AxisRotation,
@@ -34,6 +36,7 @@ __all__ = [
     "DetectorAngles",
     "DetectorCoordinates",
     "DetectorProjection",
+    "DetectorProjectionBatch",
     "DetectorRay",
     "EventTransportResult",
     "IncidentTransportResult",
@@ -46,5 +49,6 @@ __all__ = [
     "detector_coordinates_to_angles",
     "intersect_sample_ray",
     "project_detector_ray",
+    "project_detector_rays",
     "transport_scattering_events",
 ]
