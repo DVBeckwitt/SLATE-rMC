@@ -1,4 +1,4 @@
-"""Validated Pb-centered PbI2 trilayer amplitudes."""
+"""Validated material motifs for registry-resolved layer amplitudes."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from rasim_next.ordered.amplitudes import unit_cell_amplitude
 
 @dataclass(frozen=True, slots=True)
 class MotifAtom:
-    """One source site expressed in a Pb-centered crystallographic gauge."""
+    """One source site expressed in a motif-centered crystallographic gauge."""
 
     site_index: int
     source_label: str
@@ -181,8 +181,8 @@ def _as_plus_atoms(motif: PbI2Motif) -> tuple[MotifAtom, MotifAtom, MotifAtom]:
 
 
 def _reflected_atoms(
-    atoms: tuple[MotifAtom, MotifAtom, MotifAtom],
-) -> tuple[MotifAtom, MotifAtom, MotifAtom]:
+    atoms: tuple[MotifAtom, ...],
+) -> tuple[MotifAtom, ...]:
     return tuple(
         MotifAtom(
             site_index=atom.site_index,
@@ -233,7 +233,7 @@ def _canonical_plus_atoms(
 
 def _motif_crystal(
     crystal: CrystalStructure,
-    atoms: tuple[MotifAtom, MotifAtom, MotifAtom],
+    atoms: tuple[MotifAtom, ...],
     phase_id: str,
 ) -> CrystalStructure:
     sites = tuple(
@@ -256,7 +256,7 @@ def _motif_crystal(
         volume_A3=crystal.volume_A3,
         sites=sites,
         source_path=crystal.source_path,
-        provenance=f"Pb-centered motif extracted from {crystal.provenance}",
+        provenance=f"registry-free motif extracted from {crystal.provenance}",
     )
 
 
@@ -301,4 +301,136 @@ def pbi2_layer_amplitudes(
         gauge_id="pbi2.pb_centered.v1",
         layer_normal_crystal=layer_normal,
         layer_repeat_A=float(np.dot(crystal.direct_basis_A[:, 2], layer_normal)),
+    )
+
+
+def _bi2se3_quintuple_layers(
+    crystal: CrystalStructure,
+) -> tuple[tuple[MotifAtom, ...], ...]:
+    if any(site.element not in {"Bi", "Se"} for site in crystal.sites):
+        raise ValueError("Bi2Se3 motif extraction accepts only Bi and Se sites")
+    centers = tuple(
+        (site_index, site)
+        for site_index, site in enumerate(crystal.sites)
+        if site.source_label == "Se1" and site.element == "Se"
+    )
+    if len(centers) != 3 or len(crystal.sites) != 15:
+        raise ValueError("expanded Bi2Se3 must contain three Se1-centered quintuple layers")
+
+    motifs: list[tuple[MotifAtom, ...]] = []
+    covered: list[int] = []
+    center_coordinates: list[np.ndarray] = []
+    for center_index, center in centers:
+        neighbors: list[tuple[float, int, CrystalSite]] = []
+        for site_index, site in enumerate(crystal.sites):
+            if site_index == center_index:
+                continue
+            delta_z = site.fractional[2] - center.fractional[2]
+            relative_z = delta_z - np.floor(delta_z + 0.5)
+            neighbors.append((float(relative_z), site_index, site))
+        lower = sorted((row for row in neighbors if row[0] < 0.0), reverse=True)[:2]
+        upper = sorted(row for row in neighbors if row[0] > 0.0)[:2]
+        block = (*sorted(lower), (0.0, center_index, center), *upper)
+        if tuple(site.element for _, _, site in block) != ("Se", "Bi", "Se", "Bi", "Se"):
+            raise ValueError("Bi2Se3 quintuple layer must have Se-Bi-Se-Bi-Se order")
+        if block[0][2].source_label != "Se2" or block[-1][2].source_label != "Se2":
+            raise ValueError("Bi2Se3 quintuple-layer outer sites must be Se2")
+
+        center_xy = np.asarray(center.fractional[:2], dtype=np.float64)
+        motif: list[MotifAtom] = []
+        for relative_z, site_index, site in block:
+            offset_xy = np.mod(np.asarray(site.fractional[:2]) - center_xy, 1.0)
+            offset_xy[np.isclose(offset_xy, 1.0, rtol=0.0, atol=1.0e-12)] = 0.0
+            motif.append(
+                _motif_atom(
+                    site_index,
+                    site,
+                    np.asarray((offset_xy[0], offset_xy[1], relative_z)),
+                )
+            )
+            covered.append(site_index)
+        motifs.append(tuple(motif))
+        center_coordinates.append(np.asarray(center.fractional, dtype=np.float64))
+
+    if sorted(covered) != list(range(len(crystal.sites))):
+        raise ValueError("Bi2Se3 quintuple layers must cover every expanded site exactly once")
+    reference = motifs[0]
+    reference_signature = tuple(_atom_signature(atom) for atom in reference)
+    reference_labels = tuple(atom.source_label for atom in reference)
+    reference_offsets = np.asarray([atom.fractional_offset for atom in reference])
+    for motif in motifs[1:]:
+        if (
+            tuple(_atom_signature(atom) for atom in motif) != reference_signature
+            or tuple(atom.source_label for atom in motif) != reference_labels
+            or not np.allclose(
+                np.asarray([atom.fractional_offset for atom in motif]),
+                reference_offsets,
+                rtol=0.0,
+                atol=2.0e-15,
+            )
+        ):
+            raise ValueError("Bi2Se3 quintuple layers must be property-identical translations")
+
+    ordered_centers = sorted(center_coordinates, key=lambda coordinate: coordinate[2])
+    translations = tuple(
+        np.mod(right - left, 1.0)
+        for left, right in zip(
+            ordered_centers,
+            (*ordered_centers[1:], ordered_centers[0] + np.asarray((0.0, 0.0, 1.0))),
+            strict=True,
+        )
+    )
+    expected_translation = np.asarray((2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0))
+    if not all(
+        np.allclose(translation, expected_translation, rtol=0.0, atol=2.0e-15)
+        for translation in translations
+    ):
+        raise ValueError("Bi2Se3 quintuple centers must follow the CIF R-centering translation")
+    return tuple(motifs)
+
+
+def bi2se3_ql_amplitudes(
+    crystal: CrystalStructure,
+    query: RodQueryBatch,
+    *,
+    unknown_u_iso_A2: float | None = None,
+) -> LayerAmplitudeResult:
+    """Return Se1-centered Bi2Se3 quintuple-layer F+ and F- in electron units.
+
+    The source CIF establishes the five-atom motif. The returned gauge is one
+    registry-free layer; selecting a stacking parent remains a separate step.
+    """
+
+    if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
+        raise ValueError("query phase does not match the Bi2Se3 crystal")
+    plus_atoms = _bi2se3_quintuple_layers(crystal)[0]
+    minus_atoms = _reflected_atoms(plus_atoms)
+    hkl = np.column_stack((query.h, query.k, query.l_coordinate))
+    f_plus = unit_cell_amplitude(
+        _motif_crystal(crystal, plus_atoms, f"{crystal.phase_id}:ql-plus"),
+        hkl,
+        query.wavelength_A,
+        unknown_u_iso_A2=unknown_u_iso_A2,
+    ).amplitude_e
+    f_minus = unit_cell_amplitude(
+        _motif_crystal(crystal, minus_atoms, f"{crystal.phase_id}:ql-minus"),
+        hkl,
+        query.wavelength_A,
+        unknown_u_iso_A2=unknown_u_iso_A2,
+    ).amplitude_e
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
+        layer_normal = -layer_normal
+    return LayerAmplitudeResult(
+        event_id=query.event_id,
+        rod_id=query.rod_id,
+        phase_id=query.phase_id,
+        f_plus_e=f_plus,
+        f_minus_e=f_minus,
+        normalization="ONE_REGISTRY_FREE_LAYER",
+        phase_sign="POSITIVE_Q_DOT_R",
+        gauge_id="bi2se3.se1_centered_ql.v1",
+        layer_normal_crystal=layer_normal,
+        layer_repeat_A=float(np.dot(crystal.direct_basis_A[:, 2], layer_normal) / 3.0),
     )

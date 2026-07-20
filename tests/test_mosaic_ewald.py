@@ -8,7 +8,16 @@ import pytest
 from numpy.polynomial.legendre import leggauss
 from scipy.special import ndtr
 
-from painted_ewald import MosaicParameters, Rod, build_mosaic_space
+from painted_ewald import (
+    BraggSpaceConfig,
+    MosaicBraggSpace,
+    MosaicParameters,
+    Rod,
+    build_mosaic_space,
+)
+from painted_ewald import (
+    wrapped_mosaic_line_density_rad_inv as painted_mosaic_density,
+)
 from rasim_next.core.contracts import (
     IncidentSampleBatch,
     IncidentStateBatch,
@@ -35,6 +44,158 @@ BI2SE3_RECIPROCAL_BASIS_AINV = np.array(
         [0.0, 0.0, 0.2194156064806393],
     ]
 )
+
+
+class _UnequalSameFamilyStrength:
+    reciprocal_basis_Ainv = BI2SE3_RECIPROCAL_BASIS_AINV
+
+    def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+        return float((2 if (rod.h, rod.k) == (1, 0) else 5) * (1.0 + 0.1 * L))
+
+    def evaluate_profile(
+        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
+    ) -> np.ndarray:
+        multiplier = 2 if (rod.h, rod.k) == (1, 0) else 5
+        return multiplier * (1.0 + 0.1 * np.asarray(L))
+
+
+class _ComplexProfileStrength(_UnequalSameFamilyStrength):
+    def evaluate_profile(
+        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
+    ) -> np.ndarray:
+        return np.full(np.shape(L), 1.0 + 2.0j)
+
+
+class _WrongShapeProfileStrength(_UnequalSameFamilyStrength):
+    def evaluate_profile(
+        self, *, rod: Rod, L: np.ndarray, k_norm_Ainv: float
+    ) -> np.ndarray:
+        return np.ravel(L)
+
+
+def test_pre_ewald_bragg_space_weights_rods_before_exact_family_sum() -> None:
+    rods = (Rod(1, 0), Rod(0, 1))
+    config = BraggSpaceConfig(
+        reciprocal_basis_Ainv=BI2SE3_RECIPROCAL_BASIS_AINV,
+        crystal_to_sample=np.eye(3),
+        rods=rods,
+        mosaic=MosaicParameters(
+            gaussian_sigma_rad=np.deg2rad(5.0),
+            lorentzian_half_width_rad=np.deg2rad(2.0),
+            lorentzian_probability=0.1,
+            alpha_panel_count=12,
+            alpha_gauss_order=6,
+            azimuth_count=32,
+        ),
+        k_norm_Ainv=2.0 * np.pi / 1.540592925,
+    )
+    space = MosaicBraggSpace(config, _UnequalSameFamilyStrength())
+    ell = 0.25
+    family = space.weighted_family_slice(family_m=1, L=ell)
+    assert tuple(item.rod for item in family.rod_slices) == rods
+    expected = (2.0 + 5.0) * (1.0 + 0.1 * ell)
+    assert family.total_intensity_weight_A2 == pytest.approx(expected, abs=2.0e-14)
+    for rod_slice, multiplier in zip(family.rod_slices, (2.0, 5.0), strict=True):
+        assert np.sum(rod_slice.intensity_weight_A2) == pytest.approx(
+            multiplier * (1.0 + 0.1 * ell),
+            abs=2.0e-14,
+        )
+        np.testing.assert_allclose(
+            np.linalg.norm(rod_slice.q_sample_Ainv, axis=1),
+            np.linalg.norm(rod_slice.q_sample_Ainv[0]),
+            rtol=0.0,
+            atol=2.0e-14,
+        )
+    assert not np.allclose(
+        family.rod_slices[0].q_sample_Ainv,
+        family.rod_slices[1].q_sample_Ainv,
+    )
+
+    mapped = space.map_latent(
+        rod=rods[0],
+        alpha_rad=np.asarray((0.031, 0.127)),
+        beta_rad=np.asarray((0.22, 1.91)),
+        u_Ainv=np.asarray((-0.4, 0.7)),
+    )
+    unrotated = (
+        BI2SE3_RECIPROCAL_BASIS_AINV[:, 0]
+        + np.asarray((-0.4, 0.7))[:, None]
+        * BI2SE3_RECIPROCAL_BASIS_AINV[:, 2]
+        / np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])
+    )
+    np.testing.assert_allclose(
+        np.linalg.norm(mapped, axis=1),
+        np.linalg.norm(unrotated, axis=1),
+        rtol=0.0,
+        atol=2.0e-14,
+    )
+
+    alpha = 0.123456789
+    beta = 1.23456789
+    u_value = ell * np.linalg.norm(BI2SE3_RECIPROCAL_BASIS_AINV[:, 2])
+    latent = space.evaluate_latent(
+        rod=rods[0],
+        alpha_rad=alpha,
+        beta_rad=beta,
+        u_Ainv=u_value,
+    )
+    expected_mosaic_density = float(
+        2.0 * painted_mosaic_density(alpha, config.mosaic) / (2.0 * np.pi)
+    )
+    assert latent.mosaic_probability_density_rad2_inv == pytest.approx(
+        expected_mosaic_density,
+        rel=0.0,
+        abs=2.0e-15,
+    )
+    assert latent.intensity_density_A2_rad2_inv == pytest.approx(
+        expected_mosaic_density * 2.0 * (1.0 + 0.1 * ell),
+        rel=0.0,
+        abs=2.0e-14,
+    )
+    for mutation in (
+        {"alpha_rad": alpha + 0.2j},
+        {"q_sample_Ainv": latent.q_sample_Ainv.astype(np.complex128) + 0.2j},
+    ):
+        with pytest.raises(ValueError, match="must be real"):
+            replace(latent, **mutation)
+
+    alpha_node, alpha_weight = leggauss(768)
+    alpha_node = 0.5 * np.pi * (alpha_node + 1.0)
+    alpha_weight *= 0.5 * np.pi
+    continuous = space.evaluate_latent(
+        rod=rods[0],
+        alpha_rad=alpha_node,
+        beta_rad=0.731,
+        u_Ainv=u_value,
+    )
+    integrated = float(
+        np.sum(continuous.intensity_density_A2_rad2_inv * alpha_weight) * 2.0 * np.pi
+    )
+    assert integrated == pytest.approx(2.0 * (1.0 + 0.1 * ell), rel=3.0e-11)
+
+    with pytest.raises(AttributeError):
+        space.config = config  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        space._b3_norm_Ainv = 123.0  # type: ignore[misc]
+    with pytest.raises(ValueError, match="strength profile must be real"):
+        MosaicBraggSpace(config, _ComplexProfileStrength()).evaluate_latent(
+            rod=rods[0],
+            alpha_rad=alpha,
+            beta_rad=beta,
+            u_Ainv=u_value,
+        )
+    with pytest.raises(ValueError, match="must match the latent-coordinate shape"):
+        MosaicBraggSpace(config, _WrongShapeProfileStrength()).evaluate_latent(
+            rod=rods[0],
+            alpha_rad=np.full((2, 2), alpha),
+            beta_rad=beta,
+            u_Ainv=u_value,
+        )
+    with pytest.raises(ValueError, match="reciprocal bases do not match"):
+        MosaicBraggSpace(
+            replace(config, reciprocal_basis_Ainv=1.001 * BI2SE3_RECIPROCAL_BASIS_AINV),
+            _UnequalSameFamilyStrength(),
+        )
 
 
 @pytest.mark.parametrize("count", (6, 7))

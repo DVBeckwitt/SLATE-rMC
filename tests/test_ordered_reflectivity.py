@@ -10,19 +10,26 @@ import pytest
 import xraydb
 from numpy.typing import NDArray
 
+from painted_ewald import BraggSpaceConfig, MosaicBraggSpace, MosaicParameters, Rod
 from rasim_next.core.contracts import (
+    EventIntensityNormalization,
     MaterialOptics,
     RodQueryBatch,
     canonical_revision_sha256,
 )
-from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+from rasim_next.core.scattering import (
+    CLASSICAL_ELECTRON_RADIUS_A,
+    electron_squared_to_scattering_strength_A2,
+)
 from rasim_next.materials import (
+    CrystalSite,
     CrystalStructure,
     material_optics,
     read_crystal,
 )
 from rasim_next.materials.optics import HC_EV_A
 from rasim_next.ordered import (
+    bi2se3_ql_amplitudes,
     coherent_finite_stack,
     extract_pbi2_motifs,
     ordered_event_result,
@@ -30,6 +37,7 @@ from rasim_next.ordered import (
     uniform_finite_stack,
     unit_cell_amplitude,
 )
+from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity import manuscript_specular_composite, parratt_reflectivity
@@ -95,6 +103,165 @@ def _scalar_atom_sum(
             )
         )
     return np.asarray(values, dtype=np.complex128)
+
+
+def _bi2se3_ql_crystal(crystal: CrystalStructure, *, reflected: bool) -> CrystalStructure:
+    source_by_label = {
+        label: next(site for site in crystal.sites if site.source_label == label)
+        for label in ("Bi", "Se1", "Se2")
+    }
+    rows = (
+        ("Se2", (1.0 / 3.0, 2.0 / 3.0, -0.12163333333333337)),
+        ("Bi", (2.0 / 3.0, 1.0 / 3.0, -0.06746666666666667)),
+        ("Se1", (0.0, 0.0, 0.0)),
+        ("Bi", (1.0 / 3.0, 2.0 / 3.0, 0.06746666666666656)),
+        ("Se2", (2.0 / 3.0, 1.0 / 3.0, 0.12163333333333332)),
+    )
+    sites = []
+    for label, fractional in rows:
+        source = source_by_label[label]
+        x, y, z = fractional
+        sites.append(
+            CrystalSite(
+                source_label=source.source_label,
+                species=source.species,
+                element=source.element,
+                charge=source.charge,
+                occupancy=source.occupancy,
+                fractional=(x, y, -z if reflected else z),
+                u_iso_A2=source.u_iso_A2,
+                source_multiplicity=1,
+            )
+        )
+    return CrystalStructure(
+        phase_id=f"bi2se3-ql-{'minus' if reflected else 'plus'}",
+        spacegroup_hm="P 1",
+        direct_basis_A=crystal.direct_basis_A,
+        volume_A3=crystal.volume_A3,
+        sites=tuple(sites),
+        source_path=crystal.source_path,
+        provenance="independent signed-coordinate Bi2Se3 QL fixture",
+    )
+
+
+def test_bi2se3_quintuple_layer_and_finite_two_h_strength_match_direct_sums() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    h = np.asarray((1, 1, 0), dtype=np.int32)
+    k = np.asarray((0, -1, 0), dtype=np.int32)
+    ell = np.asarray((0.37, 1.13, 2.41))
+    query = RodQueryBatch(
+        event_id=np.asarray((11, 12, 13), dtype=np.int64),
+        rod_id=np.asarray((31, 32, 33), dtype=np.int64),
+        phase_id=(crystal.phase_id,) * 3,
+        h=h,
+        k=k,
+        q_sample_normal_Ainv=np.zeros(3),
+        l_coordinate=ell,
+        wavelength_A=np.full(3, WAVELENGTH_A),
+    )
+    amplitudes = bi2se3_ql_amplitudes(crystal, query)
+    hkl = np.column_stack((h, k, ell))
+    plus_oracle = _scalar_atom_sum(
+        _bi2se3_ql_crystal(crystal, reflected=False),
+        hkl,
+        query.wavelength_A,
+    )
+    minus_oracle = _scalar_atom_sum(
+        _bi2se3_ql_crystal(crystal, reflected=True),
+        hkl,
+        query.wavelength_A,
+    )
+    np.testing.assert_allclose(amplitudes.f_plus_e, plus_oracle, rtol=2.0e-13, atol=2.0e-12)
+    np.testing.assert_allclose(amplitudes.f_minus_e, minus_oracle, rtol=2.0e-13, atol=2.0e-12)
+    mirrored = bi2se3_ql_amplitudes(crystal, replace(query, l_coordinate=-ell))
+    np.testing.assert_allclose(amplitudes.f_minus_e, mirrored.f_plus_e, rtol=2.0e-13, atol=2.0e-12)
+    assert amplitudes.normalization.value == "ONE_REGISTRY_FREE_LAYER"
+    assert amplitudes.phase_sign.value == "POSITIVE_Q_DOT_R"
+    assert amplitudes.gauge_id == "bi2se3.se1_centered_ql.v1"
+    assert amplitudes.layer_repeat_A == pytest.approx(28.636 / 3.0, abs=2.0e-15)
+    assert abs(amplitudes.f_plus_e[0] - amplitudes.f_minus_e[0]) > 10.0
+
+    layers = 7
+    strength_model = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=layers,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+    )
+    profile_l = np.asarray((0.37, 1.13, 3.0))
+    strength = strength_model.evaluate_profile(
+        rod=Rod(1, 0),
+        L=profile_l,
+        k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+    )
+    profile_query = RodQueryBatch(
+        event_id=np.arange(profile_l.size, dtype=np.int64),
+        rod_id=np.zeros(profile_l.size, dtype=np.int64),
+        phase_id=(crystal.phase_id,) * profile_l.size,
+        h=np.ones(profile_l.size, dtype=np.int32),
+        k=np.zeros(profile_l.size, dtype=np.int32),
+        q_sample_normal_Ainv=np.zeros(profile_l.size),
+        l_coordinate=profile_l,
+        wavelength_A=np.full(profile_l.size, WAVELENGTH_A),
+    )
+    f_plus = _scalar_atom_sum(
+        _bi2se3_ql_crystal(crystal, reflected=False),
+        np.column_stack((profile_query.h, profile_query.k, profile_query.l_coordinate)),
+        profile_query.wavelength_A,
+    )
+    vertical = np.exp(2.0j * np.pi * profile_l / 3.0)
+    geometric = np.sum(vertical[:, None] ** np.arange(layers), axis=1)
+    expected = electron_squared_to_scattering_strength_A2(np.abs(f_plus * geometric) ** 2)
+    np.testing.assert_allclose(strength, expected, rtol=2.0e-12, atol=2.0e-23)
+    per_layer = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=layers,
+        normalization=EventIntensityNormalization.FINITE_PER_LAYER,
+    ).evaluate_profile(
+        rod=Rod(1, 0),
+        L=profile_l,
+        k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+    )
+    np.testing.assert_allclose(per_layer * layers, strength, rtol=2.0e-15, atol=2.0e-23)
+
+    rods = (Rod(1, 0), Rod(0, 1))
+    bragg_space = MosaicBraggSpace(
+        BraggSpaceConfig(
+            reciprocal_basis_Ainv=strength_model.reciprocal_basis_Ainv,
+            crystal_to_sample=np.eye(3),
+            rods=rods,
+            mosaic=MosaicParameters(
+                gaussian_sigma_rad=np.deg2rad(5.0),
+                lorentzian_half_width_rad=np.deg2rad(2.0),
+                lorentzian_probability=0.1,
+                alpha_panel_count=12,
+                alpha_gauss_order=6,
+                azimuth_count=16,
+            ),
+            k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+        ),
+        strength_model,
+    )
+    family = bragg_space.weighted_family_slice(family_m=1, L=float(profile_l[0]))
+    direct_rod_strength = tuple(
+        strength_model.evaluate(
+            rod=rod,
+            L=float(profile_l[0]),
+            k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+        )
+        for rod in rods
+    )
+    for item, expected_rod_strength in zip(family.rod_slices, direct_rod_strength, strict=True):
+        assert np.sum(item.intensity_weight_A2) == pytest.approx(
+            expected_rod_strength,
+            rel=2.0e-15,
+        )
+    assert family.total_intensity_weight_A2 == pytest.approx(
+        sum(direct_rod_strength),
+        rel=2.0e-15,
+    )
 
 
 def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:

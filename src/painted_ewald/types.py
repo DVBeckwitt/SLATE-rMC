@@ -143,6 +143,13 @@ class StrengthModel(Protocol):
     def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float: ...
 
 
+class BasisBoundStrengthModel(StrengthModel, Protocol):
+    """Strength model tied to the reciprocal basis used by its structure."""
+
+    @property
+    def reciprocal_basis_Ainv(self) -> FloatArray: ...
+
+
 @dataclass(frozen=True, slots=True)
 class MosaicParameters:
     """Wrapped Gaussian/Cauchy probability and deterministic quadrature controls."""

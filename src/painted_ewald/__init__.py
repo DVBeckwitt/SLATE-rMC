@@ -1,5 +1,12 @@
 """Standalone mosaic-painted Ewald-sphere numerical core."""
 
+from painted_ewald.bragg import (
+    BraggFamilySlice,
+    BraggSpaceConfig,
+    LatentBraggIntensity,
+    MosaicBraggSpace,
+    WeightedMosaicSlice,
+)
 from painted_ewald.mosaic import (
     MosaicSpace,
     build_mosaic_space,
@@ -8,6 +15,7 @@ from painted_ewald.mosaic import (
 from painted_ewald.painter import EwaldSpherePainter
 from painted_ewald.rods import enumerate_rods_within_ewald_sphere
 from painted_ewald.types import (
+    BasisBoundStrengthModel,
     BranchCoatingSummary,
     FamilyCoatingSummary,
     ForwardPolicy,
@@ -28,11 +36,16 @@ from painted_ewald.types import (
 )
 
 __all__ = [
+    "BasisBoundStrengthModel",
+    "BraggFamilySlice",
+    "BraggSpaceConfig",
     "BranchCoatingSummary",
     "EwaldSpherePainter",
     "FamilyCoatingSummary",
     "ForwardPolicy",
+    "LatentBraggIntensity",
     "MassLedger",
+    "MosaicBraggSpace",
     "MosaicOrientation",
     "MosaicParameters",
     "MosaicSlice",
@@ -47,6 +60,7 @@ __all__ = [
     "RodCoatingSummary",
     "SphereTexture",
     "StrengthModel",
+    "WeightedMosaicSlice",
     "build_mosaic_space",
     "enumerate_rods_within_ewald_sphere",
     "wrapped_mosaic_line_density_rad_inv",
