@@ -19,6 +19,9 @@ phases but do not override these owners.
 | source-averaged measure | summed coordinate density | pixel integrator | independent states and wavelengths add as intensities before one box integral |
 | native-pixel integrator | raw pixel mass | rendering / future fitting | deterministic finite box integral; no point deposition or image normalization |
 | bound continuous detector function | raw detector-coordinate density | continuous angle measurement | inverse-map `(phi,2theta)` with the corrected owned pose; apply the detector-area coordinate Jacobian once and retain separate `S/N` |
+| detector-native measured image + mask + angle geometry | `MeasuredPeakDiscovery` | reciprocal indexing | global angle-chart discovery accepts no marker catalogue or predicted coordinates; proposals are refined once in native coordinates |
+| measured discovery + canonical detector/Ewald geometry | per-image indexing decisions | branch-track selection | infer `m`, integer `L`, Ewald branch, and root sign only from discovered `Q`; deterministically drop ambiguous ownership |
+| distinct-incidence image decisions | immutable `MeasuredIndexingResult` | staged fitting | require replicated branch tracks and shared site identities; all image, mask, calibration, reciprocal, and policy hashes remain frozen |
 | exact integer-L marker solver | frozen root identities and native coordinates | geometry fitter | every physical rod precedes grouping; analytic root sign is part of identity |
 | bound continuous detector function | key-aligned exact-tag predictions | bounded least squares | private geometry-only tag engine; no intensity evaluation or dynamic reassignment inside the objective |
 | geometry fitter | pivoted pose corrections plus rank/residual diagnostics | outer marker audit | one fixed LAB sample pivot and a full-rank local pack are required; final visible roots are independently re-enumerated |
@@ -41,8 +44,8 @@ atomic/layer contributions sum as amplitudes only inside their owning strength m
 
 ## Deferred consumers
 
-Intensity/profile fitting, masks, background, detector PSF/efficiency, saturation, finite caking,
-and reciprocal remapping consume the accepted detector result later. None may recreate sampled
-scattering events or move a factor upstream without a new declared measure and proof. The accepted
-exact-marker geometry fit consumes geometry only and therefore does not require detector intensity
-or pixel integration.
+Intensity/profile fitting, forward-model masks/background, detector PSF/efficiency, saturation,
+continuous-`S/N` finite-bin reduction, and reciprocal remapping consume the accepted detector result
+later. None may recreate sampled scattering events or move a factor upstream without a new declared
+measure and proof. The accepted exact-marker geometry fit consumes geometry only and therefore does
+not require detector intensity or pixel integration.

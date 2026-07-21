@@ -13,11 +13,29 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 ## Current contract-v9 runtime
 
 The production runtime is the continuous detector pushforward described in
-`CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/event/selection/deposition implementation
-is retired. Current proof authority is the latent Bragg density, analytic line/sphere oracle,
+`CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
+selection/deposition implementation is retired. Current proof authority is the latent Bragg density,
+analytic line/sphere oracle,
 detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-compiled backend
 agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
 and scientific subsystem cutovers; they do not reinstate retired APIs.
+
+### Position-free measured selection activation
+
+T08 consumes detector-native measured images only after the forward contracts are fixed. Global
+angle-chart discovery accepts no marker catalogue or predicted positions; native refinement and
+sample-frame `Q` evaluation precede integer-`L`, rod-family, Ewald-branch, and beta-root inference.
+Only branch tracks replicated at distinct incidences with shared site identities enter the immutable
+selection manifest. Missing peaks remain missing observations rather than inferred extinctions.
+
+For the peak CSV specifically, the accepted mapping is one clockwise OSC conversion followed by
+`legacy_raw_x` as native detector column and `legacy_raw_y` as native detector row. These CSV
+field names are distinct provenance from the supplied-state legacy `x`/`y` variables. The CSV's
+`observed_column_px = columns - 1 - legacy_raw_x` is retained only as corrected provenance. An
+exact OSC regression gives 83,328 counts at native `(1455,1473)` for the 003 site and 46 counts at
+its reflected `(1544,1473)` location. An independent replay of the legacy cake's provenance-only
+half-pixel convention also makes the direct coordinates agree with the stored cake angles while the
+reflected coordinates fail decisively; canonical detector coordinates remain pixel centers.
 
 ### Continuous angle-coordinate measurement activation
 
@@ -25,8 +43,9 @@ T17 starts from accepted `main` `1f3a106b0fe30b5fe92f8558a45bccf0c49655f7` and a
 the pointwise detector-density pullback from the historically deferred caking row. The first new
 declared stage is `measurement.continuous_angle`: the pose-bound inverse mapping supplies
 `J=sin(2theta)/pixel_solid_angle_sr`, then returns `S=dJ`, `N=J`, and `I=S/N`. This use of solid
-angle is a coordinate identity, not the excluded detector acceptance correction. Finite caking and
-reciprocal remapping remain deferred.
+angle is a coordinate identity, not the excluded detector acceptance correction. A new
+continuous-`S/N` finite-bin reducer and reciprocal remapping remain deferred; the accepted
+finite-pixel polygon projector is unchanged.
 
 The permanent proof compares a compound-tilted, rectangular detector Jacobian with an independent
 central finite-difference determinant; checks periodic `phi`, exact-pole zero measure, and active
@@ -469,6 +488,7 @@ test_ordered_reflectivity.py
 test_stacking_transition.py
 test_integration.py
 test_fitting.py
+test_selection.py
 ```
 
 Future fitting work extends the closest owning module or adds one cohesive fitting module only when
@@ -552,6 +572,14 @@ Every branch must pass:
 - nonnegative real ensemble intensity
 - `h=k=0`, `F+=F-` Laue limit
 - finite total versus per-layer normalization
+
+### Measured selection
+
+- position-free global discovery and image-unit scaling invariance
+- once-clockwise OSC conversion and detector/cake round trip
+- reciprocal family, integer-`L`, Ewald-branch, and root-sign inference
+- ambiguity, tangency, noncoincident-rod, and duplicated-data rejection
+- exact manifest hashing and distinct-incidence/shared-site replication
 
 ## Cross-branch review gates
 

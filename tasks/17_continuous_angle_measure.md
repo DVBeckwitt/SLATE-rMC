@@ -6,8 +6,9 @@ Status: `READY`
 
 This narrow task is activated by the user request to retain the detector field as a continuous
 function of canonical `(phi, 2theta)` and to render matched 3,000 × 3,000 detector/angle views. It
-splits the continuous coordinate pullback from historical T15. Finite caking, reciprocal remapping,
-experimental masks/background, and angle-space fitting remain deferred.
+splits the continuous coordinate pullback from historical T15. A continuous-`S/N` finite-bin
+reducer, reciprocal remapping, experimental masks/background, and angle-space fitting remain
+deferred; the accepted finite-pixel polygon projector remains available unchanged.
 
 ## Owned result
 

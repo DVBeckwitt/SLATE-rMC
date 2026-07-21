@@ -8,5 +8,9 @@ recorded in `examples/MANIFEST.toml` and `FILE_MANIFEST.json`.
 only in textual occupancy formatting for Se1 and is paired with the VESTA export. The expanded P1
 file is an independent symmetry-expansion fixture.
 
-The legacy peak CSV is provenance evidence. Its canonical columns are `observed_column_px` and
-`observed_row_px`. The retained `legacy_raw_x` and `legacy_raw_y` columns are not canonical axes.
+The legacy peak CSV is provenance evidence. For this CSV specifically, after the one clockwise OSC
+conversion at the I/O boundary, `legacy_raw_x` is the accepted native detector column and
+`legacy_raw_y` is the accepted native detector row. These fields are distinct provenance from the
+supplied-state legacy `x`/`y` variables. `observed_column_px = columns - 1 - legacy_raw_x`
+contains an additional legacy horizontal reflection and is not a numerical oracle;
+`observed_row_px` duplicates `legacy_raw_y`.

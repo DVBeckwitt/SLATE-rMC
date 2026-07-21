@@ -1,7 +1,7 @@
 # T08 Codex prompt
 
-> Historical draft; do not execute. T08 is `NEEDS_REPLAN` against contract v9, and deleted
-> candidate/event/hit APIs must not be restored.
+> Historical draft; do not execute. T08 is complete through the position-free successor recorded
+> in `tasks/08_selection_indexing.md`; deleted candidate/event/hit APIs must not be restored.
 
 ## Goal
 

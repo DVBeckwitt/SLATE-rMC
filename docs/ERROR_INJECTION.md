@@ -134,6 +134,19 @@ residual-decomposition and independent m=0 constrained-Ewald oracles, synthetic 
 recovery, held-out native-coordinate error, Jacobian
 rank/condition, or post-fit selection classification.
 
+### Measured selection and indexing
+
+- Supply predicted marker coordinates to global discovery, rotate OSC data twice, swap native
+  row/column, or reuse a cake calibration different from the detector-to-`Q` calibration.
+- Infer branch identity from detector left/right, collapse equal-family rods, accept tangencies or
+  noncoincident symmetry aliases, or relabel an ambiguous assignment.
+- Reuse an image, mask, calibration, reciprocal, or policy hash after mutation; accept one-incidence
+  tracks, duplicated-image replication, or sites without distinct-incidence support.
+
+Expected detection: position-free discovery boundary, once-only OSC/cake round trip, reciprocal
+label and ownership-gate rejection, exact manifest hash, or distinct-incidence and shared-site
+replication gates.
+
 ## Control record
 
 Each proof mutation records `mutation_id`, fixture, expected first stage, expected metric, observed

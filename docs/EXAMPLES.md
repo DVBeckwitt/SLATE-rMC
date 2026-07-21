@@ -132,6 +132,21 @@ Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on b
 landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
 runtime of the full incoherent ensemble is intended.
 
+## Position-free measured peak indexing
+
+Discover peaks globally in the tracked detector-native OSC images, infer their reciprocal
+integer-`L` identities, and emit the frozen cross-incidence selection manifest:
+
+```powershell
+uv run python scripts/index_bi2se3_osc.py --json
+```
+
+Discovery accepts no marker catalogue or predicted marker positions. It searches a tiled
+`(2theta, phi)` chart, refines proposals on the native detector, and generates exact alpha-zero
+anchors only after each discrete reciprocal label is frozen. An external 3,000 × 3,000 simulation
+diagnostic may be supplied with `--simulation-diagnostic`; unresolved diagnostics are rejected
+unless the non-accepted override is explicit.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

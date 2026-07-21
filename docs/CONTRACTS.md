@@ -30,6 +30,7 @@ and ordering are validated eagerly.
 | `RodQueryBatch` | ordered/stacking | rod-aligned `L` queries with stable IDs |
 | `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
 | `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
+| `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 
 `EventIntensityResult` retains “event” in its historical type name, but it is an ordered query result;
 it is not a sampled scattering-event runtime. Its strength excludes source probability, rod
@@ -129,6 +130,22 @@ consumer and must integrate `S` and `N` before division.
   maxima.
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
+
+## Measured selection and indexing
+
+`discover_measured_cake_peaks(...)` accepts a detector-native image, mask, `CompiledInstrument`,
+`AngleFrame`, and immutable policy. It builds a tiled angle chart without accepting a marker
+catalogue or predicted marker coordinates, then refines each proposal once on the native raster.
+Image, mask, calibration, and policy identities are retained in `MeasuredPeakDiscovery`.
+
+`index_discovered_integer_l_peaks(...)` converts only discovered native coordinates to sample-frame
+`Q`, infers family `m`, integer `L`, analytic Ewald branch, and beta-root sign through the canonical
+geometry/root authorities, and deterministically drops tangent, conflicting, noncoincident, or
+ambiguously owned labels. Exact alpha-zero anchors are generated only after the discrete label is
+frozen. `select_confident_branch_tracks(...)`
+requires distinct-incidence replication with shared `L` identities and returns an immutable hashed
+`MeasuredIndexingResult`. Non-detection is never treated as a physical extinction, and fitting may
+not change an identity inside an optimization.
 
 ## Exact integer-L tagged detector-function fitting
 

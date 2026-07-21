@@ -6,6 +6,7 @@ import csv
 import gzip
 import hashlib
 import json
+import math
 import platform
 import subprocess
 import tomllib
@@ -317,12 +318,17 @@ def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, 
     _require(len(osc_entries) == 5, "expected five compressed OSC inputs")
     arrays = pack["arrays"]
     positions = arrays["osc_selected_positions_row_col"]
+    reference_position_count = positions.shape[0]
+    orientation_probe_detector_rc = np.asarray(((1473, 1455), (1473, 1544)), dtype=np.int32)
     expected = {item["name"]: item for item in pack["embedded"]["osc_files"]}
     observed: dict[str, dict[str, Any]] = {}
     for item in osc_entries:
         path = _path(root, item["path"])
         name = path.stem
-        observed[name] = _stream_gzip_osc(path, positions if name in expected else None)
+        requested_positions = positions
+        if path.name == "Bi2Se3_5m_5d.osc.gz":
+            requested_positions = np.concatenate((positions, orientation_probe_detector_rc), axis=0)
+        observed[name] = _stream_gzip_osc(path, requested_positions if name in expected else None)
         _require(observed[name]["shape"] == (3000, 3000), f"unexpected OSC shape: {name}")
     for index, (name, metadata) in enumerate(expected.items()):
         result = observed[name]
@@ -332,11 +338,17 @@ def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, 
             f"summary mismatch: {name}",
         )
         _require(
-            np.array_equal(result["selected_raw"], arrays["osc_selected_raw_values"][index]),
+            np.array_equal(
+                result["selected_raw"][:reference_position_count],
+                arrays["osc_selected_raw_values"][index],
+            ),
             f"raw sample mismatch: {name}",
         )
         _require(
-            np.array_equal(result["selected_native"], arrays["osc_selected_native_values"][index]),
+            np.array_equal(
+                result["selected_native"][:reference_position_count],
+                arrays["osc_selected_native_values"][index],
+            ),
             f"native sample mismatch: {name}",
         )
         _require(
@@ -347,6 +359,11 @@ def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, 
             np.array_equal(result["argmax_native"], arrays["osc_argmax_native_row_col"][index]),
             f"native argmax mismatch: {name}",
         )
+    direct_and_reflected = observed["Bi2Se3_5m_5d.osc"]["selected_native"][-2:]
+    _require(
+        np.array_equal(direct_and_reflected, np.asarray((83_328, 46), dtype=np.int64)),
+        "legacy peak CSV native-coordinate intensity regression mismatch",
+    )
     return len(osc_entries)
 
 
@@ -386,7 +403,36 @@ def _verify_synthetic_osc(
     return big, native, np.array([2.0, 3.0])
 
 
-def _verify_bi2se3_coordinates(root: Path) -> int:
+def _legacy_cake_angles_deg(
+    column_px: float,
+    row_px: float,
+    detector: dict[str, Any],
+) -> tuple[float, float]:
+    """Replay the legacy caker's edge-addressed half pixel, not canonical detector coordinates."""
+
+    horizontal_m = (float(detector["center_column_px"]) - (column_px + 0.5)) * float(
+        detector["pixel_pitch_column_m"]
+    )
+    vertical_m = (float(detector["center_row_px"]) - (row_px + 0.5)) * float(
+        detector["pixel_pitch_row_m"]
+    )
+    two_theta_deg = math.degrees(
+        math.atan2(
+            math.hypot(horizontal_m, vertical_m),
+            float(detector["distance_m"]),
+        )
+    )
+    return two_theta_deg, math.degrees(math.atan2(horizontal_m, vertical_m))
+
+
+def _circular_error_deg(candidate_deg: float, reference_deg: float) -> float:
+    difference_rad = math.radians(candidate_deg - reference_deg)
+    return abs(math.degrees((difference_rad + math.pi) % (2.0 * math.pi) - math.pi))
+
+
+def _verify_bi2se3_coordinates(
+    root: Path,
+) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]:
     case = tomllib.loads(
         (root / "examples" / "bi2se3" / "experiment" / "forward_case.toml").read_text(
             encoding="utf-8"
@@ -401,20 +447,58 @@ def _verify_bi2se3_coordinates(root: Path) -> int:
         detector["center_row_px"] == legacy["legacy_center_x_meant_native_row_px"],
         "beam-center row mismatch",
     )
-    rows = 0
+    direct_angle_errors_deg: list[tuple[float, float]] = []
+    reflected_angle_errors_deg: list[tuple[float, float]] = []
     csv_path = root / "examples" / "bi2se3" / "observations" / "legacy_peak_selections.csv"
     with csv_path.open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
-            expected_column = Decimal(detector["columns"] - 1) - Decimal(row["legacy_raw_x"])
-            column_error = abs(Decimal(row["observed_column_px"]) - expected_column)
+            direct_column_px = float(row["legacy_raw_x"])
+            direct_row_px = float(row["legacy_raw_y"])
+            reflected_column = Decimal(detector["columns"] - 1) - Decimal(row["legacy_raw_x"])
+            column_error = abs(Decimal(row["observed_column_px"]) - reflected_column)
             _require(column_error <= Decimal("5e-13"), "legacy column mapping mismatch")
             _require(
                 Decimal(row["observed_row_px"]) == Decimal(row["legacy_raw_y"]),
                 "legacy row mapping mismatch",
             )
-            rows += 1
-    _require(rows == 82, "legacy coordinate row count mismatch")
-    return rows
+            direct_angles_deg = _legacy_cake_angles_deg(
+                direct_column_px,
+                direct_row_px,
+                detector,
+            )
+            reflected_angles_deg = _legacy_cake_angles_deg(
+                float(row["observed_column_px"]),
+                float(row["observed_row_px"]),
+                detector,
+            )
+            reference_angles_deg = (
+                float(row["legacy_two_theta_deg"]),
+                float(row["legacy_phi_deg"]),
+            )
+            direct_angle_errors_deg.append(
+                (
+                    abs(direct_angles_deg[0] - reference_angles_deg[0]),
+                    _circular_error_deg(direct_angles_deg[1], reference_angles_deg[1]),
+                )
+            )
+            reflected_angle_errors_deg.append(
+                (
+                    abs(reflected_angles_deg[0] - reference_angles_deg[0]),
+                    _circular_error_deg(reflected_angles_deg[1], reference_angles_deg[1]),
+                )
+            )
+    _require(len(direct_angle_errors_deg) == 82, "legacy coordinate row count mismatch")
+    direct_median_deg = np.median(np.asarray(direct_angle_errors_deg), axis=0)
+    reflected_median_deg = np.median(np.asarray(reflected_angle_errors_deg), axis=0)
+    _require(
+        bool(np.all(direct_median_deg < np.asarray((3.0e-4, 1.0e-4)))),
+        "direct native coordinates disagree with stored cake angles",
+    )
+    _require(
+        bool(np.all(reflected_median_deg > np.asarray((2.0, 90.0)))),
+        "reflected legacy coordinates were not distinguished from native coordinates",
+    )
+    return len(direct_angle_errors_deg), direct_median_deg, reflected_median_deg
 
 
 def _trace(stage: str, value: NDArray[Any], kind: QuantityKind) -> TraceRecord:
@@ -528,7 +612,9 @@ def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object
     entries = _verify_examples(root)
     gzip_count = _verify_gzip_osc(root, entries, pack)
     raw, native, center = _verify_synthetic_osc(root, pack["arrays"])
-    coordinate_rows = _verify_bi2se3_coordinates(root)
+    coordinate_rows, direct_angle_error_deg, reflected_angle_error_deg = _verify_bi2se3_coordinates(
+        root
+    )
     mutations = _mutations(raw, native, center)
     _require(all(item["detected"] for item in mutations), "reference negative control escaped")
     checks = [
@@ -560,7 +646,13 @@ def run_reference_proof(*, allow_missing_pack: bool = False) -> dict[str, object
         {
             "check_id": "bi2se3_coordinates",
             "status": "PASS",
-            "evidence": f"native beam center and {coordinate_rows} legacy rows mapped exactly once",
+            "evidence": (
+                f"native beam center and {coordinate_rows} legacy rows mapped exactly once; "
+                f"median direct/reflected cake errors were "
+                f"{direct_angle_error_deg[0]:.6f}/{reflected_angle_error_deg[0]:.6f} deg "
+                f"in 2theta and {direct_angle_error_deg[1]:.6f}/"
+                f"{reflected_angle_error_deg[1]:.6f} deg in phi"
+            ),
         },
         {
             "check_id": "negative_controls",

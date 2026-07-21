@@ -187,8 +187,9 @@ Every non-deferred row must have one proof case or a documented reason that it i
 
 ## Selection and staged fitting
 
-The exact integer-L local-geometry slice activates the rows explicitly marked below. General peak
-association, multi-angle mechanical decomposition, and intensity fitting remain future work.
+Position-free measured peak discovery, frozen reciprocal association, and cross-incidence branch
+selection are active alongside the exact integer-L local-geometry slice. Multi-angle mechanical
+decomposition and intensity fitting remain future work.
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|

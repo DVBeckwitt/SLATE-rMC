@@ -51,9 +51,11 @@ all contributing rod/orientation branches. Only the active detector panel is eva
   fields and compiled CPU/CUDA evaluation.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   display-only raster evaluation.
+- `selection`: position-free angle-chart discovery, detector-native peak refinement, reciprocal
+  identity inference, and immutable cross-incidence branch manifests.
 - `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
-  the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose fitting, rank diagnostics, and post-fit root
-  re-enumeration.
+  the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
+  fitting, rank diagnostics, and post-fit root re-enumeration.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback and the finite-pixel angle projector; never part of raw
   rendering.
@@ -73,6 +75,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
    exit-refraction, and detector geometry for each landmark trial.
 7. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
    coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
+8. Measured selection discovers peaks without predicted coordinates, refines them on the native
+   detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
+   fitting consumes them.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never
@@ -91,11 +96,13 @@ module-global or import-time side effects.
   quadrature. Detector/sample pose trials reuse the reciprocal basis, rods, finite-2H model, and
   mosaic contract; pivoted sample-normal trials update the complete sample rigid transform and
   rebuild nominal incident transport, and every trial rebuilds exit-refraction/detector geometry.
+- A measured selection manifest is invalidated by any image, mask, detector/cake calibration,
+  reciprocal context, or policy hash change. A fitter never silently relabels a frozen manifest.
 - Display limits and colormaps never invalidate physics.
 
 ## Deliberately absent runtime structures
 
-There is no sampled mosaic-orientation batch, candidate pool, scattering-event table, outgoing-event
-table, point depositor, bilinear rasterizer, discrete sphere texture, compatibility adapter, or
-parallel legacy simulator. Historical equations remain only in the immutable reference pack and
-proof comparisons.
+There is no sampled mosaic-orientation batch, sampled scattering-candidate pool, scattering-event
+table, outgoing-event table, point depositor, bilinear rasterizer, discrete sphere texture,
+compatibility adapter, or parallel legacy simulator. Historical equations remain only in the
+immutable reference pack and proof comparisons.

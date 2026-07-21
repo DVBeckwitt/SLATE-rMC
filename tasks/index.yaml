@@ -44,8 +44,8 @@ tasks:
     depends_on: [T06]
   - id: T08
     file: tasks/08_selection_indexing.md
-    branch: feat/selection-indexing
-    status: NEEDS_REPLAN
+    branch: codex/real-osc-indexing
+    status: READY
     depends_on: [T07]
   - id: T09
     file: tasks/09_fit_foundation.md

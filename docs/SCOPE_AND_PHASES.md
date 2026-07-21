@@ -19,6 +19,8 @@ detector geometry.
 - Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
 - Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
   normalization densities before division.
+- Position-free measured-peak discovery in an angle chart, detector-native refinement, reciprocal
+  integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
 - Incoherent source/wavelength/phase summation before deterministic detector box integration.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
@@ -46,9 +48,10 @@ these functions. They are not stored model state.
 - Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
-- Experimental peak finding/association, multi-angle decomposition of sample and goniometer
-  mechanics, and intensity-profile fitting beyond exact marker positions.
-- Finite-bin caking and reciprocal remapping after detector-native fitting is validated.
+- Multi-angle decomposition of sample and goniometer mechanics, and intensity-profile fitting
+  beyond the accepted measured-peak association boundary.
+- Continuous-`S/N` angular-bin reduction and reciprocal remapping beyond the accepted finite-pixel
+  angle projector.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 
 ## Phase discipline
