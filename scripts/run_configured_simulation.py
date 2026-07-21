@@ -294,6 +294,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     overall_start = perf_counter()
     config = load_simulation_config(args.config, repository_root=ROOT)
+    if config.outputs.detector.enabled and config.numerics.detector_execution_backend == "cuda":
+        from rasim_next.pipeline._continuous_detector_cuda import require_cuda_available
+
+        require_cuda_available()
     output_directory = (
         config.output_directory if args.output_dir is None else args.output_dir.resolve()
     )
@@ -369,6 +373,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             detector,
             bin_size_px=config.numerics.detector_macrobin_size_px,
             gauss_order=config.numerics.detector_gauss_order,
+            execution_backend=config.numerics.detector_execution_backend,
         )
         timings["detector_wall_time_s"] = perf_counter() - start
         detector_gap = detector.detector_visible_m0_q_gap_Ainv
@@ -414,6 +419,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             for family in family_values
         },
         "root_policy": config.bragg.root_policy,
+        "detector_execution_backend": (
+            detector_image.execution_backend if detector_image is not None else None
+        ),
+        "detector_execution_device": (
+            detector_image.execution_device if detector_image is not None else None
+        ),
         "detector_visible_m0_q_gap_Ainv": (
             detector_gap if detector_gap is not None else nominal_ewald_gap
         ),

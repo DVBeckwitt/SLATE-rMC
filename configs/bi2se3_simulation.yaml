@@ -83,6 +83,7 @@ weights:
 
 numerics:
   worker_count: 32
+  detector_execution_backend: cpu
   detector_macrobin_size_px: 60
   detector_gauss_order: 2
   reciprocal_alpha_count: 3

@@ -1076,6 +1076,25 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
     )
 
     all_roots = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    explicit_cpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
+    np.testing.assert_array_equal(
+        explicit_cpu.per_rod_density_A2_per_px2,
+        all_roots.per_rod_density_A2_per_px2,
+    )
+    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+        replace(all_roots, execution_device="unexpected device")
+    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+        replace(all_roots, execution_backend="numba_cuda_source_averaged.v1")
+    with pytest.raises(ValueError, match="execution_backend"):
+        detector.evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+            execution_backend="automatic",
+        )
     lower = nonzero.evaluate_detector_coordinates(column_px, row_px, branch=1)
     upper = nonzero.evaluate_detector_coordinates(column_px, row_px, branch=2)
 
@@ -1206,6 +1225,128 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
     )
 
 
+def test_cuda_detector_backend_fails_closed_without_a_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rasim_next.pipeline import _continuous_detector_cuda as cuda_backend
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    config = replace(config, source=replace(config.source, sample_count=1))
+    detector = build_source_averaged_detector(build_configured_simulation_inputs(config))
+    monkeypatch.setattr(cuda_backend.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="no CUDA device is available"):
+        detector.evaluate_detector_coordinates_all_roots(
+            np.asarray([0.0]),
+            np.asarray([0.0]),
+            execution_backend="cuda",
+        )
+
+
+def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from numba import cuda
+
+    if not cuda.is_available():
+        pytest.skip("requires a CUDA device")
+
+    from rasim_next.pipeline import _continuous_detector_cuda as cuda_backend
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+    from rasim_next.proof.tolerances import load_stage_tolerances
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    inputs = build_configured_simulation_inputs(config)
+    detector = build_source_averaged_detector(inputs)
+    assert inputs.strength.shared_disorder_epsilon == pytest.approx(0.001)
+    unique_count, frequency = np.unique(
+        detector.reachable_rod_count_per_source_state,
+        return_counts=True,
+    )
+    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {73: 9, 85: 991}
+
+    panel_rows, panel_columns = detector.instrument.detector_shape_rc
+    column_px = np.asarray(
+        [1109.5, 1469.5, 2206.820508075689, -1.0, float(panel_columns)],
+        dtype=np.float64,
+    )
+    row_px = np.asarray(
+        [1349.5, 1469.5, 1272.1794919243112, 0.0, float(panel_rows)],
+        dtype=np.float64,
+    )
+    cpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
+    gpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+    repeated = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+    monkeypatch.setattr(cuda_backend, "_MAX_COORDINATES_PER_CHUNK", 2)
+    chunked = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+
+    assert np.any(cpu.per_rod_density_A2_per_px2[0, 1:] > 0.0)
+    cuda_compound_relative_tolerance = 6.0e-11
+    assert (
+        cuda_compound_relative_tolerance
+        <= load_stage_tolerances()["stacking.finite_intensity"].rtol
+    )
+    np.testing.assert_allclose(
+        gpu.per_rod_density_A2_per_px2,
+        cpu.per_rod_density_A2_per_px2,
+        rtol=cuda_compound_relative_tolerance,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        gpu.density_A2_per_px2,
+        cpu.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
+    np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
+    np.testing.assert_array_equal(
+        repeated.per_rod_density_A2_per_px2, gpu.per_rod_density_A2_per_px2
+    )
+    np.testing.assert_array_equal(repeated.caustic, gpu.caustic)
+    np.testing.assert_array_equal(repeated.valid_source_count, gpu.valid_source_count)
+    np.testing.assert_array_equal(
+        chunked.per_rod_density_A2_per_px2, gpu.per_rod_density_A2_per_px2
+    )
+    np.testing.assert_array_equal(chunked.caustic, gpu.caustic)
+    np.testing.assert_array_equal(chunked.valid_source_count, gpu.valid_source_count)
+    assert gpu.execution_backend == "numba_cuda_source_averaged.v1"
+    assert gpu.execution_device
+    assert np.all(gpu.per_rod_density_A2_per_px2[3:] == 0.0)
+
+
 def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     tmp_path: Path,
 ) -> None:
@@ -1227,6 +1368,7 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     assert config.bragg.selection_model == "all_elastic_reachable.v1"
     assert config.bragg.include_detector_visible_m0
     assert config.source.sample_count == 1_000
+    assert config.numerics.detector_execution_backend == "cpu"
     assert config.mosaic.gaussian_sigma_deg == pytest.approx(1.0)
     assert config.mosaic.lorentzian_probability == 0.0
     assert config.structure_factor.layers == 52
@@ -1295,6 +1437,27 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     with pytest.raises(ValueError, match="output filenames must be unique"):
         load_simulation_config(duplicate_filename, repository_root=root)
 
+    unsupported_backend = tmp_path / "unsupported-backend.yaml"
+    unsupported_backend.write_text(
+        portable_default.replace(
+            "detector_execution_backend: cpu",
+            "detector_execution_backend: automatic",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"detector_execution_backend.*cpu or cuda"):
+        load_simulation_config(unsupported_backend, repository_root=root)
+
+    legacy_v1 = tmp_path / "legacy-v1.yaml"
+    legacy_v1.write_text(
+        portable_default.replace("  detector_execution_backend: cpu\n", ""),
+        encoding="utf-8",
+    )
+    assert (
+        load_simulation_config(legacy_v1, repository_root=root).numerics.detector_execution_backend
+        == "cpu"
+    )
+
     negative_source_sigma = tmp_path / "negative-source-sigma.yaml"
     negative_source_sigma.write_text(
         portable_default.replace(
@@ -1358,6 +1521,10 @@ def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> N
     np.testing.assert_allclose(result.per_rod_image_A2[..., 1], 12.0, rtol=0.0, atol=1.0e-14)
     assert result.coordinate_evaluation_count == 24
     assert result.measure_id == "raw_detector_macrobin_fixed_quadrature_estimate_A2.v1"
+    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+        replace(result, execution_device="unexpected device")
+    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+        replace(result, execution_backend="numba_cuda_source_averaged.v1")
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,960 @@
+"""Deterministic CUDA evaluation of the source-averaged detector field."""
+
+from __future__ import annotations
+
+import cmath
+import math
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from numba import cuda
+from numpy.typing import NDArray
+
+from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+
+FloatArray = NDArray[np.float64]
+BoolArray = NDArray[np.bool_]
+IntArray = NDArray[np.int64]
+
+_FLOAT_EPS = float(np.finfo(np.float64).eps)
+_ANGULAR_TOLERANCE = 2048.0 * _FLOAT_EPS
+_THREADS_PER_BLOCK = 128
+_MAX_COORDINATES_PER_CHUNK = 50_000
+
+
+@dataclass(frozen=True, slots=True)
+class _PackedSourceAverage:
+    detector_zero_lab_m: FloatArray
+    detector_column_step_lab_m: FloatArray
+    detector_row_step_lab_m: FloatArray
+    detector_pixel_area_vector_lab_m2: FloatArray
+    sample_from_lab: FloatArray
+    sample_from_local: FloatArray
+    ray_origin_lab_m: FloatArray
+    ki_film_sample_Ainv: FloatArray
+    state_real: FloatArray
+    state_complex: NDArray[np.complex128]
+    state_block_offset: IntArray
+    active_state_rod: BoolArray
+    rod_u_bounds_Ainv: FloatArray
+    rod_u_tolerance_Ainv: FloatArray
+    rod_hk_population: FloatArray
+    rod_parallel_local_Ainv: FloatArray
+    rod_inverse_constants: FloatArray
+    atom_fractional_offset: FloatArray
+    atom_occupancy_u_iso_element: FloatArray
+    rod_atom_inplane_factor: NDArray[np.complex128]
+    f0_parameters: FloatArray
+    layers: int
+
+
+def require_cuda_available() -> str:
+    """Fail closed unless an explicitly requested CUDA device is usable."""
+
+    if not cuda.is_available():
+        raise RuntimeError("CUDA detector execution was requested, but no CUDA device is available")
+    supplied_name = cuda.get_current_device().name
+    return supplied_name.decode("utf-8") if isinstance(supplied_name, bytes) else str(supplied_name)
+
+
+def _equal_shared(name: str, candidate: Any, reference: Any) -> None:
+    if not np.array_equal(np.asarray(candidate), np.asarray(reference)):
+        raise ValueError(f"compiled source states disagree on shared CUDA field {name}")
+
+
+def _pack_source_average(
+    evaluator_blocks: tuple[tuple[Any, ...], ...],
+    *,
+    detector_shape_rc: tuple[int, int],
+    master_rod_count: int,
+) -> _PackedSourceAverage:
+    indexed_evaluators = tuple(indexed for block in evaluator_blocks for indexed in block)
+    if not indexed_evaluators:
+        raise ValueError("CUDA source average requires at least one compiled state")
+    first_evaluator = indexed_evaluators[0].evaluator
+    first = first_evaluator._state
+    if tuple(first_evaluator._detector_shape_rc) != tuple(detector_shape_rc):
+        raise ValueError("compiled detector shape disagrees with the CUDA detector shape")
+
+    state_count = len(indexed_evaluators)
+    ray_origin = np.empty((state_count, 3), dtype=np.float64)
+    ki_film = np.empty((state_count, 3), dtype=np.float64)
+    state_real = np.empty((state_count, 13), dtype=np.float64)
+    state_complex = np.empty((state_count, 4), dtype=np.complex128)
+    state_block_offset = np.concatenate(
+        (
+            np.asarray([0], dtype=np.int64),
+            np.cumsum(
+                np.asarray([len(block) for block in evaluator_blocks], dtype=np.int64),
+                dtype=np.int64,
+            ),
+        )
+    )
+    active_state_rod = np.zeros((state_count, master_rod_count), dtype=np.bool_)
+    rod_u_bounds = np.zeros((state_count, master_rod_count, 2), dtype=np.float64)
+    rod_u_tolerance = np.zeros((state_count, master_rod_count), dtype=np.float64)
+
+    atom_count = first.atom_fractional_offset.shape[0]
+    rod_hk_population = np.empty((master_rod_count, 3), dtype=np.float64)
+    rod_parallel = np.empty((master_rod_count, 3), dtype=np.float64)
+    rod_inverse = np.empty((master_rod_count, 3), dtype=np.float64)
+    rod_inplane = np.empty((master_rod_count, atom_count), dtype=np.complex128)
+    master_filled = np.zeros(master_rod_count, dtype=np.bool_)
+
+    shared_arrays = (
+        ("detector_zero_lab_m", first.detector_zero_lab_m),
+        ("detector_column_step_lab_m", first.detector_column_step_lab_m),
+        ("detector_row_step_lab_m", first.detector_row_step_lab_m),
+        ("detector_pixel_area_vector_lab_m2", first.detector_pixel_area_vector_lab_m2),
+        ("sample_from_lab", first.sample_from_lab),
+        ("sample_from_local", first.sample_from_local),
+        ("atom_fractional_offset", first.atom_fractional_offset),
+        ("atom_occupancy_u_iso_element", first.atom_occupancy_u_iso_element),
+        ("f0_parameters", first.f0_parameters),
+    )
+    shared_scalars = (
+        "layers",
+        "common_u_iso_A2",
+        "shared_disorder_epsilon",
+        "normalization_divisor",
+        "b3_norm_Ainv",
+        "gaussian_sigma_rad",
+        "lorentzian_hwhm_rad",
+        "lorentzian_probability",
+        "film_thickness_A",
+    )
+
+    for state_index, indexed in enumerate(indexed_evaluators):
+        evaluator = indexed.evaluator
+        state = evaluator._state
+        if tuple(evaluator._detector_shape_rc) != tuple(detector_shape_rc):
+            raise ValueError("compiled source states disagree on the detector shape")
+        for name, reference in shared_arrays:
+            _equal_shared(name, getattr(state, name), reference)
+        for name in shared_scalars:
+            if getattr(state, name) != getattr(first, name):
+                raise ValueError(f"compiled source states disagree on shared CUDA field {name}")
+
+        master_index = np.asarray(indexed.master_rod_index, dtype=np.int64)
+        active_count = master_index.size
+        if active_count != state.rod_hk_population.shape[0]:
+            raise ValueError("active master indices do not align with the compiled rods")
+        if np.any(master_index >= master_rod_count):
+            raise ValueError("active master rod index lies outside the CUDA catalog")
+        active_state_rod[state_index, master_index] = True
+        rod_u_bounds[state_index, master_index] = state.rod_u_bounds_Ainv
+        rod_u_tolerance[state_index, master_index] = state.rod_inverse_constants[:, 3]
+
+        for local_index, master_index_value in enumerate(master_index):
+            master = int(master_index_value)
+            if master_filled[master]:
+                _equal_shared(
+                    "rod_hk_population",
+                    state.rod_hk_population[local_index],
+                    rod_hk_population[master],
+                )
+                _equal_shared(
+                    "rod_parallel_local_Ainv",
+                    state.rod_parallel_local_Ainv[local_index],
+                    rod_parallel[master],
+                )
+                _equal_shared(
+                    "rod_inverse_constants",
+                    state.rod_inverse_constants[local_index, :3],
+                    rod_inverse[master],
+                )
+                _equal_shared(
+                    "rod_atom_inplane_factor",
+                    state.rod_atom_inplane_factor[local_index],
+                    rod_inplane[master],
+                )
+            else:
+                rod_hk_population[master] = state.rod_hk_population[local_index]
+                rod_parallel[master] = state.rod_parallel_local_Ainv[local_index]
+                rod_inverse[master] = state.rod_inverse_constants[local_index, :3]
+                rod_inplane[master] = state.rod_atom_inplane_factor[local_index]
+                master_filled[master] = True
+
+        ray_origin[state_index] = state.ray_origin_lab_m
+        ki_film[state_index] = state.ki_film_sample_Ainv
+        ki_norm = math.sqrt(
+            state.ki_film_sample_Ainv[0] ** 2
+            + state.ki_film_sample_Ainv[1] ** 2
+            + state.ki_film_sample_Ainv[2] ** 2
+        )
+        state_real[state_index] = (
+            state.internal_k_Ainv,
+            state.air_k0_Ainv,
+            state.incident_decay_Ainv,
+            state.film_thickness_A,
+            state.source_phase_weight,
+            state.b3_norm_Ainv,
+            state.gaussian_sigma_rad,
+            state.lorentzian_hwhm_rad,
+            state.lorentzian_probability,
+            state.common_u_iso_A2,
+            state.shared_disorder_epsilon,
+            state.normalization_divisor,
+            4096.0 * _FLOAT_EPS * max(ki_norm, 1.0),
+        )
+        state_complex[state_index] = (
+            state.refractive_index,
+            state.entrance_amplitude,
+            state.anomalous_factor_e[0],
+            state.anomalous_factor_e[1],
+        )
+
+    if not np.all(master_filled):
+        raise ValueError("the CUDA source states do not cover the full master rod catalog")
+
+    return _PackedSourceAverage(
+        detector_zero_lab_m=np.ascontiguousarray(first.detector_zero_lab_m),
+        detector_column_step_lab_m=np.ascontiguousarray(first.detector_column_step_lab_m),
+        detector_row_step_lab_m=np.ascontiguousarray(first.detector_row_step_lab_m),
+        detector_pixel_area_vector_lab_m2=np.ascontiguousarray(
+            first.detector_pixel_area_vector_lab_m2
+        ),
+        sample_from_lab=np.ascontiguousarray(first.sample_from_lab),
+        sample_from_local=np.ascontiguousarray(first.sample_from_local),
+        ray_origin_lab_m=ray_origin,
+        ki_film_sample_Ainv=ki_film,
+        state_real=state_real,
+        state_complex=state_complex,
+        state_block_offset=state_block_offset,
+        active_state_rod=active_state_rod,
+        rod_u_bounds_Ainv=rod_u_bounds,
+        rod_u_tolerance_Ainv=rod_u_tolerance,
+        rod_hk_population=rod_hk_population,
+        rod_parallel_local_Ainv=rod_parallel,
+        rod_inverse_constants=rod_inverse,
+        atom_fractional_offset=np.ascontiguousarray(first.atom_fractional_offset),
+        atom_occupancy_u_iso_element=np.ascontiguousarray(first.atom_occupancy_u_iso_element),
+        rod_atom_inplane_factor=rod_inplane,
+        f0_parameters=np.ascontiguousarray(first.f0_parameters),
+        layers=int(first.layers),
+    )
+
+
+@cuda.jit(device=True, inline=True)
+def _positive_normal_root(radicand: complex) -> complex:
+    root = cmath.sqrt(radicand)
+    if root.imag != 0.0:
+        if root.imag < 0.0:
+            root = -root
+    elif root.real < 0.0:
+        root = -root
+    return root
+
+
+@cuda.jit(device=True, inline=True)
+def _wrapped_mosaic_density(
+    alpha: float,
+    gaussian_sigma: float,
+    gaussian_probability: float,
+    gaussian_normalization: float,
+    lorentzian_probability: float,
+    lorentzian_rho: float,
+    lorentzian_one_minus_rho: float,
+    lorentzian_numerator: float,
+) -> float:
+    two_pi = 2.0 * math.pi
+    wrapped = (alpha + math.pi) % two_pi - math.pi
+    density = 0.0
+    if gaussian_probability > 0.0 and gaussian_sigma > 0.0:
+        if gaussian_sigma >= 1.0:
+            gaussian = 1.0
+            harmonic = 1
+            while harmonic <= 100_000:
+                amplitude = 2.0 * math.exp(-0.5 * (harmonic * gaussian_sigma) ** 2)
+                gaussian += amplitude * math.cos(harmonic * wrapped)
+                next_amplitude = 2.0 * math.exp(-0.5 * ((harmonic + 1) * gaussian_sigma) ** 2)
+                if next_amplitude <= 1.0e-15 * gaussian:
+                    break
+                harmonic += 1
+            gaussian /= two_pi
+        else:
+            scaled = math.exp(-0.5 * (wrapped / gaussian_sigma) ** 2)
+            scaled += math.exp(-0.5 * ((wrapped + two_pi) / gaussian_sigma) ** 2)
+            scaled += math.exp(-0.5 * ((wrapped - two_pi) / gaussian_sigma) ** 2)
+            gaussian = scaled / gaussian_normalization
+        density += gaussian_probability * gaussian
+    if lorentzian_probability > 0.0 and lorentzian_numerator > 0.0:
+        denominator = two_pi * (
+            lorentzian_one_minus_rho * lorentzian_one_minus_rho
+            + 4.0 * lorentzian_rho * math.sin(0.5 * wrapped) ** 2
+        )
+        density += lorentzian_probability * lorentzian_numerator / denominator
+    return density / math.pi
+
+
+@cuda.jit(device=True, inline=True)
+def _two_h_strength_A2(
+    rod_index: int,
+    ell: float,
+    common_damping: float,
+    element_factor_0: complex,
+    element_factor_1: complex,
+    rod_atom_inplane_factor: Any,
+    atom_fractional_offset: Any,
+    atom_occupancy_u_iso_element: Any,
+    layers: int,
+    shared_disorder_epsilon: float,
+    rod_hk_population: Any,
+    normalization_divisor: float,
+) -> float:
+    amplitude_plus = 0.0 + 0.0j
+    amplitude_minus = 0.0 + 0.0j
+    for atom in range(atom_fractional_offset.shape[0]):
+        occupancy = atom_occupancy_u_iso_element[atom, 0]
+        element = int(atom_occupancy_u_iso_element[atom, 2])
+        phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
+        inplane_factor = rod_atom_inplane_factor[rod_index, atom]
+        phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
+        phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
+        element_factor = element_factor_0 if element == 0 else element_factor_1
+        amplitude_plus += occupancy * element_factor * phase_plus
+        amplitude_minus += occupancy * element_factor * phase_minus
+
+    vertical_phase_angle = 2.0 * math.pi * ell / 3.0
+    vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
+    if shared_disorder_epsilon == 0.0:
+        phase_power = 1.0 + 0.0j
+        stack_sum = 1.0 + 0.0j
+        for _ in range(1, layers):
+            phase_power *= vertical_phase
+            stack_sum += phase_power
+        total = amplitude_plus * stack_sum
+        intensity_e2 = total.real * total.real + total.imag * total.imag
+    else:
+        h = int(rod_hk_population[rod_index, 0])
+        k = int(rod_hk_population[rod_index, 1])
+        registry_index = (h + 2 * k) % 3
+        if registry_index == 0:
+            omega = 1.0 + 0.0j
+        elif registry_index == 1:
+            omega = complex(-0.5, 0.5 * math.sqrt(3.0))
+        else:
+            omega = complex(-0.5, -0.5 * math.sqrt(3.0))
+        inverse_omega = complex(omega.real, -omega.imag)
+        alternative = 0.25 * shared_disorder_epsilon
+        parent = 1.0 - shared_disorder_epsilon
+        same_probability = parent + 2.0 * alternative
+        flip_probability = 2.0 * alternative
+        same_gauge = parent + alternative * inverse_omega + alternative * omega
+        plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
+        minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
+
+        probability_plus = 1.0
+        probability_minus = 0.0
+        first_moment_plus = amplitude_plus
+        first_moment_minus = 0.0 + 0.0j
+        second_moment_plus = (
+            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        )
+        second_moment_minus = 0.0
+        phase_power = 1.0 + 0.0j
+        for _ in range(1, layers):
+            phase_power *= vertical_phase
+            contribution_plus = phase_power * amplitude_plus
+            contribution_minus = phase_power * amplitude_minus
+            next_probability_plus = (
+                probability_plus * same_probability + probability_minus * flip_probability
+            )
+            next_probability_minus = (
+                probability_minus * same_probability + probability_plus * flip_probability
+            )
+            propagated_plus = (
+                same_gauge * first_moment_plus + minus_to_plus_gauge * first_moment_minus
+            )
+            propagated_minus = (
+                same_gauge * first_moment_minus + plus_to_minus_gauge * first_moment_plus
+            )
+            next_first_moment_plus = propagated_plus + next_probability_plus * contribution_plus
+            next_first_moment_minus = propagated_minus + next_probability_minus * contribution_minus
+            contribution_plus_squared = (
+                contribution_plus.real * contribution_plus.real
+                + contribution_plus.imag * contribution_plus.imag
+            )
+            contribution_minus_squared = (
+                contribution_minus.real * contribution_minus.real
+                + contribution_minus.imag * contribution_minus.imag
+            )
+            cross_plus = contribution_plus * complex(propagated_plus.real, -propagated_plus.imag)
+            cross_minus = contribution_minus * complex(
+                propagated_minus.real, -propagated_minus.imag
+            )
+            next_second_moment_plus = (
+                same_probability * second_moment_plus
+                + flip_probability * second_moment_minus
+                + next_probability_plus * contribution_plus_squared
+                + 2.0 * cross_plus.real
+            )
+            next_second_moment_minus = (
+                same_probability * second_moment_minus
+                + flip_probability * second_moment_plus
+                + next_probability_minus * contribution_minus_squared
+                + 2.0 * cross_minus.real
+            )
+            probability_plus = next_probability_plus
+            probability_minus = next_probability_minus
+            first_moment_plus = next_first_moment_plus
+            first_moment_minus = next_first_moment_minus
+            second_moment_plus = next_second_moment_plus
+            second_moment_minus = next_second_moment_minus
+        intensity_sum = second_moment_plus + second_moment_minus
+        intensity_e2 = intensity_sum if intensity_sum > 0.0 else 0.0
+    return (
+        CLASSICAL_ELECTRON_RADIUS_A**2
+        * common_damping
+        * common_damping
+        * intensity_e2
+        / normalization_divisor
+    )
+
+
+@cuda.jit(fastmath=False)
+def _prepare_state_block_geometry_kernel(
+    state_start: int,
+    state_stop: int,
+    detector_rows: int,
+    detector_columns: int,
+    column_px: Any,
+    row_px: Any,
+    detector_zero_lab_m: Any,
+    detector_column_step_lab_m: Any,
+    detector_row_step_lab_m: Any,
+    detector_pixel_area_vector_lab_m2: Any,
+    sample_from_lab: Any,
+    sample_from_local: Any,
+    ray_origin_lab_m: Any,
+    ki_film_sample_Ainv: Any,
+    state_real: Any,
+    state_complex: Any,
+    f0_parameters: Any,
+    q_geometry: Any,
+    point_factor: Any,
+    valid: Any,
+) -> None:
+    linear_index = cuda.grid(1)
+    point_count = column_px.size
+    local_state_count = state_stop - state_start
+    if linear_index >= local_state_count * point_count:
+        return
+    local_state = linear_index // point_count
+    point = linear_index - local_state * point_count
+    state_index = state_start + local_state
+    valid[local_state, point] = False
+    column = column_px[point]
+    row = row_px[point]
+    if column < -0.5 or column > detector_columns - 0.5 or row < -0.5 or row > detector_rows - 0.5:
+        return
+
+    displacement_x = (
+        detector_zero_lab_m[0]
+        + column * detector_column_step_lab_m[0]
+        + row * detector_row_step_lab_m[0]
+        - ray_origin_lab_m[state_index, 0]
+    )
+    displacement_y = (
+        detector_zero_lab_m[1]
+        + column * detector_column_step_lab_m[1]
+        + row * detector_row_step_lab_m[1]
+        - ray_origin_lab_m[state_index, 1]
+    )
+    displacement_z = (
+        detector_zero_lab_m[2]
+        + column * detector_column_step_lab_m[2]
+        + row * detector_row_step_lab_m[2]
+        - ray_origin_lab_m[state_index, 2]
+    )
+    distance = math.sqrt(
+        displacement_x * displacement_x
+        + displacement_y * displacement_y
+        + displacement_z * displacement_z
+    )
+    if distance == 0.0:
+        return
+    direction_x = displacement_x / distance
+    direction_y = displacement_y / distance
+    direction_z = displacement_z / distance
+    air_k0_Ainv = state_real[state_index, 1]
+    scaled_direction_x = air_k0_Ainv * direction_x
+    scaled_direction_y = air_k0_Ainv * direction_y
+    scaled_direction_z = air_k0_Ainv * direction_z
+    kf_air_x = (
+        sample_from_lab[0, 0] * scaled_direction_x
+        + sample_from_lab[0, 1] * scaled_direction_y
+        + sample_from_lab[0, 2] * scaled_direction_z
+    )
+    kf_air_y = (
+        sample_from_lab[1, 0] * scaled_direction_x
+        + sample_from_lab[1, 1] * scaled_direction_y
+        + sample_from_lab[1, 2] * scaled_direction_z
+    )
+    kf_air_z = (
+        sample_from_lab[2, 0] * scaled_direction_x
+        + sample_from_lab[2, 1] * scaled_direction_y
+        + sample_from_lab[2, 2] * scaled_direction_z
+    )
+    if kf_air_z <= 0.0:
+        return
+    parallel_squared = kf_air_x * kf_air_x + kf_air_y * kf_air_y
+    internal_k_Ainv = state_real[state_index, 0]
+    normal_squared = internal_k_Ainv * internal_k_Ainv - parallel_squared
+    if normal_squared <= 0.0:
+        return
+    kf_film_z = math.sqrt(normal_squared)
+    q_sample_x = kf_air_x - ki_film_sample_Ainv[state_index, 0]
+    q_sample_y = kf_air_y - ki_film_sample_Ainv[state_index, 1]
+    q_sample_z = kf_film_z - ki_film_sample_Ainv[state_index, 2]
+
+    pixel_solid_angle = abs(
+        direction_x * detector_pixel_area_vector_lab_m2[0]
+        + direction_y * detector_pixel_area_vector_lab_m2[1]
+        + direction_z * detector_pixel_area_vector_lab_m2[2]
+    ) / (distance * distance)
+    area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
+
+    refractive_index = state_complex[state_index, 0]
+    refractive_air_k_squared_Ainv2 = (refractive_index * air_k0_Ainv) ** 2
+    kz_film = _positive_normal_root(refractive_air_k_squared_Ainv2 - parallel_squared)
+    denominator = kz_film + complex(kf_air_z, 0.0)
+    if denominator == 0.0:
+        return
+    exit_amplitude = 2.0 * kz_film / denominator
+    exit_decay_Ainv = kz_film.imag if kz_film.imag > 0.0 else 0.0
+    exponent = 2.0 * (state_real[state_index, 2] + exit_decay_Ainv) * state_real[state_index, 3]
+    attenuation = 1.0 if exponent == 0.0 else -math.expm1(-exponent) / exponent
+    entrance_amplitude = state_complex[state_index, 1]
+    entrance_power = entrance_amplitude.real**2 + entrance_amplitude.imag**2
+    optical_weight = (
+        entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
+    )
+
+    q_local_x = (
+        q_sample_x * sample_from_local[0, 0]
+        + q_sample_y * sample_from_local[1, 0]
+        + q_sample_z * sample_from_local[2, 0]
+    )
+    q_local_y = (
+        q_sample_x * sample_from_local[0, 1]
+        + q_sample_y * sample_from_local[1, 1]
+        + q_sample_z * sample_from_local[2, 1]
+    )
+    q_local_z = (
+        q_sample_x * sample_from_local[0, 2]
+        + q_sample_y * sample_from_local[1, 2]
+        + q_sample_z * sample_from_local[2, 2]
+    )
+    q_norm_squared = q_local_x * q_local_x + q_local_y * q_local_y + q_local_z * q_local_z
+    q_norm = math.sqrt(q_norm_squared)
+    q_xraydb_squared = q_norm_squared / (16.0 * math.pi * math.pi)
+    f0_0 = f0_parameters[0, 0]
+    f0_1 = f0_parameters[1, 0]
+    for coefficient in range(5):
+        f0_0 += f0_parameters[0, 1 + coefficient] * math.exp(
+            -f0_parameters[0, 6 + coefficient] * q_xraydb_squared
+        )
+        f0_1 += f0_parameters[1, 1 + coefficient] * math.exp(
+            -f0_parameters[1, 6 + coefficient] * q_xraydb_squared
+        )
+
+    q_geometry[local_state, point, 0] = q_sample_x
+    q_geometry[local_state, point, 1] = q_sample_y
+    q_geometry[local_state, point, 2] = q_sample_z
+    q_geometry[local_state, point, 3] = q_local_z
+    q_geometry[local_state, point, 4] = q_norm_squared
+    q_geometry[local_state, point, 5] = q_norm
+    q_geometry[local_state, point, 6] = math.hypot(q_local_x, q_local_y)
+    q_geometry[local_state, point, 7] = math.atan2(q_local_y, q_local_x)
+    point_factor[local_state, point, 0] = area_jacobian
+    point_factor[local_state, point, 1] = optical_weight
+    point_factor[local_state, point, 2] = math.exp(
+        -0.5 * q_norm_squared * state_real[state_index, 9]
+    )
+    point_factor[local_state, point, 3] = f0_0
+    point_factor[local_state, point, 4] = f0_1
+    valid[local_state, point] = True
+
+
+@cuda.jit(fastmath=False)
+def _count_valid_state_block_kernel(
+    local_state_count: int,
+    valid: Any,
+    block_valid_source_count: Any,
+    valid_source_count: Any,
+) -> None:
+    point = cuda.grid(1)
+    if point >= valid.shape[1]:
+        return
+    count = 0
+    for local_state in range(local_state_count):
+        if valid[local_state, point]:
+            count += 1
+    block_valid_source_count[point] = count
+    valid_source_count[point] += count
+
+
+@cuda.jit(fastmath=False)
+def _accumulate_state_block_kernel(
+    state_start: int,
+    state_stop: int,
+    point_count: int,
+    sample_from_local: Any,
+    state_real: Any,
+    state_complex: Any,
+    active_state_rod: Any,
+    rod_u_bounds_Ainv: Any,
+    rod_u_tolerance_Ainv: Any,
+    rod_hk_population: Any,
+    rod_parallel_local_Ainv: Any,
+    rod_inverse_constants: Any,
+    atom_fractional_offset: Any,
+    atom_occupancy_u_iso_element: Any,
+    rod_atom_inplane_factor: Any,
+    layers: int,
+    gaussian_sigma_rad: float,
+    gaussian_probability: float,
+    gaussian_normalization: float,
+    lorentzian_probability: float,
+    lorentzian_rho: float,
+    lorentzian_one_minus_rho: float,
+    lorentzian_numerator: float,
+    q_geometry: Any,
+    point_factor: Any,
+    valid: Any,
+    block_valid_source_count: Any,
+    density: Any,
+    caustic: Any,
+) -> None:
+    linear_index = cuda.grid(1)
+    rod_count = rod_hk_population.shape[0]
+    if linear_index >= rod_count * point_count:
+        return
+    rod_index = linear_index // point_count
+    point = linear_index - rod_index * point_count
+    if block_valid_source_count[point] == 0:
+        return
+
+    a = rod_parallel_local_Ainv[rod_index, 0]
+    b = rod_parallel_local_Ainv[rod_index, 1]
+    c0 = rod_parallel_local_Ainv[rod_index, 2]
+    abs_b = rod_inverse_constants[rod_index, 0]
+    parallel_norm = rod_inverse_constants[rod_index, 1]
+    inverse_reference = rod_inverse_constants[rod_index, 2]
+    block_rod_density = 0.0
+    block_rod_caustic = False
+    two_pi = 2.0 * math.pi
+    local_state_count = state_stop - state_start
+    for local_state in range(local_state_count):
+        state_index = state_start + local_state
+        if not valid[local_state, point] or not active_state_rod[state_index, rod_index]:
+            continue
+        q_sample_x = q_geometry[local_state, point, 0]
+        q_sample_y = q_geometry[local_state, point, 1]
+        q_sample_z = q_geometry[local_state, point, 2]
+        q_local_z = q_geometry[local_state, point, 3]
+        q_norm_squared = q_geometry[local_state, point, 4]
+        q_norm = q_geometry[local_state, point, 5]
+        transverse_norm = q_geometry[local_state, point, 6]
+        azimuth_q = q_geometry[local_state, point, 7]
+        x_squared = (transverse_norm - abs_b) * (transverse_norm + abs_b)
+        w_squared = (q_norm - parallel_norm) * (q_norm + parallel_norm)
+        inverse_scale = q_norm_squared if q_norm_squared > inverse_reference else inverse_reference
+        if inverse_scale < 1.0:
+            inverse_scale = 1.0
+        inverse_tolerance = 1024.0 * _FLOAT_EPS * inverse_scale
+        if x_squared < -inverse_tolerance or w_squared < -inverse_tolerance:
+            continue
+        x_magnitude = math.sqrt(x_squared if x_squared > 0.0 else 0.0)
+        w_magnitude = math.sqrt(w_squared if w_squared > 0.0 else 0.0)
+        lower_u = rod_u_bounds_Ainv[state_index, rod_index, 0]
+        upper_u = rod_u_bounds_Ainv[state_index, rod_index, 1]
+        u_tolerance = rod_u_tolerance_Ainv[state_index, rod_index]
+        b3_norm_Ainv = state_real[state_index, 5]
+        shared_disorder_epsilon = state_real[state_index, 10]
+        normalization_divisor = state_real[state_index, 11]
+        reconstruction_tolerance = state_real[state_index, 12]
+        common_damping = point_factor[local_state, point, 2]
+        element_factor_0 = point_factor[local_state, point, 3] + state_complex[state_index, 2]
+        element_factor_1 = point_factor[local_state, point, 4] + state_complex[state_index, 3]
+        area_jacobian = point_factor[local_state, point, 0]
+        optical_weight = point_factor[local_state, point, 1]
+        source_phase_weight = state_real[state_index, 4]
+        state_rod_density = 0.0
+        state_rod_caustic = False
+
+        for x_branch in range(2):
+            x_value = (-1.0 if x_branch == 0 else 1.0) * x_magnitude
+            beta = (azimuth_q - math.atan2(b, x_value)) % two_pi
+            for w_branch in range(2):
+                w_value = (-1.0 if w_branch == 0 else 1.0) * w_magnitude
+                alpha = (math.atan2(w_value, a) - math.atan2(q_local_z, x_value)) % two_pi
+                if alpha >= two_pi - _ANGULAR_TOLERANCE:
+                    alpha = 0.0
+                if alpha > math.pi + _ANGULAR_TOLERANCE:
+                    continue
+                if alpha > math.pi:
+                    alpha = math.pi
+                u_value = w_value - c0
+                if u_value < lower_u - u_tolerance or u_value > upper_u + u_tolerance:
+                    continue
+                strength = _two_h_strength_A2(
+                    rod_index,
+                    u_value / b3_norm_Ainv,
+                    common_damping,
+                    element_factor_0,
+                    element_factor_1,
+                    rod_atom_inplane_factor,
+                    atom_fractional_offset,
+                    atom_occupancy_u_iso_element,
+                    layers,
+                    shared_disorder_epsilon,
+                    rod_hk_population,
+                    normalization_divisor,
+                )
+                mosaic_density = _wrapped_mosaic_density(
+                    alpha,
+                    gaussian_sigma_rad,
+                    gaussian_probability,
+                    gaussian_normalization,
+                    lorentzian_probability,
+                    lorentzian_rho,
+                    lorentzian_one_minus_rho,
+                    lorentzian_numerator,
+                )
+                jacobian = abs(w_value * x_value)
+                if jacobian == 0.0:
+                    cos_beta = math.cos(beta)
+                    sin_beta = math.sin(beta)
+                    reconstructed_local_x = x_value * cos_beta - b * sin_beta
+                    reconstructed_local_y = x_value * sin_beta + b * cos_beta
+                    reconstructed_local_z = -a * math.sin(alpha) + w_value * math.cos(alpha)
+                    reconstructed_sample_x = (
+                        sample_from_local[0, 0] * reconstructed_local_x
+                        + sample_from_local[0, 1] * reconstructed_local_y
+                        + sample_from_local[0, 2] * reconstructed_local_z
+                    )
+                    reconstructed_sample_y = (
+                        sample_from_local[1, 0] * reconstructed_local_x
+                        + sample_from_local[1, 1] * reconstructed_local_y
+                        + sample_from_local[1, 2] * reconstructed_local_z
+                    )
+                    reconstructed_sample_z = (
+                        sample_from_local[2, 0] * reconstructed_local_x
+                        + sample_from_local[2, 1] * reconstructed_local_y
+                        + sample_from_local[2, 2] * reconstructed_local_z
+                    )
+                    reconstruction_error = math.sqrt(
+                        (reconstructed_sample_x - q_sample_x) ** 2
+                        + (reconstructed_sample_y - q_sample_y) ** 2
+                        + (reconstructed_sample_z - q_sample_z) ** 2
+                    )
+                    if reconstruction_error > reconstruction_tolerance:
+                        continue
+                    state_rod_caustic = True
+                    if (
+                        source_phase_weight > 0.0
+                        and rod_hk_population[rod_index, 2] > 0.0
+                        and area_jacobian > 0.0
+                        and optical_weight > 0.0
+                        and strength > 0.0
+                        and mosaic_density > 0.0
+                    ):
+                        state_rod_density = math.inf
+                    continue
+                state_rod_density += (
+                    mosaic_density
+                    * rod_hk_population[rod_index, 2]
+                    * strength
+                    * area_jacobian
+                    * optical_weight
+                    * source_phase_weight
+                    / jacobian
+                )
+        block_rod_density += state_rod_density
+        if state_rod_caustic:
+            block_rod_caustic = True
+    density[rod_index, point] += block_rod_density
+    if block_rod_caustic:
+        caustic[rod_index, point] = True
+
+
+def evaluate_source_averaged_all_roots_cuda(
+    evaluator_blocks: tuple[tuple[Any, ...], ...],
+    column_px: FloatArray,
+    row_px: FloatArray,
+    *,
+    detector_shape_rc: tuple[int, int],
+    master_rod_count: int,
+) -> tuple[FloatArray, BoolArray, IntArray, str]:
+    """Evaluate all states in stable order with one unique writer per point and rod."""
+
+    device_name = require_cuda_available()
+    column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
+    row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
+    if column.shape != row.shape:
+        raise ValueError("CUDA detector coordinates must have equal shapes")
+    if column.size == 0:
+        return (
+            np.zeros((0, master_rod_count), dtype=np.float64),
+            np.zeros((0, master_rod_count), dtype=np.bool_),
+            np.zeros(0, dtype=np.int64),
+            device_name,
+        )
+    if column.size > _MAX_COORDINATES_PER_CHUNK:
+        density = np.empty((column.size, master_rod_count), dtype=np.float64)
+        caustic = np.empty((column.size, master_rod_count), dtype=np.bool_)
+        valid_source_count = np.empty(column.size, dtype=np.int64)
+        for start in range(0, column.size, _MAX_COORDINATES_PER_CHUNK):
+            stop = min(start + _MAX_COORDINATES_PER_CHUNK, column.size)
+            chunk_density, chunk_caustic, chunk_valid_count, chunk_device = (
+                evaluate_source_averaged_all_roots_cuda(
+                    evaluator_blocks,
+                    column[start:stop],
+                    row[start:stop],
+                    detector_shape_rc=detector_shape_rc,
+                    master_rod_count=master_rod_count,
+                )
+            )
+            if chunk_device != device_name:
+                raise RuntimeError("CUDA device changed while streaming detector coordinates")
+            density[start:stop] = chunk_density
+            caustic[start:stop] = chunk_caustic
+            valid_source_count[start:stop] = chunk_valid_count
+        return density, caustic, valid_source_count, device_name
+
+    packed = _pack_source_average(
+        evaluator_blocks,
+        detector_shape_rc=detector_shape_rc,
+        master_rod_count=master_rod_count,
+    )
+
+    device_column = cuda.to_device(column)
+    device_row = cuda.to_device(row)
+    device_density = cuda.to_device(np.zeros((master_rod_count, column.size), dtype=np.float64))
+    device_caustic = cuda.to_device(np.zeros((master_rod_count, column.size), dtype=np.bool_))
+    device_valid_count = cuda.to_device(np.zeros(column.size, dtype=np.int64))
+    device_detector_zero = cuda.to_device(packed.detector_zero_lab_m)
+    device_detector_column_step = cuda.to_device(packed.detector_column_step_lab_m)
+    device_detector_row_step = cuda.to_device(packed.detector_row_step_lab_m)
+    device_detector_pixel_area = cuda.to_device(packed.detector_pixel_area_vector_lab_m2)
+    device_sample_from_lab = cuda.to_device(packed.sample_from_lab)
+    device_sample_from_local = cuda.to_device(packed.sample_from_local)
+    device_ray_origin = cuda.to_device(packed.ray_origin_lab_m)
+    device_ki_film = cuda.to_device(packed.ki_film_sample_Ainv)
+    device_state_real = cuda.to_device(packed.state_real)
+    device_state_complex = cuda.to_device(packed.state_complex)
+    device_active_state_rod = cuda.to_device(packed.active_state_rod)
+    device_rod_u_bounds = cuda.to_device(packed.rod_u_bounds_Ainv)
+    device_rod_u_tolerance = cuda.to_device(packed.rod_u_tolerance_Ainv)
+    device_rod_hk_population = cuda.to_device(packed.rod_hk_population)
+    device_rod_parallel = cuda.to_device(packed.rod_parallel_local_Ainv)
+    device_rod_inverse = cuda.to_device(packed.rod_inverse_constants)
+    device_atom_offset = cuda.to_device(packed.atom_fractional_offset)
+    device_atom_properties = cuda.to_device(packed.atom_occupancy_u_iso_element)
+    device_rod_inplane = cuda.to_device(packed.rod_atom_inplane_factor)
+    device_f0_parameters = cuda.to_device(packed.f0_parameters)
+
+    rows, columns = detector_shape_rc
+    block_sizes = np.diff(packed.state_block_offset)
+    maximum_block_size = int(np.max(block_sizes))
+    device_q_geometry = cuda.device_array(
+        (maximum_block_size, column.size, 8),
+        dtype=np.float64,
+    )
+    device_point_factor = cuda.device_array(
+        (maximum_block_size, column.size, 5),
+        dtype=np.float64,
+    )
+    device_valid = cuda.device_array(
+        (maximum_block_size, column.size),
+        dtype=np.bool_,
+    )
+    device_block_valid_count = cuda.device_array(column.size, dtype=np.int64)
+    gaussian_sigma_rad = float(packed.state_real[0, 6])
+    lorentzian_hwhm_rad = float(packed.state_real[0, 7])
+    lorentzian_probability = float(packed.state_real[0, 8])
+    gaussian_probability = 1.0 - lorentzian_probability
+    gaussian_normalization = math.sqrt(2.0 * math.pi) * gaussian_sigma_rad
+    lorentzian_rho = math.exp(-lorentzian_hwhm_rad)
+    lorentzian_one_minus_rho = -math.expm1(-lorentzian_hwhm_rad)
+    lorentzian_numerator = -math.expm1(-2.0 * lorentzian_hwhm_rad)
+    point_blocks = (column.size + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+    rod_point_work = master_rod_count * column.size
+    rod_point_blocks = (rod_point_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+    for block_index in range(packed.state_block_offset.size - 1):
+        state_start = int(packed.state_block_offset[block_index])
+        state_stop = int(packed.state_block_offset[block_index + 1])
+        local_state_count = state_stop - state_start
+        geometry_work = local_state_count * column.size
+        geometry_blocks = (geometry_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+        _prepare_state_block_geometry_kernel[geometry_blocks, _THREADS_PER_BLOCK](
+            state_start,
+            state_stop,
+            rows,
+            columns,
+            device_column,
+            device_row,
+            device_detector_zero,
+            device_detector_column_step,
+            device_detector_row_step,
+            device_detector_pixel_area,
+            device_sample_from_lab,
+            device_sample_from_local,
+            device_ray_origin,
+            device_ki_film,
+            device_state_real,
+            device_state_complex,
+            device_f0_parameters,
+            device_q_geometry,
+            device_point_factor,
+            device_valid,
+        )
+        _count_valid_state_block_kernel[point_blocks, _THREADS_PER_BLOCK](
+            local_state_count,
+            device_valid,
+            device_block_valid_count,
+            device_valid_count,
+        )
+        _accumulate_state_block_kernel[rod_point_blocks, _THREADS_PER_BLOCK](
+            state_start,
+            state_stop,
+            column.size,
+            device_sample_from_local,
+            device_state_real,
+            device_state_complex,
+            device_active_state_rod,
+            device_rod_u_bounds,
+            device_rod_u_tolerance,
+            device_rod_hk_population,
+            device_rod_parallel,
+            device_rod_inverse,
+            device_atom_offset,
+            device_atom_properties,
+            device_rod_inplane,
+            packed.layers,
+            gaussian_sigma_rad,
+            gaussian_probability,
+            gaussian_normalization,
+            lorentzian_probability,
+            lorentzian_rho,
+            lorentzian_one_minus_rho,
+            lorentzian_numerator,
+            device_q_geometry,
+            device_point_factor,
+            device_valid,
+            device_block_valid_count,
+            device_density,
+            device_caustic,
+        )
+    return (
+        np.ascontiguousarray(device_density.copy_to_host().T),
+        np.ascontiguousarray(device_caustic.copy_to_host().T),
+        device_valid_count.copy_to_host(),
+        device_name,
+    )
+
+
+__all__ = ["evaluate_source_averaged_all_roots_cuda", "require_cuda_available"]

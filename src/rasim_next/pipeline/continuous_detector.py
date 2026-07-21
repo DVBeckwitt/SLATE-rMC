@@ -694,14 +694,21 @@ def _compile_detector_state(
         raise ValueError("compiled Bi2Se3 integration requires one shared isotropic displacement")
     inplane_angle = 2.0 * np.pi * (rod_hk_population[:, :2] @ atom_offsets[:, :2].T)
     rod_atom_inplane_factor = np.cos(inplane_angle) + 1j * np.sin(inplane_angle)
-    rod_parallel_local = np.asarray(
-        [(rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ crystal_from_local for rod in rods],
+    rod_parallel_crystal = np.asarray(
+        [rod.h * basis[:, 0] + rod.k * basis[:, 1] for rod in rods],
         dtype=np.float64,
     )
-    rod_u_bounds = np.asarray(
-        [bragg_config.rod_u_bounds_Ainv(rod) for rod in rods],
-        dtype=np.float64,
+    rod_parallel_local = rod_parallel_crystal @ crystal_from_local
+    axial_offset = rod_parallel_crystal @ mean_axis
+    perpendicular = rod_parallel_crystal - axial_offset[:, None] * mean_axis
+    half_width = np.sqrt(
+        np.maximum(
+            0.0,
+            (2.0 * bragg_config.k_norm_Ainv) ** 2
+            - np.einsum("ij,ij->i", perpendicular, perpendicular),
+        )
     )
+    rod_u_bounds = np.column_stack((-axial_offset - half_width, -axial_offset + half_width))
     rod_inverse_constants = np.column_stack(
         (
             np.abs(rod_parallel_local[:, 1]),

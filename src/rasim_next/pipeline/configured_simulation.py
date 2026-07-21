@@ -187,6 +187,7 @@ class NumericalConfiguration:
     ewald_alpha_count: int
     ewald_beta_count: int
     ewald_alpha_max_deg: float
+    detector_execution_backend: str = "cpu"
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,12 +269,13 @@ def _mapping(
     path: str,
     *,
     required: set[str],
+    optional: set[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be a mapping")
     keys = set(value)
     missing = required - keys
-    unknown = keys - required
+    unknown = keys - required - (optional or set())
     if missing:
         raise ValueError(f"{path}: missing key {sorted(missing)[0]!r}")
     if unknown:
@@ -657,10 +659,15 @@ def load_simulation_config(
             "ewald_beta_count",
             "ewald_alpha_max_deg",
         },
+        optional={"detector_execution_backend"},
     )
     numerics = NumericalConfiguration(
         worker_count=_integer(
             numerical_data["worker_count"], "numerics.worker_count", positive=True
+        ),
+        detector_execution_backend=_string(
+            numerical_data.get("detector_execution_backend", "cpu"),
+            "numerics.detector_execution_backend",
         ),
         detector_macrobin_size_px=_integer(
             numerical_data["detector_macrobin_size_px"],
@@ -694,6 +701,8 @@ def load_simulation_config(
             numerical_data["ewald_alpha_max_deg"], "numerics.ewald_alpha_max_deg"
         ),
     )
+    if numerics.detector_execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("numerics.detector_execution_backend must be cpu or cuda")
     if numerics.reciprocal_alpha_max_deg > 180.0:
         raise ValueError("numerics.reciprocal_alpha_max_deg must not exceed 180 degrees")
     if numerics.ewald_alpha_max_deg > 180.0:
@@ -1181,6 +1190,8 @@ class DetectorMacrobinImage:
     valid_source_count_min: NDArray[np.int64]
     coordinate_evaluation_count: int
     measure_id: str = "raw_detector_macrobin_fixed_quadrature_estimate_A2.v1"
+    execution_backend: str = "numba_cpu_source_averaged.v1"
+    execution_device: str | None = None
 
     def __post_init__(self) -> None:
         image = _readonly_float_array(self.image_A2, (None, None), "image_A2")
@@ -1221,6 +1232,19 @@ class DetectorMacrobinImage:
             "coordinate_evaluation_count",
             positive=True,
         )
+        if self.execution_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        }:
+            raise ValueError("unsupported detector macrobin execution backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be None or a nonempty string")
+        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
         valid_count.setflags(write=False)
         for name, value in (
             ("image_A2", image),
@@ -1238,6 +1262,7 @@ def integrate_detector_macrobins(
     *,
     bin_size_px: int,
     gauss_order: int,
+    execution_backend: str = "cpu",
 ) -> DetectorMacrobinImage:
     """Return a fixed-rule preview estimate over detector-aligned macrobins.
 
@@ -1267,9 +1292,15 @@ def integrate_detector_macrobins(
         offset[None, None, :, None],
         offset[None, None, None, :],
     )
+    if execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+    evaluation_kwargs = (
+        {} if execution_backend == "cpu" else {"execution_backend": execution_backend}
+    )
     evaluated = detector.evaluate_detector_coordinates_all_roots(
         column_grid + column_offset_grid,
         row_grid + row_offset_grid,
+        **evaluation_kwargs,
     )
     if np.any(evaluated.caustic):
         raise FloatingPointError("a detector quadrature node lies exactly on a caustic")
@@ -1286,6 +1317,12 @@ def integrate_detector_macrobins(
         row_center_px=row_center,
         valid_source_count_min=np.min(evaluated.valid_source_count, axis=(2, 3)),
         coordinate_evaluation_count=int(evaluated.density_A2_per_px2.size),
+        execution_backend=getattr(
+            evaluated,
+            "execution_backend",
+            "numba_cpu_source_averaged.v1",
+        ),
+        execution_device=getattr(evaluated, "execution_device", None),
     )
 
 

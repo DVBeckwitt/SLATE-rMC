@@ -1,5 +1,5 @@
 {
-  "file_count": 247,
+  "file_count": 248,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -48,8 +48,8 @@
     },
     {
       "path": "configs/bi2se3_simulation.yaml",
-      "sha256": "f6050bd2c50f2fb6c44e6904984c3ae6bb891f2446ca3312623c568165688d9f",
-      "size_bytes": 2609
+      "sha256": "790389dbac7f8996043dd46ee43239f6d5dda92955914db7d3b3be8f55d628b3",
+      "size_bytes": 2643
     },
     {
       "path": "docs/ARCHITECTURE.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "e1b5b10edb6c2d1fbbbaa742eecff784bb7289d55edf2ab2a58c05198ec2aa2e",
-      "size_bytes": 6278
+      "sha256": "a10addf0ad7333c495c317f130baf8d3db23e19faf88de9092473d88bc7d3c8e",
+      "size_bytes": 6848
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -553,8 +553,8 @@
     },
     {
       "path": "scripts/run_configured_simulation.py",
-      "sha256": "78228e37a88e1ca15e02becc40cf7ea997975929629ef0f87e6d267c523e6fd5",
-      "size_bytes": 17943
+      "sha256": "289d961df91de4e66ff26110d78440aef82a33e3ba4bc3fdeef29ffd79990955",
+      "size_bytes": 18507
     },
     {
       "path": "scripts/verify_seed.py",
@@ -797,9 +797,14 @@
       "size_bytes": 21772
     },
     {
+      "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
+      "sha256": "c4b25350dbd72a0c105d071e4a6e8f5f5d5d3d22baf6474d0594c9a7fb0eb48f",
+      "size_bytes": 40502
+    },
+    {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "366b85f8a6a056436e5f4f9b7f5e66d580c8ce350df1971d0e2c78ada4316987",
-      "size_bytes": 48602
+      "sha256": "75ef28b7b83d8160f1075042c9100072385f259ebd0e4b9546bb1e3f0d1001d6",
+      "size_bytes": 50121
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -808,13 +813,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
-      "sha256": "5eda955bea4c0c2959020c383d0067bfd2322bcf6ed86b8521c92e1483de4af8",
-      "size_bytes": 49696
+      "sha256": "a02019126b7f08640728956c10bcd7b3274b40c103177d52d6b58adff7446c08",
+      "size_bytes": 51468
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "9cb88fa9a1b1001d6016a7634c5a7ccb114a922916d34049b8423b9e96980e69",
-      "size_bytes": 95262
+      "sha256": "9b858623a7cae640f69e60096e83095da6369ec11069651a0a92a4653e6da8eb",
+      "size_bytes": 95600
     },
     {
       "path": "src/rasim_next/pipeline/intersections.py",
@@ -833,8 +838,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "ae1b87d1297b313deb1040c129932889d34a167774db5dc85d9199a190e55d79",
-      "size_bytes": 30162
+      "sha256": "de0bbcdd2bf234d6719d65598accf6ba278ff8275fa0837f129ee4c2a924bb7a",
+      "size_bytes": 32842
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1203,8 +1208,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "212b1587f3356b447c30038a707ba9290d70dffe45e70efb1ff025cb0fe638da",
-      "size_bytes": 88339
+      "sha256": "cf9b2fdbdc175a7af1cb0333282002324f5bf68fa82e01a7851cf142996d2004",
+      "size_bytes": 94775
     },
     {
       "path": "tests/test_mosaic_ewald.py",

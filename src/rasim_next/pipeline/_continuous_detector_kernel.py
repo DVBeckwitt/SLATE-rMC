@@ -164,8 +164,27 @@ def pack_bi2se3_two_h_structure(
 ) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float]:
     """Pack the existing CIF/XrayDB authorities once for exact compiled evaluation."""
 
+    offsets, properties, parameters, anomalous, layers, divisor = pack_bi2se3_two_h_structures(
+        strength,
+        wavelength_A=np.asarray([wavelength_A], dtype=np.float64),
+    )
+    return offsets, properties, parameters, anomalous[0], layers, divisor
+
+
+def pack_bi2se3_two_h_structures(
+    strength: Bi2Se3TwoHStrength,
+    *,
+    wavelength_A: NDArray[np.float64],
+) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float]:
+    """Pack shared structure data and vectorized anomalous factors for many wavelengths."""
+
     if not isinstance(strength, Bi2Se3TwoHStrength):
         raise TypeError("compiled detector integration requires Bi2Se3TwoHStrength")
+    wavelength = np.asarray(wavelength_A, dtype=np.float64)
+    if wavelength.ndim != 1 or not wavelength.size or not np.all(np.isfinite(wavelength)):
+        raise ValueError("wavelength_A must be a finite nonempty one-dimensional array")
+    if np.any(wavelength <= 0.0):
+        raise ValueError("wavelength_A must be positive")
     atoms = _bi2se3_quintuple_layers(strength.crystal)[0]
     if any(atom.u_iso_A2 is None for atom in atoms):
         raise ValueError("compiled Bi2Se3 integration requires declared isotropic displacement")
@@ -179,8 +198,8 @@ def pack_bi2se3_two_h_structure(
 
     waasmaier = xraydb.get_xraydb().get_cache("Waasmaier")
     parameters = np.empty((len(elements), 11), dtype=np.float64)
-    anomalous = np.empty(len(elements), dtype=np.complex128)
-    energy_eV = HC_EV_A / wavelength_A
+    anomalous = np.empty((wavelength.size, len(elements)), dtype=np.complex128)
+    energy_eV = HC_EV_A / wavelength
     for position, element in enumerate(elements):
         charges = {atom.charge for atom in atoms if atom.element == element}
         if len(charges) != 1:
@@ -192,10 +211,23 @@ def pack_bi2se3_two_h_structure(
         parameters[position, 0] = float(row.offset)
         parameters[position, 1:6] = json.loads(row.scale)
         parameters[position, 6:11] = json.loads(row.exponents)
-        anomalous[position] = complex(
-            xraydb.f1_chantler(element, energy_eV),
-            xraydb.f2_chantler(element, energy_eV),
-        )
+        chantler_row = xraydb.get_xraydb().get_cache(
+            "Chantler",
+            column="element",
+            value=element,
+        )[0]
+        chantler_energy_eV = np.asarray(json.loads(chantler_row.energy), dtype=np.float64)
+        interval = np.searchsorted(chantler_energy_eV, energy_eV, side="right") - 1
+        for interval_index in np.unique(interval):
+            selected = interval == interval_index
+            selected_energy = energy_eV[selected]
+            anomalous[selected, position] = np.asarray(
+                xraydb.f1_chantler(element, selected_energy),
+                dtype=np.float64,
+            ) + 1j * np.asarray(
+                xraydb.f2_chantler(element, selected_energy),
+                dtype=np.float64,
+            )
 
     divisor = (
         float(strength.layers)

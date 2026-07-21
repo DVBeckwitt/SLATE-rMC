@@ -107,6 +107,13 @@ that callable. It is intentionally suitable for interactive visualization, not q
 or detector-mass convergence; change the two YAML detector quadrature controls for a different
 preview, and use a separately convergence-certified integration path for fitted observables.
 
+`numerics.detector_execution_backend` selects `cuda` or `cpu`. CUDA execution fails closed when no
+CUDA device is available and never silently falls back to the CPU. It prepares detector-ray
+geometry on the device, then reduces stable source-state blocks into one float64 per-physical-rod
+field without atomics. The diagnostic manifest records the versioned backend and device name. The
+tracked default remains `cpu` because it is faster for this float64 workload on the profiled RTX
+3060; select `cuda` explicitly to execute the detector calculation on a CUDA device.
+
 All PNGs plus one compressed `.ra_diag.npz` are written outside the repository. Change each
 `outputs.<name>.enabled` value independently. Relative CIF and output paths are resolved against the
 YAML file, not the process working directory; unknown, missing, duplicate, merged, aliased, or

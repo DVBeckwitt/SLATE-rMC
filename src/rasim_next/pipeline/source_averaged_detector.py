@@ -16,7 +16,7 @@ from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorEvaluator,
-    pack_bi2se3_two_h_structure,
+    pack_bi2se3_two_h_structures,
 )
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.pipeline.continuous_detector import (
@@ -66,6 +66,8 @@ class SourceAveragedDetectorCoordinateIntensity:
     root_policy: str = "single_nonzero_root.v1"
     detector_visible_m0_q_gap_Ainv: float | None = None
     measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
+    execution_backend: str = "numba_cpu_source_averaged.v1"
+    execution_device: str | None = None
 
     def __post_init__(self) -> None:
         supplied_column = np.asarray(self.column_px)
@@ -126,6 +128,19 @@ class SourceAveragedDetectorCoordinateIntensity:
             raise ValueError("valid_source_count must lie within the source batch")
         if not isinstance(self.source_revision, str) or not self.source_revision:
             raise ValueError("source_revision must be nonempty")
+        if self.execution_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        }:
+            raise ValueError("unsupported detector-coordinate execution backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be None or a nonempty string")
+        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
         m0_gap = self.detector_visible_m0_q_gap_Ainv
         has_m0 = any(rod.family_m == 0 for rod in rods)
         if has_m0:
@@ -342,7 +357,18 @@ class SourceAveragedDetectorEwaldMeasure:
 
         reachable_count = np.zeros(states.incident_state_id.size, dtype=np.int64)
         evaluators: list[_IndexedCompiledEvaluator] = []
-        for state_index in valid_state_index:
+        (
+            atom_offsets,
+            atom_properties,
+            f0_parameters,
+            anomalous_factors,
+            layers,
+            normalization_divisor,
+        ) = pack_bi2se3_two_h_structures(
+            strength_model,
+            wavelength_A=states.wavelength_A[valid_state_index],
+        )
+        for valid_position, state_index in enumerate(valid_state_index):
             wavelength_A = float(states.wavelength_A[state_index])
             active_index = _reachable_master_rod_indices(
                 selected,
@@ -366,9 +392,13 @@ class SourceAveragedDetectorEwaldMeasure:
                 * phase_weight
                 * polarization
             )
-            packed = pack_bi2se3_two_h_structure(
-                strength_model,
-                wavelength_A=wavelength_A,
+            packed = (
+                atom_offsets,
+                atom_properties,
+                f0_parameters,
+                anomalous_factors[valid_position],
+                layers,
+                normalization_divisor,
             )
             evaluators.append(
                 _IndexedCompiledEvaluator(
@@ -502,6 +532,7 @@ class SourceAveragedDetectorEwaldMeasure:
         row_px: ArrayLike,
         *,
         branch: int | None,
+        execution_backend: str,
     ) -> SourceAveragedDetectorCoordinateIntensity:
         supplied_column = np.asarray(column_px)
         supplied_row = np.asarray(row_px)
@@ -518,30 +549,52 @@ class SourceAveragedDetectorEwaldMeasure:
         shape = column.shape
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
-        if self._evaluator_blocks and flat_column.size:
-            first = self._evaluator_blocks[0][0].evaluator
-            if branch is None:
-                first.evaluate_all_roots(
-                    np.empty(0, dtype=np.float64),
-                    np.empty(0, dtype=np.float64),
-                )
-            else:
-                first.evaluate(
-                    np.empty(0, dtype=np.float64),
-                    np.empty(0, dtype=np.float64),
-                    branch=branch,
-                )
-        executor = self._thread_pool()
-        try:
-            per_rod, caustic, valid_source_count = self._evaluate_flat_coordinates(
-                flat_column,
-                flat_row,
-                branch=branch,
-                executor=executor,
+        if execution_backend not in {"cpu", "cuda"}:
+            raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        if execution_backend == "cuda":
+            if branch is not None:
+                raise ValueError("the CUDA backend currently supports all retained roots only")
+            from rasim_next.pipeline._continuous_detector_cuda import (
+                evaluate_source_averaged_all_roots_cuda,
             )
-        finally:
-            if executor is not None:
-                executor.shutdown(wait=True)
+
+            per_rod, caustic, valid_source_count, execution_device = (
+                evaluate_source_averaged_all_roots_cuda(
+                    self._evaluator_blocks,
+                    flat_column,
+                    flat_row,
+                    detector_shape_rc=self._instrument.detector_shape_rc,
+                    master_rod_count=len(self._rods),
+                )
+            )
+            backend_id = "numba_cuda_source_averaged.v1"
+        else:
+            if self._evaluator_blocks and flat_column.size:
+                first = self._evaluator_blocks[0][0].evaluator
+                if branch is None:
+                    first.evaluate_all_roots(
+                        np.empty(0, dtype=np.float64),
+                        np.empty(0, dtype=np.float64),
+                    )
+                else:
+                    first.evaluate(
+                        np.empty(0, dtype=np.float64),
+                        np.empty(0, dtype=np.float64),
+                        branch=branch,
+                    )
+            executor = self._thread_pool()
+            try:
+                per_rod, caustic, valid_source_count = self._evaluate_flat_coordinates(
+                    flat_column,
+                    flat_row,
+                    branch=branch,
+                    executor=executor,
+                )
+            finally:
+                if executor is not None:
+                    executor.shutdown(wait=True)
+            execution_device = None
+            backend_id = "numba_cpu_source_averaged.v1"
         reshaped_per_rod = per_rod.reshape((*shape, len(self._rods)))
         return SourceAveragedDetectorCoordinateIntensity(
             column_px=column,
@@ -554,6 +607,8 @@ class SourceAveragedDetectorEwaldMeasure:
             valid_source_count=valid_source_count.reshape(shape),
             source_state_count=self.source_state_count,
             source_revision=self._incident.states.source_revision,
+            execution_backend=backend_id,
+            execution_device=execution_device,
             root_policy=("all_retained_roots.v1" if branch is None else "single_nonzero_root.v1"),
             detector_visible_m0_q_gap_Ainv=(
                 self._detector_visible_m0_q_gap_Ainv if branch is None else None
@@ -573,16 +628,28 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("branch must be 1 or 2")
         if any(rod.family_m == 0 for rod in self._rods):
             raise ValueError("branch-specific evaluation cannot include m=0")
-        return self._evaluate_detector_coordinates(column_px, row_px, branch=branch)
+        return self._evaluate_detector_coordinates(
+            column_px,
+            row_px,
+            branch=branch,
+            execution_backend="cpu",
+        )
 
     def evaluate_detector_coordinates_all_roots(
         self,
         column_px: ArrayLike,
         row_px: ArrayLike,
+        *,
+        execution_backend: str = "cpu",
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Evaluate every retained physical root, including supported kinematic m=0."""
 
-        return self._evaluate_detector_coordinates(column_px, row_px, branch=None)
+        return self._evaluate_detector_coordinates(
+            column_px,
+            row_px,
+            branch=None,
+            execution_backend=execution_backend,
+        )
 
     def integrate_native_pixels(
         self,
