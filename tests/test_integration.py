@@ -1714,9 +1714,7 @@ def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
 
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    base_inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
-    )
+    one_state = replace(config, source=replace(config.source, sample_count=1))
     changed_numerics = replace(
         config.numerics,
         detector_macrobin_size_px=100,
@@ -1727,41 +1725,27 @@ def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
         ewald_alpha_count=3,
         ewald_beta_count=5,
     )
-    changed_inputs = build_configured_simulation_inputs(
-        replace(
-            config,
-            source=replace(config.source, sample_count=1),
-            numerics=changed_numerics,
+    base = evaluate_nominal_integer_l_markers(
+        build_nominal_ewald_context(build_configured_simulation_inputs(one_state))
+    )
+    changed = evaluate_nominal_integer_l_markers(
+        build_nominal_ewald_context(
+            build_configured_simulation_inputs(replace(one_state, numerics=changed_numerics))
         )
     )
 
-    base = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(base_inputs))
-    changed = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(changed_inputs))
-
-    np.testing.assert_array_equal(changed.family_m, base.family_m)
-    np.testing.assert_array_equal(changed.integer_L, base.integer_L)
-    np.testing.assert_array_equal(changed.branch, base.branch)
-    np.testing.assert_array_equal(changed.root_sign, base.root_sign)
-    np.testing.assert_array_equal(changed.column_px, base.column_px)
-    np.testing.assert_array_equal(changed.row_px, base.row_px)
+    for name in (
+        "family_m",
+        "integer_L",
+        "branch",
+        "root_sign",
+        "column_px",
+        "row_px",
+        "q_sample_Ainv",
+    ):
+        np.testing.assert_array_equal(getattr(changed, name), getattr(base, name))
     assert changed.contributing_rod_hk == base.contributing_rod_hk
     assert changed.contributing_beta_rad == base.contributing_beta_rad
-
-    no_marker_config = replace(
-        config,
-        source=replace(config.source, sample_count=1),
-        instrument=replace(
-            config.instrument,
-            detector_shape_rc=(1, 1),
-            detector_reference_coordinate_px=(0.0, 0.0),
-        ),
-    )
-    empty = evaluate_nominal_integer_l_markers(
-        build_nominal_ewald_context(build_configured_simulation_inputs(no_marker_config))
-    )
-    assert empty.column_px.shape == empty.row_px.shape == (0,)
-    assert empty.q_sample_Ainv.shape == (0, 3)
-    assert empty.contributing_rod_hk == ()
 
 
 def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -> None:

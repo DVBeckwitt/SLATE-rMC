@@ -149,12 +149,11 @@ is deliberately outside this fit.
 trial tags from the same prepared detector-function family. It simultaneously minimizes
 covariance-whitened exact-tag coordinate residuals, fixed-span half-angle residuals between each
 nonzero-m root-side pair, and the total-least-squares m=0 exact-L line angle. There is no centroid
-term. The lower-level `fit_integer_l_marker_geometry(...)` accepts already frozen tagged
-coordinates under the same objective. `evaluate_tagged_geometry_objective_residual(...)` exposes
-that same immutable whitened site-plus-line vector for scientific diagnostics and error injection.
+term. `evaluate_tagged_geometry_objective_residual(...)` exposes the same immutable whitened
+site-plus-line vector for scientific diagnostics and error injection.
 Its ordering is nonzero coordinate pairs, sorted paired-branch half-angle terms, m=0 coordinate
 pairs, then the m=0 TLS-line half-angle term; m=0 L identities and wavelength must match exactly.
-Both fitters use bounded TRF least squares. The accepted
+The fitter uses bounded TRF least squares. The accepted
 single-5-degree parameterization applies active intrinsic local-x then current-local-y rotations
 relative to the frozen base poses:
 

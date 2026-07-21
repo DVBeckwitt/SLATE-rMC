@@ -511,6 +511,8 @@ def _corrected_instrument(
     base: CompiledInstrument,
     corrections: GeometryCorrections,
 ) -> CompiledInstrument:
+    if not isinstance(corrections, GeometryCorrections):
+        raise TypeError("corrections must be GeometryCorrections")
     detector = base.lab_from_detector
     sample = base.lab_from_sample
     detector_rotation = compose_intrinsic_xy_rotation(
@@ -543,7 +545,7 @@ def _corrected_instrument(
 class ContinuousDetectorGeometryModel:
     """Prepared all-state continuous detector field under four rigid-angle corrections."""
 
-    __slots__ = ("_inputs", "_prepared_detector", "_tag_model")
+    __slots__ = ("_inputs", "_prepared_detector", "_tag_geometry")
 
     def __init__(self, inputs: ConfiguredSimulationInputs) -> None:
         if not isinstance(inputs, ConfiguredSimulationInputs):
@@ -551,7 +553,7 @@ class ContinuousDetectorGeometryModel:
         prepared = build_source_averaged_detector(inputs)
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_prepared_detector", prepared)
-        object.__setattr__(self, "_tag_model", IntegerLGeometryModel(inputs))
+        object.__setattr__(self, "_tag_geometry", _ExactTagGeometry(inputs))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("ContinuousDetectorGeometryModel is immutable")
@@ -560,25 +562,8 @@ class ContinuousDetectorGeometryModel:
         raise AttributeError("ContinuousDetectorGeometryModel is immutable")
 
     @property
-    def inputs(self) -> ConfiguredSimulationInputs:
-        return self._inputs
-
-    @property
-    def source_revision(self) -> str:
-        return self._inputs.incident.states.source_revision
-
-    @property
     def source_state_count(self) -> int:
         return int(self._inputs.incident.states.incident_state_id.size)
-
-    @property
-    def execution_backend(self) -> str:
-        return "numba_cpu_source_averaged.v1"
-
-    def corrected_instrument(self, corrections: GeometryCorrections) -> CompiledInstrument:
-        if not isinstance(corrections, GeometryCorrections):
-            raise TypeError("corrections must be GeometryCorrections")
-        return _corrected_instrument(self._inputs.instrument, corrections)
 
     def bind(self, corrections: GeometryCorrections) -> ContinuousDetectorFunction:
         """Bind one immutable callable detector function without evaluating a raster."""
@@ -595,7 +580,7 @@ class ContinuousDetectorGeometryModel:
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Evaluate the pre-binned raw density at arbitrary continuous coordinates."""
 
-        instrument = self.corrected_instrument(corrections)
+        instrument = _corrected_instrument(self._inputs.instrument, corrections)
         incident = build_incident_states(
             self._inputs.samples,
             self._inputs.material,
@@ -617,8 +602,8 @@ class ContinuousDetectorGeometryModel:
         )
 
 
-class IntegerLGeometryModel:
-    """Compiled one-state exact-marker predictor with frozen non-intensity physics."""
+class _ExactTagGeometry:
+    """Internal one-state exact-tag geometry owned by the continuous field model."""
 
     __slots__ = ("_inputs", "_nominal_material", "_nominal_samples")
 
@@ -633,23 +618,14 @@ class IntegerLGeometryModel:
         object.__setattr__(self, "_nominal_material", nominal_material)
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("IntegerLGeometryModel is immutable")
+        raise AttributeError("exact tag geometry is immutable")
 
     def __delattr__(self, name: str) -> None:
-        raise AttributeError("IntegerLGeometryModel is immutable")
-
-    @property
-    def inputs(self) -> ConfiguredSimulationInputs:
-        return self._inputs
+        raise AttributeError("exact tag geometry is immutable")
 
     @property
     def reference_wavelength_A(self) -> float:
         return float(self._nominal_samples.wavelength_A[0])
-
-    def corrected_instrument(self, corrections: GeometryCorrections) -> CompiledInstrument:
-        if not isinstance(corrections, GeometryCorrections):
-            raise TypeError("corrections must be GeometryCorrections")
-        return _corrected_instrument(self._inputs.instrument, corrections)
 
     @staticmethod
     def _frozen_nonzero_keys(
@@ -683,7 +659,7 @@ class IntegerLGeometryModel:
     ) -> tuple[ContinuousEwaldCoating, DetectorEwaldMeasure]:
         if not isinstance(corrections, GeometryCorrections):
             raise TypeError("corrections must be GeometryCorrections")
-        instrument = self.corrected_instrument(corrections)
+        instrument = _corrected_instrument(self._inputs.instrument, corrections)
         incident = build_incident_states(
             self._nominal_samples,
             self._nominal_material,
@@ -932,10 +908,6 @@ class ContinuousDetectorFunction:
             raise TypeError("corrections must be GeometryCorrections")
 
     @property
-    def source_revision(self) -> str:
-        return self.model.source_revision
-
-    @property
     def source_state_count(self) -> int:
         return self.model.source_state_count
 
@@ -979,13 +951,13 @@ class ContinuousDetectorFunction:
     ) -> IntegerLMarkerPrediction:
         """Return nominal-source exact-L landmarks on this detector-function domain."""
 
-        return self.model._tag_model.predict(keys, self.corrections)
+        return self.model._tag_geometry.predict(keys, self.corrections)
 
     def predict_m0_minimum_tilt_exact_l_landmarks(
         self,
         integer_L: tuple[int, ...],
     ) -> M0IntegerLPrediction:
-        return self.model._tag_model.predict_m0_minimum_tilt_exact_l_landmarks(
+        return self.model._tag_geometry.predict_m0_minimum_tilt_exact_l_landmarks(
             integer_L,
             self.corrections,
         )
@@ -995,7 +967,7 @@ class ContinuousDetectorFunction:
         nonzero_keys: tuple[IntegerLMarkerKey, ...],
         m0_integer_L: tuple[int, ...],
     ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction]:
-        return self.model._tag_model.predict_tagged_landmarks(
+        return self.model._tag_geometry.predict_tagged_landmarks(
             nonzero_keys,
             m0_integer_L,
             self.corrections,
@@ -1005,30 +977,14 @@ class ContinuousDetectorFunction:
 def _marker_chord_pairs(
     keys: tuple[IntegerLMarkerKey, ...],
 ) -> tuple[tuple[int, int], ...]:
-    groups: dict[tuple[int, int], dict[int, tuple[int, int, tuple[int, int]]]] = {}
+    groups: dict[tuple[int, int], dict[int, int]] = {}
     for index, key in enumerate(keys):
-        identity = (key.family_m, key.integer_L)
-        group = groups.setdefault(identity, {})
-        if key.root_sign in group:
-            raise GeometryRankError(
-                "rank-deficient exact-L tag set repeats one root side within a line group"
-            )
-        group[key.root_sign] = (index, key.branch, key.representative_rod_hk)
+        groups.setdefault((key.family_m, key.integer_L), {})[key.root_sign] = index
     pairs: list[tuple[int, int]] = []
     for _, sides in sorted(groups.items()):
         if set(sides) != {-1, 1}:
             continue
-        negative_index, negative_branch, negative_rod = sides[-1]
-        positive_index, positive_branch, positive_rod = sides[1]
-        if negative_branch != positive_branch:
-            raise GeometryRankError(
-                "paired exact-L tag branches must share one analytic Ewald branch"
-            )
-        if negative_rod != positive_rod:
-            raise GeometryRankError(
-                "paired exact-L tag branches must use the same representative physical rod"
-            )
-        pairs.append((negative_index, positive_index))
+        pairs.append((sides[-1], sides[1]))
     return tuple(pairs)
 
 
@@ -1225,22 +1181,6 @@ def evaluate_tagged_geometry_objective_residual(
     return result
 
 
-def _weighted_residual(
-    predictor: _TrialLandmarkPredictor,
-    observations: IntegerLMarkerObservations,
-    correction_values: ArrayLike,
-    m0_observations: M0IntegerLObservations | None = None,
-) -> FloatArray:
-    corrections = GeometryCorrections.from_array(correction_values)
-    prediction, m0_prediction = predictor(corrections)
-    return evaluate_tagged_geometry_objective_residual(
-        observations,
-        prediction,
-        m0_observations=m0_observations,
-        m0_prediction=m0_prediction,
-    )
-
-
 def _finite_difference_jacobian(
     function: Callable[[FloatArray], FloatArray],
     values: FloatArray,
@@ -1434,7 +1374,13 @@ def _fit_landmark_geometry(
     def residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
-        return _weighted_residual(predictor, observations, value, m0_observations)
+        prediction, m0_prediction = predictor(GeometryCorrections.from_array(value))
+        return evaluate_tagged_geometry_objective_residual(
+            observations,
+            prediction,
+            m0_observations=m0_observations,
+            m0_prediction=m0_prediction,
+        )
 
     parameter_scale = 0.5 * (upper - lower)
     preflight_jacobian = _finite_difference_jacobian(
@@ -1513,40 +1459,6 @@ def _fit_landmark_geometry(
     )
 
 
-def fit_integer_l_marker_geometry(
-    model: IntegerLGeometryModel,
-    observations: IntegerLMarkerObservations,
-    *,
-    initial: GeometryCorrections,
-    bounds: GeometryCorrectionBounds,
-    m0_observations: M0IntegerLObservations | None = None,
-) -> GeometryFitResult:
-    """Fit exact detector landmarks and their dependent line-angle guidance."""
-
-    if not isinstance(model, IntegerLGeometryModel):
-        raise TypeError("model must be IntegerLGeometryModel")
-
-    def predictor(
-        corrections: GeometryCorrections,
-    ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction | None]:
-        if m0_observations is None:
-            return model.predict(observations.keys, corrections), None
-        return model.predict_tagged_landmarks(
-            observations.keys,
-            m0_observations.integer_L,
-            corrections,
-        )
-
-    return _fit_landmark_geometry(
-        predictor,
-        model.reference_wavelength_A,
-        observations,
-        initial=initial,
-        bounds=bounds,
-        m0_observations=m0_observations,
-    )
-
-
 def fit_tagged_detector_function_geometry(
     model: ContinuousDetectorGeometryModel,
     reference_function: ContinuousDetectorFunction,
@@ -1583,7 +1495,7 @@ def fit_tagged_detector_function_geometry(
         reference_prediction = reference_function.predict_integer_l_tags(frozen_keys)
     observations = IntegerLMarkerObservations.from_prediction(
         reference_prediction,
-        reference_wavelength_A=model._tag_model.reference_wavelength_A,
+        reference_wavelength_A=model._tag_geometry.reference_wavelength_A,
         sigma_px=sigma_px,
     )
     m0_observations: M0IntegerLObservations | None = None
@@ -1605,7 +1517,7 @@ def fit_tagged_detector_function_geometry(
 
     return _fit_landmark_geometry(
         trial_function_predictor,
-        model._tag_model.reference_wavelength_A,
+        model._tag_geometry.reference_wavelength_A,
         observations,
         initial=initial,
         bounds=bounds,
@@ -1652,18 +1564,21 @@ class IntegerLSelectionAudit:
 
 
 def audit_integer_l_marker_selection(
-    model: IntegerLGeometryModel,
-    corrections: GeometryCorrections,
+    detector_function: ContinuousDetectorFunction,
     expected_keys: tuple[IntegerLMarkerKey, ...],
 ) -> IntegerLSelectionAudit:
     """Independently re-enumerate visible roots after fitting without reassignment."""
 
-    if not isinstance(model, IntegerLGeometryModel):
-        raise TypeError("model must be IntegerLGeometryModel")
+    if not isinstance(detector_function, ContinuousDetectorFunction):
+        raise TypeError("detector_function must be a ContinuousDetectorFunction")
     expected = tuple(expected_keys)
     if any(not isinstance(key, IntegerLMarkerKey) for key in expected):
         raise TypeError("expected_keys must contain IntegerLMarkerKey values")
-    trial_inputs = replace(model.inputs, instrument=model.corrected_instrument(corrections))
+    model = detector_function.model
+    trial_inputs = replace(
+        model._inputs,
+        instrument=_corrected_instrument(model._inputs.instrument, detector_function.corrections),
+    )
     markers = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(trial_inputs))
     indices = np.flatnonzero(markers.family_m != 0)
     tangent_count = int(np.count_nonzero(markers.root_sign[indices] == 0))

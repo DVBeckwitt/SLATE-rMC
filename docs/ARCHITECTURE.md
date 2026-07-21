@@ -67,8 +67,8 @@ all contributing rod/orientation branches. Only the active detector panel is eva
    requested detector integration.
 5. `configured_simulation` assembles those objects from one validated YAML document.
 6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
-   structure/mosaic state; its associated `IntegerLGeometryModel` rebuilds only canonical incident,
-   exit-refraction, and detector geometry for each exact-L landmark trial.
+   structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
+   exit-refraction, and detector geometry for each landmark trial.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never

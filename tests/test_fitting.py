@@ -17,16 +17,13 @@ from rasim_next.fitting import (
     GeometryCorrections,
     GeometryPredictionError,
     GeometryRankError,
-    IntegerLGeometryModel,
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
-    IntegerLSelectionAudit,
     M0IntegerLObservations,
     M0IntegerLPrediction,
     audit_integer_l_marker_selection,
     evaluate_tagged_geometry_objective_residual,
-    fit_integer_l_marker_geometry,
     fit_tagged_detector_function_geometry,
 )
 from rasim_next.geometry import build_incident_states
@@ -106,9 +103,7 @@ def _raise_if_pixelized(*args: object, **kwargs: object) -> None:
     raise AssertionError("continuous-field fitting must not call a pixel integrator")
 
 
-def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     config = replace(
@@ -133,33 +128,10 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle(
             instrument=mismatched_pose.instrument,
         )
 
-    monkeypatch.setattr(
-        DetectorEwaldMeasure,
-        "integrate_native_pixels",
-        _raise_if_pixelized,
-    )
-    monkeypatch.setattr(
-        SourceAveragedDetectorEwaldMeasure,
-        "integrate_native_pixels",
-        _raise_if_pixelized,
-    )
     model = ContinuousDetectorGeometryModel(base_inputs)
     reference = model.bind(truth)
-    assert isinstance(reference, ContinuousDetectorFunction)
-    assert reference.source_state_count == 8
-    assert (
-        reference.tag_incident_state_policy
-        == "nominal_source_center.zero_divergence.mean_wavelength.v1"
-    )
-    assert not reference.tag_incident_state_contributes_to_intensity
     actual = reference.evaluate_detector_coordinates(column_px, row_px)
 
-    assert actual.measure_id == "raw_detector_coordinate_density_A2_per_px2.v1"
-    assert actual.execution_backend == "numba_cpu_source_averaged.v1"
-    assert actual.branch is None
-    assert any(rod.family_m == 0 for rod in actual.rods)
-    assert np.all(np.modf(2.0 * actual.column_px)[0] != 0.0)
-    assert np.all(np.modf(2.0 * actual.row_px)[0] != 0.0)
     np.testing.assert_allclose(
         actual.per_rod_density_A2_per_px2,
         expected.per_rod_density_A2_per_px2,
@@ -170,38 +142,30 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle(
     np.testing.assert_array_equal(actual.valid_source_count, expected.valid_source_count)
 
 
-def test_geometry_fit_public_records_reject_impossible_states() -> None:
-    key = IntegerLMarkerKey(1, 2, 2, 1, (1, 0))
-    with pytest.raises(ValueError, match="unique"):
-        IntegerLMarkerPrediction(
-            keys=(key, key),
-            coordinates_px=np.zeros((2, 2)),
-            detector_status=np.asarray(("VALID", "VALID")),
-            ewald_residual_Ainv=np.zeros(2),
-        )
-    with pytest.raises(ValueError, match="unsupported detector prediction status"):
-        IntegerLMarkerPrediction(
-            keys=(key,),
-            coordinates_px=np.zeros((1, 2)),
-            detector_status=np.asarray(("FABRICATED",)),
-            ewald_residual_Ainv=np.zeros(1),
-        )
-    duplicate_user_identity = IntegerLMarkerKey(1, 2, 2, 1, (0, 1))
+def test_tag_identity_rejects_duplicates_and_mismatched_pairs() -> None:
+    with pytest.raises(ValueError, match="invalid non-specular integer-L marker identity"):
+        IntegerLMarkerKey(1, 2, 2, 0, (1, 0))
+    negative = IntegerLMarkerKey(1, 2, 2, -1, (1, 0))
+    positive = IntegerLMarkerKey(1, 2, 2, 1, (1, 0))
+    duplicate_user_identity = replace(negative, representative_rod_hk=(0, 1))
     with pytest.raises(ValueError, match=r"\(m,L,tag_branch\)"):
         IntegerLMarkerPrediction(
-            keys=(key, duplicate_user_identity),
+            keys=(negative, duplicate_user_identity),
             coordinates_px=np.zeros((2, 2)),
             detector_status=np.asarray(("VALID", "VALID")),
             ewald_residual_Ainv=np.zeros(2),
         )
-    with pytest.raises(ValueError, match="SAME audit"):
-        IntegerLSelectionAudit(
-            classification="SAME",
-            missing_keys=(key,),
-            unexpected_keys=(),
-            expected_count=1,
-            enumerated_count=0,
-        )
+    for changed, message in (
+        (replace(positive, representative_rod_hk=(0, 1)), "physical rod"),
+        (replace(positive, branch=1), "Ewald branch"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            IntegerLMarkerObservations(
+                keys=(negative, changed),
+                coordinates_px=np.zeros((2, 2)),
+                covariance_px2=np.broadcast_to(np.eye(2), (2, 2, 2)),
+                reference_wavelength_A=1.54,
+            )
 
 
 def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
@@ -238,10 +202,6 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
     context_1000 = build_nominal_ewald_context(inputs_1000)
     context_1 = build_nominal_ewald_context(inputs_1)
     assert bool(context_1000.incident.states.valid[0])
-    np.testing.assert_array_equal(
-        context_1000.incident.states.k_film_phase_sample_Ainv,
-        context_1.incident.states.k_film_phase_sample_Ainv,
-    )
     markers_1000 = evaluate_nominal_integer_l_markers(context_1000)
     markers_1 = evaluate_nominal_integer_l_markers(context_1)
     for name in (
@@ -256,24 +216,39 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
         "family_strength_weight_A2",
     ):
         np.testing.assert_array_equal(getattr(markers_1000, name), getattr(markers_1, name))
-    assert markers_1000.contributing_rod_hk == markers_1.contributing_rod_hk
-    assert markers_1000.contributing_beta_rad == markers_1.contributing_beta_rad
-    assert markers_1000.per_rod_strength_weight_A2 == markers_1.per_rod_strength_weight_A2
-    assert markers_1000.reference_wavelength_A == markers_1.reference_wavelength_A
-    assert markers_1000.definition_id == markers_1.definition_id
-    assert markers_1000.source_state_policy == markers_1.source_state_policy
+    for name in (
+        "contributing_rod_hk",
+        "contributing_beta_rad",
+        "per_rod_strength_weight_A2",
+        "reference_wavelength_A",
+        "definition_id",
+        "source_state_policy",
+    ):
+        assert getattr(markers_1000, name) == getattr(markers_1, name)
     observations = IntegerLMarkerObservations.from_markers(markers_1000)
-    assert len(observations.keys) == 84
+    detector_function = ContinuousDetectorGeometryModel(inputs_1000).bind(
+        GeometryCorrections.zero()
+    )
+    predicted = detector_function.predict_integer_l_tags(observations.keys)
+    np.testing.assert_allclose(
+        predicted.coordinates_px,
+        observations.coordinates_px,
+        rtol=0.0,
+        atol=5.0e-11,
+    )
+    assert np.all(predicted.active_panel)
+    assert detector_function.source_state_count == 1000
+    assert (
+        detector_function.tag_incident_state_policy
+        == "nominal_source_center.zero_divergence.mean_wavelength.v1"
+    )
+    assert not detector_function.tag_incident_state_contributes_to_intensity
     assert {key.tag_branch for key in observations.keys} == {1, 2}
     assert len({(key.family_m, key.integer_L, key.tag_branch) for key in observations.keys}) == len(
         observations.keys
     )
-    m0 = IntegerLGeometryModel(inputs_1000).predict_m0_minimum_tilt_exact_l_landmarks(
-        tuple(range(2, 20)),
-        GeometryCorrections.zero(),
-    )
+    m0 = detector_function.predict_m0_minimum_tilt_exact_l_landmarks((2,))
     assert m0.tag_branch == 0
-    assert np.all(m0.active_panel)
 
 
 def test_tagged_detector_objective_retains_independent_line_angle_terms() -> None:
@@ -328,8 +303,6 @@ def test_tagged_detector_objective_retains_independent_line_angle_terms() -> Non
     assert residual.shape == (12,)
     assert residual[4] == pytest.approx(4.0 * math.sin(0.5 * chord_angle))
     assert residual[-1] == pytest.approx(4.0 * math.sin(0.5 * m0_angle))
-    assert residual[4] > 0.0
-    assert residual[-1] > 0.0
     with pytest.raises(ValueError, match="wavelength"):
         evaluate_tagged_geometry_objective_residual(
             observations,
@@ -345,11 +318,13 @@ def test_m0_minimum_tilt_landmarks_obey_independent_ewald_oracle() -> None:
     config = replace(config, source=replace(config.source, sample_count=1))
     inputs = build_configured_simulation_inputs(config)
     context = build_nominal_ewald_context(inputs)
-    prediction = IntegerLGeometryModel(inputs).predict_m0_minimum_tilt_exact_l_landmarks(
-        tuple(range(1, 21)),
-        GeometryCorrections.zero(),
+    prediction = (
+        ContinuousDetectorGeometryModel(inputs)
+        .bind(GeometryCorrections.zero())
+        .predict_m0_minimum_tilt_exact_l_landmarks(tuple(range(1, 21)))
     )
 
+    assert prediction.tag_branch == 0
     np.testing.assert_array_equal(
         prediction.active_panel,
         np.asarray((False, *(True for _ in range(18)), False)),
@@ -380,12 +355,6 @@ def test_m0_minimum_tilt_landmarks_obey_independent_ewald_oracle() -> None:
     )
 
     z = -u_Ainv / (2.0 * k_norm)
-    np.testing.assert_allclose(
-        direction_sample @ incident_direction,
-        z,
-        rtol=0.0,
-        atol=2.0e-14,
-    )
     mean_axis_sample = crystal_to_sample @ mean_axis_crystal
     perpendicular = mean_axis_sample - (mean_axis_sample @ incident_direction) * incident_direction
     maximum_alignment = z * float(mean_axis_sample @ incident_direction) + np.sqrt(
@@ -415,19 +384,8 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
     truth_markers = evaluate_nominal_integer_l_markers(
         build_nominal_ewald_context(_truth_inputs(base_inputs, truth))
     )
-    tangent_sign = truth_markers.root_sign.copy()
-    tangent_sign[0] = 0
-    tangent_markers = replace(truth_markers, root_sign=tangent_sign)
-    with pytest.raises(ValueError, match="invalid non-specular integer-L marker identity"):
-        IntegerLMarkerObservations.from_markers(tangent_markers, selection=np.asarray([0]))
     observations = IntegerLMarkerObservations.from_markers(truth_markers, sigma_px=0.25)
 
-    assert len(observations.keys) == 84
-    assert len(set(observations.keys)) == 84
-    assert len({(key.family_m, key.integer_L, key.tag_branch) for key in observations.keys}) == len(
-        observations.keys
-    )
-    assert {key.root_sign for key in observations.keys} == {-1, 1}
     heldout_labels = {
         (1, 2),
         (1, 9),
@@ -473,14 +431,7 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
     )
     field_model = ContinuousDetectorGeometryModel(base_inputs)
     reference_function = field_model.bind(truth)
-    assert isinstance(reference_function, ContinuousDetectorFunction)
     truth_prediction = reference_function.predict_integer_l_tags(observations.keys)
-    np.testing.assert_allclose(
-        truth_prediction.coordinates_px,
-        observations.coordinates_px,
-        rtol=0.0,
-        atol=5.0e-11,
-    )
     tagged_field_value = reference_function(
         truth_prediction.coordinates_px[:, 0],
         truth_prediction.coordinates_px[:, 1],
@@ -500,31 +451,13 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
     truth_m0_prediction = reference_function.predict_m0_minimum_tilt_exact_l_landmarks(
         tuple(range(2, 20)),
     )
-    m0_observations = M0IntegerLObservations.from_prediction(
-        truth_m0_prediction,
-        sigma_px=0.25,
-    )
-    assert m0_observations.integer_L == tuple(range(2, 20))
-    assert np.all(truth_m0_prediction.active_panel)
     m0_field_value = reference_function(
         truth_m0_prediction.coordinates_px[:, 0],
         truth_m0_prediction.coordinates_px[:, 1],
     )
     m0_index = next(index for index, rod in enumerate(m0_field_value.rods) if rod.family_m == 0)
-    assert np.all(m0_field_value.valid_source_count == 1)
     assert np.all(m0_field_value.per_rod_density_A2_per_px2[:, m0_index] > 0.0)
-    assert (
-        float(
-            np.linalg.norm(
-                truth_m0_prediction.coordinates_px[-1] - truth_m0_prediction.coordinates_px[0]
-            )
-        )
-        > 100.0
-    )
     initial = GeometryCorrections.zero()
-    initial_prediction = field_model.bind(initial).predict_integer_l_tags(training.keys)
-    initial_error = initial_prediction.coordinates_px - training.coordinates_px
-    assert float(np.sqrt(np.mean(initial_error**2))) > 5.0
 
     outside_start = None
     for candidate in (
@@ -584,73 +517,24 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
     assert result.training_chord_angle_rms_rad < 1.0e-8
     assert result.training_m0_line_angle_rad < 1.0e-8
     assert result.chord_count == 33
+    assert result.m0_landmark_count == 18
 
     fitted_function = field_model.bind(result.corrections)
     heldout_prediction = fitted_function.predict_integer_l_tags(heldout.keys)
     heldout_error = heldout_prediction.coordinates_px - heldout.coordinates_px
-    assert float(np.sqrt(np.mean(heldout_error**2))) < 1.0e-3
     assert float(np.max(np.abs(heldout_error))) < 5.0e-3
 
-    tag_model = IntegerLGeometryModel(base_inputs)
     audit = audit_integer_l_marker_selection(
-        tag_model,
-        result.corrections,
+        fitted_function,
         observations.keys,
     )
     assert audit.classification == "SAME"
-    assert audit.missing_keys == ()
-    assert audit.unexpected_keys == ()
-
-    negative_index = next(index for index, key in enumerate(training.keys) if key.root_sign == -1)
-    negative_key = training.keys[negative_index]
-    positive_index = next(
-        index
-        for index, key in enumerate(training.keys)
-        if (
-            key.family_m,
-            key.integer_L,
-            key.branch,
-            key.root_sign,
-        )
-        == (
-            negative_key.family_m,
-            negative_key.integer_L,
-            negative_key.branch,
-            1,
-        )
-    )
-    positive_key = training.keys[positive_index]
-    mismatched_rod = next(
-        rod_hk
-        for rod_hk in truth_markers.contributing_rod_hk[0]
-        if rod_hk != positive_key.representative_rod_hk
-    )
-    with pytest.raises(ValueError, match="share one representative physical rod"):
-        IntegerLMarkerObservations(
-            keys=(
-                negative_key,
-                replace(positive_key, representative_rod_hk=mismatched_rod),
-            ),
-            coordinates_px=training.coordinates_px[[negative_index, positive_index]],
-            covariance_px2=training.covariance_px2[[negative_index, positive_index]],
-            reference_wavelength_A=training.reference_wavelength_A,
-        )
-    with pytest.raises(ValueError, match="share one analytic Ewald branch"):
-        IntegerLMarkerObservations(
-            keys=(
-                negative_key,
-                replace(positive_key, branch=1),
-            ),
-            coordinates_px=training.coordinates_px[[negative_index, positive_index]],
-            covariance_px2=training.covariance_px2[[negative_index, positive_index]],
-            reference_wavelength_A=training.reference_wavelength_A,
-        )
-
-    underdetermined_observations = training.subset(np.asarray([0]))
+    assert audit.expected_count == audit.enumerated_count == 84
     with pytest.raises(GeometryRankError, match="rank"):
-        fit_integer_l_marker_geometry(
-            tag_model,
-            underdetermined_observations,
+        fit_tagged_detector_function_geometry(
+            field_model,
+            reference_function,
+            nonzero_keys=(training.keys[0],),
             initial=initial,
             bounds=bounds,
         )

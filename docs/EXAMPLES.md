@@ -61,7 +61,6 @@ from rasim_next.fitting import (
     ContinuousDetectorGeometryModel,
     GeometryCorrectionBounds,
     GeometryCorrections,
-    IntegerLGeometryModel,
     IntegerLMarkerObservations,
     audit_integer_l_marker_selection,
     fit_tagged_detector_function_geometry,
@@ -84,10 +83,8 @@ fit = fit_tagged_detector_function_geometry(
     bounds=GeometryCorrectionBounds.rasim_reduced_pose(),
 )
 fitted = model.bind(fit.corrections)
-tag_model = IntegerLGeometryModel(inputs)
 audit = audit_integer_l_marker_selection(
-    tag_model,
-    fit.corrections,
+    fitted,
     IntegerLMarkerObservations.from_markers(catalog).keys,
 )
 ```

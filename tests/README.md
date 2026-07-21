@@ -10,6 +10,8 @@ The compact suite is organized by scientific boundary:
   Ewald roots, elastic closure, and exact-family reduction.
 - `test_ordered_reflectivity.py`: CIF amplitudes, finite ordered stacks, and named specular models.
 - `test_stacking_transition.py`: finite stacking correlations, parent limits, and normalization.
+- `test_fitting.py`: exact tagged-site geometry, detector-function objectives, rank checks, and
+  blind bounded recovery.
 - `test_integration.py`: continuous detector inverse mapping, caustics, native-pixel integration,
   source averaging, YAML construction, compiled kernels, CUDA parity, and end-to-end factor
   ownership.

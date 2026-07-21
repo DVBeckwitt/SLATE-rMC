@@ -19,7 +19,7 @@ phases but do not override these owners.
 | source-averaged measure | summed coordinate density | pixel integrator | independent states and wavelengths add as intensities before one box integral |
 | native-pixel integrator | raw pixel mass | rendering / future fitting | deterministic finite box integral; no point deposition or image normalization |
 | exact integer-L marker solver | frozen root identities and native coordinates | geometry fitter | every physical rod precedes grouping; analytic root sign is part of identity |
-| `IntegerLGeometryModel` | key-aligned geometry-only predictions | bounded least squares | no intensity evaluation or dynamic reassignment inside the objective |
+| bound continuous detector function | key-aligned exact-tag predictions | bounded least squares | private geometry-only tag engine; no intensity evaluation or dynamic reassignment inside the objective |
 | geometry fitter | pose corrections plus rank/residual diagnostics | outer marker audit | only a full-rank local pack is accepted; final visible roots are independently re-enumerated |
 
 ## Factor reduction order

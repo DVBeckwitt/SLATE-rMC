@@ -1,5 +1,5 @@
 {
-  "file_count": 238,
+  "file_count": 237,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -43,8 +43,8 @@
     },
     {
       "path": "WORKTREE_LAUNCH.md",
-      "sha256": "af1104446a9057fa5ed93207aac9c43774bc42df3e1aa17387c02cb7f753cda8",
-      "size_bytes": 2059
+      "sha256": "8af39ef9f8d13c9f9b803d4925a0504e6122feef5dc0cbddd2f526f2fbcd6555",
+      "size_bytes": 2019
     },
     {
       "path": "configs/bi2se3_simulation.yaml",
@@ -53,8 +53,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "2582fcdca27065e51d004f2e50d135057544b149b5ffc348b88a7bc2f6476155",
-      "size_bytes": 5506
+      "sha256": "270d1397026c364075b7a1052ddf126e89624294990ee6ab9e3681aed6c1a34e",
+      "size_bytes": 5490
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "c4f0a1f66bd71ba9fadf03971f59855bb919470368902d33f54ec10ad9f71a64",
-      "size_bytes": 13363
+      "sha256": "ce36813bf30b5788b559796bdc334ea26a0eeb334d934a5cc7866502318375c7",
+      "size_bytes": 13240
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/DOVETAIL_MATRIX.md",
-      "sha256": "0f7efb6c114aa106beb66c0d3853f0afcdc04e3faecd8757456faacba0793283",
-      "size_bytes": 3678
+      "sha256": "8c586cc9343777dc6ce8534e7d64d17da4282fb6deee89b708a7e833e855d635",
+      "size_bytes": 3719
     },
     {
       "path": "docs/ERROR_INJECTION.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "60697f4217e94ce91e151cdbd5ff241e810b439d09863f2a82b0d929bd5aaf3c",
-      "size_bytes": 5602
+      "sha256": "7467979f077164a5c1910297b1dcbac7b4f24b05c9326e364f191057a70fc3c5",
+      "size_bytes": 5509
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -105,11 +105,6 @@
       "path": "docs/HBN_RING_FITTER_MINIMUM_SPEC.md",
       "sha256": "2566519a9605d0b4714a5af7ab6ab6a459c530284c072f8bf3c2971bdfd326a6",
       "size_bytes": 21536
-    },
-    {
-      "path": "docs/LEGACY_REFERENCE.md",
-      "sha256": "5f86071ca70e1f2d20b3b4833144a244e5325d2f59170f2c7831051f57e675b7",
-      "size_bytes": 4226
     },
     {
       "path": "docs/OSC_COORDINATES.md",
@@ -648,13 +643,13 @@
     },
     {
       "path": "src/rasim_next/fitting/__init__.py",
-      "sha256": "4f956db3664556b5317a4dbb2d428b29362df39373f9d262719ae794625f39d2",
-      "size_bytes": 1264
+      "sha256": "e64a3676c8e5f7e2a28591d3d71a4b5b5fe03abc19f0e62cd93e8e74fda89d09",
+      "size_bytes": 1136
     },
     {
       "path": "src/rasim_next/fitting/geometry.py",
-      "sha256": "ddcd6a68c2e7052169a4f8a1f13c24076672bb52511e045c40d1fdae05f5e9d7",
-      "size_bytes": 72104
+      "sha256": "1aabe05df5db36d134cb48c1feb00bb297cdd81f5786e3d384c786c54a0d4677",
+      "size_bytes": 69089
     },
     {
       "path": "src/rasim_next/geometry/__init__.py",
@@ -1143,8 +1138,8 @@
     },
     {
       "path": "tests/README.md",
-      "sha256": "fcea4d4e1ba82b39b03b105fc2e513fff975a77bd257dda93f0c886c91935081",
-      "size_bytes": 1202
+      "sha256": "ca0c25aff7cdf65e0e45751218fb61789f9e52259298a394fd9cf832f22ca9c9",
+      "size_bytes": 1324
     },
     {
       "path": "tests/test_core_coordinates.py",
@@ -1153,8 +1148,8 @@
     },
     {
       "path": "tests/test_fitting.py",
-      "sha256": "afc11783268544e2c4b4b3eaa0bf840c0b6f49c7dcd282ebdddf438e2c184dd1",
-      "size_bytes": 25038
+      "sha256": "7d43595e008c30036fedfe27309f578668788830cad95b56eb61fe1fb10cc0de",
+      "size_bytes": 20462
     },
     {
       "path": "tests/test_geometry_optics.py",
@@ -1163,8 +1158,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "e815d348907cf0c2fcd050d1df69da57f7b20aa1fc1877910ef98be0a20575aa",
-      "size_bytes": 99520
+      "sha256": "d1beae8bff1c81da7997b777ed9ece675ada234a33f2d2d73ab73587cd33f8b6",
+      "size_bytes": 98690
     },
     {
       "path": "tests/test_mosaic_ewald.py",

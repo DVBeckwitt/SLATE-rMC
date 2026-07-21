@@ -8,7 +8,6 @@ from rasim_next.fitting.geometry import (
     GeometryFitResult,
     GeometryPredictionError,
     GeometryRankError,
-    IntegerLGeometryModel,
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
@@ -17,7 +16,6 @@ from rasim_next.fitting.geometry import (
     M0IntegerLPrediction,
     audit_integer_l_marker_selection,
     evaluate_tagged_geometry_objective_residual,
-    fit_integer_l_marker_geometry,
     fit_tagged_detector_function_geometry,
 )
 
@@ -29,7 +27,6 @@ __all__ = [
     "GeometryFitResult",
     "GeometryPredictionError",
     "GeometryRankError",
-    "IntegerLGeometryModel",
     "IntegerLMarkerKey",
     "IntegerLMarkerObservations",
     "IntegerLMarkerPrediction",
@@ -38,6 +35,5 @@ __all__ = [
     "M0IntegerLPrediction",
     "audit_integer_l_marker_selection",
     "evaluate_tagged_geometry_objective_residual",
-    "fit_integer_l_marker_geometry",
     "fit_tagged_detector_function_geometry",
 ]

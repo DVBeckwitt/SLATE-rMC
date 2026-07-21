@@ -1,58 +1,48 @@
 # Worktree launch
 
-## 1. Initialize the greenfield repository
+## Historical spine
 
-```bash
-unzip RASIM_Next_Repo_Seed.zip
-cd rasim-next
-git init -b main
-git add .
-git commit -m "chore: seed greenfield RASIM Next repository"
-uv sync --frozen --group dev
-python scripts/verify_seed.py
+The bootstrap/reference spine and T02--T05 physics worktrees are complete, merged, and retired.
+Their tracked task files and reference evidence remain provenance only. Do not recreate their
+branches, relaunch their prompts, or restore their sampled event/raster runtime.
+
+## Start new work
+
+Every write-heavy task starts from the approved current `main` in one short-lived `codex/`
+worktree. First verify that the main checkout is clean and record its exact commit:
+
+```powershell
+git -C C:\path\to\SLATE-rMC status --short
+$baseSha = git -C C:\path\to\SLATE-rMC rev-parse main
+git -C C:\path\to\SLATE-rMC worktree add `
+  -b codex/<task-name> `
+  C:\path\to\SLATE-rMC\build\worktrees\<task-name> `
+  $baseSha
 ```
 
-## 2. Run the serial spine
+Inside the new worktree:
 
-Run `tasks/prompts/bootstrap.md` in the main checkout. Commit its accepted result. Then run
-`tasks/prompts/reference_verification.md`. Commit any required proof-base changes and record:
+1. Read `AGENTS.md`, the current contracts, and the task-specific prompt or plan.
+2. Confirm `git merge-base --is-ancestor main HEAD` succeeds before editing.
+3. Use the repository virtual environment or create an isolated one with the frozen lockfile.
+4. Keep one writer. Subagents may perform bounded read-only derivations and reviews.
+5. Write diagnostics and generated figures outside the repository.
+6. Finish with one coherent commit and a clean worktree.
 
-```bash
-PROOF_BASE_SHA=$(git rev-parse HEAD)
+The tracked `reference/` pack and cited legacy snapshot are immutable evidence. Production code and
+permanent tests never import or execute the legacy snapshot.
+
+## Review and integrate
+
+Before merging, run the focused tests, compact suite, formatting, lint, registered proofs,
+`scripts/verify_seed.py`, and an independent read-only review. Then merge from the clean main
+checkout without rewriting history:
+
+```powershell
+git -C C:\path\to\SLATE-rMC merge --ff-only codex/<task-name>
+git -C C:\path\to\SLATE-rMC status --short
 ```
 
-The tracked `reference/rasim_reference_v1.npz` and `examples/` inputs are immutable after this
-point. The external archives are not required for any worktree proof. The exact cited manuscript extracts and legacy-source snapshot are tracked under `reference/`.
-
-## 3. Create four worktrees
-
-Manual Git worktrees:
-
-```bash
-git worktree add -b feat/geometry-optics ../wt-geometry "$PROOF_BASE_SHA"
-git worktree add -b feat/mosaic-ewald ../wt-mosaic "$PROOF_BASE_SHA"
-git worktree add -b feat/ordered-reflectivity ../wt-ordered "$PROOF_BASE_SHA"
-git worktree add -b feat/stacking-transition ../wt-stacking "$PROOF_BASE_SHA"
-```
-
-Start one Codex task in each worktree with the matching prompt under `tasks/prompts/`.
-
-Codex-managed worktrees start detached. The prompt may create its feature branch after confirming
-that `HEAD` is the selected proof-base commit. Tracked files are present automatically. No ignored
-environment file is required.
-
-Use one separate `.venv` per worktree and one shared external package cache:
-
-```bash
-export UV_CACHE_DIR="$HOME/.cache/uv"
-uv sync --frozen --group dev
-```
-
-Limit each concurrent branch to one BLAS/OpenMP thread unless its own benchmark intentionally
-measures parallel scaling.
-
-## 4. Review and integrate
-
-Do not merge overnight. Run the read-only review prompt with the four exact SHAs. Integrate one
-approved branch at a time through T07, rerunning the smallest vertical proof after each merge.
-Selection and fitting begin only after the detector-native forward model is accepted.
+If `main` advanced and is no longer an ancestor, stop and reconcile explicitly in the feature
+worktree before integration. Remove a retired worktree or branch only after its accepted commit is
+reachable from `main` and no task still uses it.
