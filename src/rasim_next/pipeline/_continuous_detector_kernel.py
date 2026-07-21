@@ -1,4 +1,4 @@
-"""Compiled point evaluator for the accepted finite ideal-2H Bi2Se3 fixture."""
+"""Compiled point evaluator for the accepted finite parent-2H Bi2Se3 fixture."""
 
 from __future__ import annotations
 
@@ -71,6 +71,7 @@ class CompiledDetectorState:
     f0_parameters: FloatArray
     anomalous_factor_e: NDArray[np.complex128]
     layers: int
+    shared_disorder_epsilon: float
     normalization_divisor: float
 
     def __post_init__(self) -> None:
@@ -131,6 +132,7 @@ class CompiledDetectorState:
             "lorentzian_hwhm_rad",
             "lorentzian_probability",
             "common_u_iso_A2",
+            "shared_disorder_epsilon",
             "normalization_divisor",
         )
         for name in scalar_names:
@@ -144,6 +146,8 @@ class CompiledDetectorState:
             raise ValueError("normalization_divisor must be positive")
         if not 0.0 <= self.lorentzian_probability <= 1.0:
             raise ValueError("lorentzian_probability must lie in [0, 1]")
+        if not 0.0 <= self.shared_disorder_epsilon <= 1.0:
+            raise ValueError("shared_disorder_epsilon must lie in [0, 1]")
         if self.layers < 1:
             raise ValueError("layers must be positive")
         for name in ("refractive_index", "entrance_amplitude"):
@@ -269,32 +273,113 @@ def _two_h_strength_A2(
     atom_fractional_offset: FloatArray,
     atom_occupancy_u_iso_element: FloatArray,
     layers: int,
+    shared_disorder_epsilon: float,
+    rod_hk_population: FloatArray,
     normalization_divisor: float,
 ) -> float:
-    amplitude = 0.0 + 0.0j
+    amplitude_plus = 0.0 + 0.0j
+    amplitude_minus = 0.0 + 0.0j
     for atom in range(atom_fractional_offset.shape[0]):
         occupancy = atom_occupancy_u_iso_element[atom, 0]
         element = int(atom_occupancy_u_iso_element[atom, 2])
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
-        phase_factor = rod_atom_inplane_factor[rod_index, atom] * complex(
-            math.cos(phase_z), math.sin(phase_z)
-        )
+        inplane_factor = rod_atom_inplane_factor[rod_index, atom]
+        phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
+        phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
         element_factor = element_factor_0 if element == 0 else element_factor_1
-        amplitude += occupancy * element_factor * phase_factor
+        amplitude_plus += occupancy * element_factor * phase_plus
+        amplitude_minus += occupancy * element_factor * phase_minus
 
     vertical_phase_angle = 2.0 * math.pi * ell / 3.0
     vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
-    phase_power = 1.0 + 0.0j
-    stack_sum = 1.0 + 0.0j
-    for _ in range(1, layers):
-        phase_power *= vertical_phase
-        stack_sum += phase_power
-    total = amplitude * stack_sum
+    if shared_disorder_epsilon == 0.0:
+        phase_power = 1.0 + 0.0j
+        stack_sum = 1.0 + 0.0j
+        for _ in range(1, layers):
+            phase_power *= vertical_phase
+            stack_sum += phase_power
+        total = amplitude_plus * stack_sum
+        intensity_e2 = total.real * total.real + total.imag * total.imag
+    else:
+        h = int(rod_hk_population[rod_index, 0])
+        k = int(rod_hk_population[rod_index, 1])
+        registry_index = (h + 2 * k) % 3
+        if registry_index == 0:
+            omega = 1.0 + 0.0j
+        elif registry_index == 1:
+            omega = complex(-0.5, 0.5 * math.sqrt(3.0))
+        else:
+            omega = complex(-0.5, -0.5 * math.sqrt(3.0))
+        inverse_omega = omega.conjugate()
+        alternative = 0.25 * shared_disorder_epsilon
+        parent = 1.0 - shared_disorder_epsilon
+        same_probability = parent + 2.0 * alternative
+        flip_probability = 2.0 * alternative
+        same_gauge = parent + alternative * inverse_omega + alternative * omega
+        plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
+        minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
+
+        probability_plus = 1.0
+        probability_minus = 0.0
+        first_moment_plus = amplitude_plus
+        first_moment_minus = 0.0 + 0.0j
+        second_moment_plus = (
+            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        )
+        second_moment_minus = 0.0
+        phase_power = 1.0 + 0.0j
+        for _ in range(1, layers):
+            phase_power *= vertical_phase
+            contribution_plus = phase_power * amplitude_plus
+            contribution_minus = phase_power * amplitude_minus
+            next_probability_plus = (
+                probability_plus * same_probability + probability_minus * flip_probability
+            )
+            next_probability_minus = (
+                probability_minus * same_probability + probability_plus * flip_probability
+            )
+            propagated_plus = (
+                same_gauge * first_moment_plus + minus_to_plus_gauge * first_moment_minus
+            )
+            propagated_minus = (
+                same_gauge * first_moment_minus + plus_to_minus_gauge * first_moment_plus
+            )
+            next_first_moment_plus = propagated_plus + next_probability_plus * contribution_plus
+            next_first_moment_minus = propagated_minus + next_probability_minus * contribution_minus
+            contribution_plus_squared = (
+                contribution_plus.real * contribution_plus.real
+                + contribution_plus.imag * contribution_plus.imag
+            )
+            contribution_minus_squared = (
+                contribution_minus.real * contribution_minus.real
+                + contribution_minus.imag * contribution_minus.imag
+            )
+            cross_plus = contribution_plus * propagated_plus.conjugate()
+            cross_minus = contribution_minus * propagated_minus.conjugate()
+            next_second_moment_plus = (
+                same_probability * second_moment_plus
+                + flip_probability * second_moment_minus
+                + next_probability_plus * contribution_plus_squared
+                + 2.0 * cross_plus.real
+            )
+            next_second_moment_minus = (
+                same_probability * second_moment_minus
+                + flip_probability * second_moment_plus
+                + next_probability_minus * contribution_minus_squared
+                + 2.0 * cross_minus.real
+            )
+            probability_plus = next_probability_plus
+            probability_minus = next_probability_minus
+            first_moment_plus = next_first_moment_plus
+            first_moment_minus = next_first_moment_minus
+            second_moment_plus = next_second_moment_plus
+            second_moment_minus = next_second_moment_minus
+        intensity_e2 = max(second_moment_plus + second_moment_minus, 0.0)
     return (
         CLASSICAL_ELECTRON_RADIUS_A**2
         * common_damping
         * common_damping
-        * (total.real * total.real + total.imag * total.imag)
+        * intensity_e2
         / normalization_divisor
     )
 
@@ -338,6 +423,7 @@ def _evaluate_point_into(
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
     entrance_power: float,
@@ -537,6 +623,8 @@ def _evaluate_point_into(
                     atom_fractional_offset,
                     atom_occupancy_u_iso_element,
                     layers,
+                    shared_disorder_epsilon,
+                    rod_hk_population,
                     normalization_divisor,
                 )
                 mosaic_density = _wrapped_mosaic_density(
@@ -637,6 +725,7 @@ def _evaluate_points_kernel(
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
 ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
@@ -697,6 +786,7 @@ def _evaluate_points_kernel(
             f0_parameters,
             anomalous_factor_e,
             layers,
+            shared_disorder_epsilon,
             normalization_divisor,
             branch,
             entrance_power,
@@ -745,6 +835,7 @@ def _integrate_pixel_boxes_kernel(
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
 ) -> tuple[
@@ -832,6 +923,7 @@ def _integrate_pixel_boxes_kernel(
                     f0_parameters,
                     anomalous_factor_e,
                     layers,
+                    shared_disorder_epsilon,
                     normalization_divisor,
                     branch,
                     entrance_power,
@@ -896,6 +988,7 @@ def _integrate_pixel_boxes_kernel(
                 f0_parameters,
                 anomalous_factor_e,
                 layers,
+                shared_disorder_epsilon,
                 normalization_divisor,
                 branch,
                 entrance_power,
@@ -985,6 +1078,7 @@ class CompiledDetectorEvaluator:
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
+            state.shared_disorder_epsilon,
             state.normalization_divisor,
             branch,
         )
@@ -1051,6 +1145,7 @@ class CompiledDetectorEvaluator:
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
+            state.shared_disorder_epsilon,
             state.normalization_divisor,
             branch,
         )

@@ -56,6 +56,8 @@ python scripts/generate_bi2se3_continuous_detector.py `
   --gaussian-sigma-deg 1 `
   --lorentzian-hwhm-deg 0 `
   --eta 0 `
+  --layers 52 `
+  --stacking-epsilon 0.001 `
   --integration-method adaptive_compiled `
   --worker-count 32 `
   --allow-unresolved-diagnostic `
@@ -65,6 +67,10 @@ python scripts/generate_bi2se3_continuous_detector.py `
 `--eta 0` selects a pure Gaussian and `--eta 1` selects a pure Lorentzian. Values strictly between
 zero and one mix the two normalized densities. Every component with positive probability must
 have a positive width; an inactive component may use zero width. The existing defaults remain a
-5-degree Gaussian sigma, 2-degree Lorentzian HWHM, and eta 0.1. The example flag permits an
-explicitly labelled, non-accepted diagnostic because the current zero-transverse-width rod model
-contains detector-visible caustics; it does not claim quadrature convergence.
+5-degree Gaussian sigma, 2-degree Lorentzian HWHM, eta 0.1, seven layers, and ideal 2H. The example
+uses 52 quintuple layers (49.636 nm from the CIF repeat) and the shared rich-parent disorder law
+with parent probability 0.999 and four alternative probabilities of 0.00025 each. The diagnostic
+flag permits an explicitly labelled, non-accepted image because the current zero-transverse-width
+rod model contains detector-visible caustics; it does not claim quadrature convergence. Layer count
+must be at least one, and stacking epsilon must be finite and lie in `[0, 1]`. This generator fixes
+the finite-stack strength normalization to `FINITE_TOTAL`.

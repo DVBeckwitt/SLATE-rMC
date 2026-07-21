@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 from painted_ewald import BraggSpaceConfig, MosaicBraggSpace, MosaicParameters, Rod
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
+    LayerNormalQBatch,
     MaterialOptics,
     RodQueryBatch,
     canonical_revision_sha256,
@@ -41,6 +42,12 @@ from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity import manuscript_specular_composite, parratt_reflectivity
+from rasim_next.stacking import (
+    InitialPopulation,
+    Parent,
+    RichEpsilonModel,
+    finite_event_intensity,
+)
 
 ROOT = Path(__file__).parents[1]
 STRUCTURES = ROOT / "examples"
@@ -262,6 +269,71 @@ def test_bi2se3_quintuple_layer_and_finite_two_h_strength_match_direct_sums() ->
         sum(direct_rod_strength),
         rel=2.0e-15,
     )
+
+
+def test_bi2se3_near_ideal_two_h_strength_matches_shared_disorder_oracle() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    rod = Rod(1, 0)
+    ell = np.asarray((-5.93, 0.37, 6.02))
+    layers = 52
+    epsilon = 0.001
+    model = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=layers,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+        shared_disorder_epsilon=epsilon,
+    )
+
+    actual = model.evaluate_profile(
+        rod=rod,
+        L=ell,
+        k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+    )
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    q_crystal = reciprocal.q_cartesian_Ainv(
+        np.column_stack((np.full(ell.size, rod.h), np.full(ell.size, rod.k), ell))
+    )
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
+        layer_normal = -layer_normal
+    layer_normal_q = q_crystal @ layer_normal
+    event_id = np.arange(ell.size, dtype=np.int64)
+    rod_id = np.zeros(ell.size, dtype=np.int64)
+    query = RodQueryBatch(
+        event_id=event_id,
+        rod_id=rod_id,
+        phase_id=(crystal.phase_id,) * ell.size,
+        h=np.full(ell.size, rod.h, dtype=np.int32),
+        k=np.full(ell.size, rod.k, dtype=np.int32),
+        q_sample_normal_Ainv=layer_normal_q,
+        l_coordinate=ell,
+        wavelength_A=np.full(ell.size, WAVELENGTH_A),
+    )
+    amplitudes = bi2se3_ql_amplitudes(crystal, query)
+    oracle = finite_event_intensity(
+        query,
+        amplitudes,
+        RichEpsilonModel(Parent.TWO_H, epsilon).transition_law(),
+        layer_normal_q=LayerNormalQBatch(
+            event_id=event_id,
+            rod_id=rod_id,
+            phase_id=query.phase_id,
+            layer_normal_q_Ainv=layer_normal_q,
+            gauge_id=amplitudes.gauge_id,
+        ),
+        layers=layers,
+        initial=InitialPopulation.plus_only(),
+        model_component_id="near-ideal-2H",
+        population_group_id=None,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+    )
+
+    assert model.shared_disorder_epsilon == epsilon
+    np.testing.assert_allclose(actual, oracle.scattering_strength_A2, rtol=2.0e-13, atol=2.0e-23)
 
 
 def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:

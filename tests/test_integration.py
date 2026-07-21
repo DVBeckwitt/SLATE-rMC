@@ -725,6 +725,62 @@ def test_continuous_detector_compiled_density_accepts_inactive_zero_width(
     np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
 
 
+def test_continuous_detector_compiled_density_matches_52_layer_shared_disorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+    detector, m1_rods, _ = namespace["build_default_detector_measure"](
+        gaussian_sigma_deg=1.0,
+        lorentzian_hwhm_deg=0.0,
+        eta=0.0,
+        layers=52,
+        shared_disorder_epsilon=0.001,
+    )
+    strength = detector.coating.bragg_space.strength_model
+    assert strength.layers == 52
+    assert strength.shared_disorder_epsilon == 0.001
+    selected_rods = (m1_rods[1], m1_rods[3])
+    mapped = tuple(
+        detector.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=math.radians(2.0),
+            beta_rad=math.radians(178.0),
+        )
+        for rod in selected_rods
+    )
+    column_px = np.asarray([item.geometry.column_px for item in mapped])
+    row_px = np.asarray([item.geometry.row_px for item in mapped])
+
+    oracle = detector.evaluate_detector_coordinates(
+        column_px,
+        row_px,
+        rods=selected_rods,
+    )
+    compiled_density, compiled_count, compiled_caustic = (
+        detector._evaluate_compiled_coordinates_for_proof(
+            column_px,
+            row_px,
+            rods=selected_rods,
+            branch=2,
+        )
+    )
+
+    assert all(bool(item.geometry.valid) for item in mapped)
+    assert np.all(np.isfinite(oracle.density_A2_per_px2))
+    assert np.all(oracle.density_A2_per_px2 > 0.0)
+    np.testing.assert_allclose(
+        compiled_density,
+        oracle.per_rod_density_A2_per_px2,
+        rtol=2.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(compiled_count, oracle.per_rod_inverse_branch_count)
+    np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
+
+
 @pytest.mark.parametrize(
     ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta", "message"),
     (
@@ -772,6 +828,8 @@ def test_continuous_detector_cli_exposes_mosaic_parameters(
     assert "--gaussian-sigma-deg" in help_text
     assert "--lorentzian-hwhm-deg" in help_text
     assert "--eta" in help_text
+    assert "--layers" in help_text
+    assert "--stacking-epsilon" in help_text
 
     with pytest.raises(SystemExit) as invalid_exit:
         namespace["main"](
@@ -788,6 +846,65 @@ def test_continuous_detector_cli_exposes_mosaic_parameters(
 
     assert invalid_exit.value.code == 2
     assert "Gaussian sigma must be positive" in capsys.readouterr().err
+
+    for argument, value, message in (
+        ("--layers", "0", "layers must be positive"),
+        ("--stacking-epsilon", "1.1", "stacking epsilon must lie in [0, 1]"),
+    ):
+        with pytest.raises(SystemExit) as strength_exit:
+            namespace["main"](["--numeric-only", argument, value])
+
+        assert strength_exit.value.code == 2
+        assert message in capsys.readouterr().err
+
+
+def test_continuous_detector_reference_strength_manifest_is_locked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+    detector, _, _ = namespace["build_default_detector_measure"](
+        layers=52,
+        shared_disorder_epsilon=0.001,
+    )
+    strength = detector.coating.bragg_space.strength_model
+
+    for field, value in (
+        ("strength_layer_count", 51),
+        ("strength_normalization", EventIntensityNormalization.FINITE_PER_LAYER.value),
+        ("strength_shared_disorder_epsilon", 0.0),
+    ):
+        manifest = {
+            "strength_layer_count": 52,
+            "strength_normalization": EventIntensityNormalization.FINITE_TOTAL.value,
+            "strength_shared_disorder_epsilon": 0.001,
+        }
+        manifest[field] = value
+        path = tmp_path / f"mismatch-{field}.npz"
+        np.savez_compressed(
+            path,
+            manifest_json=np.frombuffer(json.dumps(manifest).encode("utf-8"), dtype=np.uint8),
+        )
+
+        with pytest.raises(ValueError, match=field):
+            namespace["_validate_reference_strength"](path, strength)
+
+    ideal_detector, _, _ = namespace["build_default_detector_measure"]()
+    legacy_manifest = {
+        "strength_layer_count": 7,
+        "strength_normalization": EventIntensityNormalization.FINITE_TOTAL.value,
+    }
+    legacy_path = tmp_path / "legacy-ideal.npz"
+    np.savez_compressed(
+        legacy_path,
+        manifest_json=np.frombuffer(json.dumps(legacy_manifest).encode("utf-8"), dtype=np.uint8),
+    )
+    namespace["_validate_reference_strength"](
+        legacy_path,
+        ideal_detector.coating.bragg_space.strength_model,
+    )
 
 
 def _instrument(

@@ -1217,7 +1217,7 @@ class DetectorEwaldMeasure:
         return tuple(result)
 
     def _compiled_evaluator(self, rods: tuple[Rod, ...]) -> CompiledDetectorEvaluator:
-        """Pack one reusable evaluator for the accepted finite ideal-2H model."""
+        """Pack one reusable evaluator for the accepted finite parent-2H model."""
 
         strength = self._coating.bragg_space.strength_model
         if not isinstance(strength, Bi2Se3TwoHStrength):
@@ -1334,6 +1334,7 @@ class DetectorEwaldMeasure:
             f0_parameters=f0_parameters,
             anomalous_factor_e=anomalous,
             layers=layers,
+            shared_disorder_epsilon=strength.shared_disorder_epsilon,
             normalization_divisor=normalization_divisor,
         )
         return CompiledDetectorEvaluator(state, self._instrument.detector_shape_rc)

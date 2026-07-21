@@ -21,6 +21,7 @@ from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.stacking import (
     InitialPopulation,
     Parent,
+    RichEpsilonModel,
     TransitionLaw,
     finite_event_intensity,
 )
@@ -45,16 +46,19 @@ def _physical_rod_id(rod: Rod) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Bi2Se3TwoHStrength:
-    """Finite ideal-2H strength from a CIF-derived Bi2Se3 quintuple layer.
+    """Finite parent-2H strength from a CIF-derived Bi2Se3 quintuple layer.
 
     ``Parent.TWO_H`` is the registry-fixed AA sequence. The source R-3m CIF
     supplies the internal quintuple-layer motif but its native registry-cycling
-    3R sequence is intentionally not selected by this model.
+    3R sequence is intentionally not selected by this model. A nonzero shared
+    disorder epsilon assigns ``1-epsilon`` to the 2H parent transition and
+    ``epsilon/4`` to each of the four alternative transitions.
     """
 
     crystal: CrystalStructure
     layers: int
     normalization: EventIntensityNormalization = EventIntensityNormalization.FINITE_PER_LAYER
+    shared_disorder_epsilon: float = 0.0
     _lattice: ReciprocalLattice = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -69,8 +73,13 @@ class Bi2Se3TwoHStrength:
         normalization = EventIntensityNormalization(self.normalization)
         if normalization is EventIntensityNormalization.UNIT_CELL:
             raise ValueError("2H stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
+        epsilon = RichEpsilonModel(
+            Parent.TWO_H,
+            self.shared_disorder_epsilon,
+        ).epsilon
         object.__setattr__(self, "layers", layers)
         object.__setattr__(self, "normalization", normalization)
+        object.__setattr__(self, "shared_disorder_epsilon", epsilon)
         object.__setattr__(self, "_lattice", ReciprocalLattice.from_crystal(self.crystal))
 
     @property
@@ -132,10 +141,18 @@ class Bi2Se3TwoHStrength:
             wavelength_A=np.full(ell_flat.size, wavelength_A),
         )
         amplitudes = bi2se3_ql_amplitudes(self.crystal, query)
+        law = (
+            TransitionLaw.for_parent(Parent.TWO_H)
+            if self.shared_disorder_epsilon == 0.0
+            else RichEpsilonModel(
+                Parent.TWO_H,
+                self.shared_disorder_epsilon,
+            ).transition_law()
+        )
         result = finite_event_intensity(
             query,
             amplitudes,
-            TransitionLaw.for_parent(Parent.TWO_H),
+            law,
             layer_normal_q=LayerNormalQBatch(
                 event_id=event_id,
                 rod_id=rod_id,

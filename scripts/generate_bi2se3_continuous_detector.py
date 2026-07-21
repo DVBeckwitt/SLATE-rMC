@@ -39,10 +39,50 @@ M1_ROD_KEYS = ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))
 DEFAULT_GAUSSIAN_SIGMA_DEG = 5.0
 DEFAULT_LORENTZIAN_HWHM_DEG = 2.0
 DEFAULT_LORENTZIAN_PROBABILITY = 0.1
+DEFAULT_STRENGTH_LAYER_COUNT = 7
+DEFAULT_SHARED_DISORDER_EPSILON = 0.0
 
 
 class _MosaicInputError(ValueError):
     """Invalid user-selected continuous mosaic parameters."""
+
+
+def _validate_reference_strength(
+    reference_path: Path,
+    strength: Bi2Se3TwoHStrength,
+) -> None:
+    """Require reference and active finite-stack strength fixtures to match."""
+
+    with np.load(reference_path) as reference:
+        if "manifest_json" not in reference.files:
+            raise ValueError("reference diagnostic has no embedded manifest_json")
+        manifest_array = np.asarray(reference["manifest_json"])
+    if manifest_array.dtype != np.uint8 or manifest_array.ndim != 1:
+        raise ValueError("reference diagnostic has an invalid manifest_json")
+    try:
+        manifest = json.loads(manifest_array.tobytes().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("reference diagnostic has an invalid manifest_json") from error
+    if not isinstance(manifest, dict):
+        raise ValueError("reference diagnostic manifest must be a JSON object")
+
+    expected = {
+        "strength_layer_count": strength.layers,
+        "strength_normalization": strength.normalization.value,
+        # Diagnostics written before this field existed used ideal 2H.
+        "strength_shared_disorder_epsilon": strength.shared_disorder_epsilon,
+    }
+    actual = {
+        "strength_layer_count": manifest.get("strength_layer_count"),
+        "strength_normalization": manifest.get("strength_normalization"),
+        "strength_shared_disorder_epsilon": manifest.get(
+            "strength_shared_disorder_epsilon",
+            0.0,
+        ),
+    }
+    for field, expected_value in expected.items():
+        if actual[field] != expected_value:
+            raise ValueError(f"reference {field} does not match the active strength fixture")
 
 
 def _peak_working_set_bytes() -> int | None:
@@ -121,8 +161,10 @@ def build_default_detector_measure(
     gaussian_sigma_deg: float = DEFAULT_GAUSSIAN_SIGMA_DEG,
     lorentzian_hwhm_deg: float = DEFAULT_LORENTZIAN_HWHM_DEG,
     eta: float = DEFAULT_LORENTZIAN_PROBABILITY,
+    layers: int = DEFAULT_STRENGTH_LAYER_COUNT,
+    shared_disorder_epsilon: float = DEFAULT_SHARED_DISORDER_EPSILON,
 ) -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
-    """Build the 5-degree, seven-layer fixture for one explicit nonzero mosaic."""
+    """Build the 5-degree fixture for one explicit mosaic and finite 2H model."""
 
     mosaic = _mosaic_parameters_from_degrees(
         gaussian_sigma_deg=gaussian_sigma_deg,
@@ -152,8 +194,9 @@ def build_default_detector_measure(
         ),
         Bi2Se3TwoHStrength(
             crystal=crystal,
-            layers=7,
+            layers=layers,
             normalization=EventIntensityNormalization.FINITE_TOTAL,
+            shared_disorder_epsilon=shared_disorder_epsilon,
         ),
     )
     coating = ContinuousEwaldCoating(
@@ -319,6 +362,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="Lorentzian mixture probability; 0 is pure Gaussian and 1 is pure Lorentzian "
         "(default: %(default)s)",
     )
+    parser.add_argument(
+        "--layers",
+        type=int,
+        default=DEFAULT_STRENGTH_LAYER_COUNT,
+        help="finite Bi2Se3 quintuple-layer count (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--stacking-epsilon",
+        type=float,
+        default=DEFAULT_SHARED_DISORDER_EPSILON,
+        help="shared rich-parent 2H disorder probability (default: %(default)s)",
+    )
     parser.add_argument("--pixel-gauss-order", type=int, default=2)
     parser.add_argument("--fold-gauss-order", type=int, default=4)
     parser.add_argument("--fold-subdivision-count", type=int, default=8)
@@ -341,6 +396,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--numeric-only and --output-dir are mutually exclusive")
     if not args.numeric_only and args.output_dir is None:
         parser.error("provide --output-dir or --numeric-only")
+    if args.layers < 1:
+        parser.error("layers must be positive")
+    if not math.isfinite(args.stacking_epsilon):
+        parser.error("stacking epsilon must be finite")
+    if not 0.0 <= args.stacking_epsilon <= 1.0:
+        parser.error("stacking epsilon must lie in [0, 1]")
 
     fixture_start = perf_counter()
     try:
@@ -348,10 +409,20 @@ def main(argv: Sequence[str] | None = None) -> None:
             gaussian_sigma_deg=args.gaussian_sigma_deg,
             lorentzian_hwhm_deg=args.lorentzian_hwhm_deg,
             eta=args.eta,
+            layers=args.layers,
+            shared_disorder_epsilon=args.stacking_epsilon,
         )
     except _MosaicInputError as error:
         parser.error(str(error))
     fixture_elapsed = perf_counter() - fixture_start
+    strength_model = detector.coating.bragg_space.strength_model
+    if not isinstance(strength_model, Bi2Se3TwoHStrength):
+        raise TypeError("the default fixture must use Bi2Se3TwoHStrength")
+    reference_path = (
+        args.reference_diagnostic.resolve() if args.reference_diagnostic is not None else None
+    )
+    if reference_path is not None:
+        _validate_reference_strength(reference_path, strength_model)
     start = perf_counter()
     result = detector.integrate_native_pixels(
         rods=m1_rods,
@@ -392,9 +463,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     bragg_config = detector.coating.bragg_space.config
     mosaic = bragg_config.mosaic
-    strength_model = detector.coating.bragg_space.strength_model
-    if not isinstance(strength_model, Bi2Se3TwoHStrength):
-        raise TypeError("the default fixture must use Bi2Se3TwoHStrength")
     hash_start = perf_counter()
     image_hash = hashlib.sha256(
         memoryview(np.ascontiguousarray(result.image_A2)).cast("B")
@@ -453,13 +521,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         "pixel_gauss_order": args.pixel_gauss_order,
         "strength_layer_count": strength_model.layers,
         "strength_normalization": strength_model.normalization.value,
+        "strength_shared_disorder_epsilon": strength_model.shared_disorder_epsilon,
         "total_detector_mass_A2": result.total_detector_mass_A2,
         "integration_wall_time_s": elapsed,
         "wavelength_A": float(2.0 * np.pi / bragg_config.k_norm_Ainv),
     }
-    if args.reference_diagnostic is not None:
+    if reference_path is not None:
         reference_start = perf_counter()
-        reference_path = args.reference_diagnostic.resolve()
         with np.load(reference_path) as reference:
             reference_image = np.asarray(reference["image_A2"], dtype=np.float64)
             reference_per_rod = np.asarray(reference["per_rod_detector_mass_A2"], dtype=np.float64)
@@ -533,7 +601,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             mosaic_description=(
                 f"Gaussian sigma={math.degrees(mosaic.gaussian_sigma_rad):g}°, "
                 f"Lorentzian HWHM={math.degrees(mosaic.lorentzian_half_width_rad):g}°, "
-                f"eta={mosaic.lorentzian_probability:g}"
+                f"eta={mosaic.lorentzian_probability:g}\n"
+                f"{strength_model.layers} QLs, shared 2H disorder "
+                f"epsilon={strength_model.shared_disorder_epsilon:g}"
             ),
             unresolved_pixel_count=result.adaptive_unresolved_pixel_count,
             output_path=figure_path,

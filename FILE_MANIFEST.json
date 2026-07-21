@@ -88,8 +88,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "39378b46b271d2eaa2e12e3302025f4357de6736c5aa89083131cb35be9fe6f8",
-      "size_bytes": 3260
+      "sha256": "3f106c48a06ce0b53e7b92f7a0e56fe2b16d2d52035d767a3e33e35682520ce2",
+      "size_bytes": 3689
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -533,8 +533,8 @@
     },
     {
       "path": "scripts/generate_bi2se3_continuous_detector.py",
-      "sha256": "7371d8550f73f682c9e75bc16e99aaf6d90911d132f472903a1892f9a0bd6c31",
-      "size_bytes": 23081
+      "sha256": "21bfceeb32ae5af1dc4fd439fa8898b969110a8a124f2565aa950002c729cadd",
+      "size_bytes": 26200
     },
     {
       "path": "scripts/generate_bi2se3_detector_image.py",
@@ -783,18 +783,18 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "f6fdb7a320d8cdf5f9f38faa3312c3489318b267e2269ffc5dd18eb47a6fbdc7",
-      "size_bytes": 43133
+      "sha256": "80925379e863c917950f79ee3385a8c2931f44eb4aca5512ebbb8fc21670d869",
+      "size_bytes": 47779
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
-      "sha256": "7f337af682c95e5b9bbd422c01ec9efabaf87e64d3e2424be6a7f81e142118d6",
-      "size_bytes": 6243
+      "sha256": "bda272acb9066816503858b5132d31593d4e26a99a77ae1808bcc5b3f254d9ed",
+      "size_bytes": 6888
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "8789d8e6f4a628bc10fb3b667191a9bb2957baca55d19ba24a9364a7d625c333",
-      "size_bytes": 87950
+      "sha256": "71ddee5aac0e23780716e7b790473d0ec6d3e7f78136d603d6bce162d718ce44",
+      "size_bytes": 88021
     },
     {
       "path": "src/rasim_next/pipeline/intersections.py",
@@ -1178,8 +1178,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "ae0133c9ee705cac3d5725974837035982accaef50e695c8bc06d60333add74d",
-      "size_bytes": 61372
+      "sha256": "2d46d657c445cea93fa46314b309d5f0a424fb41afbb9a272ffc2a383cae091a",
+      "size_bytes": 65641
     },
     {
       "path": "tests/test_mosaic_ewald.py",
@@ -1188,8 +1188,8 @@
     },
     {
       "path": "tests/test_ordered_reflectivity.py",
-      "sha256": "4b89ba5fb78461b304cb75c61ab70b2ac814461a5ed1de5c81dff53ec8096f8a",
-      "size_bytes": 26652
+      "sha256": "7f1bbe6fc211e89ab073bf5a01fb19b4c44c80ee57af3d34f7335d5ab0350195",
+      "size_bytes": 29158
     },
     {
       "path": "tests/test_seed.py",
