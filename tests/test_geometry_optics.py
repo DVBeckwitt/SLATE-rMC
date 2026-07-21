@@ -14,7 +14,6 @@ from rasim_next.core.contracts import (
     IncidentSampleBatch,
     IncidentStateBatch,
     MaterialOptics,
-    ScatteringEventBatch,
     canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
@@ -34,13 +33,11 @@ from rasim_next.geometry import (
     intersect_sample_ray,
     project_detector_ray,
     project_detector_rays,
-    transport_scattering_events,
 )
 from rasim_next.io.orientation import detector_native_to_raw
 from rasim_next.io.osc import OscFormatError, read_osc
 from rasim_next.materials import material_optics, read_crystal
 from rasim_next.optics import (
-    mode_decay_constant,
     path_attenuation,
     scalar_optical_weight,
     solve_exit_mode,
@@ -733,7 +730,7 @@ def test_refraction_and_attenuation_equations() -> None:
     )
 
 
-def test_transport_preserves_identity_factors_and_first_failure() -> None:
+def test_incident_transport_preserves_identity_and_first_failure() -> None:
     wavelength_A = 1.54
     instrument = compile_instrument(_configuration())
     material = _material(wavelength_A)
@@ -817,101 +814,14 @@ def test_transport_preserves_identity_factors_and_first_failure() -> None:
         ("angstrom^-1", FrameId.SAMPLE)
     }
 
-    film_normal_Ainv = abs(float(incident.states.kz_film_Ainv[0].real))
-    events = ScatteringEventBatch(
-        event_id=np.array([200, 100]),
-        incident_state_id=np.array([30, 10]),
-        orientation_id=np.array([4, 2]),
-        rod_id=np.array([2, 1]),
-        wavelength_A=np.full(2, wavelength_A),
-        q_internal_sample_Ainv=np.zeros((2, 3)),
-        q_sample_normal_Ainv=np.zeros(2),
-        l_coordinate=np.zeros(2),
-        kf_film_phase_sample_Ainv=np.array(
-            [[0.0, 0.0, film_normal_Ainv], [0.0, 0.0, film_normal_Ainv]]
-        ),
-        reciprocal_weight=np.array([0.25, 0.75]),
-        ewald_residual_Ainv=np.zeros(2),
-        status=(ValidityCode.VALID, ValidityCode.VALID),
-        valid=np.ones(2, dtype=bool),
-    )
-    transported = transport_scattering_events(
-        events,
-        incident,
-        material,
-        instrument,
-        trace_case_id="transport",
-    )
-    with pytest.raises(ValueError, match="incident_state_id 999"):
-        transport_scattering_events(
-            replace(events, incident_state_id=np.array([999, 10])),
-            incident,
-            material,
-            instrument,
-        )
-    with pytest.raises(ValueError, match="event wavelength"):
-        transport_scattering_events(
-            replace(events, wavelength_A=np.array([1.0, wavelength_A])),
-            incident,
-            material,
-            instrument,
-        )
-    assert transported.outgoing_status == (
-        ValidityCode.VALID,
-        ValidityCode.OUTSIDE_SUPPORT,
-    )
-    assert transported.detector_status == (
-        ValidityCode.VALID,
-        ValidityCode.OUTSIDE_SUPPORT,
-    )
-    failed_events = replace(
-        events,
-        status=(ValidityCode.RESIDUAL_EXCEEDED, ValidityCode.VALID),
-        valid=np.array([False, True]),
-    )
-    failed_transport = transport_scattering_events(
-        failed_events,
-        incident,
-        material,
-        instrument,
-    )
-    assert failed_transport.outgoing_status[0] is ValidityCode.RESIDUAL_EXCEEDED
-    assert failed_transport.detector_status[0] is ValidityCode.RESIDUAL_EXCEEDED
-    np.testing.assert_array_equal(transported.outgoing_waves.event_id, events.event_id)
-    np.testing.assert_array_equal(transported.detector_hits.event_id, events.event_id)
-    assert (transported.detector_hits.column_px[0], transported.detector_hits.row_px[0]) == (
-        3.0,
-        5.0,
-    )
-
-    incident_mode = solve_incident_mode([0.0, 0.0, -1.0], wavelength_A, material)
-    exit_mode = solve_exit_mode(
-        [0.0, 0.0, film_normal_Ainv],
-        wavelength_A,
-        material,
-    )
-    attenuation = uniform_depth_attenuation(
-        mode_decay_constant(
-            incident_mode.kz_film_Ainv,
-            incident_mode.propagation_direction,
-        ),
-        mode_decay_constant(exit_mode.kz_film_Ainv, exit_mode.propagation_direction),
-        instrument.film_thickness_A,
-    )
-    expected_optical = scalar_optical_weight(
-        incident_mode.entrance_amplitude,
-        exit_mode.exit_amplitude,
-        attenuation,
-    )
-    assert transported.outgoing_waves.optical_weight[0] == pytest.approx(expected_optical)
     assert {
-        "optics.kz_exit_air",
-        "optics.uniform_depth_attenuation",
-        "geometry.detector_column_px",
-        "measurement.optical_weight",
+        "geometry.sample_intersection",
+        "optics.ki_air_sample",
+        "optics.ki_parallel_sample",
+        "optics.kz_incident_film",
+        "optics.entrance_amplitude",
         "sampling.source_empirical_mass",
-        "geometry.detector_pixel_solid_angle",
-    } <= {record.stage_id for record in (*incident.traces, *transported.traces)}
+    } <= {record.stage_id for record in incident.traces}
 
 
 def test_public_monochromatic_multi_ray_source_uses_one_exact_material_row() -> None:

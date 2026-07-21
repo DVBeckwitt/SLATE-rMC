@@ -44,13 +44,16 @@ No normalization to 100, rounding, artificial fractional reflections, or proof-m
 
 Every `(h,k)` rod remains distinct. `Qr` is family metadata and is collapsed only by a declared measurement or fitting selection.
 
-## D012: Event-aligned model contracts
+## D012: Query-aligned ordered model contracts
 
-Ordered and stacking models return scattering strengths aligned by `event_id`. Internal grids and interpolation are implementation details with convergence proof.
+Ordered and stacking models return scattering strengths aligned by immutable query IDs. Internal
+grids and interpolation are implementation details with convergence proof. The historical
+`EventIntensityResult` name denotes this query result, not a sampled scattering-event runtime.
 
-## D013: One explicit detector measure
+## D013: One explicit detector measure (superseded by D029)
 
-For each incident ray and phase/parent, integration selects from one all-rod candidate pool using the full once-only physical mass. Selected events deposit equal `T/N`; source PDF, structure, mosaic, selection probability, and solid angle are not reapplied.
+The finite candidate-pool and point-deposition implementation was an integration-stage contract. It
+is retired; D029 is the current detector measure.
 
 ## D014: Branch and Qr selection follow integration
 
@@ -122,3 +125,25 @@ retains only transforms with numerical or proof consumers; ordered goniometer co
 local step and no `lab_from_crystal` derivative is stored. Detector-angle fingerprint v2 hashes only
 the detector transform, shape, pitches, and reference coordinate, while `AngleFrame` remains a
 separate cache-key owner.
+
+## D029: Continuous detector pushforward
+
+Contract API v9 replaces sampled orientations, scattering-event rows, selection, and point
+deposition with one continuous latent Bragg measure, analytic Ewald restriction, exact inverse
+detector-coordinate pushforward, incoherent source-state sum, and deterministic pixel-box
+integration. The raw coordinate density and integrated pixel mass are separately named measures.
+There are no compatibility shims for the retired runtime.
+
+## D030: One YAML fixture authority
+
+`configs/bi2se3_simulation.yaml` owns the default source, material, sample, mosaic, finite-2H,
+detector, numerical backend, and artifact switches. Specialized diagnostic CLIs inherit omitted
+physical values from it and may expose explicit overrides only for controlled studies. Schema v2
+makes the execution backend explicit; v1 files are rejected instead of being reinterpreted under a
+changed required-field contract.
+
+## D031: Display arrays are not models
+
+Reciprocal-space and Ewald-coating arrays may be sampled for visualization, and detector macrobins
+may be integrated for a preview, but no sampled array, sphere object, mesh, texture, or image becomes
+the authoritative physical field.

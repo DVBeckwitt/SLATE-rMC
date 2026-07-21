@@ -23,10 +23,8 @@ from rasim_next.geometry.instrument import (
 )
 from rasim_next.geometry.sample import SampleIntersection, intersect_sample_ray
 from rasim_next.geometry.transport import (
-    EventTransportResult,
     IncidentTransportResult,
     build_incident_states,
-    transport_scattering_events,
 )
 
 __all__ = [
@@ -38,7 +36,6 @@ __all__ = [
     "DetectorProjection",
     "DetectorProjectionBatch",
     "DetectorRay",
-    "EventTransportResult",
     "IncidentTransportResult",
     "InstrumentConfiguration",
     "SampleIntersection",
@@ -50,5 +47,4 @@ __all__ = [
     "intersect_sample_ray",
     "project_detector_ray",
     "project_detector_rays",
-    "transport_scattering_events",
 ]

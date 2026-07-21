@@ -316,6 +316,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     measures: dict[str, str] = {}
     detector_gap: float | None = None
     nominal_ewald_gap: float | None = None
+    nominal_ewald_wavelength_A: float | None = None
+    nominal_ewald_ki_sample_Ainv: np.ndarray | None = None
 
     if config.outputs.reciprocal_space.enabled:
         start = perf_counter()
@@ -341,6 +343,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if config.outputs.ewald_surface.enabled:
         start = perf_counter()
         nominal = build_nominal_ewald_context(inputs)
+        nominal_ewald_wavelength_A = float(nominal.incident.states.wavelength_A[0])
+        nominal_ewald_ki_sample_Ainv = np.asarray(
+            nominal.incident.states.k_film_phase_sample_Ainv[0], dtype=np.float64
+        )
         ewald = evaluate_nominal_ewald_surface(
             nominal,
             alpha_count=config.numerics.ewald_alpha_count,
@@ -362,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "ewald_family_m": ewald.family_m,
                 "ewald_q_sample_Ainv": ewald.q_sample_Ainv,
                 "ewald_residual_Ainv": ewald.ewald_residual_Ainv,
+                "nominal_ewald_ki_sample_Ainv": nominal_ewald_ki_sample_Ainv,
+                "nominal_ewald_wavelength_A": np.asarray(nominal_ewald_wavelength_A),
             }
         )
 
@@ -430,6 +438,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
         "ensemble_detector_m0_q_gap_Ainv": detector_gap,
         "nominal_ewald_m0_q_gap_Ainv": nominal_ewald_gap,
+        "nominal_ewald_state_policy": (
+            "mean_source_state.v1" if nominal_ewald_wavelength_A is not None else None
+        ),
+        "nominal_ewald_wavelength_A": nominal_ewald_wavelength_A,
+        "nominal_ewald_ki_sample_Ainv": (
+            nominal_ewald_ki_sample_Ainv.tolist()
+            if nominal_ewald_ki_sample_Ainv is not None
+            else None
+        ),
         "m0_model": (
             "detector_visible_kinematic_00L.v1"
             if any(rod.family_m == 0 for rod in inputs.rods)

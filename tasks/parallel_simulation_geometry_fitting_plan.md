@@ -1,6 +1,8 @@
 # CPU/GPU-compatible simulation, representative detector labels, and staged geometry fitting plan
 
-Status: PROPOSED
+Status: **HISTORICAL PROPOSAL.** CPU/CUDA source-averaged detector execution is implemented under
+contract API v9. Any future fitting work requires a fresh plan against the live continuous APIs;
+the sampled-cell, tag-cache, and point-deposition assumptions below are not runtime authority.
 
 Entry gate: shared beam-to-`ki` Checkpoint K passes first. Deterministic DP-02 through DP-06 then
 freeze the accepted scalar/cell pushforward, detector-native observable, and component-tag cache

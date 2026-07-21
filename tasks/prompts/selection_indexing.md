@@ -1,5 +1,8 @@
 # T08 Codex prompt
 
+> Historical draft; do not execute. T08 is `NEEDS_REPLAN` against contract v9, and deleted
+> candidate/event/hit APIs must not be restored.
+
 ## Goal
 
 Implement stable post-integration rod-family, reflection-group, branch, and measured-association semantics.

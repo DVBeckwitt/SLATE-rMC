@@ -10,6 +10,46 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
+## Current contract-v9 runtime
+
+The production runtime is the continuous detector pushforward described in
+`CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/event/selection/deposition implementation
+is retired. Current proof authority is the latent Bragg density, analytic line/sphere oracle,
+detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-compiled backend
+agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
+and scientific subsystem cutovers; they do not reinstate retired APIs.
+
+### Continuous-runtime maintenance cutover
+
+The maintenance branch starts from accepted `main` `0167f6dac79a66d79a94d358c041665bcb73ed38`.
+It removes the sampled orientation/event/selection/deposition simulator, discrete Ewald painter and
+raster, two superseded image scripts, one redundant seed test, and the duplicated `examples.zip`
+archive. The surviving one-state CLI now inherits all omitted physics from the canonical YAML, and
+the YAML backend is explicit rather than compatibility-defaulted.
+
+Before the final clean-tree rerun, the compact suite passed 61 cases in about 30.4 seconds, down from 86
+accepted baseline cases. All 70 surviving production/proof modules imported successfully; Ruff,
+format checking, documentation links, task-index validation, strict YAML/TOML checks, and static
+removed-symbol scans passed. The core, reference, ordered, and stacking registered proofs passed.
+Geometry/optics passed all 11 scientific checks and 17 controls; its only precommit failure was the
+intentional dirty-tree gate. Mosaic/Ewald passed signed probability, analytic-root, exact rod-sum,
+catalog, and 3/3 mutation checks; its only precommit failure was the same dirty-tree gate.
+
+The mosaic convergence sequence at quadrature orders 256, 512, 1024, and 2048 had absolute mass
+errors `6.6703e-4`, `2.2646e-6`, `2.5942e-11`, and `1.5654e-13`. For 96 equivalent latent points,
+the vectorized Ewald coating took 0.00393 seconds versus 0.20611 seconds for an independently
+assembled scalar root/latent/coarea oracle (52.5x), with `tracemalloc` peaks 63,224 and 51,159 bytes
+respectively. Forty-one points had regular positive support; maximum intensity error was
+`4.89e-15`. The representative-rod reduction mutation differed from the physical rod sum by
+`1.00685 angstrom^2`; the independent population-times-strength error was zero. Root-coordinate
+error was `6.66e-16 inverse angstrom`, coarea-Jacobian error was `4.44e-16`, and elastic residual was
+zero for the independent root fixture.
+
+The retained limitations are explicit: the direct `m=0`, `Q=0` root remains excluded; only regular
+detector-visible `m=0` support with a positive reciprocal gap is admitted. Fixed macrobin output is
+a preview estimate, not an adaptive convergence claim. Detector response, background, caking, and
+fitting remain deferred.
+
 ## Historical BKI-15 incident-boundary proof
 
 This subsection records the contract-v7 predecessor. Its material/sample revision hashes are
@@ -356,14 +396,8 @@ test_stacking_transition.py
 test_integration.py
 ```
 
-Post-integration work adds only:
-
-```text
-test_selection.py
-test_fitting.py
-```
-
-The sequential fitting tasks extend `test_fitting.py`; they do not leave one permanent module per fit stage. Do not create large per-feature suites.
+Future fitting work extends the closest owning module or adds one cohesive fitting module only when
+it protects a new public boundary. It must not recreate one permanent file per task or fit stage.
 
 Permanent tests:
 
@@ -416,7 +450,11 @@ Every branch must pass:
 - pole behavior
 - tangent and no-root status
 - Ewald residual
-- integrated event mass convergence
+- continuous latent-density identities
+- analytic roots versus an independent quadratic oracle
+- per-rod to exact-family intensity reduction
+- detector-visible coating and elastic closure
+- detector-coordinate and pixel-quadrature convergence
 
 ### Ordered and reflectivity
 
@@ -448,7 +486,7 @@ trace schema version
 legacy-pack hash
 units and frames
 array shapes
-source and event ID preservation
+source, incident, rod, and query ID preservation
 amplitude versus intensity declarations
 probability density versus probability mass
 model versions
@@ -462,23 +500,24 @@ A read-only scientific review then checks that:
 - the same shared equation is not reimplemented inconsistently
 - material optics and complex-wave branches agree
 - rod and family identities agree
-- event `Qz`, `L`, and wavelength semantics agree
-- ordered and stacking return interchangeable event-aligned intensities
-- outgoing film wavevectors can be consumed by geometry
+- latent `u`, `L`, `Q`, root, and wavelength semantics agree
+- ordered and stacking return interchangeable query-aligned strengths
+- outgoing film wavevectors and detector rays use the same geometry/optical branch
 - OSC and simulation coordinates meet at exactly one boundary
 
 ## Integration sequence
 
-Integrate through vertical slices:
+Integrate through these live vertical slices:
 
-1. synthetic source to synthetic incident state
-2. ordered rod catalog to mosaic with synthetic incident states
-3. geometry incident states to mosaic event generation
-4. event-aligned queries to ordered intensities
-5. event outgoing wavevectors to exit refraction and continuous detector hits
-6. hits to integration-owned detector deposition
-7. substitute stacking strength for ordered strength under the same contract
-8. run the tiny end-to-end detector case
+1. source rows to canonical incident film-phase `ki`;
+2. CIF and reciprocal basis to complete physical rods and query-aligned strengths;
+3. rods, mosaic, and strength to the continuous latent Bragg density;
+4. latent rods to analytic Ewald roots and the intrinsic coating oracle;
+5. arbitrary detector coordinates to exit-refracted film `kf`, sample-frame `Q`, and every inverse
+   latent branch;
+6. per-rod contributions to one-state and then source-averaged detector-coordinate density;
+7. continuous density to deterministic detector-pixel box integrals; and
+8. stacking strength substitution under the same per-rod contract.
 
 ## Later fitting proof
 
@@ -495,6 +534,15 @@ Measured-data improvement is not proof without synthetic recovery and parameter-
 
 ## Tolerance freeze and proof sensitivity
 
-Before T02--T05 compare with the shared pack, they load `proof/stage_tolerances_v1.json` through the strict loader and record canonical SHA-256 `d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3`. Tolerances may change only through reviewed proof-base work, never after seeing branch error. Exact calculations do not invent convergence; broad sweeps, mutations, and benchmarks remain one-shot evidence rather than permanent frameworks.
+The original T02--T05 comparison proofs loaded `proof/stage_tolerances_v1.json` through the strict
+loader and recorded canonical SHA-256
+`d3739963a8decf481fc7ec87723854ef7628e8da02dbcb3e6f7e5bb41522b4b3`. The compact contract-v9
+reciprocal proof instead binds its analytic floating-point limits directly to each stated identity
+and does not claim that tolerance-artifact provenance. Tolerances may change only through reviewed
+proof-base work, never after seeing branch error. Exact calculations do not invent convergence;
+broad sweeps, mutations, and benchmarks remain one-shot evidence rather than permanent frameworks.
 
-A branch is not proven when the fixture is insensitive to likely mistakes. Run the workstream mutations from [ERROR_INJECTION.md](ERROR_INJECTION.md) and record the expected and observed first failing stage. The integration proof runs the factor-omission, factor-duplication, event-identity, OSC-orientation, and row-column mutations.
+A branch is not proven when the fixture is insensitive to likely mistakes. Run the workstream
+mutations from [ERROR_INJECTION.md](ERROR_INJECTION.md) and record the expected and observed first
+failing stage. The integration proof covers factor omission/duplication, rod/source identity,
+Ewald-root sign, OSC orientation, detector tilts, and row/column mutations.

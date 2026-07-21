@@ -77,9 +77,9 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-REC-003 | Bragg-sphere circle construction | same | Methods line 16 | mosaic | MATCH as reference option |
 | PHY-REC-004 | continuous rod/Ewald roots | old code discretizes/uses spheres | rod model in Methods | mosaic | NEW recommended |
 | PHY-REC-005 | tangent and no-root status | `solve_q` statuses | elastic geometry | mosaic | CORRECTED |
-| PHY-REC-006 | candidate mosaic/Jacobian mass | implicit `I_Q` | SI line 525 | mosaic | CORRECTED explicit |
-| PHY-REC-007 | valid-support construction and convergence | old uniform/adaptive scan | numerical requirement | mosaic | NEW |
-| PHY-REC-008 | complete-pool inverse-CDF selection without double weighting | event resampling paths | n/a | integration | CORRECTED |
+| PHY-REC-006 | continuous per-rod mosaic/population/strength density | implicit `I_Q` | SI line 525 | mosaic | CORRECTED explicit latent measure |
+| PHY-REC-007 | analytic Ewald roots, support, coarea, and convergence | old uniform/adaptive scan | numerical requirement | mosaic/integration | CORRECTED analytic |
+| PHY-REC-008 | complete-pool inverse-CDF event selection | event resampling paths | n/a | none | RETIRED by contract-v9 continuous pushforward |
 | PHY-REC-009 | external versus internal Q | inconsistent helper paths | refraction section | bootstrap/mosaic | CORRECTED |
 
 ## Ordered structure and rods
@@ -142,13 +142,13 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|
-| PHY-MEA-001 | sampled raw-detector mass declaration | absent | SI lines 523-527 | bootstrap | NEW |
+| PHY-MEA-001 | continuous raw detector-coordinate density | absent | SI lines 523-527 | integration | NEW explicit `A2/px2` measure |
 | PHY-MEA-002 | solid-angle correction for later caking/analysis | caking helper `exact_cake_portable.py:866-874` | SI lines 523-527 | analysis | CORRECTED, excluded from raw rendering |
 | PHY-MEA-003 | scattering polarization distinct from Fresnel fields | no consistent native path | SI preprocessing and interface notes | integration | NEW explicit model, data-corrected unity, or declared approximation |
 | PHY-MEA-003A | reciprocal event Jacobian versus separate Lorentz factor | implicit old `I_Q` and powder paths | SI event measure | mosaic/integration | CORRECTED, no duplicate factor |
-| PHY-MEA-004 | detector pixel integration | point/bilinear events | detector measurement | integration | NEW convergence proof |
-| PHY-MEA-005 | mass-conserving deposition | diffraction accumulation helpers | numerical | integration | MATCH/prove |
-| PHY-MEA-006 | detector PSF/resolution | bilinear only | ordered-results resolution discussion | integration | NEW normalized operator |
+| PHY-MEA-004 | deterministic detector pixel-box integration | point/bilinear events | detector measurement | integration | CORRECTED with convergence proof |
+| PHY-MEA-005 | point/bilinear event deposition | diffraction accumulation helpers | numerical | none | RETIRED by pixel-box integration |
+| PHY-MEA-006 | detector PSF/resolution | bilinear was not a PSF | ordered-results resolution discussion | none | DEFERRED normalized operator |
 | PHY-MEA-007 | detector efficiency | not explicit | absolute-count requirement | none | DEFERRED unless calibrated |
 | PHY-MEA-008 | masks, beamstop, saturation, bad pixels | GUI/data paths | experimental handling | none | DEFERRED from forward core |
 | PHY-MEA-009 | background | GUI/fitting paths | later comparison | none | DEFERRED |

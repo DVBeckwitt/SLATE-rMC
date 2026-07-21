@@ -32,7 +32,6 @@ from rasim_next.io.orientation import (
 )
 from rasim_next.proof import __main__ as proof_cli
 from rasim_next.proof import tolerances as stage_tolerances
-from rasim_next.proof.core import run_synthetic_plumbing
 from rasim_next.proof.diagnostics import write_diagnostic
 from rasim_next.proof.traces import Tolerance, compare_traces
 
@@ -65,7 +64,7 @@ def test_shared_coordinate_and_optical_primitives() -> None:
     assert scalar_interface_amplitude(2.0, 2.0) == pytest.approx(1.0)
 
 
-def test_minimal_contract_flow_preserves_event_identity_and_mass() -> None:
+def test_source_and_incident_contracts_preserve_identity_and_failure_payloads() -> None:
     sample_ids = np.array([10, 11], dtype=np.int64)
     origins = np.zeros((2, 3))
     directions = np.tile([1.0, 0.0, 0.0], (2, 1))
@@ -208,41 +207,6 @@ def test_minimal_contract_flow_preserves_event_identity_and_mass() -> None:
         )
         with pytest.raises(ValueError, match=message):
             replace(base, **changes)
-
-    result = run_synthetic_plumbing()
-    np.testing.assert_array_equal(result.event_id, [100])
-    np.testing.assert_allclose(result.event_mass, [0.6], rtol=0.0, atol=1e-15)
-    np.testing.assert_allclose(result.detector_image, [[0.15, 0.45]], rtol=0.0, atol=1e-15)
-    changed_metadata = run_synthetic_plumbing(pixel_solid_angle_sr=0.2)
-    np.testing.assert_array_equal(changed_metadata.detector_image, result.detector_image)
-    assert result.detector_image.sum() == pytest.approx(result.event_mass.sum())
-    assert len(result.factor_names) == 7
-
-
-def test_scattering_event_contract_is_explicit() -> None:
-    q_internal = np.array([[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]])
-    events = contracts.ScatteringEventBatch(
-        event_id=np.array([100, 200]),
-        incident_state_id=np.array([10, 20]),
-        orientation_id=np.array([40, 40]),
-        rod_id=np.array([30, 40]),
-        wavelength_A=np.ones(2),
-        q_internal_sample_Ainv=q_internal,
-        q_sample_normal_Ainv=q_internal[:, 2],
-        l_coordinate=np.zeros(2),
-        kf_film_phase_sample_Ainv=q_internal,
-        reciprocal_weight=np.array([0.5, 0.0]),
-        ewald_residual_Ainv=np.array([0.0, 1e-6]),
-        status=(ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED),
-        valid=np.array([True, False]),
-    )
-    assert events.status == (ValidityCode.VALID, ValidityCode.RESIDUAL_EXCEEDED)
-    with pytest.raises(ValueError, match="status"):
-        replace(events, status=(ValidityCode.VALID,))
-    with pytest.raises(ValueError, match="status"):
-        replace(events, valid=np.array([True, True]))
-    with pytest.raises(ValueError, match="sample-normal"):
-        replace(events, q_sample_normal_Ainv=np.array([0.1, 0.3]))
 
 
 def test_layer_phase_and_intensity_conversion_contracts_are_explicit() -> None:

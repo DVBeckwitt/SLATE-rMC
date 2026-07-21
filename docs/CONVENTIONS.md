@@ -106,8 +106,11 @@ For a general cell, `Qr` comes from the in-plane reciprocal metric. Floating `Qr
 
 ## Branch convention
 
-Branch identity is assigned only after integrated event geometry exists. For a non-specular pair, compute a wrapped in-plane reciprocal azimuth from the event `Q` in the declared sample or crystal basis. The sign-to-label mapping defines branch `0` and `1` and is versioned with the basis, wrapping convention, and deadband.
+The live branch identifier belongs to the analytic Ewald root, not to a sampled event or detector
+side. For a nonzero rod, branch `1` is the lower-`u` quadratic root and branch `2` is the upper-`u`
+root. A retained regular nonzero `m=0` solution uses branch `0`; the algebraic direct `Q=0` root is
+suppressed. Tangent and no-root cases emit no ordinary-density branch.
 
-Raw OSC row/column sign and display orientation are never branch identity. Detector-native side is derived by projecting the already identified event and is used only for measured association and presentation.
-
-`00L` cases that collapse at the branch boundary use `branch_id=None` with an explicit `COLLAPSED_00L` status. Optimizers never switch identity dynamically.
+Raw OSC row/column sign, display orientation, reciprocal azimuth, and detector-native side are never
+Ewald-root identity. A future measured-selection side or azimuth label must be a separately named,
+versioned contract and must not overload branches `0`, `1`, or `2`.

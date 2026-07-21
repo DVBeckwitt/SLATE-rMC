@@ -1,4 +1,4 @@
-schema_version: rasim-simulation-v1
+schema_version: rasim-simulation-v2
 
 material:
   cif_path: ../examples/bi2se3/structures/Bi2Se3_vesta.cif

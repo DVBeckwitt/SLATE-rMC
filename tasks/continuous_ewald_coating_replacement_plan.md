@@ -1,6 +1,8 @@
 # Continuous Ewald coating replacement plan
 
-Status: proposed. No implementation has started.
+Status: **HISTORICAL AND SUPERSEDED.** The implemented contract-v9 continuous detector pushforward
+uses the architecture and result measure documented in `docs/ARCHITECTURE.md` and
+`docs/RESULT_MEASURE.md`; this earlier sampled-event proposal is retained only as provenance.
 
 Entry gate: the beam-sampling-to-reciprocal-`ki` remediation must pass BKI-15 before this plan
 validates or freezes a continuous coating measure. BKI-15 branches independently into this

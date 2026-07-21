@@ -1,104 +1,61 @@
-# Performance strategy
+# Performance policy
 
-## Result-first rule
+Correctness, measure identity, and deterministic proof precede acceleration. Optimize the number of
+physical evaluations and reusable state before changing processors or precision.
 
-Do not commit to CPU, GPU, CUDA, Numba, JAX, C++, or another backend before the integrated reference path is profiled. The accepted production method is the fastest implementation that preserves the declared observable within a measured error bound and memory limit.
+## Current work model
 
-## Algorithmic priorities
+The runtime never materializes a detector × rod × orientation × source Cartesian product. For each
+requested detector-coordinate block it:
 
-1. Compile instrument transforms once.
-2. Use fixed-seed empirical source samples and deterministic/adaptive candidate support.
-3. Construct localized Ewald support instead of scanning a full circle when possible.
-4. Stream or use two passes instead of materializing the full incident-by-rod-by-mosaic product.
-5. Keep candidate geometry separate from scattering strength so later fits can reuse it.
-6. Evaluate ordered and stacking models only at event-required `Qz` or `L` coordinates.
-7. Cache rod grids only when profiling proves reuse outweighs interpolation error and memory.
-8. Separate continuous detector hits from deposition.
-9. Use fixed seeds and reproducible reduction in proof and fitting modes.
-10. Render only selected detector regions during fitting when the objective does not require the full image.
+1. builds detector rays and refracted film `kf` in vectorized arrays;
+2. prunes rods whose reciprocal lines cannot enter that source state's elastic-reach ball;
+3. evaluates analytic inverse branches and finite-stack strength in bounded blocks;
+4. sums rods and independent source states into one coordinate-density result; and
+5. applies one detector box quadrature to the requested native pixels or display macrobins.
 
-## Repeated fitting workloads
+The source-averaged evaluator therefore presents one callable detector field even when source rows
+have different directions and wavelengths. Each state retains its own elastic and optical geometry;
+only intensities are reduced.
 
-Later optimization should keep these states resident or cached:
+## Reusable immutable state
 
-```text
-CompiledInstrument
-IncidentSampleBatch
-IncidentStateBatch
-RodCatalog
-ScatteringEventBatch
-DetectorHitBatch
-```
+- Compiled instrument transforms and detector axes.
+- Canonical incident state table.
+- CIF expansion, material optics, reciprocal basis, and physical rod catalog.
+- Finite-2H strength parameters.
+- Mosaic constants and elastic-reach bounds.
+- Packed detector evaluator arrays and reachable-rod indices.
+- Pixel quadrature nodes and weights.
 
-Parameter dependency:
+A source, sample, material, wavelength, mosaic, structure, or detector revision invalidates only its
+declared downstream state. No hidden module-global cache or import-time device setup is permitted.
 
-```text
-scale or background
-    final combination only
+## CPU and CUDA
 
-ordered or stacking parameters
-    scattering strength and detector reduction
+The NumPy implementation is the transparent proof path. The compiled CPU path removes Python
+dispatch from repeated coordinate evaluation. The CUDA path batches source states, detector
+coordinates, and reachable rods on device and must agree with the scalar/NumPy oracle within the
+frozen observable tolerance.
 
-mosaic parameters
-    reciprocal weights and possibly event support
+Backend choice is explicit in YAML. Kernel compilation is normally paid once per process and kernel
+signature, not once per incident state. Changing detector tilt or distance changes packed data, not
+the kernel program. A Python, NumPy, Numba, device, dtype, or kernel-code change may require a new
+compilation.
 
-optical constants
-    incident refraction, optical weight, and downstream reduction
+## Quality controls
 
-film thickness
-    attenuation, optical weight, and downstream reduction; not incident-state revisions
+- Use float64/complex128 for proof.
+- Display macrobins and low-order fixed quadrature are declared preview estimates.
+- Native-pixel adaptive quadrature reports unresolved pixels and cannot silently claim convergence.
+- Approximation quality is assessed on final mass, normalized L1 shape, centroid, per-rod mass, and
+  invalid-support behavior, not visual similarity alone.
+- Many low-quality source-state contributions may reduce source Monte Carlo noise, but they do not
+  repair a biased detector quadrature. Detector quadrature must still meet its own error target.
 
-sample entrance pose or support
-    full incident states, events, hits, and response
+## Benchmark protocol
 
-sample_from_crystal
-    reciprocal events, hits, and response; not incident states
-
-detector geometry
-    detector hits and response only; not incident states or coating masses/CDFs
-```
-
-Batch parameter evaluation is desirable for multi-start, finite differences, profile likelihoods, and population methods.
-
-## Benchmark set
-
-Record equivalent work for:
-
-```text
-small proof
-    individual rays, few rods, direct oracles
-
-medium forward
-    representative detector simulation and rod catalog
-
-large forward
-    maximum intended source and reciprocal sampling
-
-fit-structure
-    repeated ordered or stacking intensity evaluations with fixed event geometry
-
-fit-geometry
-    repeated full invalidating evaluations on selected peak observations
-```
-
-Record wall time, peak memory, transfer time if applicable, setup/compile time, reuse time, hardware, precision, and error versus the reference path.
-
-## Beam-to-`ki` authority-cutover evidence
-
-The clean `f106c45` geometry/optics proof ran 512 equivalent float64/complex128 work items on
-Windows 11, Python 3.13.13, NumPy 2.2.6, SciPy 1.15.1, and Intel64 Family 6 Model 183. The vector
-path took `0.9387 ms`, the scalar oracle took `16.8892 ms` (ratio `17.99`), and the untimed vector
-call had an incremental `tracemalloc` peak of `451,425` bytes for `36,864` input and `86,528`
-retained-output numeric bytes. Maximum point and complex-normal-wavevector errors were zero;
-maximum amplitude error was `2.22e-16`.
-
-The contract cleanup does not claim that timing as a new optimization. It removes three stored
-float64 material arrays (`24*M` numeric bytes for `M` wavelengths), two consumer-zero compiled
-transform payloads, repeated transport revision hashing, and noncausal angle-cache invalidation.
-The guarded reuse check observed zero revision-helper calls during incident transport. PERF-01
-remains future and must record `NO_CHANGE` unless representative all-valid, mixed, all-invalid, and
-repeated-geometry profiling justifies the optional allocation cleanup.
-
-## Selection rule
-
-Choose the production path after integration. One subsystem may use a different internal method if it preserves the same public contracts and does not create a general backend abstraction.
+Record warm and cold wall time separately, coordinate-evaluation count, active source/rod count,
+backend, dtype, detector region, quadrature rule, total detector mass, normalized image error,
+centroid shift, and peak resident memory. Benchmark outputs are external diagnostics, not committed
+fixtures or permanent tests.

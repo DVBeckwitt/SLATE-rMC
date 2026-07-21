@@ -1,5 +1,8 @@
 # T09 Codex prompt
 
+> Historical draft; do not execute. T09 is `NEEDS_REPLAN` against the contract-v9 continuous
+> detector boundary.
+
 ## Goal
 
 Implement the minimal reusable fitting contracts and invalidation layer without forward physics.

@@ -1,7 +1,8 @@
 # Implementation Plan: Beam Sampling to Reciprocal-Space `ki` Audit Follow-ups
 
-Status: **CHECKPOINT K ACCEPTED — SHARED CONTRACT MERGED; DOWNSTREAM OWNER TASKS REMAIN
-DEPENDENCY-GATED**
+Status: **HISTORICAL ACCEPTED BEAM-BOUNDARY PLAN.** Contract API v9 retains this canonical
+source-to-film-`ki` boundary. Current downstream authority is in `docs/ARCHITECTURE.md`,
+`docs/CONTRACTS.md`, and `docs/SCOPE_AND_PHASES.md`.
 
 ## Overview
 

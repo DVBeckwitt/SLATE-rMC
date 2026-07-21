@@ -1,8 +1,12 @@
 # T13 Codex prompt
 
+> Historical draft; do not execute. T13 is `NEEDS_REPLAN`; deleted event/hit APIs must not be
+> restored.
+
 ## Goal
 
-Implement ordered detector-ROI intensity fitting while reusing event geometry and detector response.
+Implement ordered detector-ROI intensity fitting while reusing analytic root geometry and the
+continuous detector-coordinate response.
 
 ## Context
 

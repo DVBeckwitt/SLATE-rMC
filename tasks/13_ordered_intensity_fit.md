@@ -1,12 +1,16 @@
 # T13: ordered intensity fit
 
-Status: FUTURE. Begin after accepted T12 mosaic.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against contract v9; references
+to event geometry, hits, or detector response do not authorize restoring deleted APIs.
 
 Branch: `feat/ordered-intensity-fit`
 
 ## Goal
 
-Fit relative ordered Bragg intensities from immutable detector-native ROI selections while reusing event geometry and detector response.
+Fit relative ordered Bragg intensities from immutable detector-native ROI selections while reusing
+the continuous Bragg and detector mappings.
 
 ## Owned paths
 
@@ -35,7 +39,7 @@ manuscript
 - compare measured and simulated detector mass under one declared noise model
 - support exact nonnegative per-image scale where applicable
 - keep structural parameters global and nuisance scales/backgrounds separate
-- reuse event geometry, continuous hits, and detector response
+- reuse analytic root geometry and continuous detector-coordinate response
 - fit raw amplitudes/relative intensities without maximum normalization, pruning, or independent peak amplitudes
 - expose held-out reflection validation and parameter identifiability
 
@@ -60,7 +64,7 @@ git diff --check
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

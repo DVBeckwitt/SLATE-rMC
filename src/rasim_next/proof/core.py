@@ -1,4 +1,4 @@
-"""Compact analytic checks and one no-physics contract flow."""
+"""Compact analytic checks for shared coordinate and optical primitives."""
 
 from __future__ import annotations
 
@@ -7,29 +7,16 @@ import json
 import platform
 import subprocess
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
 
-from rasim_next.core.contracts import (
-    CONTRACT_API_VERSION,
-    DetectorHitBatch,
-    EventIntensityNormalization,
-    EventIntensityResult,
-    IncidentStateBatch,
-    OutgoingWaveBatch,
-    RodCatalog,
-    RodQueryBatch,
-    ScatteringEventBatch,
-    canonical_revision_sha256,
-)
+from rasim_next.core.contracts import CONTRACT_API_VERSION
 from rasim_next.core.frames import FrameId
 from rasim_next.core.interfaces import scalar_interface_amplitude
 from rasim_next.core.traces import Measure, QuantityKind, TraceRecord
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.core.validity import ValidityCode
 from rasim_next.core.wave_modes import normal_wavevector, select_normal_wavevector
 from rasim_next.io.orientation import (
     OscRawIndex,
@@ -40,152 +27,6 @@ from rasim_next.io.orientation import (
 )
 from rasim_next.proof.diagnostics import write_diagnostic
 from rasim_next.proof.traces import compare_traces
-from rasim_next.sampling.source import sample_gaussian_source_rays
-
-
-def _readonly(value: NDArray[np.generic]) -> NDArray[np.generic]:
-    result = np.array(value, copy=True)
-    result.setflags(write=False)
-    return result
-
-
-@dataclass(frozen=True, slots=True)
-class SyntheticPlumbingResult:
-    event_id: NDArray[np.int64]
-    event_mass: NDArray[np.float64]
-    detector_image: NDArray[np.float64]
-    factor_names: tuple[str, ...]
-
-
-def run_synthetic_plumbing(*, pixel_solid_angle_sr: float = 0.1) -> SyntheticPlumbingResult:
-    """Pass one candidate through the trivial one-candidate selection case."""
-
-    samples = sample_gaussian_source_rays(
-        mean_origin_lab_m=np.zeros(3),
-        mean_direction_lab=np.array([1.0, 0.0, 0.0]),
-        transverse_axes_lab=np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
-        spatial_sigma_m=np.zeros(2),
-        divergence_sigma_rad=np.zeros(2),
-        mean_wavelength_A=1.0,
-        wavelength_sigma_A=0.0,
-        sample_count=1,
-        seed=0,
-        polarization_state_id="linear",
-    )
-    states = IncidentStateBatch(
-        incident_state_id=np.array([20], dtype=np.int64),
-        incident_sample_id=samples.incident_sample_id,
-        sample_intersection_lab_m=np.zeros((1, 3)),
-        direction_sample=samples.direction_lab,
-        k_air_sample_Ainv=np.array([[2.0 * np.pi, 0.0, 0.0]]),
-        k_film_phase_sample_Ainv=np.array([[2.0 * np.pi, 0.0, 0.0]]),
-        kz_film_Ainv=np.array([0.0 + 0.0j]),
-        entrance_amplitude=np.array([1.0 + 0.0j]),
-        footprint_acceptance=np.array([1.0]),
-        source_weight=samples.source_weight,
-        wavelength_A=samples.wavelength_A,
-        polarization_state_id=samples.polarization_state_id,
-        status=(ValidityCode.VALID,),
-        valid=np.array([True]),
-        source_sampling_model_id=samples.source_sampling_model_id,
-        source_rng_model_id=samples.source_rng_model_id,
-        source_seed=samples.source_seed,
-        source_parameter_provenance=samples.source_parameter_provenance,
-        source_parameter_revision=samples.source_parameter_revision,
-        source_revision=samples.source_revision,
-        sample_geometry_revision=canonical_revision_sha256(
-            ("sample_geometry", "core synthetic plumbing.v1")
-        ),
-        material_revision=canonical_revision_sha256(("material", "core synthetic plumbing.v1")),
-        incident_model_id="one_transmitted_channel.v1",
-    )
-    rods = RodCatalog(
-        np.array([30], dtype=np.int64),
-        ("phase",),
-        np.array([1], dtype=np.int32),
-        np.array([0], dtype=np.int32),
-        ("family",),
-        ("hex-m1",),
-        np.array([1.0]),
-        np.eye(3),
-        ("identity",),
-    )
-    events = ScatteringEventBatch(
-        event_id=np.array([100], dtype=np.int64),
-        incident_state_id=states.incident_state_id,
-        orientation_id=np.array([40], dtype=np.int64),
-        rod_id=rods.rod_id,
-        wavelength_A=samples.wavelength_A,
-        q_internal_sample_Ainv=np.array([[1.0, 0.0, 0.2]]),
-        q_sample_normal_Ainv=np.array([0.2]),
-        l_coordinate=np.array([0.2]),
-        kf_film_phase_sample_Ainv=np.array([[1.0, 0.0, 0.2]]),
-        reciprocal_weight=np.array([0.5]),
-        ewald_residual_Ainv=np.zeros(1),
-        status=(ValidityCode.VALID,),
-        valid=np.array([True]),
-    )
-    query = RodQueryBatch(
-        event_id=events.event_id,
-        rod_id=events.rod_id,
-        phase_id=rods.phase_id,
-        h=rods.h,
-        k=rods.k,
-        q_sample_normal_Ainv=events.q_sample_normal_Ainv,
-        l_coordinate=events.l_coordinate,
-        wavelength_A=events.wavelength_A,
-    )
-    intensity = EventIntensityResult(
-        event_id=query.event_id,
-        scattering_strength_A2=np.array([2.0]),
-        model_id="synthetic-no-physics",
-        model_component_id="identity",
-        population_group_id="population",
-        normalization=EventIntensityNormalization.UNIT_CELL,
-    )
-    outgoing = OutgoingWaveBatch(
-        events.event_id,
-        events.kf_film_phase_sample_Ainv,
-        np.ones(1, dtype=np.complex128),
-        np.ones(1),
-        np.array([0.8]),
-        np.array([True]),
-    )
-    hits = DetectorHitBatch(
-        outgoing.event_id,
-        np.array([0.75]),
-        np.array([0.0]),
-        np.array([pixel_solid_angle_sr]),
-        np.array([True]),
-    )
-    for aligned in (query.event_id, intensity.event_id, outgoing.event_id, hits.event_id):
-        if not np.array_equal(events.event_id, aligned):
-            raise ValueError("event-ID alignment failed")
-
-    event_mass = (
-        states.source_weight
-        * events.reciprocal_weight
-        * 1.0
-        * intensity.scattering_strength_A2
-        * outgoing.optical_weight
-        * states.footprint_acceptance
-        * 0.75
-    )
-    image = event_mass[:, None] * np.array([[0.25, 0.75]])
-    return SyntheticPlumbingResult(
-        _readonly(events.event_id),
-        _readonly(event_mass),
-        _readonly(image),
-        (
-            "source_weight",
-            "reciprocal_weight",
-            "population_weight",
-            "scattering_strength",
-            "optical_weight",
-            "footprint_weight",
-            "polarization_weight",
-        ),
-    )
 
 
 def _trace(stage: str, value: NDArray[np.generic], *, discrete: bool = False) -> TraceRecord:
@@ -215,7 +56,13 @@ def _mutations() -> list[dict[str, object]]:
             np.array([3.0, 2.0]),
             False,
         ),
-        ("half_pixel", "osc.beam_center_native", np.array([2.0, 3.0]), np.array([2.5, 3.5]), False),
+        (
+            "half_pixel",
+            "osc.beam_center_native",
+            np.array([2.0, 3.0]),
+            np.array([2.5, 3.5]),
+            False,
+        ),
         (
             "transform_order",
             "geometry.instrument_transforms",
@@ -223,8 +70,20 @@ def _mutations() -> list[dict[str, object]]:
             np.array([-1.0, 1.0]),
             False,
         ),
-        ("translate_vector", "geometry.lab_ray", np.array([1.0, 0.0]), np.array([2.0, 2.0]), False),
-        ("opposite_root", "optics.kz_incident_film", np.array([2.0j]), np.array([-2.0j]), False),
+        (
+            "translate_vector",
+            "geometry.lab_ray",
+            np.array([1.0, 0.0]),
+            np.array([2.0, 2.0]),
+            False,
+        ),
+        (
+            "opposite_root",
+            "optics.kz_incident_film",
+            np.array([2.0j]),
+            np.array([-2.0j]),
+            False,
+        ),
     )
     results: list[dict[str, object]] = []
     for mutation_id, stage, expected, mutated, discrete in pairs:
@@ -260,7 +119,6 @@ def _checks() -> tuple[list[dict[str, str]], list[dict[str, object]]]:
         k_parallel_Ainv=np.array([1.0, 0.0]),
         propagation_direction=1,
     )
-    flow = run_synthetic_plumbing()
     checks = [
         {
             "check_id": "coordinates",
@@ -279,13 +137,6 @@ def _checks() -> tuple[list[dict[str, str]], list[dict[str, object]]]:
             and scalar_interface_amplitude(2.0, 2.0) == 1.0
             else "FAIL",
             "evidence": "rigid inverse, dispersion, decay branch, and equal-medium amplitude",
-        },
-        {
-            "check_id": "contract_flow",
-            "status": "PASS"
-            if np.isclose(flow.detector_image.sum(), flow.event_mass.sum())
-            else "FAIL",
-            "evidence": "stable event ID and seven factors conserve synthetic mass",
         },
     ]
     mutations = _mutations()

@@ -1,5 +1,8 @@
 # T11 Codex prompt
 
+> Historical draft; do not execute. T11 is `NEEDS_REPLAN` against the contract-v9 continuous
+> detector boundary.
+
 ## Goal
 
 Implement sample and goniometer geometry fitting with frozen associations and an outer re-index audit.

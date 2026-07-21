@@ -20,7 +20,6 @@ from rasim_next.core.contracts import (
     CONTRACT_API_VERSION,
     IncidentSampleBatch,
     MaterialOptics,
-    ScatteringEventBatch,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
@@ -33,7 +32,7 @@ from rasim_next.geometry.instrument import (
     compile_instrument,
 )
 from rasim_next.geometry.sample import intersect_sample_ray
-from rasim_next.geometry.transport import build_incident_states, transport_scattering_events
+from rasim_next.geometry.transport import build_incident_states
 from rasim_next.io.osc import read_osc
 from rasim_next.optics.attenuation import (
     mode_decay_constant,
@@ -1222,6 +1221,7 @@ def _optics_check(arrays: Any, tolerances: Mapping[str, StageTolerance]) -> dict
 
 
 def _transport_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]:
+    del tolerances
     wavelength_A = 1.54
     instrument = _instrument()
     material = _material(wavelength_A, 0.999979 + 3.2e-7j, "transport-film")
@@ -1239,81 +1239,30 @@ def _transport_check(tolerances: Mapping[str, StageTolerance]) -> dict[str, Any]
         instrument,
         trace_case_id="compact",
     )
-    film_normal_Ainv = abs(float(incident.states.kz_film_Ainv[0].real))
-    events = ScatteringEventBatch(
-        event_id=np.array([9, 4]),
-        incident_state_id=np.array([7, 3]),
-        orientation_id=np.array([3, 1]),
-        rod_id=np.array([2, 5]),
-        wavelength_A=np.full(2, wavelength_A),
-        q_internal_sample_Ainv=np.zeros((2, 3)),
-        q_sample_normal_Ainv=np.zeros(2),
-        l_coordinate=np.zeros(2),
-        kf_film_phase_sample_Ainv=np.array(
-            [[0.0, 0.0, film_normal_Ainv], [0.0, 0.0, film_normal_Ainv]]
-        ),
-        reciprocal_weight=np.array([0.2, 0.8]),
-        ewald_residual_Ainv=np.zeros(2),
-        status=(ValidityCode.VALID, ValidityCode.VALID),
-        valid=np.ones(2, dtype=bool),
-    )
-    transported = transport_scattering_events(
-        events,
-        incident,
-        material,
-        instrument,
-        trace_case_id="compact",
-    )
-    exit_mode = solve_exit_mode(
-        [0.0, 0.0, film_normal_Ainv],
-        wavelength_A,
-        material,
-    )
-    incident_mode = solve_incident_mode([0.0, 0.0, -1.0], wavelength_A, material)
-    attenuation = uniform_depth_attenuation(
-        mode_decay_constant(
-            incident_mode.kz_film_Ainv,
-            incident_mode.propagation_direction,
-        ),
-        mode_decay_constant(exit_mode.kz_film_Ainv, exit_mode.propagation_direction),
-        instrument.film_thickness_A,
-    )
-    expected_optical = scalar_optical_weight(
-        incident_mode.entrance_amplitude,
-        exit_mode.exit_amplitude,
-        attenuation,
-    )
-    stage_ids = {record.stage_id for record in (*incident.traces, *transported.traces)}
+    stage_ids = {record.stage_id for record in incident.traces}
     passed = all(
         (
             incident.states.status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
-            transported.outgoing_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
-            transported.detector_status == (ValidityCode.VALID, ValidityCode.OUTSIDE_SUPPORT),
-            np.array_equal(transported.outgoing_waves.event_id, events.event_id),
-            np.array_equal(transported.detector_hits.event_id, events.event_id),
-            abs(transported.outgoing_waves.optical_weight[0] - expected_optical)
-            <= tolerances["measurement.optical_weight"]
-            .bind(max(abs(float(expected_optical)), 1.0))
-            .limit,
-            transported.detector_hits.column_px[0] == 3.0,
-            transported.detector_hits.row_px[0] == 5.0,
+            np.array_equal(incident.states.incident_state_id, [7, 3]),
+            np.array_equal(incident.states.source_weight, [0.5, 0.5]),
+            np.all(incident.states.k_film_phase_sample_Ainv[1] == 0.0),
             {
-                "optics.kz_exit_air",
-                "optics.uniform_depth_attenuation",
-                "geometry.detector_column_px",
-                "measurement.optical_weight",
+                "geometry.sample_intersection",
+                "optics.ki_air_sample",
+                "optics.ki_parallel_sample",
+                "optics.kz_incident_film",
+                "optics.entrance_amplitude",
                 "sampling.source_empirical_mass",
-                "geometry.detector_pixel_solid_angle",
             }
             <= stage_ids,
         )
     )
     return _check(
-        "public_transport_contract",
+        "public_incident_transport_contract",
         passed,
-        "IDs, first-failure status, optical factors, detector hits, and trace stages stay aligned",
-        valid_event_id=int(events.event_id[0]),
-        invalid_event_id=int(events.event_id[1]),
+        "source IDs, first-failure status, transmitted incident state, and trace stages stay aligned",
+        valid_incident_state_id=int(incident.states.incident_state_id[0]),
+        invalid_incident_state_id=int(incident.states.incident_state_id[1]),
     )
 
 

@@ -306,7 +306,7 @@ class NormalizedAngleField:
     angle_mask_excluded_normalization: float
 
     observable_kind: ClassVar[str] = "normalized-finite-bin-angle-field.v1"
-    detector_signal_kind: ClassVar[str] = "nonnegative-deposited-detector-signal.v1"
+    detector_signal_kind: ClassVar[str] = "nonnegative-detector-pixel-mass.v2"
     detector_normalization_kind: ClassVar[str] = "nonnegative-detector-support-weight.v1"
     input_correction_policy: ClassVar[str] = "no-corrections-declared.v1"
     invalid_bin_rule: ClassVar[str] = "normalization-strictly-positive.v1"

@@ -1,6 +1,9 @@
 # T11: sample and goniometer geometry fit
 
-Status: FUTURE. Begin after T08, T09, and accepted T10 calibration.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against the contract-v9
+continuous detector boundary before implementation.
 
 Branch: `feat/sample-geometry-fit`
 
@@ -88,7 +91,7 @@ Stop `BLOCKED` if associations are ambiguous, the active geometry is unidentifia
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

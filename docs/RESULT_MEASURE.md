@@ -1,139 +1,109 @@
-# Result and factor measure
+# Result measure
 
-## Declared final output
+This document defines the factors and units of every current forward result. No downstream caller
+may silently renormalize one of these measures.
 
-The integrated core returns a nonnegative detector-native array of sampled scattering mass in `angstrom^2` per pixel. Its normalized ensemble mean is the raw detector observable; it is not differential per solid angle.
+## Source measure
 
-The default source uses `independent_gaussian_antithetic_lhs.v2` with an explicit
-`numpy_pcg64.v1` generator. For `N=2p`, each of the five independent dimensions permutes the
-lower strata `0..p-1`, draws one coordinate strictly inside each selected `N`-stratum, and places
-its exact complement in the paired upper stratum on the adjacent row. For `N=2p+1`, the final row
-is exactly the middle coordinate `0.5`. Every row has exact empirical mass `1/N`; the generating
-Gaussian PDF is never a weight. The batch retains canonical, unit/frame-labelled text for only the
-declared source parameters plus its independently validated SHA-256 revision. Sampling-model ID,
-RNG-model ID, and nonnegative seed are separate fields; together with the parameter revision and
-realized rows they determine the complete source revision. Packet or worker layout is not source
-provenance. Deterministic Gauss–Hermite is an oracle only.
+`IncidentSampleBatch.source_weight` is an empirical probability mass over complete source rows.
+Valid source weights sum to one. Entrance transport multiplies it by the declared sample-footprint
+acceptance. Independent source rows, wavelengths, phases, and polarization states add as
+intensities.
 
-The complete canonical source realization is generated and hashed once. Worker count, packet size,
-backend, and completion order neither enter the RNG key nor create slice revisions. The
-self-contained incident ledger preserves every row and its `1/N` mass through geometry or optical
-failure; rejected rows are not renormalized away.
+## Continuous Bragg measure
 
-The raw result does not apply incident flux, exposure, gain, detector quantum efficiency, background, pixel solid angle, maximum normalization, or display rescaling.
-
-## Current finite-pool selection and deposition
-
-For each incident ray and independent phase/parent, the current T07 comparison path forms one
-candidate pool spanning every individual `(h,k)` rod and valid mosaic/`Q` solution that also has a
-valid detector hit. `pipeline.selection.CandidatePool` requires exactly those detector-valid event
-rows. Each candidate retains its own rod, orientation, `Q`, elastic `kf`, detector hit, scattering
-strength, mosaic mass, and other physical factors. `Qr` is never candidate identity.
-
-For candidate `i`,
-
-\[
-m_i=w^{\mathrm{src}}w^{\mathrm{recip}}_i w^{\mathrm{pop}}
-S_i W^{\mathrm{opt}}_i W^{\mathrm{foot}} W^{\mathrm{pol}}_i,
-\qquad T=\sum_i m_i,
-\qquad P(i)=m_i/T.
-\]
-
-`S_i` is polarization-neutral `r_e^2` times raw electron² in `angstrom^2`. T04 or T05 applies the single `core.scattering` conversion exactly once. `w_recip` is the candidate mosaic/Jacobian mass, and source and population masses are independent incoherent factors.
-
-T07 selects a configurable `N` outgoing events from this finite detector-valid pool by seeded
-cumulative inverse CDF (legacy default `50`). Its current `T` and CDF are therefore
-detector-conditioned. Every selected event receives exactly `T/N` and uses its selected
-candidate's own geometry and hit. For detector pixel `p`,
-
-\[
-M_p=\sum_s \frac{T}{N}D_{sp}.
-\]
-
-Bilinear deposition splits that mass once and reports edge clipping explicitly. There is no per-reflection normalization and no post-selection source PDF, structure factor, mosaic mass, selection probability, or solid-angle multiplier. Deterministic/adaptive support construction precedes statistical selection; two-pass or streaming enumeration is preferred so the incident×rod×mosaic product is not retained.
-
-This finite-pool behavior is temporary comparison evidence for parallel Tasks 1.1--1.2; it is not
-the accepted continuous-coating measure. The future continuous-coating replacement uses
-detector-unconditioned component masses and CDFs. Under that replacement, detector projection and
-clipping occur after sampling; a detector miss is rejected mass and cannot change source/incident
-revisions, component masses, or coating CDFs.
-
-## Optical model for the first reference core
-
-Use
-
-\[
-W_T=|T_{\mathrm{in}}|^2|T_{\mathrm{out}}|^2
-\]
-
-and, for a uniformly scattering film of thickness `t`,
-
-\[
-\overline W_{\mathrm{prop}}=
-\frac{1-\exp[-2(\kappa_i+\kappa_f)t]}
-{2(\kappa_i+\kappa_f)t}.
-\]
-
-Then
-
-\[
-W^{\mathrm{opt}}=W_T\overline W_{\mathrm{prop}}.
-\]
-
-This is the current off-specular scalar reference model described by manuscript equations `eq:si_scalar_transmission`, `eq:si_entry_exit_transmission`, `eq:si_transmission_intensity`, `eq:si_abs_complex_kz`, and `eq:si_full_optical_weight_lambda`.
-
-A path-length attenuation result may also be exposed when an event has an explicitly defined scattering depth. Full multilayer distorted fields are deferred to a separately named later model.
-
-## Coherence
-
-Sum amplitudes before squaring for:
-
-- atoms in one unit cell or layer motif
-- coherent layers in an ordered finite stack
-- correlated layer pairs in the transition model
-
-Sum intensities for:
-
-- independent source samples and wavelengths
-- incoherent mosaic orientations
-- distinct crystalline phases
-- distinct parent-rich stacking populations
-- distinct rods after their own event geometry is evaluated
-
-
-## Polarization declaration
-
-Polarization is separate from the scalar Fresnel coefficient. Every dataset/model pairing declares one of:
+For physical rod `r`, folded tilt `alpha in [0, pi]`, full azimuth `beta in [0, 2*pi)`, and rod
+coordinate `u` in inverse angstroms,
 
 ```text
-MODEL
-    compute the Thomson scattering polarization factor from a declared
-    incident polarization state and outgoing direction
+Q_r(alpha,beta,u) = C R_beta R_alpha (h*b1 + k*b2 + u*d)
 
-DATA_CORRECTED
-    measured data were consistently polarization-corrected and W_pol = 1
-
-UNITY_APPROXIMATION
-    W_pol = 1 is an explicit approximation recorded in provenance
+b_r(alpha,beta,u)
+  = p(alpha,beta) * population_r * S_r(L=u/|b3|; K)
 ```
 
-There is no silent unity default. A full vector polarization-resolved interface-field calculation remains deferred.
+`p` is the normalized wrapped mosaic density with respect to `dalpha dbeta`. The folded-alpha
+factor is included exactly once, full beta already represents both signed tilt directions, and the
+total continuous probability is one. `S_r` is a nonnegative per-rod finite-stack strength in
+angstrom squared. `b_r` therefore has measure ID
+`latent_bragg_density_A2_rad2_inv.v1`; integrating over `du` also contributes inverse-angstrom
+measure.
 
-## Event Jacobian and Lorentz terminology
+Each `(h,k)` rod is evaluated before summing intensities within exact family `m`. Independent rods
+never sum as amplitudes, and no summed family structure factor is attached to a representative rod.
 
-`w_recip` contains the candidate measure/Jacobian required by reciprocal support construction. It enters `m_i` once and is not multiplied after selection. Do not add a second empirical or powder Lorentz factor.
+## Analytic Ewald restriction
 
-## Solid angle
+For incident film-phase wavevector `ki`, the elastic constraint is
 
-For a flat detector pixel of area `A_pixel`, ray distance `R`, detector normal `n`, and unit ray direction `r_hat`,
+```text
+|ki + Q_r(alpha,beta,u)| = |ki|.
+```
 
-\[
-\Delta\Omega=A_{\mathrm{pixel}}
-\frac{|\hat{\mathbf n}\cdot\hat{\mathbf r}|}{R^2}.
-\]
+The line/sphere equation is solved analytically for every retained root `u_j(alpha,beta)`. The
+intrinsic coating diagnostic evaluates
 
-`pixel_solid_angle_sr` is immutable geometry metadata for optional later caking or analysis. It cannot change the raw detector image. Bilinear deposition is numerical support allocation, not a physical point-spread function.
+```text
+e_r,j(alpha,beta) = b_r(alpha,beta,u_j) * J_Ewald,j,
+```
 
-## Reflectivity
+where `J_Ewald` is the one required coarea factor. Its measure ID is
+`detector_visible_intrinsic_ewald_latent_density_A2_rad2_inv.v1` after restricting validity to the
+active panel. Tangencies and no-root regions have explicit status. The zero-width `m=0` direct root
+at `Q=0` is excluded. For the top-exit detector geometry, the retained nonzero `m=0` solution is
+separated from that root by the proven gap `|Q| > -ki_z > 0`; the all-roots detector path includes
+only this regular detector-visible support and reports the gap.
 
-Pure Parratt, pure kinematic specular intensity, and the named smooth composite are separate outputs. They are not silently added to off-specular scattering strength. Integration declares how a specular-family output enters the detector image.
+## Detector-coordinate measure
+
+A floating-point detector coordinate `(c,r)` determines one outgoing air ray. Exit refraction is
+solved using the shared complex-normal branch to obtain the film-phase `kf`; then
+
+```text
+Q_sample(c,r) = kf_film_sample(c,r) - ki_film_sample
+|Q_sample + ki_film_sample| = |ki_film_sample|.
+```
+
+For every physical rod, the inverse latent branches mapping to this `Q` are enumerated. The
+pre-binned density is
+
+```text
+d_r(c,r) = sum_inverse_branches [
+    b_r(alpha,beta,u)
+    * J_Qsurface(c,r) / |J_latent(alpha,beta,u)|
+    * |t_in * t_out|^2 * attenuation
+    * source_weight * footprint * phase_population * polarization
+]
+```
+
+This direct change of variables is equivalent to the intrinsic Ewald coarea restriction followed
+by the surface-to-detector map; it does not apply the coarea factor twice. The result is
+`raw_detector_coordinate_density_A2_per_px2.v1` and is callable at arbitrary detector coordinates.
+All inverse branches and rods sum as intensities.
+
+The zero-transverse-width rod model has integrable caustic curves. The coordinate density is an
+almost-everywhere representative: exact positive caustic points are marked and may be infinite,
+while finite pixel box integrals remain the authoritative detector values. Display interpolation or
+blur is not a physical regularization.
+
+`pixel_solid_angle_sr` is geometry metadata. The raw detector-coordinate density already contains
+the required coordinate-change Jacobian, so solid angle is not multiplied a second time as an
+acceptance or efficiency factor. Any later area-normalized or caked observable must be separately
+named and apply its correction once.
+
+## Pixel measure
+
+For native pixel box `P_ij`,
+
+```text
+I_ij = integral_Pij d(c,r) dc dr.
+```
+
+`DetectorPixelMass.measure_id` is `raw_detector_pixel_mass_A2.v1`. Deterministic fixed or adaptive
+quadrature evaluates the continuous function inside the box. A display macrobin uses the same box
+integral over a larger declared rectangle and is labelled
+`raw_detector_macrobin_fixed_quadrature_estimate_A2.v1`.
+
+No point deposition, histogram, pixel supersampling claim, per-reflection normalization, or image
+maximum normalization belongs to the physical result. Masks, background, saturation, detector
+efficiency, and detector PSF remain separate future operators.

@@ -1,5 +1,8 @@
 # T14 Codex prompt
 
+> Historical draft; do not execute. T14 is `NEEDS_REPLAN`; deleted event/hit APIs must not be
+> restored.
+
 ## Goal
 
 Implement stacking-disorder fitting on fixed Qr families and explicit branches with upstream states frozen.

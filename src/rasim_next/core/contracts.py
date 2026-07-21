@@ -1,4 +1,4 @@
-"""Immutable array contracts shared by T02 through T05."""
+"""Immutable array contracts shared by the detector-native numerical core."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.validity import ValidityCode
 
-CONTRACT_API_VERSION = 8
+CONTRACT_API_VERSION = 9
 _ArraySpec = tuple[str, np.dtype[Any] | type[np.generic], tuple[int, ...], bool]
 
 
@@ -589,57 +589,6 @@ class RodCatalog:
 
 
 @dataclass(frozen=True, slots=True)
-class ScatteringEventBatch:
-    event_id: NDArray[np.int64]
-    incident_state_id: NDArray[np.int64]
-    orientation_id: NDArray[np.int64]
-    rod_id: NDArray[np.int64]
-    wavelength_A: NDArray[np.float64]
-    q_internal_sample_Ainv: NDArray[np.float64]
-    q_sample_normal_Ainv: NDArray[np.float64]
-    l_coordinate: NDArray[np.float64]
-    kf_film_phase_sample_Ainv: NDArray[np.float64]
-    reciprocal_weight: NDArray[np.float64]
-    ewald_residual_Ainv: NDArray[np.float64]
-    status: tuple[ValidityCode, ...]
-    valid: NDArray[np.bool_]
-
-    def __post_init__(self) -> None:
-        size = _batch(
-            self,
-            "event_id",
-            (
-                ("incident_state_id", np.int64, (), True),
-                ("orientation_id", np.int64, (), True),
-                ("rod_id", np.int64, (), True),
-                ("wavelength_A", np.float64, (), True),
-                ("q_internal_sample_Ainv", np.float64, (3,), False),
-                ("q_sample_normal_Ainv", np.float64, (), False),
-                ("l_coordinate", np.float64, (), False),
-                ("kf_film_phase_sample_Ainv", np.float64, (3,), False),
-                ("reciprocal_weight", np.float64, (), True),
-                ("ewald_residual_Ainv", np.float64, (), False),
-                ("valid", np.bool_, (), False),
-            ),
-        )
-        status = tuple(ValidityCode(item) for item in self.status)
-        if len(status) != size:
-            raise ValueError(f"status must contain {size} ValidityCode values")
-        object.__setattr__(self, "status", status)
-        status_valid = np.fromiter(
-            (item is ValidityCode.VALID for item in status), dtype=np.bool_, count=size
-        )
-        if not np.array_equal(self.valid, status_valid):
-            raise ValueError("valid must agree exactly with status == ValidityCode.VALID")
-        if not np.array_equal(self.q_sample_normal_Ainv, self.q_internal_sample_Ainv[:, 2]):
-            raise ValueError(
-                "q_sample_normal_Ainv must equal the sample-normal component of event Q"
-            )
-        if np.any(self.wavelength_A == 0):
-            raise ValueError("wavelength_A must be positive")
-
-
-@dataclass(frozen=True, slots=True)
 class RodQueryBatch:
     event_id: NDArray[np.int64]
     rod_id: NDArray[np.int64]
@@ -748,47 +697,3 @@ class EventIntensityResult:
         ):
             raise ValueError("model identity and population group are required")
         object.__setattr__(self, "normalization", EventIntensityNormalization(self.normalization))
-
-
-@dataclass(frozen=True, slots=True)
-class OutgoingWaveBatch:
-    event_id: NDArray[np.int64]
-    kf_air_lab_Ainv: NDArray[np.float64]
-    exit_amplitude: NDArray[np.complex128]
-    attenuation_weight: NDArray[np.float64]
-    optical_weight: NDArray[np.float64]
-    valid: NDArray[np.bool_]
-
-    def __post_init__(self) -> None:
-        _batch(
-            self,
-            "event_id",
-            (
-                ("kf_air_lab_Ainv", np.float64, (3,), False),
-                ("exit_amplitude", np.complex128, (), False),
-                ("attenuation_weight", np.float64, (), True),
-                ("optical_weight", np.float64, (), True),
-                ("valid", np.bool_, (), False),
-            ),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class DetectorHitBatch:
-    event_id: NDArray[np.int64]
-    column_px: NDArray[np.float64]
-    row_px: NDArray[np.float64]
-    pixel_solid_angle_sr: NDArray[np.float64]
-    valid: NDArray[np.bool_]
-
-    def __post_init__(self) -> None:
-        _batch(
-            self,
-            "event_id",
-            (
-                ("column_px", np.float64, (), False),
-                ("row_px", np.float64, (), False),
-                ("pixel_solid_angle_sr", np.float64, (), True),
-                ("valid", np.bool_, (), False),
-            ),
-        )

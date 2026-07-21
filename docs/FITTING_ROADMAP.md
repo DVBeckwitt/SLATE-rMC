@@ -1,5 +1,11 @@
 # Post-integration selection and staged fitting roadmap
 
+> **Historical design record — fresh plan required.** This roadmap predates contract v9 and is not
+> an executable task or API specification. References below to reciprocal events, detector hits,
+> detector response, or the sampled T07 boundary describe retired designs and do not authorize
+> restoring them. Any fitting implementation must be replanned around physical rods, analytic
+> Ewald roots, continuous detector-coordinate density, and explicitly declared detector integrals.
+
 The forward model is not complete merely because it renders an image. The completed project must recover geometry, mosaicity, ordered intensities, and stacking disorder without allowing one stage to compensate for an error in another.
 
 The governing manuscript source is `sections/refinement_workflow.tex:4-59`. Original-RASIM reference locations include:
@@ -35,7 +41,9 @@ These sources define behavior to characterize. They do not dictate the new archi
 
 ## Prerequisites
 
-Selection and fitting begin only after T07 proves the integrated native-detector forward model. The accepted forward state must expose immutable revisions for the instrument, source samples, material optics, rod catalog, event geometry, detector hits, and detector response.
+The historical staged ordering began after T07. Its accepted successor exposes immutable revisions
+for the instrument, source samples, material optics, rod catalog, continuous Bragg field, analytic
+root policy, and detector measure.
 
 The initial inverse workflow remains in detector-native coordinates. `2theta/phi`, caking, and reciprocal-space remapping are later measurement transforms, not prerequisites for geometry, mosaic, or ordered-intensity fitting.
 
@@ -63,15 +71,20 @@ For a hexagonal cell, the exact family key contains
 m=h^2+hk+k^2.
 \]
 
-Floating `Qr` alone is not an identity. For a general cell, the exact family key is derived from the declared in-plane reciprocal metric and integer indices. An ordered reflection group additionally records its `L` or other discrete out-of-plane index. Rods sharing `Qr` are not collapsed before their amplitudes, event geometry, and detector projection are evaluated.
+Floating `Qr` alone is not an identity. For a general cell, the exact family key is derived from the
+declared in-plane reciprocal metric and integer indices. An ordered reflection group additionally
+records its `L` or other discrete out-of-plane index. Rods sharing `Qr` are not collapsed before
+their amplitudes, analytic-root contributions, and detector-coordinate response are evaluated.
 
 ### Branch identity
 
-The canonical branch is defined from the sign of a wrapped physical in-plane reciprocal azimuth in the declared sample or crystal basis. It is not defined from raw OSC row or column sign.
+Any future measured-selection side label is defined separately from the analytic Ewald-root branch.
+It may use the sign of a wrapped physical in-plane reciprocal azimuth in the declared sample or
+crystal basis, but it is not defined from raw OSC row or column sign.
 
 ```text
-branch_id = 0 or 1 for the two signed non-specular branches
-branch_id = None with COLLAPSED_00L for applicable specular-family cases
+selection_side_id = 0 or 1 for two signed non-specular association sides
+selection_side_id = None for applicable specular-family associations
 ```
 
 The axis basis, angle wrapping, sign-to-label mapping, and deadband are versioned. Original RASIM's signed-phi behavior is characterized and reproduced where it is valid. Detector-native side labels are derived from projected events only for display and association.
@@ -233,7 +246,7 @@ Rules:
 - Associations and branch IDs are frozen during one run.
 - Invalid topology is reported, not reassigned.
 - Intensity cannot repair peak placement.
-- Geometry changes invalidate incident states, reciprocal events, detector hits, and detector response.
+- Geometry changes invalidate incident states and compiled continuous root/detector state.
 - The accepted result must pass the re-indexing audit above.
 
 Proof:
@@ -309,7 +322,7 @@ Candidate parameters may include:
 
 Rules:
 
-- Source, geometry, mosaic, event geometry, detector hits, and detector response are reused.
+- Source, geometry, mosaic, continuous Bragg strength, and detector mapping are reused.
 - No maximum normalization, rounding, reflection pruning, fabricated reflections, or independently fitted peak amplitudes.
 - Scale and background nuisance terms remain distinct from structural parameters.
 - Physical amplitudes and relative intensities retain their declared normalization.
@@ -340,7 +353,7 @@ Rules:
 - Source, geometry, mosaic, lattice, motif amplitudes, material optics, and ordered baseline are fixed.
 - Peak amplitudes are not independently fit before applying the transition model.
 - Parent populations combine under declared incoherent semantics.
-- Event geometry and detector response are reused.
+- Analytic root geometry and detector mapping are reused.
 
 Proof:
 

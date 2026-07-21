@@ -1,6 +1,9 @@
 # T08: post-integration selection and indexing
 
-Status: FUTURE. Begin only after T07 passes.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against contract v9; references
+to integrated events, candidates, or hits do not authorize restoring deleted APIs.
 
 Branch: `feat/selection-indexing`
 
@@ -36,7 +39,8 @@ manuscript
 3. Define an ordered reflection-group key that adds discrete `L` or equivalent out-of-plane identity.
 4. Define branch from signed wrapped reciprocal azimuth in the declared sample/crystal in-plane basis, with explicit sign mapping and deadband.
 5. Represent applicable `00L` cases as `branch_id=None` with `COLLAPSED_00L`.
-6. Project candidates through the integrated forward model and associate measured peaks or ROIs using explicit gates and uncertainty.
+6. Evaluate predicted physical rod/root detector coordinates and associate measured peaks or ROIs
+   using explicit gates and uncertainty.
 7. Reject ambiguous associations or mark them unused.
 8. Write an immutable, hashable `SelectionManifest` containing every relevant revision and candidate decision.
 9. Implement re-index auditing between fit runs. Never change identity during an objective evaluation.
@@ -66,11 +70,13 @@ git diff --check
 
 ## Stop conditions
 
-Stop `BLOCKED` if the integrated event and rod contracts do not expose enough frame, identity, or projection metadata. Request the smallest shared-contract change rather than inferring identity from display pixels.
+Stop `BLOCKED` if the continuous rod/root and detector contracts do not expose enough frame,
+identity, or projection metadata. Request the smallest shared-contract change rather than inferring
+identity from display pixels.
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

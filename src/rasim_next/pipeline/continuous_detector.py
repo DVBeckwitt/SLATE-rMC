@@ -20,6 +20,7 @@ from painted_ewald import (
     Rod,
 )
 from painted_ewald.rotations import mosaic_axes
+from painted_ewald.validation import positive_integer
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.detector import (
@@ -76,16 +77,6 @@ def _subdivided_legendre_rule(
     return offset, weight
 
 
-def _positive_integer(value: object, name: str) -> int:
-    try:
-        result = index(value)
-    except TypeError as error:
-        raise ValueError(f"{name} must be a positive integer") from error
-    if isinstance(value, (bool, np.bool_)) or result <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return result
-
-
 @dataclass(frozen=True, slots=True)
 class DetectorQuadrature:
     """Deterministic integration controls for exact native pixel rectangles.
@@ -116,7 +107,7 @@ class DetectorQuadrature:
             "max_depth",
             "worker_count",
         ):
-            object.__setattr__(self, name, _positive_integer(getattr(self, name), name))
+            object.__setattr__(self, name, positive_integer(getattr(self, name), name))
         if self.fold_gauss_order < self.pixel_gauss_order:
             raise ValueError("fold_gauss_order must not be smaller than pixel_gauss_order")
         object.__setattr__(self, "method", PixelIntegrationMethod(self.method))
@@ -481,7 +472,10 @@ class DetectorPixelMass:
     def adaptive_tolerance_satisfied(self) -> bool:
         """Whether every adaptively selected pixel met the requested tolerance."""
 
-        return self.adaptive_unresolved_pixel_count == 0
+        return (
+            self.quadrature.method is PixelIntegrationMethod.ADAPTIVE_COMPILED
+            and self.adaptive_unresolved_pixel_count == 0
+        )
 
     def __post_init__(self) -> None:
         image = np.array(self.image_A2, dtype=np.float64, copy=True, order="C")
@@ -522,7 +516,7 @@ class DetectorPixelMass:
                 raise ValueError("sampled_valid_pixel_center must match the detector image")
             center_valid.setflags(write=False)
         refined_count = (
-            _positive_integer(
+            positive_integer(
                 self.fold_refined_pixel_count,
                 "fold_refined_pixel_count",
             )
@@ -539,7 +533,7 @@ class DetectorPixelMass:
             "coordinate_evaluation_count",
         ):
             supplied = getattr(self, name)
-            value = _positive_integer(supplied, name) if supplied != 0 else 0
+            value = positive_integer(supplied, name) if supplied != 0 else 0
             integer_diagnostics[name] = value
         for name in (
             "adaptive_refined_pixel_count",
@@ -1482,13 +1476,21 @@ class DetectorEwaldMeasure:
         self,
         column_px: ArrayLike,
         row_px: ArrayLike,
+        *,
+        include_surface_jacobian: bool = True,
     ) -> DetectorCoordinateGeometry:
-        """Return the canonical detector-ray, internal-kf, and Q geometry."""
+        """Return canonical detector-ray, internal-kf, and Q geometry.
+
+        Set ``include_surface_jacobian=False`` when only ray validity or Q is
+        needed. The returned Jacobian is then identically zero and its
+        derivative work is skipped.
+        """
 
         return self._detector_coordinate_state(
             column_px,
             row_px,
             include_optical=False,
+            include_surface_jacobian=include_surface_jacobian,
         )[0]
 
     def _validated_intensity_rods(self, rods: tuple[Rod, ...]) -> tuple[Rod, ...]:

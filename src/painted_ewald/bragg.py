@@ -324,10 +324,6 @@ class MosaicBraggSpace:
 
         return self._config.mosaic.zero_tilt_probability_mass
 
-    @property
-    def family_m_values(self) -> tuple[int, ...]:
-        return tuple(sorted({rod.family_m for rod in self._config.rods}))
-
     def _configured_rod(self, rod: Rod) -> Rod:
         if not isinstance(rod, Rod):
             raise TypeError("rod must be a Rod")

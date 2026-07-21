@@ -1,5 +1,8 @@
 # T10 Codex prompt
 
+> Historical draft; do not execute. T10 is `NEEDS_REPLAN` against the contract-v9 continuous
+> detector boundary.
+
 ## Goal
 
 Implement source characterization and independent detector calibration with synthetic recovery.

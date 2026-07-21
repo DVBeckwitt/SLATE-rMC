@@ -350,8 +350,8 @@ def solve_infinite_rod_ewald(
     """Solve ``|ki + q0 + u*d| = |ki|`` without truncating the rod.
 
     The discriminant is evaluated from the line's perpendicular offset, an
-    anchor-invariant form of ``A**2 - Cq``. A caller may pass zero root
-    tolerance to request strict sign classification for a legacy contract.
+    anchor-invariant form of ``A**2 - Cq``. A zero root tolerance requests
+    the strict sign classification required by the detector pushforward.
     """
 
     incident = readonly_float_array(ki_sample_Ainv, (3,), "ki_sample_Ainv")

@@ -1,6 +1,9 @@
 # T10: source and detector calibration
 
-Status: FUTURE. Begin after T09. It may be developed while T08 is implemented, but accepted calibration precedes final sample indexing.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against the contract-v9
+continuous detector boundary before implementation.
 
 Branch: `feat/instrument-calibration`
 
@@ -101,7 +104,7 @@ git diff --check
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

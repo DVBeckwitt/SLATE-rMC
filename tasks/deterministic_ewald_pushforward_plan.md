@@ -1,8 +1,9 @@
 # Specification and atomic plan: deterministic Ewald-coating pushforward
 
-Status: **SHARED CHECKPOINT K ACCEPTED — the owner-approved API-v8 beam-to-`ki` boundary is
-merged; deterministic pushforward remains gated by its separate implementation and certification
-checkpoints.**
+Status: **HISTORICAL IMPLEMENTATION PLAN.** The continuous contract-v9 runtime is implemented on
+`main` through `0167f6d`; `docs/ARCHITECTURE.md`, `docs/RESULT_MEASURE.md`, and
+`docs/CONTRACTS.md` are the live authorities. Unfinished checklist items are not authorization to
+restore sampled events, point deposition, or obsolete compatibility APIs.
 
 This is the authoritative replacement proposal for the Monte Carlo coating and detector-integration
 framework. It supersedes the production direction in:

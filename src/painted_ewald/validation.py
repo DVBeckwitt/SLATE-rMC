@@ -1,4 +1,4 @@
-"""Narrow validation helpers for the standalone reciprocal-space painter."""
+"""Narrow validation helpers for the continuous reciprocal and Ewald core."""
 
 from __future__ import annotations
 

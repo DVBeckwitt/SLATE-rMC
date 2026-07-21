@@ -1,7 +1,9 @@
 # T09: fit foundation
 
-Status: FUTURE. Begin only after shared beam-to-`ki` Checkpoint K and the accepted deterministic
-detector-native Phase 1 boundary.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against the contract-v9
+continuous detector boundary before implementation.
 
 Branch: `feat/fit-foundation`
 
@@ -89,7 +91,7 @@ git diff --check
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

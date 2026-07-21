@@ -1,7 +1,9 @@
 # Deterministic Ewald pushforward checklist
 
-Status: **SHARED CHECKPOINT K ACCEPTED — API v8 is merged; deterministic pushforward remains gated
-by its owning workbranch and the remaining base/certification checkpoints below.**
+Status: **HISTORICAL EXECUTION CHECKLIST.** The production cutover is complete under contract API
+v9 on `main` through `0167f6d`. This file preserves planning provenance; unchecked items are not
+live runtime requirements. Current contracts and remaining scope are in `docs/CONTRACTS.md` and
+`docs/SCOPE_AND_PHASES.md`.
 
 Authoritative specification: `tasks/deterministic_ewald_pushforward_plan.md`.
 

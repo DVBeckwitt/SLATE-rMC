@@ -11,6 +11,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald import BraggSpaceConfig, MosaicParameters, Rod
 from painted_ewald.rotations import mosaic_axes
+from painted_ewald.validation import positive_integer
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
@@ -24,23 +25,12 @@ from rasim_next.pipeline.continuous_detector import (
     DetectorQuadrature,
     PixelIntegrationMethod,
     _compile_detector_state,
-    _positive_integer,
+    _float_array,
     _subdivided_legendre_rule,
 )
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
-
-
-def _float_array(value: ArrayLike, shape: tuple[int, ...], name: str) -> FloatArray:
-    supplied = np.asarray(value)
-    if np.iscomplexobj(supplied) and np.any(supplied.imag != 0.0):
-        raise ValueError(f"{name} must be real")
-    array = np.array(supplied.real, dtype=np.float64, copy=True, order="C")
-    if array.shape != shape or not np.all(np.isfinite(array)):
-        raise ValueError(f"{name} must be finite with shape {shape}")
-    array.setflags(write=False)
-    return array
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +112,7 @@ class SourceAveragedDetectorCoordinateIntensity:
         caustic = np.array(self.caustic, dtype=np.bool_, copy=True, order="C")
         if caustic.shape != (*shape, len(rods)):
             raise ValueError("caustic must have one flag per detector coordinate and rod")
-        state_count = _positive_integer(self.source_state_count, "source_state_count")
+        state_count = positive_integer(self.source_state_count, "source_state_count")
         valid_count = np.array(self.valid_source_count, dtype=np.int64, copy=True, order="C")
         if valid_count.shape != shape or np.any((valid_count < 0) | (valid_count > state_count)):
             raise ValueError("valid_source_count must lie within the source batch")
@@ -299,7 +289,7 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("phase_population_weight must be finite and nonnegative")
         if not isfinite(polarization) or polarization < 0.0:
             raise ValueError("polarization_weight must be finite and nonnegative")
-        workers = _positive_integer(worker_count, "worker_count")
+        workers = positive_integer(worker_count, "worker_count")
         states = incident.states
         if states.material_revision != material.material_revision:
             raise ValueError("incident states and material must have the same revision")
@@ -670,6 +660,8 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("source-averaged integration does not apply a second fold rule")
         if branch not in {1, 2}:
             raise ValueError("branch must be 1 or 2")
+        if any(rod.family_m == 0 for rod in self._rods):
+            raise ValueError("branch-specific pixel integration cannot include m=0")
         rows, columns = self._instrument.detector_shape_rc
         offset, one_dimensional_weight = _subdivided_legendre_rule(
             quadrature.pixel_gauss_order,

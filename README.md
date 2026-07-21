@@ -1,37 +1,54 @@
-# RASIM Next repository seed
+# SLATE-rMC
 
-This archive seeds a new greenfield repository for correct native-detector X-ray scattering and
-staged refinement. It contains the project philosophy, mathematical conventions, physics/source
-ledger, cross-branch contracts, proof protocol, worktree prompts, task graph, immutable compact
-reference data, and self-contained Bi2Se3, HBN, OSC, and PbI2 examples.
+SLATE-rMC is a compact detector-native X-ray scattering core. It maps a configured incident beam,
+CIF-derived reciprocal rods, mosaic probability, finite-stack structure strength, refraction, and
+attenuation directly to a continuous detector-coordinate density and then integrates that density
+over detector pixels.
 
-The controlling result is a declared detector-native observable. Architecture and acceleration are
-subordinate to correctness, convergence, composability, wall time, and memory.
+The production path is continuous and deterministic. It does not construct an Ewald-sphere mesh,
+sample an orientation cloud, create scattering-event rows, resample candidates, or deposit points
+onto pixels. The Ewald sphere appears only through the elastic equation, solved analytically for
+each rod and incident state.
 
-Development order:
+## Quick start
 
-1. Run the serial bootstrap task to implement shared units, frames, OSC conversion, complex-kz
-   primitives, contracts, trace schema, reference reader, and synthetic plumbing.
-2. Run the serial reference-verification task and commit the common proof base.
-3. Create four worktrees from that exact commit for geometry/optics, mosaic/Ewald, ordered
-   rods/reflectivity, and stacking transition.
-4. Review all four branches read-only, then integrate them one at a time through detector-native
-   vertical slices.
-5. Only after integration, implement stable Qr-family, rod, reflection-group, and physical-branch
-   selection.
-6. Add fitting in stages: detector/source calibration, sample/goniometer geometry, mosaic shape,
-   ordered intensities, then stacking-disorder intensities.
-7. Add caking and `2theta/phi` only later as a measurement transformation that reuses accepted
-   identities and geometry.
+Python 3.12 or 3.13 is required.
 
-No GUI work is included. Persistent diagnostics are external, disabled by default, and exactly one
-`.ra_diag.npz` file when requested.
+```powershell
+uv sync --frozen --group dev --extra visualization
+uv run python scripts/verify_seed.py
+uv run pytest
+```
 
-Start with `AGENTS.md`, `WORKTREE_LAUNCH.md`, and `tasks/OVERNIGHT_RUNBOOK.md`. Verify the archive
-with `uv sync --frozen --group dev` followed by `python scripts/verify_seed.py`.
+The authoritative Bi2Se3 input is
+[`configs/bi2se3_simulation.yaml`](configs/bi2se3_simulation.yaml). It controls the source, sample,
+detector pose and both detector tilts, mosaic, finite 2H structure model, numerical backend, and
+which external figures are rendered.
 
-## In-repository scientific evidence
+```powershell
+uv run python scripts/run_configured_simulation.py configs/bi2se3_simulation.yaml
+```
 
-The seed includes the selected manuscript TeX sources, the exact original-RASIM files cited by the
-tasks, a compact immutable numerical reference pack, three Bi2Se3 OSC images, HBN calibration and
-dark images, and Bi2Se3/PbI2 crystallographic examples. Physics branches require no external data.
+Generated figures and diagnostics must resolve outside the repository. Override the configured
+destination with `--output-dir` when needed. Select `cpu` or `cuda` explicitly in the YAML; CUDA
+fails clearly when no compatible device is available.
+
+For a one-incident-state, native-pixel convergence diagnostic, use
+`scripts/generate_bi2se3_continuous_detector.py`. Its omitted physical options inherit the same YAML
+fixture, so there is only one default authority.
+
+## Scientific contracts
+
+- Internal angles are radians; distances are metres; wavelengths and crystal lengths are
+  angstroms; wavevectors are inverse angstroms.
+- Arrays are `[row, column]`; continuous detector coordinates are `(column_px, row_px)`.
+- Every physical `(h,k)` rod is evaluated independently before an exact-family intensity sum.
+- Source, phase, polarization, structure, mosaic, optical, Jacobian, and pixel-integration factors
+  each have one owner and are applied once.
+- Invalid rays carry explicit status and zero intensity.
+- The pre-binned detector field is callable at arbitrary floating-point detector coordinates.
+- Pixel values are deterministic box integrals, never display interpolation.
+
+Read `AGENTS.md`, `docs/CONVENTIONS.md`, `docs/RESULT_MEASURE.md`, `docs/ARCHITECTURE.md`, and
+`docs/CONTRACTS.md` before changing the numerical core. Compact proof commands and accepted
+classifications are recorded in `docs/VALIDATION.md` and `docs/PHYSICS_LEDGER.md`.

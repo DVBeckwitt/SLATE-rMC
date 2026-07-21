@@ -16,14 +16,6 @@ from painted_ewald.validation import finite_scalar, readonly_float_array
 FloatArray = NDArray[np.float64]
 
 
-def _readonly_array(value: ArrayLike, shape: tuple[int, ...], name: str) -> FloatArray:
-    array = np.array(value, dtype=np.float64, copy=True, order="C")
-    if array.shape != shape or not np.all(np.isfinite(array)):
-        raise ValueError(f"{name} must be finite with shape {shape}")
-    array.setflags(write=False)
-    return array
-
-
 @dataclass(frozen=True, slots=True)
 class EwaldLatentGeometry:
     """One analytic rod/root map at arbitrary folded-alpha/full-beta coordinates."""
@@ -49,7 +41,7 @@ class EwaldLatentGeometry:
         shape = alpha.shape
         if not np.all(np.isfinite(alpha)) or np.any((alpha < 0.0) | (alpha > np.pi)):
             raise ValueError("alpha_rad must be finite and lie in [0, pi]")
-        beta = _readonly_array(self.beta_rad, shape, "beta_rad")
+        beta = readonly_float_array(self.beta_rad, shape, "beta_rad")
         if np.any((beta < 0.0) | (beta >= 2.0 * np.pi)):
             raise ValueError("beta_rad must lie in [0, 2*pi)")
         scalar_arrays = {
@@ -58,10 +50,10 @@ class EwaldLatentGeometry:
             "ewald_residual_Ainv": self.ewald_residual_Ainv,
         }
         validated = {
-            name: _readonly_array(value, shape, name) for name, value in scalar_arrays.items()
+            name: readonly_float_array(value, shape, name) for name, value in scalar_arrays.items()
         }
-        q_sample = _readonly_array(self.q_sample_Ainv, (*shape, 3), "q_sample_Ainv")
-        kf_sample = _readonly_array(self.kf_sample_Ainv, (*shape, 3), "kf_sample_Ainv")
+        q_sample = readonly_float_array(self.q_sample_Ainv, (*shape, 3), "q_sample_Ainv")
+        kf_sample = readonly_float_array(self.kf_sample_Ainv, (*shape, 3), "kf_sample_Ainv")
         supplied_status = np.asarray(self.status)
         if supplied_status.shape != shape:
             raise ValueError(f"status must have shape {shape}")
@@ -105,7 +97,9 @@ class EwaldLatentIntensity:
             "coarea_jacobian": self.coarea_jacobian,
             "coating_intensity_density_A2_rad2_inv": (self.coating_intensity_density_A2_rad2_inv),
         }
-        validated = {name: _readonly_array(value, shape, name) for name, value in arrays.items()}
+        validated = {
+            name: readonly_float_array(value, shape, name) for name, value in arrays.items()
+        }
         if any(np.any(value < 0.0) for value in validated.values()):
             raise ValueError("Ewald intensity factors must be nonnegative")
         valid = self.geometry.valid

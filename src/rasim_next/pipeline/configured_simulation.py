@@ -430,7 +430,7 @@ def load_simulation_config(
     *,
     repository_root: str | Path | None = None,
 ) -> SimulationConfiguration:
-    """Load one strict, config-relative ``rasim-simulation-v1`` document."""
+    """Load one strict, config-relative ``rasim-simulation-v2`` document."""
 
     config_path = Path(path).resolve()
     root = (
@@ -455,8 +455,8 @@ def load_simulation_config(
         },
     )
     schema = _string(document["schema_version"], "schema_version")
-    if schema != "rasim-simulation-v1":
-        raise ValueError("schema_version must be rasim-simulation-v1")
+    if schema != "rasim-simulation-v2":
+        raise ValueError("schema_version must be rasim-simulation-v2")
 
     material_data = _mapping(
         document["material"],
@@ -700,6 +700,7 @@ def load_simulation_config(
         "numerics",
         required={
             "worker_count",
+            "detector_execution_backend",
             "detector_macrobin_size_px",
             "detector_gauss_order",
             "reciprocal_alpha_count",
@@ -710,14 +711,14 @@ def load_simulation_config(
             "ewald_beta_count",
             "ewald_alpha_max_deg",
         },
-        optional={"detector_execution_backend"},
+        optional=set(),
     )
     numerics = NumericalConfiguration(
         worker_count=_integer(
             numerical_data["worker_count"], "numerics.worker_count", positive=True
         ),
         detector_execution_backend=_string(
-            numerical_data.get("detector_execution_backend", "cpu"),
+            numerical_data["detector_execution_backend"],
             "numerics.detector_execution_backend",
         ),
         detector_macrobin_size_px=_integer(
@@ -1018,28 +1019,37 @@ def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEw
     incident = build_incident_states(samples, material, inputs.instrument)
     if not bool(incident.states.valid[0]):
         raise ValueError("nominal mean source state is invalid")
-    air_k = 2.0 * np.pi / float(samples.wavelength_A[0])
+    nominal_air_k = 2.0 * np.pi / float(samples.wavelength_A[0])
+    bragg_config = inputs.bragg_space.config
+    tolerance = 256.0 * np.finfo(np.float64).eps * max(nominal_air_k, 1.0)
+    if not np.isclose(bragg_config.k_norm_Ainv, nominal_air_k, rtol=0.0, atol=tolerance):
+        raise ValueError("nominal Bragg space wavelength does not match the mean source state")
+    if not np.array_equal(bragg_config.reciprocal_basis_Ainv, inputs.reciprocal.basis_Ainv):
+        raise ValueError(
+            "nominal Bragg space reciprocal basis does not match the configured lattice"
+        )
+    if not np.array_equal(
+        bragg_config.crystal_to_sample,
+        inputs.instrument.sample_from_crystal.rotation,
+    ):
+        raise ValueError("nominal Bragg space orientation does not match the configured instrument")
+    if bragg_config.mosaic != inputs.mosaic:
+        raise ValueError("nominal Bragg space mosaic does not match the configured mosaic")
+    if inputs.bragg_space.strength_model is not inputs.strength:
+        raise ValueError("nominal Bragg space does not own the configured strength model")
     reachable_keys = {
         (rod.h, rod.k)
         for rod in enumerate_rods_within_ewald_sphere(
             reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
-            k_norm_Ainv=air_k,
+            k_norm_Ainv=nominal_air_k,
             population=inputs.config.bragg.rod_population,
         )
     }
-    rods = tuple(rod for rod in inputs.rods if (rod.h, rod.k) in reachable_keys)
-    bragg = MosaicBraggSpace(
-        BraggSpaceConfig(
-            reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
-            crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
-            rods=rods,
-            mosaic=inputs.mosaic,
-            k_norm_Ainv=air_k,
-        ),
-        inputs.strength,
-    )
+    expected_rods = tuple(rod for rod in inputs.rods if (rod.h, rod.k) in reachable_keys)
+    if bragg_config.rods != expected_rods:
+        raise ValueError("nominal Bragg space rods do not match nominal elastic reach")
     coating = ContinuousEwaldCoating(
-        bragg,
+        inputs.bragg_space,
         ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
     )
     geometry = DetectorEwaldMeasure(
@@ -1202,10 +1212,10 @@ def evaluate_nominal_ewald_surface(
                 beta_rad=beta_grid,
             )
             valid = evaluated.geometry.valid
-            if evaluated.detector_visible_m0_q_gap_Ainv is not None:
-                m0_gap = evaluated.detector_visible_m0_q_gap_Ainv
             if not np.any(valid):
                 continue
+            if evaluated.detector_visible_m0_q_gap_Ainv is not None:
+                m0_gap = evaluated.detector_visible_m0_q_gap_Ainv
             ewald = evaluated.geometry.ewald_geometry
             count = int(np.count_nonzero(valid))
             points.append(ewald.q_sample_Ainv[valid])

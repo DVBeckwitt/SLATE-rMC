@@ -1,478 +1,127 @@
-# Shared contracts
-
-Bootstrap owns contract API v8. Parallel physics branches treat these contracts as read-only.
-
-## Coordinate and transform types
-
-```python
-@dataclass(frozen=True)
-class OscRawIndex:
-    row: int
-    column: int
-
-@dataclass(frozen=True)
-class DetectorIndex:
-    row: int
-    column: int
-
-@dataclass(frozen=True)
-class DetectorCoordinate:
-    column_px: float
-    row_px: float
-
-@dataclass(frozen=True)
-class RigidTransform:
-    rotation: Float64[3, 3]
-    translation_m: Float64[3]
-    source_frame: FrameId
-    target_frame: FrameId
-```
-
-## Instrument configuration
-
-```text
-InstrumentConfiguration
-    lab axis definitions
-    beam origin and direction convention
-    goniometer axes, order, and pivots
-    commanded angles
-    static misalignment rotations
-    sample offsets and surface normal
-    sample_support_model_id
-    sample_width_m and sample_length_m only for finite_rectangle.v1
-    sample_from_crystal transform (CRYSTAL -> SAMPLE)
-    detector origin, row axis, column axis, normal, and pivot
-    detector shape and row/column pitch
-    beam center in detector-native continuous coordinates
-```
-
-User-facing parameters compile once into explicit transforms. Kernels never reconstruct rotation
-chains independently. `lab_from_goniometer` is a local ordered-compilation intermediate, not stored
-compiled state. `CompiledInstrument` retains only `lab_from_sample`, its immutable derived inverse
-`sample_from_lab`, `sample_from_crystal`, `lab_from_detector`, detector calibration, sample support,
-film thickness, and its derived `sample_geometry_revision`; `lab_from_crystal` is not stored.
-Callers cannot supply the inverse or revision, and batched incident construction neither inverts the
-same transform nor rebuilds the revision.
-
-Configured simulations may specify active right-handed detector-local column and row tilts in
-degrees. The boundary applies the column tilt first and the resulting-row tilt second,
-`R_final = R_base @ R_column @ R_row`, about the detector reference-coordinate point. It immediately
-folds them into `lab_from_detector`; compiled state and kernels retain no second tilt representation.
-Missing or exactly zero tilt values preserve the base transform and its revision exactly.
-
-## Source samples
-
-```text
-PolarizationState
-    model_id
-    basis_u_lab[3] float64
-    basis_v_lab[3] float64
-    stokes[4] float64
-    provenance
-
-IncidentSampleBatch
-    incident_sample_id[N] int64
-    origin_lab_m[N,3] float64
-    direction_lab[N,3] float64
-    wavelength_A[N] float64
-    source_weight[N] float64
-    polarization_state_id[N]
-    source_sampling_model_id
-    source_rng_model_id
-    source_seed unsigned 64-bit integer
-    source_parameter_provenance canonical text
-    source_parameter_revision SHA-256
-    source_revision SHA-256
-```
-
-A Cartesian product is allowed only when source variables are declared independent.
-In both source and incident-state batches, `source_weight` is exactly uniform empirical mass `1/N` and sums to one; it is never the sampled PDF. An incident-state batch covers one source-ray batch for one phase/parent.
-The Gaussian source declaration consists of a mean LAB origin in metres, a unit mean LAB direction,
-two orthonormal LAB transverse axes, two spatial sigmas in metres, two divergence sigmas in radians,
-mean wavelength and wavelength sigma in angstroms, sample count, and polarization-state ID. The
-five independent random coordinates are two transverse positions, two tangent-plane divergences,
-and wavelength. `independent_gaussian_antithetic_lhs.v2` uses `numpy_pcg64.v1`: every `N`-stratum
-is occupied exactly once in every dimension, adjacent rows are exact antithetic complements, and
-an odd final row is exactly `0.5`.
-`IncidentSampleBatch` derives both revisions through its sole construction path. One parameter
-hash covers the
-canonical `frames`, `units`, and `values` text for only the declared
-means/axes/sigmas/wavelength/count/polarization inputs. Sampling-model ID, RNG-model ID, and seed are
-separate and are not duplicated in that parameter text. The realization revision covers those
-three fields, the parameter revision,
-IDs, rays, wavelengths, weights, and polarization IDs. A merely
-well-shaped hexadecimal string cannot be supplied in place of either derived revision. Canonical revision fields are
-length-prefixed and typed; numeric arrays use fixed little-endian dtype/rank/shape/C-order bytes.
-
-## Material optics
-
-```text
-MaterialOptics
-    material_id
-    wavelength_A[M] float64
-    n_complex[M] complex128
-    provenance
-    material_revision SHA-256 (derived, init=False)
-```
-
-The ordered/materials branch produces this contract. `wavelength_A` is nonempty, finite, positive,
-strictly increasing, and exact. The producer applies one sorted exact `unique` operation before
-optical evaluation, so repeated requested wavelengths share one authoritative material row.
-Manually constructed duplicate or unsorted grids fail. Geometry consumes the contract without
-parsing CIF files, interpolation, or tolerance-based matching. `n_complex` is the sole optical-array
-authority and its imaginary part is nonnegative; any real decrement, absorptive part, or attenuation
-coefficient needed by an equation is derived locally rather than stored as a second representation.
-The owner-computed `material_optics_revision.v2` digest hashes exactly `material_id`, the schema tag,
-`wavelength_A`, `n_complex`, and `provenance`. No caller supplies it and transport only copies it.
-
-## Sample support
-
-The compiled instrument carries exactly one `sample_support_model_id`. `finite_rectangle.v1`
-requires finite positive width and length and retains the closed-edge footprint test.
-`unbounded_plane.v1` requires both dimensions to be absent and accepts every unique forward plane
-intersection with footprint acceptance one. Zero or placeholder dimensions are invalid.
-Every ray with `abs(direction_sample_z) <= 1e-14`, including a coplanar ray, is `PARALLEL` because
-the plane intersection is not unique. Such a row has no intersection, footprint mass, or optical
-payload.
-
-`CompiledInstrument` owns the init-disabled `sample_geometry_revision`. The
-`sample_entrance_revision.v2` payload always includes the full SAMPLE-to-LAB rotation, explicit
-source/target frames, `unique_forward_plane_intersection.v1`, and the support model. Finite support
-also includes the full translation and width/length. Unbounded support replaces the arbitrary two
-tangent-origin coordinates with the signed LAB normal offset
-`dot(lab_from_sample.rotation[:,2], lab_from_sample.translation_m)`, canonicalized at the frozen
-`1e-12 m` geometry position resolution by nearest-integer ties-to-even rounding while
-`abs(offset / 1e-12) < 2**52`, with signed zero normalized. Once float spacing reaches that
-resolution, the exact finite float is retained. This makes in-plane origin changes cache-equivalent
-without changing the full transforms used by numerical transport.
-
-## Incident states
-
-```text
-IncidentStateBatch
-    incident_state_id[N] int64
-    incident_sample_id[N] int64
-    sample_intersection_lab_m[N,3] float64
-    direction_sample[N,3] float64
-    k_air_sample_Ainv[N,3] float64
-    k_film_phase_sample_Ainv[N,3] float64
-    kz_film_Ainv[N] complex128
-    entrance_amplitude[N] complex128
-    footprint_acceptance[N] float64
-    source_weight[N] float64
-    wavelength_A[N] float64
-    polarization_state_id[N]
-    status[N] tuple[ValidityCode, ...]
-    valid[N] bool
-    source_sampling_model_id
-    source_rng_model_id
-    source_seed unsigned 64-bit integer
-    source_parameter_provenance canonical text
-    source_parameter_revision SHA-256
-    source_revision SHA-256
-    sample_geometry_revision SHA-256
-    material_revision SHA-256
-    incident_model_id
-```
-
-For `one_transmitted_channel.v1`, `incident_state_id` and `incident_sample_id` form a one-to-one
-identity relation and `valid` equals `status == VALID` exactly. Geometry failures retain source ID,
-wavelength, empirical mass, polarization, and every revision but expose zero intersection,
-direction, air-side, film-side, amplitude, and footprint payload. Optical failures retain their
-accepted intersection, SAMPLE direction, air-side `ki`, footprint, source fields, and revisions,
-but expose zero film-side `ki`, complex normal mode, and entrance amplitude. Valid rows enforce
-`k_air=(2*pi/wavelength)*direction`, tangential conservation, and equality between the phase-vector
-normal component and `real(kz_film)`.
-
-The sample and material revisions are copied from their owning compiled objects. Detector
-calibration, `sample_from_crystal`, and film thickness are deliberately excluded from incident
-identity. `IncidentStateBatch` is the complete reciprocal-space incident authority: downstream
-consumers use its wavelength, polarization, status, empirical mass, `ki`, optical evidence, and full
-revision envelope and never rejoin raw source rows. Future worker row views inherit owner revisions
-and canonical parent indices and never hash a slice. Contract-v8 digest changes are provenance
-rebaselines caused by the explicit v2 payloads; accepted statuses and numerical observables are not
-corrected by this cutover.
-
-## Rod catalog
-
-```text
-RodCatalog
-    rod_id[R] int64
-    phase_id[R]
-    h[R] int32
-    k[R] int32
-    family_id[R]
-    family_key[R]
-    qr_Ainv[R] float64
-    reciprocal_basis_Ainv[3,3]
-    symmetry_metadata[R]
-```
-
-Every physical `(h,k)` rod remains separate.
-
-## Pre-selection scattering candidates
-
-```text
-ScatteringEventBatch
-    event_id[E] int64
-    incident_state_id[E] int64
-    orientation_id[E] int64
-    rod_id[E] int64
-    wavelength_A[E] float64
-    q_internal_sample_Ainv[E,3] float64
-    q_sample_normal_Ainv[E] float64
-    l_coordinate[E] float64
-    kf_film_phase_sample_Ainv[E,3] float64
-    reciprocal_weight[E] float64
-    ewald_residual_Ainv[E] float64
-    status[E] tuple[ValidityCode, ...]
-    valid[E] bool
-```
-
-Rows are deterministic/adaptive valid-support candidates. For one incident ray and independent phase/parent, T07 forms one pool across every individual rod and valid mosaic/`Q` solution; each candidate retains its own rod, orientation, `Q`, `kf`, hit, scattering strength, mosaic mass, and other once-only factors. There is no per-reflection normalization or `Qr` collapse, and two-pass/streaming enumeration is preferred.
-`reciprocal_weight` is candidate mosaic/Jacobian mass used only in that complete-pool candidate mass, never as a post-selection multiplier. It excludes source, population, scattering strength, optics, solid angle, and deposition.
-`orientation_id` is a repeatable foreign key, not an array index. `event_id` maps uniquely to it.
-`q_sample_normal_Ainv` equals `q_internal_sample_Ainv[:,2]`, and `valid` is true exactly where `status` is `VALID`; failures retain their exact status.
-
-## Event-aligned rod query
-
-```text
-RodQueryBatch
-    event_id[E] int64
-    rod_id[E] int64
-    phase_id[E]
-    h[E] int32
-    k[E] int32
-    q_sample_normal_Ainv[E] float64
-    l_coordinate[E] float64
-    wavelength_A[E] float64
-```
-
-Grid evaluation and interpolation may be internal optimizations. The integration contract is event-aligned.
-
-## Model outputs
-
-```text
-LayerAmplitudeResult
-    event_id[E] int64
-    rod_id[E] int64
-    phase_id[E]
-    f_plus_e[E] complex128
-    f_minus_e[E] complex128 or absent
-    normalization = ONE_REGISTRY_FREE_LAYER
-    phase_sign = POSITIVE_Q_DOT_R
-    gauge_id = pbi2.pb_centered.v1
-    layer_normal_crystal[3] float64 unit vector
-    layer_repeat_A positive float64
-
-LayerNormalQBatch
-    event_id[E] int64
-    rod_id[E] int64
-    phase_id[E]
-    layer_normal_q_Ainv[E] float64
-    gauge_id
-
-EventIntensityResult
-    event_id[E] int64
-    scattering_strength_A2[E] float64
-    model_id
-    model_component_id
-    population_group_id or absent
-    normalization = UNIT_CELL | FINITE_TOTAL | FINITE_PER_LAYER
-
-PopulationWeightTable
-    population_group_id
-    model_component_id
-    weight
-    semantics = incoherent
-    provenance
-```
-
-Ordered and stacking models implement the same event-aligned scattering-strength contract.
-`LayerNormalQBatch` is produced by future T07 from full event `Q`, `orientation_id`, and T04 layer metadata; T05 requires exact event/rod/phase/gauge alignment and uses `exp(+i Q·R)` with no sample-`Qz` fallback.
-`scattering_strength_A2` is unweighted, polarization-neutral `r_e²` times raw electron² in `angstrom²`; it excludes population, optics, polarization, solid angle, and deposition. T04 and T05 use the single core conversion helper exactly once; T07 does not apply `r_e²`.
-`PopulationWeightTable` remains a declared incoherent-intensity contract but is deferred to reviewed T07 preparation; T02--T05 do not implement or apply it.
-
-## Outgoing transport and detector hits
-
-```text
-OutgoingWaveBatch
-    event_id[E] int64
-    kf_air_lab_Ainv[E,3] float64
-    exit_amplitude[E] complex128
-    attenuation_weight[E] float64
-    optical_weight[E] float64
-    valid[E] bool
-
-DetectorHitBatch
-    event_id[H] int64
-    column_px[H] float64
-    row_px[H] float64
-    pixel_solid_angle_sr[H] float64
-    valid[H] bool
-```
-
-`pixel_solid_angle_sr` is immutable geometry metadata for optional later analysis; it is never an input to raw rendering.
-
-The detector-angle projector's `instrument_fingerprint` uses
-`detector_angle_instrument_fingerprint.v2` and hashes exactly the full `lab_from_detector`
-transform, detector shape, row pitch, column pitch, and detector reference coordinate. `AngleFrame`
-has its own cache-key contribution. Sample/goniometer/crystal transforms, sample support, film
-thickness, and incident revisions do not affect `instrument_fingerprint`; they invalidate a
-projector only when they also change the separately keyed `AngleFrame` consumed by its numerical
-kernel.
-
-## Pixel contributions
-
-```text
-PixelContributionBatch
-    event_id[C] int64
-    flat_pixel_index[C] int64
-    deposition_weight[C] float64
-```
-
-For each valid event, deposition weights sum to one unless support falls outside the detector and the declared clipping policy says otherwise.
-
-## Selection identities, post-integration
-
-```text
-RadialFamilyKey
-    phase_id
-    reciprocal_cell_revision
-    exact_inplane_key
-    qr_Ainv
-    rod_ids
-
-ReflectionGroupKey
-    radial_family_key
-    discrete_out_of_plane_key
-    member rod_ids
-
-BranchKey
-    reflection_group_key or radial_family_key
-    branch_id: 0, 1, or None
-    azimuth_frame
-    basis_revision
-    sign_mapping
-    deadband_rad
-    rule_version
-
-SelectionManifest
-    data_revision
-    source_revision
-    instrument_revision
-    rod_catalog_revision
-    event_model_revision
-    selected radial families and reflection groups
-    selected branches
-    measured observations and candidate evidence
-    detector-native ROIs
-    ambiguity status
-    provenance and hash
-```
-
-The branch is defined from signed physical reciprocal azimuth in the declared sample/crystal in-plane basis. Detector pixels are used for measured association, not as the branch definition. Associations are immutable during one fit and may change only through a new manifest revision between runs.
-
-## Fit observations, post-integration
-
-```text
-DirectBeamObservation
-    dataset_id
-    detector_distance_or_pose
-    detector-native image or centroid/width summary
-    covariance or variance
-
-CalibrantObservation
-    dataset_id
-    calibrant identity and d-spacing provenance
-    detector-native ring/peak support
-    covariance or variance
-
-PeakObservation
-    observation_id
-    dataset_id
-    rod_id or reflection_group_id
-    branch_id
-    measured_column_px
-    measured_row_px
-    covariance_px2[2,2]
-
-ProfileObservation
-    observation_id
-    dataset_id
-    selection_id
-    detector-native support
-    measured signal
-    normalization or variance
-
-IntegratedIntensityObservation
-    observation_id
-    dataset_id
-    selection_id
-    measured_mass
-    variance or likelihood metadata
-```
-
-## Fit contracts, post-integration
-
-```text
-ParameterSpec
-    name
-    value
-    unit
-    lower and upper bounds
-    internal transform
-    active flag
-    dependency stage
-
-DataCorrectionLedger
-    dark subtraction status
-    flat-field status
-    polarization: model, data-corrected, or declared unity approximation
-    solid angle: optional later caking/analysis metadata, never raw-render input
-    detector efficiency status
-    exposure/flux normalization status
-    background policy
-    provenance
-
-FitDataset
-    detector-native data
-    mask
-    noise/variance model
-    exposure metadata
-    preprocessing revision
-    correction ledger
-    source, instrument, and selection revisions
-
-CompiledFitContext
-    immutable forward states
-    selected observations and support
-    seeded sample revision
-    invalidation graph
-
-FitResult
-    parameters and units
-    objective definition and value
-    convergence and invalid evaluations
-    uncertainty and identifiability evidence
-    held-out results
-    provenance and revisions
-```
-
-## Trace record
-
-```text
-TraceRecord
-    case_id
-    stage_id
-    value
-    shape
-    dtype
-    unit
-    frame
-    measure
-    model_version
-    provenance
-```
-
-The proof comparator reports the first failing `stage_id`.
+# Contracts
+
+Contract API version: **9**. Trace schema version: **4**. Reference pack version: **1**.
+
+Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
+contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
+and ordering are validated eagerly.
+
+## Global conventions
+
+- Column vectors and active rotations.
+- Radians internally.
+- Metres for instrument positions; angstroms for wavelength and crystal lengths; inverse angstroms
+  for wavevectors.
+- Array access is `[row, column]`; continuous detector coordinates are `(column_px, row_px)`.
+- `Q = kf - ki` in the declared frame.
+- Invalid rows have explicit status and cannot carry fabricated nonzero intensity.
+- IDs prove alignment and provenance; they are not numerical weights or sorting keys.
+
+## Stable core data contracts
+
+| Contract | Owner | Essential payload |
+|---|---|---|
+| `SourceConfiguration` / `sample_gaussian_source_rays` | configured pipeline / sampling | validated source parameters and immutable sampled source rows |
+| `IncidentSampleBatch` | sampling | complete source rows, empirical weights, wavelength, polarization, provenance |
+| `InstrumentConfiguration` / `CompiledInstrument` | geometry | canonical transforms, sample support, detector shape/pitch/reference coordinate, revisions |
+| `IncidentStateBatch` | geometry | entrance-intersected air and film-phase `ki`, Fresnel amplitude, decay, footprint, source identity |
+| `MaterialOptics` | materials | wavelength-aligned complex refractive index and material revision |
+| `RodCatalog` | reciprocal | every physical `(h,k)` rod and exact family metadata |
+| `RodQueryBatch` | ordered/stacking | rod-aligned `L` queries with stable IDs |
+| `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
+| `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
+
+`EventIntensityResult` retains “event” in its historical type name, but it is an ordered query result;
+it is not a sampled scattering-event runtime. Its strength excludes source probability, rod
+population, mosaic probability, optics, polarization, detector Jacobians, and pixel integration.
+
+## Continuous reciprocal contracts
+
+### `MosaicParameters`
+
+Owns Gaussian sigma, Lorentzian HWHM, mixture probability, and deterministic proof quadrature. A
+zero width is permitted only for an inactive mixture component. The accepted continuous law is
+folded alpha/full beta and integrates to one.
+
+### `Rod`
+
+Owns exact `(h,k)`, family metadata, and population. Rod identity is never a floating radial value.
+
+### `MosaicBraggSpace`
+
+- `map_latent(rod, alpha_rad, beta_rad, u_Ainv)` maps arbitrary broadcast coordinates to sample-frame
+  `Q`.
+- `evaluate_latent(...)` returns per-rod mosaic density, finite-stack strength, and their product.
+- `rod_u_bounds_Ainv(rod)` returns the full elastic-reach axial interval.
+
+The map and density are functions; a quadrature node set is never the model.
+
+### `ContinuousEwaldCoating`
+
+- `evaluate_latent(rod, branch, alpha_rad, beta_rad)` solves the analytic elastic root and returns
+  geometry, strength, mosaic density, and the once-only Ewald coarea-weighted coating.
+- `evaluate_specular_geometry(...)` exposes retained nonzero branch-0 `m=0` geometry without
+  inventing finite direct-beam intensity. The algebraic `Q=0` direct root is suppressed. The
+  separate detector-visible all-roots path may include regular nonzero `m=0` support only with a
+  positive reciprocal-gap certificate.
+
+## Detector contracts
+
+### `DetectorEwaldMeasure`
+
+Immutable one-incident-state model. It requires the canonical transported film-phase `ki`, matching
+air wavelength, strict root classification, material optics, and compiled instrument.
+
+- `evaluate_detector_geometry(column_px, row_px, *, include_surface_jacobian=True)` performs detector
+  point → outgoing ray → exit refraction → film `kf` → sample-frame `Q` and reports
+  validity and elastic residual. Passing `False` skips derivative work and returns a zero Jacobian
+  when only ray validity or `Q` is needed.
+- `evaluate_detector_coordinates(column_px, row_px, rods, branch)` returns the almost-everywhere
+  `raw_detector_coordinate_density_A2_per_px2.v1`, per-rod contributions, inverse-branch counts, and
+  caustic flags.
+- `map_latent(...)` is the independent forward route used for proof and diagnostics.
+- `integrate_native_pixels(...)` returns deterministic `raw_detector_pixel_mass_A2.v1` with
+  convergence, work-count, validity, and per-rod evidence.
+
+### `SourceAveragedDetectorEwaldMeasure`
+
+Owns an ordered tuple of complete incident-state measures. Its arbitrary-coordinate evaluator sums
+independent source intensities over all retained roots. Detector-visible `m=0` is admitted only when
+every contributing top-exit state proves the positive direct-root gap. Its quantitative native-pixel
+integrator is deliberately branch-specific and rejects any model containing `m=0`; the configured
+all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
+weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
+
+### Configured simulation
+
+- `load_simulation_config(path, repository_root=...)` accepts one strict
+  `rasim-simulation-v2` YAML document. Unknown, duplicate, aliased, or missing fields fail.
+- `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
+  material, rods, finite-2H strength, and Bragg space once.
+- `build_source_averaged_detector(inputs)` builds the all-state detector model.
+- `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
+  `integrate_detector_macrobins` generate optional display data without becoming model authority.
+
+## Once-only factor ownership
+
+| Factor | Owner |
+|---|---|
+| empirical source mass | source sampler |
+| sample-footprint acceptance and entrance amplitude | incident transport |
+| per-rod population | `MosaicBraggSpace` |
+| CIF/finite-stack structure strength | ordered strength model |
+| wrapped mosaic probability | `MosaicBraggSpace` |
+| Ewald restriction / inverse-map determinant | Ewald or detector pushforward, by declared route |
+| exit amplitude and uniform-depth attenuation | detector optical mapping |
+| phase and polarization weights | detector measure construction |
+| source-state sum | source-averaged detector measure |
+| detector box integration | pixel integrator |
+
+The two Ewald routes are equivalent proof views and are never multiplied together.
+
+## Removed API
+
+Contract version 9 intentionally has no compatibility shims for sampled mosaic orientation batches,
+candidate selection, scattering-event batches, outgoing-wave batches, detector-hit batches, event
+transport, point deposition, discrete Ewald painters, sphere textures, or raster grids. Callers must
+use the continuous reciprocal and detector contracts above.

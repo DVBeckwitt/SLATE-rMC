@@ -1,243 +1,86 @@
 # Architecture
 
-## Package layout
+## Design rule
+
+The repository has one production path from a configured incident beam to a detector-native
+observable. Scientific state is immutable, transformations are explicit, and the public model is a
+callable function rather than a sampled cloud or image cache.
 
 ```text
-src/rasim_next/
-    core/
-        frames.py
-        transforms.py
-        wave_modes.py
-        interfaces.py
-        contracts.py
-        scattering.py
-        traces.py
-        validity.py
-
-    io/
-        osc.py
-        orientation.py
-
-    geometry/
-        instrument.py
-        sample.py
-        detector.py
-        transport.py
-
-    optics/
-        refraction.py
-        attenuation.py
-
-    materials/
-        cif.py
-        atomic_data.py
-        optical_constants.py
-
-    sampling/
-        source.py
-        wavelength.py
-        mosaic.py
-        quadrature.py
-
-    reciprocal/
-        lattice.py
-        rods.py
-        ewald.py
-        events.py
-        proof.py
-
-    ordered/
-        structure_factor.py
-        layer_motif.py
-        finite_stack.py
-        rod_model.py
-
-    reflectivity/
-        parratt.py
-        kinematic.py
-        composite.py
-
-    stacking/
-        transition.py
-        enumeration.py
-        finite_intensity.py
-        parent_models.py
-
-    measurement/
-        angle_space.py
-        factors.py
-        solid_angle.py
-
-    render/
-        deposition.py
-        detector_image.py
-
-    pipeline/
-        intersections.py
-        simulate.py
-
-    selection/          # post-integration
-        rod_families.py
-        branches.py
-        observations.py
-        roi.py
-
-    fitting/            # post-integration
-        contracts.py
-        context.py
-        invalidation.py
-        source.py
-        detector.py
-        geometry.py
-        mosaic.py
-        ordered_intensity.py
-        stacking_intensity.py
-        result.py
-
-    proof/
-        __main__.py
-        core.py
-        reference.py
-        traces.py
-        tolerances.py
-        stage_tolerances_v1.json
-        diagnostics.py
+strict YAML + CIF
+  -> sampled source rows
+  -> canonical entrance transport and incident film-phase ki
+  -> physical reciprocal rods + continuous mosaic/finite-stack strength
+  -> analytic rod/Ewald roots and exit optics
+  -> continuous detector-coordinate density
+  -> source-state intensity sum
+  -> deterministic detector-pixel box integration
 ```
 
-A different internal arrangement is acceptable if ownership and dependency rules remain equivalent.
+No physical Ewald-sphere object is created. A detector coordinate determines an outgoing air ray;
+exit refraction determines its film wavevector; the elastic relation and inverse latent map recover
+all contributing rod/orientation branches. Only the active detector panel is evaluated.
 
-## Dependency direction
+## Package ownership
 
-```text
-core
-  -> io, geometry, optics, materials, sampling
-  -> reciprocal, ordered, reflectivity, stacking
-  -> measurement, render
-  -> pipeline
-  -> selection
-  -> fitting
-```
+### `painted_ewald`
 
-Lower layers never import higher layers. Only `pipeline` assembles the forward model. Only `fitting` owns optimizers and objectives. Selection owns rod/branch association but no physics equations.
+- `types.py`: immutable rods, mosaic parameters, root status, and strength protocols.
+- `rotations.py`: column-vector active rotations.
+- `mosaic.py`: normalized folded-alpha/full-beta probability law and compact quadrature helpers.
+- `rods.py`: detector-independent elastic-reach rod enumeration.
+- `bragg.py`: continuous `(alpha, beta, u)` map and per-rod mosaic × population × strength density.
+- `ewald.py`: stable analytic line/sphere roots with tangent and no-root status.
+- `surface.py`: intrinsic Ewald restriction and its once-only coarea factor.
 
-## Bootstrap-owned shared mathematics
+### `rasim_next`
 
-Bootstrap implements and proves:
+- `core`: frames, units, immutable contracts, validity, transforms, and trace records.
+- `geometry`: instrument compilation, source/sample intersection, incident transport, detector rays,
+  and forward detector intersection.
+- `materials` and `optics`: CIF-derived material data, shared complex-normal mode selection,
+  refraction, Fresnel amplitudes, and uniform-depth attenuation.
+- `ordered`, `stacking`, and `reflectivity`: structure amplitudes, finite stacks, stacking models,
+  and separately named specular calculations.
+- `reciprocal`: reciprocal basis and complete physical rod catalogs.
+- `sampling`: deterministic source phase-space sampling only.
+- `pipeline/bragg_space.py`: binds CIF-derived finite-2H strength to rods and mosaic geometry.
+- `pipeline/continuous_detector.py`: one-incident-state detector pullback and native-pixel
+  integration.
+- `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
+  fields and compiled CPU/CUDA evaluation.
+- `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
+  display-only raster evaluation.
+- `measurement`: later detector-derived coordinate transforms; never part of raw rendering.
+- `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
-- units and frame tags
-- `RigidTransform` inverse and composition
-- OSC index mapping
-- complex square-root branch selection
-- normal-wavevector calculation
-- scalar interface amplitude
-- common validity/status codes
-- production-neutral trace values, proof-only comparison/tolerances, and event IDs
-- no-physics synthetic plumbing
+## Public runtime layers
 
-Geometry and reflectivity consume the same normal-wavevector and interface primitives. They do not reimplement them.
+1. `MosaicBraggSpace` owns the latent reciprocal measure for every physical rod.
+2. `ContinuousEwaldCoating` restricts one rod to one analytic Ewald root for intrinsic diagnostics.
+3. `DetectorEwaldMeasure` pulls all inverse branches onto arbitrary detector coordinates and
+   integrates one incident state's pixels.
+4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before the one
+   requested detector integration.
+5. `configured_simulation` assembles those objects from one validated YAML document.
 
-## Parallel ownership
+The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
+state and must reproduce it within the frozen tolerance. Device initialization and caches are never
+module-global or import-time side effects.
 
-```text
-geometry-optics
-    io/osc.py, geometry/, optics/
+## Invalidation boundaries
 
-mosaic-ewald
-    sampling/, reciprocal/ewald.py, reciprocal/events.py, reciprocal/proof.py
+- Source changes rebuild source rows and incident transport.
+- Sample entrance geometry or material optics changes rebuild incident transport.
+- CIF, finite-stack, mosaic, wavelength, or sample/crystal orientation changes rebuild Bragg and
+  detector evaluator state.
+- Detector pose, distance, pitch, shape, or either detector tilt rebuilds detector geometry and its
+  compiled evaluator, but not detector-independent structure amplitudes.
+- Display limits and colormaps never invalidate physics.
 
-ordered-reflectivity
-    materials/, reciprocal/lattice.py, reciprocal/rods.py,
-    ordered/, reflectivity/
+## Deliberately absent runtime structures
 
-stacking-transition
-    stacking/
-
-integration
-    measurement/, render/, pipeline/
-
-post-integration selection
-    selection/
-
-post-integration fitting
-    fitting/ contracts and one stage-specific module per future worktree
-```
-
-Shared files change only through a small separately reviewed contract commit.
-
-## Reusable compiled states
-
-The forward model exposes immutable state boundaries:
-
-```text
-CompiledInstrument
-IncidentSampleBatch
-IncidentStateBatch
-RodCatalog
-ScatteringEventBatch
-OutgoingWaveBatch
-DetectorHitBatch
-```
-
-They are not optimizer objects. They are dependency and reuse boundaries.
-
-`IncidentSampleBatch` is generated once as one complete canonical source realization. Its derived
-parameter and realization revisions are each hashed once by the batch's sole construction path.
-`MaterialOptics` owns one sorted wavelength grid, sole `n_complex` optical state, and its derived
-`material_revision` under schema `material_optics_revision.v2`; transport consumes all three
-without reconstructing the material.
-The compiled instrument retains the causal `lab_from_sample`, derives `sample_from_lab` once, and
-owns `sample_geometry_revision` under schema `sample_entrance_revision.v2`. Its ordered
-`lab_from_goniometer` exists only while compiling `lab_from_sample`; no derived `lab_from_crystal`
-is stored because reciprocal construction consumes the retained `sample_from_crystal` directly. No
-caller can supply a competing inverse or revision.
-`IncidentStateBatch` is the sole reciprocal-space incident authority: reciprocal construction does
-not rejoin a raw source batch for wavelength, polarization, status, mass, or provenance.
-Parallel Task 1.1 remains a scalar-reference task and introduces no runtime worker packets. Any
-private worker packets introduced by future staged execution belong to parallel Task 1.4, after
-Task 1.3 freezes the narrow numeric boundaries. They must carry canonical row indices, inherit the
-full parent revision envelope, and never regenerate source rows or hash packet slices.
-
-Invalidation rules:
-
-```text
-geometry parameter change
-    invalidates incident states, events, hits, and response
-
-source parameter, model, RNG, seed, or realized-row change
-    invalidates the complete source revision and all downstream incident/event state
-
-material optical change
-    rebuilds owner material_revision under material_optics_revision.v2 and invalidates incident optical modes and downstream event state
-
-finite sample entrance translation, rotation, support, or dimension change
-    rebuilds owner sample_geometry_revision under sample_entrance_revision.v2 and invalidates incident geometry
-
-unbounded sample rotation or canonical signed-normal-offset change
-    rebuilds owner sample_geometry_revision and invalidates incident geometry
-
-unbounded sample tangent-origin-only change
-    changes neither the canonical plane revision nor accepted incident geometry within 1e-12 m
-
-detector calibration, sample_from_crystal, or film-thickness-only change
-    does not invalidate incident states or their source/sample/material revisions
-
-detector transform, shape, pitch, or reference-coordinate change
-    invalidates detector-angle fingerprint v2; sample/support/film-only changes do not
-
-mosaic parameter change
-    invalidates reciprocal weights and possibly event support, but not instrument compilation
-
-ordered or stacking intensity parameter change
-    invalidates model intensities, but may reuse event geometry, hits, and response
-
-scale/background nuisance change
-    invalidates only final combination and objective
-```
-
-This is the central performance requirement for later fitting.
-The contract-v8 material/sample digests are provenance-only rebaselines; the implementation cutover
-does not alter accepted source-to-`ki` statuses or numeric fields.
-
-## Production acceleration
-
-The architecture does not require CPU, GPU, CUDA, Numba, JAX, C++, or another technology. After the integrated reference path exists, profile representative full simulation and repeated-fit workloads. Choose the implementation that gives the fastest correct final observable under bounded error and memory.
+There is no sampled mosaic-orientation batch, candidate pool, scattering-event table, outgoing-event
+table, point depositor, bilinear rasterizer, discrete sphere texture, compatibility adapter, or
+parallel legacy simulator. Historical equations remain only in the immutable reference pack and
+proof comparisons.

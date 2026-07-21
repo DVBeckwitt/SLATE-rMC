@@ -1,5 +1,8 @@
 # T12 Codex prompt
 
+> Historical draft; do not execute. T12 is `NEEDS_REPLAN` against the contract-v9 continuous
+> detector boundary.
+
 ## Goal
 
 Implement mosaic-profile fitting with source and geometry frozen and deterministic quadrature.

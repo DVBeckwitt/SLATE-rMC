@@ -9,39 +9,30 @@ import math
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
 
 import numpy as np
-from generate_bi2se3_detector_image import build_default_case_inputs
 
 from painted_ewald import (
-    BraggSpaceConfig,
     ContinuousEwaldCoating,
-    MosaicBraggSpace,
-    MosaicParameters,
     Rod,
 )
-from rasim_next.core.contracts import EventIntensityNormalization
-from rasim_next.geometry import build_incident_states
-from rasim_next.materials import material_optics, read_crystal
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.configured_simulation import (
+    build_configured_simulation_inputs,
+    load_simulation_config,
+)
 from rasim_next.pipeline.continuous_detector import (
     DetectorEwaldMeasure,
     DetectorQuadrature,
     PixelIntegrationMethod,
 )
-from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.proof.diagnostics import write_diagnostic
-from rasim_next.reciprocal.lattice import ReciprocalLattice
 
 ROOT = Path(__file__).resolve().parents[1]
 M1_ROD_KEYS = ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))
-DEFAULT_GAUSSIAN_SIGMA_DEG = 5.0
-DEFAULT_LORENTZIAN_HWHM_DEG = 2.0
-DEFAULT_LORENTZIAN_PROBABILITY = 0.1
-DEFAULT_STRENGTH_LAYER_COUNT = 7
-DEFAULT_SHARED_DISORDER_EPSILON = 0.0
 
 
 class _MosaicInputError(ValueError):
@@ -70,16 +61,12 @@ def _validate_reference_strength(
     expected = {
         "strength_layer_count": strength.layers,
         "strength_normalization": strength.normalization.value,
-        # Diagnostics written before this field existed used ideal 2H.
         "strength_shared_disorder_epsilon": strength.shared_disorder_epsilon,
     }
     actual = {
         "strength_layer_count": manifest.get("strength_layer_count"),
         "strength_normalization": manifest.get("strength_normalization"),
-        "strength_shared_disorder_epsilon": manifest.get(
-            "strength_shared_disorder_epsilon",
-            0.0,
-        ),
+        "strength_shared_disorder_epsilon": manifest.get("strength_shared_disorder_epsilon"),
     }
     for field, expected_value in expected.items():
         if actual[field] != expected_value:
@@ -126,12 +113,12 @@ def _peak_working_set_bytes() -> int | None:
     return int(counters.PeakWorkingSetSize) if succeeded else None
 
 
-def _mosaic_parameters_from_degrees(
+def _validate_mosaic_degrees(
     *,
     gaussian_sigma_deg: float,
     lorentzian_hwhm_deg: float,
     eta: float,
-) -> MosaicParameters:
+) -> None:
     values = {
         "Gaussian sigma": gaussian_sigma_deg,
         "Lorentzian HWHM": lorentzian_hwhm_deg,
@@ -147,120 +134,73 @@ def _mosaic_parameters_from_degrees(
         raise _MosaicInputError("Gaussian sigma must be positive when eta is less than one")
     if eta > 0.0 and lorentzian_hwhm_deg == 0.0:
         raise _MosaicInputError("Lorentzian HWHM must be positive when eta is greater than zero")
-    return MosaicParameters(
-        gaussian_sigma_rad=math.radians(gaussian_sigma_deg),
-        lorentzian_half_width_rad=math.radians(lorentzian_hwhm_deg),
-        lorentzian_probability=eta,
-        alpha_panel_count=8,
-        alpha_gauss_order=12,
-        azimuth_count=32,
-    )
 
 
 def build_default_detector_measure(
     *,
-    gaussian_sigma_deg: float = DEFAULT_GAUSSIAN_SIGMA_DEG,
-    lorentzian_hwhm_deg: float = DEFAULT_LORENTZIAN_HWHM_DEG,
-    eta: float = DEFAULT_LORENTZIAN_PROBABILITY,
-    layers: int = DEFAULT_STRENGTH_LAYER_COUNT,
-    shared_disorder_epsilon: float = DEFAULT_SHARED_DISORDER_EPSILON,
+    gaussian_sigma_deg: float | None = None,
+    lorentzian_hwhm_deg: float | None = None,
+    eta: float | None = None,
+    layers: int | None = None,
+    shared_disorder_epsilon: float | None = None,
 ) -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
-    """Build the 5-degree fixture for one explicit mosaic and finite 2H model."""
+    """Build the YAML-authoritative 5-degree fixture with optional overrides."""
 
-    mosaic = _mosaic_parameters_from_degrees(
+    config = load_simulation_config(ROOT / "configs" / "bi2se3_simulation.yaml")
+    gaussian_sigma_deg = (
+        config.mosaic.gaussian_sigma_deg if gaussian_sigma_deg is None else gaussian_sigma_deg
+    )
+    lorentzian_hwhm_deg = (
+        config.mosaic.lorentzian_hwhm_deg if lorentzian_hwhm_deg is None else lorentzian_hwhm_deg
+    )
+    eta = config.mosaic.lorentzian_probability if eta is None else eta
+    layers = config.structure_factor.layers if layers is None else layers
+    shared_disorder_epsilon = (
+        config.structure_factor.shared_disorder_epsilon
+        if shared_disorder_epsilon is None
+        else shared_disorder_epsilon
+    )
+
+    _validate_mosaic_degrees(
         gaussian_sigma_deg=gaussian_sigma_deg,
         lorentzian_hwhm_deg=lorentzian_hwhm_deg,
         eta=eta,
     )
-    samples, instrument = build_default_case_inputs(
-        sample_count=1,
-        sample_angle_rad=math.radians(5.0),
-    )
-    crystal = read_crystal(
-        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
-    )
-    material = material_optics(crystal, samples.wavelength_A)
-    incident = build_incident_states(samples, material, instrument)
-    reciprocal = ReciprocalLattice.from_crystal(crystal)
-    m0_rod = Rod(0, 0)
-    m1_rods = tuple(Rod(h, k) for h, k in M1_ROD_KEYS)
-    bragg = MosaicBraggSpace(
-        BraggSpaceConfig(
-            reciprocal_basis_Ainv=reciprocal.basis_Ainv,
-            crystal_to_sample=instrument.sample_from_crystal.rotation,
-            rods=(m0_rod, *m1_rods),
-            mosaic=mosaic,
-            k_norm_Ainv=2.0 * np.pi / samples.wavelength_A[0],
+    config = replace(
+        config,
+        source=replace(config.source, sample_count=1),
+        mosaic=replace(
+            config.mosaic,
+            gaussian_sigma_deg=gaussian_sigma_deg,
+            lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+            lorentzian_probability=eta,
         ),
-        Bi2Se3TwoHStrength(
-            crystal=crystal,
+        structure_factor=replace(
+            config.structure_factor,
             layers=layers,
-            normalization=EventIntensityNormalization.FINITE_TOTAL,
             shared_disorder_epsilon=shared_disorder_epsilon,
         ),
     )
+    inputs = build_configured_simulation_inputs(config)
+    m0_rod = next(rod for rod in inputs.bragg_space.config.rods if rod.family_m == 0)
+    m1_rods = tuple(rod for rod in inputs.bragg_space.config.rods if rod.family_m == 1)
+    if tuple((rod.h, rod.k) for rod in m1_rods) != M1_ROD_KEYS:
+        raise RuntimeError("configured default m=1 rod ordering changed")
     coating = ContinuousEwaldCoating(
-        bragg,
-        ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
+        inputs.bragg_space,
+        ki_sample_Ainv=inputs.incident.states.k_film_phase_sample_Ainv[0],
     )
     return (
         DetectorEwaldMeasure(
             coating=coating,
-            incident=incident,
-            material=material,
-            instrument=instrument,
+            incident=inputs.incident,
+            material=inputs.material,
+            instrument=inputs.instrument,
+            phase_population_weight=config.weights.phase_population,
+            polarization_weight=config.weights.polarization,
         ),
         m1_rods,
         m0_rod,
-    )
-
-
-def build_default_source_averaged_detector_measure(
-    *,
-    sample_count: int,
-    gaussian_sigma_deg: float = DEFAULT_GAUSSIAN_SIGMA_DEG,
-    lorentzian_hwhm_deg: float = DEFAULT_LORENTZIAN_HWHM_DEG,
-    eta: float = DEFAULT_LORENTZIAN_PROBABILITY,
-    layers: int = DEFAULT_STRENGTH_LAYER_COUNT,
-    shared_disorder_epsilon: float = DEFAULT_SHARED_DISORDER_EPSILON,
-    worker_count: int = 1,
-) -> SourceAveragedDetectorEwaldMeasure:
-    """Build the canonical 5-degree Monte Carlo source average."""
-
-    mosaic = _mosaic_parameters_from_degrees(
-        gaussian_sigma_deg=gaussian_sigma_deg,
-        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
-        eta=eta,
-    )
-    samples, instrument = build_default_case_inputs(
-        sample_count=sample_count,
-        sample_angle_rad=math.radians(5.0),
-    )
-    crystal = read_crystal(
-        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
-    )
-    material = material_optics(crystal, samples.wavelength_A)
-    incident = build_incident_states(samples, material, instrument)
-    reciprocal = ReciprocalLattice.from_crystal(crystal)
-    m1_rods = tuple(Rod(h, k) for h, k in M1_ROD_KEYS)
-    strength = Bi2Se3TwoHStrength(
-        crystal=crystal,
-        layers=layers,
-        normalization=EventIntensityNormalization.FINITE_TOTAL,
-        shared_disorder_epsilon=shared_disorder_epsilon,
-    )
-    return SourceAveragedDetectorEwaldMeasure(
-        reciprocal_basis_Ainv=reciprocal.basis_Ainv,
-        crystal_to_sample=instrument.sample_from_crystal.rotation,
-        rods=m1_rods,
-        mosaic=mosaic,
-        strength_model=strength,
-        incident=incident,
-        material=material,
-        instrument=instrument,
-        worker_count=worker_count,
     )
 
 
@@ -272,12 +212,9 @@ def _center_valid_mask(detector: DetectorEwaldMeasure, *, row_chunk_size: int) -
         stop = min(start + row_chunk_size, rows)
         row = np.arange(start, stop, dtype=np.float64)
         column_grid, row_grid = np.broadcast_arrays(column[None, :], row[:, None])
-        # Reuse the authoritative ray geometry while omitting optical and
-        # surface-Jacobian arrays that the display mask does not consume.
-        geometry, _ = detector._detector_coordinate_state(
+        geometry = detector.evaluate_detector_geometry(
             column_grid,
             row_grid,
-            include_optical=False,
             include_surface_jacobian=False,
         )
         valid[start:stop] = geometry.valid
@@ -388,40 +325,33 @@ def _write_figure(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    overall_start = perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--gaussian-sigma-deg",
         type=float,
-        default=DEFAULT_GAUSSIAN_SIGMA_DEG,
-        help="Gaussian mosaic standard deviation in degrees (default: %(default)s)",
+        help="override the YAML Gaussian mosaic standard deviation in degrees",
     )
     parser.add_argument(
         "--lorentzian-hwhm-deg",
         type=float,
-        default=DEFAULT_LORENTZIAN_HWHM_DEG,
-        help="Lorentzian mosaic half width at half maximum in degrees (default: %(default)s)",
+        help="override the YAML Lorentzian mosaic half width at half maximum in degrees",
     )
     parser.add_argument(
         "--eta",
         "--lorentzian-probability",
         dest="eta",
         type=float,
-        default=DEFAULT_LORENTZIAN_PROBABILITY,
-        help="Lorentzian mixture probability; 0 is pure Gaussian and 1 is pure Lorentzian "
-        "(default: %(default)s)",
+        help="override the YAML Lorentzian mixture probability; 0 is Gaussian and 1 Lorentzian",
     )
     parser.add_argument(
         "--layers",
         type=int,
-        default=DEFAULT_STRENGTH_LAYER_COUNT,
-        help="finite Bi2Se3 quintuple-layer count (default: %(default)s)",
+        help="override the YAML finite Bi2Se3 quintuple-layer count",
     )
     parser.add_argument(
         "--stacking-epsilon",
         type=float,
-        default=DEFAULT_SHARED_DISORDER_EPSILON,
-        help="shared rich-parent 2H disorder probability (default: %(default)s)",
+        help="override the YAML shared rich-parent 2H disorder probability",
     )
     parser.add_argument("--pixel-gauss-order", type=int, default=2)
     parser.add_argument("--fold-gauss-order", type=int, default=4)
@@ -445,11 +375,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error("--numeric-only and --output-dir are mutually exclusive")
     if not args.numeric_only and args.output_dir is None:
         parser.error("provide --output-dir or --numeric-only")
-    if args.layers < 1:
+    if args.layers is not None and args.layers < 1:
         parser.error("layers must be positive")
-    if not math.isfinite(args.stacking_epsilon):
+    if args.stacking_epsilon is not None and not math.isfinite(args.stacking_epsilon):
         parser.error("stacking epsilon must be finite")
-    if not 0.0 <= args.stacking_epsilon <= 1.0:
+    if args.stacking_epsilon is not None and not 0.0 <= args.stacking_epsilon <= 1.0:
         parser.error("stacking epsilon must lie in [0, 1]")
 
     fixture_start = perf_counter()
@@ -473,6 +403,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if reference_path is not None:
         _validate_reference_strength(reference_path, strength_model)
     start = perf_counter()
+    integration_method = PixelIntegrationMethod(args.integration_method)
     result = detector.integrate_native_pixels(
         rods=m1_rods,
         branch=2,
@@ -481,7 +412,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             fold_gauss_order=args.fold_gauss_order,
             fold_subdivision_count=args.fold_subdivision_count,
             row_chunk_size=args.row_chunk_size,
-            method=PixelIntegrationMethod(args.integration_method),
+            method=integration_method,
             relative_tolerance=args.relative_tolerance,
             absolute_tolerance_A2=args.absolute_tolerance_a2,
             max_depth=args.max_depth,
@@ -491,6 +422,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     elapsed = perf_counter() - start
     if (
         args.output_dir is not None
+        and integration_method is PixelIntegrationMethod.ADAPTIVE_COMPILED
         and not result.adaptive_tolerance_satisfied
         and not args.allow_unresolved_diagnostic
     ):
@@ -552,7 +484,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         "adaptive_tolerance_satisfied": result.adaptive_tolerance_satisfied,
         "adaptive_unresolved_pixel_count": result.adaptive_unresolved_pixel_count,
         "artifact_status": (
-            "CONVERGED" if result.adaptive_tolerance_satisfied else "UNRESOLVED_ADAPTIVE_DIAGNOSTIC"
+            "FIXED_PREVIEW"
+            if integration_method is PixelIntegrationMethod.FIXED_NUMPY
+            else (
+                "ADAPTIVE_CONVERGED"
+                if result.adaptive_tolerance_satisfied
+                else "ADAPTIVE_UNRESOLVED_DIAGNOSTIC"
+            )
         ),
         "sampled_invalid_pixel_count": result.sampled_invalid_pixel_count,
         "coordinate_evaluation_count": result.coordinate_evaluation_count,
@@ -661,7 +599,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         summary["diagnostic_path"] = os.fspath(diagnostic_path)
         summary["figure_path"] = os.fspath(figure_path)
         summary["diagnostic_storage"] = "atomic_compressed_npz_embedded_manifest.v1"
-        diagnostic_start = perf_counter()
         write_diagnostic(
             diagnostic_path,
             arrays={
@@ -673,10 +610,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             manifest=summary,
             repository_root=ROOT,
         )
-        summary["diagnostic_write_wall_time_s"] = perf_counter() - diagnostic_start
-        summary["diagnostic_size_bytes"] = diagnostic_path.stat().st_size
-        summary["end_to_end_peak_working_set_bytes"] = _peak_working_set_bytes()
-        summary["end_to_end_wall_time_s"] = perf_counter() - overall_start
     print(json.dumps(summary, sort_keys=True))
 
 

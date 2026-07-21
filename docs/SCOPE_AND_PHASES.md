@@ -1,148 +1,49 @@
 # Scope and phases
 
-This file is the authoritative scope statement.
+## Current objective
 
-## Final project goal
+Maintain the smallest scientifically explicit core that produces detector-native X-ray scattering
+from canonical source, sample, material, reciprocal, mosaic, structure, refraction, attenuation, and
+detector geometry.
 
-The completed system will support a staged detector-native scientific workflow:
+## Implemented core
 
-1. characterize source size, divergence, wavelength, and their declared correlations
-2. calibrate detector pose and beam center from direct-beam and calibrant observations where available
-3. index measured sample peaks against stable rod-family, reflection-group, and branch identities
-4. fit sample and goniometer geometry with those associations frozen and then revalidate them
-5. fit the mosaic orientation distribution with source and geometry fixed
-6. fit ordered structural intensities from selected detector regions and `Qr` rod families
-7. fit stacking-disorder intensities from selected branches and fixed-`Qr` rod observations
+- Strict YAML configuration and immutable compiled state.
+- Source phase-space sampling with direction, position, wavelength, weight, and polarization
+  provenance.
+- Canonical source/sample intersection and entrance refraction.
+- CIF parsing, reciprocal basis, complete physical rod catalogs, and finite ordered/stacked
+  intensities.
+- Wrapped Gaussian/Lorentzian mosaic probability in continuous latent coordinates.
+- Analytic infinite-rod Ewald roots and detector-visible intrinsic coating diagnostics.
+- Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
+- Incoherent source/wavelength/phase summation before deterministic detector box integration.
+- Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
+- NumPy proof, compiled CPU, and CUDA detector evaluators.
+- Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
-The forward model is built and proved first so every later fit changes only the parameters intended for that stage.
+## Current result boundary
 
-## Phase 0: bootstrap
+The authoritative output is either:
 
-Included:
+- `raw_detector_coordinate_density_A2_per_px2.v1` at arbitrary floating coordinates; or
+- its finite native-pixel integral `raw_detector_pixel_mass_A2.v1`.
 
-- greenfield `src/` package layout
-- shared units, frames, coordinate types, event IDs, and validity codes
-- shared rigid-transform, complex-normal-wavevector branch selection, and scalar-interface primitives
-- exact OSC raw-to-detector-native mapping
-- proof CLI and stage-trace schema
-- diagnostic writer that rejects repository-local output
-- synthetic no-physics pipeline crossing every branch contract
-- locked dependency and import policy
+The optional reciprocal-space, Ewald-coating, and detector PNGs are display artifacts evaluated from
+these functions. They are not stored model state.
 
-## Phase 1: immutable tracked reference verification
+## Deferred work
 
-Included:
+- Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
+- Multiple scattering, extinction, and full distorted-wave off-specular fields.
+- Multi-phase optical environments beyond the declared single-film model.
+- Stable experimental peak/rod association and detector-native staged fitting.
+- Caking and reciprocal remapping after detector-native fitting is validated.
+- Optional bounded approximations for fitting, admitted only with observable error bounds.
 
-- one pinned original-RASIM environment record
-- deterministic explicit inputs
-- subsystem and tiny end-to-end intermediate traces
-- one tracked read-only `.npz` pack with one JSON manifest
-- source and pack hashes committed in `reference/reference_manifest.toml`
+## Phase discipline
 
-No physics branch creates or edits legacy evidence.
-
-## Phase 2: four parallel forward worktrees
-
-Included:
-
-### Geometry and optics
-
-- OSC decoding and high-range pixels
-- instrument configuration and rigid poses
-- sample and footprint intersection
-- detector intersection and continuous detector coordinates
-- entrance and exit refraction
-- scalar field-amplitude Fresnel factors
-- absorption, evanescence, and manuscript uniform-depth attenuation
-
-### Mosaic and Ewald
-
-- fixed-seed empirical source and wavelength samples under declared correlations
-- Gaussian-plus-Lorentzian mosaic distribution
-- correct spherical probability measure
-- deterministic/adaptive valid-candidate support, Ewald residuals, and reciprocal mass
-
-### Ordered rods and reflectivity
-
-- CIF parsing, symmetry, occupancy, displacement, and atomic factors
-- wavelength-dependent material optics
-- complete individual `(h,k)` rod catalog with exact radial-family metadata
-- arbitrary-`Qz` complex amplitudes and finite ordered stacks
-- pure Parratt, pure kinematic, and named manuscript/legacy composite outputs
-
-### Stacking transition
-
-- `F+` and `F-` consuming contracts
-- full six-state and exact reduced transition calculations
-- direct finite-sequence and pair-sum oracles
-- finite-stack intensity, parent-rich models, and explicit normalization
-
-Excluded from the four worktrees:
-
-- all optimization and fitting
-- final rod/branch association
-- detector deposition and final image assembly
-- caking, `2theta/phi`, and reciprocal-space remapping
-- GUI code
-- production acceleration frameworks
-
-## Phase 3: review and native-detector integration
-
-Included:
-
-- automated contract and trace review
-- read-only scientific review
-- one-at-a-time vertical integration
-- exact factor ownership and complete-pool selection
-- conservative non-square detector deposition
-- ordered and stacking substitution through one event-aligned interface
-- one tiny end-to-end native-detector proof
-- integrated profiling and production-path recommendation
-
-## Phase 4: selection and fit foundation
-
-Included only after Phase 3 passes:
-
-- immutable rod, radial-family, reflection-group, and branch identities
-- exact hexagonal `m` identity and general-cell reciprocal-metric identity
-- physical signed-azimuth branch rule with explicit deadband
-- measured peak and ROI association with ambiguity rejection
-- versioned selection manifests
-- fit parameter, dataset, objective, result, provenance, and invalidation contracts
-- deterministic sampling during optimization
-- explicit data likelihood, mask, variance, scale, background, and data/model correction semantics
-
-Selection is versioned outside the optimizer. Geometry may trigger a new selection manifest only between optimization runs.
-
-## Phase 5: staged fitting
-
-Included in this order:
-
-1. source and wavelength characterization
-2. detector geometry calibration
-3. sample and goniometer geometry fit with frozen associations
-4. association revalidation
-5. mosaic fit with source and geometry fixed
-6. ordered intensity fit with geometry and mosaic fixed
-7. stacking-disorder fit with the ordered baseline fixed
-
-Initial objectives operate in detector-native coordinates. Compiled forward stages are reused according to an explicit invalidation graph.
-
-## Later phases
-
-Deferred until native-detector fits pass:
-
-- `2theta/phi` caking
-- reciprocal-space remapping
-- selected `Qz` profiles derived from signal and normalization fields
-- optional final joint polish after staged stability
-- full multilayer off-specular distorted fields
-- graded rough-interface fields
-- calibrated absolute flux, detector quantum efficiency, gain, dead time, saturation, global background, beamstop, and bad-pixel response
-- multiple scattering and extinction
-- vector polarization-resolved distorted-wave calculations
-- GUI work
-- saved-session migration
-- multi-GPU execution
-
-A later caking implementation must consume the same frozen rod and branch identities and must not redefine them.
+New work starts from current `main` in an isolated `codex/` worktree. A change owns a narrow set of
+contracts, proves its first divergent stage, retains only tests for distinct long-term invariants,
+places diagnostics outside the repository, and ends with one clean commit. Historical numbered task
+files remain provenance; this document and the live contracts describe the current runtime.

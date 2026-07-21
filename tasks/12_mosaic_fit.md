@@ -1,6 +1,9 @@
 # T12: mosaic fit
 
-Status: FUTURE. Begin after accepted T11 geometry and stable selection.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against the contract-v9
+continuous detector boundary before implementation.
 
 Branch: `feat/mosaic-fit`
 
@@ -61,7 +64,7 @@ git diff --check
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 

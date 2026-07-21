@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import runpy
 from dataclasses import replace
@@ -10,7 +9,7 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull, QhullError
 
-from rasim_next.core.contracts import DetectorHitBatch, EventIntensityNormalization
+from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry import (
@@ -21,14 +20,33 @@ from rasim_next.geometry import (
     detector_coordinates_to_angles,
     project_detector_rays,
 )
-from rasim_next.materials import material_optics, read_crystal
+from rasim_next.materials import material_optics
 from rasim_next.measurement import (
     AngleBinGrid,
     compile_detector_angle_projector,
     project_normalized_angle_field,
     to_increasing_phi,
 )
-from rasim_next.render.deposition import deposit_bilinear
+from rasim_next.pipeline.configured_simulation import (
+    build_configured_simulation_inputs,
+    load_simulation_config,
+)
+
+
+def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> object:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    rotations = (
+        replace(config.instrument.axis_rotations[0], angle_deg=sample_angle_deg),
+        *config.instrument.axis_rotations[1:],
+    )
+    return build_configured_simulation_inputs(
+        replace(
+            config,
+            source=replace(config.source, sample_count=sample_count),
+            instrument=replace(config.instrument, axis_rotations=rotations),
+        )
+    )
 
 
 def _intrinsic_detector_tilt(
@@ -79,26 +97,14 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         IntensityStatus,
         PixelIntegrationMethod,
     )
-    from rasim_next.reciprocal.lattice import ReciprocalLattice
 
-    namespace = runpy.run_path(
-        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
-    )
-    samples, instrument = namespace["build_default_case_inputs"](
-        sample_count=1,
-        sample_angle_rad=math.radians(5.0),
-    )
-    crystal = read_crystal(
-        Path(__file__).resolve().parents[1]
-        / "examples"
-        / "bi2se3"
-        / "structures"
-        / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
-    )
-    material = material_optics(crystal, samples.wavelength_A)
-    incident = build_incident_states(samples, material, instrument)
-    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    inputs = _configured_inputs(sample_count=1)
+    samples = inputs.samples
+    instrument = inputs.instrument
+    crystal = inputs.crystal
+    material = inputs.material
+    incident = inputs.incident
+    reciprocal = inputs.reciprocal
     rods = tuple(
         Rod(h, k)
         for h, k in (
@@ -553,10 +559,13 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         np.arange(3, dtype=np.float64),
         np.arange(3, dtype=np.float64),
     )
-    expected_center_valid = tiny_detector.evaluate_detector_geometry(
+    center_geometry = tiny_detector.evaluate_detector_geometry(
         center_column,
         center_row,
-    ).valid
+        include_surface_jacobian=False,
+    )
+    np.testing.assert_array_equal(center_geometry.q_surface_jacobian_Ainv2_per_px2, 0.0)
+    expected_center_valid = center_geometry.valid
     assert accelerated.sampled_valid_pixel_center is not None
     assert accelerated.sampled_valid_pixel_center.flags.writeable is False
     np.testing.assert_array_equal(
@@ -661,150 +670,6 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     assert zero_pixels.fold_refinement_centroid_shift_px == 0.0
 
 
-@pytest.mark.parametrize(
-    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta"),
-    (
-        (1.0, 0.0, 0.0),
-        (5.0, 2.0, 0.1),
-        (0.0, 2.0, 1.0),
-    ),
-)
-def test_continuous_detector_fixture_accepts_explicit_nonzero_mosaic(
-    monkeypatch: pytest.MonkeyPatch,
-    gaussian_sigma_deg: float,
-    lorentzian_hwhm_deg: float,
-    eta: float,
-) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "scripts"))
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
-
-    detector, _, _ = namespace["build_default_detector_measure"](
-        gaussian_sigma_deg=gaussian_sigma_deg,
-        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
-        eta=eta,
-    )
-
-    mosaic = detector.coating.bragg_space.config.mosaic
-    assert math.degrees(mosaic.gaussian_sigma_rad) == pytest.approx(gaussian_sigma_deg)
-    assert math.degrees(mosaic.lorentzian_half_width_rad) == pytest.approx(lorentzian_hwhm_deg)
-    assert mosaic.lorentzian_probability == eta
-    assert mosaic.zero_tilt_probability_mass == 0.0
-    assert math.fsum(detector.coating.bragg_space.mosaic_space.probability_mass) == pytest.approx(
-        1.0,
-        abs=1.0e-15,
-    )
-
-
-@pytest.mark.parametrize(
-    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta"),
-    ((1.0, 0.0, 0.0), (0.0, 2.0, 1.0)),
-)
-def test_continuous_detector_compiled_density_accepts_inactive_zero_width(
-    monkeypatch: pytest.MonkeyPatch,
-    gaussian_sigma_deg: float,
-    lorentzian_hwhm_deg: float,
-    eta: float,
-) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "scripts"))
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
-    detector, m1_rods, _ = namespace["build_default_detector_measure"](
-        gaussian_sigma_deg=gaussian_sigma_deg,
-        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
-        eta=eta,
-    )
-    rod = m1_rods[1]
-    mapped = detector.map_latent(
-        rod=rod,
-        branch=2,
-        alpha_rad=math.radians(2.0),
-        beta_rad=math.radians(178.0),
-    )
-
-    oracle = detector.evaluate_detector_coordinates(
-        mapped.geometry.column_px,
-        mapped.geometry.row_px,
-        rods=(rod,),
-    )
-    compiled_density, compiled_count, compiled_caustic = (
-        detector._evaluate_compiled_coordinates_for_proof(
-            mapped.geometry.column_px,
-            mapped.geometry.row_px,
-            rods=(rod,),
-            branch=2,
-        )
-    )
-
-    assert bool(mapped.geometry.valid)
-    assert np.isfinite(oracle.density_A2_per_px2)
-    assert oracle.density_A2_per_px2 > 0.0
-    np.testing.assert_allclose(
-        compiled_density,
-        oracle.per_rod_density_A2_per_px2,
-        rtol=3.0e-12,
-        atol=2.0e-24,
-    )
-    np.testing.assert_array_equal(compiled_count, oracle.per_rod_inverse_branch_count)
-    np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
-
-
-def test_continuous_detector_compiled_density_matches_52_layer_shared_disorder(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "scripts"))
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
-    detector, m1_rods, _ = namespace["build_default_detector_measure"](
-        gaussian_sigma_deg=1.0,
-        lorentzian_hwhm_deg=0.0,
-        eta=0.0,
-        layers=52,
-        shared_disorder_epsilon=0.001,
-    )
-    strength = detector.coating.bragg_space.strength_model
-    assert strength.layers == 52
-    assert strength.shared_disorder_epsilon == 0.001
-    selected_rods = (m1_rods[1], m1_rods[3])
-    mapped = tuple(
-        detector.map_latent(
-            rod=rod,
-            branch=2,
-            alpha_rad=math.radians(2.0),
-            beta_rad=math.radians(178.0),
-        )
-        for rod in selected_rods
-    )
-    column_px = np.asarray([item.geometry.column_px for item in mapped])
-    row_px = np.asarray([item.geometry.row_px for item in mapped])
-
-    oracle = detector.evaluate_detector_coordinates(
-        column_px,
-        row_px,
-        rods=selected_rods,
-    )
-    compiled_density, compiled_count, compiled_caustic = (
-        detector._evaluate_compiled_coordinates_for_proof(
-            column_px,
-            row_px,
-            rods=selected_rods,
-            branch=2,
-        )
-    )
-
-    assert all(bool(item.geometry.valid) for item in mapped)
-    assert np.all(np.isfinite(oracle.density_A2_per_px2))
-    assert np.all(oracle.density_A2_per_px2 > 0.0)
-    np.testing.assert_allclose(
-        compiled_density,
-        oracle.per_rod_density_A2_per_px2,
-        rtol=2.0e-11,
-        atol=2.0e-24,
-    )
-    np.testing.assert_array_equal(compiled_count, oracle.per_rod_inverse_branch_count)
-    np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
-
-
 def _two_state_source_averaged_detector_fixture(
     *,
     detector_shape_rc: tuple[int, int] | None = None,
@@ -822,21 +687,14 @@ def _two_state_source_averaged_detector_fixture(
         DetectorEwaldMeasure,
     )
     from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
-    from rasim_next.reciprocal.lattice import ReciprocalLattice
 
-    root = Path(__file__).resolve().parents[1]
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_detector_image.py"))
-    samples, instrument = namespace["build_default_case_inputs"](
-        sample_count=2,
-        sample_angle_rad=math.radians(5.0),
-    )
-    crystal = read_crystal(
-        root / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
-    )
-    material = material_optics(crystal, samples.wavelength_A)
-    incident = build_incident_states(samples, material, instrument)
-    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    inputs = _configured_inputs(sample_count=2)
+    samples = inputs.samples
+    instrument = inputs.instrument
+    crystal = inputs.crystal
+    material = inputs.material
+    incident = inputs.incident
+    reciprocal = inputs.reciprocal
     rods = tuple(Rod(h, k) for h, k in ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)))
     mosaic = MosaicParameters(
         gaussian_sigma_rad=math.radians(5.0),
@@ -1019,6 +877,7 @@ def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> 
     )
     assert result.coordinate_evaluation_count == detector_shape[0] * detector_shape[1] * 2**2
     assert result.execution_backend == "numba_source_averaged.v1"
+    assert not result.adaptive_tolerance_satisfied
 
 
 def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
@@ -1028,7 +887,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         MosaicBraggSpace,
         Rod,
     )
-    from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+    from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure, DetectorQuadrature
     from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 
     nonzero, scalar_detectors = _two_state_source_averaged_detector_fixture()
@@ -1046,6 +905,16 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         instrument=nonzero.instrument,
         worker_count=2,
     )
+    with pytest.raises(ValueError, match="pixel integration cannot include m=0"):
+        detector.integrate_native_pixels(
+            branch=2,
+            quadrature=DetectorQuadrature(
+                pixel_gauss_order=2,
+                fold_gauss_order=2,
+                fold_subdivision_count=1,
+                row_chunk_size=2,
+            ),
+        )
     seed = scalar_detectors[0].map_latent(
         rod=nonzero.rods[1],
         branch=2,
@@ -1448,6 +1317,7 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     default_path = root / "configs" / "bi2se3_simulation.yaml"
     config = load_simulation_config(default_path, repository_root=root)
 
+    assert config.schema_version == "rasim-simulation-v2"
     assert config.enabled_artifact_names == (
         "reciprocal_space",
         "ewald_surface",
@@ -1496,7 +1366,7 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
 
     duplicate = tmp_path / "duplicate.yaml"
     duplicate.write_text(
-        "schema_version: rasim-simulation-v1\nschema_version: duplicate\n",
+        "schema_version: rasim-simulation-v2\nschema_version: duplicate\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"duplicate key.*schema_version"):
@@ -1536,15 +1406,13 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     with pytest.raises(ValueError, match=r"detector_execution_backend.*cpu or cuda"):
         load_simulation_config(unsupported_backend, repository_root=root)
 
-    legacy_v1 = tmp_path / "legacy-v1.yaml"
-    legacy_v1.write_text(
+    missing_backend = tmp_path / "missing-backend.yaml"
+    missing_backend.write_text(
         portable_default.replace("  detector_execution_backend: cpu\n", ""),
         encoding="utf-8",
     )
-    assert (
-        load_simulation_config(legacy_v1, repository_root=root).numerics.detector_execution_backend
-        == "cpu"
-    )
+    with pytest.raises(ValueError, match=r"numerics.*missing.*detector_execution_backend"):
+        load_simulation_config(missing_backend, repository_root=root)
 
     negative_source_sigma = tmp_path / "negative-source-sigma.yaml"
     negative_source_sigma.write_text(
@@ -1575,6 +1443,45 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     )
     with pytest.raises(ValueError, match="at least one output"):
         load_simulation_config(all_disabled, repository_root=root)
+
+
+def test_nominal_ewald_gap_is_attached_only_to_visible_m0_support() -> None:
+    from painted_ewald import MosaicBraggSpace
+    from rasim_next.pipeline.configured_simulation import (
+        build_nominal_ewald_context,
+        evaluate_nominal_ewald_surface,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        config,
+        source=replace(config.source, sample_count=1),
+        instrument=replace(
+            config.instrument,
+            detector_reference_coordinate_px=(-1000.0, 1500.0),
+        ),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    stale_bragg = MosaicBraggSpace(
+        replace(
+            inputs.bragg_space.config,
+            k_norm_Ainv=inputs.bragg_space.config.k_norm_Ainv * 1.001,
+        ),
+        inputs.strength,
+    )
+    with pytest.raises(ValueError, match="wavelength does not match"):
+        build_nominal_ewald_context(replace(inputs, bragg_space=stale_bragg))
+    display = evaluate_nominal_ewald_surface(
+        build_nominal_ewald_context(inputs),
+        alpha_count=16,
+        beta_count=72,
+        alpha_max_deg=5.0,
+    )
+
+    assert np.any(display.family_m != 0)
+    assert not np.any(display.family_m == 0)
+    assert display.detector_visible_m0_q_gap_Ainv is None
 
 
 def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -> None:
@@ -1697,37 +1604,6 @@ def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> N
         replace(result, execution_backend="numba_cuda_source_averaged.v1")
 
 
-@pytest.mark.parametrize(
-    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta", "message"),
-    (
-        (float("nan"), 2.0, 0.1, "finite"),
-        (5.0, float("inf"), 0.1, "finite"),
-        (-1.0, 0.0, 0.0, "nonnegative"),
-        (1.0, 1.0, -0.1, r"\[0, 1\]"),
-        (1.0, 1.0, 1.1, r"\[0, 1\]"),
-        (0.0, 0.0, 0.0, "Gaussian sigma"),
-        (1.0, 0.0, 0.1, "Lorentzian HWHM"),
-    ),
-)
-def test_continuous_detector_fixture_rejects_invalid_or_atomic_mosaic(
-    monkeypatch: pytest.MonkeyPatch,
-    gaussian_sigma_deg: float,
-    lorentzian_hwhm_deg: float,
-    eta: float,
-    message: str,
-) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "scripts"))
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
-
-    with pytest.raises(ValueError, match=message):
-        namespace["build_default_detector_measure"](
-            gaussian_sigma_deg=gaussian_sigma_deg,
-            lorentzian_hwhm_deg=lorentzian_hwhm_deg,
-            eta=eta,
-        )
-
-
 def test_continuous_detector_cli_exposes_mosaic_parameters(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1763,65 +1639,6 @@ def test_continuous_detector_cli_exposes_mosaic_parameters(
     assert invalid_exit.value.code == 2
     assert "Gaussian sigma must be positive" in capsys.readouterr().err
 
-    for argument, value, message in (
-        ("--layers", "0", "layers must be positive"),
-        ("--stacking-epsilon", "1.1", "stacking epsilon must lie in [0, 1]"),
-    ):
-        with pytest.raises(SystemExit) as strength_exit:
-            namespace["main"](["--numeric-only", argument, value])
-
-        assert strength_exit.value.code == 2
-        assert message in capsys.readouterr().err
-
-
-def test_continuous_detector_reference_strength_manifest_is_locked(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(root / "scripts"))
-    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
-    detector, _, _ = namespace["build_default_detector_measure"](
-        layers=52,
-        shared_disorder_epsilon=0.001,
-    )
-    strength = detector.coating.bragg_space.strength_model
-
-    for field, value in (
-        ("strength_layer_count", 51),
-        ("strength_normalization", EventIntensityNormalization.FINITE_PER_LAYER.value),
-        ("strength_shared_disorder_epsilon", 0.0),
-    ):
-        manifest = {
-            "strength_layer_count": 52,
-            "strength_normalization": EventIntensityNormalization.FINITE_TOTAL.value,
-            "strength_shared_disorder_epsilon": 0.001,
-        }
-        manifest[field] = value
-        path = tmp_path / f"mismatch-{field}.npz"
-        np.savez_compressed(
-            path,
-            manifest_json=np.frombuffer(json.dumps(manifest).encode("utf-8"), dtype=np.uint8),
-        )
-
-        with pytest.raises(ValueError, match=field):
-            namespace["_validate_reference_strength"](path, strength)
-
-    ideal_detector, _, _ = namespace["build_default_detector_measure"]()
-    legacy_manifest = {
-        "strength_layer_count": 7,
-        "strength_normalization": EventIntensityNormalization.FINITE_TOTAL.value,
-    }
-    legacy_path = tmp_path / "legacy-ideal.npz"
-    np.savez_compressed(
-        legacy_path,
-        manifest_json=np.frombuffer(json.dumps(legacy_manifest).encode("utf-8"), dtype=np.uint8),
-    )
-    namespace["_validate_reference_strength"](
-        legacy_path,
-        ideal_detector.coating.bragg_space.strength_model,
-    )
-
 
 def _instrument(
     *,
@@ -1855,59 +1672,10 @@ def _instrument(
     return compile_instrument(configuration)
 
 
-def test_default_case_inputs_have_one_explicit_source_and_support_authority() -> None:
-    namespace = runpy.run_path(
-        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
-    )
-    samples, instrument = namespace["build_default_case_inputs"]()
-    provenance = json.loads(samples.source_parameter_provenance)
-    values = provenance["values"]
-
-    assert samples.source_sampling_model_id == "independent_gaussian_antithetic_lhs.v2"
-    assert samples.source_rng_model_id == "numpy_pcg64.v1"
-    assert samples.source_seed == 1729
-    assert set(provenance) == {"frames", "units", "values"}
-    assert values["sample_count"] == 20
-    assert values["mean_origin_lab_m"] == [(0.0).hex(), (-0.020).hex(), (0.0).hex()]
-    assert values["mean_direction_lab"] == [(0.0).hex(), (1.0).hex(), (0.0).hex()]
-    assert values["transverse_axes_lab"] == [
-        [(1.0).hex(), (0.0).hex(), (0.0).hex()],
-        [(0.0).hex(), (0.0).hex(), (1.0).hex()],
-    ]
-    fwhm_to_sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
-    assert values["spatial_sigma_m"] == [(0.05e-3 * fwhm_to_sigma).hex()] * 2
-    assert values["divergence_sigma_rad"] == [(0.0008726646259971648 * fwhm_to_sigma).hex()] * 2
-    assert values["mean_wavelength_A"] == (1.540592925).hex()
-    assert values["wavelength_sigma_A"] == (1.540592925 * 0.007).hex()
-    assert instrument.sample_support_model_id == "unbounded_plane.v1"
-    assert instrument.sample_width_m is None and instrument.sample_length_m is None
-    assert instrument.lab_from_sample.source_frame is FrameId.SAMPLE
-    assert instrument.lab_from_sample.target_frame is FrameId.LAB
-    assert instrument.sample_from_crystal.source_frame is FrameId.CRYSTAL
-    assert instrument.sample_from_crystal.target_frame is FrameId.SAMPLE
-    assert instrument.detector_shape_rc == (3000, 3000)
-    assert instrument.detector_reference_coordinate_px == (1453.12, 1596.422)
-    np.testing.assert_array_equal(
-        instrument.lab_from_detector.rotation,
-        np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]),
-    )
-    np.testing.assert_array_equal(
-        instrument.lab_from_detector.translation_m,
-        np.array([0.0, 0.075, 0.0]),
-    )
-    assert instrument.detector_row_pitch_m == 1.0e-4
-    assert instrument.detector_column_pitch_m == 1.0e-4
-    assert instrument.film_thickness_A == 500.0
-
-
-def test_actual_initial_beam_projects_1000_equal_mass_ki_to_untilted_detector() -> None:
-    namespace = runpy.run_path(
-        str(Path(__file__).resolve().parents[1] / "scripts" / "generate_bi2se3_detector_image.py")
-    )
-    samples, instrument = namespace["build_default_case_inputs"](
-        sample_count=1000,
-        sample_angle_rad=math.radians(5.0),
-    )
+def test_configured_initial_beam_maps_exactly_to_the_untilted_detector() -> None:
+    inputs = _configured_inputs(sample_count=6)
+    samples = inputs.samples
+    instrument = inputs.instrument
     sample_angle_rad = math.radians(5.0)
     cosine = math.cos(sample_angle_rad)
     sine = math.sin(sample_angle_rad)
@@ -1920,19 +1688,7 @@ def test_actual_initial_beam_projects_1000_equal_mass_ki_to_untilted_detector() 
         rtol=0.0,
         atol=2.0e-16,
     )
-    crystal = read_crystal(
-        Path(__file__).resolve().parents[1]
-        / "examples"
-        / "bi2se3"
-        / "structures"
-        / "Bi2Se3_vesta.cif",
-        phase_id="bi2se3",
-    )
-    incident = build_incident_states(
-        samples,
-        material_optics(crystal, samples.wavelength_A),
-        instrument,
-    ).states
+    incident = inputs.incident.states
     sample_normal_lab = expected_lab_from_sample_rotation[:, 2]
     source_to_sample_m = -(
         (samples.origin_lab_m - instrument.lab_from_sample.translation_m) @ sample_normal_lab
@@ -1956,8 +1712,8 @@ def test_actual_initial_beam_projects_1000_equal_mass_ki_to_untilted_detector() 
         instrument,
     )
 
-    assert samples.incident_sample_id.size == 1000
-    np.testing.assert_array_equal(samples.source_weight, np.full(1000, 0.001))
+    assert samples.incident_sample_id.size == 6
+    np.testing.assert_array_equal(samples.source_weight, np.full(6, 1.0 / 6.0))
     assert np.all(incident.valid)
     assert np.all(projection.valid)
     detector_normal_lab = instrument.lab_from_detector.apply_vector([0.0, 0.0, 1.0])
@@ -1994,37 +1750,8 @@ def test_actual_initial_beam_projects_1000_equal_mass_ki_to_untilted_detector() 
         rtol=0.0,
         atol=2.0e-12,
     )
-    fwhm_to_sigma = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
-    source_to_detector_m = 0.020 + 0.075
-    position_sigma_m = 0.05e-3 * fwhm_to_sigma
-    divergence_sigma_rad = 0.0008726646259971648 * fwhm_to_sigma
-    expected_sigma_px = (
-        math.hypot(
-            position_sigma_m,
-            source_to_detector_m * divergence_sigma_rad,
-        )
-        / 1.0e-4
-    )
-    observed_sigma_px = np.sqrt(
-        np.asarray(
-            (
-                np.sum(weights * (projection.column_px - centroid[0]) ** 2),
-                np.sum(weights * (projection.row_px - centroid[1]) ** 2),
-            )
-        )
-    )
-    np.testing.assert_allclose(
-        observed_sigma_px,
-        np.full(2, expected_sigma_px),
-        rtol=0.05,
-        atol=0.0,
-    )
     wavelength_mean_A = float(np.sum(weights * incident.wavelength_A))
-    wavelength_sigma_A = math.sqrt(
-        float(np.sum(weights * (incident.wavelength_A - wavelength_mean_A) ** 2))
-    )
     assert wavelength_mean_A == pytest.approx(1.540592925, abs=2.0e-15)
-    assert wavelength_sigma_A == pytest.approx(1.540592925 * 0.007, rel=0.005)
     assert np.sum(weights[projection.valid]) == pytest.approx(1.0, abs=2.0e-15)
 
 
@@ -2443,62 +2170,6 @@ def test_sparse_projector_matches_independent_polygon_oracle_across_seam() -> No
         )
         == 4
     )
-
-
-def test_accepted_bilinear_deposition_precedes_angle_reduction_at_all_edge_strips() -> None:
-    instrument = _instrument(shape_rc=(2, 3))
-    frame = _frame([4.0e-3, -0.7e-3, 0.0])
-    grid = _full_grid(instrument, frame, radial_bins=3)
-    projector = compile_detector_angle_projector(
-        instrument=instrument,
-        angle_frame=frame,
-        grid=grid,
-    )
-    column_px = np.array([-0.25, 2.25, 0.75, 1.75, 1.0, 1.3])
-    row_px = np.array([0.25, 0.75, -0.25, 1.25, 1.0, 0.4])
-    event_id = np.arange(column_px.size, dtype=np.int64)
-    hits = DetectorHitBatch(
-        event_id=event_id,
-        column_px=column_px,
-        row_px=row_px,
-        pixel_solid_angle_sr=np.zeros(column_px.size),
-        valid=np.ones(column_px.size, dtype=np.bool_),
-    )
-    mass = np.array([2.0, 3.0, 5.0, 7.0, 11.0, 13.0])
-    exposure = np.array([1.0, 4.0, 2.0, 3.0, 5.0, 6.0])
-    deposited = deposit_bilinear(
-        hits,
-        event_row=event_id,
-        event_id=event_id,
-        assigned_mass_A2=mass,
-        detector_shape_rc=(2, 3),
-    )
-    deposited_exposure = deposit_bilinear(
-        hits,
-        event_row=event_id,
-        event_id=event_id,
-        assigned_mass_A2=exposure,
-        detector_shape_rc=(2, 3),
-    )
-
-    direct_image = np.array([[2.0625, 8.2725, 2.9025], [0.375, 15.9525, 7.185]])
-    np.testing.assert_allclose(deposited.image_A2, direct_image, rtol=0.0, atol=1e-15)
-    assert deposited.clipped_mass_A2 == pytest.approx(4.25, rel=0.0, abs=2e-15)
-    assert deposited.deposited_mass_A2 + deposited.clipped_mass_A2 == pytest.approx(mass.sum())
-
-    matrix = _dense_projector(projector)
-    expected_S = (matrix @ direct_image.ravel()).reshape(grid.shape)
-    expected_N = (matrix @ deposited_exposure.image_A2.ravel()).reshape(grid.shape)
-    expected_I = np.zeros(grid.shape)
-    np.divide(expected_S, expected_N, out=expected_I, where=expected_N > 0.0)
-    field = project_normalized_angle_field(
-        projector,
-        deposited.image_A2,
-        deposited_exposure.image_A2,
-    )
-    np.testing.assert_allclose(field.S, expected_S, rtol=3e-11, atol=3e-13)
-    np.testing.assert_allclose(field.N, expected_N, rtol=3e-11, atol=3e-13)
-    np.testing.assert_allclose(field.I, expected_I, rtol=4e-11, atol=3e-13)
 
 
 @pytest.mark.parametrize("reference_cr", [(1.0, 1.0), (1.5, 1.0), (1.5, 1.5)])

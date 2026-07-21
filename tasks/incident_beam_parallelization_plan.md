@@ -1,7 +1,8 @@
 # Incident-beam source-to-film-\(k_i\) execution plan
 
-Status: read-only implementation plan; no production or test implementation is authorized by this
-document. The scope starts with one canonical Monte Carlo source realization and ends when the
+Status: **HISTORICAL ACCEPTED PLAN.** The canonical source-to-film-`ki` boundary is implemented and
+retained by contract API v9; current authority is `docs/CONTRACTS.md`. The scope starts with one
+canonical Monte Carlo source realization and ends when the
 authoritative `IncidentStateBatch` owns `k_film_phase_sample_Ainv` and its aligned incident payload.
 It excludes Ewald/coating work, outgoing \(k_f\), detector projection, deposition, and fitting.
 

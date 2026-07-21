@@ -1,6 +1,9 @@
 # T15: later caking and reciprocal-space measurement transform
 
-Status: DEFERRED. Begin only after T14 and native-detector fit validation.
+Status: `DEFERRED_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against the accepted
+contract-v9 detector measures after the fitting stages are redesigned.
 
 Branch: `feat/caking-qspace`
 

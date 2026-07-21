@@ -1,6 +1,9 @@
 # T14: stacking-disorder intensity fit
 
-Status: FUTURE. Begin after accepted T13 ordered baseline.
+Status: `NEEDS_REPLAN`.
+
+This is a historical design note, not an executable task. Replan it against contract v9; references
+to event geometry, hits, or detector response do not authorize restoring deleted APIs.
 
 Branch: `feat/stacking-intensity-fit`
 
@@ -36,7 +39,7 @@ manuscript
 - retain the symmetry-related branch for validation when available
 - consume detector-native selected regions or event-aligned `Qz` observations without requiring caking
 - freeze source, geometry, mosaic, lattice, motif amplitudes, material optics, and ordered baseline
-- reuse event geometry and detector response
+- reuse analytic root geometry and continuous detector-coordinate response
 - fit typed transition parameters and declared incoherent parent populations
 - do not fit independent peak amplitudes before the stacking model
 
@@ -60,7 +63,7 @@ git diff --check
 
 ## Execution plan
 
-State: FUTURE
+State: NEEDS_REPLAN
 
 ## Handoff
 
