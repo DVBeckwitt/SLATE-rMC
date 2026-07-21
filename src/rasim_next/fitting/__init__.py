@@ -1,6 +1,8 @@
 """Detector-native geometric fitting interfaces."""
 
 from rasim_next.fitting.geometry import (
+    ContinuousDetectorFunction,
+    ContinuousDetectorGeometryModel,
     GeometryCorrectionBounds,
     GeometryCorrections,
     GeometryFitResult,
@@ -11,11 +13,17 @@ from rasim_next.fitting.geometry import (
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
     IntegerLSelectionAudit,
+    M0IntegerLObservations,
+    M0IntegerLPrediction,
     audit_integer_l_marker_selection,
+    evaluate_tagged_geometry_objective_residual,
     fit_integer_l_marker_geometry,
+    fit_tagged_detector_function_geometry,
 )
 
 __all__ = [
+    "ContinuousDetectorFunction",
+    "ContinuousDetectorGeometryModel",
     "GeometryCorrectionBounds",
     "GeometryCorrections",
     "GeometryFitResult",
@@ -26,6 +34,10 @@ __all__ = [
     "IntegerLMarkerObservations",
     "IntegerLMarkerPrediction",
     "IntegerLSelectionAudit",
+    "M0IntegerLObservations",
+    "M0IntegerLPrediction",
     "audit_integer_l_marker_selection",
+    "evaluate_tagged_geometry_objective_residual",
     "fit_integer_l_marker_geometry",
+    "fit_tagged_detector_function_geometry",
 ]

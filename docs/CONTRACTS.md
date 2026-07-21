@@ -115,22 +115,64 @@ weights are preserved; wavelength-dependent evaluators are never collapsed geome
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
 
-## Exact integer-L geometry fitting
+## Exact integer-L tagged detector-function fitting
 
-`IntegerLGeometryModel` predicts arbitrary frozen non-specular integer-L sites without evaluating
-their intensities. `IntegerLMarkerKey` fixes `(m, L, Ewald branch, beta-root sign, representative
-physical rod)` throughout the objective; missing, tangent, or branch-changing roots fail instead of
-being reassigned. `IntegerLMarkerObservations` stores native `(column_px,row_px)` coordinates and one
-positive-definite 2-by-2 covariance per site.
+`ContinuousDetectorGeometryModel.bind(...)` returns an immutable callable detector field
+`D(column_px,row_px)`. Reference and trial fields remain functions; fitting does not rasterize,
+pixel-integrate, or evaluate a detector-domain quadrature. Exact tags are associated landmarks on
+each field's continuous detector-coordinate domain. They are not scalar-density maxima or
+intensity centroids.
 
-`fit_integer_l_marker_geometry(...)` minimizes covariance-whitened native-coordinate residuals with
-bounded TRF least squares. Its accepted single-5-degree parameterization applies active intrinsic
-local-x then current-local-y rotations relative to the frozen base poses:
+All tags use exactly one deterministic incident companion state with source-center origin, zero
+divergence, and mean wavelength (`nominal_source_center.zero_divergence.mean_wavelength.v1`). The
+Monte Carlo source index is not part of tag identity, so a 1,000-state detector field still has
+one tag per visible user-facing `(m,L,tag_branch)`. The companion state traverses the same
+incident transport, Ewald, exit-refraction, and detector-intersection code, but is not inserted as
+an artificial finite-mass delta into the empirical Gaussian source sum.
+
+For nonzero `m`, `IntegerLMarkerKey` freezes `(m, L, Ewald branch, beta-root sign,
+representative physical rod)` and the nominal-source `alpha=0` policy. The two `root_sign` values
+are the two analytic beta-root sides; they are not two Ewald branches. User-facing `tag_branch=1`
+is `root_sign=-1`, and `tag_branch=2` is `root_sign=+1`; the analytic Ewald branch remains separate
+provenance. Exactly one tag is allowed for each `(m,L,tag_branch)`. Missing, tangent, or
+branch-changing roots fail instead of being reassigned. For `m=0`, exact `L` alone leaves a
+continuous orientation curve, so the only admitted landmark policy selects the unique exact-L
+reciprocal-axis direction with minimum mosaic tilt relative to the unmosaicked axis. This is a
+geometry landmark, not a claimed m=0 intensity peak; its user-facing branch is `tag_branch=0`.
+
+An exact landmark may lie on an integrable caustic of the zero-transverse-width detector density.
+The tagged-coordinate observable is still well defined there, but its pointwise scalar intensity
+is not used as a residual. Pixel mass would require the separate native-pixel integration API and
+is deliberately outside this fit.
+
+`fit_tagged_detector_function_geometry(...)` evaluates reference tags from one bound callable and
+trial tags from the same prepared detector-function family. It simultaneously minimizes
+covariance-whitened exact-tag coordinate residuals, fixed-span half-angle residuals between each
+nonzero-m root-side pair, and the total-least-squares m=0 exact-L line angle. There is no centroid
+term. The lower-level `fit_integer_l_marker_geometry(...)` accepts already frozen tagged
+coordinates under the same objective. `evaluate_tagged_geometry_objective_residual(...)` exposes
+that same immutable whitened site-plus-line vector for scientific diagnostics and error injection.
+Its ordering is nonzero coordinate pairs, sorted paired-branch half-angle terms, m=0 coordinate
+pairs, then the m=0 TLS-line half-angle term; m=0 L identities and wavelength must match exactly.
+Both fitters use bounded TRF least squares. The accepted
+single-5-degree parameterization applies active intrinsic local-x then current-local-y rotations
+relative to the frozen base poses:
 
 ```text
 R_detector = R_detector,0 Rx(delta_detector,column) Ry(delta_detector,row)
 R_sample   = R_sample,0   Rx(delta_sample-normal,x) Ry(delta_sample-normal,y)
 ```
+
+Every trial tag rebuilds canonical incident transport, solves the exact Ewald constraint, applies
+exit refraction, and intersects the corrected detector plane. No reciprocal-space point is
+geometrically projected onto an image surrogate.
+
+TRF accepts steps by decrease of the complete coordinate-plus-angle least-squares objective. It
+does not require every individual line angle to decrease at every accepted step. The angle-only
+Jacobian has rank two for this four-parameter fixture, and different tagged lines can request
+conflicting local directions; an angle-monotone projection would therefore discard identifiable
+coordinate information or stall. Exact coordinates provide the missing directions, while the
+reported chord and m=0 angles verify the shared line geometry at the solution.
 
 The detector limits use RA-SIM's direct `(+/-10 deg, +/-10 deg)` pitch/yaw hard shells. The two
 effective sample-normal components conservatively use its `+/-5 deg` angular-correction shell;

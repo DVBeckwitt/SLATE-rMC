@@ -51,8 +51,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
   fields and compiled CPU/CUDA evaluation.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   display-only raster evaluation.
-- `fitting/geometry.py`: frozen exact integer-L marker observations, geometry-only prediction,
-  bounded identifiable pose fitting, rank diagnostics, and post-fit root re-enumeration.
+- `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
+  the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose fitting, rank diagnostics, and post-fit root
+  re-enumeration.
 - `measurement`: later detector-derived coordinate transforms; never part of raw rendering.
 - `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
@@ -65,8 +66,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before the one
    requested detector integration.
 5. `configured_simulation` assembles those objects from one validated YAML document.
-6. `IntegerLGeometryModel` reuses the accepted reciprocal state while rebuilding only canonical
-   incident and detector geometry for each local pose trial.
+6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
+   structure/mosaic state; its associated `IntegerLGeometryModel` rebuilds only canonical incident,
+   exit-refraction, and detector geometry for each exact-L landmark trial.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never
@@ -80,9 +82,11 @@ module-global or import-time side effects.
   detector evaluator state.
 - Detector pose, distance, pitch, shape, or either detector tilt rebuilds detector geometry and its
   compiled evaluator, but not detector-independent structure amplitudes.
-- The exact-marker fitter never evaluates mosaic or structure-factor intensity. Detector/sample
-  pose trials reuse the reciprocal basis, rods, finite-2H model, and mosaic contract; sample-normal
-  trials rebuild the nominal incident transport, and every trial rebuilds exit/detector geometry.
+- The tagged-function fitter never rasterizes either detector field. It fits exact landmarks and
+  their line angles, so it does not need mosaic/SF intensity values, centroids, or detector
+  quadrature. Detector/sample pose trials reuse the reciprocal basis, rods, finite-2H model, and
+  mosaic contract; sample-normal trials rebuild nominal incident transport, and every trial
+  rebuilds exit-refraction/detector geometry.
 - Display limits and colormaps never invalidate physics.
 
 ## Deliberately absent runtime structures

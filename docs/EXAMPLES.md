@@ -50,47 +50,56 @@ the active panel. Each tag declares `m`, integer `L`, and Ewald-root branch; the
 retains the contributing physical `(h,k)` rods and their exact beta coordinates. A center that is
 back-facing or off-panel is deliberately absent even if a nonzero-mosaic tail becomes visible.
 
-## Fit exact integer-L marker positions
+## Fit tagged landmarks between continuous detector functions
 
-After assigning measured detector centers to the displayed physical roots, reuse their frozen keys
-and replace only the native coordinates and covariance:
+Bind the base simulation and every trial as continuous detector functions. The fit uses the exact
+tag identities and their detector-coordinate line geometry; it does not construct an image,
+centroid, pixel integral, or detector quadrature:
 
 ```python
-from dataclasses import replace
-
 from rasim_next.fitting import (
+    ContinuousDetectorGeometryModel,
     GeometryCorrectionBounds,
     GeometryCorrections,
     IntegerLGeometryModel,
     IntegerLMarkerObservations,
     audit_integer_l_marker_selection,
-    fit_integer_l_marker_geometry,
+    fit_tagged_detector_function_geometry,
 )
 
 catalog = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(inputs))
-template = IntegerLMarkerObservations.from_markers(catalog, selection=selected_rows)
-observations = replace(
-    template,
-    coordinates_px=measured_column_row_px,
-    covariance_px2=covariance_px2,
-)
-model = IntegerLGeometryModel(inputs)
-fit = fit_integer_l_marker_geometry(
+keys = IntegerLMarkerObservations.from_markers(
+    catalog,
+    selection=selected_rows,
+).keys
+model = ContinuousDetectorGeometryModel(inputs)
+reference = model.bind(reference_geometry_corrections)
+fit = fit_tagged_detector_function_geometry(
     model,
-    observations,
+    reference,
+    nonzero_keys=keys,
+    m0_integer_L=tuple(range(2, 20)),
+    sigma_px=0.25,
     initial=GeometryCorrections.zero(),
     bounds=GeometryCorrectionBounds.rasim_reduced_pose(),
 )
+fitted = model.bind(fit.corrections)
+tag_model = IntegerLGeometryModel(inputs)
 audit = audit_integer_l_marker_selection(
-    model,
+    tag_model,
     fit.corrections,
     IntegerLMarkerObservations.from_markers(catalog).keys,
 )
 ```
 
-This one-state fit adjusts both detector tilts and the two identifiable components of the effective
-sample normal. It intentionally does not report separate sample-mount and goniometer-axis errors;
-that decomposition requires markers from multiple commanded goniometer angles.
+The nonzero lines join user-facing `tag_branch=1/2`, which retain analytic `root_sign=-1/+1` at
+the same `(m,L,Ewald branch)`; the sides are not separate Ewald branches. The m=0 line uses
+`tag_branch=0` and explicitly named minimum-mosaic-tilt
+exact-L landmarks because `(m=0,L)` alone is a curve. These landmarks are not advertised as
+intensity maxima. The fit adjusts both detector tilts and the two identifiable components of the
+effective sample normal. It intentionally does not report separate sample-mount and
+goniometer-axis errors; that decomposition requires tags from multiple commanded goniometer
+angles.
 
 ## Quantitative one-state pixel diagnostic
 

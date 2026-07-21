@@ -5,13 +5,13 @@ from __future__ import annotations
 import cmath
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import NamedTuple
 
 import numba
 import numpy as np
 import xraydb
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
@@ -102,6 +102,7 @@ class CompiledDetectorState:
                 raise ValueError(f"{name} must be finite with shape {shape}")
             value.setflags(write=False)
             object.__setattr__(self, name, value)
+
         anomalous = np.array(self.anomalous_factor_e, dtype=np.complex128, copy=True, order="C")
         if anomalous.shape != (2,) or not np.all(np.isfinite(anomalous)):
             raise ValueError("anomalous_factor_e must be finite with shape (2,)")
@@ -155,6 +156,66 @@ class CompiledDetectorState:
             if not math.isfinite(value.real) or not math.isfinite(value.imag):
                 raise ValueError(f"{name} must be finite")
             object.__setattr__(self, name, value)
+
+    def rebind_geometry(
+        self,
+        *,
+        detector_zero_lab_m: ArrayLike,
+        detector_column_step_lab_m: ArrayLike,
+        detector_row_step_lab_m: ArrayLike,
+        detector_pixel_area_vector_lab_m2: ArrayLike,
+        ray_origin_lab_m: ArrayLike,
+        sample_from_lab: ArrayLike,
+        ki_film_sample_Ainv: ArrayLike,
+        internal_k_Ainv: float,
+        entrance_amplitude: complex,
+        incident_decay_Ainv: float,
+        source_phase_weight: float,
+    ) -> CompiledDetectorState:
+        """Replace dynamic geometry while sharing validated read-only physics arrays."""
+
+        array_values = {
+            "detector_zero_lab_m": (detector_zero_lab_m, (3,)),
+            "detector_column_step_lab_m": (detector_column_step_lab_m, (3,)),
+            "detector_row_step_lab_m": (detector_row_step_lab_m, (3,)),
+            "detector_pixel_area_vector_lab_m2": (
+                detector_pixel_area_vector_lab_m2,
+                (3,),
+            ),
+            "ray_origin_lab_m": (ray_origin_lab_m, (3,)),
+            "sample_from_lab": (sample_from_lab, (3, 3)),
+            "ki_film_sample_Ainv": (ki_film_sample_Ainv, (3,)),
+        }
+        validated_arrays: dict[str, FloatArray] = {}
+        for name, (supplied, shape) in array_values.items():
+            value = np.array(supplied, dtype=np.float64, copy=True, order="C")
+            if value.shape != shape or not np.all(np.isfinite(value)):
+                raise ValueError(f"{name} must be finite with shape {shape}")
+            value.setflags(write=False)
+            validated_arrays[name] = value
+        scalar_values = {
+            "internal_k_Ainv": float(internal_k_Ainv),
+            "incident_decay_Ainv": float(incident_decay_Ainv),
+            "source_phase_weight": float(source_phase_weight),
+        }
+        if (
+            not all(math.isfinite(value) and value >= 0.0 for value in scalar_values.values())
+            or scalar_values["internal_k_Ainv"] == 0.0
+        ):
+            raise ValueError("rebound geometry scalars must be finite and physically nonnegative")
+        entrance = complex(entrance_amplitude)
+        if not math.isfinite(entrance.real) or not math.isfinite(entrance.imag):
+            raise ValueError("entrance_amplitude must be finite")
+
+        rebound = object.__new__(type(self))
+        for descriptor in fields(self):
+            object.__setattr__(rebound, descriptor.name, getattr(self, descriptor.name))
+        for name, value in validated_arrays.items():
+            object.__setattr__(rebound, name, value)
+        for name, value in scalar_values.items():
+            object.__setattr__(rebound, name, value)
+        object.__setattr__(rebound, "entrance_amplitude", entrance)
+        return rebound
 
 
 def pack_bi2se3_two_h_structure(
@@ -1061,6 +1122,12 @@ class CompiledDetectorEvaluator:
     def __init__(self, state: CompiledDetectorState, detector_shape_rc: tuple[int, int]) -> None:
         self._state = state
         self._detector_shape_rc = detector_shape_rc
+
+    @property
+    def state(self) -> CompiledDetectorState:
+        """Return the immutable numeric state for geometry-only rebinding."""
+
+        return self._state
 
     def _evaluate_with_root_selector(
         self,

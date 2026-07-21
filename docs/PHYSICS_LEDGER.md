@@ -201,8 +201,11 @@ association, multi-angle mechanical decomposition, and intensity fitting remain 
 | PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed, active local four-angle pack |
 | PHY-FIT-002 | independent detector geometry calibration | calibrant and geometry paths | refinement step 2 | fitting | NEW/CORRECTED detector-native |
 | PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; effective sample normal only |
+| PHY-FIT-002B | continuous detector-function exact-tag map from one nominal companion incident state | no single legacy owner | alignment stage | fitting | NEW active; source center, zero divergence, mean wavelength; excluded from empirical source mass |
+| PHY-FIT-002C | paired tag-branch half-angle and m=0 increasing-L TLS-line residuals | caked line/peak geometry objectives | alignment stage | fitting | CORRECTED active simultaneous coordinate-plus-angle objective |
 | PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |
 | PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active exact-marker audit |
+| PHY-FIT-003B | exact-L m=0 minimum-mosaic-tilt detector landmark (`tag_branch=0`) | no legacy point identity for the m=0 orientation curve | constrained Ewald geometry | fitting/mosaic | NEW active geometry landmark, not an intensity maximum |
 | PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active exact-marker proof |
 | PHY-FIT-005 | normalized local mosaic-profile objective | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED |
 | PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED |

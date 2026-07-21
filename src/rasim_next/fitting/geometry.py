@@ -11,6 +11,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import least_squares
 
 from painted_ewald import ContinuousEwaldCoating
+from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
@@ -21,11 +22,13 @@ from rasim_next.pipeline.configured_simulation import (
     ConfiguredSimulationInputs,
     DetectorIntegerLMarkers,
     build_nominal_ewald_context,
+    build_source_averaged_detector,
     evaluate_nominal_integer_l_markers,
     sample_configured_source,
     solve_integer_l_ewald_roots,
 )
 from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorCoordinateIntensity
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -163,6 +166,30 @@ class IntegerLMarkerKey:
         object.__setattr__(self, "root_sign", int(self.root_sign))
         object.__setattr__(self, "representative_rod_hk", (int(rod_hk[0]), int(rod_hk[1])))
 
+    @property
+    def tag_branch(self) -> int:
+        """User-facing detector branch: negative beta-root side 1, positive side 2."""
+
+        return 1 if self.root_sign < 0 else 2
+
+
+def _validate_tag_key_pack(keys: tuple[IntegerLMarkerKey, ...], record_name: str) -> None:
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"integer-L {record_name} identities must be unique")
+    tag_identities = tuple((key.family_m, key.integer_L, key.tag_branch) for key in keys)
+    if len(set(tag_identities)) != len(tag_identities):
+        raise ValueError("each (m,L,tag_branch) may have only one detector tag")
+    paired: dict[tuple[int, int], dict[int, IntegerLMarkerKey]] = {}
+    for key in keys:
+        paired.setdefault((key.family_m, key.integer_L), {})[key.tag_branch] = key
+    for sides in paired.values():
+        if set(sides) != {1, 2}:
+            continue
+        if sides[1].branch != sides[2].branch:
+            raise ValueError("paired detector tags must share one analytic Ewald branch")
+        if sides[1].representative_rod_hk != sides[2].representative_rod_hk:
+            raise ValueError("paired detector tags must share one representative physical rod")
+
 
 def _marker_keys(
     markers: DetectorIntegerLMarkers,
@@ -215,8 +242,7 @@ class IntegerLMarkerObservations:
         keys = tuple(self.keys)
         if not keys or any(not isinstance(key, IntegerLMarkerKey) for key in keys):
             raise ValueError("keys must contain at least one IntegerLMarkerKey")
-        if len(set(keys)) != len(keys):
-            raise ValueError("integer-L observation identities must be unique")
+        _validate_tag_key_pack(keys, "observation")
         coordinates = _readonly_float_array(self.coordinates_px, (len(keys), 2), "coordinates_px")
         covariance = _readonly_float_array(self.covariance_px2, (len(keys), 2, 2), "covariance_px2")
         if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
@@ -255,6 +281,34 @@ class IntegerLMarkerObservations:
         covariance = np.broadcast_to(np.eye(2) * sigma**2, (indices.size, 2, 2)).copy()
         return cls(keys, coordinates, covariance, markers.reference_wavelength_A)
 
+    @classmethod
+    def from_prediction(
+        cls,
+        prediction: IntegerLMarkerPrediction,
+        *,
+        reference_wavelength_A: float,
+        sigma_px: float = 1.0,
+    ) -> IntegerLMarkerObservations:
+        """Freeze exact tagged landmarks supplied by one reference detector function."""
+
+        if not isinstance(prediction, IntegerLMarkerPrediction):
+            raise TypeError("prediction must be IntegerLMarkerPrediction")
+        if not np.all(prediction.active_panel):
+            raise ValueError("every reference tagged landmark must lie on the active panel")
+        sigma = float(sigma_px)
+        if not math.isfinite(sigma) or sigma <= 0.0:
+            raise ValueError("sigma_px must be finite and positive")
+        covariance = np.broadcast_to(
+            np.eye(2) * sigma**2,
+            (len(prediction.keys), 2, 2),
+        ).copy()
+        return cls(
+            keys=prediction.keys,
+            coordinates_px=prediction.coordinates_px,
+            covariance_px2=covariance,
+            reference_wavelength_A=reference_wavelength_A,
+        )
+
     def subset(self, selection: ArrayLike) -> IntegerLMarkerObservations:
         indices = _selection_indices(selection, len(self.keys))
         return IntegerLMarkerObservations(
@@ -277,8 +331,7 @@ class IntegerLMarkerPrediction:
         keys = tuple(self.keys)
         if not keys or any(not isinstance(key, IntegerLMarkerKey) for key in keys):
             raise ValueError("keys must contain at least one IntegerLMarkerKey")
-        if len(set(keys)) != len(keys):
-            raise ValueError("integer-L prediction identities must be unique")
+        _validate_tag_key_pack(keys, "prediction")
         coordinates = _readonly_float_array(self.coordinates_px, (len(keys), 2), "coordinates_px")
         residual = _readonly_float_array(
             self.ewald_residual_Ainv, (len(keys),), "ewald_residual_Ainv"
@@ -300,6 +353,268 @@ class IntegerLMarkerPrediction:
         object.__setattr__(self, "detector_status", status)
         object.__setattr__(self, "ewald_residual_Ainv", residual)
         object.__setattr__(self, "active_panel", active)
+
+
+@dataclass(frozen=True, slots=True)
+class M0IntegerLPrediction:
+    """Minimum-mosaic-tilt exact-L landmarks on the m=0 detector function."""
+
+    integer_L: tuple[int, ...]
+    coordinates_px: FloatArray
+    alpha_rad: FloatArray
+    beta_rad: FloatArray
+    detector_status: NDArray[np.str_]
+    ewald_residual_Ainv: FloatArray
+    reference_wavelength_A: float
+    active_panel: BoolArray = field(init=False)
+    landmark_policy: str = "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1"
+
+    def __post_init__(self) -> None:
+        integer_l = tuple(self.integer_L)
+        if (
+            not integer_l
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer))
+                for value in integer_l
+            )
+            or any(int(value) == 0 for value in integer_l)
+            or len(set(integer_l)) != len(integer_l)
+        ):
+            raise ValueError("integer_L must contain unique nonzero integer identities")
+        integer_l = tuple(int(value) for value in integer_l)
+        size = len(integer_l)
+        coordinates = _readonly_float_array(self.coordinates_px, (size, 2), "coordinates_px")
+        alpha = _readonly_float_array(self.alpha_rad, (size,), "alpha_rad")
+        beta = _readonly_float_array(self.beta_rad, (size,), "beta_rad")
+        residual = _readonly_float_array(
+            self.ewald_residual_Ainv,
+            (size,),
+            "ewald_residual_Ainv",
+        )
+        if np.any(alpha < 0.0) or np.any(alpha > np.pi):
+            raise ValueError("alpha_rad must use the folded interval [0, pi]")
+        if np.any(beta < 0.0) or np.any(beta >= 2.0 * np.pi):
+            raise ValueError("beta_rad must use [0, 2*pi)")
+        if np.any(residual < 0.0):
+            raise ValueError("ewald_residual_Ainv must be nonnegative")
+        wavelength = float(self.reference_wavelength_A)
+        if not math.isfinite(wavelength) or wavelength <= 0.0:
+            raise ValueError("reference_wavelength_A must be finite and positive")
+        supplied_status = np.asarray(self.detector_status)
+        if supplied_status.shape != (size,):
+            raise ValueError("detector_status must contain one value per m=0 landmark")
+        status = np.asarray(tuple(str(value) for value in supplied_status), dtype="U32")
+        invalid_status = sorted(set(status) - _PREDICTION_STATUSES)
+        if invalid_status:
+            raise ValueError(f"unsupported detector prediction status: {invalid_status}")
+        active = status == ValidityCode.VALID.value
+        if self.landmark_policy != "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1":
+            raise ValueError("unsupported m=0 exact-L landmark policy")
+        for value in (status, active):
+            value.setflags(write=False)
+        object.__setattr__(self, "integer_L", integer_l)
+        object.__setattr__(self, "coordinates_px", coordinates)
+        object.__setattr__(self, "alpha_rad", alpha)
+        object.__setattr__(self, "beta_rad", beta)
+        object.__setattr__(self, "detector_status", status)
+        object.__setattr__(self, "ewald_residual_Ainv", residual)
+        object.__setattr__(self, "reference_wavelength_A", wavelength)
+        object.__setattr__(self, "active_panel", active)
+
+    @property
+    def tag_branch(self) -> int:
+        """Return the unique specular-axis branch used by every m=0 landmark."""
+
+        return 0
+
+
+@dataclass(frozen=True, slots=True)
+class M0IntegerLObservations:
+    """Frozen m=0 exact-L detector landmarks from one reference function."""
+
+    integer_L: tuple[int, ...]
+    coordinates_px: FloatArray
+    covariance_px2: FloatArray
+    reference_wavelength_A: float
+    whitening_matrix_px_inv: FloatArray = field(init=False, repr=False)
+    landmark_policy: str = "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1"
+
+    def __post_init__(self) -> None:
+        integer_l = tuple(self.integer_L)
+        if (
+            len(integer_l) < 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer))
+                for value in integer_l
+            )
+            or any(int(value) == 0 for value in integer_l)
+            or len(set(integer_l)) != len(integer_l)
+        ):
+            raise ValueError(
+                "m=0 line observations require at least two unique nonzero integer L values"
+            )
+        integer_l = tuple(int(value) for value in integer_l)
+        size = len(integer_l)
+        coordinates = _readonly_float_array(self.coordinates_px, (size, 2), "coordinates_px")
+        covariance = _readonly_float_array(
+            self.covariance_px2,
+            (size, 2, 2),
+            "covariance_px2",
+        )
+        if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
+            raise ValueError("each m=0 landmark covariance must be symmetric")
+        try:
+            cholesky = np.linalg.cholesky(covariance)
+        except np.linalg.LinAlgError as error:
+            raise ValueError("each m=0 landmark covariance must be positive definite") from error
+        whitening = np.linalg.inv(cholesky)
+        whitening.setflags(write=False)
+        wavelength = float(self.reference_wavelength_A)
+        if not math.isfinite(wavelength) or wavelength <= 0.0:
+            raise ValueError("reference_wavelength_A must be finite and positive")
+        if self.landmark_policy != "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1":
+            raise ValueError("unsupported m=0 exact-L landmark policy")
+        object.__setattr__(self, "integer_L", integer_l)
+        object.__setattr__(self, "coordinates_px", coordinates)
+        object.__setattr__(self, "covariance_px2", covariance)
+        object.__setattr__(self, "reference_wavelength_A", wavelength)
+        object.__setattr__(self, "whitening_matrix_px_inv", whitening)
+
+    @classmethod
+    def from_prediction(
+        cls,
+        prediction: M0IntegerLPrediction,
+        *,
+        sigma_px: float = 1.0,
+    ) -> M0IntegerLObservations:
+        if not isinstance(prediction, M0IntegerLPrediction):
+            raise TypeError("prediction must be M0IntegerLPrediction")
+        if not np.all(prediction.active_panel):
+            raise ValueError("every reference m=0 landmark must lie on the active panel")
+        sigma = float(sigma_px)
+        if not math.isfinite(sigma) or sigma <= 0.0:
+            raise ValueError("sigma_px must be finite and positive")
+        covariance = np.broadcast_to(
+            np.eye(2) * sigma**2,
+            (len(prediction.integer_L), 2, 2),
+        ).copy()
+        return cls(
+            integer_L=prediction.integer_L,
+            coordinates_px=prediction.coordinates_px,
+            covariance_px2=covariance,
+            reference_wavelength_A=prediction.reference_wavelength_A,
+            landmark_policy=prediction.landmark_policy,
+        )
+
+
+def _corrected_instrument(
+    base: CompiledInstrument,
+    corrections: GeometryCorrections,
+) -> CompiledInstrument:
+    detector = base.lab_from_detector
+    sample = base.lab_from_sample
+    detector_rotation = compose_intrinsic_xy_rotation(
+        detector.rotation,
+        corrections.detector_column_tilt_rad,
+        corrections.detector_row_tilt_rad,
+    )
+    sample_rotation = compose_intrinsic_xy_rotation(
+        sample.rotation,
+        corrections.sample_normal_x_tilt_rad,
+        corrections.sample_normal_y_tilt_rad,
+    )
+    return replace(
+        base,
+        lab_from_detector=RigidTransform(
+            detector_rotation,
+            detector.translation_m,
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        lab_from_sample=RigidTransform(
+            sample_rotation,
+            sample.translation_m,
+            FrameId.SAMPLE,
+            FrameId.LAB,
+        ),
+    )
+
+
+class ContinuousDetectorGeometryModel:
+    """Prepared all-state continuous detector field under four rigid-angle corrections."""
+
+    __slots__ = ("_inputs", "_prepared_detector", "_tag_model")
+
+    def __init__(self, inputs: ConfiguredSimulationInputs) -> None:
+        if not isinstance(inputs, ConfiguredSimulationInputs):
+            raise TypeError("inputs must be ConfiguredSimulationInputs")
+        prepared = build_source_averaged_detector(inputs)
+        object.__setattr__(self, "_inputs", inputs)
+        object.__setattr__(self, "_prepared_detector", prepared)
+        object.__setattr__(self, "_tag_model", IntegerLGeometryModel(inputs))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("ContinuousDetectorGeometryModel is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("ContinuousDetectorGeometryModel is immutable")
+
+    @property
+    def inputs(self) -> ConfiguredSimulationInputs:
+        return self._inputs
+
+    @property
+    def source_revision(self) -> str:
+        return self._inputs.incident.states.source_revision
+
+    @property
+    def source_state_count(self) -> int:
+        return int(self._inputs.incident.states.incident_state_id.size)
+
+    @property
+    def execution_backend(self) -> str:
+        return "numba_cpu_source_averaged.v1"
+
+    def corrected_instrument(self, corrections: GeometryCorrections) -> CompiledInstrument:
+        if not isinstance(corrections, GeometryCorrections):
+            raise TypeError("corrections must be GeometryCorrections")
+        return _corrected_instrument(self._inputs.instrument, corrections)
+
+    def bind(self, corrections: GeometryCorrections) -> ContinuousDetectorFunction:
+        """Bind one immutable callable detector function without evaluating a raster."""
+
+        if not isinstance(corrections, GeometryCorrections):
+            raise TypeError("corrections must be GeometryCorrections")
+        return ContinuousDetectorFunction(self, corrections)
+
+    def evaluate_detector_coordinates(
+        self,
+        corrections: GeometryCorrections,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        """Evaluate the pre-binned raw density at arbitrary continuous coordinates."""
+
+        instrument = self.corrected_instrument(corrections)
+        incident = build_incident_states(
+            self._inputs.samples,
+            self._inputs.material,
+            instrument,
+        )
+        try:
+            detector = self._prepared_detector.rebind_geometry(
+                incident=incident,
+                instrument=instrument,
+            )
+        except ValueError as error:
+            raise GeometryPredictionError(
+                f"continuous-field geometry became invalid: {error}"
+            ) from error
+        return detector.evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+            execution_backend="cpu",
+        )
 
 
 class IntegerLGeometryModel:
@@ -334,45 +649,40 @@ class IntegerLGeometryModel:
     def corrected_instrument(self, corrections: GeometryCorrections) -> CompiledInstrument:
         if not isinstance(corrections, GeometryCorrections):
             raise TypeError("corrections must be GeometryCorrections")
-        base = self._inputs.instrument
-        detector = base.lab_from_detector
-        sample = base.lab_from_sample
-        detector_rotation = compose_intrinsic_xy_rotation(
-            detector.rotation,
-            corrections.detector_column_tilt_rad,
-            corrections.detector_row_tilt_rad,
-        )
-        sample_rotation = compose_intrinsic_xy_rotation(
-            sample.rotation,
-            corrections.sample_normal_x_tilt_rad,
-            corrections.sample_normal_y_tilt_rad,
-        )
-        return replace(
-            base,
-            lab_from_detector=RigidTransform(
-                detector_rotation,
-                detector.translation_m,
-                FrameId.DETECTOR,
-                FrameId.LAB,
-            ),
-            lab_from_sample=RigidTransform(
-                sample_rotation,
-                sample.translation_m,
-                FrameId.SAMPLE,
-                FrameId.LAB,
-            ),
-        )
+        return _corrected_instrument(self._inputs.instrument, corrections)
 
-    def predict(
-        self,
+    @staticmethod
+    def _frozen_nonzero_keys(
         keys: tuple[IntegerLMarkerKey, ...],
-        corrections: GeometryCorrections,
-    ) -> IntegerLMarkerPrediction:
-        frozen_keys = tuple(keys)
-        if not frozen_keys or any(not isinstance(key, IntegerLMarkerKey) for key in frozen_keys):
+    ) -> tuple[IntegerLMarkerKey, ...]:
+        frozen = tuple(keys)
+        if not frozen or any(not isinstance(key, IntegerLMarkerKey) for key in frozen):
             raise ValueError("keys must contain at least one IntegerLMarkerKey")
-        if len(set(frozen_keys)) != len(frozen_keys):
+        if len(set(frozen)) != len(frozen):
             raise ValueError("prediction keys must be unique")
+        return frozen
+
+    @staticmethod
+    def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
+        frozen = tuple(integer_L)
+        if (
+            not frozen
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer))
+                for value in frozen
+            )
+            or any(int(value) == 0 for value in frozen)
+            or len(set(frozen)) != len(frozen)
+        ):
+            raise ValueError("integer_L must contain unique nonzero integer identities")
+        return tuple(int(value) for value in frozen)
+
+    def _detector_context(
+        self,
+        corrections: GeometryCorrections,
+    ) -> tuple[ContinuousEwaldCoating, DetectorEwaldMeasure]:
+        if not isinstance(corrections, GeometryCorrections):
+            raise TypeError("corrections must be GeometryCorrections")
         instrument = self.corrected_instrument(corrections)
         incident = build_incident_states(
             self._nominal_samples,
@@ -387,12 +697,28 @@ class IntegerLGeometryModel:
             self._inputs.bragg_space,
             ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
         )
-        detector = DetectorEwaldMeasure(
+        return coating, DetectorEwaldMeasure(
             coating=coating,
             incident=incident,
             material=self._nominal_material,
             instrument=instrument,
         )
+
+    def predict(
+        self,
+        keys: tuple[IntegerLMarkerKey, ...],
+        corrections: GeometryCorrections,
+    ) -> IntegerLMarkerPrediction:
+        frozen_keys = self._frozen_nonzero_keys(keys)
+        coating, detector = self._detector_context(corrections)
+        return self._predict_nonzero_with_context(frozen_keys, coating, detector)
+
+    def _predict_nonzero_with_context(
+        self,
+        frozen_keys: tuple[IntegerLMarkerKey, ...],
+        coating: ContinuousEwaldCoating,
+        detector: DetectorEwaldMeasure,
+    ) -> IntegerLMarkerPrediction:
         rods = {(rod.h, rod.k): rod for rod in self._inputs.bragg_space.config.rods}
         basis = self._inputs.bragg_space.config.reciprocal_basis_Ainv
         crystal_to_sample = self._inputs.bragg_space.config.crystal_to_sample
@@ -463,14 +789,385 @@ class IntegerLGeometryModel:
             ewald_residual_Ainv=residual,
         )
 
+    def predict_m0_minimum_tilt_exact_l_landmarks(
+        self,
+        integer_L: tuple[int, ...],
+        corrections: GeometryCorrections,
+    ) -> M0IntegerLPrediction:
+        """Map the unique minimum-tilt m=0 orientation at each exact nonzero L.
 
-def _weighted_residual(
-    model: IntegerLGeometryModel,
+        An exact m=0 L section intersects the mosaic/Ewald manifold in a curve. This method
+        fixes one reproducible landmark by choosing the reciprocal-axis direction closest to the
+        unmosaicked axis. It is a geometry landmark on the continuous detector function, not an
+        intensity maximum or centroid.
+        """
+
+        frozen_l = self._frozen_m0_integer_l(integer_L)
+        coating, detector = self._detector_context(corrections)
+        return self._predict_m0_with_context(frozen_l, coating, detector)
+
+    def _predict_m0_with_context(
+        self,
+        frozen_l: tuple[int, ...],
+        coating: ContinuousEwaldCoating,
+        detector: DetectorEwaldMeasure,
+    ) -> M0IntegerLPrediction:
+        specular_rods = tuple(
+            rod for rod in self._inputs.bragg_space.config.rods if rod.family_m == 0
+        )
+        if len(specular_rods) != 1:
+            raise ValueError("minimum-tilt exact-L landmarks require one physical m=0 rod")
+        rod = specular_rods[0]
+        basis = self._inputs.bragg_space.config.reciprocal_basis_Ainv
+        crystal_to_sample = self._inputs.bragg_space.config.crystal_to_sample
+        mean_axis_crystal, tilt_axis_crystal = mosaic_axes(basis)
+        reference_axis_crystal = np.cross(tilt_axis_crystal, mean_axis_crystal)
+        mean_axis_sample = crystal_to_sample @ mean_axis_crystal
+        ki_sample = coating.ki_sample_Ainv
+        k_norm = float(np.linalg.norm(ki_sample))
+        incident_direction = ki_sample / k_norm
+        perpendicular_mean = mean_axis_sample - float(mean_axis_sample @ incident_direction) * (
+            incident_direction
+        )
+        perpendicular_norm = float(np.linalg.norm(perpendicular_mean))
+        if perpendicular_norm <= 1024.0 * np.finfo(np.float64).eps:
+            raise GeometryPredictionError(
+                "minimum-tilt m=0 landmark is ambiguous when ki is parallel to the mean axis"
+            )
+        closest_perpendicular = perpendicular_mean / perpendicular_norm
+        b3_norm = float(np.linalg.norm(basis[:, 2]))
+        size = len(frozen_l)
+        coordinates = np.zeros((size, 2), dtype=np.float64)
+        alpha = np.zeros(size, dtype=np.float64)
+        beta = np.zeros(size, dtype=np.float64)
+        residual = np.zeros(size, dtype=np.float64)
+        status = np.full(size, "ROOT_MISSING", dtype="U32")
+        feasible_indices: list[int] = []
+        for index, integer_l in enumerate(frozen_l):
+            u_Ainv = integer_l * b3_norm
+            z = -u_Ainv / (2.0 * k_norm)
+            tolerance = 4096.0 * np.finfo(np.float64).eps
+            if abs(z) > 1.0 + tolerance:
+                continue
+            z = min(1.0, max(-1.0, z))
+            direction_sample = (
+                z * incident_direction + math.sqrt(max(0.0, 1.0 - z * z)) * closest_perpendicular
+            )
+            direction_crystal = crystal_to_sample.T @ direction_sample
+            cosine_alpha = min(
+                1.0,
+                max(-1.0, float(direction_crystal @ mean_axis_crystal)),
+            )
+            alpha[index] = math.acos(cosine_alpha)
+            beta[index] = math.atan2(
+                float(direction_crystal @ tilt_axis_crystal),
+                float(direction_crystal @ reference_axis_crystal),
+            ) % (2.0 * np.pi)
+            feasible_indices.append(index)
+
+        if feasible_indices:
+            indices = np.asarray(feasible_indices, dtype=np.int64)
+            mapped = detector.map_specular_geometry(
+                rod=rod,
+                alpha_rad=alpha[indices],
+                beta_rad=beta[indices],
+            ).geometry
+            actual_l = mapped.ewald_geometry.L
+            for batch_index, landmark_index in enumerate(indices):
+                integer_l = frozen_l[int(landmark_index)]
+                l_tolerance = (
+                    131072.0
+                    * np.finfo(np.float64).eps
+                    * max(abs(float(actual_l[batch_index])), abs(integer_l), 1.0)
+                )
+                if abs(float(actual_l[batch_index]) - integer_l) > l_tolerance:
+                    status[landmark_index] = "INTEGER_L_MISMATCH"
+                    continue
+                coordinates[landmark_index] = (
+                    float(mapped.column_px[batch_index]),
+                    float(mapped.row_px[batch_index]),
+                )
+                residual[landmark_index] = float(
+                    mapped.ewald_geometry.ewald_residual_Ainv[batch_index]
+                )
+                status[landmark_index] = str(mapped.detector_status[batch_index])
+        return M0IntegerLPrediction(
+            integer_L=frozen_l,
+            coordinates_px=coordinates,
+            alpha_rad=alpha,
+            beta_rad=beta,
+            detector_status=status,
+            ewald_residual_Ainv=residual,
+            reference_wavelength_A=self.reference_wavelength_A,
+        )
+
+    def predict_tagged_landmarks(
+        self,
+        nonzero_keys: tuple[IntegerLMarkerKey, ...],
+        m0_integer_L: tuple[int, ...],
+        corrections: GeometryCorrections,
+    ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction]:
+        """Predict both tag groups while constructing incident/detector geometry once."""
+
+        frozen_keys = self._frozen_nonzero_keys(nonzero_keys)
+        frozen_l = self._frozen_m0_integer_l(m0_integer_L)
+        coating, detector = self._detector_context(corrections)
+        return (
+            self._predict_nonzero_with_context(frozen_keys, coating, detector),
+            self._predict_m0_with_context(frozen_l, coating, detector),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuousDetectorFunction:
+    """One immutable continuous detector field with associated exact-L landmarks."""
+
+    model: ContinuousDetectorGeometryModel = field(repr=False)
+    corrections: GeometryCorrections
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.model, ContinuousDetectorGeometryModel):
+            raise TypeError("model must be ContinuousDetectorGeometryModel")
+        if not isinstance(self.corrections, GeometryCorrections):
+            raise TypeError("corrections must be GeometryCorrections")
+
+    @property
+    def source_revision(self) -> str:
+        return self.model.source_revision
+
+    @property
+    def source_state_count(self) -> int:
+        return self.model.source_state_count
+
+    @property
+    def measure_id(self) -> str:
+        return "raw_detector_coordinate_density_A2_per_px2.v1"
+
+    @property
+    def tag_incident_state_policy(self) -> str:
+        """Return the single deterministic incident state used for all exact tags."""
+
+        return "nominal_source_center.zero_divergence.mean_wavelength.v1"
+
+    @property
+    def tag_incident_state_contributes_to_intensity(self) -> bool:
+        """The nominal companion carries tag geometry, not empirical source mass."""
+
+        return False
+
+    def evaluate_detector_coordinates(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        return self.model.evaluate_detector_coordinates(
+            self.corrections,
+            column_px,
+            row_px,
+        )
+
+    def __call__(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        return self.evaluate_detector_coordinates(column_px, row_px)
+
+    def predict_integer_l_tags(
+        self,
+        keys: tuple[IntegerLMarkerKey, ...],
+    ) -> IntegerLMarkerPrediction:
+        """Return nominal-source exact-L landmarks on this detector-function domain."""
+
+        return self.model._tag_model.predict(keys, self.corrections)
+
+    def predict_m0_minimum_tilt_exact_l_landmarks(
+        self,
+        integer_L: tuple[int, ...],
+    ) -> M0IntegerLPrediction:
+        return self.model._tag_model.predict_m0_minimum_tilt_exact_l_landmarks(
+            integer_L,
+            self.corrections,
+        )
+
+    def predict_tagged_landmarks(
+        self,
+        nonzero_keys: tuple[IntegerLMarkerKey, ...],
+        m0_integer_L: tuple[int, ...],
+    ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction]:
+        return self.model._tag_model.predict_tagged_landmarks(
+            nonzero_keys,
+            m0_integer_L,
+            self.corrections,
+        )
+
+
+def _marker_chord_pairs(
+    keys: tuple[IntegerLMarkerKey, ...],
+) -> tuple[tuple[int, int], ...]:
+    groups: dict[tuple[int, int], dict[int, tuple[int, int, tuple[int, int]]]] = {}
+    for index, key in enumerate(keys):
+        identity = (key.family_m, key.integer_L)
+        group = groups.setdefault(identity, {})
+        if key.root_sign in group:
+            raise GeometryRankError(
+                "rank-deficient exact-L tag set repeats one root side within a line group"
+            )
+        group[key.root_sign] = (index, key.branch, key.representative_rod_hk)
+    pairs: list[tuple[int, int]] = []
+    for _, sides in sorted(groups.items()):
+        if set(sides) != {-1, 1}:
+            continue
+        negative_index, negative_branch, negative_rod = sides[-1]
+        positive_index, positive_branch, positive_rod = sides[1]
+        if negative_branch != positive_branch:
+            raise GeometryRankError(
+                "paired exact-L tag branches must share one analytic Ewald branch"
+            )
+        if negative_rod != positive_rod:
+            raise GeometryRankError(
+                "paired exact-L tag branches must use the same representative physical rod"
+            )
+        pairs.append((negative_index, positive_index))
+    return tuple(pairs)
+
+
+def _signed_line_angle_rad(target_vector: FloatArray, trial_vector: FloatArray) -> float:
+    target_norm = float(np.linalg.norm(target_vector))
+    trial_norm = float(np.linalg.norm(trial_vector))
+    scale = max(target_norm, trial_norm, 1.0)
+    if min(target_norm, trial_norm) <= 1024.0 * np.finfo(np.float64).eps * scale:
+        raise GeometryPredictionError("a tagged detector line collapsed to zero span")
+    target = target_vector / target_norm
+    trial = trial_vector / trial_norm
+    determinant = float(target[0] * trial[1] - target[1] * trial[0])
+    dot = float(target @ trial)
+    return math.atan2(determinant, dot)
+
+
+def _nonzero_chord_angles_and_residual_px(
     observations: IntegerLMarkerObservations,
-    correction_values: ArrayLike,
+    prediction: IntegerLMarkerPrediction,
+) -> tuple[FloatArray, FloatArray]:
+    pairs = _marker_chord_pairs(observations.keys)
+    angle = np.empty(len(pairs), dtype=np.float64)
+    residual = np.empty(len(pairs), dtype=np.float64)
+    for pair_index, (negative_index, positive_index) in enumerate(pairs):
+        target_vector = (
+            observations.coordinates_px[positive_index]
+            - observations.coordinates_px[negative_index]
+        )
+        trial_vector = (
+            prediction.coordinates_px[positive_index] - prediction.coordinates_px[negative_index]
+        )
+        delta = _signed_line_angle_rad(target_vector, trial_vector)
+        angle[pair_index] = delta
+        residual[pair_index] = float(np.linalg.norm(target_vector)) * math.sin(0.5 * delta)
+    return angle, residual
+
+
+def _m0_principal_line(
+    coordinates_px: FloatArray, integer_L: tuple[int, ...]
+) -> tuple[FloatArray, float]:
+    order = np.argsort(np.asarray(integer_L, dtype=np.int64))
+    coordinate = np.asarray(coordinates_px[order], dtype=np.float64)
+    ell = np.asarray(integer_L, dtype=np.float64)[order]
+    centered = coordinate - np.mean(coordinate, axis=0)
+    covariance = centered.T @ centered
+    trace = float(np.trace(covariance))
+    eigengap = math.hypot(
+        float(covariance[0, 0] - covariance[1, 1]),
+        2.0 * float(covariance[0, 1]),
+    )
+    if trace <= 0.0 or eigengap <= 1024.0 * np.finfo(np.float64).eps * max(trace, 1.0):
+        raise GeometryPredictionError("m=0 exact-L landmarks do not define a stable detector line")
+    angle = 0.5 * math.atan2(
+        2.0 * float(covariance[0, 1]),
+        float(covariance[0, 0] - covariance[1, 1]),
+    )
+    direction = np.asarray((math.cos(angle), math.sin(angle)), dtype=np.float64)
+    orientation = float(np.sum((ell - np.mean(ell)) * (centered @ direction)))
+    if abs(orientation) <= 1024.0 * np.finfo(np.float64).eps * max(trace, 1.0):
+        raise GeometryPredictionError("m=0 exact-L line has ambiguous increasing-L orientation")
+    if orientation < 0.0:
+        direction = -direction
+    projection = coordinate @ direction
+    span = float(np.max(projection) - np.min(projection))
+    if span <= 1024.0 * np.finfo(np.float64).eps * max(float(np.max(np.abs(coordinate))), 1.0):
+        raise GeometryPredictionError("m=0 exact-L line has negligible span")
+    return direction, span
+
+
+def _m0_line_angle_and_residual_px(
+    observations: M0IntegerLObservations,
+    prediction: M0IntegerLPrediction,
+) -> tuple[float, float]:
+    target_direction, target_span = _m0_principal_line(
+        observations.coordinates_px,
+        observations.integer_L,
+    )
+    trial_direction, _ = _m0_principal_line(
+        prediction.coordinates_px,
+        prediction.integer_L,
+    )
+    delta = _signed_line_angle_rad(target_direction, trial_direction)
+    return delta, target_span * math.sin(0.5 * delta)
+
+
+def _typical_observation_sigma_px(covariance_px2: FloatArray) -> float:
+    variance = 0.5 * (covariance_px2[:, 0, 0] + covariance_px2[:, 1, 1])
+    return math.sqrt(float(np.mean(variance)))
+
+
+_TrialLandmarkPredictor = Callable[
+    [GeometryCorrections],
+    tuple[IntegerLMarkerPrediction, M0IntegerLPrediction | None],
+]
+
+
+def evaluate_tagged_geometry_objective_residual(
+    observations: IntegerLMarkerObservations,
+    prediction: IntegerLMarkerPrediction,
+    *,
+    m0_observations: M0IntegerLObservations | None = None,
+    m0_prediction: M0IntegerLPrediction | None = None,
 ) -> FloatArray:
-    corrections = GeometryCorrections.from_array(correction_values)
-    prediction = model.predict(observations.keys, corrections)
+    """Evaluate the declared whitened site-plus-line objective without optimization.
+
+    Ordering is nonzero-tag ``(column,row)`` residuals in key order, paired nonzero
+    half-angle residuals in sorted ``(m,L)`` order, then—when supplied—m=0
+    ``(column,row)`` residuals in L-record order and the single increasing-L TLS-line
+    half-angle residual.
+    """
+
+    if not isinstance(observations, IntegerLMarkerObservations):
+        raise TypeError("observations must be IntegerLMarkerObservations")
+    if not isinstance(prediction, IntegerLMarkerPrediction):
+        raise TypeError("prediction must be IntegerLMarkerPrediction")
+    if prediction.keys != observations.keys:
+        raise ValueError("prediction keys must exactly match observation keys")
+    if (m0_observations is None) != (m0_prediction is None):
+        raise ValueError("m=0 observations and prediction must be supplied together")
+    if m0_observations is not None:
+        if not isinstance(m0_observations, M0IntegerLObservations) or not isinstance(
+            m0_prediction,
+            M0IntegerLPrediction,
+        ):
+            raise TypeError("m=0 records must use the declared observation and prediction types")
+        if m0_prediction.integer_L != m0_observations.integer_L:
+            raise ValueError("m=0 prediction L identities must exactly match observations")
+        wavelength_scale = max(
+            m0_prediction.reference_wavelength_A,
+            m0_observations.reference_wavelength_A,
+            1.0,
+        )
+        if not math.isclose(
+            m0_prediction.reference_wavelength_A,
+            m0_observations.reference_wavelength_A,
+            rel_tol=0.0,
+            abs_tol=256.0 * np.finfo(np.float64).eps * wavelength_scale,
+        ):
+            raise ValueError("m=0 prediction wavelength must match observations")
     if not np.all(prediction.active_panel):
         invalid = tuple(
             f"{observations.keys[index]}:{prediction.detector_status[index]}"
@@ -484,7 +1181,64 @@ def _weighted_residual(
         delta,
         optimize=True,
     )
-    return np.asarray(weighted.reshape(-1), dtype=np.float64)
+    _, chord_residual_px = _nonzero_chord_angles_and_residual_px(observations, prediction)
+    pieces = [
+        np.asarray(weighted.reshape(-1), dtype=np.float64),
+        chord_residual_px / _typical_observation_sigma_px(observations.covariance_px2),
+    ]
+    if m0_observations is not None:
+        if m0_prediction is None:
+            raise AssertionError("validated m=0 prediction unexpectedly disappeared")
+        if not np.all(m0_prediction.active_panel):
+            invalid = tuple(
+                f"L={m0_observations.integer_L[index]}:{m0_prediction.detector_status[index]}"
+                for index in np.flatnonzero(~m0_prediction.active_panel)
+            )
+            raise GeometryPredictionError(
+                "frozen m=0 landmark topology changed: " + "; ".join(invalid)
+            )
+        m0_delta = m0_prediction.coordinates_px - m0_observations.coordinates_px
+        m0_weighted = np.einsum(
+            "nij,nj->ni",
+            m0_observations.whitening_matrix_px_inv,
+            m0_delta,
+            optimize=True,
+        )
+        _, m0_line_residual_px = _m0_line_angle_and_residual_px(
+            m0_observations,
+            m0_prediction,
+        )
+        pieces.extend(
+            (
+                np.asarray(m0_weighted.reshape(-1), dtype=np.float64),
+                np.asarray(
+                    [
+                        m0_line_residual_px
+                        / _typical_observation_sigma_px(m0_observations.covariance_px2)
+                    ],
+                    dtype=np.float64,
+                ),
+            )
+        )
+    result = np.concatenate(pieces)
+    result.setflags(write=False)
+    return result
+
+
+def _weighted_residual(
+    predictor: _TrialLandmarkPredictor,
+    observations: IntegerLMarkerObservations,
+    correction_values: ArrayLike,
+    m0_observations: M0IntegerLObservations | None = None,
+) -> FloatArray:
+    corrections = GeometryCorrections.from_array(correction_values)
+    prediction, m0_prediction = predictor(corrections)
+    return evaluate_tagged_geometry_objective_residual(
+        observations,
+        prediction,
+        m0_observations=m0_observations,
+        m0_prediction=m0_prediction,
+    )
 
 
 def _finite_difference_jacobian(
@@ -543,6 +1297,10 @@ class GeometryFitResult:
     message: str
     training_site_rms_px: float
     training_site_max_px: float
+    training_chord_angle_rms_rad: float
+    training_m0_line_angle_rad: float
+    chord_count: int
+    m0_landmark_count: int
     jacobian_rank: int
     jacobian_condition: float
     scaled_jacobian_singular_values: FloatArray
@@ -559,13 +1317,23 @@ class GeometryFitResult:
             raise TypeError("success must be a boolean")
         if not isinstance(self.message, str) or not self.message:
             raise ValueError("message must be nonempty")
-        for name in ("training_site_rms_px", "training_site_max_px"):
+        for name in (
+            "training_site_rms_px",
+            "training_site_max_px",
+            "training_chord_angle_rms_rad",
+            "training_m0_line_angle_rad",
+        ):
             value = float(getattr(self, name))
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and nonnegative")
             object.__setattr__(self, name, value)
         if self.training_site_max_px < self.training_site_rms_px:
             raise ValueError("training site maximum cannot be smaller than its RMS")
+        for name in ("chord_count", "m0_landmark_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+            object.__setattr__(self, name, int(value))
         if (
             isinstance(self.jacobian_rank, bool)
             or not isinstance(self.jacobian_rank, (int, np.integer))
@@ -611,31 +1379,48 @@ class GeometryFitResult:
         object.__setattr__(self, "jacobian_condition", condition)
 
 
-def fit_integer_l_marker_geometry(
-    model: IntegerLGeometryModel,
+def _fit_landmark_geometry(
+    predictor: _TrialLandmarkPredictor,
+    reference_wavelength_A: float,
     observations: IntegerLMarkerObservations,
     *,
     initial: GeometryCorrections,
     bounds: GeometryCorrectionBounds,
+    m0_observations: M0IntegerLObservations | None = None,
 ) -> GeometryFitResult:
-    """Fit the identifiable four-angle pose pack to frozen detector-native sites."""
+    """Fit exact detector landmarks through one declared trial-function feature map."""
 
-    if not isinstance(model, IntegerLGeometryModel):
-        raise TypeError("model must be IntegerLGeometryModel")
+    if not callable(predictor):
+        raise TypeError("predictor must be callable")
     if not isinstance(observations, IntegerLMarkerObservations):
         raise TypeError("observations must be IntegerLMarkerObservations")
     if not isinstance(initial, GeometryCorrections):
         raise TypeError("initial must be GeometryCorrections")
     if not isinstance(bounds, GeometryCorrectionBounds):
         raise TypeError("bounds must be GeometryCorrectionBounds")
-    wavelength_scale = max(model.reference_wavelength_A, observations.reference_wavelength_A, 1.0)
+    if m0_observations is not None and not isinstance(
+        m0_observations,
+        M0IntegerLObservations,
+    ):
+        raise TypeError("m0_observations must be M0IntegerLObservations or None")
+    reference_wavelength_A = float(reference_wavelength_A)
+    if not math.isfinite(reference_wavelength_A) or reference_wavelength_A <= 0.0:
+        raise ValueError("reference_wavelength_A must be finite and positive")
+    wavelength_scale = max(reference_wavelength_A, observations.reference_wavelength_A, 1.0)
     if not math.isclose(
-        model.reference_wavelength_A,
+        reference_wavelength_A,
         observations.reference_wavelength_A,
         rel_tol=0.0,
         abs_tol=256.0 * np.finfo(np.float64).eps * wavelength_scale,
     ):
         raise ValueError("observation wavelength does not match the geometry model")
+    if m0_observations is not None and not math.isclose(
+        reference_wavelength_A,
+        m0_observations.reference_wavelength_A,
+        rel_tol=0.0,
+        abs_tol=256.0 * np.finfo(np.float64).eps * wavelength_scale,
+    ):
+        raise ValueError("m=0 observation wavelength does not match the geometry model")
     lower = bounds.lower.as_array()
     upper = bounds.upper.as_array()
     initial_values = initial.as_array()
@@ -649,7 +1434,7 @@ def fit_integer_l_marker_geometry(
     def residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
-        return _weighted_residual(model, observations, value)
+        return _weighted_residual(predictor, observations, value, m0_observations)
 
     parameter_scale = 0.5 * (upper - lower)
     preflight_jacobian = _finite_difference_jacobian(
@@ -677,11 +1462,30 @@ def fit_integer_l_marker_geometry(
         max_nfev=100,
     )
     corrections = GeometryCorrections.from_array(optimized.x)
-    prediction = model.predict(observations.keys, corrections)
+    prediction, fitted_m0_prediction = predictor(corrections)
     if not np.all(prediction.active_panel):
         raise GeometryPredictionError("the fitted marker set does not remain on the active panel")
     raw_error = prediction.coordinates_px - observations.coordinates_px
-    site_error_px = np.linalg.norm(raw_error, axis=1)
+    site_error_parts = [np.linalg.norm(raw_error, axis=1)]
+    chord_angles, _ = _nonzero_chord_angles_and_residual_px(observations, prediction)
+    m0_line_angle = 0.0
+    if m0_observations is not None:
+        if fitted_m0_prediction is None:
+            raise AssertionError("combined tagged prediction did not return m=0 landmarks")
+        m0_prediction = fitted_m0_prediction
+        if not np.all(m0_prediction.active_panel):
+            raise GeometryPredictionError("the fitted m=0 landmark set does not remain on panel")
+        site_error_parts.append(
+            np.linalg.norm(
+                m0_prediction.coordinates_px - m0_observations.coordinates_px,
+                axis=1,
+            )
+        )
+        m0_line_angle, _ = _m0_line_angle_and_residual_px(
+            m0_observations,
+            m0_prediction,
+        )
+    site_error_px = np.concatenate(site_error_parts)
     final_jacobian = np.asarray(optimized.jac, dtype=np.float64)
     rank, condition, singular = _rank_diagnostics(final_jacobian, parameter_scale)
     active_bounds = np.isclose(optimized.x, lower, rtol=0.0, atol=1.0e-10) | np.isclose(
@@ -693,6 +1497,12 @@ def fit_integer_l_marker_geometry(
         message=str(optimized.message),
         training_site_rms_px=float(np.sqrt(np.mean(site_error_px**2))),
         training_site_max_px=float(np.max(site_error_px)),
+        training_chord_angle_rms_rad=(
+            float(np.sqrt(np.mean(chord_angles**2))) if chord_angles.size else 0.0
+        ),
+        training_m0_line_angle_rad=abs(float(m0_line_angle)),
+        chord_count=int(chord_angles.size),
+        m0_landmark_count=(0 if m0_observations is None else len(m0_observations.integer_L)),
         jacobian_rank=rank,
         jacobian_condition=condition,
         scaled_jacobian_singular_values=singular,
@@ -700,6 +1510,106 @@ def fit_integer_l_marker_geometry(
         model_evaluation_count=model_evaluation_count + 1,
         optimizer_function_evaluation_count=int(optimized.nfev),
         optimizer_jacobian_evaluation_count=int(optimized.njev or 0),
+    )
+
+
+def fit_integer_l_marker_geometry(
+    model: IntegerLGeometryModel,
+    observations: IntegerLMarkerObservations,
+    *,
+    initial: GeometryCorrections,
+    bounds: GeometryCorrectionBounds,
+    m0_observations: M0IntegerLObservations | None = None,
+) -> GeometryFitResult:
+    """Fit exact detector landmarks and their dependent line-angle guidance."""
+
+    if not isinstance(model, IntegerLGeometryModel):
+        raise TypeError("model must be IntegerLGeometryModel")
+
+    def predictor(
+        corrections: GeometryCorrections,
+    ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction | None]:
+        if m0_observations is None:
+            return model.predict(observations.keys, corrections), None
+        return model.predict_tagged_landmarks(
+            observations.keys,
+            m0_observations.integer_L,
+            corrections,
+        )
+
+    return _fit_landmark_geometry(
+        predictor,
+        model.reference_wavelength_A,
+        observations,
+        initial=initial,
+        bounds=bounds,
+        m0_observations=m0_observations,
+    )
+
+
+def fit_tagged_detector_function_geometry(
+    model: ContinuousDetectorGeometryModel,
+    reference_function: ContinuousDetectorFunction,
+    *,
+    nonzero_keys: tuple[IntegerLMarkerKey, ...],
+    m0_integer_L: tuple[int, ...] = (),
+    sigma_px: float = 1.0,
+    initial: GeometryCorrections,
+    bounds: GeometryCorrectionBounds,
+) -> GeometryFitResult:
+    """Fit exact tagged landmarks associated with two continuous detector functions.
+
+    The reference remains a callable detector field. Each trial correction binds another callable
+    field from the same prepared model. Only exact tagged detector coordinates and the line angles
+    derived from those tags enter the objective; no raster, pixel integration, field sampling, or
+    centroid is constructed.
+    """
+
+    if not isinstance(model, ContinuousDetectorGeometryModel):
+        raise TypeError("model must be ContinuousDetectorGeometryModel")
+    if not isinstance(reference_function, ContinuousDetectorFunction):
+        raise TypeError("reference_function must be ContinuousDetectorFunction")
+    if reference_function.model is not model:
+        raise ValueError("reference and trial functions must share one prepared detector model")
+    frozen_keys = tuple(nonzero_keys)
+    frozen_m0 = tuple(m0_integer_L)
+    reference_m0: M0IntegerLPrediction | None = None
+    if frozen_m0:
+        reference_prediction, reference_m0 = reference_function.predict_tagged_landmarks(
+            frozen_keys,
+            frozen_m0,
+        )
+    else:
+        reference_prediction = reference_function.predict_integer_l_tags(frozen_keys)
+    observations = IntegerLMarkerObservations.from_prediction(
+        reference_prediction,
+        reference_wavelength_A=model._tag_model.reference_wavelength_A,
+        sigma_px=sigma_px,
+    )
+    m0_observations: M0IntegerLObservations | None = None
+    if frozen_m0:
+        if reference_m0 is None:
+            raise AssertionError("combined reference prediction did not return m=0 landmarks")
+        m0_observations = M0IntegerLObservations.from_prediction(
+            reference_m0,
+            sigma_px=sigma_px,
+        )
+
+    def trial_function_predictor(
+        corrections: GeometryCorrections,
+    ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction | None]:
+        trial_function = model.bind(corrections)
+        if frozen_m0:
+            return trial_function.predict_tagged_landmarks(frozen_keys, frozen_m0)
+        return trial_function.predict_integer_l_tags(frozen_keys), None
+
+    return _fit_landmark_geometry(
+        trial_function_predictor,
+        model._tag_model.reference_wavelength_A,
+        observations,
+        initial=initial,
+        bounds=bounds,
+        m0_observations=m0_observations,
     )
 
 

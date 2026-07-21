@@ -15,6 +15,7 @@ from painted_ewald.validation import positive_integer
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
+from rasim_next.optics import mode_decay_constant
 from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorEvaluator,
     pack_bi2se3_two_h_structures,
@@ -160,6 +161,7 @@ class SourceAveragedDetectorCoordinateIntensity:
 class _IndexedCompiledEvaluator:
     evaluator: CompiledDetectorEvaluator
     master_rod_index: NDArray[np.int64]
+    incident_state_index: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.evaluator, CompiledDetectorEvaluator):
@@ -169,8 +171,25 @@ class _IndexedCompiledEvaluator:
             raise ValueError("master_rod_index must contain nonnegative indices")
         if np.unique(indices).size != indices.size:
             raise ValueError("master_rod_index must not repeat an index")
+        state_index = self.incident_state_index
+        if isinstance(state_index, bool) or not isinstance(state_index, (int, np.integer)):
+            raise TypeError("incident_state_index must be an integer")
+        if state_index < 0:
+            raise ValueError("incident_state_index must be nonnegative")
         indices.setflags(write=False)
         object.__setattr__(self, "master_rod_index", indices)
+        object.__setattr__(self, "incident_state_index", int(state_index))
+
+    def with_evaluator(self, evaluator: CompiledDetectorEvaluator) -> _IndexedCompiledEvaluator:
+        """Reuse the already validated immutable rod-index map."""
+
+        if not isinstance(evaluator, CompiledDetectorEvaluator):
+            raise TypeError("evaluator must be CompiledDetectorEvaluator")
+        rebound = object.__new__(type(self))
+        object.__setattr__(rebound, "evaluator", evaluator)
+        object.__setattr__(rebound, "master_rod_index", self.master_rod_index)
+        object.__setattr__(rebound, "incident_state_index", self.incident_state_index)
+        return rebound
 
 
 def _sum_compiled_evaluator_block(
@@ -242,6 +261,7 @@ class SourceAveragedDetectorEwaldMeasure:
         "_evaluator_blocks",
         "_incident",
         "_instrument",
+        "_phase_polarization_weight",
         "_reachable_rod_count_per_source_state",
         "_rods",
         "_valid_state_count",
@@ -408,6 +428,7 @@ class SourceAveragedDetectorEwaldMeasure:
                         instrument.detector_shape_rc,
                     ),
                     master_rod_index=active_index,
+                    incident_state_index=int(state_index),
                 )
             )
         block_size = max(
@@ -423,6 +444,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_phase_polarization_weight", phase_weight * polarization)
         object.__setattr__(self, "_reachable_rod_count_per_source_state", reachable_count)
         object.__setattr__(self, "_rods", selected)
         object.__setattr__(self, "_valid_state_count", len(evaluators))
@@ -465,6 +487,153 @@ class SourceAveragedDetectorEwaldMeasure:
         """Physical lower bound on ``|Q|`` for included top-exit m=0 rays."""
 
         return self._detector_visible_m0_q_gap_Ainv
+
+    def rebind_geometry(
+        self,
+        *,
+        incident: IncidentTransportResult,
+        instrument: CompiledInstrument,
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Bind new rigid geometry while reusing immutable rod, mosaic, and SF state.
+
+        Source identities, wavelengths, material, detector calibration, crystal mounting, and
+        the valid-state topology are frozen. Only detector/sample rigid geometry and the incident
+        quantities causally derived from that geometry are replaced.
+        """
+
+        if not isinstance(incident, IncidentTransportResult):
+            raise TypeError("incident must be IncidentTransportResult")
+        if not isinstance(instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        old_states = self._incident.states
+        new_states = incident.states
+        if new_states.sample_geometry_revision != instrument.sample_geometry_revision:
+            raise ValueError(
+                "geometry rebind requires incident transport and instrument to share one pose"
+            )
+        invariant_arrays = (
+            ("incident_state_id", old_states.incident_state_id, new_states.incident_state_id),
+            ("incident_sample_id", old_states.incident_sample_id, new_states.incident_sample_id),
+            ("source_weight", old_states.source_weight, new_states.source_weight),
+            ("wavelength_A", old_states.wavelength_A, new_states.wavelength_A),
+            ("valid", old_states.valid, new_states.valid),
+        )
+        for name, old, new in invariant_arrays:
+            if not np.array_equal(old, new):
+                raise ValueError(f"geometry rebind requires unchanged {name}")
+        if (
+            old_states.source_revision != new_states.source_revision
+            or old_states.material_revision != new_states.material_revision
+            or old_states.polarization_state_id != new_states.polarization_state_id
+        ):
+            raise ValueError("geometry rebind requires unchanged source and material identity")
+        old_instrument = self._instrument
+        invariant_instrument = (
+            instrument.detector_shape_rc == old_instrument.detector_shape_rc
+            and instrument.detector_row_pitch_m == old_instrument.detector_row_pitch_m
+            and instrument.detector_column_pitch_m == old_instrument.detector_column_pitch_m
+            and instrument.detector_reference_coordinate_px
+            == old_instrument.detector_reference_coordinate_px
+            and instrument.sample_support_model_id == old_instrument.sample_support_model_id
+            and instrument.sample_width_m == old_instrument.sample_width_m
+            and instrument.sample_length_m == old_instrument.sample_length_m
+            and instrument.film_thickness_A == old_instrument.film_thickness_A
+            and np.array_equal(
+                instrument.sample_from_crystal.rotation,
+                old_instrument.sample_from_crystal.rotation,
+            )
+            and np.array_equal(
+                instrument.sample_from_crystal.translation_m,
+                old_instrument.sample_from_crystal.translation_m,
+            )
+        )
+        if not invariant_instrument:
+            raise ValueError(
+                "geometry rebind requires unchanged detector calibration, sample support, "
+                "film, and crystal mounting"
+            )
+
+        detector_rotation = instrument.lab_from_detector.rotation
+        column_step_lab = detector_rotation[:, 0] * instrument.detector_column_pitch_m
+        row_step_lab = detector_rotation[:, 1] * instrument.detector_row_pitch_m
+        reference_column, reference_row = instrument.detector_reference_coordinate_px
+        detector_zero_lab = (
+            instrument.lab_from_detector.translation_m
+            - reference_column * column_step_lab
+            - reference_row * row_step_lab
+        )
+        detector_area_vector = np.cross(column_step_lab, row_step_lab)
+        rebound_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
+        for block in self._evaluator_blocks:
+            rebound_block: list[_IndexedCompiledEvaluator] = []
+            for indexed in block:
+                state_index = indexed.incident_state_index
+                incident_direction = -1 if new_states.direction_sample[state_index, 2] < 0.0 else 1
+                incident_decay = float(
+                    mode_decay_constant(
+                        new_states.kz_film_Ainv[state_index],
+                        incident_direction,
+                    )
+                )
+                source_phase_weight = float(
+                    new_states.source_weight[state_index]
+                    * new_states.footprint_acceptance[state_index]
+                    * self._phase_polarization_weight
+                )
+                rebound_state = indexed.evaluator.state.rebind_geometry(
+                    detector_zero_lab_m=np.ascontiguousarray(detector_zero_lab),
+                    detector_column_step_lab_m=np.ascontiguousarray(column_step_lab),
+                    detector_row_step_lab_m=np.ascontiguousarray(row_step_lab),
+                    detector_pixel_area_vector_lab_m2=np.ascontiguousarray(detector_area_vector),
+                    ray_origin_lab_m=np.ascontiguousarray(
+                        new_states.sample_intersection_lab_m[state_index]
+                    ),
+                    sample_from_lab=np.ascontiguousarray(instrument.sample_from_lab.rotation),
+                    ki_film_sample_Ainv=np.ascontiguousarray(
+                        new_states.k_film_phase_sample_Ainv[state_index]
+                    ),
+                    internal_k_Ainv=float(
+                        np.linalg.norm(new_states.k_film_phase_sample_Ainv[state_index])
+                    ),
+                    entrance_amplitude=complex(new_states.entrance_amplitude[state_index]),
+                    incident_decay_Ainv=incident_decay,
+                    source_phase_weight=source_phase_weight,
+                )
+                rebound_block.append(
+                    indexed.with_evaluator(
+                        CompiledDetectorEvaluator(
+                            rebound_state,
+                            instrument.detector_shape_rc,
+                        )
+                    )
+                )
+            rebound_blocks.append(tuple(rebound_block))
+
+        m0_gap: float | None = None
+        if any(rod.family_m == 0 for rod in self._rods):
+            incident_normal = new_states.k_film_phase_sample_Ainv[new_states.valid, 2]
+            if not incident_normal.size or np.any(incident_normal >= 0.0):
+                raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
+            m0_gap = float(np.min(-incident_normal))
+        rebound = object.__new__(type(self))
+        object.__setattr__(rebound, "_evaluator_blocks", tuple(rebound_blocks))
+        object.__setattr__(rebound, "_detector_visible_m0_q_gap_Ainv", m0_gap)
+        object.__setattr__(rebound, "_incident", incident)
+        object.__setattr__(rebound, "_instrument", instrument)
+        object.__setattr__(
+            rebound,
+            "_phase_polarization_weight",
+            self._phase_polarization_weight,
+        )
+        object.__setattr__(
+            rebound,
+            "_reachable_rod_count_per_source_state",
+            self._reachable_rod_count_per_source_state,
+        )
+        object.__setattr__(rebound, "_rods", self._rods)
+        object.__setattr__(rebound, "_valid_state_count", self._valid_state_count)
+        object.__setattr__(rebound, "_worker_count", self._worker_count)
+        return rebound
 
     def _thread_pool(self) -> ThreadPoolExecutor | None:
         if self._worker_count <= 1 or len(self._evaluator_blocks) <= 1:

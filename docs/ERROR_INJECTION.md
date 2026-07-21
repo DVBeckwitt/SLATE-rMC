@@ -103,15 +103,22 @@ identity, or explicit availability failure.
 
 ### Exact-marker geometry fitting
 
+- Replace either callable detector field with a sampled target array or call a pixel integrator.
 - Remove the analytic beta-root sign from marker identity or derive it from detector left/right.
+- Treat the two beta-root sides as separate Ewald branches, or fabricate +/- branches for m=0.
+- Change the m=0 exact-L landmark from the declared minimum-mosaic-tilt solution without changing
+  its policy identity.
+- Drop either the exact-tag coordinate terms or the paired-root/m=0 line-angle terms.
 - Reassign a missing/tangent/branch-changing root inside the residual.
 - Reverse either intrinsic correction sign/order, swap detector column/row, or compare caked rather
   than native coordinates.
 - Admit an underdetermined raw sample/goniometer pack without a scaled-Jacobian rank gate.
 - Fit only the training sites without held-out prediction or the independent outer root audit.
 
-Expected detection: duplicate marker identity, topology failure, synthetic parameter recovery,
-held-out native-coordinate error, Jacobian rank/condition, or post-fit selection classification.
+Expected detection: callable/no-pixel spies, duplicate marker identity, topology failure, line-angle
+residual-decomposition and independent m=0 constrained-Ewald oracles, synthetic parameter
+recovery, held-out native-coordinate error, Jacobian
+rank/condition, or post-fit selection classification.
 
 ## Control record
 
