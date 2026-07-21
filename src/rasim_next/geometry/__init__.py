@@ -21,6 +21,7 @@ from rasim_next.geometry.instrument import (
     AxisRotation,
     CompiledInstrument,
     InstrumentConfiguration,
+    axis_rotation_transform,
     compile_instrument,
     compose_intrinsic_xy_rotation,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "SampleIntersection",
     "angles_to_detector_coordinate_area_measure",
     "angles_to_detector_coordinates",
+    "axis_rotation_transform",
     "build_incident_states",
     "compile_instrument",
     "compose_intrinsic_xy_rotation",

@@ -2899,3 +2899,484 @@ def test_normalized_field_freezes_masks_losses_divide_order_and_phi_permutation(
     assert clipped_field.N.sum() + clipped_field.angular_lost_normalization == pytest.approx(
         normalization.sum(), abs=2e-12
     )
+
+
+def test_interactive_detector_raster_samples_all_roots_without_pixel_integration() -> None:
+    from types import SimpleNamespace
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    sample_detector_raster = viewer["sample_detector_raster"]
+
+    class ContinuousDetectorSpy:
+        rods = (object(), object(), object())
+        source_state_count = 7
+
+        def __init__(self) -> None:
+            self.call: tuple[np.ndarray, np.ndarray, str] | None = None
+
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: np.ndarray,
+            row_px: np.ndarray,
+            *,
+            execution_backend: str,
+        ) -> object:
+            self.call = (column_px.copy(), row_px.copy(), execution_backend)
+            density = column_px + 10.0 * row_px
+            caustic = np.zeros((*density.shape, len(self.rods)), dtype=np.bool_)
+            caustic[1, 0, 2] = True
+            return SimpleNamespace(
+                density_A2_per_px2=density,
+                valid_source_count=np.full(density.shape, self.source_state_count),
+                caustic=caustic,
+                root_policy="all_retained_roots.v1",
+                execution_backend="numba_cpu_source_averaged.v1",
+                execution_device=None,
+            )
+
+        def integrate_native_pixels(self, **_kwargs: object) -> object:
+            raise AssertionError("the display must not integrate detector pixels")
+
+    detector = ContinuousDetectorSpy()
+    raster = sample_detector_raster(
+        detector,
+        detector_shape_rc=(6, 10),
+        display_samples_per_axis=2,
+        execution_backend="cpu",
+    )
+
+    assert detector.call is not None
+    column_px, row_px, backend = detector.call
+    np.testing.assert_array_equal(column_px, np.array([[2.0, 7.0], [2.0, 7.0]]))
+    np.testing.assert_array_equal(row_px, np.array([[1.0, 1.0], [4.0, 4.0]]))
+    np.testing.assert_array_equal(raster.density_A2_per_px2, column_px + 10.0 * row_px)
+    np.testing.assert_array_equal(raster.valid, np.ones((2, 2), dtype=np.bool_))
+    np.testing.assert_array_equal(raster.caustic, np.array([[False, False], [True, False]]))
+    assert backend == "cpu"
+    assert raster.source_state_count == 7
+    assert raster.physical_rod_count == 3
+    assert raster.root_policy == "all_retained_roots.v1"
+    assert raster.measure_id == "raw_detector_coordinate_density_A2_per_px2.v1"
+
+
+def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    without_m0 = replace(
+        config,
+        bragg=replace(config.bragg, include_detector_visible_m0=False),
+    )
+
+    with pytest.raises(ValueError, match="all-m display"):
+        viewer["_build_bundle"](without_m0, 1)
+
+
+def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -> None:
+    from painted_ewald import enumerate_rods_within_ewald_sphere
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    config = replace(
+        config,
+        source=replace(config.source, wavelength_sigma_A=0.2),
+        instrument=replace(
+            config.instrument,
+            sample_support_model_id="finite_rectangle.v1",
+            sample_width_m=0.0002,
+            sample_length_m=0.0002,
+        ),
+    )
+    bundle = viewer["_build_bundle"](config, 25)
+    states = bundle.inputs.incident.states
+    base_minimum_wavelength_A = float(np.min(states.wavelength_A[states.valid]))
+    base_rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=bundle.inputs.reciprocal.basis_Ainv,
+        k_norm_Ainv=2.0 * np.pi / base_minimum_wavelength_A,
+        population=config.bragg.rod_population,
+    )
+    assert bundle.inputs.rods == base_rods
+
+    deltas = viewer["GeometryDeltas"](
+        goniometer_axis_pitch_offset_deg=0.4,
+        sample_in_plane_y_translation_mm=-0.13,
+    )
+    changed_instrument = viewer["apply_geometry_deltas"](
+        bundle.inputs.instrument,
+        deltas,
+        configured_axis_rotations=bundle.inputs.config.instrument.axis_rotations,
+    )
+    changed_incident = build_incident_states(
+        bundle.inputs.samples,
+        bundle.inputs.material,
+        changed_instrument,
+    )
+    assert not np.array_equal(changed_incident.states.valid, states.valid)
+    changed_minimum_wavelength_A = float(
+        np.min(changed_incident.states.wavelength_A[changed_incident.states.valid])
+    )
+    changed_rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=bundle.inputs.reciprocal.basis_Ainv,
+        k_norm_Ainv=2.0 * np.pi / changed_minimum_wavelength_A,
+        population=config.bragg.rod_population,
+    )
+    assert changed_minimum_wavelength_A < base_minimum_wavelength_A
+    assert len(changed_rods) > len(base_rods)
+
+    evaluate_bundle = viewer["_evaluate_bundle"]
+    evaluate_bundle.__globals__["sample_detector_raster"] = lambda detector, **_kwargs: len(
+        detector.rods
+    )
+    changed_rod_count = evaluate_bundle(
+        bundle,
+        deltas,
+        display_samples_per_axis=2,
+        execution_backend="cpu",
+    )
+    assert changed_rod_count == len(changed_rods)
+
+
+def test_interactive_geometry_deltas_use_domain_names_and_apply_base_local_pose() -> None:
+    from dataclasses import fields
+
+    from rasim_next.geometry.instrument import CompiledInstrument
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    GeometryDeltas = viewer["GeometryDeltas"]
+    apply_geometry_deltas = viewer["apply_geometry_deltas"]
+
+    expected_names = (
+        "detector_pitch_offset_deg",
+        "detector_yaw_offset_deg",
+        "detector_in_plane_rotation_offset_deg",
+        "detector_column_translation_mm",
+        "detector_row_translation_mm",
+        "detector_distance_offset_mm",
+        "goniometer_axis_pitch_offset_deg",
+        "goniometer_axis_yaw_offset_deg",
+        "effective_incidence_angle_offset_deg",
+        "effective_sample_tilt_offset_deg",
+        "sample_in_plane_rotation_offset_deg",
+        "sample_in_plane_x_translation_mm",
+        "sample_in_plane_y_translation_mm",
+        "sample_normal_translation_mm",
+    )
+    assert tuple(item.name for item in fields(GeometryDeltas)) == expected_names
+    assert tuple(spec.field_name for spec in viewer["_CONTROL_SPECS"]) == expected_names
+    labels_by_name = {spec.field_name: spec.label for spec in viewer["_CONTROL_SPECS"]}
+    required_label_terms = {
+        "detector_pitch_offset_deg": r"-\Delta\gamma_{\rm RA}",
+        "detector_yaw_offset_deg": r"\Delta\Gamma_{\rm RA}",
+        "detector_in_plane_rotation_offset_deg": r"\Delta\chi_D",
+        "detector_column_translation_mm": r"\Delta x_D",
+        "detector_row_translation_mm": r"\Delta y_D",
+        "detector_distance_offset_mm": r"\Delta D_n",
+        "goniometer_axis_pitch_offset_deg": r"\Delta\alpha$ [RA-SIM cor_angle]",
+        "goniometer_axis_yaw_offset_deg": r"\Delta\psi_g$ [RA-SIM psi_z]",
+        "effective_incidence_angle_offset_deg": r"\Delta\theta_i",
+        "effective_sample_tilt_offset_deg": r"\Delta\delta",
+        "sample_in_plane_rotation_offset_deg": r"RA-SIM $-\Delta\psi$",
+        "sample_in_plane_x_translation_mm": r"\Delta x_S",
+        "sample_in_plane_y_translation_mm": r"\Delta y_S",
+        "sample_normal_translation_mm": r"\Delta n_S=-\Delta z_S",
+    }
+    assert labels_by_name.keys() == required_label_terms.keys()
+    for name, required_term in required_label_terms.items():
+        assert required_term in labels_by_name[name]
+
+    identity = np.eye(3)
+    detector_rotation = np.array(((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    instrument = CompiledInstrument(
+        lab_from_sample=RigidTransform(
+            identity,
+            np.array((0.1, 0.2, 0.3)),
+            FrameId.SAMPLE,
+            FrameId.LAB,
+        ),
+        sample_from_crystal=RigidTransform(
+            identity,
+            np.zeros(3),
+            FrameId.CRYSTAL,
+            FrameId.SAMPLE,
+        ),
+        lab_from_detector=RigidTransform(
+            detector_rotation,
+            np.array((0.4, 0.5, 0.6)),
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        detector_shape_rc=(6, 10),
+        detector_row_pitch_m=2.0e-4,
+        detector_column_pitch_m=1.0e-4,
+        detector_reference_coordinate_px=(4.0, 2.0),
+        sample_support_model_id="unbounded_plane.v1",
+        sample_width_m=None,
+        sample_length_m=None,
+        film_thickness_A=500.0,
+    )
+
+    zero = apply_geometry_deltas(instrument, GeometryDeltas.zero())
+    np.testing.assert_array_equal(
+        zero.lab_from_sample.rotation,
+        instrument.lab_from_sample.rotation,
+    )
+    np.testing.assert_array_equal(
+        zero.lab_from_detector.translation_m,
+        instrument.lab_from_detector.translation_m,
+    )
+
+    detector_angles_deg = (7.0, -11.0, 13.0)
+    detector_translation_mm = (2.0, -3.0, 4.0)
+    sample_angles_deg = (-5.0, 6.0, -9.0)
+    sample_translation_mm = (-1.5, 3.0, 0.75)
+    changed = apply_geometry_deltas(
+        instrument,
+        GeometryDeltas(
+            detector_pitch_offset_deg=detector_angles_deg[0],
+            detector_yaw_offset_deg=detector_angles_deg[1],
+            detector_in_plane_rotation_offset_deg=detector_angles_deg[2],
+            detector_column_translation_mm=detector_translation_mm[0],
+            detector_row_translation_mm=detector_translation_mm[1],
+            detector_distance_offset_mm=detector_translation_mm[2],
+            effective_incidence_angle_offset_deg=sample_angles_deg[0],
+            effective_sample_tilt_offset_deg=sample_angles_deg[1],
+            sample_in_plane_rotation_offset_deg=sample_angles_deg[2],
+            sample_in_plane_x_translation_mm=sample_translation_mm[0],
+            sample_in_plane_y_translation_mm=sample_translation_mm[1],
+            sample_normal_translation_mm=sample_translation_mm[2],
+        ),
+    )
+
+    def intrinsic_xyz_deg(x_deg: float, y_deg: float, z_deg: float) -> np.ndarray:
+        x_rad, y_rad, z_rad = np.radians((x_deg, y_deg, z_deg))
+        cx, sx = np.cos(x_rad), np.sin(x_rad)
+        cy, sy = np.cos(y_rad), np.sin(y_rad)
+        cz, sz = np.cos(z_rad), np.sin(z_rad)
+        rotation_x = np.array(((1.0, 0.0, 0.0), (0.0, cx, -sx), (0.0, sx, cx)))
+        rotation_y = np.array(((cy, 0.0, sy), (0.0, 1.0, 0.0), (-sy, 0.0, cy)))
+        rotation_z = np.array(((cz, -sz, 0.0), (sz, cz, 0.0), (0.0, 0.0, 1.0)))
+        return rotation_x @ rotation_y @ rotation_z
+
+    np.testing.assert_allclose(
+        changed.lab_from_detector.rotation,
+        detector_rotation @ intrinsic_xyz_deg(*detector_angles_deg),
+        rtol=0.0,
+        atol=3.0e-16,
+    )
+    np.testing.assert_allclose(
+        changed.lab_from_detector.translation_m,
+        instrument.lab_from_detector.translation_m
+        + detector_rotation @ (1.0e-3 * np.asarray(detector_translation_mm)),
+        rtol=0.0,
+        atol=2.0e-16,
+    )
+    np.testing.assert_allclose(
+        changed.lab_from_sample.rotation,
+        intrinsic_xyz_deg(*sample_angles_deg),
+        rtol=0.0,
+        atol=3.0e-16,
+    )
+    np.testing.assert_allclose(
+        changed.lab_from_sample.translation_m,
+        instrument.lab_from_sample.translation_m + 1.0e-3 * np.asarray(sample_translation_mm),
+        rtol=0.0,
+        atol=2.0e-16,
+    )
+    assert changed.detector_shape_rc == instrument.detector_shape_rc
+    assert changed.detector_reference_coordinate_px == instrument.detector_reference_coordinate_px
+
+
+def test_interactive_goniometer_axis_deltas_rebuild_the_pivoted_commanded_motion() -> None:
+    from rasim_next.geometry import AxisRotation
+    from rasim_next.pipeline.configured_simulation import AxisRotationConfiguration
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    GeometryDeltas = viewer["GeometryDeltas"]
+    apply_geometry_deltas = viewer["apply_geometry_deltas"]
+
+    def rotation_y(angle_rad: float) -> np.ndarray:
+        cosine, sine = math.cos(angle_rad), math.sin(angle_rad)
+        return np.array(((cosine, 0.0, sine), (0.0, 1.0, 0.0), (-sine, 0.0, cosine)))
+
+    def rotation_z(angle_rad: float) -> np.ndarray:
+        cosine, sine = math.cos(angle_rad), math.sin(angle_rad)
+        return np.array(((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0)))
+
+    def rodrigues(axis: np.ndarray, angle_rad: float) -> np.ndarray:
+        x_axis, y_axis, z_axis = axis
+        cosine, sine = math.cos(angle_rad), math.sin(angle_rad)
+        complement = 1.0 - cosine
+        return np.array(
+            (
+                (
+                    cosine + x_axis * x_axis * complement,
+                    x_axis * y_axis * complement - z_axis * sine,
+                    x_axis * z_axis * complement + y_axis * sine,
+                ),
+                (
+                    y_axis * x_axis * complement + z_axis * sine,
+                    cosine + y_axis * y_axis * complement,
+                    y_axis * z_axis * complement - x_axis * sine,
+                ),
+                (
+                    z_axis * x_axis * complement - y_axis * sine,
+                    z_axis * y_axis * complement + x_axis * sine,
+                    cosine + z_axis * z_axis * complement,
+                ),
+            )
+        )
+
+    commanded_angle_deg = 12.0
+    pivot_lab_m = np.array((0.04, -0.02, 0.01))
+    zero_rotation = rotation_z(math.radians(17.0))
+    zero_translation_m = np.array((0.02, -0.01, 0.03))
+    mount_rotation = rotation_y(math.radians(-8.0))
+    mount_translation_m = np.array((0.004, 0.003, -0.002))
+    base_pitch_deg = -0.8
+    base_yaw_deg = 1.1
+    base_pitch_rad = math.radians(base_pitch_deg)
+    base_yaw_rad = math.radians(base_yaw_deg)
+    base_axis = np.array(
+        (
+            math.cos(base_pitch_rad) * math.cos(base_yaw_rad),
+            -math.cos(base_pitch_rad) * math.sin(base_yaw_rad),
+            math.sin(base_pitch_rad),
+        )
+    )
+    base_axis_rotation = AxisRotation(
+        axis_lab=base_axis,
+        angle_rad=math.radians(commanded_angle_deg),
+        pivot_lab_m=pivot_lab_m,
+    )
+    base_configuration = InstrumentConfiguration(
+        axis_rotations=(base_axis_rotation,),
+        lab_from_goniometer_zero=RigidTransform(
+            zero_rotation,
+            zero_translation_m,
+            FrameId.GONIOMETER,
+            FrameId.LAB,
+        ),
+        goniometer_from_sample=RigidTransform(
+            mount_rotation,
+            mount_translation_m,
+            FrameId.SAMPLE,
+            FrameId.GONIOMETER,
+        ),
+        sample_from_crystal=RigidTransform(
+            np.eye(3),
+            np.zeros(3),
+            FrameId.CRYSTAL,
+            FrameId.SAMPLE,
+        ),
+        lab_from_detector=RigidTransform(
+            np.eye(3),
+            np.array((0.0, 0.1, 0.0)),
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        detector_shape_rc=(6, 10),
+        detector_row_pitch_m=2.0e-4,
+        detector_column_pitch_m=1.0e-4,
+        detector_reference_coordinate_px=(4.0, 2.0),
+        sample_support_model_id="unbounded_plane.v1",
+        sample_width_m=None,
+        sample_length_m=None,
+        film_thickness_A=500.0,
+    )
+    base_instrument = compile_instrument(base_configuration)
+    configured_axes = (
+        AxisRotationConfiguration(
+            axis_lab=tuple(base_axis),
+            angle_deg=commanded_angle_deg,
+            pivot_lab_m=tuple(pivot_lab_m),
+        ),
+    )
+
+    pitch_deg = 1.5
+    yaw_deg = 0.7
+    changed = apply_geometry_deltas(
+        base_instrument,
+        GeometryDeltas(
+            goniometer_axis_pitch_offset_deg=pitch_deg,
+            goniometer_axis_yaw_offset_deg=yaw_deg,
+        ),
+        configured_axis_rotations=configured_axes,
+    )
+    pitch_rad = math.radians(base_pitch_deg + pitch_deg)
+    yaw_rad = math.radians(base_yaw_deg + yaw_deg)
+    corrected_axis = np.array(
+        (
+            math.cos(pitch_rad) * math.cos(yaw_rad),
+            -math.cos(pitch_rad) * math.sin(yaw_rad),
+            math.sin(pitch_rad),
+        )
+    )
+    commanded_rotation = rodrigues(corrected_axis, math.radians(commanded_angle_deg))
+    mounted_rotation = zero_rotation @ mount_rotation
+    mounted_translation_m = zero_translation_m + zero_rotation @ mount_translation_m
+    expected_rotation = commanded_rotation @ mounted_rotation
+    expected_translation_m = (
+        pivot_lab_m - commanded_rotation @ pivot_lab_m + commanded_rotation @ mounted_translation_m
+    )
+    np.testing.assert_allclose(
+        changed.lab_from_sample.rotation,
+        expected_rotation,
+        rtol=0.0,
+        atol=4.0e-16,
+    )
+    np.testing.assert_allclose(
+        changed.lab_from_sample.translation_m,
+        expected_translation_m,
+        rtol=0.0,
+        atol=4.0e-16,
+    )
+    np.testing.assert_array_equal(
+        changed.lab_from_detector.rotation,
+        base_instrument.lab_from_detector.rotation,
+    )
+
+    zero_command_configuration = replace(
+        base_configuration,
+        axis_rotations=(replace(base_axis_rotation, angle_rad=0.0),),
+    )
+    zero_command_instrument = compile_instrument(zero_command_configuration)
+    zero_command_changed = apply_geometry_deltas(
+        zero_command_instrument,
+        GeometryDeltas(
+            goniometer_axis_pitch_offset_deg=pitch_deg,
+            goniometer_axis_yaw_offset_deg=yaw_deg,
+        ),
+        configured_axis_rotations=(replace(configured_axes[0], angle_deg=0.0),),
+    )
+    np.testing.assert_array_equal(
+        zero_command_changed.lab_from_sample.rotation,
+        zero_command_instrument.lab_from_sample.rotation,
+    )
+    np.testing.assert_array_equal(
+        zero_command_changed.lab_from_sample.translation_m,
+        zero_command_instrument.lab_from_sample.translation_m,
+    )
+
+    with pytest.raises(ValueError, match="exactly one configured goniometer axis"):
+        apply_geometry_deltas(
+            base_instrument,
+            GeometryDeltas(goniometer_axis_pitch_offset_deg=1.0),
+            configured_axis_rotations=configured_axes * 2,
+        )

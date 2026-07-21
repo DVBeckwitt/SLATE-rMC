@@ -32,6 +32,10 @@ and ordering are validated eagerly.
 | `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 
+`axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
+active LAB-to-LAB rigid transform about its declared LAB pivot. `compile_instrument` uses the same
+function for every commanded goniometer motion in tuple order.
+
 `EventIntensityResult` retains “event” in its historical type name, but it is an ordered query result;
 it is not a sampled scattering-event runtime. Its strength excludes source probability, rod
 population, mosaic probability, optics, polarization, detector Jacobians, and pixel integration.

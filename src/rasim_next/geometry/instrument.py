@@ -262,6 +262,18 @@ def _rotation_matrix(rotation: AxisRotation) -> NDArray[np.float64]:
     )
 
 
+def axis_rotation_transform(rotation: AxisRotation) -> RigidTransform:
+    """Return one configured active LAB rotation about its declared LAB pivot."""
+
+    if not isinstance(rotation, AxisRotation):
+        raise TypeError("rotation must be an AxisRotation")
+    return RigidTransform.around_pivot(
+        rotation=_rotation_matrix(rotation),
+        pivot_m=rotation.pivot_lab_m,
+        frame=FrameId.LAB,
+    )
+
+
 def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstrument:
     """Apply declared rotations in tuple order and compile target-from-source transforms."""
 
@@ -269,11 +281,7 @@ def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstru
         raise TypeError("configuration must be an InstrumentConfiguration")
     lab_motion = RigidTransform.identity(FrameId.LAB)
     for rotation in configuration.axis_rotations:
-        step = RigidTransform.around_pivot(
-            rotation=_rotation_matrix(rotation),
-            pivot_m=rotation.pivot_lab_m,
-            frame=FrameId.LAB,
-        )
+        step = axis_rotation_transform(rotation)
         lab_motion = step.compose(lab_motion)
 
     lab_from_goniometer = lab_motion.compose(configuration.lab_from_goniometer_zero)

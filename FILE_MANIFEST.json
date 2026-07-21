@@ -1,5 +1,5 @@
 {
-  "file_count": 245,
+  "file_count": 246,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "a43e7552fa7ebdbc8c8666adc24ba8c5180e732a7c217e304a30d5d32ecf8317",
-      "size_bytes": 16123
+      "sha256": "179d18d008c7391ce394a2eaaf2ef20a9d99ef0df61531108ad5ce564d8e8949",
+      "size_bytes": 16384
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "9c925ee23241ca21ba2bda2f558e59b063f57b659abb6fb1409439ddbfef2cf5",
-      "size_bytes": 7234
+      "sha256": "18deab555cdbfdbb5d7fa46c2c032b710ec3510049dd8c5f3386645d9a1fb595",
+      "size_bytes": 11499
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -537,6 +537,11 @@
       "size_bytes": 28174
     },
     {
+      "path": "scripts/interactive_detector_viewer.py",
+      "sha256": "405fb76376ebc232cee6f943735c57034dfd768b0e8aa811c31ba7280b6d0348",
+      "size_bytes": 41976
+    },
+    {
       "path": "scripts/render_continuous_angle_comparison.py",
       "sha256": "7edb3c39ce4faf2b673d8e28817ffe1c481b614649f926c6a7e7ef91e8844c00",
       "size_bytes": 14828
@@ -663,8 +668,8 @@
     },
     {
       "path": "src/rasim_next/geometry/__init__.py",
-      "sha256": "43846333c0f4bd22e1231f0cf16f4463da6c6353ce6a1a74a095746b6ae5fedf",
-      "size_bytes": 1536
+      "sha256": "90a90c6e5b25d113e0a5bce9f8c3ab8aed01fa18180464c3beb444267a49f3a2",
+      "size_bytes": 1596
     },
     {
       "path": "src/rasim_next/geometry/_vectors.py",
@@ -683,8 +688,8 @@
     },
     {
       "path": "src/rasim_next/geometry/instrument.py",
-      "sha256": "416107bb37338621a6d7735894c1763b16dce6907afdee8dc57d3d78e89efdeb",
-      "size_bytes": 12041
+      "sha256": "86a0a9d5ac48f38e9fb8d6a0d965f40d6f8a84c33ba75fd9f7025a69d3139003",
+      "size_bytes": 12333
     },
     {
       "path": "src/rasim_next/geometry/proof.py",
@@ -1193,8 +1198,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "a4f7d9c4578a841346139aad3ef5908b4c92b5ee233f60bc39ca087c284c6c7a",
-      "size_bytes": 109329
+      "sha256": "25fe338e5f9dc90886f7ac5b3229f9e0e67d40461d86b03ac1d83b378632520f",
+      "size_bytes": 128034
     },
     {
       "path": "tests/test_mosaic_ewald.py",

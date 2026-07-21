@@ -132,6 +132,74 @@ Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on b
 landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
 runtime of the full incoherent ensemble is intended.
 
+## Interactive continuous detector viewer
+
+Open a medium-resolution detector view with live sample/detector pose controls:
+
+```powershell
+uv run --extra visualization python scripts/interactive_detector_viewer.py
+```
+
+The viewer starts with 25 requested incident-ray phase-space samples and 128 continuous
+detector-coordinate display samples per axis for the settled field. The two numerical controls are
+named **incident-ray samples** (`N_ray`) and **display samples per axis** (`N_disp`): a source sample
+contains origin, direction, and wavelength, while the display count is only an ephemeral view of
+the continuous function. While a pose control moves, one nominal incident ray samples the unbinned
+function on a fixed 32 x 32 grid for responsive feedback. Releasing a changed control starts the
+requested incoherent source-average render in a background thread; the title always distinguishes
+the nominal preview from the completed requested source average. Press `R` to render, `0` to reset,
+or `Q` to close.
+
+Every geometry slider is a zero-based correction to the configured geometry. The labels use the
+original RA-SIM and manuscript vocabulary while distinguishing mechanical goniometer controls from
+effective end-pose controls:
+
+- detector pitch is the current column-axis correction, equal to `-delta gamma` in the original
+  RA-SIM sign convention; detector yaw is the row-axis `delta Gamma` correction;
+- detector and sample in-plane rotations are distinguished as `delta chi_D` and `delta chi_S`;
+  the latter is locally `-delta psi` in RA-SIM's sign convention;
+- detector-normal distance is `delta D_n`; detector column/row translations remain physical
+  millimetre translations and are only marked as coupled to manuscript beam-center `x0/y0`;
+- goniometer-axis pitch `delta alpha` is RA-SIM `delta cor_angle`, and goniometer-axis yaw
+  `delta psi_g` is RA-SIM `delta psi_z`. These reorient the sole configured commanded axis while
+  preserving its motor angle and LAB pivot; they are not direct sample rotations;
+- effective incidence and sample tilt are `delta theta_i` and `delta delta` (the latter was RA-SIM
+  `chi`, labelled **Sample Pitch**);
+- sample tangent translations remain `delta x_S/delta y_S`; sample-normal translation is
+  `delta n_S = -delta z_S` in the original RA-SIM sign convention.
+
+Detector rotations are about the configured detector reference-coordinate point. The two
+goniometer controls reconstruct the pivoted commanded motion using the RA-SIM axis
+`(cos(alpha) cos(psi_g), -cos(alpha) sin(psi_g), sin(alpha))`; consequently they have exactly zero
+effect when the commanded motor angle is zero. Nonzero goniometer offsets require exactly one
+configured axis because the current schema does not name motor roles in a multi-axis tuple.
+Remaining sample rotations and translations are effective local end-pose corrections applied after
+that mechanical motion. The viewer does not relabel unmatched tangent translations as manuscript
+parameters or add the independent beam offset `z_B`. These manual forward controls also do not make
+`(alpha, psi_g)` separately identifiable from one measured image; that requires multiple commanded
+goniometer angles and remains outside the current fitting contract.
+
+Every view evaluates all elastically reachable physical `(h,k)` rods and all retained Ewald roots,
+including only the certified detector-visible nonzero `m=0` support. The inverse pullback starts at
+the active panel, so no off-detector Ewald mesh is built. Values are center samples of
+`raw_detector_coordinate_density_A2_per_px2.v1`; the smoothly interpolated raster is display-only
+and is not detector-pixel integration, a PSF, or a normalized physical result.
+Configurations that disable detector-visible `m=0` are rejected because this viewer's contract is
+the all-`m` physical-rod catalogue.
+
+The requested-render backend inherits the explicit YAML setting. Override it without fallback when
+desired:
+
+```powershell
+uv run --extra visualization python scripts/interactive_detector_viewer.py `
+  --source-samples 25 `
+  --display-samples-per-axis 128 `
+  --backend cuda
+```
+
+The earlier `--ki-samples` and `--raster-size` spellings remain command-line aliases; the canonical
+names state what is actually sampled.
+
 ## Position-free measured peak indexing
 
 Discover peaks globally in the tracked detector-native OSC images, infer their reciprocal
