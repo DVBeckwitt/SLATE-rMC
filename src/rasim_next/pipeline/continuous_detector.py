@@ -24,7 +24,9 @@ from painted_ewald.validation import positive_integer
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.detector import (
+    _DETECTOR_INCIDENCE_COSINE_TOL,
     _detector_coordinates_to_lab_points,
+    _detector_incidence_cosine,
     _project_detector_rays,
 )
 from rasim_next.geometry.instrument import CompiledInstrument
@@ -1148,13 +1150,19 @@ class DetectorEwaldMeasure:
         status[inside & ~nonzero] = ValidityCode.NO_SOLUTION.value
         direction_lab = np.zeros((size, 3), dtype=np.float64)
         direction_lab[nonzero] = displacement_lab[nonzero] / distance_m[nonzero, None]
+        incidence_cosine = _detector_incidence_cosine(direction_lab, self._instrument)
+        detector_parallel = nonzero & (np.abs(incidence_cosine) <= _DETECTOR_INCIDENCE_COSINE_TOL)
+        status[detector_parallel] = ValidityCode.PARALLEL.value
+        back_facing = nonzero & (incidence_cosine < -_DETECTOR_INCIDENCE_COSINE_TOL)
+        status[back_facing] = ValidityCode.BACKWARD.value
+        front_facing = nonzero & (incidence_cosine > _DETECTOR_INCIDENCE_COSINE_TOL)
         kf_air_sample = np.zeros((size, 3), dtype=np.float64)
-        kf_air_sample[nonzero] = self._instrument.sample_from_lab.apply_vector(
-            self._air_k0_Ainv * direction_lab[nonzero]
+        kf_air_sample[front_facing] = self._instrument.sample_from_lab.apply_vector(
+            self._air_k0_Ainv * direction_lab[front_facing]
         )
-        top_exit = nonzero & (kf_air_sample[:, 2] > 0.0)
-        status[nonzero & (kf_air_sample[:, 2] < 0.0)] = ValidityCode.BACKWARD.value
-        status[nonzero & (kf_air_sample[:, 2] == 0.0)] = ValidityCode.PARALLEL.value
+        top_exit = front_facing & (kf_air_sample[:, 2] > 0.0)
+        status[front_facing & (kf_air_sample[:, 2] < 0.0)] = ValidityCode.BACKWARD.value
+        status[front_facing & (kf_air_sample[:, 2] == 0.0)] = ValidityCode.PARALLEL.value
 
         incident_norm = float(np.linalg.norm(self._coating.ki_sample_Ainv))
         parallel_squared = np.einsum(
@@ -1349,6 +1357,7 @@ class DetectorEwaldMeasure:
         for x_sign in (-1.0, 1.0):
             x_value = x_sign * x_magnitude
             beta = np.remainder(azimuth_q - np.arctan2(b, x_value), two_pi)
+            beta = np.where(beta >= two_pi, 0.0, beta)
             for w_sign in (-1.0, 1.0):
                 w_value = w_sign * w_magnitude
                 alpha = np.remainder(

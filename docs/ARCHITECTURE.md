@@ -85,8 +85,8 @@ module-global or import-time side effects.
 - The tagged-function fitter never rasterizes either detector field. It fits exact landmarks and
   their line angles, so it does not need mosaic/SF intensity values, centroids, or detector
   quadrature. Detector/sample pose trials reuse the reciprocal basis, rods, finite-2H model, and
-  mosaic contract; sample-normal trials rebuild nominal incident transport, and every trial
-  rebuilds exit-refraction/detector geometry.
+  mosaic contract; pivoted sample-normal trials update the complete sample rigid transform and
+  rebuild nominal incident transport, and every trial rebuilds exit-refraction/detector geometry.
 - Display limits and colormaps never invalidate physics.
 
 ## Deliberately absent runtime structures

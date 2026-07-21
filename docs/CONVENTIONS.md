@@ -89,6 +89,9 @@ Do not average s and p power-transmission coefficients in this scalar model.
 - Continuous coordinates: `(column_px, row_px)`.
 - Integer index `(r,c)` refers to the pixel centered at `(c,r)` unless a file format explicitly defines edge coordinates.
 - Beam center is stored as `(column_px,row_px)` in detector-native coordinates.
+- Detector-local `+z` is the outward normal. The active face is approached from detector-local
+  `z < 0`, so a valid outgoing ray satisfies `n_D dot kf_hat > 1e-14`. Back-side and tangent
+  approaches are invalid and carry zero geometry and intensity.
 
 ## Rod and family conventions
 

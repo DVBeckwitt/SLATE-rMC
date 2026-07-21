@@ -53,8 +53,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "270d1397026c364075b7a1052ddf126e89624294990ee6ab9e3681aed6c1a34e",
-      "size_bytes": 5490
+      "sha256": "6482f74b5dad98c5263ed0e6a0828ea6a9572fbbc9f9950279708e7f8b9a1790",
+      "size_bytes": 5545
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -68,13 +68,13 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "ce36813bf30b5788b559796bdc334ea26a0eeb334d934a5cc7866502318375c7",
-      "size_bytes": 13240
+      "sha256": "d38b6442573127211820902b681bfa702316934d20aec5c9d2b83316d7ef9499",
+      "size_bytes": 14009
     },
     {
       "path": "docs/CONVENTIONS.md",
-      "sha256": "1421fdc0dca59332c780eef6c09a69e67c002d93f75f84281302f40768661fd3",
-      "size_bytes": 3532
+      "sha256": "0250617f2d0a9eff37535f15ce9c7dac74febdf8471cf87a2485e8b606f72f30",
+      "size_bytes": 3784
     },
     {
       "path": "docs/DECISIONS.md",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/DOVETAIL_MATRIX.md",
-      "sha256": "8c586cc9343777dc6ce8534e7d64d17da4282fb6deee89b708a7e833e855d635",
-      "size_bytes": 3719
+      "sha256": "3c257b07f036a6b367a65fa2eac574a87231686fdac13cd46c0c1ad63f83df43",
+      "size_bytes": 3767
     },
     {
       "path": "docs/ERROR_INJECTION.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "7467979f077164a5c1910297b1dcbac7b4f24b05c9326e364f191057a70fc3c5",
-      "size_bytes": 5509
+      "sha256": "2cda6fa9d3ddd7d2b6a67029f94b66b416d1d1f6192fa24c1138ad8c2d4da124",
+      "size_bytes": 5675
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -118,13 +118,13 @@
     },
     {
       "path": "docs/PHYSICS_LEDGER.md",
-      "sha256": "c8fe2e3437045de37b4f885ef4f974427a3cb8f980ca93c9573986f94bcd5935",
-      "size_bytes": 25313
+      "sha256": "17cc0805d0e7437df8ae3ac0a3e238e732cb04f1eee95bdc1bebf1180d52c2e8",
+      "size_bytes": 25367
     },
     {
       "path": "docs/RESULT_MEASURE.md",
-      "sha256": "2fd09c0316490b668db4d982bdf6fedee2d2023f2519c1f2e7daa5785d102bee",
-      "size_bytes": 4624
+      "sha256": "5787dbbd9c8bc10cd3793dc31eec4aff176ff96d480df4c42191bffbf8167a8a",
+      "size_bytes": 4821
     },
     {
       "path": "docs/SCOPE_AND_PHASES.md",
@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "32c4ce2e26633218c8ad1fc7a244e12579910bdee4ae7146d951464b65408465",
-      "size_bytes": 36357
+      "sha256": "46c26a28b83c4cfe016e0c6bd252ae468ad0866d329230311dbcace0941a91a1",
+      "size_bytes": 39340
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -648,8 +648,8 @@
     },
     {
       "path": "src/rasim_next/fitting/geometry.py",
-      "sha256": "1aabe05df5db36d134cb48c1feb00bb297cdd81f5786e3d384c786c54a0d4677",
-      "size_bytes": 69089
+      "sha256": "21b2ede68d91919ae1ad2ed4b50183ea75938e1edac3b85e1568e0582e6a563d",
+      "size_bytes": 71808
     },
     {
       "path": "src/rasim_next/geometry/__init__.py",
@@ -663,13 +663,13 @@
     },
     {
       "path": "src/rasim_next/geometry/angles.py",
-      "sha256": "2b85c7357e5018e42d20837752f305919f7010d915bc851dae29c65809a3b243",
-      "size_bytes": 13825
+      "sha256": "cf9cdd619d539286cb3df0c325eccc50ff883e596e1e0e5c36221f7b5b2e855b",
+      "size_bytes": 14477
     },
     {
       "path": "src/rasim_next/geometry/detector.py",
-      "sha256": "8f0743ce09da8c77339c3dfd294d8ec287679e22b61cdbe1003e52ca76e297fb",
-      "size_bytes": 13590
+      "sha256": "48386ba17d6aa1cfd652d33334ef3d64a737e81c9dbc175644954e9140db807f",
+      "size_bytes": 14581
     },
     {
       "path": "src/rasim_next/geometry/instrument.py",
@@ -778,13 +778,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
-      "sha256": "c4b25350dbd72a0c105d071e4a6e8f5f5d5d3d22baf6474d0594c9a7fb0eb48f",
-      "size_bytes": 40502
+      "sha256": "33127625291ec1feecc709e3e35b76a1ff910c80f69178ffa0c602d445d61ca6",
+      "size_bytes": 40922
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "4fc72c565b7d5e71ff2de8ef5a4632899d05c340fed515bf92d02c912d00300f",
-      "size_bytes": 53072
+      "sha256": "d7897ca015620056301488e1cde72302a6d58af4d0101919e725f0754105e242",
+      "size_bytes": 53498
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -798,8 +798,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "0d5b6c920ca136e70b22bc1b9d117d4548fc10a3a99f941f2a79e0cf7859320d",
-      "size_bytes": 96227
+      "sha256": "457c5508a2971992e73bed4e508ed1894873aa0ca1063c5e6c2420ac58fbeae9",
+      "size_bytes": 96853
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
@@ -1148,18 +1148,18 @@
     },
     {
       "path": "tests/test_fitting.py",
-      "sha256": "7d43595e008c30036fedfe27309f578668788830cad95b56eb61fe1fb10cc0de",
-      "size_bytes": 20462
+      "sha256": "d39835826d86c8442aeea7e7081f0ae7b836724c79b447c877c4d4ede79fa68d",
+      "size_bytes": 24433
     },
     {
       "path": "tests/test_geometry_optics.py",
-      "sha256": "337c411c7f4b397879dc795b0b8c089b181e24420afa221298aca8c991e6f509",
-      "size_bytes": 42939
+      "sha256": "3dd385c66a7050e74eff9f16247cb70e4ae54d0a4e82aea6b68eae10a961ea7b",
+      "size_bytes": 43589
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "d1beae8bff1c81da7997b777ed9ece675ada234a33f2d2d73ab73587cd33f8b6",
-      "size_bytes": 98690
+      "sha256": "54fc1d0a0268d503ff03dfa7dda16c63171c73c74227aafa981cfe033f82ca65",
+      "size_bytes": 102550
     },
     {
       "path": "tests/test_mosaic_ewald.py",

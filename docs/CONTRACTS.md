@@ -76,8 +76,10 @@ air wavelength, strict root classification, material optics, and compiled instru
 
 - `evaluate_detector_geometry(column_px, row_px, *, include_surface_jacobian=True)` performs detector
   point → outgoing ray → exit refraction → film `kf` → sample-frame `Q` and reports
-  validity and elastic residual. Passing `False` skips derivative work and returns a zero Jacobian
-  when only ray validity or `Q` is needed.
+  validity and elastic residual. The ray is valid only on the active front face,
+  `n_D dot kf_hat > 1e-14`; back-side and tangent approaches are rejected before optical or
+  reciprocal work. Passing `False` skips derivative work and returns a zero Jacobian when only ray
+  validity or `Q` is needed.
 - `evaluate_detector_coordinates(column_px, row_px, rods, branch)` returns the almost-everywhere
   `raw_detector_coordinate_density_A2_per_px2.v1`, per-rod contributions, inverse-branch counts, and
   caustic flags.
@@ -153,14 +155,26 @@ term. `evaluate_tagged_geometry_objective_residual(...)` exposes the same immuta
 site-plus-line vector for scientific diagnostics and error injection.
 Its ordering is nonzero coordinate pairs, sorted paired-branch half-angle terms, m=0 coordinate
 pairs, then the m=0 TLS-line half-angle term; m=0 L identities and wavelength must match exactly.
-The fitter uses bounded TRF least squares. The accepted
-single-5-degree parameterization applies active intrinsic local-x then current-local-y rotations
-relative to the frozen base poses:
+The fitter uses bounded TRF least squares. The accepted single-5-degree parameterization
+`detector_xy_plus_pivoted_effective_sample_normal_xy.v2` applies active intrinsic local-x then
+current-local-y rotations relative to the frozen base poses:
 
 ```text
 R_detector = R_detector,0 Rx(delta_detector,column) Ry(delta_detector,row)
 R_sample   = R_sample,0   Rx(delta_sample-normal,x) Ry(delta_sample-normal,y)
 ```
+
+Detector corrections keep the declared detector reference point fixed. Sample corrections use one
+fixed mechanical LAB pivot `p`. With `A = R_sample R_sample,0^T`, the sample origin changes as
+
+```text
+t_sample = p + A (t_sample,0 - p).
+```
+
+The model infers `p` only when every configured goniometer axis declares the same pivot. A
+configuration with no axis or unequal pivots must supply an explicit
+`sample_correction_pivot_lab_m`; it never silently substitutes the sample origin or one arbitrary
+axis pivot.
 
 Every trial tag rebuilds canonical incident transport, solves the exact Ewald constraint, applies
 exit refraction, and intersects the corrected detector plane. No reciprocal-space point is
@@ -175,11 +189,12 @@ reported chord and m=0 angles verify the shared line geometry at the solution.
 
 The detector limits use RA-SIM's direct `(+/-10 deg, +/-10 deg)` pitch/yaw hard shells. The two
 effective sample-normal components conservatively use its `+/-5 deg` angular-correction shell;
-RA-SIM has no separately bounded second reduced-normal coordinate. These are not separately
-recovered sample-mount and goniometer-axis errors. A preflight bound-scaled Jacobian must have rank
-four and acceptable condition. `audit_integer_l_marker_selection(...)` independently re-enumerates
-the full visible non-specular catalog after fitting and reports `SAME`, `MISSING`, `CHANGED`, or
-`AMBIGUOUS` without reassignment.
+RA-SIM has no separately bounded second reduced-normal coordinate. They share the declared fixed
+pivot but are not separately recovered sample-mount and named goniometer-axis errors. A preflight
+bound-scaled Jacobian must have rank four and acceptable condition.
+`audit_integer_l_marker_selection(...)` independently re-enumerates the full visible
+non-specular catalog after fitting and reports `SAME`, `MISSING`, `CHANGED`, or `AMBIGUOUS` without
+reassignment.
 
 One image at one commanded goniometer angle cannot distinguish raw sample-zero tilt, goniometer-axis
 yaw/pitch, crystal rotation about the rod axis, detector tangent translation/beam-center shifts, or

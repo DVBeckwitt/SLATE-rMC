@@ -94,9 +94,10 @@ the same `(m,L,Ewald branch)`; the sides are not separate Ewald branches. The m=
 `tag_branch=0` and explicitly named minimum-mosaic-tilt
 exact-L landmarks because `(m=0,L)` alone is a curve. These landmarks are not advertised as
 intensity maxima. The fit adjusts both detector tilts and the two identifiable components of the
-effective sample normal. It intentionally does not report separate sample-mount and
-goniometer-axis errors; that decomposition requires tags from multiple commanded goniometer
-angles.
+effective sample normal about the common configured goniometer pivot. Configurations without a
+unique common pivot must pass `sample_correction_pivot_lab_m` when constructing the model. The fit
+intentionally does not report separate sample-mount and goniometer-axis errors; that decomposition
+requires tags from multiple commanded goniometer angles.
 
 ## Quantitative one-state pixel diagnostic
 

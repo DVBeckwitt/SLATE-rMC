@@ -12,6 +12,7 @@ from numba import cuda
 from numpy.typing import NDArray
 
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -478,6 +479,18 @@ def _prepare_state_block_geometry_kernel(
     direction_x = displacement_x / distance
     direction_y = displacement_y / distance
     direction_z = displacement_z / distance
+    signed_pixel_area_projection = (
+        direction_x * detector_pixel_area_vector_lab_m2[0]
+        + direction_y * detector_pixel_area_vector_lab_m2[1]
+        + direction_z * detector_pixel_area_vector_lab_m2[2]
+    )
+    pixel_area = math.sqrt(
+        detector_pixel_area_vector_lab_m2[0] ** 2
+        + detector_pixel_area_vector_lab_m2[1] ** 2
+        + detector_pixel_area_vector_lab_m2[2] ** 2
+    )
+    if signed_pixel_area_projection <= _DETECTOR_INCIDENCE_COSINE_TOL * pixel_area:
+        return
     air_k0_Ainv = state_real[state_index, 1]
     scaled_direction_x = air_k0_Ainv * direction_x
     scaled_direction_y = air_k0_Ainv * direction_y
@@ -509,11 +522,7 @@ def _prepare_state_block_geometry_kernel(
     q_sample_y = kf_air_y - ki_film_sample_Ainv[state_index, 1]
     q_sample_z = kf_film_z - ki_film_sample_Ainv[state_index, 2]
 
-    pixel_solid_angle = abs(
-        direction_x * detector_pixel_area_vector_lab_m2[0]
-        + direction_y * detector_pixel_area_vector_lab_m2[1]
-        + direction_z * detector_pixel_area_vector_lab_m2[2]
-    ) / (distance * distance)
+    pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
     area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
 
     refractive_index = state_complex[state_index, 0]

@@ -64,6 +64,10 @@ Q_sample(c,r) = kf_film_sample(c,r) - ki_film_sample
 |Q_sample + ki_film_sample| = |ki_film_sample|.
 ```
 
+The coordinate contributes only when its ray approaches the active detector face with
+`n_D dot kf_hat > 1e-14`. Back-side, tangent, off-panel, or otherwise invalid coordinates carry
+zero density.
+
 For every physical rod, the inverse latent branches mapping to this `Q` are enumerated. The
 pre-binned density is
 

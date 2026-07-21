@@ -51,7 +51,12 @@ def _rotation_y(angle_rad: float) -> np.ndarray:
     return np.asarray(((cosine, 0.0, sine), (0.0, 1.0, 0.0), (-sine, 0.0, cosine)))
 
 
-def _truth_inputs(base_inputs: object, truth: GeometryCorrections) -> object:
+def _truth_inputs(
+    base_inputs: object,
+    truth: GeometryCorrections,
+    *,
+    sample_correction_pivot_lab_m: object | None = None,
+) -> object:
     """Construct hidden geometry independently of the fit model."""
 
     instrument = base_inputs.instrument
@@ -67,6 +72,19 @@ def _truth_inputs(base_inputs: object, truth: GeometryCorrections) -> object:
         @ _rotation_x(truth.sample_normal_x_tilt_rad)
         @ _rotation_y(truth.sample_normal_y_tilt_rad)
     )
+    if sample_correction_pivot_lab_m is None:
+        pivots = tuple(
+            np.asarray(rotation.pivot_lab_m, dtype=np.float64)
+            for rotation in base_inputs.config.instrument.axis_rotations
+        )
+        assert pivots and all(np.array_equal(pivot, pivots[0]) for pivot in pivots[1:])
+        sample_pivot_lab_m = pivots[0]
+    else:
+        sample_pivot_lab_m = np.asarray(sample_correction_pivot_lab_m, dtype=np.float64)
+    sample_delta_lab = sample_rotation @ sample.rotation.T
+    sample_translation_m = sample_pivot_lab_m + sample_delta_lab @ (
+        sample.translation_m - sample_pivot_lab_m
+    )
     truth_instrument = replace(
         instrument,
         lab_from_detector=RigidTransform(
@@ -77,7 +95,7 @@ def _truth_inputs(base_inputs: object, truth: GeometryCorrections) -> object:
         ),
         lab_from_sample=RigidTransform(
             sample_rotation,
-            sample.translation_m,
+            sample_translation_m,
             FrameId.SAMPLE,
             FrameId.LAB,
         ),
@@ -85,10 +103,19 @@ def _truth_inputs(base_inputs: object, truth: GeometryCorrections) -> object:
     return replace(base_inputs, instrument=truth_instrument)
 
 
-def _truth_field_inputs(base_inputs: object, truth: GeometryCorrections) -> object:
+def _truth_field_inputs(
+    base_inputs: object,
+    truth: GeometryCorrections,
+    *,
+    sample_correction_pivot_lab_m: object | None = None,
+) -> object:
     """Construct hidden geometry and its incident transport independently of the fit model."""
 
-    transformed = _truth_inputs(base_inputs, truth)
+    transformed = _truth_inputs(
+        base_inputs,
+        truth,
+        sample_correction_pivot_lab_m=sample_correction_pivot_lab_m,
+    )
     return replace(
         transformed,
         incident=build_incident_states(
@@ -106,14 +133,33 @@ def _raise_if_pixelized(*args: object, **kwargs: object) -> None:
 def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    shared_pivot_lab_m = (0.003, -0.001, 0.002)
+    sample_mount = config.instrument.goniometer_from_sample
     config = replace(
         config,
         source=replace(config.source, sample_count=8),
         numerics=replace(config.numerics, worker_count=4),
+        instrument=replace(
+            config.instrument,
+            axis_rotations=tuple(
+                replace(rotation, pivot_lab_m=shared_pivot_lab_m)
+                for rotation in config.instrument.axis_rotations
+            ),
+            goniometer_from_sample=replace(
+                sample_mount,
+                translation_m=(0.001, 0.0004, -0.0008),
+            ),
+        ),
     )
     base_inputs = build_configured_simulation_inputs(config)
     truth = GeometryCorrections.from_array(np.radians((0.17, -0.23, 0.11, -0.14)))
     truth_inputs = _truth_field_inputs(base_inputs, truth)
+    assert not np.allclose(
+        truth_inputs.instrument.lab_from_sample.translation_m,
+        base_inputs.instrument.lab_from_sample.translation_m,
+        rtol=0.0,
+        atol=1.0e-12,
+    )
     direct_detector = build_source_averaged_detector(truth_inputs)
     column_px = np.asarray((131.137, 722.283, 1104.417, 1818.639, 2387.811))
     row_px = np.asarray((83.219, 621.137, 1208.319, 1711.773, 1996.427))
@@ -140,6 +186,69 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     )
     np.testing.assert_array_equal(actual.caustic, expected.caustic)
     np.testing.assert_array_equal(actual.valid_source_count, expected.valid_source_count)
+    truth_observations = IntegerLMarkerObservations.from_markers(
+        evaluate_nominal_integer_l_markers(build_nominal_ewald_context(truth_inputs))
+    )
+    truth_tag_prediction = reference.predict_integer_l_tags(truth_observations.keys)
+    np.testing.assert_allclose(
+        truth_tag_prediction.coordinates_px,
+        truth_observations.coordinates_px,
+        rtol=0.0,
+        atol=5.0e-11,
+    )
+
+    no_axis_inputs = build_configured_simulation_inputs(
+        replace(
+            config,
+            instrument=replace(config.instrument, axis_rotations=()),
+        )
+    )
+    with pytest.raises(ValueError, match="common configured goniometer pivot"):
+        ContinuousDetectorGeometryModel(no_axis_inputs)
+
+    distinct_pivot_axis = replace(
+        config.instrument.axis_rotations[0],
+        angle_deg=0.0,
+        pivot_lab_m=(0.004, -0.001, 0.002),
+    )
+    ambiguous_inputs = build_configured_simulation_inputs(
+        replace(
+            config,
+            source=replace(config.source, sample_count=1),
+            instrument=replace(
+                config.instrument,
+                axis_rotations=(*config.instrument.axis_rotations, distinct_pivot_axis),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="common configured goniometer pivot"):
+        ContinuousDetectorGeometryModel(ambiguous_inputs)
+    explicit_pivot_model = ContinuousDetectorGeometryModel(
+        ambiguous_inputs,
+        sample_correction_pivot_lab_m=shared_pivot_lab_m,
+    )
+    np.testing.assert_array_equal(
+        explicit_pivot_model.sample_correction_pivot_lab_m,
+        shared_pivot_lab_m,
+    )
+    assert not explicit_pivot_model.sample_correction_pivot_lab_m.flags.writeable
+    explicit_expected = build_source_averaged_detector(
+        _truth_field_inputs(
+            ambiguous_inputs,
+            truth,
+            sample_correction_pivot_lab_m=shared_pivot_lab_m,
+        )
+    ).evaluate_detector_coordinates_all_roots(column_px, row_px)
+    explicit_actual = explicit_pivot_model.bind(truth).evaluate_detector_coordinates(
+        column_px,
+        row_px,
+    )
+    np.testing.assert_allclose(
+        explicit_actual.per_rod_density_A2_per_px2,
+        explicit_expected.per_rod_density_A2_per_px2,
+        rtol=2.0e-12,
+        atol=0.0,
+    )
 
 
 def test_tag_identity_rejects_duplicates_and_mismatched_pairs() -> None:
@@ -504,6 +613,7 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
     )
     assert len(bound_trial_corrections) == result.model_evaluation_count
     assert result.success, result.message
+    assert result.parameterization_id == "detector_xy_plus_pivoted_effective_sample_normal_xy.v2"
     assert result.jacobian_rank == 4
     assert result.jacobian_condition < 100.0
     np.testing.assert_allclose(

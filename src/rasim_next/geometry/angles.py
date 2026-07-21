@@ -10,8 +10,10 @@ from numpy.typing import ArrayLike, NDArray
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry._vectors import finite_vector3
 from rasim_next.geometry.detector import (
+    _DETECTOR_INCIDENCE_COSINE_TOL,
     _POSITION_TOL_M,
     _detector_coordinates_to_lab_points,
+    _detector_incidence_cosine,
     _project_detector_rays,
 )
 from rasim_next.geometry.instrument import CompiledInstrument
@@ -264,6 +266,18 @@ def detector_coordinates_to_angles(
     active = status == ValidityCode.VALID
     no_direction = active & (distance_m <= _POSITION_TOL_M)
     status[no_direction] = ValidityCode.NO_SOLUTION
+    active = status == ValidityCode.VALID
+    safe_distance_m = np.where(active, distance_m, 1.0)
+    direction_lab = np.where(
+        active[..., None],
+        displacement_lab_m / safe_distance_m[..., None],
+        0.0,
+    )
+    incidence_cosine = _detector_incidence_cosine(direction_lab, instrument)
+    detector_parallel = active & (np.abs(incidence_cosine) <= _DETECTOR_INCIDENCE_COSINE_TOL)
+    status[detector_parallel] = ValidityCode.PARALLEL
+    back_facing = active & (incidence_cosine < -_DETECTOR_INCIDENCE_COSINE_TOL)
+    status[back_facing] = ValidityCode.BACKWARD
 
     t1 = displacement_lab_m @ angle_frame.row_down_lab
     t2 = displacement_lab_m @ angle_frame.column_right_lab

@@ -344,6 +344,7 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
         ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], ValidityCode.PARALLEL),
         ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], ValidityCode.NO_SOLUTION),
         ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], ValidityCode.BACKWARD),
+        ([0.0, 0.0, 2.0], [0.0, 0.0, -1.0], ValidityCode.BACKWARD),
         ([1.0e-3, 0.0, 0.0], [0.0, 0.0, 1.0], ValidityCode.OUTSIDE_SUPPORT),
     ):
         projection = project_detector_ray(origin, direction, instrument)
@@ -371,6 +372,24 @@ def test_sample_and_detector_statuses_and_round_trip() -> None:
     )
     assert near.status is ValidityCode.VALID
     assert 0.0 < near.ray_distance_m <= 1e-12
+
+    back_facing = detector_coordinate_to_ray(
+        3.0,
+        5.0,
+        origin_lab_m=detector_center + 0.01 * detector_normal,
+        instrument=instrument,
+    )
+    assert back_facing.status is ValidityCode.BACKWARD
+    assert back_facing.ray_distance_m == 0.0
+
+    back_facing_angles = detector_coordinates_to_angles(
+        [3.0],
+        [5.0],
+        instrument=instrument,
+        angle_frame=_angle_frame(detector_center + 0.01 * detector_normal),
+    )
+    assert back_facing_angles.status[0] == ValidityCode.BACKWARD
+    assert not back_facing_angles.valid[0]
 
 
 def test_batched_detector_projection_matches_scalar_rays() -> None:

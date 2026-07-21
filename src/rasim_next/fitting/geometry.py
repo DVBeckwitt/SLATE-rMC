@@ -510,9 +510,15 @@ class M0IntegerLObservations:
 def _corrected_instrument(
     base: CompiledInstrument,
     corrections: GeometryCorrections,
+    sample_correction_pivot_lab_m: ArrayLike,
 ) -> CompiledInstrument:
     if not isinstance(corrections, GeometryCorrections):
         raise TypeError("corrections must be GeometryCorrections")
+    sample_pivot = _readonly_float_array(
+        sample_correction_pivot_lab_m,
+        (3,),
+        "sample_correction_pivot_lab_m",
+    )
     detector = base.lab_from_detector
     sample = base.lab_from_sample
     detector_rotation = compose_intrinsic_xy_rotation(
@@ -525,6 +531,16 @@ def _corrected_instrument(
         corrections.sample_normal_x_tilt_rad,
         corrections.sample_normal_y_tilt_rad,
     )
+    if corrections.sample_normal_x_tilt_rad == 0.0 and corrections.sample_normal_y_tilt_rad == 0.0:
+        corrected_sample = sample
+    else:
+        sample_delta_lab = sample_rotation @ sample.rotation.T
+        sample_motion_lab = RigidTransform.around_pivot(
+            rotation=sample_delta_lab,
+            pivot_m=sample_pivot,
+            frame=FrameId.LAB,
+        )
+        corrected_sample = sample_motion_lab.compose(sample)
     return replace(
         base,
         lab_from_detector=RigidTransform(
@@ -533,27 +549,65 @@ def _corrected_instrument(
             FrameId.DETECTOR,
             FrameId.LAB,
         ),
-        lab_from_sample=RigidTransform(
-            sample_rotation,
-            sample.translation_m,
-            FrameId.SAMPLE,
-            FrameId.LAB,
-        ),
+        lab_from_sample=corrected_sample,
+    )
+
+
+def _resolved_sample_correction_pivot(
+    inputs: ConfiguredSimulationInputs,
+    supplied_pivot_lab_m: ArrayLike | None,
+) -> FloatArray:
+    if supplied_pivot_lab_m is not None:
+        return _readonly_float_array(
+            supplied_pivot_lab_m,
+            (3,),
+            "sample_correction_pivot_lab_m",
+        )
+    configured_pivots = tuple(
+        np.asarray(rotation.pivot_lab_m, dtype=np.float64)
+        for rotation in inputs.config.instrument.axis_rotations
+    )
+    if not configured_pivots or any(
+        not np.array_equal(pivot, configured_pivots[0]) for pivot in configured_pivots[1:]
+    ):
+        raise ValueError(
+            "geometry fitting requires one common configured goniometer pivot or an explicit "
+            "sample_correction_pivot_lab_m"
+        )
+    return _readonly_float_array(
+        configured_pivots[0],
+        (3,),
+        "sample_correction_pivot_lab_m",
     )
 
 
 class ContinuousDetectorGeometryModel:
     """Prepared all-state continuous detector field under four rigid-angle corrections."""
 
-    __slots__ = ("_inputs", "_prepared_detector", "_tag_geometry")
+    __slots__ = (
+        "_inputs",
+        "_prepared_detector",
+        "_sample_correction_pivot_lab_m",
+        "_tag_geometry",
+    )
 
-    def __init__(self, inputs: ConfiguredSimulationInputs) -> None:
+    def __init__(
+        self,
+        inputs: ConfiguredSimulationInputs,
+        *,
+        sample_correction_pivot_lab_m: ArrayLike | None = None,
+    ) -> None:
         if not isinstance(inputs, ConfiguredSimulationInputs):
             raise TypeError("inputs must be ConfiguredSimulationInputs")
+        sample_pivot = _resolved_sample_correction_pivot(
+            inputs,
+            sample_correction_pivot_lab_m,
+        )
         prepared = build_source_averaged_detector(inputs)
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_prepared_detector", prepared)
-        object.__setattr__(self, "_tag_geometry", _ExactTagGeometry(inputs))
+        object.__setattr__(self, "_sample_correction_pivot_lab_m", sample_pivot)
+        object.__setattr__(self, "_tag_geometry", _ExactTagGeometry(inputs, sample_pivot))
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("ContinuousDetectorGeometryModel is immutable")
@@ -564,6 +618,12 @@ class ContinuousDetectorGeometryModel:
     @property
     def source_state_count(self) -> int:
         return int(self._inputs.incident.states.incident_state_id.size)
+
+    @property
+    def sample_correction_pivot_lab_m(self) -> FloatArray:
+        """Return the fixed LAB pivot used by effective sample-normal corrections."""
+
+        return self._sample_correction_pivot_lab_m
 
     def bind(self, corrections: GeometryCorrections) -> ContinuousDetectorFunction:
         """Bind one immutable callable detector function without evaluating a raster."""
@@ -580,7 +640,11 @@ class ContinuousDetectorGeometryModel:
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Evaluate the pre-binned raw density at arbitrary continuous coordinates."""
 
-        instrument = _corrected_instrument(self._inputs.instrument, corrections)
+        instrument = _corrected_instrument(
+            self._inputs.instrument,
+            corrections,
+            self._sample_correction_pivot_lab_m,
+        )
         incident = build_incident_states(
             self._inputs.samples,
             self._inputs.material,
@@ -605,9 +669,18 @@ class ContinuousDetectorGeometryModel:
 class _ExactTagGeometry:
     """Internal one-state exact-tag geometry owned by the continuous field model."""
 
-    __slots__ = ("_inputs", "_nominal_material", "_nominal_samples")
+    __slots__ = (
+        "_inputs",
+        "_nominal_material",
+        "_nominal_samples",
+        "_sample_correction_pivot_lab_m",
+    )
 
-    def __init__(self, inputs: ConfiguredSimulationInputs) -> None:
+    def __init__(
+        self,
+        inputs: ConfiguredSimulationInputs,
+        sample_correction_pivot_lab_m: ArrayLike,
+    ) -> None:
         if not isinstance(inputs, ConfiguredSimulationInputs):
             raise TypeError("inputs must be ConfiguredSimulationInputs")
         build_nominal_ewald_context(inputs)
@@ -616,6 +689,15 @@ class _ExactTagGeometry:
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_nominal_samples", nominal_samples)
         object.__setattr__(self, "_nominal_material", nominal_material)
+        object.__setattr__(
+            self,
+            "_sample_correction_pivot_lab_m",
+            _readonly_float_array(
+                sample_correction_pivot_lab_m,
+                (3,),
+                "sample_correction_pivot_lab_m",
+            ),
+        )
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("exact tag geometry is immutable")
@@ -659,7 +741,11 @@ class _ExactTagGeometry:
     ) -> tuple[ContinuousEwaldCoating, DetectorEwaldMeasure]:
         if not isinstance(corrections, GeometryCorrections):
             raise TypeError("corrections must be GeometryCorrections")
-        instrument = _corrected_instrument(self._inputs.instrument, corrections)
+        instrument = _corrected_instrument(
+            self._inputs.instrument,
+            corrections,
+            self._sample_correction_pivot_lab_m,
+        )
         incident = build_incident_states(
             self._nominal_samples,
             self._nominal_material,
@@ -1248,7 +1334,7 @@ class GeometryFitResult:
     model_evaluation_count: int
     optimizer_function_evaluation_count: int
     optimizer_jacobian_evaluation_count: int
-    parameterization_id: str = "detector_xy_plus_effective_sample_normal_xy.v1"
+    parameterization_id: str = "detector_xy_plus_pivoted_effective_sample_normal_xy.v2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.corrections, GeometryCorrections):
@@ -1300,7 +1386,7 @@ class GeometryFitResult:
             object.__setattr__(self, name, int(value))
         if self.model_evaluation_count < self.optimizer_function_evaluation_count:
             raise ValueError("model evaluation count cannot be smaller than optimizer nfev")
-        if self.parameterization_id != "detector_xy_plus_effective_sample_normal_xy.v1":
+        if self.parameterization_id != "detector_xy_plus_pivoted_effective_sample_normal_xy.v2":
             raise ValueError("unsupported geometry-fit parameterization")
         singular = _readonly_float_array(
             self.scaled_jacobian_singular_values,
@@ -1577,7 +1663,11 @@ def audit_integer_l_marker_selection(
     model = detector_function.model
     trial_inputs = replace(
         model._inputs,
-        instrument=_corrected_instrument(model._inputs.instrument, detector_function.corrections),
+        instrument=_corrected_instrument(
+            model._inputs.instrument,
+            detector_function.corrections,
+            model._sample_correction_pivot_lab_m,
+        ),
     )
     markers = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(trial_inputs))
     indices = np.flatnonzero(markers.family_m != 0)

@@ -37,7 +37,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-GEO-005 | unique ray-plane intersection; reject parallel and coplanar rays | `diffraction.py:285-325` | geometric construction | geometry | CORRECTED for coplanar; first divergence `geometry.sample_intersection` |
 | PHY-GEO-006 | sample footprint clipping | `diffraction.py:1807-1874` | Methods line 18; SI line 525 | geometry | MATCH as accepted beam mass |
 | PHY-GEO-007 | internal-to-lab outgoing vector | `diffraction.py:2260-2264` | Methods | geometry | CORRECTED |
-| PHY-GEO-008 | detector intersection | `diffraction.py:2266-2299` | Methods | geometry | MATCH after frame correction |
+| PHY-GEO-008 | front-facing detector intersection | `diffraction.py:2266-2299` | Methods | geometry | CORRECTED, signed active-face validity after frame correction |
 | PHY-GEO-009 | forward ray-to-pixel | `diffraction.py:2294-2306` | Methods | geometry | CORRECTED typed coordinates |
 | PHY-GEO-010 | inverse pixel-to-ray | `intersection_analysis.py:506-615` | n/a | geometry | CORRECTED shared inverse |
 | PHY-GEO-011 | rectangular detector and anisotropic pitch | old core assumes square | n/a | geometry | NEW |
@@ -200,7 +200,7 @@ association, multi-angle mechanical decomposition, and intensity fitting remain 
 | PHY-FIT-000 | source size, divergence, wavelength, and correlation characterization | distributed beam setup | refinement step 1 | fitting | NEW staged result |
 | PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed, active local four-angle pack |
 | PHY-FIT-002 | independent detector geometry calibration | calibrant and geometry paths | refinement step 2 | fitting | NEW/CORRECTED detector-native |
-| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; effective sample normal only |
+| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; pivoted effective sample normal only |
 | PHY-FIT-002B | continuous detector-function exact-tag map from one nominal companion incident state | no single legacy owner | alignment stage | fitting | NEW active; source center, zero divergence, mean wavelength; excluded from empirical source mass |
 | PHY-FIT-002C | paired tag-branch half-angle and m=0 increasing-L TLS-line residuals | caked line/peak geometry objectives | alignment stage | fitting | CORRECTED active simultaneous coordinate-plus-angle objective |
 | PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |

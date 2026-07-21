@@ -308,6 +308,42 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         regular_mapped.postoptical_density_A2_rad2_inv / detector_jacobian,
         rel=2.0e-8,
     )
+
+    detector_pose = instrument.lab_from_detector
+    flipped_instrument = replace(
+        instrument,
+        lab_from_detector=RigidTransform(
+            detector_pose.rotation @ np.diag((1.0, -1.0, -1.0)),
+            detector_pose.translation_m,
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+    )
+    flipped_detector = DetectorEwaldMeasure(
+        coating=coating,
+        incident=incident,
+        material=material,
+        instrument=flipped_instrument,
+    )
+    _, reference_row = instrument.detector_reference_coordinate_px
+    back_facing_column = np.asarray([regular_mapped.geometry.column_px])
+    back_facing_row = np.asarray([2.0 * reference_row - regular_mapped.geometry.row_px])
+    back_facing_numpy = flipped_detector.evaluate_detector_coordinates(
+        back_facing_column,
+        back_facing_row,
+        rods=(rod,),
+        branch=2,
+    )
+    assert back_facing_numpy.geometry.status.item() == "BACKWARD"
+    assert back_facing_numpy.density_A2_per_px2.item() == 0.0
+    compiled_back_facing = flipped_detector._compiled_evaluator((rod,)).evaluate(
+        back_facing_column,
+        back_facing_row,
+        branch=2,
+    )
+    assert not compiled_back_facing[3].item()
+    assert compiled_back_facing[0].item() == 0.0
+
     two_branch_seed = detector.map_latent(
         rod=rod,
         branch=2,
@@ -419,6 +455,44 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     )
     np.testing.assert_array_equal(compiled_count, numpy_proof.per_rod_inverse_branch_count)
     np.testing.assert_array_equal(compiled_caustic, numpy_proof.caustic)
+
+    seam_rod = Rod(0, -1)
+    seam_seed = detector.map_latent(
+        rod=seam_rod,
+        branch=2,
+        alpha_rad=math.radians(0.2),
+        beta_rad=0.0,
+    )
+    assert bool(seam_seed.geometry.valid)
+    seam_density = detector.evaluate_detector_coordinates(
+        np.asarray([seam_seed.geometry.column_px]),
+        np.asarray([seam_seed.geometry.row_px]),
+        rods=(seam_rod,),
+        branch=2,
+    )
+    assert seam_density.per_rod_inverse_branch_count.item() == 2
+    assert not seam_density.caustic.item()
+    assert math.isfinite(float(seam_density.density_A2_per_px2.item()))
+    assert seam_density.density_A2_per_px2 > 0.0
+    seam_compiled_density, seam_compiled_count, seam_compiled_caustic = (
+        detector._evaluate_compiled_coordinates_for_proof(
+            np.asarray([seam_seed.geometry.column_px]),
+            np.asarray([seam_seed.geometry.row_px]),
+            rods=(seam_rod,),
+            branch=2,
+        )
+    )
+    np.testing.assert_allclose(
+        seam_compiled_density,
+        seam_density.per_rod_density_A2_per_px2,
+        rtol=3.0e-12,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(
+        seam_compiled_count,
+        seam_density.per_rod_inverse_branch_count,
+    )
+    np.testing.assert_array_equal(seam_compiled_caustic, seam_density.caustic)
 
     # The production pixel kernel must integrate the same arbitrary continuous
     # detector-coordinate density as the independent NumPy point evaluator.
@@ -1303,6 +1377,38 @@ def test_cuda_compound_detector_tilt_matches_cpu() -> None:
     np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
     assert np.all(gpu.per_rod_density_A2_per_px2[2] == 0.0)
 
+    flipped_rotation = tilted_rotation @ np.diag((1.0, -1.0, -1.0))
+    back_facing_config = replace(
+        config,
+        instrument=replace(
+            config.instrument,
+            lab_from_detector=replace(
+                tilted_detector,
+                rotation=tuple(tuple(float(entry) for entry in row) for row in flipped_rotation),
+            ),
+        ),
+    )
+    back_facing_detector = build_source_averaged_detector(
+        build_configured_simulation_inputs(back_facing_config)
+    )
+    reference_row = config.instrument.detector_reference_coordinate_px[1]
+    back_facing_column = column_px[:1]
+    back_facing_row = 2.0 * reference_row - row_px[:1]
+    back_facing_cpu = back_facing_detector.evaluate_detector_coordinates_all_roots(
+        back_facing_column,
+        back_facing_row,
+        execution_backend="cpu",
+    )
+    back_facing_gpu = back_facing_detector.evaluate_detector_coordinates_all_roots(
+        back_facing_column,
+        back_facing_row,
+        execution_backend="cuda",
+    )
+    assert back_facing_cpu.valid_source_count.item() == 0
+    assert back_facing_gpu.valid_source_count.item() == 0
+    assert back_facing_cpu.density_A2_per_px2.item() == 0.0
+    assert back_facing_gpu.density_A2_per_px2.item() == 0.0
+
 
 def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     tmp_path: Path,
@@ -1679,15 +1785,15 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
                 atol=3.0e-12,
             )
             if index == order[0]:
-                assert strength_weight_A2 == pytest.approx(
+                np.testing.assert_array_max_ulp(
+                    strength_weight_A2,
                     rod.population
                     * space.strength_model.evaluate(
                         rod=rod,
                         L=float(integer_L),
                         k_norm_Ainv=space.config.k_norm_Ainv,
                     ),
-                    rel=2.0e-15,
-                    abs=0.0,
+                    maxulp=16,
                 )
         kf_film_sample_Ainv = ki_sample_Ainv + markers.q_sample_Ainv[index]
         assert float(kf_film_sample_Ainv @ mean_axis_sample) > 0.0

@@ -12,7 +12,7 @@ from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry._vectors import finite_vector3, finite_vectors3
 from rasim_next.geometry.instrument import CompiledInstrument
 
-_PARALLEL_TOL = 1e-14
+_DETECTOR_INCIDENCE_COSINE_TOL = 1e-14
 _POSITION_TOL_M = 1e-12
 
 
@@ -154,6 +154,18 @@ def _detector_coordinates_to_lab_points(
     return instrument.lab_from_detector.apply_point(point_detector_m)
 
 
+def _detector_incidence_cosine(
+    direction_lab: ArrayLike,
+    instrument: CompiledInstrument,
+) -> NDArray[np.float64]:
+    """Return signed incidence on the detector's outward normal."""
+
+    directions = np.asarray(direction_lab, dtype=np.float64)
+    if directions.shape[-1:] != (3,):
+        raise ValueError("direction_lab must end with a length-3 coordinate axis")
+    return np.asarray(directions @ instrument.lab_from_detector.rotation[:, 2])
+
+
 def _intersect_detector_plane(
     origin_lab_m: ArrayLike,
     direction_lab: ArrayLike,
@@ -180,7 +192,7 @@ def _intersect_detector_plane(
     direction_detector = detector_from_lab.apply_vector(directions)
     denominator = direction_detector[:, 2]
     offset_m = origin_detector_m[:, 2]
-    parallel = np.abs(denominator) <= _PARALLEL_TOL
+    parallel = np.abs(denominator) <= _DETECTOR_INCIDENCE_COSINE_TOL
     status = np.full(origins.shape[0], ValidityCode.VALID, dtype="U16")
     status[parallel] = ValidityCode.PARALLEL
 
@@ -191,6 +203,8 @@ def _intersect_detector_plane(
     status[backward] = ValidityCode.BACKWARD
     no_forward_distance = nonparallel & ~backward & (distance_m <= 0.0)
     status[no_forward_distance] = ValidityCode.NO_SOLUTION
+    back_facing = (status == ValidityCode.VALID) & (denominator < -_DETECTOR_INCIDENCE_COSINE_TOL)
+    status[back_facing] = ValidityCode.BACKWARD
     distance_m = np.maximum(distance_m, 0.0)
     point_detector_m = origin_detector_m + distance_m[:, None] * direction_detector
     reference_column, reference_row = instrument.detector_reference_coordinate_px
@@ -251,7 +265,7 @@ def _project_detector_rays(
     pixel_area_m2 = instrument.detector_column_pitch_m * instrument.detector_row_pitch_m
     solid_angle_sr[positive_distance] = (
         pixel_area_m2
-        * np.abs(direction_detector[positive_distance, 2])
+        * direction_detector[positive_distance, 2]
         / distance_m[positive_distance] ** 2
     )
     numeric_failure = (status == ValidityCode.VALID) & ~(
@@ -351,9 +365,15 @@ def detector_coordinate_to_ray(
     distance_m = float(np.linalg.norm(displacement))
     if not math.isfinite(distance_m) or distance_m == 0.0:
         return _ray(np.zeros(3), np.zeros(3), 0.0, ValidityCode.NO_SOLUTION)
+    direction_lab = displacement / distance_m
+    incidence_cosine = float(_detector_incidence_cosine(direction_lab, instrument))
+    if abs(incidence_cosine) <= _DETECTOR_INCIDENCE_COSINE_TOL:
+        return _ray(np.zeros(3), np.zeros(3), 0.0, ValidityCode.PARALLEL)
+    if incidence_cosine < 0.0:
+        return _ray(np.zeros(3), np.zeros(3), 0.0, ValidityCode.BACKWARD)
     return _ray(
         detector_point_lab_m,
-        displacement / distance_m,
+        direction_lab,
         distance_m,
         ValidityCode.VALID,
     )

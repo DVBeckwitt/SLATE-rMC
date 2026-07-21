@@ -15,6 +15,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.materials.optics import HC_EV_A, _f0_species
 from rasim_next.ordered.motifs import _bi2se3_quintuple_layers
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
@@ -564,6 +565,18 @@ def _evaluate_point_into(
     direction_x = displacement_x / distance
     direction_y = displacement_y / distance
     direction_z = displacement_z / distance
+    signed_pixel_area_projection = (
+        direction_x * detector_pixel_area_vector_lab_m2[0]
+        + direction_y * detector_pixel_area_vector_lab_m2[1]
+        + direction_z * detector_pixel_area_vector_lab_m2[2]
+    )
+    pixel_area = math.sqrt(
+        detector_pixel_area_vector_lab_m2[0] ** 2
+        + detector_pixel_area_vector_lab_m2[1] ** 2
+        + detector_pixel_area_vector_lab_m2[2] ** 2
+    )
+    if signed_pixel_area_projection <= _DETECTOR_INCIDENCE_COSINE_TOL * pixel_area:
+        return False
     scaled_direction_x = air_k0_Ainv * direction_x
     scaled_direction_y = air_k0_Ainv * direction_y
     scaled_direction_z = air_k0_Ainv * direction_z
@@ -595,11 +608,7 @@ def _evaluate_point_into(
     q_sample_y = kf_film_y - ki_film_sample_Ainv[1]
     q_sample_z = kf_film_z - ki_film_sample_Ainv[2]
 
-    pixel_solid_angle = abs(
-        direction_x * detector_pixel_area_vector_lab_m2[0]
-        + direction_y * detector_pixel_area_vector_lab_m2[1]
-        + direction_z * detector_pixel_area_vector_lab_m2[2]
-    ) / (distance * distance)
+    pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
     area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
 
     kz_film = _positive_normal_root(refractive_air_k_squared_Ainv2 - parallel_squared)

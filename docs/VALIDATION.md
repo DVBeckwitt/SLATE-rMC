@@ -19,6 +19,45 @@ detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-co
 agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
 and scientific subsystem cutovers; they do not reinstate retired APIs.
 
+### Detector-pose validity maintenance
+
+The 2026-07-21 maintenance branch starts from accepted `main`
+`02407a966f60cc7a9af336b53f447fd93ebfa217` and corrects three first divergences:
+
+- Detector intersection previously treated the panel as two-sided and used an absolute projected
+  area. The first divergence was `geometry.detector_face_validity`: a forward ray approaching
+  detector-local `z=0` from `z>0` was reported `VALID`. Scalar/batched geometry, angle conversion,
+  the NumPy detector field, compiled CPU, and CUDA now share the signed gate
+  `n_D dot kf_hat > 1e-14`; invalid rays carry zero geometry and intensity before reciprocal or
+  optical work.
+- The exact inverse of a valid `(h,k)=(0,-1)`, branch-2, `alpha=0.2 deg`, `beta=0` point produced a
+  floating value just below zero whose remainder rounded to exactly `2 pi`. The first divergence
+  was `reciprocal.inverse_latent_beta`, where the public latent evaluator rejected its own inverse.
+  Only the exact upper endpoint is now canonicalized back to zero. The point retains two finite,
+  non-caustic inverse contributions, and the NumPy and compiled CPU densities agree.
+- Effective sample-normal fit corrections previously changed the sample rotation while freezing
+  its LAB origin. The first divergence was `geometry.instrument_transforms` for an offset sample
+  mount and nonzero mechanical pivot. Production now composes the canonical rigid motion about the
+  pivot; an independent analytic oracle checks `t1 = p + (R1 R0^T)(t0-p)`. The same corrected pose
+  feeds the continuous field, nonzero and m=0 exact tags, fitting, and the final marker audit.
+  Missing or unequal configured pivots require an explicit override.
+
+All 70 compact permanent tests pass, including real CUDA parity. The four clean-tree-independent
+registered proofs pass. Geometry/optics passes 11 scientific checks and all 17 mutations, and
+mosaic/Ewald passes its continuous-science check and all three mutations; before commit, both
+report only their intentional dirty-tree block. Ruff lint/format and diff whitespace checks pass.
+One unrelated assertion also failed identically on unmodified `main`: batch and scalar evaluation
+of the same exact integer-L strength differed by 10 binary64 ULPs while the relative test budget
+allowed slightly fewer. Its numerical comparison is now explicitly bounded at 16 ULPs; production
+physics is unchanged.
+
+A one-state, all-rod compiled-CPU benchmark over 50,000 continuous detector coordinates gave a
+median of `0.45518 s` on this branch versus `0.45185 s` on `main` (five post-warmup calls, `0.74%`
+difference). Both runs had the same `98,947,160`-byte Python allocation peak, `39,050,000` output
+numeric bytes, 25,444 valid coordinates, and summed density `2.2326975134605485e-5`; no measurable
+performance or output regression was found. This reduced four-angle fitter remains an effective
+end-pose correction about one fixed pivot, not a decomposition into named goniometer-axis errors.
+
 ### Continuous-runtime maintenance cutover
 
 The maintenance branch starts from accepted `main` `0167f6dac79a66d79a94d358c041665bcb73ed38`.
