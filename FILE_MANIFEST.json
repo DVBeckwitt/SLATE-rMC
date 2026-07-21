@@ -1,5 +1,5 @@
 {
-  "file_count": 237,
+  "file_count": 242,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -532,6 +532,11 @@
       "size_bytes": 25424
     },
     {
+      "path": "scripts/index_bi2se3_osc.py",
+      "sha256": "18e79c9438500244d23fa81785829c8571b9f907d26c5c35c7b555db57fe1be5",
+      "size_bytes": 28174
+    },
+    {
       "path": "scripts/run_configured_simulation.py",
       "sha256": "8d0865924a6f53b951f43e1a2e58582b54d920b71bf4b9fcacc46a8171b99745",
       "size_bytes": 24723
@@ -887,6 +892,21 @@
       "size_bytes": 7525
     },
     {
+      "path": "src/rasim_next/selection/__init__.py",
+      "sha256": "926f68b635cabb40b8353de794f1f260763c6475b09c72fba303c08e131f7923",
+      "size_bytes": 980
+    },
+    {
+      "path": "src/rasim_next/selection/blind.py",
+      "sha256": "3f7d99ebe735f1840e107c5e8dcd5f98f5e620f4312b48dd7e4f009ee55ffeef",
+      "size_bytes": 39901
+    },
+    {
+      "path": "src/rasim_next/selection/indexing.py",
+      "sha256": "7731e25d10be08cd92c8a42951f16482e5f9e0d6cfee8d06abe87740ba59e016",
+      "size_bytes": 60570
+    },
+    {
       "path": "src/rasim_next/stacking/__init__.py",
       "sha256": "a54c55027efbb521d76f6c2286e67dbc8f511310a9ae2dfdc218a94be9856c74",
       "size_bytes": 935
@@ -958,8 +978,8 @@
     },
     {
       "path": "tasks/08_selection_indexing.md",
-      "sha256": "3eb835d4ddaa7407aed6847c2ec5620945baf0275fc8120fa32e30393ca83d5d",
-      "size_bytes": 3101
+      "sha256": "fca42aa4ceae6ea4ecc93c0517fabfab6dc9f31baacd54e938d208bfedf14aca",
+      "size_bytes": 10137
     },
     {
       "path": "tasks/09_fit_foundation.md",
@@ -1170,6 +1190,11 @@
       "path": "tests/test_ordered_reflectivity.py",
       "sha256": "7f1bbe6fc211e89ab073bf5a01fb19b4c44c80ee57af3d34f7335d5ab0350195",
       "size_bytes": 29158
+    },
+    {
+      "path": "tests/test_selection.py",
+      "sha256": "0587f01a8a3c665f5a52def99589981445b27f93c4ab9411d48fb4a401a33a29",
+      "size_bytes": 27056
     },
     {
       "path": "tests/test_stacking_transition.py",
