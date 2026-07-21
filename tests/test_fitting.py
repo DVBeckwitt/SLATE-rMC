@@ -173,6 +173,18 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
 
     model = ContinuousDetectorGeometryModel(base_inputs)
     reference = model.bind(truth)
+    np.testing.assert_allclose(
+        reference.instrument.lab_from_detector.rotation,
+        truth_inputs.instrument.lab_from_detector.rotation,
+        rtol=0.0,
+        atol=3.0e-16,
+    )
+    np.testing.assert_allclose(
+        reference.instrument.lab_from_sample.rotation,
+        truth_inputs.instrument.lab_from_sample.rotation,
+        rtol=0.0,
+        atol=3.0e-16,
+    )
     actual = reference.evaluate_detector_coordinates(column_px, row_px)
 
     np.testing.assert_allclose(

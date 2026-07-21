@@ -153,6 +153,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-MEA-008 | masks, beamstop, saturation, bad pixels | GUI/data paths | experimental handling | none | DEFERRED from forward core |
 | PHY-MEA-009 | background | GUI/fitting paths | later comparison | none | DEFERRED |
 | PHY-MEA-010 | multiple scattering and extinction | absent | not claimed | none | DEFERRED |
+| PHY-MAP-001A | continuous detector-density pullback to canonical `2theta/phi` with separate `S/N` | `exact_cake_portable.py` continuous geometry | coordinate-measure identity | analysis | MATCH coordinate convention, NEW generalized pose/J/`S/N` under T17; no finite caking claim |
 
 Every non-deferred row must have one proof case or a documented reason that it is covered by a shared proof.
 
@@ -220,7 +221,7 @@ association, multi-angle mechanical decomposition, and intensity fitting remain 
 | PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | CORRECTED explicit |
 | PHY-FIT-015 | dependency-aware cache invalidation | distributed runtime caches | performance requirement | fitting | NEW |
 | PHY-FIT-016 | optional final joint polish after staged stability | global old optimization paths | refinement discussion | fitting | FUTURE with safeguards |
-| PHY-MAP-001 | `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | none | DEFERRED until native fits pass |
+| PHY-MAP-001B | finite `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | none | DEFERRED until native fits pass |
 
 ## Coverage rule
 

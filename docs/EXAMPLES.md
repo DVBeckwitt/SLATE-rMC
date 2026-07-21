@@ -115,6 +115,23 @@ Omitted mosaic, layer-count, and shared-disorder arguments inherit the canonical
 overrides are available for controlled convergence studies. This diagnostic intentionally uses one
 incident state, the six physical `m=1` rods, and the upper root; it is not a second default model.
 
+## Matched continuous detector and angle views
+
+Render the same continuous detector density on native detector coordinates and canonical
+`(phi, 2theta)` coordinates:
+
+```powershell
+uv run python scripts/render_continuous_angle_comparison.py `
+  --output C:\path\outside\the\repository\bi2se3-detector-angle.png
+```
+
+The default evaluates two 3,000 × 3,000 center-sampled fields for one nominal source state, every
+configured physical rod, and every retained root. The angle panel displays the normalized
+`I=S/N`, not `S` alone, so its values retain the detector-density units and shared color scale.
+Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on both panels; these
+landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
+runtime of the full incoherent ensemble is intended.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

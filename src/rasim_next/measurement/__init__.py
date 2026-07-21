@@ -1,4 +1,4 @@
-"""Finite-bin detector-to-angle observables."""
+"""Continuous and finite-bin detector-to-angle observables."""
 
 from rasim_next.measurement.angle_space import (
     AngleBinGrid,
@@ -9,9 +9,15 @@ from rasim_next.measurement.angle_space import (
     project_normalized_angle_field,
     to_increasing_phi,
 )
+from rasim_next.measurement.continuous_angle import (
+    ContinuousNormalizedAngleFunction,
+    ContinuousNormalizedAngleValues,
+)
 
 __all__ = [
     "AngleBinGrid",
+    "ContinuousNormalizedAngleFunction",
+    "ContinuousNormalizedAngleValues",
     "IncreasingPhiAngleField",
     "NormalizedAngleField",
     "SparseDetectorAngleProjector",

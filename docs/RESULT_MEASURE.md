@@ -95,6 +95,44 @@ the required coordinate-change Jacobian, so solid angle is not multiplied a seco
 acceptance or efficiency factor. Any later area-normalized or caked observable must be separately
 named and apply its correction once.
 
+## Continuous angle-coordinate measure
+
+Let `t = 2theta` and let the fixed `AngleFrame` define canonical `phi`. The inverse geometry gives
+`(c,r) = T^-1(t,phi)` on the active detector. For one detector pixel area viewed from that same
+angle-frame origin,
+
+```text
+J(t,phi) = |d(c,r) / d(t,phi)|
+         = sin(t) / pixel_solid_angle_sr(c,r).
+```
+
+`pixel_solid_angle_sr` appears here only as an exact geometry identity for the coordinate measure;
+it is not multiplied into the raw detector physics as an acceptance factor. The continuous
+normalized angle function returns
+
+```text
+S(t,phi) = d(c,r) J(t,phi)
+N(t,phi) = J(t,phi)
+I(t,phi) = S(t,phi) / N(t,phi) = d(c,r).
+```
+
+The measure IDs are `raw_detector_angle_signal_density_A2_per_rad2.v1`,
+`detector_area_density_px2_per_rad2.v1`, and
+`raw_detector_area_normalized_intensity_A2_per_px2.v1`. Invalid or off-panel directions have zero
+`S`, `N`, and `I`. At `t=0` the azimuth is undefined and `J=0`, so the duplicated point is invalid
+for pointwise normalization even when the direct-beam detector coordinate exists.
+
+For a finite angular bin `B`, the only admitted reduction is
+
+```text
+I_B = integral_B S dt dphi / integral_B N dt dphi.
+```
+
+Dividing or averaging pointwise ratios before this reduction is not equivalent. Direct integration
+of the continuous function converges to the existing finite-pixel corner-polygon projector as the
+detector pixels are refined. It does not claim bitwise identity at finite pixel size because that
+projector treats each already-integrated detector pixel as uniform over its angular polygon.
+
 ## Pixel measure
 
 For native pixel box `P_ij`,

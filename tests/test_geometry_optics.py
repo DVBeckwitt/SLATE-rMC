@@ -3,6 +3,7 @@ from __future__ import annotations
 import cmath
 import gzip
 import json
+import math
 from dataclasses import fields, replace
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from rasim_next.geometry import (
     DetectorAngles,
     DetectorProjectionBatch,
     InstrumentConfiguration,
+    angles_to_detector_coordinate_area_measure,
     angles_to_detector_coordinates,
     build_incident_states,
     compile_instrument,
@@ -581,6 +583,134 @@ def test_detector_angles_tilted_forward_inverse_oracles() -> None:
         np.cos(reconstructed.phi_rad - angles.phi_rad),
     )
     np.testing.assert_allclose(circular_phi_error, 0.0, rtol=0.0, atol=2e-14)
+
+
+def test_detector_angle_inverse_exposes_the_coordinate_jacobian() -> None:
+    tilt_y_rad = math.radians(-5.0)
+    tilt_x_rad = math.radians(7.0)
+    rotation_y = np.array(
+        [
+            [np.cos(tilt_y_rad), 0.0, np.sin(tilt_y_rad)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(tilt_y_rad), 0.0, np.cos(tilt_y_rad)],
+        ]
+    )
+    rotation_x = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, np.cos(tilt_x_rad), -np.sin(tilt_x_rad)],
+            [0.0, np.sin(tilt_x_rad), np.cos(tilt_x_rad)],
+        ]
+    )
+    configuration = replace(
+        _configuration(),
+        lab_from_detector=RigidTransform(
+            rotation_x @ rotation_y,
+            [0.0, 0.0, 1.0],
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        detector_shape_rc=(1001, 1001),
+        detector_row_pitch_m=1.1e-3,
+        detector_column_pitch_m=7.0e-4,
+        detector_reference_coordinate_px=(500.0, 500.0),
+    )
+    instrument = compile_instrument(configuration)
+    frame = _angle_frame()
+    target_columns = np.array([220.1, 501.2, 781.4])
+    target_rows = np.array([263.3, 517.1, 742.7])
+    target_angles = detector_coordinates_to_angles(
+        target_columns,
+        target_rows,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    assert np.all(target_angles.valid)
+
+    inverse_measure = angles_to_detector_coordinate_area_measure(
+        target_angles.two_theta_rad,
+        target_angles.phi_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    sine = np.sin(target_angles.two_theta_rad)
+    directions_lab = (
+        (-sine * np.cos(target_angles.phi_rad))[:, None] * frame.row_down_lab
+        + (-sine * np.sin(target_angles.phi_rad))[:, None] * frame.column_right_lab
+        + np.cos(target_angles.two_theta_rad)[:, None] * frame.direct_beam_lab
+    )
+    projections = project_detector_rays(
+        np.broadcast_to(frame.origin_lab_m, directions_lab.shape),
+        directions_lab,
+        instrument,
+    )
+    expected_jacobian = sine / projections.pixel_solid_angle_sr
+    step_rad = 2.0e-7
+    theta_plus = angles_to_detector_coordinates(
+        target_angles.two_theta_rad + step_rad,
+        target_angles.phi_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    theta_minus = angles_to_detector_coordinates(
+        target_angles.two_theta_rad - step_rad,
+        target_angles.phi_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    phi_plus = angles_to_detector_coordinates(
+        target_angles.two_theta_rad,
+        target_angles.phi_rad + step_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    phi_minus = angles_to_detector_coordinates(
+        target_angles.two_theta_rad,
+        target_angles.phi_rad - step_rad,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    dc_dtheta = (theta_plus.column_px - theta_minus.column_px) / (2.0 * step_rad)
+    dr_dtheta = (theta_plus.row_px - theta_minus.row_px) / (2.0 * step_rad)
+    dc_dphi = (phi_plus.column_px - phi_minus.column_px) / (2.0 * step_rad)
+    dr_dphi = (phi_plus.row_px - phi_minus.row_px) / (2.0 * step_rad)
+    finite_difference_jacobian = np.abs(dc_dtheta * dr_dphi - dc_dphi * dr_dtheta)
+
+    np.testing.assert_allclose(
+        inverse_measure.detector_area_jacobian_px2_per_rad2,
+        expected_jacobian,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        inverse_measure.detector_area_jacobian_px2_per_rad2,
+        finite_difference_jacobian,
+        rtol=2.0e-9,
+        atol=0.0,
+    )
+    periodic = angles_to_detector_coordinate_area_measure(
+        target_angles.two_theta_rad,
+        target_angles.phi_rad + 2.0 * np.pi,
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    np.testing.assert_allclose(
+        periodic.detector_area_jacobian_px2_per_rad2,
+        inverse_measure.detector_area_jacobian_px2_per_rad2,
+        rtol=0.0,
+        atol=2.0e-12,
+    )
+    assert not inverse_measure.detector_area_jacobian_px2_per_rad2.flags.writeable
+
+    flat_instrument = compile_instrument(_configuration())
+    pole = angles_to_detector_coordinate_area_measure(
+        [0.0, np.finfo(np.float64).eps],
+        [1.7, -0.4],
+        instrument=flat_instrument,
+        angle_frame=frame,
+    )
+    assert np.all(pole.coordinates.valid)
+    np.testing.assert_array_equal(pole.detector_area_jacobian_px2_per_rad2, 0.0)
 
 
 def test_detector_angle_support_frame_and_inverse_statuses() -> None:

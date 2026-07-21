@@ -19,6 +19,41 @@ detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-co
 agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
 and scientific subsystem cutovers; they do not reinstate retired APIs.
 
+### Continuous angle-coordinate measurement activation
+
+T17 starts from accepted `main` `1f3a106b0fe30b5fe92f8558a45bccf0c49655f7` and activates only
+the pointwise detector-density pullback from the historically deferred caking row. The first new
+declared stage is `measurement.continuous_angle`: the pose-bound inverse mapping supplies
+`J=sin(2theta)/pixel_solid_angle_sr`, then returns `S=dJ`, `N=J`, and `I=S/N`. This use of solid
+angle is a coordinate identity, not the excluded detector acceptance correction. Finite caking and
+reciprocal remapping remain deferred.
+
+The permanent proof compares a compound-tilted, rectangular detector Jacobian with an independent
+central finite-difference determinant; checks periodic `phi`, exact-pole zero measure, and active
+support; evaluates a real nominal-source all-root detector function through both coordinate routes;
+and verifies that a nonzero corrected geometry exposes the same owned detector/sample pose used by
+the detector field. A separate analytic square-panel oracle integrates a nonlinear detector
+density in angular coordinates, conserves detector area and signal, and distinguishes
+`integral(S)/integral(N)` from averaging pointwise `I`. The external 3,000 × 3,000 comparison is
+display/benchmark evidence and is not committed. The flat legacy coordinate convention is
+classified `MATCH`; the arbitrary-pose Jacobian and explicit continuous `S/N` measures are `NEW`.
+
+Measured T17 proof gives a maximum relative Jacobian error of `3.2410e-10` against the independent
+central-difference determinant. For the analytic nonlinear square-panel fixture, angular
+Gauss-Legendre orders 4, 8, and 16 give signal errors `-7.0971e-4`, `-1.9421e-9`, and
+`-2.8422e-14`, while normalization errors are `-9.9340e-5`, `-1.4427e-10`, and
+`-3.5527e-15`. The conserved finite-bin ratio is `4.266666666666666`; incorrectly averaging the
+pointwise ratio gives `4.17297308593442` and is rejected. All 73 compact permanent tests pass in
+`100.382 s`, the production-scope Ruff lint/format gates and diff whitespace check pass, and the
+independent final review reports `READY`.
+
+The external comparison evaluates one nominal source state, all 85 physical rods, and every
+retained inverse root into two true 3,000 × 3,000 center-sampled arrays. It labels all 84
+positive-strength nominal exact-integer-`L` markers and uses one shared logarithmic intensity
+scale. Build, detector-field, and angle-field times were `3.343 s`, `127.178 s`, and `82.099 s`;
+peak working memory was `1,419,460,608` bytes. These center samples visualize the continuous
+function; finite angular-bin observables still integrate `S` and `N` separately before division.
+
 ### Detector-pose validity maintenance
 
 The 2026-07-21 maintenance branch starts from accepted `main`
@@ -86,8 +121,8 @@ zero for the independent root fixture.
 
 The retained limitations are explicit: the direct `m=0`, `Q=0` root remains excluded; only regular
 detector-visible `m=0` support with a positive reciprocal gap is admitted. Fixed macrobin output is
-a preview estimate, not an adaptive convergence claim. Detector response, background, caking, and
-fitting remain deferred.
+a preview estimate, not an adaptive convergence claim. Detector response, background, finite
+caking, and intensity fitting remain deferred.
 
 ## Historical BKI-15 incident-boundary proof
 
@@ -495,6 +530,8 @@ Every branch must pass:
 - per-rod to exact-family intensity reduction
 - detector-visible coating and elastic closure
 - detector-coordinate and pixel-quadrature convergence
+- detector-angle inverse Jacobian, periodic seam, pole, and invalid-support behavior
+- continuous angle `S=dJ`, `N=J`, and `I=S/N` with the corrected pose owned by the detector function
 
 ### Ordered and reflectivity
 

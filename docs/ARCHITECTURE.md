@@ -54,7 +54,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
   the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose fitting, rank diagnostics, and post-fit root
   re-enumeration.
-- `measurement`: later detector-derived coordinate transforms; never part of raw rendering.
+- `measurement`: downstream detector-derived observables, including the continuous normalized
+  `(phi, 2theta)` coordinate pullback and the finite-pixel angle projector; never part of raw
+  rendering.
 - `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
 ## Public runtime layers
@@ -69,6 +71,8 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
    structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
    exit-refraction, and detector geometry for each landmark trial.
+7. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
+   coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never

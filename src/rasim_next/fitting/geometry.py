@@ -994,6 +994,16 @@ class ContinuousDetectorFunction:
         return "raw_detector_coordinate_density_A2_per_px2.v1"
 
     @property
+    def instrument(self) -> CompiledInstrument:
+        """Return the corrected pose owned by this immutable detector function."""
+
+        return _corrected_instrument(
+            self.model._inputs.instrument,
+            self.corrections,
+            self.model._sample_correction_pivot_lab_m,
+        )
+
+    @property
     def tag_incident_state_policy(self) -> str:
         """Return the single deterministic incident state used for all exact tags."""
 

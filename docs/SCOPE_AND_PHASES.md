@@ -17,6 +17,8 @@ detector geometry.
 - Wrapped Gaussian/Lorentzian mosaic probability in continuous latent coordinates.
 - Analytic infinite-rod Ewald roots and detector-visible intrinsic coating diagnostics.
 - Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
+- Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
+  normalization densities before division.
 - Incoherent source/wavelength/phase summation before deterministic detector box integration.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
@@ -31,6 +33,11 @@ The authoritative output is either:
 - `raw_detector_coordinate_density_A2_per_px2.v1` at arbitrary floating coordinates; or
 - its finite native-pixel integral `raw_detector_pixel_mass_A2.v1`.
 
+An optional downstream measurement view evaluates
+`raw_detector_area_normalized_intensity_A2_per_px2.v1` continuously in `(phi, 2theta)`. It is a
+coordinate reparameterization of the detector density, not a replacement raw result or an added
+detector-efficiency/solid-angle correction.
+
 The optional reciprocal-space, Ewald-coating, and detector PNGs are display artifacts evaluated from
 these functions. They are not stored model state.
 
@@ -41,7 +48,7 @@ these functions. They are not stored model state.
 - Multi-phase optical environments beyond the declared single-film model.
 - Experimental peak finding/association, multi-angle decomposition of sample and goniometer
   mechanics, and intensity-profile fitting beyond exact marker positions.
-- Caking and reciprocal remapping after detector-native fitting is validated.
+- Finite-bin caking and reciprocal remapping after detector-native fitting is validated.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 
 ## Phase discipline

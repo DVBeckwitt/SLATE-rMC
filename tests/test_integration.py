@@ -9,12 +9,15 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull, QhullError
 
+from painted_ewald import Rod
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
+from rasim_next.fitting import ContinuousDetectorGeometryModel, GeometryCorrections
 from rasim_next.geometry import (
     AngleFrame,
     InstrumentConfiguration,
+    angles_to_detector_coordinate_area_measure,
     build_incident_states,
     compile_instrument,
     detector_coordinates_to_angles,
@@ -23,6 +26,7 @@ from rasim_next.geometry import (
 from rasim_next.materials import material_optics
 from rasim_next.measurement import (
     AngleBinGrid,
+    ContinuousNormalizedAngleFunction,
     compile_detector_angle_projector,
     project_normalized_angle_field,
     to_increasing_phi,
@@ -30,6 +34,9 @@ from rasim_next.measurement import (
 from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
     load_simulation_config,
+)
+from rasim_next.pipeline.source_averaged_detector import (
+    SourceAveragedDetectorCoordinateIntensity,
 )
 
 
@@ -2112,6 +2119,173 @@ def _frame(origin_lab_m: np.ndarray | list[float] | None = None) -> AngleFrame:
         direct_beam_lab=np.array([0.0, 0.0, 1.0]),
         revision="integration-angle-frame.v1",
     )
+
+
+def test_continuous_angle_function_preserves_detector_density_through_s_over_n() -> None:
+    inputs = _configured_inputs(sample_count=1)
+    detector_function = ContinuousDetectorGeometryModel(inputs).bind(GeometryCorrections.zero())
+    frame = AngleFrame(
+        origin_lab_m=np.zeros(3),
+        row_down_lab=np.array([0.0, 0.0, -1.0]),
+        column_right_lab=np.array([1.0, 0.0, 0.0]),
+        direct_beam_lab=np.array([0.0, 1.0, 0.0]),
+        revision="configured-nominal-angle-frame.v1",
+    )
+    detector_column = np.array([811.25, 1510.0, 2237.75])
+    detector_row = np.array([412.5, 1596.422, 2461.125])
+    angles = detector_coordinates_to_angles(
+        detector_column,
+        detector_row,
+        instrument=detector_function.instrument,
+        angle_frame=frame,
+    )
+    assert np.all(angles.valid)
+    direct = detector_function(detector_column, detector_row)
+
+    angle_function = ContinuousNormalizedAngleFunction(detector_function, frame)
+    evaluated = angle_function(
+        np.concatenate((angles.two_theta_rad, [0.0, np.pi / 2.0])),
+        np.concatenate((angles.phi_rad, [0.37, 0.0])),
+    )
+    expected_measure = angles_to_detector_coordinate_area_measure(
+        angles.two_theta_rad,
+        angles.phi_rad,
+        instrument=detector_function.instrument,
+        angle_frame=frame,
+    )
+    expected_normalization = expected_measure.detector_area_jacobian_px2_per_rad2
+
+    np.testing.assert_allclose(
+        evaluated.normalization_density_px2_per_rad2[:3],
+        expected_normalization,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        evaluated.signal_density_A2_per_rad2[:3],
+        direct.density_A2_per_px2 * expected_normalization,
+        rtol=3.0e-13,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        evaluated.intensity_A2_per_px2[:3],
+        direct.density_A2_per_px2,
+        rtol=3.0e-13,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        evaluated.signal_density_A2_per_rad2[:3] / evaluated.normalization_density_px2_per_rad2[:3],
+        evaluated.intensity_A2_per_px2[:3],
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(evaluated.valid, [True, True, True, False, False])
+    np.testing.assert_array_equal(
+        evaluated.normalization_density_px2_per_rad2[3:],
+        np.zeros(2),
+    )
+    np.testing.assert_array_equal(evaluated.signal_density_A2_per_rad2[3:], np.zeros(2))
+    np.testing.assert_array_equal(evaluated.intensity_A2_per_px2[3:], np.zeros(2))
+    assert evaluated.signal_measure_id == "raw_detector_angle_signal_density_A2_per_rad2.v1"
+    assert evaluated.normalization_measure_id == "detector_area_density_px2_per_rad2.v1"
+    assert evaluated.intensity_measure_id == "raw_detector_area_normalized_intensity_A2_per_px2.v1"
+    assert not evaluated.intensity_A2_per_px2.flags.writeable
+
+
+class _AnalyticDetectorDensity:
+    measure_id = "raw_detector_coordinate_density_A2_per_px2.v1"
+
+    def __init__(self, instrument: object) -> None:
+        self.instrument = instrument
+
+    def evaluate_detector_coordinates(
+        self,
+        column_px: object,
+        row_px: object,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        column, row = np.broadcast_arrays(
+            np.asarray(column_px, dtype=np.float64),
+            np.asarray(row_px, dtype=np.float64),
+        )
+        center_column = self.instrument.detector_reference_coordinate_px[0]
+        density = 4.0 + 0.2 * (column - center_column) ** 2
+        return SourceAveragedDetectorCoordinateIntensity(
+            column_px=column,
+            row_px=row,
+            rods=(Rod(1, 0),),
+            branch=2,
+            per_rod_density_A2_per_px2=density[..., None],
+            density_A2_per_px2=density,
+            caustic=np.zeros((*density.shape, 1), dtype=np.bool_),
+            valid_source_count=np.ones(density.shape, dtype=np.int64),
+            source_state_count=1,
+            source_revision="analytic-angle-bin.v1",
+        )
+
+
+def _integrate_square_panel_in_angle_coordinates(
+    angle_function: ContinuousNormalizedAngleFunction,
+    *,
+    order: int,
+) -> tuple[float, float, float]:
+    node, weight = np.polynomial.legendre.leggauss(order)
+    signal = 0.0
+    normalization = 0.0
+    ratio_integral = 0.0
+    angular_area = 0.0
+    pitch_over_distance = 0.05
+    panel_half_width_px = 2.0
+    for sector in range(8):
+        phi_lower = -np.pi + sector * np.pi / 4.0
+        phi_upper = phi_lower + np.pi / 4.0
+        phi = 0.5 * (phi_upper - phi_lower) * node + 0.5 * (phi_upper + phi_lower)
+        phi_weight = 0.5 * (phi_upper - phi_lower) * weight
+        radial_limit_px = panel_half_width_px / np.maximum(np.abs(np.sin(phi)), np.abs(np.cos(phi)))
+        theta_upper = np.arctan(pitch_over_distance * radial_limit_px)
+        two_theta = 0.5 * (node[None, :] + 1.0) * theta_upper[:, None]
+        two_theta_weight = 0.5 * theta_upper[:, None] * weight[None, :]
+        phi_grid = np.broadcast_to(phi[:, None], two_theta.shape)
+        area_weight = phi_weight[:, None] * two_theta_weight
+        evaluated = angle_function(two_theta, phi_grid)
+        assert np.all(evaluated.valid)
+        signal += float(np.sum(evaluated.signal_density_A2_per_rad2 * area_weight))
+        normalization += float(np.sum(evaluated.normalization_density_px2_per_rad2 * area_weight))
+        ratio_integral += float(np.sum(evaluated.intensity_A2_per_px2 * area_weight))
+        angular_area += float(np.sum(area_weight))
+    return signal, normalization, ratio_integral / angular_area
+
+
+def test_continuous_angle_signal_and_normalization_conserve_a_finite_detector_bin() -> None:
+    base = _instrument(shape_rc=(4, 4), reference_cr=(1.5, 1.5))
+    instrument = replace(
+        base,
+        lab_from_detector=RigidTransform(
+            np.eye(3),
+            [0.0, 0.0, 1.0],
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        detector_row_pitch_m=0.05,
+        detector_column_pitch_m=0.05,
+    )
+    angle_function = ContinuousNormalizedAngleFunction(
+        _AnalyticDetectorDensity(instrument),
+        _frame(),
+    )
+    coarse = _integrate_square_panel_in_angle_coordinates(angle_function, order=4)
+    medium = _integrate_square_panel_in_angle_coordinates(angle_function, order=8)
+    fine = _integrate_square_panel_in_angle_coordinates(angle_function, order=16)
+    expected_normalization = 16.0
+    expected_signal = 64.0 + 64.0 / 15.0
+    expected_intensity = expected_signal / expected_normalization
+    fine_error = abs(fine[0] - expected_signal) + abs(fine[1] - expected_normalization)
+
+    assert fine_error < abs(medium[0] - expected_signal) + abs(medium[1] - expected_normalization)
+    assert fine_error < abs(coarse[0] - expected_signal) + abs(coarse[1] - expected_normalization)
+    assert fine[0] == pytest.approx(expected_signal, rel=2.0e-14)
+    assert fine[1] == pytest.approx(expected_normalization, rel=2.0e-14)
+    assert fine[0] / fine[1] == pytest.approx(expected_intensity, rel=2.0e-14)
+    assert abs(fine[2] - expected_intensity) > 1.0e-3
 
 
 def _full_grid(instrument: object, frame: AngleFrame, *, radial_bins: int = 5) -> AngleBinGrid:

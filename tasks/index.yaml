@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: continuous_detector_maintenance
+current_phase: continuous_angle_measurement
 
 tasks:
   - id: T00
@@ -82,3 +82,8 @@ tasks:
     branch: feat/caking-qspace
     status: DEFERRED_REPLAN
     depends_on: [T14]
+  - id: T17
+    file: tasks/17_continuous_angle_measure.md
+    branch: codex/continuous-angle-render
+    status: READY
+    depends_on: [T07]

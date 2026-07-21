@@ -3,7 +3,9 @@
 from rasim_next.geometry.angles import (
     AngleFrame,
     DetectorAngles,
+    DetectorCoordinateAreaMeasure,
     DetectorCoordinates,
+    angles_to_detector_coordinate_area_measure,
     angles_to_detector_coordinates,
     detector_coordinates_to_angles,
 )
@@ -33,6 +35,7 @@ __all__ = [
     "AxisRotation",
     "CompiledInstrument",
     "DetectorAngles",
+    "DetectorCoordinateAreaMeasure",
     "DetectorCoordinates",
     "DetectorProjection",
     "DetectorProjectionBatch",
@@ -40,6 +43,7 @@ __all__ = [
     "IncidentTransportResult",
     "InstrumentConfiguration",
     "SampleIntersection",
+    "angles_to_detector_coordinate_area_measure",
     "angles_to_detector_coordinates",
     "build_incident_states",
     "compile_instrument",

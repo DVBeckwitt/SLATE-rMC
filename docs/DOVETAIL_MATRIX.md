@@ -18,6 +18,7 @@ phases but do not override these owners.
 | `DetectorEwaldMeasure` | one-state coordinate density | source average / pixel integration | all inverse branches, optics, source and phase factors exactly once |
 | source-averaged measure | summed coordinate density | pixel integrator | independent states and wavelengths add as intensities before one box integral |
 | native-pixel integrator | raw pixel mass | rendering / future fitting | deterministic finite box integral; no point deposition or image normalization |
+| bound continuous detector function | raw detector-coordinate density | continuous angle measurement | inverse-map `(phi,2theta)` with the corrected owned pose; apply the detector-area coordinate Jacobian once and retain separate `S/N` |
 | exact integer-L marker solver | frozen root identities and native coordinates | geometry fitter | every physical rod precedes grouping; analytic root sign is part of identity |
 | bound continuous detector function | key-aligned exact-tag predictions | bounded least squares | private geometry-only tag engine; no intensity evaluation or dynamic reassignment inside the objective |
 | geometry fitter | pivoted pose corrections plus rank/residual diagnostics | outer marker audit | one fixed LAB sample pivot and a full-rank local pack are required; final visible roots are independently re-enumerated |
@@ -40,8 +41,8 @@ atomic/layer contributions sum as amplitudes only inside their owning strength m
 
 ## Deferred consumers
 
-Intensity/profile fitting, masks, background, detector PSF/efficiency, saturation, caking, and
-reciprocal remapping consume the accepted detector result later. None may recreate sampled
+Intensity/profile fitting, masks, background, detector PSF/efficiency, saturation, finite caking,
+and reciprocal remapping consume the accepted detector result later. None may recreate sampled
 scattering events or move a factor upstream without a new declared measure and proof. The accepted
 exact-marker geometry fit consumes geometry only and therefore does not require detector intensity
 or pixel integration.

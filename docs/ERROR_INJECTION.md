@@ -91,6 +91,20 @@ Expected detection: detector ray/Q identity, forward/inverse round-trip, per-rod
 constant-field pixel identity, caustic finite-box oracle, quadrature refinement, mass/centroid error,
 or invalid-support contract.
 
+### Continuous angle-coordinate measure
+
+- Swap row/column or the canonical `phi` sign, shift detector coordinates by half a pixel, or use a
+  detector pose different from the bound detector function.
+- Omit the detector-area Jacobian, apply it twice, use a source-state solid angle instead of the
+  fixed `AngleFrame` origin, or multiply it into `I` as an acceptance correction.
+- Give the exact pole or an invalid/off-panel direction nonzero normalization.
+- Average `S/N` point samples before a finite-bin reduction instead of integrating `S` and `N`
+  separately.
+
+Expected detection: tilted finite-difference Jacobian, periodic-seam/pole/support checks,
+pose-bound instrument comparison, pointwise `S=dJ`, `N=J`, `I=S/N`, and a nonlinear divide-order
+oracle.
+
 ### Configuration and acceleration
 
 - Accept an unknown, duplicate, aliased, or missing YAML key.

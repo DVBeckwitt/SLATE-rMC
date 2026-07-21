@@ -98,6 +98,19 @@ integrator is deliberately branch-specific and rejects any model containing `m=0
 all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
 weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
+### `ContinuousNormalizedAngleFunction`
+
+Owns one pose-bound `ContinuousDetectorFunction` and one fixed `AngleFrame`. Callers provide only
+broadcastable `two_theta_rad` and `phi_rad`; the wrapper obtains the corrected
+`CompiledInstrument` from the detector function, so a stale or mismatched detector pose cannot be
+supplied separately. `phi` is canonicalized into `[-pi, pi)`.
+
+The immutable `ContinuousNormalizedAngleValues` payload retains the inverse detector coordinates,
+the detector-area Jacobian `N`, angular signal density `S`, normalized detector density `I=S/N`,
+caustic flags, and pointwise validity. It applies no detector solid-angle acceptance correction.
+The exact pole and every invalid/off-panel direction have `S=N=I=0`. Finite bins are a separate
+consumer and must integrate `S` and `N` before division.
+
 ### Configured simulation
 
 - `load_simulation_config(path, repository_root=...)` accepts one strict

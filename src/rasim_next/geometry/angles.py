@@ -202,6 +202,30 @@ class DetectorCoordinates:
             object.__setattr__(self, name, array)
 
 
+@dataclass(frozen=True, slots=True)
+class DetectorCoordinateAreaMeasure:
+    """Inverse detector coordinates and their area measure per angular area."""
+
+    coordinates: DetectorCoordinates
+    detector_area_jacobian_px2_per_rad2: NDArray[np.float64]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.coordinates, DetectorCoordinates):
+            raise TypeError("coordinates must be DetectorCoordinates")
+        jacobian = _readonly_array(
+            self.detector_area_jacobian_px2_per_rad2,
+            np.float64,
+            "detector_area_jacobian_px2_per_rad2",
+        )
+        if jacobian.shape != self.coordinates.column_px.shape:
+            raise ValueError("detector-area Jacobian must preserve the coordinate shape")
+        if np.any(jacobian < 0.0):
+            raise ValueError("detector-area Jacobian must be nonnegative")
+        if np.any(jacobian[~self.coordinates.valid] != 0.0):
+            raise ValueError("invalid detector coordinates must have zero area measure")
+        object.__setattr__(self, "detector_area_jacobian_px2_per_rad2", jacobian)
+
+
 def _validate_context(instrument: CompiledInstrument, angle_frame: AngleFrame) -> None:
     if not isinstance(instrument, CompiledInstrument):
         raise TypeError("instrument must be a CompiledInstrument")
@@ -299,16 +323,10 @@ def detector_coordinates_to_angles(
     return DetectorAngles(two_theta, chi_raw, phi, valid, azimuth_valid, status)
 
 
-def angles_to_detector_coordinates(
+def _inverse_angle_arrays(
     two_theta_rad: ArrayLike,
     phi_rad: ArrayLike,
-    *,
-    instrument: CompiledInstrument,
-    angle_frame: AngleFrame,
-) -> DetectorCoordinates:
-    """Project scattering angles to continuous detector coordinates."""
-
-    _validate_context(instrument, angle_frame)
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     two_theta, phi = _coordinate_arrays(
         two_theta_rad,
         phi_rad,
@@ -317,17 +335,14 @@ def angles_to_detector_coordinates(
     )
     if np.any((two_theta < 0.0) | (two_theta > np.pi)):
         raise ValueError("two_theta_rad must lie in the closed interval [0, pi]")
-    shape = two_theta.shape
-    if _origin_is_in_detector_plane(instrument, angle_frame):
-        status = _status_array(shape, ValidityCode.NO_SOLUTION)
-        return DetectorCoordinates(
-            np.zeros(shape, dtype=np.float64),
-            np.zeros(shape, dtype=np.float64),
-            np.zeros(shape, dtype=np.bool_),
-            status,
-        )
+    return two_theta, _wrap_pi(phi)
 
-    phi = _wrap_pi(phi)
+
+def _angle_directions_lab(
+    two_theta: NDArray[np.float64],
+    phi: NDArray[np.float64],
+    angle_frame: AngleFrame,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     sine = np.sin(two_theta)
     cosine = np.cos(two_theta)
     at_pole = (two_theta <= _AZIMUTH_TOL) | ((np.pi - two_theta) <= _AZIMUTH_TOL)
@@ -339,7 +354,28 @@ def angles_to_detector_coordinates(
         + cosine[..., None] * angle_frame.direct_beam_lab
     )
     direction_norm = np.linalg.norm(directions_lab, axis=-1, keepdims=True)
-    directions_lab = directions_lab / direction_norm
+    area_sine = np.where(at_pole, 0.0, sine)
+    return directions_lab / direction_norm, area_sine
+
+
+def _project_angles_to_detector(
+    two_theta: NDArray[np.float64],
+    phi: NDArray[np.float64],
+    *,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+) -> tuple[DetectorCoordinates, NDArray[np.float64], NDArray[np.float64]]:
+    shape = two_theta.shape
+    directions_lab, sine = _angle_directions_lab(two_theta, phi, angle_frame)
+    if _origin_is_in_detector_plane(instrument, angle_frame):
+        status = _status_array(shape, ValidityCode.NO_SOLUTION)
+        coordinates = DetectorCoordinates(
+            np.zeros(shape, dtype=np.float64),
+            np.zeros(shape, dtype=np.float64),
+            np.zeros(shape, dtype=np.bool_),
+            status,
+        )
+        return coordinates, directions_lab, sine
     flat_directions = np.reshape(directions_lab, (-1, 3))
     flat_origins = np.broadcast_to(angle_frame.origin_lab_m, flat_directions.shape)
     projections = _project_detector_rays(
@@ -350,9 +386,62 @@ def angles_to_detector_coordinates(
     )
     status = np.reshape(projections.status, shape)
     valid = status == ValidityCode.VALID
-    return DetectorCoordinates(
+    coordinates = DetectorCoordinates(
         np.reshape(projections.column_px, shape),
         np.reshape(projections.row_px, shape),
         valid,
         status,
     )
+    return coordinates, directions_lab, sine
+
+
+def angles_to_detector_coordinates(
+    two_theta_rad: ArrayLike,
+    phi_rad: ArrayLike,
+    *,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+) -> DetectorCoordinates:
+    """Project scattering angles to continuous detector coordinates."""
+
+    _validate_context(instrument, angle_frame)
+    two_theta, phi = _inverse_angle_arrays(two_theta_rad, phi_rad)
+    coordinates, _, _ = _project_angles_to_detector(
+        two_theta,
+        phi,
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    return coordinates
+
+
+def angles_to_detector_coordinate_area_measure(
+    two_theta_rad: ArrayLike,
+    phi_rad: ArrayLike,
+    *,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+) -> DetectorCoordinateAreaMeasure:
+    """Return inverse coordinates and ``|d(c,r)/d(2theta,phi)|`` in ``px2/rad2``."""
+
+    _validate_context(instrument, angle_frame)
+    two_theta, phi = _inverse_angle_arrays(two_theta_rad, phi_rad)
+    coordinates, directions_lab, sine = _project_angles_to_detector(
+        two_theta,
+        phi,
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    detector_normal_lab = instrument.lab_from_detector.rotation[:, 2]
+    plane_distance_normal_m = float(
+        detector_normal_lab
+        @ (instrument.lab_from_detector.translation_m - angle_frame.origin_lab_m)
+    )
+    incidence_cosine = directions_lab @ detector_normal_lab
+    pixel_area_m2 = instrument.detector_column_pitch_m * instrument.detector_row_pitch_m
+    jacobian = np.zeros(two_theta.shape, dtype=np.float64)
+    active = coordinates.valid & (sine > 0.0)
+    jacobian[active] = (
+        plane_distance_normal_m**2 * sine[active] / (pixel_area_m2 * incidence_cosine[active] ** 3)
+    )
+    return DetectorCoordinateAreaMeasure(coordinates, jacobian)
