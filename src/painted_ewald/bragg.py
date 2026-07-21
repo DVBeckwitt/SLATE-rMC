@@ -70,6 +70,34 @@ class BraggSpaceConfig:
 
         return 2.0 * self.k_norm_Ainv
 
+    def rod_u_bounds_Ainv(self, rod: Rod) -> tuple[float, float]:
+        """Return one configured rod's complete interval inside the elastic ball."""
+
+        if not isinstance(rod, Rod):
+            raise TypeError("rod must be a Rod")
+        try:
+            configured = next(
+                candidate for candidate in self.rods if (candidate.h, candidate.k) == (rod.h, rod.k)
+            )
+        except StopIteration as error:
+            raise ValueError(f"rod ({rod.h}, {rod.k}) is not configured") from error
+        mean_axis, _ = mosaic_axes(self.reciprocal_basis_Ainv)
+        q_parallel = (
+            configured.h * self.reciprocal_basis_Ainv[:, 0]
+            + configured.k * self.reciprocal_basis_Ainv[:, 1]
+        )
+        axial_offset = float(np.dot(q_parallel, mean_axis))
+        perpendicular = q_parallel - axial_offset * mean_axis
+        half_width = float(
+            np.sqrt(
+                max(
+                    0.0,
+                    self.q_norm_max_Ainv**2 - float(np.dot(perpendicular, perpendicular)),
+                )
+            )
+        )
+        return -axial_offset - half_width, -axial_offset + half_width
+
 
 @dataclass(frozen=True, slots=True)
 class LatentBraggIntensity:
@@ -315,22 +343,7 @@ class MosaicBraggSpace:
     def rod_u_bounds_Ainv(self, rod: Rod) -> tuple[float, float]:
         """Return the complete axial interval inside the elastic-reach ball."""
 
-        configured = self._configured_rod(rod)
-        q_parallel = (
-            configured.h * self._config.reciprocal_basis_Ainv[:, 0]
-            + configured.k * self._config.reciprocal_basis_Ainv[:, 1]
-        )
-        axial_offset = float(np.dot(q_parallel, self._mean_axis))
-        perpendicular = q_parallel - axial_offset * self._mean_axis
-        half_width = float(
-            np.sqrt(
-                max(
-                    0.0,
-                    self._config.q_norm_max_Ainv**2 - float(np.dot(perpendicular, perpendicular)),
-                )
-            )
-        )
-        return -axial_offset - half_width, -axial_offset + half_width
+        return self._config.rod_u_bounds_Ainv(rod)
 
     def map_latent(
         self,

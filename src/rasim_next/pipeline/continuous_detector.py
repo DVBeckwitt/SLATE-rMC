@@ -13,7 +13,12 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 from numpy.typing import ArrayLike, NDArray
 
-from painted_ewald import ContinuousEwaldCoating, EwaldLatentGeometry, Rod
+from painted_ewald import (
+    BraggSpaceConfig,
+    ContinuousEwaldCoating,
+    EwaldLatentGeometry,
+    Rod,
+)
 from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.core.validity import ValidityCode
@@ -526,6 +531,7 @@ class DetectorPixelMass:
         if self.execution_backend not in {
             "numpy_vectorized.v1",
             "numba_nogil_thread_tiles.v1",
+            "numba_source_averaged.v1",
         }:
             raise ValueError("unsupported detector integration backend")
         if self.measure_id != "raw_detector_pixel_mass_A2.v1":
@@ -550,6 +556,183 @@ class _MappedArrays:
     exit_amplitude: ComplexArray
     kz_film_Ainv: ComplexArray
     propagation_direction: NDArray[np.int8]
+
+
+def _compile_detector_state(
+    *,
+    bragg_config: BraggSpaceConfig,
+    strength_model: Bi2Se3TwoHStrength,
+    ki_sample_Ainv: ArrayLike,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+    rods: tuple[Rod, ...],
+    incident_state_index: int,
+    source_phase_weight: float,
+    packed_structure: tuple[
+        FloatArray,
+        FloatArray,
+        FloatArray,
+        ComplexArray,
+        int,
+        float,
+    ]
+    | None = None,
+) -> CompiledDetectorState:
+    """Pack one canonical incident row for the shared compiled point kernel."""
+
+    state_index = index(incident_state_index)
+    states = incident.states
+    if state_index < 0 or state_index >= states.incident_state_id.size:
+        raise ValueError("incident_state_index lies outside the incident batch")
+    if not states.valid[state_index]:
+        raise ValueError("the compiled incident state must be valid")
+    if not isinstance(bragg_config, BraggSpaceConfig):
+        raise TypeError("bragg_config must be BraggSpaceConfig")
+    if not isinstance(strength_model, Bi2Se3TwoHStrength):
+        raise TypeError("compiled integration requires the accepted Bi2Se3TwoHStrength model")
+    basis_scale = max(float(np.linalg.norm(bragg_config.reciprocal_basis_Ainv)), 1.0)
+    if not np.allclose(
+        strength_model.reciprocal_basis_Ainv,
+        bragg_config.reciprocal_basis_Ainv,
+        rtol=0.0,
+        atol=256.0 * np.finfo(np.float64).eps * basis_scale,
+    ):
+        raise ValueError("strength-model and Bragg-space reciprocal bases do not match")
+    mosaic = bragg_config.mosaic
+    if mosaic.zero_tilt_probability_mass != 0.0:
+        raise ValueError("compiled integration does not support zero-tilt atoms")
+    wavelength_A = float(states.wavelength_A[state_index])
+    air_k0_Ainv = 2.0 * np.pi / wavelength_A
+    ki_sample = np.asarray(ki_sample_Ainv, dtype=np.float64)
+    if ki_sample.shape != (3,) or not np.all(np.isfinite(ki_sample)):
+        raise ValueError("ki_sample_Ainv must be finite with shape (3,)")
+    scale = max(float(np.linalg.norm(ki_sample)), 1.0)
+    if not np.allclose(
+        ki_sample,
+        states.k_film_phase_sample_Ainv[state_index],
+        rtol=0.0,
+        atol=256.0 * np.finfo(np.float64).eps * scale,
+    ):
+        raise ValueError("ki_sample_Ainv must match the selected canonical incident state")
+    if not np.isclose(
+        bragg_config.k_norm_Ainv,
+        air_k0_Ainv,
+        rtol=0.0,
+        atol=256.0 * np.finfo(np.float64).eps * max(air_k0_Ainv, 1.0),
+    ):
+        raise ValueError("Bragg strength must use the selected incident air wavelength")
+    if packed_structure is None:
+        packed_structure = pack_bi2se3_two_h_structure(
+            strength_model,
+            wavelength_A=wavelength_A,
+        )
+    (
+        atom_offsets,
+        atom_properties,
+        f0_parameters,
+        anomalous,
+        layers,
+        normalization_divisor,
+    ) = packed_structure
+
+    detector_rotation = instrument.lab_from_detector.rotation
+    column_step_lab = detector_rotation[:, 0] * instrument.detector_column_pitch_m
+    row_step_lab = detector_rotation[:, 1] * instrument.detector_row_pitch_m
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
+    detector_zero_lab = (
+        instrument.lab_from_detector.translation_m
+        - reference_column * column_step_lab
+        - reference_row * row_step_lab
+    )
+    basis = bragg_config.reciprocal_basis_Ainv
+    mean_axis, tilt_axis = mosaic_axes(basis)
+    reference_axis = np.cross(tilt_axis, mean_axis)
+    crystal_from_local = np.column_stack((reference_axis, tilt_axis, mean_axis))
+    crystal_to_sample = bragg_config.crystal_to_sample
+    sample_from_local = crystal_to_sample @ crystal_from_local
+    rod_hk_population = np.asarray(
+        [(rod.h, rod.k, rod.population) for rod in rods],
+        dtype=np.float64,
+    )
+    common_u_iso_A2 = float(atom_properties[0, 1])
+    if not np.all(atom_properties[:, 1] == common_u_iso_A2):
+        raise ValueError("compiled Bi2Se3 integration requires one shared isotropic displacement")
+    inplane_angle = 2.0 * np.pi * (rod_hk_population[:, :2] @ atom_offsets[:, :2].T)
+    rod_atom_inplane_factor = np.cos(inplane_angle) + 1j * np.sin(inplane_angle)
+    rod_parallel_local = np.asarray(
+        [(rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ crystal_from_local for rod in rods],
+        dtype=np.float64,
+    )
+    rod_u_bounds = np.asarray(
+        [bragg_config.rod_u_bounds_Ainv(rod) for rod in rods],
+        dtype=np.float64,
+    )
+    rod_inverse_constants = np.column_stack(
+        (
+            np.abs(rod_parallel_local[:, 1]),
+            np.hypot(rod_parallel_local[:, 0], rod_parallel_local[:, 1]),
+            np.einsum("ij,ij->i", rod_parallel_local, rod_parallel_local),
+            1024.0
+            * np.finfo(np.float64).eps
+            * np.maximum.reduce(
+                (
+                    np.abs(rod_u_bounds[:, 0]),
+                    np.abs(rod_u_bounds[:, 1]),
+                    np.ones(len(rods), dtype=np.float64),
+                )
+            ),
+        )
+    )
+    material_index = int(np.searchsorted(material.wavelength_A, wavelength_A))
+    if (
+        material_index >= material.wavelength_A.size
+        or material.wavelength_A[material_index] != wavelength_A
+    ):
+        raise ValueError("material does not contain the exact incident wavelength")
+    incident_direction = -1 if states.direction_sample[state_index, 2] < 0.0 else 1
+    incident_decay = float(
+        mode_decay_constant(
+            states.kz_film_Ainv[state_index],
+            incident_direction,
+        )
+    )
+    return CompiledDetectorState(
+        detector_zero_lab_m=np.ascontiguousarray(detector_zero_lab),
+        detector_column_step_lab_m=np.ascontiguousarray(column_step_lab),
+        detector_row_step_lab_m=np.ascontiguousarray(row_step_lab),
+        detector_pixel_area_vector_lab_m2=np.ascontiguousarray(
+            np.cross(column_step_lab, row_step_lab)
+        ),
+        ray_origin_lab_m=np.ascontiguousarray(states.sample_intersection_lab_m[state_index]),
+        sample_from_lab=np.ascontiguousarray(instrument.sample_from_lab.rotation),
+        ki_film_sample_Ainv=np.ascontiguousarray(states.k_film_phase_sample_Ainv[state_index]),
+        internal_k_Ainv=float(np.linalg.norm(states.k_film_phase_sample_Ainv[state_index])),
+        air_k0_Ainv=air_k0_Ainv,
+        refractive_index=complex(material.n_complex[material_index]),
+        entrance_amplitude=complex(states.entrance_amplitude[state_index]),
+        incident_decay_Ainv=incident_decay,
+        film_thickness_A=instrument.film_thickness_A,
+        source_phase_weight=source_phase_weight,
+        sample_from_local=np.ascontiguousarray(sample_from_local),
+        rod_hk_population=rod_hk_population,
+        rod_parallel_local_Ainv=rod_parallel_local,
+        rod_u_bounds_Ainv=rod_u_bounds,
+        rod_inverse_constants=rod_inverse_constants,
+        b3_norm_Ainv=float(np.linalg.norm(basis[:, 2])),
+        gaussian_sigma_rad=mosaic.gaussian_sigma_rad,
+        lorentzian_hwhm_rad=mosaic.lorentzian_half_width_rad,
+        lorentzian_probability=mosaic.lorentzian_probability,
+        atom_fractional_offset=atom_offsets,
+        atom_occupancy_u_iso_element=atom_properties,
+        rod_atom_inplane_factor=rod_atom_inplane_factor,
+        common_u_iso_A2=common_u_iso_A2,
+        f0_parameters=f0_parameters,
+        anomalous_factor_e=anomalous,
+        layers=layers,
+        shared_disorder_epsilon=strength_model.shared_disorder_epsilon,
+        normalization_divisor=normalization_divisor,
+    )
 
 
 class DetectorEwaldMeasure:
@@ -1224,118 +1407,16 @@ class DetectorEwaldMeasure:
             raise TypeError(
                 "adaptive_compiled integration requires the accepted Bi2Se3TwoHStrength model"
             )
-        mosaic = self._coating.bragg_space.config.mosaic
-        if mosaic.zero_tilt_probability_mass != 0.0:
-            raise ValueError("adaptive_compiled integration does not support zero-tilt atoms")
-        wavelength_A = float(self._incident.states.wavelength_A[0])
-        (
-            atom_offsets,
-            atom_properties,
-            f0_parameters,
-            anomalous,
-            layers,
-            normalization_divisor,
-        ) = pack_bi2se3_two_h_structure(strength, wavelength_A=wavelength_A)
-
-        detector_rotation = self._instrument.lab_from_detector.rotation
-        column_step_lab = detector_rotation[:, 0] * self._instrument.detector_column_pitch_m
-        row_step_lab = detector_rotation[:, 1] * self._instrument.detector_row_pitch_m
-        reference_column, reference_row = self._instrument.detector_reference_coordinate_px
-        detector_zero_lab = (
-            self._instrument.lab_from_detector.translation_m
-            - reference_column * column_step_lab
-            - reference_row * row_step_lab
-        )
-        sample_from_local = self._crystal_to_sample @ self._crystal_from_local
-        basis = self._coating.bragg_space.config.reciprocal_basis_Ainv
-        rod_hk_population = np.asarray(
-            [(rod.h, rod.k, rod.population) for rod in rods],
-            dtype=np.float64,
-        )
-        common_u_iso_A2 = float(atom_properties[0, 1])
-        if not np.all(atom_properties[:, 1] == common_u_iso_A2):
-            raise ValueError(
-                "compiled Bi2Se3 integration requires one shared isotropic displacement"
-            )
-        inplane_angle = 2.0 * np.pi * (rod_hk_population[:, :2] @ atom_offsets[:, :2].T)
-        rod_atom_inplane_factor = np.cos(inplane_angle) + 1j * np.sin(inplane_angle)
-        rod_parallel_local = np.asarray(
-            [
-                (rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ self._crystal_from_local
-                for rod in rods
-            ],
-            dtype=np.float64,
-        )
-        rod_u_bounds = np.asarray(
-            [self._coating.bragg_space.rod_u_bounds_Ainv(rod) for rod in rods],
-            dtype=np.float64,
-        )
-        rod_inverse_constants = np.column_stack(
-            (
-                np.abs(rod_parallel_local[:, 1]),
-                np.hypot(rod_parallel_local[:, 0], rod_parallel_local[:, 1]),
-                np.einsum("ij,ij->i", rod_parallel_local, rod_parallel_local),
-                1024.0
-                * np.finfo(np.float64).eps
-                * np.maximum.reduce(
-                    (
-                        np.abs(rod_u_bounds[:, 0]),
-                        np.abs(rod_u_bounds[:, 1]),
-                        np.ones(len(rods), dtype=np.float64),
-                    )
-                ),
-            )
-        )
-        material_index = int(np.searchsorted(self._material.wavelength_A, wavelength_A))
-        if (
-            material_index >= self._material.wavelength_A.size
-            or self._material.wavelength_A[material_index] != wavelength_A
-        ):
-            raise ValueError("material does not contain the exact incident wavelength")
-        incident_direction = -1 if self._incident.states.direction_sample[0, 2] < 0.0 else 1
-        incident_decay = float(
-            mode_decay_constant(
-                self._incident.states.kz_film_Ainv[0],
-                incident_direction,
-            )
-        )
-        state = CompiledDetectorState(
-            detector_zero_lab_m=np.ascontiguousarray(detector_zero_lab),
-            detector_column_step_lab_m=np.ascontiguousarray(column_step_lab),
-            detector_row_step_lab_m=np.ascontiguousarray(row_step_lab),
-            detector_pixel_area_vector_lab_m2=np.ascontiguousarray(
-                np.cross(column_step_lab, row_step_lab)
-            ),
-            ray_origin_lab_m=np.ascontiguousarray(
-                self._incident.states.sample_intersection_lab_m[0]
-            ),
-            sample_from_lab=np.ascontiguousarray(self._instrument.sample_from_lab.rotation),
-            ki_film_sample_Ainv=np.ascontiguousarray(self._coating.ki_sample_Ainv),
-            internal_k_Ainv=float(np.linalg.norm(self._coating.ki_sample_Ainv)),
-            air_k0_Ainv=self._air_k0_Ainv,
-            refractive_index=complex(self._material.n_complex[material_index]),
-            entrance_amplitude=complex(self._incident.states.entrance_amplitude[0]),
-            incident_decay_Ainv=incident_decay,
-            film_thickness_A=self._instrument.film_thickness_A,
+        state = _compile_detector_state(
+            bragg_config=self._coating.bragg_space.config,
+            strength_model=strength,
+            ki_sample_Ainv=self._coating.ki_sample_Ainv,
+            incident=self._incident,
+            material=self._material,
+            instrument=self._instrument,
+            rods=rods,
+            incident_state_index=0,
             source_phase_weight=self._source_phase_weight,
-            sample_from_local=np.ascontiguousarray(sample_from_local),
-            rod_hk_population=rod_hk_population,
-            rod_parallel_local_Ainv=rod_parallel_local,
-            rod_u_bounds_Ainv=rod_u_bounds,
-            rod_inverse_constants=rod_inverse_constants,
-            b3_norm_Ainv=float(np.linalg.norm(basis[:, 2])),
-            gaussian_sigma_rad=mosaic.gaussian_sigma_rad,
-            lorentzian_hwhm_rad=mosaic.lorentzian_half_width_rad,
-            lorentzian_probability=mosaic.lorentzian_probability,
-            atom_fractional_offset=atom_offsets,
-            atom_occupancy_u_iso_element=atom_properties,
-            rod_atom_inplane_factor=rod_atom_inplane_factor,
-            common_u_iso_A2=common_u_iso_A2,
-            f0_parameters=f0_parameters,
-            anomalous_factor_e=anomalous,
-            layers=layers,
-            shared_disorder_epsilon=strength.shared_disorder_epsilon,
-            normalization_divisor=normalization_divisor,
         )
         return CompiledDetectorEvaluator(state, self._instrument.detector_shape_rc)
 

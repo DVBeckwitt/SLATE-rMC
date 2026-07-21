@@ -31,6 +31,7 @@ from rasim_next.pipeline.continuous_detector import (
     DetectorQuadrature,
     PixelIntegrationMethod,
 )
+from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.proof.diagnostics import write_diagnostic
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 
@@ -212,6 +213,54 @@ def build_default_detector_measure(
         ),
         m1_rods,
         m0_rod,
+    )
+
+
+def build_default_source_averaged_detector_measure(
+    *,
+    sample_count: int,
+    gaussian_sigma_deg: float = DEFAULT_GAUSSIAN_SIGMA_DEG,
+    lorentzian_hwhm_deg: float = DEFAULT_LORENTZIAN_HWHM_DEG,
+    eta: float = DEFAULT_LORENTZIAN_PROBABILITY,
+    layers: int = DEFAULT_STRENGTH_LAYER_COUNT,
+    shared_disorder_epsilon: float = DEFAULT_SHARED_DISORDER_EPSILON,
+    worker_count: int = 1,
+) -> SourceAveragedDetectorEwaldMeasure:
+    """Build the canonical 5-degree Monte Carlo source average."""
+
+    mosaic = _mosaic_parameters_from_degrees(
+        gaussian_sigma_deg=gaussian_sigma_deg,
+        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+        eta=eta,
+    )
+    samples, instrument = build_default_case_inputs(
+        sample_count=sample_count,
+        sample_angle_rad=math.radians(5.0),
+    )
+    crystal = read_crystal(
+        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    material = material_optics(crystal, samples.wavelength_A)
+    incident = build_incident_states(samples, material, instrument)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    m1_rods = tuple(Rod(h, k) for h, k in M1_ROD_KEYS)
+    strength = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=layers,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+        shared_disorder_epsilon=shared_disorder_epsilon,
+    )
+    return SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+        crystal_to_sample=instrument.sample_from_crystal.rotation,
+        rods=m1_rods,
+        mosaic=mosaic,
+        strength_model=strength,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        worker_count=worker_count,
     )
 
 

@@ -781,6 +781,222 @@ def test_continuous_detector_compiled_density_matches_52_layer_shared_disorder(
     np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
 
 
+def _two_state_source_averaged_detector_fixture(
+    *,
+    detector_shape_rc: tuple[int, int] | None = None,
+) -> tuple[object, tuple[object, ...]]:
+    from painted_ewald import (
+        BraggSpaceConfig,
+        ContinuousEwaldCoating,
+        MosaicBraggSpace,
+        MosaicParameters,
+        Rod,
+    )
+    from rasim_next.core.contracts import IncidentSampleBatch
+    from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+    from rasim_next.pipeline.continuous_detector import (
+        DetectorEwaldMeasure,
+    )
+    from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+    from rasim_next.reciprocal.lattice import ReciprocalLattice
+
+    root = Path(__file__).resolve().parents[1]
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_detector_image.py"))
+    samples, instrument = namespace["build_default_case_inputs"](
+        sample_count=2,
+        sample_angle_rad=math.radians(5.0),
+    )
+    crystal = read_crystal(
+        root / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    material = material_optics(crystal, samples.wavelength_A)
+    incident = build_incident_states(samples, material, instrument)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    rods = tuple(Rod(h, k) for h, k in ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)))
+    mosaic = MosaicParameters(
+        gaussian_sigma_rad=math.radians(5.0),
+        lorentzian_half_width_rad=math.radians(2.0),
+        lorentzian_probability=0.1,
+    )
+    strength = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=7,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+    )
+    singleton_incidents = []
+    coatings = []
+    for state_index in range(2):
+        singleton = IncidentSampleBatch(
+            incident_sample_id=np.asarray([state_index], dtype=np.int64),
+            origin_lab_m=samples.origin_lab_m[state_index : state_index + 1],
+            direction_lab=samples.direction_lab[state_index : state_index + 1],
+            wavelength_A=samples.wavelength_A[state_index : state_index + 1],
+            source_weight=np.asarray([1.0]),
+            polarization_state_id=(samples.polarization_state_id[state_index],),
+            source_sampling_model_id="explicit_external_source.v1",
+            source_rng_model_id="no_rng.v1",
+            source_seed=state_index,
+            source_parameter_provenance=f"two-state scalar oracle row {state_index}",
+        )
+        singleton_incident = build_incident_states(singleton, material, instrument)
+        singleton_incidents.append(singleton_incident)
+        bragg = MosaicBraggSpace(
+            BraggSpaceConfig(
+                reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+                crystal_to_sample=instrument.sample_from_crystal.rotation,
+                rods=rods,
+                mosaic=mosaic,
+                k_norm_Ainv=2.0 * np.pi / singleton.wavelength_A[0],
+            ),
+            strength,
+        )
+        coatings.append(
+            ContinuousEwaldCoating(
+                bragg,
+                ki_sample_Ainv=singleton_incident.states.k_film_phase_sample_Ainv[0],
+            )
+        )
+    if detector_shape_rc is not None:
+        provisional = DetectorEwaldMeasure(
+            coating=coatings[0],
+            incident=singleton_incidents[0],
+            material=material,
+            instrument=instrument,
+        )
+        seed = provisional.map_latent(
+            rod=rods[1],
+            branch=2,
+            alpha_rad=math.radians(2.0),
+            beta_rad=math.radians(178.0),
+        )
+        rows, columns = detector_shape_rc
+        instrument = replace(
+            instrument,
+            detector_shape_rc=detector_shape_rc,
+            detector_reference_coordinate_px=(
+                instrument.detector_reference_coordinate_px[0]
+                + 0.5 * (columns - 1)
+                - float(seed.geometry.column_px),
+                instrument.detector_reference_coordinate_px[1]
+                + 0.5 * (rows - 1)
+                - float(seed.geometry.row_px),
+            ),
+        )
+    averaged = SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+        crystal_to_sample=instrument.sample_from_crystal.rotation,
+        rods=rods,
+        mosaic=mosaic,
+        strength_model=strength,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        worker_count=2,
+    )
+    scalar_detectors = tuple(
+        DetectorEwaldMeasure(
+            coating=coating,
+            incident=singleton_incident,
+            material=material,
+            instrument=instrument,
+        )
+        for coating, singleton_incident in zip(coatings, singleton_incidents, strict=True)
+    )
+    return averaged, scalar_detectors
+
+
+def test_source_averaged_detector_density_equals_independent_state_sum() -> None:
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    rods = averaged.rods
+    seed_rod = rods[1]
+    mapped = tuple(
+        detector.map_latent(
+            rod=seed_rod,
+            branch=2,
+            alpha_rad=math.radians(2.0),
+            beta_rad=math.radians(178.0),
+        )
+        for detector in scalar_detectors
+    )
+    column_px = np.asarray([item.geometry.column_px for item in mapped])
+    row_px = np.asarray([item.geometry.row_px for item in mapped])
+
+    result = averaged.evaluate_detector_coordinates(column_px, row_px, branch=2)
+    scalar = tuple(
+        detector.evaluate_detector_coordinates(column_px, row_px, rods=rods, branch=2)
+        for detector in scalar_detectors
+    )
+    expected_per_rod = 0.5 * (
+        scalar[0].per_rod_density_A2_per_px2 + scalar[1].per_rod_density_A2_per_px2
+    )
+
+    np.testing.assert_allclose(
+        result.per_rod_density_A2_per_px2,
+        expected_per_rod,
+        rtol=3.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_allclose(
+        result.density_A2_per_px2,
+        np.sum(expected_per_rod, axis=-1),
+        rtol=3.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(result.caustic, scalar[0].caustic | scalar[1].caustic)
+    np.testing.assert_array_equal(result.valid_source_count, np.asarray([2, 2]))
+    assert result.source_revision == averaged.incident.states.source_revision
+    assert result.measure_id == "raw_detector_coordinate_density_A2_per_px2.v1"
+    for detector, scalar_result in zip(scalar_detectors, scalar, strict=True):
+        internal_ki = detector.coating.ki_sample_Ainv
+        valid = scalar_result.geometry.valid
+        np.testing.assert_allclose(
+            np.linalg.norm(scalar_result.geometry.q_sample_Ainv[valid] + internal_ki, axis=-1),
+            np.linalg.norm(internal_ki),
+            rtol=0.0,
+            atol=4.0e-15,
+        )
+
+
+def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> None:
+    from rasim_next.pipeline.continuous_detector import DetectorQuadrature
+
+    detector_shape = (8, 8)
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture(
+        detector_shape_rc=detector_shape
+    )
+    quadrature = DetectorQuadrature(
+        pixel_gauss_order=2,
+        fold_gauss_order=2,
+        fold_subdivision_count=1,
+        row_chunk_size=2,
+    )
+
+    result = averaged.integrate_native_pixels(branch=2, quadrature=quadrature)
+    scalar = tuple(
+        detector.integrate_native_pixels(
+            rods=averaged.rods,
+            branch=2,
+            quadrature=quadrature,
+        )
+        for detector in scalar_detectors
+    )
+    expected_image = 0.5 * (scalar[0].image_A2 + scalar[1].image_A2)
+    expected_per_rod = 0.5 * (
+        scalar[0].per_rod_detector_mass_A2 + scalar[1].per_rod_detector_mass_A2
+    )
+
+    np.testing.assert_allclose(result.image_A2, expected_image, rtol=3.0e-11, atol=2.0e-24)
+    np.testing.assert_allclose(
+        result.per_rod_detector_mass_A2,
+        expected_per_rod,
+        rtol=3.0e-11,
+        atol=2.0e-24,
+    )
+    assert result.coordinate_evaluation_count == detector_shape[0] * detector_shape[1] * 2**2
+    assert result.execution_backend == "numba_source_averaged.v1"
+
+
 @pytest.mark.parametrize(
     ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta", "message"),
     (

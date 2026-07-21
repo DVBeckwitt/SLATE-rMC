@@ -1,5 +1,5 @@
 {
-  "file_count": 242,
+  "file_count": 244,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -533,13 +533,18 @@
     },
     {
       "path": "scripts/generate_bi2se3_continuous_detector.py",
-      "sha256": "21bfceeb32ae5af1dc4fd439fa8898b969110a8a124f2565aa950002c729cadd",
-      "size_bytes": 26200
+      "sha256": "32ac1124116b2e9eebd3319357389f8f30502f4b98b5fcaaf4f4923518172e73",
+      "size_bytes": 28062
     },
     {
       "path": "scripts/generate_bi2se3_detector_image.py",
       "sha256": "d391669e46665f360259d9df69fda2813fbc3a2487f529809eb95419d38f79a0",
       "size_bytes": 6766
+    },
+    {
+      "path": "scripts/generate_bi2se3_source_averaged_detector.py",
+      "sha256": "28c5d504f33fd52105676af87119ec5f34d366eef5c6df113527e07c1ec28a04",
+      "size_bytes": 10745
     },
     {
       "path": "scripts/verify_seed.py",
@@ -553,8 +558,8 @@
     },
     {
       "path": "src/painted_ewald/bragg.py",
-      "sha256": "6c7a32b907924444bc753c782059d2000271f3ad46e4393549f330bf4fa01825",
-      "size_bytes": 21628
+      "sha256": "d2f1763b897cf7ebc9bdc6d65eef1c1a6f1e637c6733d7c0208da6b96ea9031a",
+      "size_bytes": 22181
     },
     {
       "path": "src/painted_ewald/ewald.py",
@@ -793,8 +798,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "71ddee5aac0e23780716e7b790473d0ec6d3e7f78136d603d6bce162d718ce44",
-      "size_bytes": 88021
+      "sha256": "5b27e6355047e7eca6eab0877d3e3745346cd2a6a048461e1fb2cc36e5e6b547",
+      "size_bytes": 90652
     },
     {
       "path": "src/rasim_next/pipeline/intersections.py",
@@ -810,6 +815,11 @@
       "path": "src/rasim_next/pipeline/simulate.py",
       "sha256": "d660caec33745a1435a70be55b81719f70aaf222eaf89051dd24f5f7ebf8b677",
       "size_bytes": 26339
+    },
+    {
+      "path": "src/rasim_next/pipeline/source_averaged_detector.py",
+      "sha256": "895e40d7b034438dedb32d5bea7adf5169160812d31f9e7b64c8077b0d637e4c",
+      "size_bytes": 23552
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1178,8 +1188,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "2d46d657c445cea93fa46314b309d5f0a424fb41afbb9a272ffc2a383cae091a",
-      "size_bytes": 65641
+      "sha256": "37147c3a540c98fa176ed49a70b1ffb1a7308de592e91d2fcdeff5f18f787ca6",
+      "size_bytes": 73839
     },
     {
       "path": "tests/test_mosaic_ewald.py",
