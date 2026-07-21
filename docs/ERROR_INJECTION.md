@@ -101,6 +101,18 @@ or invalid-support contract.
 Expected detection: strict loader, revision/key ownership, scalar-versus-compiled parity, backend
 identity, or explicit availability failure.
 
+### Exact-marker geometry fitting
+
+- Remove the analytic beta-root sign from marker identity or derive it from detector left/right.
+- Reassign a missing/tangent/branch-changing root inside the residual.
+- Reverse either intrinsic correction sign/order, swap detector column/row, or compare caked rather
+  than native coordinates.
+- Admit an underdetermined raw sample/goniometer pack without a scaled-Jacobian rank gate.
+- Fit only the training sites without held-out prediction or the independent outer root audit.
+
+Expected detection: duplicate marker identity, topology failure, synthetic parameter recovery,
+held-out native-coordinate error, Jacobian rank/condition, or post-fit selection classification.
+
 ## Control record
 
 Each proof mutation records `mutation_id`, fixture, expected first stage, expected metric, observed

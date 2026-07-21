@@ -58,6 +58,8 @@ The map and density are functions; a quadrature node set is never the model.
 
 ### `ContinuousEwaldCoating`
 
+- `evaluate_geometry(rod, branch, alpha_rad, beta_rad)` returns only the analytic Ewald geometry for
+  a non-specular rod/root and evaluates no mosaic or structure-factor intensity.
 - `evaluate_latent(rod, branch, alpha_rad, beta_rad)` solves the analytic elastic root and returns
   geometry, strength, mosaic density, and the once-only Ewald coarea-weighted coating.
 - `evaluate_specular_geometry(...)` exposes retained nonzero branch-0 `m=0` geometry without
@@ -80,6 +82,8 @@ air wavelength, strict root classification, material optics, and compiled instru
   `raw_detector_coordinate_density_A2_per_px2.v1`, per-rod contributions, inverse-branch counts, and
   caustic flags.
 - `map_latent(...)` is the independent forward route used for proof and diagnostics.
+- `map_latent_geometry(...)` is the same canonical forward geometry, exit refraction, and detector
+  intersection without mosaic, structure strength, attenuation, or intensity work.
 - `integrate_native_pixels(...)` returns deterministic `raw_detector_pixel_mass_A2.v1` with
   convergence, work-count, validity, and per-rod evidence.
 
@@ -98,13 +102,48 @@ weights are preserved; wavelength-dependent evaluators are never collapsed geome
   `rasim-simulation-v2` YAML document. Unknown, duplicate, aliased, or missing fields fail.
 - `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
   material, rods, finite-2H strength, and Bragg space once.
+- `sample_configured_source(source, sample_count=...)` is the one mapping from validated configured
+  source parameters to the canonical source sampler, including the exact one-row nominal state.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
 - `evaluate_nominal_integer_l_markers(context)` solves exact integer-L intersections on the
   peak-mosaic (`alpha=0`) manifold, applies the canonical nominal-state exit/refraction and active
   detector visibility path, and retains every physical rod before grouping only coincident display
-  labels. These are nominal-source references, not source-averaged raster maxima.
+  labels. The seam-safe `root_sign = sign(sin(beta - phase))` distinguishes the analytic
+  `phase-delta` and `phase+delta` sites even when `(m,L,branch)` labels coincide. These are
+  `peak_mosaic_alpha0_integer_L_center.v2` nominal-source references, not source-averaged raster
+  maxima.
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
+
+## Exact integer-L geometry fitting
+
+`IntegerLGeometryModel` predicts arbitrary frozen non-specular integer-L sites without evaluating
+their intensities. `IntegerLMarkerKey` fixes `(m, L, Ewald branch, beta-root sign, representative
+physical rod)` throughout the objective; missing, tangent, or branch-changing roots fail instead of
+being reassigned. `IntegerLMarkerObservations` stores native `(column_px,row_px)` coordinates and one
+positive-definite 2-by-2 covariance per site.
+
+`fit_integer_l_marker_geometry(...)` minimizes covariance-whitened native-coordinate residuals with
+bounded TRF least squares. Its accepted single-5-degree parameterization applies active intrinsic
+local-x then current-local-y rotations relative to the frozen base poses:
+
+```text
+R_detector = R_detector,0 Rx(delta_detector,column) Ry(delta_detector,row)
+R_sample   = R_sample,0   Rx(delta_sample-normal,x) Ry(delta_sample-normal,y)
+```
+
+The detector limits use RA-SIM's direct `(+/-10 deg, +/-10 deg)` pitch/yaw hard shells. The two
+effective sample-normal components conservatively use its `+/-5 deg` angular-correction shell;
+RA-SIM has no separately bounded second reduced-normal coordinate. These are not separately
+recovered sample-mount and goniometer-axis errors. A preflight bound-scaled Jacobian must have rank
+four and acceptable condition. `audit_integer_l_marker_selection(...)` independently re-enumerates
+the full visible non-specular catalog after fitting and reports `SAME`, `MISSING`, `CHANGED`, or
+`AMBIGUOUS` without reassignment.
+
+One image at one commanded goniometer angle cannot distinguish raw sample-zero tilt, goniometer-axis
+yaw/pitch, crystal rotation about the rod axis, detector tangent translation/beam-center shifts, or
+sample-normal offset/detector-distance gauges. Those parameters require additional constrained data,
+especially multiple commanded goniometer angles; they are not exposed by this fit contract.
 
 ## Once-only factor ownership
 

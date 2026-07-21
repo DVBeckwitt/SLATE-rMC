@@ -50,6 +50,48 @@ the active panel. Each tag declares `m`, integer `L`, and Ewald-root branch; the
 retains the contributing physical `(h,k)` rods and their exact beta coordinates. A center that is
 back-facing or off-panel is deliberately absent even if a nonzero-mosaic tail becomes visible.
 
+## Fit exact integer-L marker positions
+
+After assigning measured detector centers to the displayed physical roots, reuse their frozen keys
+and replace only the native coordinates and covariance:
+
+```python
+from dataclasses import replace
+
+from rasim_next.fitting import (
+    GeometryCorrectionBounds,
+    GeometryCorrections,
+    IntegerLGeometryModel,
+    IntegerLMarkerObservations,
+    audit_integer_l_marker_selection,
+    fit_integer_l_marker_geometry,
+)
+
+catalog = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(inputs))
+template = IntegerLMarkerObservations.from_markers(catalog, selection=selected_rows)
+observations = replace(
+    template,
+    coordinates_px=measured_column_row_px,
+    covariance_px2=covariance_px2,
+)
+model = IntegerLGeometryModel(inputs)
+fit = fit_integer_l_marker_geometry(
+    model,
+    observations,
+    initial=GeometryCorrections.zero(),
+    bounds=GeometryCorrectionBounds.rasim_reduced_pose(),
+)
+audit = audit_integer_l_marker_selection(
+    model,
+    fit.corrections,
+    IntegerLMarkerObservations.from_markers(catalog).keys,
+)
+```
+
+This one-state fit adjusts both detector tilts and the two identifiable components of the effective
+sample normal. It intentionally does not report separate sample-mount and goniometer-axis errors;
+that decomposition requires markers from multiple commanded goniometer angles.
+
 ## Quantitative one-state pixel diagnostic
 
 The retained one-state CLI exercises native-pixel fixed or adaptive integration and emits an

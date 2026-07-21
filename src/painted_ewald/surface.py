@@ -276,6 +276,29 @@ class ContinuousEwaldCoating:
         coarea.setflags(write=False)
         return geometry, coarea
 
+    def evaluate_geometry(
+        self,
+        *,
+        rod: Rod,
+        branch: int,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+    ) -> EwaldLatentGeometry:
+        """Evaluate only the analytic Ewald geometry for one non-specular rod/root."""
+
+        configured = self._configured_rod(rod)
+        if configured.family_m == 0:
+            raise ValueError("use evaluate_specular_geometry for the m=0 rod")
+        if branch not in {1, 2}:
+            raise ValueError("branch must be 1 or 2 for a nonzero rod")
+        geometry, _ = self._evaluate_geometry(
+            rod=configured,
+            branch=branch,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+        )
+        return geometry
+
     def evaluate_latent(
         self,
         *,

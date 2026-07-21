@@ -1005,6 +1005,24 @@ class DetectorEwaldMeasure:
             postoptical_density_A2_rad2_inv=postoptical,
         )
 
+    def map_latent_geometry(
+        self,
+        *,
+        rod: Rod,
+        branch: int,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+    ) -> DetectorMappedGeometry:
+        """Map analytic non-specular Ewald geometry without evaluating intensity."""
+
+        geometry = self._coating.evaluate_geometry(
+            rod=rod,
+            branch=branch,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+        )
+        return self._map_geometry(geometry).geometry
+
     def map_detector_visible_coating(
         self,
         *,

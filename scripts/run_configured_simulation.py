@@ -487,6 +487,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     integer_l_markers.family_strength_weight_A2
                 ),
                 "detector_integer_l_integer_L": integer_l_markers.integer_L,
+                "detector_integer_l_root_sign": integer_l_markers.root_sign,
                 "detector_integer_l_q_sample_Ainv": integer_l_markers.q_sample_Ainv,
                 "detector_integer_l_rod_beta_rad": np.asarray(
                     [beta for group in integer_l_markers.contributing_beta_rad for beta in group]

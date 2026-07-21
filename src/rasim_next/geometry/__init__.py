@@ -20,6 +20,7 @@ from rasim_next.geometry.instrument import (
     CompiledInstrument,
     InstrumentConfiguration,
     compile_instrument,
+    compose_intrinsic_xy_rotation,
 )
 from rasim_next.geometry.sample import SampleIntersection, intersect_sample_ray
 from rasim_next.geometry.transport import (
@@ -42,6 +43,7 @@ __all__ = [
     "angles_to_detector_coordinates",
     "build_incident_states",
     "compile_instrument",
+    "compose_intrinsic_xy_rotation",
     "detector_coordinate_to_ray",
     "detector_coordinates_to_angles",
     "intersect_sample_ray",

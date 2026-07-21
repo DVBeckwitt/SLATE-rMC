@@ -19,6 +19,8 @@ detector geometry.
 - Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
 - Incoherent source/wavelength/phase summation before deterministic detector box integration.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
+- Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
+  detector-tilt and effective sample-normal correction pack.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
@@ -37,7 +39,8 @@ these functions. They are not stored model state.
 - Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
-- Stable experimental peak/rod association and detector-native staged fitting.
+- Experimental peak finding/association, multi-angle decomposition of sample and goniometer
+  mechanics, and intensity-profile fitting beyond exact marker positions.
 - Caking and reciprocal remapping after detector-native fitting is validated.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 

@@ -1515,14 +1515,29 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
     inputs = _configured_inputs(sample_count=1, sample_angle_deg=sample_angle_deg)
     context = build_nominal_ewald_context(inputs)
     markers = evaluate_nominal_integer_l_markers(context)
-    assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v1"
+    assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v2"
     assert markers.source_state_policy == "mean_source_state.v1"
     assert markers.reference_wavelength_A == pytest.approx(1.540592925, abs=2.0e-15)
     if sample_angle_deg == 5.0:
         assert not np.any((markers.family_m == 1) & (markers.integer_L == 1))
         np.testing.assert_array_equal(np.unique(markers.family_m), np.asarray((1, 3, 4)))
         np.testing.assert_array_equal(np.unique(markers.branch), np.asarray((2,)))
+        np.testing.assert_array_equal(np.unique(markers.root_sign), np.asarray((-1, 1)))
         assert markers.column_px.size == 84
+        assert (
+            len(
+                set(
+                    zip(
+                        markers.family_m,
+                        markers.integer_L,
+                        markers.branch,
+                        markers.root_sign,
+                        strict=True,
+                    )
+                )
+            )
+            == 84
+        )
         assert np.all((markers.column_px >= -0.5) & (markers.column_px < 2999.5))
         assert np.all((markers.row_px >= -0.5) & (markers.row_px < 2999.5))
         assert float(np.max(markers.ewald_residual_Ainv)) < 2.0e-13
@@ -1545,8 +1560,8 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
         atol=2.0e-6,
     )
     assert [markers.labels[index] for index in order] == [
-        f"m=1, L={integer_L}, b=2",
-        f"m=1, L={integer_L}, b=2",
+        f"m=1, L={integer_L}, b=2, s={int(markers.root_sign[order[0]]):+d}",
+        f"m=1, L={integer_L}, b=2, s={int(markers.root_sign[order[1]]):+d}",
     ]
 
     space = context.geometry.coating.bragg_space
@@ -1640,6 +1655,17 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
         ):
             rod = rods[hk]
             assert rod.family_m == 1
+            q_parallel = (
+                rod.h * space.config.reciprocal_basis_Ainv[:, 0]
+                + rod.k * space.config.reciprocal_basis_Ainv[:, 1]
+            )
+            q_perpendicular = q_parallel - float(q_parallel @ mean_axis_crystal) * mean_axis_crystal
+            q_quadrature = np.cross(mean_axis_crystal, q_perpendicular)
+            phase = math.atan2(
+                float(ki_sample_Ainv @ (space.config.crystal_to_sample @ q_quadrature)),
+                float(ki_sample_Ainv @ (space.config.crystal_to_sample @ q_perpendicular)),
+            )
+            assert int(np.sign(np.sin(beta_rad - phase))) == int(markers.root_sign[index])
             q_sample_Ainv = space.map_latent(
                 rod=rod,
                 alpha_rad=0.0,
@@ -1715,6 +1741,7 @@ def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
     np.testing.assert_array_equal(changed.family_m, base.family_m)
     np.testing.assert_array_equal(changed.integer_L, base.integer_L)
     np.testing.assert_array_equal(changed.branch, base.branch)
+    np.testing.assert_array_equal(changed.root_sign, base.root_sign)
     np.testing.assert_array_equal(changed.column_px, base.column_px)
     np.testing.assert_array_equal(changed.row_px, base.row_px)
     assert changed.contributing_rod_hk == base.contributing_rod_hk

@@ -18,6 +18,9 @@ phases but do not override these owners.
 | `DetectorEwaldMeasure` | one-state coordinate density | source average / pixel integration | all inverse branches, optics, source and phase factors exactly once |
 | source-averaged measure | summed coordinate density | pixel integrator | independent states and wavelengths add as intensities before one box integral |
 | native-pixel integrator | raw pixel mass | rendering / future fitting | deterministic finite box integral; no point deposition or image normalization |
+| exact integer-L marker solver | frozen root identities and native coordinates | geometry fitter | every physical rod precedes grouping; analytic root sign is part of identity |
+| `IntegerLGeometryModel` | key-aligned geometry-only predictions | bounded least squares | no intensity evaluation or dynamic reassignment inside the objective |
+| geometry fitter | pose corrections plus rank/residual diagnostics | outer marker audit | only a full-rank local pack is accepted; final visible roots are independently re-enumerated |
 
 ## Factor reduction order
 
@@ -37,6 +40,8 @@ atomic/layer contributions sum as amplitudes only inside their owning strength m
 
 ## Deferred consumers
 
-Fitting, masks, background, detector PSF/efficiency, saturation, caking, and reciprocal remapping
-consume the accepted detector result later. None may recreate sampled scattering events or move a
-factor upstream without a new declared measure and proof.
+Intensity/profile fitting, masks, background, detector PSF/efficiency, saturation, caking, and
+reciprocal remapping consume the accepted detector result later. None may recreate sampled
+scattering events or move a factor upstream without a new declared measure and proof. The accepted
+exact-marker geometry fit consumes geometry only and therefore does not require detector intensity
+or pixel integration.

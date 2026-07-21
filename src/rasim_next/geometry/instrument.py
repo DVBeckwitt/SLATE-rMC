@@ -68,6 +68,31 @@ def _detector_reference(value: tuple[float, float]) -> tuple[float, float]:
     return coordinate
 
 
+def compose_intrinsic_xy_rotation(
+    base_rotation: NDArray[np.float64],
+    x_tilt_rad: float,
+    y_tilt_rad: float,
+) -> NDArray[np.float64]:
+    """Apply active local-x tilt, then current-local-y tilt, to one base pose."""
+
+    base = np.asarray(base_rotation, dtype=np.float64)
+    x_tilt = float(x_tilt_rad)
+    y_tilt = float(y_tilt_rad)
+    if base.shape != (3, 3) or not np.all(np.isfinite(base)):
+        raise ValueError("base_rotation must be a finite 3-by-3 matrix")
+    if not math.isfinite(x_tilt) or not math.isfinite(y_tilt):
+        raise ValueError("intrinsic tilt angles must be finite")
+    x_cosine = math.cos(x_tilt)
+    x_sine = math.sin(x_tilt)
+    y_cosine = math.cos(y_tilt)
+    y_sine = math.sin(y_tilt)
+    about_x = np.asarray(((1.0, 0.0, 0.0), (0.0, x_cosine, -x_sine), (0.0, x_sine, x_cosine)))
+    about_current_y = np.asarray(
+        ((y_cosine, 0.0, y_sine), (0.0, 1.0, 0.0), (-y_sine, 0.0, y_cosine))
+    )
+    return np.asarray(base @ about_x @ about_current_y, dtype=np.float64)
+
+
 @dataclass(frozen=True, slots=True)
 class AxisRotation:
     """One active right-handed rotation about a unit lab axis and lab pivot."""

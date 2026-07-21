@@ -186,23 +186,24 @@ Every non-deferred row must have one proof case or a documented reason that it i
 
 ## Selection and staged fitting
 
-These rows are future work and begin only after native-detector integration passes.
+The exact integer-L local-geometry slice activates the rows explicitly marked below. General peak
+association, multi-angle mechanical decomposition, and intensity fitting remain future work.
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|
 | PHY-SEL-001 | stable exact rod identity | distributed Miller and hit tables | Methods rod-family discussion | selection | NEW explicit |
 | PHY-SEL-002 | hexagonal `m` and general-metric `Qr` family identity | `gui/geometry_q_group_manager.py:1197-1329` | Methods lines 64-78 | selection | CORRECTED |
-| PHY-SEL-003 | deterministic physical signed-azimuth branch identity | `utils/calculations.py:48-62` | SI selected-branch discussion | selection | CORRECTED, declared sample/crystal basis |
+| PHY-SEL-003 | deterministic physical signed-azimuth branch identity | `utils/calculations.py:48-62` | SI selected-branch discussion | selection | CORRECTED active analytic beta-root sign |
 | PHY-SEL-004 | collapsed `00L` branch status | `utils/calculations.py:90-117` | specular-family semantics | selection | MATCH/CORRECTED typed |
 | PHY-SEL-005 | measured peak to rod/branch association | geometry Q-group and peak-selection paths | refinement workflow | selection | CORRECTED frozen association |
 | PHY-SEL-006 | detector-native ROI and selected-rod manifests | GUI selection managers | ordered and diffuse objectives | selection | NEW immutable manifest |
 | PHY-FIT-000 | source size, divergence, wavelength, and correlation characterization | distributed beam setup | refinement step 1 | fitting | NEW staged result |
-| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed |
+| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed, active local four-angle pack |
 | PHY-FIT-002 | independent detector geometry calibration | calibrant and geometry paths | refinement step 2 | fitting | NEW/CORRECTED detector-native |
-| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED, no caking required |
-| PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH principle |
-| PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW required |
-| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW required |
+| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; effective sample normal only |
+| PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |
+| PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active exact-marker audit |
+| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active exact-marker proof |
 | PHY-FIT-005 | normalized local mosaic-profile objective | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED |
 | PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED |
 | PHY-FIT-007 | frozen geometry during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle |

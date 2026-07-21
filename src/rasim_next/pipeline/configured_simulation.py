@@ -36,6 +36,7 @@ from rasim_next.geometry.instrument import (
     CompiledInstrument,
     InstrumentConfiguration,
     compile_instrument,
+    compose_intrinsic_xy_rotation,
 )
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.materials import CrystalStructure, material_optics, read_crystal
@@ -375,27 +376,11 @@ def _detector_transform(value: Any, tilt_value: Any | None) -> TransformConfigur
     if column_deg == 0.0 and row_deg == 0.0:
         return transform
 
-    column_rad = math.radians(column_deg)
-    row_rad = math.radians(row_deg)
-    column_cos = math.cos(column_rad)
-    column_sin = math.sin(column_rad)
-    row_cos = math.cos(row_rad)
-    row_sin = math.sin(row_rad)
-    about_column = np.asarray(
-        (
-            (1.0, 0.0, 0.0),
-            (0.0, column_cos, -column_sin),
-            (0.0, column_sin, column_cos),
-        )
+    rotation = compose_intrinsic_xy_rotation(
+        np.asarray(transform.rotation),
+        math.radians(column_deg),
+        math.radians(row_deg),
     )
-    about_current_row = np.asarray(
-        (
-            (row_cos, 0.0, row_sin),
-            (0.0, 1.0, 0.0),
-            (-row_sin, 0.0, row_cos),
-        )
-    )
-    rotation = np.asarray(transform.rotation) @ about_column @ about_current_row
     return TransformConfiguration(
         rotation=tuple(tuple(float(entry) for entry in row) for row in rotation),
         translation_m=transform.translation_m,
@@ -830,7 +815,7 @@ def _rigid_transform(
     )
 
 
-def _sample_source(
+def sample_configured_source(
     source: SourceConfiguration,
     *,
     sample_count: int | None = None,
@@ -926,7 +911,7 @@ def build_configured_simulation_inputs(
 
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
-    samples = _sample_source(config.source)
+    samples = sample_configured_source(config.source)
     instrument = _compile_instrument(config.instrument)
     crystal = read_crystal(config.material.cif_path, phase_id=config.material.phase_id)
     material = material_optics(crystal, samples.wavelength_A)
@@ -1014,7 +999,7 @@ class NominalEwaldContext:
 def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEwaldContext:
     """Build the explicitly nominal mean incident state for one Ewald visualization."""
 
-    samples = _sample_source(inputs.config.source, sample_count=1)
+    samples = sample_configured_source(inputs.config.source, sample_count=1)
     material = material_optics(inputs.crystal, samples.wavelength_A)
     incident = build_incident_states(samples, material, inputs.instrument)
     if not bool(incident.states.valid[0]):
@@ -1077,13 +1062,14 @@ class DetectorIntegerLMarkers:
     family_m: NDArray[np.int64]
     integer_L: NDArray[np.int64]
     branch: NDArray[np.int64]
+    root_sign: NDArray[np.int64]
     ewald_residual_Ainv: FloatArray
     family_strength_weight_A2: FloatArray
     contributing_rod_hk: tuple[tuple[tuple[int, int], ...], ...]
     contributing_beta_rad: tuple[tuple[float, ...], ...]
     per_rod_strength_weight_A2: tuple[tuple[float, ...], ...]
     reference_wavelength_A: float
-    definition_id: str = "peak_mosaic_alpha0_integer_L_center.v1"
+    definition_id: str = "peak_mosaic_alpha0_integer_L_center.v2"
     source_state_policy: str = "mean_source_state.v1"
 
     def __post_init__(self) -> None:
@@ -1106,13 +1092,17 @@ class DetectorIntegerLMarkers:
         family = np.array(self.family_m, dtype=np.int64, copy=True, order="C")
         integer_l = np.array(self.integer_L, dtype=np.int64, copy=True, order="C")
         branch = np.array(self.branch, dtype=np.int64, copy=True, order="C")
+        root_sign = np.array(self.root_sign, dtype=np.int64, copy=True, order="C")
         if (
             family.shape != shape
             or integer_l.shape != shape
             or branch.shape != shape
+            or root_sign.shape != shape
             or np.any(family < 0)
             or np.any(~np.isin(branch, (0, 1, 2)))
             or np.any((family == 0) != (branch == 0))
+            or np.any((family == 0) & (root_sign != 0))
+            or np.any((family != 0) & ~np.isin(root_sign, (-1, 0, 1)))
             or np.any(residual < 0.0)
             or np.any(family_strength <= 0.0)
         ):
@@ -1148,11 +1138,11 @@ class DetectorIntegerLMarkers:
             ):
                 raise ValueError("integer-L marker provenance is inconsistent")
         wavelength = _positive(self.reference_wavelength_A, "reference_wavelength_A")
-        if self.definition_id != "peak_mosaic_alpha0_integer_L_center.v1":
+        if self.definition_id != "peak_mosaic_alpha0_integer_L_center.v2":
             raise ValueError("unsupported integer-L marker definition")
         if self.source_state_policy != "mean_source_state.v1":
             raise ValueError("unsupported integer-L marker source-state policy")
-        for value in (column, family, integer_l, branch):
+        for value in (column, family, integer_l, branch, root_sign):
             value.setflags(write=False)
         object.__setattr__(self, "column_px", column)
         object.__setattr__(self, "row_px", row)
@@ -1160,6 +1150,7 @@ class DetectorIntegerLMarkers:
         object.__setattr__(self, "family_m", family)
         object.__setattr__(self, "integer_L", integer_l)
         object.__setattr__(self, "branch", branch)
+        object.__setattr__(self, "root_sign", root_sign)
         object.__setattr__(self, "ewald_residual_Ainv", residual)
         object.__setattr__(self, "family_strength_weight_A2", family_strength)
         object.__setattr__(self, "contributing_rod_hk", rod_hk)
@@ -1169,14 +1160,15 @@ class DetectorIntegerLMarkers:
 
     @property
     def labels(self) -> tuple[str, ...]:
-        """Return unambiguous family, integer-L, and root-branch labels."""
+        """Return unambiguous family, integer-L, Ewald-branch, and beta-side labels."""
 
         return tuple(
-            f"m={family}, L={integer_l}, b={branch}"
-            for family, integer_l, branch in zip(
+            f"m={family}, L={integer_l}, b={branch}, s={root_sign:+d}"
+            for family, integer_l, branch, root_sign in zip(
                 self.family_m,
                 self.integer_L,
                 self.branch,
+                self.root_sign,
                 strict=True,
             )
         )
@@ -1187,6 +1179,7 @@ class _IntegerLMarkerContribution:
     family_m: int
     integer_L: int
     branch: int
+    root_sign: int
     column_px: float
     row_px: float
     q_sample_Ainv: FloatArray
@@ -1196,14 +1189,38 @@ class _IntegerLMarkerContribution:
     strength_weight_A2: float
 
 
-def _integer_l_beta_roots(
+@dataclass(frozen=True, slots=True)
+class IntegerLEwaldRoots:
+    """Isolated alpha-zero beta roots for one exact integer-L rod section."""
+
+    beta_rad: tuple[float, ...]
+    root_sign: tuple[int, ...]
+    branch: int
+
+    def __post_init__(self) -> None:
+        beta = tuple(float(value) for value in self.beta_rad)
+        signs = tuple(int(value) for value in self.root_sign)
+        if (
+            len(beta) not in {1, 2}
+            or len(signs) != len(beta)
+            or any(not math.isfinite(value) or not 0.0 <= value < 2.0 * np.pi for value in beta)
+            or (len(beta) == 1 and signs != (0,))
+            or (len(beta) == 2 and signs != (-1, 1))
+            or self.branch not in {1, 2}
+        ):
+            raise ValueError("invalid isolated integer-L Ewald roots")
+        object.__setattr__(self, "beta_rad", beta)
+        object.__setattr__(self, "root_sign", signs)
+
+
+def solve_integer_l_ewald_roots(
     *,
     rod: Rod,
     integer_l: int,
     reciprocal_basis_Ainv: FloatArray,
     crystal_to_sample: FloatArray,
     ki_sample_Ainv: FloatArray,
-) -> tuple[tuple[float, ...], int] | None:
+) -> IntegerLEwaldRoots | None:
     """Solve the alpha=0 Ewald equation analytically for full-beta roots."""
 
     b3 = reciprocal_basis_Ainv[:, 2]
@@ -1245,14 +1262,20 @@ def _integer_l_beta_roots(
     delta = math.acos(cosine)
     if 1.0 - abs(cosine) <= tolerance:
         beta = ((phase + (np.pi if cosine < 0.0 else 0.0)) % (2.0 * np.pi),)
+        root_sign = (0,)
     else:
-        beta = tuple(sorted(((phase - delta) % (2.0 * np.pi), (phase + delta) % (2.0 * np.pi))))
+        beta = ((phase - delta) % (2.0 * np.pi), (phase + delta) % (2.0 * np.pi))
+        root_sign = (-1, 1)
     direction_sample = crystal_to_sample @ mean_axis
     signed_root = u_Ainv + float(q_parallel @ mean_axis) + float(ki_sample_Ainv @ direction_sample)
     root_scale = max(abs(u_Ainv), float(np.linalg.norm(ki_sample_Ainv)), 1.0)
     if abs(signed_root) <= tolerance * root_scale:
         return None
-    return beta, 1 if signed_root < 0.0 else 2
+    return IntegerLEwaldRoots(
+        beta_rad=beta,
+        root_sign=root_sign,
+        branch=1 if signed_root < 0.0 else 2,
+    )
 
 
 def evaluate_nominal_integer_l_markers(
@@ -1274,6 +1297,7 @@ def evaluate_nominal_integer_l_markers(
     k_norm_Ainv = float(np.linalg.norm(ki_sample_Ainv))
     b3_norm_Ainv = float(np.linalg.norm(basis[:, 2]))
     tolerance = 4096.0 * np.finfo(np.float64).eps
+    integer_l_solver_tolerance = 131072.0 * np.finfo(np.float64).eps
     contributions: list[_IntegerLMarkerContribution] = []
 
     for rod in space.config.rods:
@@ -1306,6 +1330,7 @@ def evaluate_nominal_integer_l_markers(
                     family_m=0,
                     integer_L=integer_l,
                     branch=0,
+                    root_sign=0,
                     column_px=float(mapped.column_px[0]),
                     row_px=float(mapped.row_px[0]),
                     q_sample_Ainv=np.asarray(exact_q, dtype=np.float64),
@@ -1323,9 +1348,9 @@ def evaluate_nominal_integer_l_markers(
         l_scale = max(abs(lower_l), abs(upper_l), 1.0)
         first_l = math.ceil(lower_l - tolerance * l_scale)
         last_l = math.floor(upper_l + tolerance * l_scale)
-        candidates_by_branch: dict[int, list[tuple[int, float]]] = {1: [], 2: []}
+        candidates_by_branch: dict[int, list[tuple[int, float, int]]] = {1: [], 2: []}
         for integer_l in range(first_l, last_l + 1):
-            roots = _integer_l_beta_roots(
+            roots = solve_integer_l_ewald_roots(
                 rod=rod,
                 integer_l=integer_l,
                 reciprocal_basis_Ainv=basis,
@@ -1334,9 +1359,11 @@ def evaluate_nominal_integer_l_markers(
             )
             if roots is None:
                 continue
-            beta_values, branch = roots
-            candidates_by_branch[branch].extend((integer_l, beta_rad) for beta_rad in beta_values)
-        visible_roots: list[tuple[int, int, float, float, float]] = []
+            candidates_by_branch[roots.branch].extend(
+                (integer_l, beta_rad, root_sign)
+                for beta_rad, root_sign in zip(roots.beta_rad, roots.root_sign, strict=True)
+            )
+        visible_roots: list[tuple[int, int, int, float, float, float]] = []
         for branch, candidates in candidates_by_branch.items():
             if not candidates:
                 continue
@@ -1347,16 +1374,17 @@ def evaluate_nominal_integer_l_markers(
                 alpha_rad=np.zeros(beta_values.size, dtype=np.float64),
                 beta_rad=beta_values,
             )
-            for beta_index, (integer_l, beta_rad) in enumerate(candidates):
+            for beta_index, (integer_l, beta_rad, root_sign) in enumerate(candidates):
                 if not bool(mapped.geometry.valid[beta_index]):
                     continue
                 actual_l = float(mapped.geometry.ewald_geometry.L[beta_index])
-                if abs(actual_l - integer_l) > tolerance * max(abs(actual_l), 1.0):
+                if abs(actual_l - integer_l) > integer_l_solver_tolerance * max(abs(actual_l), 1.0):
                     raise FloatingPointError("analytic integer-L root disagrees with Ewald solver")
                 visible_roots.append(
                     (
                         integer_l,
                         branch,
+                        root_sign,
                         beta_rad,
                         float(mapped.geometry.column_px[beta_index]),
                         float(mapped.geometry.row_px[beta_index]),
@@ -1374,7 +1402,7 @@ def evaluate_nominal_integer_l_markers(
             k_norm_Ainv=space.config.k_norm_Ainv,
         )
         strength_by_l = dict(zip(visible_integer_l.astype(np.int64), visible_strength, strict=True))
-        for integer_l, branch, beta_rad, column_px, row_px in visible_roots:
+        for integer_l, branch, root_sign, beta_rad, column_px, row_px in visible_roots:
             strength = float(strength_by_l[integer_l])
             exact_q = space.map_latent(
                 rod=rod,
@@ -1390,6 +1418,7 @@ def evaluate_nominal_integer_l_markers(
                     family_m=rod.family_m,
                     integer_L=integer_l,
                     branch=branch,
+                    root_sign=root_sign,
                     column_px=column_px,
                     row_px=row_px,
                     q_sample_Ainv=np.asarray(exact_q, dtype=np.float64),
@@ -1410,6 +1439,7 @@ def evaluate_nominal_integer_l_markers(
             item.family_m,
             item.integer_L,
             item.branch,
+            item.root_sign,
             item.row_px,
             item.column_px,
             item.rod_hk,
@@ -1422,6 +1452,7 @@ def evaluate_nominal_integer_l_markers(
                 contribution.family_m == representative.family_m
                 and contribution.integer_L == representative.integer_L
                 and contribution.branch == representative.branch
+                and contribution.root_sign == representative.root_sign
                 and math.hypot(
                     contribution.column_px - representative.column_px,
                     contribution.row_px - representative.row_px,
@@ -1446,6 +1477,7 @@ def evaluate_nominal_integer_l_markers(
             group[0].family_m,
             group[0].integer_L,
             group[0].branch,
+            group[0].root_sign,
             group[0].row_px,
             group[0].column_px,
         )
@@ -1459,6 +1491,7 @@ def evaluate_nominal_integer_l_markers(
         family_m=np.asarray([item.family_m for item in representatives], dtype=np.int64),
         integer_L=np.asarray([item.integer_L for item in representatives], dtype=np.int64),
         branch=np.asarray([item.branch for item in representatives], dtype=np.int64),
+        root_sign=np.asarray([item.root_sign for item in representatives], dtype=np.int64),
         ewald_residual_Ainv=np.asarray(
             [max(member.ewald_residual_Ainv for member in group) for group in grouped]
         ),
