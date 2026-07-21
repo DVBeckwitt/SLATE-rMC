@@ -12,8 +12,14 @@ dependencies = [
   "gemmi>=0.7,<0.8",
   "numba>=0.66,<0.67",
   "numpy>=2.0,<3",
+  "PyYAML>=6.0.3,<7",
   "scipy>=1.14,<2",
   "xraydb>=4.5,<5",
+]
+
+[project.optional-dependencies]
+visualization = [
+  "matplotlib>=3.9,<4",
 ]
 
 [dependency-groups]

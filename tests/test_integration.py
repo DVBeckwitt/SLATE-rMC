@@ -997,6 +997,369 @@ def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> 
     assert result.execution_backend == "numba_source_averaged.v1"
 
 
+def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
+    from painted_ewald import (
+        BraggSpaceConfig,
+        ContinuousEwaldCoating,
+        MosaicBraggSpace,
+        Rod,
+    )
+    from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+    from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+
+    nonzero, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    rods = (Rod(0, 0), *nonzero.rods)
+    strength = scalar_detectors[0].coating.bragg_space.strength_model
+    material = material_optics(strength.crystal, nonzero.incident.states.wavelength_A)
+    detector = SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=scalar_detectors[0].coating.bragg_space.config.reciprocal_basis_Ainv,
+        crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
+        rods=rods,
+        mosaic=scalar_detectors[0].coating.bragg_space.config.mosaic,
+        strength_model=strength,
+        incident=nonzero.incident,
+        material=material,
+        instrument=nonzero.instrument,
+        worker_count=2,
+    )
+    seed = scalar_detectors[0].map_latent(
+        rod=nonzero.rods[1],
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    column_px = np.asarray([seed.geometry.column_px])
+    row_px = np.asarray([seed.geometry.row_px])
+
+    intrinsic_nonzero = scalar_detectors[0].map_detector_visible_coating(
+        rod=nonzero.rods[1],
+        branch=2,
+        alpha_rad=np.asarray([math.radians(2.0)]),
+        beta_rad=np.asarray([math.radians(178.0)]),
+    )
+    direct_nonzero = scalar_detectors[0].coating.evaluate_latent(
+        rod=nonzero.rods[1],
+        branch=2,
+        alpha_rad=np.asarray([math.radians(2.0)]),
+        beta_rad=np.asarray([math.radians(178.0)]),
+    )
+    assert intrinsic_nonzero.geometry.valid[0]
+    np.testing.assert_allclose(
+        intrinsic_nonzero.coating_intensity_density_A2_rad2_inv,
+        direct_nonzero.coating_intensity_density_A2_rad2_inv,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert (
+        intrinsic_nonzero.measure_id
+        == "detector_visible_intrinsic_ewald_latent_density_A2_rad2_inv.v1"
+    )
+    zero_weight_detector = DetectorEwaldMeasure(
+        coating=scalar_detectors[0].coating,
+        incident=scalar_detectors[0].incident,
+        material=material,
+        instrument=nonzero.instrument,
+        phase_population_weight=0.0,
+        polarization_weight=0.0,
+    )
+    zero_weight_intrinsic = zero_weight_detector.map_detector_visible_coating(
+        rod=nonzero.rods[1],
+        branch=2,
+        alpha_rad=np.asarray([math.radians(2.0)]),
+        beta_rad=np.asarray([math.radians(178.0)]),
+    )
+    np.testing.assert_allclose(
+        zero_weight_intrinsic.coating_intensity_density_A2_rad2_inv,
+        intrinsic_nonzero.coating_intensity_density_A2_rad2_inv,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    all_roots = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    lower = nonzero.evaluate_detector_coordinates(column_px, row_px, branch=1)
+    upper = nonzero.evaluate_detector_coordinates(column_px, row_px, branch=2)
+
+    assert all_roots.root_policy == "all_retained_roots.v1"
+    assert all_roots.branch is None
+    assert all_roots.detector_visible_m0_q_gap_Ainv > 0.3
+    assert all_roots.rods[0] == Rod(0, 0)
+    assert np.isfinite(all_roots.per_rod_density_A2_per_px2[..., 0]).all()
+    assert np.all(all_roots.per_rod_density_A2_per_px2[..., 0] > 0.0)
+    expected_m0 = np.zeros(column_px.shape, dtype=np.float64)
+    first_m0_oracle = None
+    for scalar_detector in scalar_detectors:
+        scalar_bragg = MosaicBraggSpace(
+            BraggSpaceConfig(
+                reciprocal_basis_Ainv=(
+                    scalar_detector.coating.bragg_space.config.reciprocal_basis_Ainv
+                ),
+                crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
+                rods=rods,
+                mosaic=scalar_detector.coating.bragg_space.config.mosaic,
+                k_norm_Ainv=scalar_detector.coating.bragg_space.config.k_norm_Ainv,
+            ),
+            strength,
+        )
+        scalar_oracle = DetectorEwaldMeasure(
+            coating=ContinuousEwaldCoating(
+                scalar_bragg,
+                ki_sample_Ainv=scalar_detector.coating.ki_sample_Ainv,
+            ),
+            incident=scalar_detector.incident,
+            material=material,
+            instrument=nonzero.instrument,
+        )
+        if first_m0_oracle is None:
+            first_m0_oracle = scalar_oracle
+            intrinsic_m0 = scalar_oracle.map_detector_visible_coating(
+                rod=rods[0],
+                branch=0,
+                alpha_rad=np.asarray([0.0]),
+                beta_rad=np.asarray([0.0]),
+            )
+            assert intrinsic_m0.geometry.valid[0]
+            assert intrinsic_m0.detector_visible_m0_q_gap_Ainv > 0.3
+            m0_geometry = intrinsic_m0.geometry.ewald_geometry
+            q_norm = float(np.linalg.norm(m0_geometry.q_sample_Ainv[0]))
+            assert q_norm > intrinsic_m0.detector_visible_m0_q_gap_Ainv
+            assert abs(float(m0_geometry.u_Ainv[0])) > 0.0
+            assert m0_geometry.ewald_residual_Ainv[0] < 4.0e-15
+            latent_m0 = scalar_bragg.evaluate_latent(
+                rod=rods[0],
+                alpha_rad=m0_geometry.alpha_rad,
+                beta_rad=m0_geometry.beta_rad,
+                u_Ainv=m0_geometry.u_Ainv,
+            )
+            incident_norm = float(np.linalg.norm(scalar_oracle.coating.ki_sample_Ainv))
+            np.testing.assert_allclose(
+                intrinsic_m0.coating_intensity_density_A2_rad2_inv,
+                latent_m0.intensity_density_A2_rad2_inv * (2.0 * incident_norm / q_norm),
+                rtol=3.0e-14,
+                atol=0.0,
+            )
+            with pytest.raises(ValueError, match="branch 0"):
+                scalar_oracle.map_detector_visible_coating(
+                    rod=rods[0],
+                    branch=1,
+                    alpha_rad=0.0,
+                    beta_rad=0.0,
+                )
+        geometry, optical = scalar_oracle._detector_coordinate_state(column_px, row_px)
+        for branch in (1, 2):
+            density, _, _ = scalar_oracle._inverse_rod_density(
+                geometry=geometry,
+                optical_weight=optical,
+                rod=rods[0],
+                branch=branch,
+            )
+            expected_m0 += 0.5 * density
+    np.testing.assert_allclose(
+        all_roots.per_rod_density_A2_per_px2[..., 0],
+        expected_m0,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+
+    assert first_m0_oracle is not None
+    positive_k = first_m0_oracle.coating.ki_sample_Ainv.copy()
+    positive_k[2] = abs(positive_k[2])
+    positive_kz = first_m0_oracle.incident.states.kz_film_Ainv.copy()
+    positive_kz.real[:] = np.abs(positive_kz.real)
+    positive_states = replace(
+        first_m0_oracle.incident.states,
+        k_film_phase_sample_Ainv=positive_k[None, :],
+        kz_film_Ainv=positive_kz,
+    )
+    positive_incident = replace(first_m0_oracle.incident, states=positive_states)
+    with pytest.raises(ValueError, match="negative sample-normal half-space"):
+        SourceAveragedDetectorEwaldMeasure(
+            reciprocal_basis_Ainv=first_m0_oracle.coating.bragg_space.config.reciprocal_basis_Ainv,
+            crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
+            rods=rods,
+            mosaic=first_m0_oracle.coating.bragg_space.config.mosaic,
+            strength_model=strength,
+            incident=positive_incident,
+            material=material,
+            instrument=nonzero.instrument,
+        )
+    positive_detector = DetectorEwaldMeasure(
+        coating=ContinuousEwaldCoating(
+            first_m0_oracle.coating.bragg_space,
+            ki_sample_Ainv=positive_k,
+        ),
+        incident=positive_incident,
+        material=material,
+        instrument=nonzero.instrument,
+    )
+    with pytest.raises(ValueError, match="negative incident sample-normal"):
+        positive_detector.map_detector_visible_coating(
+            rod=rods[0],
+            branch=0,
+            alpha_rad=0.0,
+            beta_rad=0.0,
+        )
+    np.testing.assert_allclose(
+        all_roots.per_rod_density_A2_per_px2[..., 1:],
+        lower.per_rod_density_A2_per_px2 + upper.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+
+
+def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
+    tmp_path: Path,
+) -> None:
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    default_path = root / "configs" / "bi2se3_simulation.yaml"
+    config = load_simulation_config(default_path, repository_root=root)
+
+    assert config.enabled_artifact_names == (
+        "reciprocal_space",
+        "ewald_surface",
+        "detector",
+    )
+    assert config.bragg.selection_model == "all_elastic_reachable.v1"
+    assert config.bragg.include_detector_visible_m0
+    assert config.source.sample_count == 1_000
+    assert config.mosaic.gaussian_sigma_deg == pytest.approx(1.0)
+    assert config.mosaic.lorentzian_probability == 0.0
+    assert config.structure_factor.layers == 52
+    assert config.structure_factor.shared_disorder_epsilon == pytest.approx(0.001)
+    assert not config.output_directory.is_relative_to(root)
+
+    inputs = build_configured_simulation_inputs(config)
+    assert 2.0 * np.pi / inputs.bragg_space.config.k_norm_Ainv == pytest.approx(
+        config.source.mean_wavelength_A,
+        rel=0.0,
+        abs=2.0e-15,
+    )
+    expected_multiplicity = {
+        0: 1,
+        1: 6,
+        3: 6,
+        4: 6,
+        7: 12,
+        9: 6,
+        12: 6,
+        13: 12,
+        16: 6,
+        19: 12,
+        21: 12,
+    }
+    assert {
+        family: sum(rod.family_m == family for rod in inputs.rods)
+        for family in sorted({rod.family_m for rod in inputs.rods})
+    } == expected_multiplicity
+    detector = build_source_averaged_detector(inputs)
+    unique_count, frequency = np.unique(
+        detector.reachable_rod_count_per_source_state,
+        return_counts=True,
+    )
+    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {73: 9, 85: 991}
+    assert not detector.reachable_rod_count_per_source_state.flags.writeable
+
+    duplicate = tmp_path / "duplicate.yaml"
+    duplicate.write_text(
+        "schema_version: rasim-simulation-v1\nschema_version: duplicate\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"duplicate key.*schema_version"):
+        load_simulation_config(duplicate, repository_root=root)
+
+    unknown = tmp_path / "unknown.yaml"
+    unknown.write_text(
+        default_path.read_text(encoding="utf-8") + "\nunknown_parameter: 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"unknown key.*unknown_parameter"):
+        load_simulation_config(unknown, repository_root=root)
+
+    duplicate_filename = tmp_path / "duplicate-filename.yaml"
+    portable_default = default_path.read_text(encoding="utf-8").replace(
+        "../examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        (root / "examples/bi2se3/structures/Bi2Se3_vesta.cif").as_posix(),
+    )
+    duplicate_filename.write_text(
+        portable_default.replace(
+            "filename: ewald-surface.png",
+            "filename: reciprocal-space.png",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="output filenames must be unique"):
+        load_simulation_config(duplicate_filename, repository_root=root)
+
+    negative_source_sigma = tmp_path / "negative-source-sigma.yaml"
+    negative_source_sigma.write_text(
+        portable_default.replace(
+            "spatial_sigma_m: [2.123304500720048e-05, 2.123304500720048e-05]",
+            "spatial_sigma_m: [-1.0, 2.123304500720048e-05]",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"source\.spatial_sigma_m.*nonnegative"):
+        load_simulation_config(negative_source_sigma, repository_root=root)
+
+    excessive_reciprocal_tilt = tmp_path / "excessive-reciprocal-tilt.yaml"
+    excessive_reciprocal_tilt.write_text(
+        portable_default.replace(
+            "reciprocal_alpha_max_deg: 5.0",
+            "reciprocal_alpha_max_deg: 181.0",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"reciprocal_alpha_max_deg.*180"):
+        load_simulation_config(excessive_reciprocal_tilt, repository_root=root)
+
+    all_disabled = tmp_path / "all-disabled.yaml"
+    all_disabled.write_text(
+        portable_default.replace("enabled: true", "enabled: false"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="at least one output"):
+        load_simulation_config(all_disabled, repository_root=root)
+
+
+def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> None:
+    from types import SimpleNamespace
+
+    from rasim_next.pipeline.configured_simulation import integrate_detector_macrobins
+
+    class ConstantDetector:
+        instrument = SimpleNamespace(detector_shape_rc=(4, 6))
+
+        @staticmethod
+        def evaluate_detector_coordinates_all_roots(
+            column_px: np.ndarray,
+            row_px: np.ndarray,
+        ) -> object:
+            shape = np.broadcast_shapes(column_px.shape, row_px.shape)
+            per_rod = np.broadcast_to(np.asarray([2.0, 3.0]), (*shape, 2))
+            return SimpleNamespace(
+                per_rod_density_A2_per_px2=per_rod,
+                density_A2_per_px2=np.sum(per_rod, axis=-1),
+                caustic=np.zeros((*shape, 2), dtype=np.bool_),
+                valid_source_count=np.ones(shape, dtype=np.int64),
+            )
+
+    result = integrate_detector_macrobins(
+        ConstantDetector(),
+        bin_size_px=2,
+        gauss_order=2,
+    )
+    np.testing.assert_allclose(result.image_A2, 20.0, rtol=0.0, atol=2.0e-14)
+    np.testing.assert_allclose(result.per_rod_image_A2[..., 0], 8.0, rtol=0.0, atol=1.0e-14)
+    np.testing.assert_allclose(result.per_rod_image_A2[..., 1], 12.0, rtol=0.0, atol=1.0e-14)
+    assert result.coordinate_evaluation_count == 24
+    assert result.measure_id == "raw_detector_macrobin_fixed_quadrature_estimate_A2.v1"
+
+
 @pytest.mark.parametrize(
     ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta", "message"),
     (

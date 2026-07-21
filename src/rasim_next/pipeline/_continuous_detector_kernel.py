@@ -1030,19 +1030,17 @@ class CompiledDetectorEvaluator:
         self._state = state
         self._detector_shape_rc = detector_shape_rc
 
-    def evaluate(
+    def _evaluate_with_root_selector(
         self,
         column_px: NDArray[np.float64],
         row_px: NDArray[np.float64],
         *,
-        branch: int,
+        root_selector: int,
     ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
         column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
         row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
         if column.shape != row.shape:
             raise ValueError("compiled detector coordinates must have equal shapes")
-        if branch not in {1, 2}:
-            raise ValueError("branch must be 1 or 2")
         state = self._state
         return _evaluate_points_kernel(
             column,
@@ -1080,7 +1078,37 @@ class CompiledDetectorEvaluator:
             state.layers,
             state.shared_disorder_epsilon,
             state.normalization_divisor,
-            branch,
+            root_selector,
+        )
+
+    def evaluate(
+        self,
+        column_px: NDArray[np.float64],
+        row_px: NDArray[np.float64],
+        *,
+        branch: int,
+    ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
+        """Evaluate one ordered nonzero-rod root branch."""
+
+        if branch not in {1, 2}:
+            raise ValueError("branch must be 1 or 2")
+        return self._evaluate_with_root_selector(
+            column_px,
+            row_px,
+            root_selector=branch,
+        )
+
+    def evaluate_all_roots(
+        self,
+        column_px: NDArray[np.float64],
+        row_px: NDArray[np.float64],
+    ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
+        """Sum both nonzero roots and both m=0 latent inverse preimages."""
+
+        return self._evaluate_with_root_selector(
+            column_px,
+            row_px,
+            root_selector=0,
         )
 
     def integrate_pixel_boxes(

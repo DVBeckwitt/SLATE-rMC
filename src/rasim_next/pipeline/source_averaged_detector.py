@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald import BraggSpaceConfig, MosaicParameters, Rod
+from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
@@ -55,13 +56,15 @@ class SourceAveragedDetectorCoordinateIntensity:
     column_px: FloatArray
     row_px: FloatArray
     rods: tuple[Rod, ...]
-    branch: int
+    branch: int | None
     per_rod_density_A2_per_px2: FloatArray
     density_A2_per_px2: FloatArray
     caustic: BoolArray
     valid_source_count: NDArray[np.int64]
     source_state_count: int
     source_revision: str
+    root_policy: str = "single_nonzero_root.v1"
+    detector_visible_m0_q_gap_Ainv: float | None = None
     measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
 
     def __post_init__(self) -> None:
@@ -83,8 +86,11 @@ class SourceAveragedDetectorCoordinateIntensity:
             raise ValueError("rods must contain at least one Rod")
         if len({(rod.h, rod.k) for rod in rods}) != len(rods):
             raise ValueError("rods must not repeat a physical rod")
-        if self.branch not in {1, 2}:
-            raise ValueError("branch must be 1 or 2")
+        if self.branch is None:
+            if self.root_policy != "all_retained_roots.v1":
+                raise ValueError("all-root results require all_retained_roots.v1")
+        elif self.branch not in {1, 2} or self.root_policy != "single_nonzero_root.v1":
+            raise ValueError("a single-root result requires branch 1 or 2")
         supplied_per_rod = np.asarray(self.per_rod_density_A2_per_px2)
         if np.iscomplexobj(supplied_per_rod) and np.any(supplied_per_rod.imag != 0.0):
             raise ValueError("per-rod detector density must be real")
@@ -120,6 +126,16 @@ class SourceAveragedDetectorCoordinateIntensity:
             raise ValueError("valid_source_count must lie within the source batch")
         if not isinstance(self.source_revision, str) or not self.source_revision:
             raise ValueError("source_revision must be nonempty")
+        m0_gap = self.detector_visible_m0_q_gap_Ainv
+        has_m0 = any(rod.family_m == 0 for rod in rods)
+        if has_m0:
+            if self.branch is not None:
+                raise ValueError("m=0 is available only in an all-root result")
+            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) <= 0.0:
+                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            m0_gap = float(m0_gap)
+        elif m0_gap is not None:
+            raise ValueError("an m=0 support gap requires an m=0 rod")
         if self.measure_id != "raw_detector_coordinate_density_A2_per_px2.v1":
             raise ValueError("unsupported detector-coordinate measure")
         for value in (column, row, per_rod, total, caustic, valid_count):
@@ -132,35 +148,77 @@ class SourceAveragedDetectorCoordinateIntensity:
         object.__setattr__(self, "caustic", caustic)
         object.__setattr__(self, "valid_source_count", valid_count)
         object.__setattr__(self, "source_state_count", state_count)
+        object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
+
+
+@dataclass(frozen=True, slots=True)
+class _IndexedCompiledEvaluator:
+    evaluator: CompiledDetectorEvaluator
+    master_rod_index: NDArray[np.int64]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evaluator, CompiledDetectorEvaluator):
+            raise TypeError("evaluator must be CompiledDetectorEvaluator")
+        indices = np.array(self.master_rod_index, dtype=np.int64, copy=True, order="C")
+        if indices.ndim != 1 or indices.size == 0 or np.any(indices < 0):
+            raise ValueError("master_rod_index must contain nonnegative indices")
+        if np.unique(indices).size != indices.size:
+            raise ValueError("master_rod_index must not repeat an index")
+        indices.setflags(write=False)
+        object.__setattr__(self, "master_rod_index", indices)
 
 
 def _sum_compiled_evaluator_block(
-    evaluators: tuple[CompiledDetectorEvaluator, ...],
+    evaluators: tuple[_IndexedCompiledEvaluator, ...],
     column_px: FloatArray,
     row_px: FloatArray,
-    branch: int,
+    branch: int | None,
+    master_rod_count: int,
 ) -> tuple[FloatArray, BoolArray, NDArray[np.int64]]:
     """Sum one fixed source-state block without materializing a state axis."""
 
-    per_rod: FloatArray | None = None
-    caustic: BoolArray | None = None
+    per_rod = np.zeros((column_px.size, master_rod_count), dtype=np.float64)
+    caustic = np.zeros(per_rod.shape, dtype=np.bool_)
     valid_source_count = np.zeros(column_px.size, dtype=np.int64)
-    for evaluator in evaluators:
-        density, _, state_caustic, state_valid = evaluator.evaluate(
-            column_px,
-            row_px,
-            branch=branch,
-        )
-        if per_rod is None:
-            per_rod = density
-            caustic = state_caustic
+    for indexed in evaluators:
+        if branch is None:
+            density, _, state_caustic, state_valid = indexed.evaluator.evaluate_all_roots(
+                column_px,
+                row_px,
+            )
         else:
-            per_rod += density
-            caustic |= state_caustic
+            density, _, state_caustic, state_valid = indexed.evaluator.evaluate(
+                column_px,
+                row_px,
+                branch=branch,
+            )
+        per_rod[:, indexed.master_rod_index] += density
+        caustic[:, indexed.master_rod_index] |= state_caustic
         valid_source_count += state_valid
-    if per_rod is None or caustic is None:
+    if not evaluators:
         raise ValueError("a source-state block must contain at least one evaluator")
     return per_rod, caustic, valid_source_count
+
+
+def _reachable_master_rod_indices(
+    rods: tuple[Rod, ...],
+    reciprocal_basis_Ainv: FloatArray,
+    k_norm_Ainv: float,
+) -> NDArray[np.int64]:
+    """Return stable master indices whose rod lines enter one elastic ball."""
+
+    mean_axis, _ = mosaic_axes(reciprocal_basis_Ainv)
+    q_parallel = np.asarray(
+        [rod.h * reciprocal_basis_Ainv[:, 0] + rod.k * reciprocal_basis_Ainv[:, 1] for rod in rods],
+        dtype=np.float64,
+    )
+    perpendicular = q_parallel - (q_parallel @ mean_axis)[:, None] * mean_axis
+    distance = np.linalg.norm(perpendicular, axis=1)
+    maximum_distance = 2.0 * float(k_norm_Ainv)
+    tolerance = 256.0 * np.finfo(np.float64).eps * max(maximum_distance, 1.0)
+    result = np.flatnonzero(distance <= maximum_distance + tolerance).astype(np.int64)
+    result.setflags(write=False)
+    return result
 
 
 class SourceAveragedDetectorEwaldMeasure:
@@ -175,9 +233,11 @@ class SourceAveragedDetectorEwaldMeasure:
     """
 
     __slots__ = (
+        "_detector_visible_m0_q_gap_Ainv",
         "_evaluator_blocks",
         "_incident",
         "_instrument",
+        "_reachable_rod_count_per_source_state",
         "_rods",
         "_valid_state_count",
         "_worker_count",
@@ -218,8 +278,6 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("rods must contain at least one Rod")
         if len({(rod.h, rod.k) for rod in selected}) != len(selected):
             raise ValueError("rods must not repeat a physical rod")
-        if any(rod.family_m == 0 for rod in selected):
-            raise ValueError("m=0 intensity is excluded without physical direct-beam support")
         phase_weight = float(phase_population_weight)
         polarization = float(polarization_weight)
         if not isfinite(phase_weight) or phase_weight < 0.0:
@@ -240,12 +298,16 @@ class SourceAveragedDetectorEwaldMeasure:
             np.isfinite(supplied_crystal_to_sample)
         ):
             raise ValueError("crystal_to_sample must be finite with shape (3, 3)")
+        valid_state_index = np.flatnonzero(states.valid)
+        if not valid_state_index.size:
+            raise ValueError("source-averaged detector requires at least one valid incident state")
+        maximum_air_k_Ainv = 2.0 * np.pi / float(np.min(states.wavelength_A[valid_state_index]))
         reference_config = BraggSpaceConfig(
             reciprocal_basis_Ainv=reciprocal_basis_Ainv,
             crystal_to_sample=supplied_crystal_to_sample,
             rods=selected,
             mosaic=mosaic,
-            k_norm_Ainv=2.0 * np.pi / float(states.wavelength_A[0]),
+            k_norm_Ainv=maximum_air_k_Ainv,
         )
         rotation_tolerance = 512.0 * np.finfo(np.float64).eps
         if not np.allclose(
@@ -264,13 +326,37 @@ class SourceAveragedDetectorEwaldMeasure:
         ):
             raise ValueError("strength-model and Bragg-space reciprocal bases do not match")
 
-        evaluators: list[CompiledDetectorEvaluator] = []
-        for state_index in np.flatnonzero(states.valid):
+        m0_gap: float | None = None
+        if any(rod.family_m == 0 for rod in selected):
+            if not valid_state_index.size:
+                raise ValueError("detector-visible m=0 requires at least one valid incident state")
+            incident_normal = states.k_film_phase_sample_Ainv[valid_state_index, 2]
+            if np.any(incident_normal >= 0.0):
+                raise ValueError(
+                    "detector-visible m=0 requires every valid incident state to enter "
+                    "through the negative sample-normal half-space"
+                )
+            m0_gap = float(np.min(-incident_normal))
+            if not isfinite(m0_gap) or m0_gap <= 0.0:
+                raise ValueError("detector-visible m=0 reciprocal support gap must be positive")
+
+        reachable_count = np.zeros(states.incident_state_id.size, dtype=np.int64)
+        evaluators: list[_IndexedCompiledEvaluator] = []
+        for state_index in valid_state_index:
             wavelength_A = float(states.wavelength_A[state_index])
+            active_index = _reachable_master_rod_indices(
+                selected,
+                reference_config.reciprocal_basis_Ainv,
+                2.0 * np.pi / wavelength_A,
+            )
+            if not active_index.size:
+                continue
+            reachable_count[state_index] = active_index.size
+            active_rods = tuple(selected[int(position)] for position in active_index)
             bragg_config = BraggSpaceConfig(
                 reciprocal_basis_Ainv=reference_config.reciprocal_basis_Ainv,
                 crystal_to_sample=reference_config.crystal_to_sample,
-                rods=selected,
+                rods=active_rods,
                 mosaic=mosaic,
                 k_norm_Ainv=2.0 * np.pi / wavelength_A,
             )
@@ -285,20 +371,23 @@ class SourceAveragedDetectorEwaldMeasure:
                 wavelength_A=wavelength_A,
             )
             evaluators.append(
-                CompiledDetectorEvaluator(
-                    _compile_detector_state(
-                        bragg_config=bragg_config,
-                        strength_model=strength_model,
-                        ki_sample_Ainv=states.k_film_phase_sample_Ainv[state_index],
-                        incident=incident,
-                        material=material,
-                        instrument=instrument,
-                        rods=selected,
-                        incident_state_index=int(state_index),
-                        source_phase_weight=source_phase_weight,
-                        packed_structure=packed,
+                _IndexedCompiledEvaluator(
+                    evaluator=CompiledDetectorEvaluator(
+                        _compile_detector_state(
+                            bragg_config=bragg_config,
+                            strength_model=strength_model,
+                            ki_sample_Ainv=states.k_film_phase_sample_Ainv[state_index],
+                            incident=incident,
+                            material=material,
+                            instrument=instrument,
+                            rods=active_rods,
+                            incident_state_index=int(state_index),
+                            source_phase_weight=source_phase_weight,
+                            packed_structure=packed,
+                        ),
+                        instrument.detector_shape_rc,
                     ),
-                    instrument.detector_shape_rc,
+                    master_rod_index=active_index,
                 )
             )
         block_size = max(
@@ -309,9 +398,12 @@ class SourceAveragedDetectorEwaldMeasure:
             tuple(evaluators[start : start + block_size])
             for start in range(0, len(evaluators), block_size)
         )
+        reachable_count.setflags(write=False)
         object.__setattr__(self, "_evaluator_blocks", blocks)
+        object.__setattr__(self, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_reachable_rod_count_per_source_state", reachable_count)
         object.__setattr__(self, "_rods", selected)
         object.__setattr__(self, "_valid_state_count", len(evaluators))
         object.__setattr__(self, "_worker_count", workers)
@@ -342,6 +434,18 @@ class SourceAveragedDetectorEwaldMeasure:
     def valid_source_state_count(self) -> int:
         return self._valid_state_count
 
+    @property
+    def reachable_rod_count_per_source_state(self) -> NDArray[np.int64]:
+        """Stable master-catalog reach count for each aligned incident state."""
+
+        return self._reachable_rod_count_per_source_state
+
+    @property
+    def detector_visible_m0_q_gap_Ainv(self) -> float | None:
+        """Physical lower bound on ``|Q|`` for included top-exit m=0 rays."""
+
+        return self._detector_visible_m0_q_gap_Ainv
+
     def _thread_pool(self) -> ThreadPoolExecutor | None:
         if self._worker_count <= 1 or len(self._evaluator_blocks) <= 1:
             return None
@@ -352,7 +456,7 @@ class SourceAveragedDetectorEwaldMeasure:
         column_px: FloatArray,
         row_px: FloatArray,
         *,
-        branch: int,
+        branch: int | None,
         executor: ThreadPoolExecutor | None,
     ) -> tuple[FloatArray, BoolArray, NDArray[np.int64]]:
         per_rod = np.zeros((column_px.size, len(self._rods)), dtype=np.float64)
@@ -369,6 +473,7 @@ class SourceAveragedDetectorEwaldMeasure:
                         chunk_column,
                         chunk_row,
                         branch,
+                        len(self._rods),
                     )
                     for block in self._evaluator_blocks
                 )
@@ -380,6 +485,7 @@ class SourceAveragedDetectorEwaldMeasure:
                         chunk_column,
                         chunk_row,
                         branch,
+                        len(self._rods),
                     )
                     for block in self._evaluator_blocks
                 )
@@ -390,17 +496,13 @@ class SourceAveragedDetectorEwaldMeasure:
                 valid_source_count[start:stop] += block_valid_count
         return per_rod, caustic, valid_source_count
 
-    def evaluate_detector_coordinates(
+    def _evaluate_detector_coordinates(
         self,
         column_px: ArrayLike,
         row_px: ArrayLike,
         *,
-        branch: int = 2,
+        branch: int | None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
-        """Evaluate the source-averaged density at arbitrary detector coordinates."""
-
-        if branch not in {1, 2}:
-            raise ValueError("branch must be 1 or 2")
         supplied_column = np.asarray(column_px)
         supplied_row = np.asarray(row_px)
         if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
@@ -417,11 +519,18 @@ class SourceAveragedDetectorEwaldMeasure:
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
         if self._evaluator_blocks and flat_column.size:
-            self._evaluator_blocks[0][0].evaluate(
-                np.empty(0, dtype=np.float64),
-                np.empty(0, dtype=np.float64),
-                branch=branch,
-            )
+            first = self._evaluator_blocks[0][0].evaluator
+            if branch is None:
+                first.evaluate_all_roots(
+                    np.empty(0, dtype=np.float64),
+                    np.empty(0, dtype=np.float64),
+                )
+            else:
+                first.evaluate(
+                    np.empty(0, dtype=np.float64),
+                    np.empty(0, dtype=np.float64),
+                    branch=branch,
+                )
         executor = self._thread_pool()
         try:
             per_rod, caustic, valid_source_count = self._evaluate_flat_coordinates(
@@ -445,7 +554,35 @@ class SourceAveragedDetectorEwaldMeasure:
             valid_source_count=valid_source_count.reshape(shape),
             source_state_count=self.source_state_count,
             source_revision=self._incident.states.source_revision,
+            root_policy=("all_retained_roots.v1" if branch is None else "single_nonzero_root.v1"),
+            detector_visible_m0_q_gap_Ainv=(
+                self._detector_visible_m0_q_gap_Ainv if branch is None else None
+            ),
         )
+
+    def evaluate_detector_coordinates(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        branch: int = 2,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        """Evaluate one nonzero-rod root at arbitrary detector coordinates."""
+
+        if branch not in {1, 2}:
+            raise ValueError("branch must be 1 or 2")
+        if any(rod.family_m == 0 for rod in self._rods):
+            raise ValueError("branch-specific evaluation cannot include m=0")
+        return self._evaluate_detector_coordinates(column_px, row_px, branch=branch)
+
+    def evaluate_detector_coordinates_all_roots(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        """Evaluate every retained physical root, including supported kinematic m=0."""
+
+        return self._evaluate_detector_coordinates(column_px, row_px, branch=None)
 
     def integrate_native_pixels(
         self,
@@ -476,7 +613,7 @@ class SourceAveragedDetectorEwaldMeasure:
         per_rod_mass = np.zeros(len(self._rods), dtype=np.float64)
         column_center = np.arange(columns, dtype=np.float64)
         if self._evaluator_blocks:
-            self._evaluator_blocks[0][0].evaluate(
+            self._evaluator_blocks[0][0].evaluator.evaluate(
                 np.empty(0, dtype=np.float64),
                 np.empty(0, dtype=np.float64),
                 branch=branch,

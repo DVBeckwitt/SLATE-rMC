@@ -444,6 +444,33 @@ The current result is scattering mass in \(\mathrm{\mathring A}^2\) per detector
 unit-count photons additionally require calibrated fluence/exposure, sample amount, detector
 efficiency, and a stochastic total-count model.
 
+### Detector-visible kinematic m=0 support
+
+The configured Bi2Se3 detector pullback activates the kinematic `m=0` component only on the actual
+top-exit detector domain. Every included incident state satisfies \(k_{i,z}<0\), and the canonical
+exit map accepts only \(k_{f,z}>0\). Consequently,
+
+\[
+Q_z=k_{f,z}-k_{i,z}>-k_{i,z}>0,
+\qquad
+\lVert Q\rVert\ge Q_z,
+\]
+
+so the active source batch supplies the declared physical gap
+\(q_{\min}=\min_i(-k_{i,z})\). The constructor records and requires this positive value before an
+`m=0` rod can enter an all-root detector result. This bounds the direct-root coarea divergence
+without an invented epsilon or display smoothing. Both latent inverse preimages of the retained
+non-direct `m=0` event are summed; an even detector quadrature avoids evaluating its integrable
+polar caustic at a pixel or macrobin center. This certificate does not authorize a full-shell
+`m=0` coating, and it does not combine kinematic `00L` mass with Parratt or composite reflectivity.
+
+`DetectorEwaldMeasure.map_detector_visible_coating()` exposes the corresponding intrinsic Ewald
+artifact before detector deposition. For every nonzero rod it returns mosaic times per-rod SF times
+exactly one Ewald coarea factor. For `m=0` it evaluates branch 0 only after the same top-exit panel
+mask establishes the positive reciprocal gap. Exit refraction is used to decide visibility, but
+source weights, Fresnel amplitudes, attenuation, detector solid angle, and the detector-coordinate
+Jacobian are not part of this intrinsic latent measure.
+
 ## 6. Performance and parallel execution
 
 The expected implementation fits the existing ray-block and bounded-candidate execution boundary:

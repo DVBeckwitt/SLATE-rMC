@@ -1,5 +1,5 @@
 {
-  "file_count": 244,
+  "file_count": 247,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -47,6 +47,11 @@
       "size_bytes": 2059
     },
     {
+      "path": "configs/bi2se3_simulation.yaml",
+      "sha256": "f6050bd2c50f2fb6c44e6904984c3ae6bb891f2446ca3312623c568165688d9f",
+      "size_bytes": 2609
+    },
+    {
       "path": "docs/ARCHITECTURE.md",
       "sha256": "1be0de244b519e07ba54823fa7f1e141b8c2f26bed2a8869d5f8866faa96a5f9",
       "size_bytes": 7239
@@ -58,8 +63,8 @@
     },
     {
       "path": "docs/CONTINUOUS_EWAL_COATING_STRATEGY.md",
-      "sha256": "e0f2c79cb7a2b677e43909fdd1c608c4c510194ad6dd857ff89745c2a1412996",
-      "size_bytes": 17034
+      "sha256": "4c36a97e00ece1986bf292f2f7b941ea5e8e6dc6d6c26dbeced9be811d1ff334",
+      "size_bytes": 18587
     },
     {
       "path": "docs/CONTRACTS.md",
@@ -88,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "3f106c48a06ce0b53e7b92f7a0e56fe2b16d2d52035d767a3e33e35682520ce2",
-      "size_bytes": 3689
+      "sha256": "e1b5b10edb6c2d1fbbbaa742eecff784bb7289d55edf2ab2a58c05198ec2aa2e",
+      "size_bytes": 6278
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -288,8 +293,8 @@
     },
     {
       "path": "pyproject.toml",
-      "sha256": "5fab0add6434265d06ad30a75c78dd28d8078b7e20a548e8ace8683022f9161e",
-      "size_bytes": 768
+      "sha256": "57ee39ca7686816612c918bec1d833cfb17c35126c671c139d6bbd3676e772e4",
+      "size_bytes": 867
     },
     {
       "path": "reference/README.md",
@@ -547,6 +552,11 @@
       "size_bytes": 10745
     },
     {
+      "path": "scripts/run_configured_simulation.py",
+      "sha256": "78228e37a88e1ca15e02becc40cf7ea997975929629ef0f87e6d267c523e6fd5",
+      "size_bytes": 17943
+    },
+    {
       "path": "scripts/verify_seed.py",
       "sha256": "c0f93712ef01b8c909150664c12cd2740443c1f4df344248602bad14aa0b8c39",
       "size_bytes": 2615
@@ -788,8 +798,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "80925379e863c917950f79ee3385a8c2931f44eb4aca5512ebbb8fc21670d869",
-      "size_bytes": 47779
+      "sha256": "366b85f8a6a056436e5f4f9b7f5e66d580c8ce350df1971d0e2c78ada4316987",
+      "size_bytes": 48602
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -797,9 +807,14 @@
       "size_bytes": 6888
     },
     {
+      "path": "src/rasim_next/pipeline/configured_simulation.py",
+      "sha256": "5eda955bea4c0c2959020c383d0067bfd2322bcf6ed86b8521c92e1483de4af8",
+      "size_bytes": 49696
+    },
+    {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "5b27e6355047e7eca6eab0877d3e3745346cd2a6a048461e1fb2cc36e5e6b547",
-      "size_bytes": 90652
+      "sha256": "9cb88fa9a1b1001d6016a7634c5a7ccb114a922916d34049b8423b9e96980e69",
+      "size_bytes": 95262
     },
     {
       "path": "src/rasim_next/pipeline/intersections.py",
@@ -818,8 +833,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "895e40d7b034438dedb32d5bea7adf5169160812d31f9e7b64c8077b0d637e4c",
-      "size_bytes": 23552
+      "sha256": "ae1b87d1297b313deb1040c129932889d34a167774db5dc85d9199a190e55d79",
+      "size_bytes": 30162
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1188,8 +1203,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "37147c3a540c98fa176ed49a70b1ffb1a7308de592e91d2fcdeff5f18f787ca6",
-      "size_bytes": 73839
+      "sha256": "212b1587f3356b447c30038a707ba9290d70dffe45e70efb1ff025cb0fe638da",
+      "size_bytes": 88339
     },
     {
       "path": "tests/test_mosaic_ewald.py",
@@ -1213,13 +1228,13 @@
     },
     {
       "path": "tools/check_docs.py",
-      "sha256": "222c841e1291031f3a4b538799f6b21a35be8b25483c2bd098c1c4facf8e54f5",
-      "size_bytes": 3171
+      "sha256": "1846693fd169452a15dab4eeb7ac8a53c313f3cb87234b055f2e46aa0546631a",
+      "size_bytes": 3395
     },
     {
       "path": "uv.lock",
-      "sha256": "7a3fa4ff7850e8d7cb7fd7f08da15f0a50ec7183bf8de5241bb5a8ed8f8cd162",
-      "size_bytes": 52459
+      "sha256": "39e9ac0bac78c196480a786b9d722bf60bbc41991a39fd1afd7ad04c626ad285",
+      "size_bytes": 109830
     }
   ]
 }

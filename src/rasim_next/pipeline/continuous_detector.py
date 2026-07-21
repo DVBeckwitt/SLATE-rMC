@@ -205,6 +205,40 @@ class DetectorMappedGeometry:
 
 
 @dataclass(frozen=True, slots=True)
+class DetectorVisibleEwaldCoating:
+    """Intrinsic latent Ewald coating restricted only by active-panel visibility."""
+
+    geometry: DetectorMappedGeometry
+    coating_intensity_density_A2_rad2_inv: FloatArray
+    detector_visible_m0_q_gap_Ainv: float | None = None
+    measure_id: str = "detector_visible_intrinsic_ewald_latent_density_A2_rad2_inv.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.geometry, DetectorMappedGeometry):
+            raise TypeError("geometry must be DetectorMappedGeometry")
+        shape = self.geometry.ewald_geometry.alpha_rad.shape
+        density = _float_array(
+            self.coating_intensity_density_A2_rad2_inv,
+            shape,
+            "coating_intensity_density_A2_rad2_inv",
+        )
+        if np.any(density < 0.0) or np.any((~self.geometry.valid) & (density != 0.0)):
+            raise ValueError("intrinsic Ewald coating must be nonnegative and detector-visible")
+        rod = self.geometry.ewald_geometry.rod
+        gap = self.detector_visible_m0_q_gap_Ainv
+        if rod.family_m == 0:
+            if gap is None or not isfinite(float(gap)) or float(gap) <= 0.0:
+                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            gap = float(gap)
+        elif gap is not None:
+            raise ValueError("an m=0 reciprocal support gap requires the (0, 0) rod")
+        if self.measure_id != "detector_visible_intrinsic_ewald_latent_density_A2_rad2_inv.v1":
+            raise ValueError("unsupported detector-visible Ewald coating measure")
+        object.__setattr__(self, "coating_intensity_density_A2_rad2_inv", density)
+        object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", gap)
+
+
+@dataclass(frozen=True, slots=True)
 class DetectorCoordinateGeometry:
     """Internal elastic wave selected by one continuous detector coordinate."""
 
@@ -833,6 +867,10 @@ class DetectorEwaldMeasure:
         return self._coating
 
     @property
+    def incident(self) -> IncidentTransportResult:
+        return self._incident
+
+    @property
     def instrument(self) -> CompiledInstrument:
         return self._instrument
 
@@ -964,6 +1002,71 @@ class DetectorEwaldMeasure:
             coating_intensity_density_A2_rad2_inv=(intensity.coating_intensity_density_A2_rad2_inv),
             source_phase_weight=self._source_phase_weight,
             postoptical_density_A2_rad2_inv=postoptical,
+        )
+
+    def map_detector_visible_coating(
+        self,
+        *,
+        rod: Rod,
+        branch: int,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+    ) -> DetectorVisibleEwaldCoating:
+        """Map the intrinsic coating while using exit geometry only as a visibility mask.
+
+        No source weight, optical factor, attenuation, detector solid angle, or
+        detector-coordinate Jacobian enters the returned latent density.
+        """
+
+        if not isinstance(rod, Rod):
+            raise TypeError("rod must be a Rod")
+        m0_gap: float | None = None
+        if rod.family_m == 0:
+            if branch != 0:
+                raise ValueError("detector-visible m=0 requires branch 0")
+            incident_normal = float(self._coating.ki_sample_Ainv[2])
+            if incident_normal >= 0.0:
+                raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
+            m0_gap = -incident_normal
+            geometry, coarea = self._coating._evaluate_geometry(
+                rod=rod,
+                branch=0,
+                alpha_rad=alpha_rad,
+                beta_rad=beta_rad,
+            )
+            mapped = self._map_geometry(geometry)
+            visible = mapped.geometry.valid
+            density = np.zeros(geometry.alpha_rad.shape, dtype=np.float64)
+            if np.any(visible):
+                q_norm = np.linalg.norm(geometry.q_sample_Ainv[visible], axis=-1)
+                if np.any(q_norm <= m0_gap):
+                    raise FloatingPointError("detector-visible m=0 violated its reciprocal gap")
+                latent = self._coating.bragg_space.evaluate_latent(
+                    rod=rod,
+                    alpha_rad=geometry.alpha_rad[visible],
+                    beta_rad=geometry.beta_rad[visible],
+                    u_Ainv=geometry.u_Ainv[visible],
+                )
+                density[visible] = latent.intensity_density_A2_rad2_inv * coarea[visible]
+        else:
+            if branch not in {1, 2}:
+                raise ValueError("a nonzero rod requires branch 1 or 2")
+            intensity = self._coating.evaluate_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=alpha_rad,
+                beta_rad=beta_rad,
+            )
+            mapped = self._map_geometry(intensity.geometry)
+            density = np.where(
+                mapped.geometry.valid,
+                intensity.coating_intensity_density_A2_rad2_inv,
+                0.0,
+            )
+        return DetectorVisibleEwaldCoating(
+            geometry=mapped.geometry,
+            coating_intensity_density_A2_rad2_inv=density,
+            detector_visible_m0_q_gap_Ainv=m0_gap,
         )
 
     def map_specular_geometry(
@@ -2060,6 +2163,7 @@ __all__ = [
     "DetectorMappedGeometry",
     "DetectorPixelMass",
     "DetectorQuadrature",
+    "DetectorVisibleEwaldCoating",
     "IntensityStatus",
     "PixelIntegrationMethod",
     "SpecularDetectorGeometry",

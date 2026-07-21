@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -10,10 +11,14 @@ TASK = re.compile(r"^  - id: (T\d{2})\n((?:    [^\n]+\n?)+)", re.MULTILINE)
 
 
 def repository_files(pattern: str) -> list[Path]:
+    tracked = subprocess.check_output(
+        ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+        cwd=ROOT,
+    ).decode("utf-8")
     return sorted(
-        path
-        for path in ROOT.rglob(pattern)
-        if ".git" not in path.parts and ".venv" not in path.parts
+        ROOT / relative
+        for relative in tracked.split("\0")
+        if relative and Path(relative).match(pattern)
     )
 
 
@@ -25,8 +30,7 @@ def check_task_index(errors: list[str]) -> None:
     indexed_files: set[str] = set()
     for task_id, body in TASK.findall(text):
         fields = dict(
-            match.groups()
-            for match in re.finditer(r"^    ([a-z_]+): (.+)$", body, re.MULTILINE)
+            match.groups() for match in re.finditer(r"^    ([a-z_]+): (.+)$", body, re.MULTILINE)
         )
         task_file = fields.get("file", "")
         dependencies = {
@@ -68,9 +72,10 @@ def main() -> int:
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
             errors.append(f"{path.relative_to(ROOT).as_posix()}: {error}")
     if [path.relative_to(ROOT).as_posix() for path in repository_files("*.yaml")] != [
-        "tasks/index.yaml"
+        "configs/bi2se3_simulation.yaml",
+        "tasks/index.yaml",
     ]:
-        errors.append("only tasks/index.yaml is supported")
+        errors.append("tracked YAML set is incomplete or contains an unsupported file")
     check_task_index(errors)
     check_links(errors)
     if errors:

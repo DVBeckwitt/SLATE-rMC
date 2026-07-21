@@ -74,3 +74,40 @@ flag permits an explicitly labelled, non-accepted image because the current zero
 rod model contains detector-visible caustics; it does not claim quadrature convergence. Layer count
 must be at least one, and stacking epsilon must be finite and lie in `[0, 1]`. This generator fixes
 the finite-stack strength normalization to `FINITE_TOTAL`.
+
+## One-file configured continuous simulation
+
+`configs/bi2se3_simulation.yaml` is the strict, editable runtime declaration for the continuous
+Bi2Se3 views. It owns the source, all four rigid transforms, detector, mosaic, finite-2H structure
+factor, rod policy, numerical display controls, and three independent output switches. Run it with:
+
+```powershell
+uv run --frozen --extra visualization python scripts/run_configured_simulation.py configs/bi2se3_simulation.yaml
+```
+
+The default selects every physical rod in the elastic-reach union at the shortest realized
+wavelength, preserves a stable master catalog while each source state evaluates only its reachable
+subset, and sums all retained roots. This naturally includes detector-visible kinematic `m=0` and
+every higher family that can contribute; unreachable or off-panel contributions remain zero. The
+top-exit detector patch supplies the physical `m=0` direct-root support gap. Full-shell `m=0` and
+dimensionless Parratt/composite reflectivity remain excluded from the raw Bragg mass.
+
+The reciprocal-space and Ewald arrays are finite display samples of continuous callables. The
+reciprocal view labels its color as latent `(alpha, beta, u)` intensity, not Cartesian `d^3Q`
+density, and declares the nominal source wavelength used for that representative Bragg field.
+The Ewald view uses one explicitly nominal mean incident state because wavelength-varying source
+states do not share one Q-space Ewald surface. Its color is the intrinsic mosaic times per-rod SF
+times one Ewald coarea factor; detector geometry is used only as a visibility mask, so no exit
+optics or detector Jacobian enters that artifact.
+
+The detector is the exact common sum domain: each state retains its wavelength, origin, `ki`, exit
+refraction, attenuation, and structure factor before the continuous fields are summed. The default
+60-pixel, order-2 macrobin image is explicitly a fast, non-quantitative fixed-quadrature preview of
+that callable. It is intentionally suitable for interactive visualization, not quantitative fitting
+or detector-mass convergence; change the two YAML detector quadrature controls for a different
+preview, and use a separately convergence-certified integration path for fitted observables.
+
+All PNGs plus one compressed `.ra_diag.npz` are written outside the repository. Change each
+`outputs.<name>.enabled` value independently. Relative CIF and output paths are resolved against the
+YAML file, not the process working directory; unknown, missing, duplicate, merged, aliased, or
+non-finite configuration values are rejected.
