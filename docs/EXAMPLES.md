@@ -45,3 +45,26 @@ maps that meaning to `unbounded_plane.v1` with absent width/length; zero is not 
 sentinel. This is `CORRECTED` relative to the former script-only finite rectangle, with the first
 possible divergence at `geometry.footprint_acceptance`. Nothing under `examples/` or `reference/`
 is regenerated to encode the correction.
+
+## Continuous detector mosaic selection
+
+The continuous Bi2Se3 detector generator accepts Gaussian sigma, Lorentzian HWHM, and the
+Lorentzian mixture probability directly in degrees. For a pure 1-degree Gaussian mosaic:
+
+```powershell
+python scripts/generate_bi2se3_continuous_detector.py `
+  --gaussian-sigma-deg 1 `
+  --lorentzian-hwhm-deg 0 `
+  --eta 0 `
+  --integration-method adaptive_compiled `
+  --worker-count 32 `
+  --allow-unresolved-diagnostic `
+  --output-dir C:\path\outside\the\repository
+```
+
+`--eta 0` selects a pure Gaussian and `--eta 1` selects a pure Lorentzian. Values strictly between
+zero and one mix the two normalized densities. Every component with positive probability must
+have a positive width; an inactive component may use zero width. The existing defaults remain a
+5-degree Gaussian sigma, 2-degree Lorentzian HWHM, and eta 0.1. The example flag permits an
+explicitly labelled, non-accepted diagnostic because the current zero-transverse-width rod model
+contains detector-visible caustics; it does not claim quadrature convergence.

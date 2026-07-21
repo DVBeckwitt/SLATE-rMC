@@ -88,8 +88,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "142c2086f12e41d65c4a4f94905ec036fea40227dc76ee217ef9d64c739f7c1d",
-      "size_bytes": 2195
+      "sha256": "39378b46b271d2eaa2e12e3302025f4357de6736c5aa89083131cb35be9fe6f8",
+      "size_bytes": 3260
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -533,8 +533,8 @@
     },
     {
       "path": "scripts/generate_bi2se3_continuous_detector.py",
-      "sha256": "038cb6e7e4387c8cfd9aafae36cdfca0a80d616d12babf52f0f11408bf7d6be8",
-      "size_bytes": 20210
+      "sha256": "7371d8550f73f682c9e75bc16e99aaf6d90911d132f472903a1892f9a0bd6c31",
+      "size_bytes": 23081
     },
     {
       "path": "scripts/generate_bi2se3_detector_image.py",
@@ -1178,8 +1178,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "a6d0d9a50987ee128a32de16ddfb91ad2823348a004244b6899b4cc60e90f2b6",
-      "size_bytes": 56264
+      "sha256": "ae0133c9ee705cac3d5725974837035982accaef50e695c8bc06d60333add74d",
+      "size_bytes": 61372
     },
     {
       "path": "tests/test_mosaic_ewald.py",

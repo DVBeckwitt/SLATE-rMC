@@ -637,6 +637,159 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     assert zero_pixels.fold_refinement_centroid_shift_px == 0.0
 
 
+@pytest.mark.parametrize(
+    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta"),
+    (
+        (1.0, 0.0, 0.0),
+        (5.0, 2.0, 0.1),
+        (0.0, 2.0, 1.0),
+    ),
+)
+def test_continuous_detector_fixture_accepts_explicit_nonzero_mosaic(
+    monkeypatch: pytest.MonkeyPatch,
+    gaussian_sigma_deg: float,
+    lorentzian_hwhm_deg: float,
+    eta: float,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+
+    detector, _, _ = namespace["build_default_detector_measure"](
+        gaussian_sigma_deg=gaussian_sigma_deg,
+        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+        eta=eta,
+    )
+
+    mosaic = detector.coating.bragg_space.config.mosaic
+    assert math.degrees(mosaic.gaussian_sigma_rad) == pytest.approx(gaussian_sigma_deg)
+    assert math.degrees(mosaic.lorentzian_half_width_rad) == pytest.approx(lorentzian_hwhm_deg)
+    assert mosaic.lorentzian_probability == eta
+    assert mosaic.zero_tilt_probability_mass == 0.0
+    assert math.fsum(detector.coating.bragg_space.mosaic_space.probability_mass) == pytest.approx(
+        1.0,
+        abs=1.0e-15,
+    )
+
+
+@pytest.mark.parametrize(
+    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta"),
+    ((1.0, 0.0, 0.0), (0.0, 2.0, 1.0)),
+)
+def test_continuous_detector_compiled_density_accepts_inactive_zero_width(
+    monkeypatch: pytest.MonkeyPatch,
+    gaussian_sigma_deg: float,
+    lorentzian_hwhm_deg: float,
+    eta: float,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+    detector, m1_rods, _ = namespace["build_default_detector_measure"](
+        gaussian_sigma_deg=gaussian_sigma_deg,
+        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+        eta=eta,
+    )
+    rod = m1_rods[1]
+    mapped = detector.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+
+    oracle = detector.evaluate_detector_coordinates(
+        mapped.geometry.column_px,
+        mapped.geometry.row_px,
+        rods=(rod,),
+    )
+    compiled_density, compiled_count, compiled_caustic = (
+        detector._evaluate_compiled_coordinates_for_proof(
+            mapped.geometry.column_px,
+            mapped.geometry.row_px,
+            rods=(rod,),
+            branch=2,
+        )
+    )
+
+    assert bool(mapped.geometry.valid)
+    assert np.isfinite(oracle.density_A2_per_px2)
+    assert oracle.density_A2_per_px2 > 0.0
+    np.testing.assert_allclose(
+        compiled_density,
+        oracle.per_rod_density_A2_per_px2,
+        rtol=3.0e-12,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(compiled_count, oracle.per_rod_inverse_branch_count)
+    np.testing.assert_array_equal(compiled_caustic, oracle.caustic)
+
+
+@pytest.mark.parametrize(
+    ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "eta", "message"),
+    (
+        (float("nan"), 2.0, 0.1, "finite"),
+        (5.0, float("inf"), 0.1, "finite"),
+        (-1.0, 0.0, 0.0, "nonnegative"),
+        (1.0, 1.0, -0.1, r"\[0, 1\]"),
+        (1.0, 1.0, 1.1, r"\[0, 1\]"),
+        (0.0, 0.0, 0.0, "Gaussian sigma"),
+        (1.0, 0.0, 0.1, "Lorentzian HWHM"),
+    ),
+)
+def test_continuous_detector_fixture_rejects_invalid_or_atomic_mosaic(
+    monkeypatch: pytest.MonkeyPatch,
+    gaussian_sigma_deg: float,
+    lorentzian_hwhm_deg: float,
+    eta: float,
+    message: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+
+    with pytest.raises(ValueError, match=message):
+        namespace["build_default_detector_measure"](
+            gaussian_sigma_deg=gaussian_sigma_deg,
+            lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+            eta=eta,
+        )
+
+
+def test_continuous_detector_cli_exposes_mosaic_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(root / "scripts"))
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+
+    with pytest.raises(SystemExit) as exit_info:
+        namespace["main"](["--help"])
+
+    assert exit_info.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--gaussian-sigma-deg" in help_text
+    assert "--lorentzian-hwhm-deg" in help_text
+    assert "--eta" in help_text
+
+    with pytest.raises(SystemExit) as invalid_exit:
+        namespace["main"](
+            [
+                "--numeric-only",
+                "--gaussian-sigma-deg",
+                "0",
+                "--lorentzian-hwhm-deg",
+                "0",
+                "--eta",
+                "0",
+            ]
+        )
+
+    assert invalid_exit.value.code == 2
+    assert "Gaussian sigma must be positive" in capsys.readouterr().err
+
+
 def _instrument(
     *,
     shape_rc: tuple[int, int] = (3, 4),

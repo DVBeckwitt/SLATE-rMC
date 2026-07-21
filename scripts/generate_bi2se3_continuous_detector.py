@@ -8,6 +8,7 @@ import json
 import math
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from time import perf_counter
 
@@ -35,6 +36,13 @@ from rasim_next.reciprocal.lattice import ReciprocalLattice
 
 ROOT = Path(__file__).resolve().parents[1]
 M1_ROD_KEYS = ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))
+DEFAULT_GAUSSIAN_SIGMA_DEG = 5.0
+DEFAULT_LORENTZIAN_HWHM_DEG = 2.0
+DEFAULT_LORENTZIAN_PROBABILITY = 0.1
+
+
+class _MosaicInputError(ValueError):
+    """Invalid user-selected continuous mosaic parameters."""
 
 
 def _peak_working_set_bytes() -> int | None:
@@ -77,9 +85,50 @@ def _peak_working_set_bytes() -> int | None:
     return int(counters.PeakWorkingSetSize) if succeeded else None
 
 
-def build_default_detector_measure() -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
-    """Build the accepted 5-degree, seven-layer finite-total fixture."""
+def _mosaic_parameters_from_degrees(
+    *,
+    gaussian_sigma_deg: float,
+    lorentzian_hwhm_deg: float,
+    eta: float,
+) -> MosaicParameters:
+    values = {
+        "Gaussian sigma": gaussian_sigma_deg,
+        "Lorentzian HWHM": lorentzian_hwhm_deg,
+        "eta": eta,
+    }
+    if any(not math.isfinite(value) for value in values.values()):
+        raise _MosaicInputError("mosaic parameters must be finite")
+    if gaussian_sigma_deg < 0.0 or lorentzian_hwhm_deg < 0.0:
+        raise _MosaicInputError("mosaic widths must be nonnegative")
+    if not 0.0 <= eta <= 1.0:
+        raise _MosaicInputError("eta must lie in [0, 1]")
+    if eta < 1.0 and gaussian_sigma_deg == 0.0:
+        raise _MosaicInputError("Gaussian sigma must be positive when eta is less than one")
+    if eta > 0.0 and lorentzian_hwhm_deg == 0.0:
+        raise _MosaicInputError("Lorentzian HWHM must be positive when eta is greater than zero")
+    return MosaicParameters(
+        gaussian_sigma_rad=math.radians(gaussian_sigma_deg),
+        lorentzian_half_width_rad=math.radians(lorentzian_hwhm_deg),
+        lorentzian_probability=eta,
+        alpha_panel_count=8,
+        alpha_gauss_order=12,
+        azimuth_count=32,
+    )
 
+
+def build_default_detector_measure(
+    *,
+    gaussian_sigma_deg: float = DEFAULT_GAUSSIAN_SIGMA_DEG,
+    lorentzian_hwhm_deg: float = DEFAULT_LORENTZIAN_HWHM_DEG,
+    eta: float = DEFAULT_LORENTZIAN_PROBABILITY,
+) -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
+    """Build the 5-degree, seven-layer fixture for one explicit nonzero mosaic."""
+
+    mosaic = _mosaic_parameters_from_degrees(
+        gaussian_sigma_deg=gaussian_sigma_deg,
+        lorentzian_hwhm_deg=lorentzian_hwhm_deg,
+        eta=eta,
+    )
     samples, instrument = build_default_case_inputs(
         sample_count=1,
         sample_angle_rad=math.radians(5.0),
@@ -98,14 +147,7 @@ def build_default_detector_measure() -> tuple[DetectorEwaldMeasure, tuple[Rod, .
             reciprocal_basis_Ainv=reciprocal.basis_Ainv,
             crystal_to_sample=instrument.sample_from_crystal.rotation,
             rods=(m0_rod, *m1_rods),
-            mosaic=MosaicParameters(
-                gaussian_sigma_rad=math.radians(5.0),
-                lorentzian_half_width_rad=math.radians(2.0),
-                lorentzian_probability=0.1,
-                alpha_panel_count=12,
-                alpha_gauss_order=6,
-                azimuth_count=32,
-            ),
+            mosaic=mosaic,
             k_norm_Ainv=2.0 * np.pi / samples.wavelength_A[0],
         ),
         Bi2Se3TwoHStrength(
@@ -156,6 +198,7 @@ def _write_figure(
     valid_center: np.ndarray,
     direct_beam_column_row: tuple[float, float],
     specular_column_row: tuple[float, float],
+    mosaic_description: str,
     unresolved_pixel_count: int,
     output_path: Path,
 ) -> None:
@@ -243,16 +286,39 @@ def _write_figure(
         else f"UNRESOLVED QUADRATURE DIAGNOSTIC ({unresolved_pixel_count:,} pixels) — "
     )
     figure.suptitle(
-        status_prefix + "Bi$_2$Se$_3$, one 5° incident state: detector point → $k_f$ → Q → "
-        "mosaic * 2H SF → integrated native pixels"
+        status_prefix
+        + "Bi$_2$Se$_3$, one 5° incident state\n"
+        + f"{mosaic_description}\n"
+        + "detector point → $k_f$ → Q → mosaic * 2H SF → integrated native pixels"
     )
     figure.savefig(output_path, dpi=220)
     plt.close(figure)
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     overall_start = perf_counter()
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--gaussian-sigma-deg",
+        type=float,
+        default=DEFAULT_GAUSSIAN_SIGMA_DEG,
+        help="Gaussian mosaic standard deviation in degrees (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--lorentzian-hwhm-deg",
+        type=float,
+        default=DEFAULT_LORENTZIAN_HWHM_DEG,
+        help="Lorentzian mosaic half width at half maximum in degrees (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--eta",
+        "--lorentzian-probability",
+        dest="eta",
+        type=float,
+        default=DEFAULT_LORENTZIAN_PROBABILITY,
+        help="Lorentzian mixture probability; 0 is pure Gaussian and 1 is pure Lorentzian "
+        "(default: %(default)s)",
+    )
     parser.add_argument("--pixel-gauss-order", type=int, default=2)
     parser.add_argument("--fold-gauss-order", type=int, default=4)
     parser.add_argument("--fold-subdivision-count", type=int, default=8)
@@ -270,14 +336,21 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--numeric-only", action="store_true")
     parser.add_argument("--allow-unresolved-diagnostic", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.numeric_only and args.output_dir is not None:
         parser.error("--numeric-only and --output-dir are mutually exclusive")
     if not args.numeric_only and args.output_dir is None:
         parser.error("provide --output-dir or --numeric-only")
 
     fixture_start = perf_counter()
-    detector, m1_rods, m0_rod = build_default_detector_measure()
+    try:
+        detector, m1_rods, m0_rod = build_default_detector_measure(
+            gaussian_sigma_deg=args.gaussian_sigma_deg,
+            lorentzian_hwhm_deg=args.lorentzian_hwhm_deg,
+            eta=args.eta,
+        )
+    except _MosaicInputError as error:
+        parser.error(str(error))
     fixture_elapsed = perf_counter() - fixture_start
     start = perf_counter()
     result = detector.integrate_native_pixels(
@@ -457,6 +530,11 @@ def main() -> None:
             valid_center=valid_center,
             direct_beam_column_row=direct_beam,
             specular_column_row=specular_coordinate,
+            mosaic_description=(
+                f"Gaussian sigma={math.degrees(mosaic.gaussian_sigma_rad):g}°, "
+                f"Lorentzian HWHM={math.degrees(mosaic.lorentzian_half_width_rad):g}°, "
+                f"eta={mosaic.lorentzian_probability:g}"
+            ),
             unresolved_pixel_count=result.adaptive_unresolved_pixel_count,
             output_path=figure_path,
         )
