@@ -54,6 +54,12 @@ film thickness, and its derived `sample_geometry_revision`; `lab_from_crystal` i
 Callers cannot supply the inverse or revision, and batched incident construction neither inverts the
 same transform nor rebuilds the revision.
 
+Configured simulations may specify active right-handed detector-local column and row tilts in
+degrees. The boundary applies the column tilt first and the resulting-row tilt second,
+`R_final = R_base @ R_column @ R_row`, about the detector reference-coordinate point. It immediately
+folds them into `lab_from_detector`; compiled state and kernels retain no second tilt representation.
+Missing or exactly zero tilt values preserve the base transform and its revision exactly.
+
 ## Source samples
 
 ```text

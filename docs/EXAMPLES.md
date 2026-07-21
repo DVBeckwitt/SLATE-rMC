@@ -85,6 +85,24 @@ factor, rod policy, numerical display controls, and three independent output swi
 uv run --frozen --extra visualization python scripts/run_configured_simulation.py configs/bi2se3_simulation.yaml
 ```
 
+The optional two-axis detector pose is edited directly in the same file:
+
+```yaml
+instrument:
+  detector_tilt:
+    about_column_axis_deg: 0.0
+    about_row_axis_deg: 0.0
+```
+
+These are active right-handed intrinsic rotations of the base `lab_from_detector` pose. The column
+rotation is applied first, followed by rotation about the resulting detector row axis, so
+`R_final = R_base @ R_column @ R_row`. Both rotations pivot about the detector reference-coordinate
+point and leave its LAB translation fixed. Degrees exist only at the YAML boundary; the loader
+folds the angles once into the canonical detector-to-LAB transform. Consequently detector rays,
+the visible Ewald patch, exit refraction and attenuation, pixel solid angle, and CPU/CUDA detector
+integration all use the same tilted plane without an image-space rotation or an extra Jacobian.
+Omitting the mapping or setting both entries to zero reproduces the original pose exactly.
+
 The default selects every physical rod in the elastic-reach union at the shortest realized
 wavelength, preserves a stable master catalog while each source state evaluates only its reachable
 subset, and sums all retained roots. This naturally includes detector-visible kinematic `m=0` and

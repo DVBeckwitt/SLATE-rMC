@@ -353,6 +353,55 @@ def _transform(value: Any, path: str) -> TransformConfiguration:
     )
 
 
+def _detector_transform(value: Any, tilt_value: Any | None) -> TransformConfiguration:
+    """Fold intrinsic detector-axis tilts into the one canonical detector pose."""
+
+    transform = _transform(value, "instrument.lab_from_detector")
+    if tilt_value is None:
+        return transform
+    tilt = _mapping(
+        tilt_value,
+        "instrument.detector_tilt",
+        required={"about_column_axis_deg", "about_row_axis_deg"},
+    )
+    column_deg = _finite(
+        tilt["about_column_axis_deg"],
+        "instrument.detector_tilt.about_column_axis_deg",
+    )
+    row_deg = _finite(
+        tilt["about_row_axis_deg"],
+        "instrument.detector_tilt.about_row_axis_deg",
+    )
+    if column_deg == 0.0 and row_deg == 0.0:
+        return transform
+
+    column_rad = math.radians(column_deg)
+    row_rad = math.radians(row_deg)
+    column_cos = math.cos(column_rad)
+    column_sin = math.sin(column_rad)
+    row_cos = math.cos(row_rad)
+    row_sin = math.sin(row_rad)
+    about_column = np.asarray(
+        (
+            (1.0, 0.0, 0.0),
+            (0.0, column_cos, -column_sin),
+            (0.0, column_sin, column_cos),
+        )
+    )
+    about_current_row = np.asarray(
+        (
+            (row_cos, 0.0, row_sin),
+            (0.0, 1.0, 0.0),
+            (-row_sin, 0.0, row_cos),
+        )
+    )
+    rotation = np.asarray(transform.rotation) @ about_column @ about_current_row
+    return TransformConfiguration(
+        rotation=tuple(tuple(float(entry) for entry in row) for row in rotation),
+        translation_m=transform.translation_m,
+    )
+
+
 def _artifact(value: Any, path: str) -> ArtifactConfiguration:
     data = _mapping(value, path, required={"enabled", "filename"})
     filename = _string(data["filename"], f"{path}.filename")
@@ -485,6 +534,7 @@ def load_simulation_config(
             "sample_length_m",
             "film_thickness_A",
         },
+        optional={"detector_tilt"},
     )
     raw_rotations = instrument_data["axis_rotations"]
     if not isinstance(raw_rotations, list):
@@ -524,8 +574,9 @@ def load_simulation_config(
         sample_from_crystal=_transform(
             instrument_data["sample_from_crystal"], "instrument.sample_from_crystal"
         ),
-        lab_from_detector=_transform(
-            instrument_data["lab_from_detector"], "instrument.lab_from_detector"
+        lab_from_detector=_detector_transform(
+            instrument_data["lab_from_detector"],
+            instrument_data.get("detector_tilt"),
         ),
         detector_shape_rc=(
             _integer(detector_shape[0], "instrument.detector_shape_rc[0]", positive=True),

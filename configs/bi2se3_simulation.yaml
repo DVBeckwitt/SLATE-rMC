@@ -47,6 +47,11 @@ instrument:
       - [0.0, 0.0, 1.0]
       - [0.0, -1.0, 0.0]
     translation_m: [0.0, 0.075, 0.0]
+  # Active right-handed intrinsic tilts: column first, then the resulting row axis.
+  # The detector reference-coordinate point is the fixed pivot.
+  detector_tilt:
+    about_column_axis_deg: 0.0
+    about_row_axis_deg: 0.0
   detector_shape_rc: [3000, 3000]
   detector_row_pitch_m: 0.0001
   detector_column_pitch_m: 0.0001

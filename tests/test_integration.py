@@ -31,6 +31,30 @@ from rasim_next.measurement import (
 from rasim_next.render.deposition import deposit_bilinear
 
 
+def _intrinsic_detector_tilt(
+    base_rotation: np.ndarray,
+    column_deg: float,
+    row_deg: float,
+) -> np.ndarray:
+    column = math.radians(column_deg)
+    row = math.radians(row_deg)
+    about_column = np.asarray(
+        (
+            (1.0, 0.0, 0.0),
+            (0.0, math.cos(column), -math.sin(column)),
+            (0.0, math.sin(column), math.cos(column)),
+        )
+    )
+    about_current_row = np.asarray(
+        (
+            (math.cos(row), 0.0, math.sin(row)),
+            (0.0, 1.0, 0.0),
+            (-math.sin(row), 0.0, math.cos(row)),
+        )
+    )
+    return np.asarray(base_rotation) @ about_column @ about_current_row
+
+
 def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1347,6 +1371,70 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
     assert np.all(gpu.per_rod_density_A2_per_px2[3:] == 0.0)
 
 
+def test_cuda_compound_detector_tilt_matches_cpu() -> None:
+    from numba import cuda
+
+    if not cuda.is_available():
+        pytest.skip("requires a CUDA device")
+
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    base_detector = config.instrument.lab_from_detector
+    tilted_rotation = _intrinsic_detector_tilt(
+        np.asarray(base_detector.rotation),
+        0.7,
+        -1.1,
+    )
+    tilted_detector = replace(
+        base_detector,
+        rotation=tuple(tuple(float(entry) for entry in row) for row in tilted_rotation),
+    )
+    config = replace(
+        config,
+        source=replace(config.source, sample_count=1),
+        instrument=replace(config.instrument, lab_from_detector=tilted_detector),
+    )
+    detector = build_source_averaged_detector(build_configured_simulation_inputs(config))
+    column_px = np.asarray([1109.5, 1469.5, -1.0])
+    row_px = np.asarray([1349.5, 1469.5, 0.0])
+    cpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
+    gpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+
+    assert np.any(cpu.per_rod_density_A2_per_px2[:2] > 0.0)
+    np.testing.assert_allclose(
+        gpu.per_rod_density_A2_per_px2,
+        cpu.per_rod_density_A2_per_px2,
+        rtol=6.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        gpu.density_A2_per_px2,
+        cpu.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
+    np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
+    assert np.all(gpu.per_rod_density_A2_per_px2[2] == 0.0)
+
+
 def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     tmp_path: Path,
 ) -> None:
@@ -1487,6 +1575,88 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     )
     with pytest.raises(ValueError, match="at least one output"):
         load_simulation_config(all_disabled, repository_root=root)
+
+
+def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -> None:
+    from rasim_next.core.validity import ValidityCode
+    from rasim_next.geometry import detector_coordinate_to_ray, project_detector_ray
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        load_simulation_config,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    default_path = root / "configs" / "bi2se3_simulation.yaml"
+    portable_default = default_path.read_text(encoding="utf-8").replace(
+        "../examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        (root / "examples/bi2se3/structures/Bi2Se3_vesta.cif").as_posix(),
+    )
+    zero_tilt = "  detector_tilt:\n    about_column_axis_deg: 0.0\n    about_row_axis_deg: 0.0\n"
+    base_path = tmp_path / "base.yaml"
+    zero_path = tmp_path / "zero.yaml"
+    tilted_path = tmp_path / "tilted.yaml"
+    base_path.write_text(portable_default.replace(zero_tilt, "", 1), encoding="utf-8")
+    zero_path.write_text(portable_default, encoding="utf-8")
+    tilted_path.write_text(
+        portable_default.replace(
+            zero_tilt,
+            "  detector_tilt:\n    about_column_axis_deg: 7.0\n    about_row_axis_deg: -11.0\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    base = load_simulation_config(base_path, repository_root=root)
+    zero = load_simulation_config(zero_path, repository_root=root)
+    tilted = load_simulation_config(tilted_path, repository_root=root)
+
+    assert zero.instrument.lab_from_detector == base.instrument.lab_from_detector
+    assert zero.physics_revision == base.physics_revision
+    base_rotation = np.asarray(base.instrument.lab_from_detector.rotation)
+    expected_rotation = _intrinsic_detector_tilt(base_rotation, 7.0, -11.0)
+    np.testing.assert_allclose(
+        tilted.instrument.lab_from_detector.rotation,
+        expected_rotation,
+        rtol=0.0,
+        atol=3.0e-16,
+    )
+    assert (
+        tilted.instrument.lab_from_detector.translation_m
+        == base.instrument.lab_from_detector.translation_m
+    )
+    assert tilted.physics_revision != base.physics_revision
+
+    one_sample = replace(tilted, source=replace(tilted.source, sample_count=1))
+    instrument = build_configured_simulation_inputs(one_sample).instrument
+    np.testing.assert_allclose(
+        instrument.lab_from_detector.rotation,
+        expected_rotation,
+        rtol=0.0,
+        atol=3.0e-16,
+    )
+    column_px, row_px = 1200.25, 1500.75
+    origin_lab_m = np.zeros(3)
+    ray = detector_coordinate_to_ray(
+        column_px,
+        row_px,
+        origin_lab_m=origin_lab_m,
+        instrument=instrument,
+    )
+    assert ray.status is ValidityCode.VALID
+    projection = project_detector_ray(origin_lab_m, ray.direction_lab, instrument)
+    assert projection.status is ValidityCode.VALID
+    assert projection.column_px == pytest.approx(column_px, rel=0.0, abs=2.0e-10)
+    assert projection.row_px == pytest.approx(row_px, rel=0.0, abs=2.0e-10)
+    pixel_area_m2 = instrument.detector_column_pitch_m * instrument.detector_row_pitch_m
+    expected_solid_angle_sr = (
+        pixel_area_m2
+        * abs(float(expected_rotation[:, 2] @ ray.direction_lab))
+        / ray.ray_distance_m**2
+    )
+    assert projection.pixel_solid_angle_sr == pytest.approx(
+        expected_solid_angle_sr,
+        rel=2.0e-15,
+        abs=0.0,
+    )
 
 
 def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> None:
