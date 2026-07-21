@@ -1062,6 +1062,423 @@ def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEw
 
 
 @dataclass(frozen=True, slots=True)
+class DetectorIntegerLMarkers:
+    """Exact peak-mosaic integer-L references that reach the active detector.
+
+    The coordinates use the nominal mean incident state and the continuous
+    ``alpha=0`` mosaic center.  Coincident family sites are stored once for
+    display, while every independently evaluated physical rod remains in the
+    aligned provenance tuples.
+    """
+
+    column_px: FloatArray
+    row_px: FloatArray
+    q_sample_Ainv: FloatArray
+    family_m: NDArray[np.int64]
+    integer_L: NDArray[np.int64]
+    branch: NDArray[np.int64]
+    ewald_residual_Ainv: FloatArray
+    family_strength_weight_A2: FloatArray
+    contributing_rod_hk: tuple[tuple[tuple[int, int], ...], ...]
+    contributing_beta_rad: tuple[tuple[float, ...], ...]
+    per_rod_strength_weight_A2: tuple[tuple[float, ...], ...]
+    reference_wavelength_A: float
+    definition_id: str = "peak_mosaic_alpha0_integer_L_center.v1"
+    source_state_policy: str = "mean_source_state.v1"
+
+    def __post_init__(self) -> None:
+        column = np.array(self.column_px, dtype=np.float64, copy=True, order="C")
+        if column.ndim != 1 or not np.all(np.isfinite(column)):
+            raise ValueError("column_px must be a finite one-dimensional array")
+        shape = column.shape
+        row = _readonly_float_array(self.row_px, shape, "row_px")
+        q_sample = _readonly_float_array(self.q_sample_Ainv, (*shape, 3), "q_sample_Ainv")
+        residual = _readonly_float_array(
+            self.ewald_residual_Ainv,
+            shape,
+            "ewald_residual_Ainv",
+        )
+        family_strength = _readonly_float_array(
+            self.family_strength_weight_A2,
+            shape,
+            "family_strength_weight_A2",
+        )
+        family = np.array(self.family_m, dtype=np.int64, copy=True, order="C")
+        integer_l = np.array(self.integer_L, dtype=np.int64, copy=True, order="C")
+        branch = np.array(self.branch, dtype=np.int64, copy=True, order="C")
+        if (
+            family.shape != shape
+            or integer_l.shape != shape
+            or branch.shape != shape
+            or np.any(family < 0)
+            or np.any(~np.isin(branch, (0, 1, 2)))
+            or np.any((family == 0) != (branch == 0))
+            or np.any(residual < 0.0)
+            or np.any(family_strength <= 0.0)
+        ):
+            raise ValueError("integer-L marker arrays contain invalid values")
+        rod_hk = tuple(
+            tuple((int(h), int(k)) for h, k in group) for group in self.contributing_rod_hk
+        )
+        beta = tuple(tuple(float(value) for value in group) for group in self.contributing_beta_rad)
+        per_rod_strength = tuple(
+            tuple(float(value) for value in group) for group in self.per_rod_strength_weight_A2
+        )
+        if not (len(rod_hk) == len(beta) == len(per_rod_strength) == column.size):
+            raise ValueError("marker provenance must have one group per display site")
+        for index, (hk_group, beta_group, strength_group) in enumerate(
+            zip(rod_hk, beta, per_rod_strength, strict=True)
+        ):
+            if (
+                not hk_group
+                or len(hk_group) != len(beta_group)
+                or len(hk_group) != len(strength_group)
+                or len(set(hk_group)) != len(hk_group)
+                or any(
+                    not math.isfinite(value) or not 0.0 <= value < 2.0 * np.pi
+                    for value in beta_group
+                )
+                or any(not math.isfinite(value) or value < 0.0 for value in strength_group)
+                or not math.isclose(
+                    math.fsum(strength_group),
+                    float(family_strength[index]),
+                    rel_tol=1024.0 * np.finfo(np.float64).eps,
+                    abs_tol=0.0,
+                )
+            ):
+                raise ValueError("integer-L marker provenance is inconsistent")
+        wavelength = _positive(self.reference_wavelength_A, "reference_wavelength_A")
+        if self.definition_id != "peak_mosaic_alpha0_integer_L_center.v1":
+            raise ValueError("unsupported integer-L marker definition")
+        if self.source_state_policy != "mean_source_state.v1":
+            raise ValueError("unsupported integer-L marker source-state policy")
+        for value in (column, family, integer_l, branch):
+            value.setflags(write=False)
+        object.__setattr__(self, "column_px", column)
+        object.__setattr__(self, "row_px", row)
+        object.__setattr__(self, "q_sample_Ainv", q_sample)
+        object.__setattr__(self, "family_m", family)
+        object.__setattr__(self, "integer_L", integer_l)
+        object.__setattr__(self, "branch", branch)
+        object.__setattr__(self, "ewald_residual_Ainv", residual)
+        object.__setattr__(self, "family_strength_weight_A2", family_strength)
+        object.__setattr__(self, "contributing_rod_hk", rod_hk)
+        object.__setattr__(self, "contributing_beta_rad", beta)
+        object.__setattr__(self, "per_rod_strength_weight_A2", per_rod_strength)
+        object.__setattr__(self, "reference_wavelength_A", wavelength)
+
+    @property
+    def labels(self) -> tuple[str, ...]:
+        """Return unambiguous family, integer-L, and root-branch labels."""
+
+        return tuple(
+            f"m={family}, L={integer_l}, b={branch}"
+            for family, integer_l, branch in zip(
+                self.family_m,
+                self.integer_L,
+                self.branch,
+                strict=True,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _IntegerLMarkerContribution:
+    family_m: int
+    integer_L: int
+    branch: int
+    column_px: float
+    row_px: float
+    q_sample_Ainv: FloatArray
+    ewald_residual_Ainv: float
+    rod_hk: tuple[int, int]
+    beta_rad: float
+    strength_weight_A2: float
+
+
+def _integer_l_beta_roots(
+    *,
+    rod: Rod,
+    integer_l: int,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+) -> tuple[tuple[float, ...], int] | None:
+    """Solve the alpha=0 Ewald equation analytically for full-beta roots."""
+
+    b3 = reciprocal_basis_Ainv[:, 2]
+    mean_axis = b3 / np.linalg.norm(b3)
+    q_parallel = rod.h * reciprocal_basis_Ainv[:, 0] + rod.k * reciprocal_basis_Ainv[:, 1]
+    q_axis = float(q_parallel @ mean_axis) * mean_axis
+    q_perpendicular = q_parallel - q_axis
+    q_quadrature = np.cross(mean_axis, q_perpendicular)
+    cosine_coefficient = 2.0 * float(ki_sample_Ainv @ (crystal_to_sample @ q_perpendicular))
+    sine_coefficient = 2.0 * float(ki_sample_Ainv @ (crystal_to_sample @ q_quadrature))
+    amplitude = math.hypot(cosine_coefficient, sine_coefficient)
+    coefficient_scale = max(
+        float(np.linalg.norm(ki_sample_Ainv) * np.linalg.norm(q_perpendicular)),
+        1.0,
+    )
+    tolerance = 4096.0 * np.finfo(np.float64).eps
+    u_Ainv = integer_l * float(np.linalg.norm(b3))
+    q_base = q_axis + u_Ainv * mean_axis
+    q_unrotated = q_parallel + u_Ainv * mean_axis
+    constant = float(
+        q_unrotated @ q_unrotated + 2.0 * ki_sample_Ainv @ (crystal_to_sample @ q_base)
+    )
+    equation_scale = max(
+        float(q_unrotated @ q_unrotated),
+        2.0 * float(np.linalg.norm(ki_sample_Ainv) * np.linalg.norm(q_base)),
+        1.0,
+    )
+    if amplitude <= tolerance * coefficient_scale:
+        if abs(constant) <= tolerance * equation_scale:
+            raise ValueError(
+                "integer-L center is a continuous beta manifold, not isolated marker points"
+            )
+        return None
+    cosine = -constant / amplitude
+    if cosine < -1.0 - tolerance or cosine > 1.0 + tolerance:
+        return None
+    cosine = min(1.0, max(-1.0, cosine))
+    phase = math.atan2(sine_coefficient, cosine_coefficient)
+    delta = math.acos(cosine)
+    if 1.0 - abs(cosine) <= tolerance:
+        beta = ((phase + (np.pi if cosine < 0.0 else 0.0)) % (2.0 * np.pi),)
+    else:
+        beta = tuple(sorted(((phase - delta) % (2.0 * np.pi), (phase + delta) % (2.0 * np.pi))))
+    direction_sample = crystal_to_sample @ mean_axis
+    signed_root = u_Ainv + float(q_parallel @ mean_axis) + float(ki_sample_Ainv @ direction_sample)
+    root_scale = max(abs(u_Ainv), float(np.linalg.norm(ki_sample_Ainv)), 1.0)
+    if abs(signed_root) <= tolerance * root_scale:
+        return None
+    return beta, 1 if signed_root < 0.0 else 2
+
+
+def evaluate_nominal_integer_l_markers(
+    context: NominalEwaldContext,
+) -> DetectorIntegerLMarkers:
+    """Return exact visible integer-L centers for the nominal incident state.
+
+    Each physical rod is evaluated independently at exact integer L before
+    symmetry-coincident detector sites are grouped for legible display.
+    """
+
+    if not isinstance(context, NominalEwaldContext):
+        raise TypeError("context must be a NominalEwaldContext")
+    geometry = context.geometry
+    space = geometry.coating.bragg_space
+    basis = space.config.reciprocal_basis_Ainv
+    crystal_to_sample = space.config.crystal_to_sample
+    ki_sample_Ainv = geometry.coating.ki_sample_Ainv
+    k_norm_Ainv = float(np.linalg.norm(ki_sample_Ainv))
+    b3_norm_Ainv = float(np.linalg.norm(basis[:, 2]))
+    tolerance = 4096.0 * np.finfo(np.float64).eps
+    contributions: list[_IntegerLMarkerContribution] = []
+
+    for rod in space.config.rods:
+        if rod.family_m == 0:
+            mapped = geometry.map_specular_geometry(
+                rod=rod,
+                alpha_rad=np.asarray([0.0]),
+                beta_rad=np.asarray([0.0]),
+            ).geometry
+            if not bool(mapped.valid[0]):
+                continue
+            actual_l = float(mapped.ewald_geometry.L[0])
+            integer_l = round(actual_l)
+            if integer_l == 0 or abs(actual_l - integer_l) > tolerance * max(abs(actual_l), 1.0):
+                continue
+            strength = rod.population * space.strength_model.evaluate(
+                rod=rod,
+                L=float(integer_l),
+                k_norm_Ainv=space.config.k_norm_Ainv,
+            )
+            exact_q = space.map_latent(
+                rod=rod,
+                alpha_rad=0.0,
+                beta_rad=0.0,
+                u_Ainv=integer_l * b3_norm_Ainv,
+            )
+            residual = abs(float(np.linalg.norm(ki_sample_Ainv + exact_q) - k_norm_Ainv))
+            contributions.append(
+                _IntegerLMarkerContribution(
+                    family_m=0,
+                    integer_L=integer_l,
+                    branch=0,
+                    column_px=float(mapped.column_px[0]),
+                    row_px=float(mapped.row_px[0]),
+                    q_sample_Ainv=np.asarray(exact_q, dtype=np.float64),
+                    ewald_residual_Ainv=residual,
+                    rod_hk=(rod.h, rod.k),
+                    beta_rad=0.0,
+                    strength_weight_A2=float(strength),
+                )
+            )
+            continue
+
+        lower_u_Ainv, upper_u_Ainv = space.rod_u_bounds_Ainv(rod)
+        lower_l = lower_u_Ainv / b3_norm_Ainv
+        upper_l = upper_u_Ainv / b3_norm_Ainv
+        l_scale = max(abs(lower_l), abs(upper_l), 1.0)
+        first_l = math.ceil(lower_l - tolerance * l_scale)
+        last_l = math.floor(upper_l + tolerance * l_scale)
+        candidates_by_branch: dict[int, list[tuple[int, float]]] = {1: [], 2: []}
+        for integer_l in range(first_l, last_l + 1):
+            roots = _integer_l_beta_roots(
+                rod=rod,
+                integer_l=integer_l,
+                reciprocal_basis_Ainv=basis,
+                crystal_to_sample=crystal_to_sample,
+                ki_sample_Ainv=ki_sample_Ainv,
+            )
+            if roots is None:
+                continue
+            beta_values, branch = roots
+            candidates_by_branch[branch].extend((integer_l, beta_rad) for beta_rad in beta_values)
+        visible_roots: list[tuple[int, int, float, float, float]] = []
+        for branch, candidates in candidates_by_branch.items():
+            if not candidates:
+                continue
+            beta_values = np.asarray([item[1] for item in candidates])
+            mapped = geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=np.zeros(beta_values.size, dtype=np.float64),
+                beta_rad=beta_values,
+            )
+            for beta_index, (integer_l, beta_rad) in enumerate(candidates):
+                if not bool(mapped.geometry.valid[beta_index]):
+                    continue
+                actual_l = float(mapped.geometry.ewald_geometry.L[beta_index])
+                if abs(actual_l - integer_l) > tolerance * max(abs(actual_l), 1.0):
+                    raise FloatingPointError("analytic integer-L root disagrees with Ewald solver")
+                visible_roots.append(
+                    (
+                        integer_l,
+                        branch,
+                        beta_rad,
+                        float(mapped.geometry.column_px[beta_index]),
+                        float(mapped.geometry.row_px[beta_index]),
+                    )
+                )
+        if not visible_roots:
+            continue
+        visible_integer_l = np.asarray(
+            sorted({item[0] for item in visible_roots}),
+            dtype=np.float64,
+        )
+        visible_strength = rod.population * space.strength_model.evaluate_profile(
+            rod=rod,
+            L=visible_integer_l,
+            k_norm_Ainv=space.config.k_norm_Ainv,
+        )
+        strength_by_l = dict(zip(visible_integer_l.astype(np.int64), visible_strength, strict=True))
+        for integer_l, branch, beta_rad, column_px, row_px in visible_roots:
+            strength = float(strength_by_l[integer_l])
+            exact_q = space.map_latent(
+                rod=rod,
+                alpha_rad=0.0,
+                beta_rad=beta_rad,
+                u_Ainv=float(integer_l) * b3_norm_Ainv,
+            )
+            residual = abs(float(np.linalg.norm(ki_sample_Ainv + exact_q) - k_norm_Ainv))
+            if residual > tolerance * max(k_norm_Ainv, 1.0):
+                raise FloatingPointError("integer-L marker violates the Ewald identity")
+            contributions.append(
+                _IntegerLMarkerContribution(
+                    family_m=rod.family_m,
+                    integer_L=integer_l,
+                    branch=branch,
+                    column_px=column_px,
+                    row_px=row_px,
+                    q_sample_Ainv=np.asarray(exact_q, dtype=np.float64),
+                    ewald_residual_Ainv=residual,
+                    rod_hk=(rod.h, rod.k),
+                    beta_rad=beta_rad,
+                    strength_weight_A2=strength,
+                )
+            )
+
+    coordinate_scale = max(float(max(geometry.instrument.detector_shape_rc)), 1.0)
+    coordinate_tolerance_px = 32768.0 * np.finfo(np.float64).eps * coordinate_scale
+    q_tolerance_Ainv = 32768.0 * np.finfo(np.float64).eps * max(k_norm_Ainv, 1.0)
+    grouped: list[list[_IntegerLMarkerContribution]] = []
+    for contribution in sorted(
+        contributions,
+        key=lambda item: (
+            item.family_m,
+            item.integer_L,
+            item.branch,
+            item.row_px,
+            item.column_px,
+            item.rod_hk,
+        ),
+    ):
+        matched: list[_IntegerLMarkerContribution] | None = None
+        for group in grouped:
+            representative = group[0]
+            if (
+                contribution.family_m == representative.family_m
+                and contribution.integer_L == representative.integer_L
+                and contribution.branch == representative.branch
+                and math.hypot(
+                    contribution.column_px - representative.column_px,
+                    contribution.row_px - representative.row_px,
+                )
+                <= coordinate_tolerance_px
+                and float(np.linalg.norm(contribution.q_sample_Ainv - representative.q_sample_Ainv))
+                <= q_tolerance_Ainv
+            ):
+                matched = group
+                break
+        if matched is None:
+            grouped.append([contribution])
+        else:
+            matched.append(contribution)
+
+    grouped = [
+        group for group in grouped if math.fsum(member.strength_weight_A2 for member in group) > 0.0
+    ]
+
+    grouped.sort(
+        key=lambda group: (
+            group[0].family_m,
+            group[0].integer_L,
+            group[0].branch,
+            group[0].row_px,
+            group[0].column_px,
+        )
+    )
+    representatives = [group[0] for group in grouped]
+    ordered_groups = [sorted(group, key=lambda item: item.rod_hk) for group in grouped]
+    return DetectorIntegerLMarkers(
+        column_px=np.asarray([item.column_px for item in representatives]),
+        row_px=np.asarray([item.row_px for item in representatives]),
+        q_sample_Ainv=np.asarray([item.q_sample_Ainv for item in representatives]).reshape(-1, 3),
+        family_m=np.asarray([item.family_m for item in representatives], dtype=np.int64),
+        integer_L=np.asarray([item.integer_L for item in representatives], dtype=np.int64),
+        branch=np.asarray([item.branch for item in representatives], dtype=np.int64),
+        ewald_residual_Ainv=np.asarray(
+            [max(member.ewald_residual_Ainv for member in group) for group in grouped]
+        ),
+        family_strength_weight_A2=np.asarray(
+            [math.fsum(member.strength_weight_A2 for member in group) for group in ordered_groups]
+        ),
+        contributing_rod_hk=tuple(
+            tuple(member.rod_hk for member in group) for group in ordered_groups
+        ),
+        contributing_beta_rad=tuple(
+            tuple(member.beta_rad for member in group) for group in ordered_groups
+        ),
+        per_rod_strength_weight_A2=tuple(
+            tuple(member.strength_weight_A2 for member in group) for group in ordered_groups
+        ),
+        reference_wavelength_A=float(context.incident.states.wavelength_A[0]),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ReciprocalSpaceDisplay:
     q_sample_Ainv: FloatArray
     intensity_density_A2_rad2_inv: FloatArray
@@ -1389,6 +1806,7 @@ def integrate_detector_macrobins(
 
 __all__ = [
     "ConfiguredSimulationInputs",
+    "DetectorIntegerLMarkers",
     "DetectorMacrobinImage",
     "EwaldSurfaceDisplay",
     "NominalEwaldContext",
@@ -1398,6 +1816,7 @@ __all__ = [
     "build_nominal_ewald_context",
     "build_source_averaged_detector",
     "evaluate_nominal_ewald_surface",
+    "evaluate_nominal_integer_l_markers",
     "integrate_detector_macrobins",
     "load_simulation_config",
     "sample_reciprocal_space",

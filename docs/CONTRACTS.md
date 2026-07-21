@@ -99,6 +99,10 @@ weights are preserved; wavelength-dependent evaluators are never collapsed geome
 - `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
   material, rods, finite-2H strength, and Bragg space once.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
+- `evaluate_nominal_integer_l_markers(context)` solves exact integer-L intersections on the
+  peak-mosaic (`alpha=0`) manifold, applies the canonical nominal-state exit/refraction and active
+  detector visibility path, and retains every physical rod before grouping only coincident display
+  labels. These are nominal-source references, not source-averaged raster maxima.
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
 

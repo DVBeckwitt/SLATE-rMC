@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "7bb1bede0429980fb2323158132de20d31c1e87217f45732f28123cc1e61d786",
-      "size_bytes": 7031
+      "sha256": "ee09a3044341778ffc69a5746c2d9cec8c5bd7276baf2c9cf7e0020a594b8ff8",
+      "size_bytes": 7403
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "ff169fb06889333631ef18395ec0d985dc6972932b50b3cdbbc8fc2608164dfc",
-      "size_bytes": 3227
+      "sha256": "c720c1a2d91313e9b28ee06c8fe15268a8e7048cb328becca0b4cca8651c9298",
+      "size_bytes": 3646
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -538,8 +538,8 @@
     },
     {
       "path": "scripts/run_configured_simulation.py",
-      "sha256": "27b12233f548f231bd3015db8442b6036349334e47567a9f7e100eabb5a551ef",
-      "size_bytes": 19394
+      "sha256": "445145ea1d8ba1982243ff11027c17698678d02ebe403ac6dffd5eb694a8e675",
+      "size_bytes": 24646
     },
     {
       "path": "scripts/verify_seed.py",
@@ -788,8 +788,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
-      "sha256": "3da8c5eaf9bb062ccb6cc4f0b02b6e8223198dd2b95e81291aae6505f2dc7aab",
-      "size_bytes": 53995
+      "sha256": "f176ffeb8a010f147494518e372e82277691d1fb720082206b12690e89ab14c6",
+      "size_bytes": 72097
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
@@ -1148,8 +1148,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "630bc74c9660fb366d234e15b4ee393b1bdae2769deffd04f305296542d7a760",
-      "size_bytes": 88347
+      "sha256": "53ef10b8496b1822d2ee90b4adaf6a3cd03ab9de9b348c6460a75e1e946b8edb",
+      "size_bytes": 98249
     },
     {
       "path": "tests/test_mosaic_ewald.py",

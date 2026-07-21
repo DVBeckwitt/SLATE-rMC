@@ -13,6 +13,7 @@ from time import perf_counter
 import numpy as np
 
 from rasim_next.pipeline.configured_simulation import (
+    DetectorIntegerLMarkers,
     DetectorMacrobinImage,
     EwaldSurfaceDisplay,
     ReciprocalSpaceDisplay,
@@ -20,6 +21,7 @@ from rasim_next.pipeline.configured_simulation import (
     build_nominal_ewald_context,
     build_source_averaged_detector,
     evaluate_nominal_ewald_surface,
+    evaluate_nominal_integer_l_markers,
     integrate_detector_macrobins,
     load_simulation_config,
     sample_reciprocal_space,
@@ -167,6 +169,7 @@ def _render_ewald_surface(data: EwaldSurfaceDisplay, path: Path) -> None:
 def _render_detector(
     data: DetectorMacrobinImage,
     *,
+    integer_l_markers: DetectorIntegerLMarkers,
     detector_shape_rc: tuple[int, int],
     direct_beam_column_row_px: tuple[float, float],
     sample_count: int,
@@ -222,6 +225,18 @@ def _render_detector(
         data.valid_source_count_min > 0,
         np.ones(data.image_A2.shape, dtype=np.uint8),
     )
+    marker_groups = sorted(
+        {
+            (int(family), int(branch))
+            for family, branch in zip(
+                integer_l_markers.family_m,
+                integer_l_markers.branch,
+                strict=True,
+            )
+        }
+    )
+    marker_colors = matplotlib.colormaps["tab10"](np.linspace(0.0, 0.8, max(len(marker_groups), 1)))
+    branch_shapes = {0: "s", 1: "v", 2: "o"}
     for axis in axes:
         axis.imshow(
             invalid,
@@ -242,11 +257,44 @@ def _render_detector(
             color="#00e5ff",
             label="direct-beam coordinate",
         )
+        for group_index, (family, branch) in enumerate(marker_groups):
+            selected = (integer_l_markers.family_m == family) & (integer_l_markers.branch == branch)
+            axis.scatter(
+                integer_l_markers.column_px[selected],
+                integer_l_markers.row_px[selected],
+                marker=branch_shapes[branch],
+                s=29,
+                linewidths=1.0,
+                facecolors="none",
+                edgecolors=marker_colors[group_index],
+                label=rf"$m={family}$, branch {branch}; number = $L$",
+            )
         axis.set_xlabel("detector column (native pixel coordinate)")
         axis.set_ylabel("detector row (native pixel coordinate)")
         axis.set_xlim(-0.5, columns - 0.5)
         axis.set_ylim(rows - 0.5, -0.5)
         axis.legend(loc="lower right", fontsize=8, framealpha=0.85)
+    group_index_by_key = {key: index for index, key in enumerate(marker_groups)}
+    detector_middle = 0.5 * columns
+    for index in range(integer_l_markers.column_px.size):
+        family = int(integer_l_markers.family_m[index])
+        branch = int(integer_l_markers.branch[index])
+        group_index = group_index_by_key[(family, branch)]
+        on_left = float(integer_l_markers.column_px[index]) < detector_middle
+        axes[1].annotate(
+            str(int(integer_l_markers.integer_L[index])),
+            (
+                float(integer_l_markers.column_px[index]),
+                float(integer_l_markers.row_px[index]),
+            ),
+            xytext=(-4.0 if on_left else 4.0, 0.0),
+            textcoords="offset points",
+            color=marker_colors[group_index],
+            fontsize=6.2,
+            ha="right" if on_left else "left",
+            va="center",
+            clip_on=True,
+        )
     axes[0].set_title("Linear quadrature estimate (99.5% display clip)")
     axes[1].set_title(
         "Logarithmic quadrature estimate (8-decade display floor)"
@@ -263,7 +311,9 @@ def _render_detector(
     figure.suptitle(
         rf"Bi$_2$Se$_3$: {sample_count:,} incoherent source states, all natural $m${m0_label}"
         "\nall retained Ewald roots; exit refraction and attenuation evaluated per ray; "
-        "fixed-quadrature preview"
+        "fixed-quadrature preview\n"
+        r"marker number is exact integer $L$; legend gives $m$/branch; "
+        r"nominal-source $\alpha=0$ references (not raster maxima)"
     )
     figure.savefig(path, dpi=220)
     plt.close(figure)
@@ -340,13 +390,21 @@ def main(argv: Sequence[str] | None = None) -> None:
             }
         )
 
-    if config.outputs.ewald_surface.enabled:
+    nominal = None
+    integer_l_markers: DetectorIntegerLMarkers | None = None
+    if config.outputs.ewald_surface.enabled or config.outputs.detector.enabled:
         start = perf_counter()
         nominal = build_nominal_ewald_context(inputs)
         nominal_ewald_wavelength_A = float(nominal.incident.states.wavelength_A[0])
         nominal_ewald_ki_sample_Ainv = np.asarray(
             nominal.incident.states.k_film_phase_sample_Ainv[0], dtype=np.float64
         )
+        timings["nominal_ewald_build_wall_time_s"] = perf_counter() - start
+
+    if config.outputs.ewald_surface.enabled:
+        if nominal is None:
+            raise AssertionError("the nominal Ewald context was not built")
+        start = perf_counter()
         ewald = evaluate_nominal_ewald_surface(
             nominal,
             alpha_count=config.numerics.ewald_alpha_count,
@@ -375,6 +433,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     detector_image: DetectorMacrobinImage | None = None
     if config.outputs.detector.enabled:
+        if nominal is None:
+            raise AssertionError("the nominal Ewald context was not built")
+        marker_start = perf_counter()
+        integer_l_markers = evaluate_nominal_integer_l_markers(nominal)
+        timings["integer_l_markers_wall_time_s"] = perf_counter() - marker_start
         start = perf_counter()
         detector = build_source_averaged_detector(inputs)
         detector_image = integrate_detector_macrobins(
@@ -388,6 +451,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         path = _external_artifact_path(output_directory, config.outputs.detector.filename)
         _render_detector(
             detector_image,
+            integer_l_markers=integer_l_markers,
             detector_shape_rc=inputs.instrument.detector_shape_rc,
             direct_beam_column_row_px=inputs.instrument.detector_reference_coordinate_px,
             sample_count=inputs.samples.incident_sample_id.size,
@@ -404,6 +468,42 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "detector_per_rod_image_A2": detector_image.per_rod_image_A2,
                 "detector_row_center_px": detector_image.row_center_px,
                 "detector_valid_source_count_min": detector_image.valid_source_count_min,
+            }
+        )
+        rod_counts = np.asarray(
+            [len(group) for group in integer_l_markers.contributing_rod_hk],
+            dtype=np.int64,
+        )
+        rod_offsets = np.concatenate(
+            (np.asarray([0], dtype=np.int64), np.cumsum(rod_counts, dtype=np.int64))
+        )
+        arrays.update(
+            {
+                "detector_integer_l_branch": integer_l_markers.branch,
+                "detector_integer_l_column_px": integer_l_markers.column_px,
+                "detector_integer_l_ewald_residual_Ainv": (integer_l_markers.ewald_residual_Ainv),
+                "detector_integer_l_family_m": integer_l_markers.family_m,
+                "detector_integer_l_family_strength_weight_A2": (
+                    integer_l_markers.family_strength_weight_A2
+                ),
+                "detector_integer_l_integer_L": integer_l_markers.integer_L,
+                "detector_integer_l_q_sample_Ainv": integer_l_markers.q_sample_Ainv,
+                "detector_integer_l_rod_beta_rad": np.asarray(
+                    [beta for group in integer_l_markers.contributing_beta_rad for beta in group]
+                ),
+                "detector_integer_l_rod_hk": np.asarray(
+                    [hk for group in integer_l_markers.contributing_rod_hk for hk in group],
+                    dtype=np.int64,
+                ).reshape(-1, 2),
+                "detector_integer_l_rod_offset": rod_offsets,
+                "detector_integer_l_rod_strength_weight_A2": np.asarray(
+                    [
+                        strength
+                        for group in integer_l_markers.per_rod_strength_weight_A2
+                        for strength in group
+                    ]
+                ),
+                "detector_integer_l_row_px": integer_l_markers.row_px,
             }
         )
 
@@ -446,6 +546,18 @@ def main(argv: Sequence[str] | None = None) -> None:
             nominal_ewald_ki_sample_Ainv.tolist()
             if nominal_ewald_ki_sample_Ainv is not None
             else None
+        ),
+        "integer_l_marker_count": (
+            int(integer_l_markers.column_px.size) if integer_l_markers is not None else 0
+        ),
+        "integer_l_marker_definition": (
+            integer_l_markers.definition_id if integer_l_markers is not None else None
+        ),
+        "integer_l_marker_labels": (
+            list(integer_l_markers.labels) if integer_l_markers is not None else []
+        ),
+        "integer_l_marker_source_state_policy": (
+            integer_l_markers.source_state_policy if integer_l_markers is not None else None
         ),
         "m0_model": (
             "detector_visible_kinematic_00L.v1"

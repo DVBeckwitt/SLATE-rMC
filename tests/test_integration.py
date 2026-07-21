@@ -1484,6 +1484,259 @@ def test_nominal_ewald_gap_is_attached_only_to_visible_m0_support() -> None:
     assert display.detector_visible_m0_q_gap_Ainv is None
 
 
+@pytest.mark.parametrize(
+    ("sample_angle_deg", "integer_L", "expected_column_px", "expected_row_px"),
+    (
+        (
+            5.0,
+            2,
+            np.asarray((1103.80545816, 1802.43454184)),
+            1512.79406073,
+        ),
+        (
+            2.0,
+            1,
+            np.asarray((1106.00777167, 1800.23222833)),
+            1553.31955165,
+        ),
+    ),
+)
+def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
+    sample_angle_deg: float,
+    integer_L: int,
+    expected_column_px: np.ndarray,
+    expected_row_px: float,
+) -> None:
+    from rasim_next.pipeline.configured_simulation import (
+        build_nominal_ewald_context,
+        evaluate_nominal_integer_l_markers,
+    )
+
+    inputs = _configured_inputs(sample_count=1, sample_angle_deg=sample_angle_deg)
+    context = build_nominal_ewald_context(inputs)
+    markers = evaluate_nominal_integer_l_markers(context)
+    assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v1"
+    assert markers.source_state_policy == "mean_source_state.v1"
+    assert markers.reference_wavelength_A == pytest.approx(1.540592925, abs=2.0e-15)
+    if sample_angle_deg == 5.0:
+        assert not np.any((markers.family_m == 1) & (markers.integer_L == 1))
+        np.testing.assert_array_equal(np.unique(markers.family_m), np.asarray((1, 3, 4)))
+        np.testing.assert_array_equal(np.unique(markers.branch), np.asarray((2,)))
+        assert markers.column_px.size == 84
+        assert np.all((markers.column_px >= -0.5) & (markers.column_px < 2999.5))
+        assert np.all((markers.row_px >= -0.5) & (markers.row_px < 2999.5))
+        assert float(np.max(markers.ewald_residual_Ainv)) < 2.0e-13
+    selected = np.flatnonzero(
+        (markers.family_m == 1) & (markers.integer_L == integer_L) & (markers.branch == 2)
+    )
+
+    assert selected.size == 2
+    order = selected[np.argsort(markers.column_px[selected])]
+    np.testing.assert_allclose(
+        markers.column_px[order],
+        expected_column_px,
+        rtol=0.0,
+        atol=2.0e-6,
+    )
+    np.testing.assert_allclose(
+        markers.row_px[order],
+        expected_row_px,
+        rtol=0.0,
+        atol=2.0e-6,
+    )
+    assert [markers.labels[index] for index in order] == [
+        f"m=1, L={integer_L}, b=2",
+        f"m=1, L={integer_L}, b=2",
+    ]
+
+    space = context.geometry.coating.bragg_space
+    b3_norm_Ainv = float(np.linalg.norm(space.config.reciprocal_basis_Ainv[:, 2]))
+    mean_axis_crystal = space.config.reciprocal_basis_Ainv[:, 2] / b3_norm_Ainv
+    mean_axis_sample = space.config.crystal_to_sample @ mean_axis_crystal
+    ki_sample_Ainv = context.geometry.coating.ki_sample_Ainv
+    k_norm_Ainv = float(np.linalg.norm(ki_sample_Ainv))
+    rods = {(rod.h, rod.k): rod for rod in space.config.rods}
+    if sample_angle_deg == 5.0:
+        l1_rod = next(rod for rod in space.config.rods if rod.family_m == 1)
+        q_parallel = (
+            l1_rod.h * space.config.reciprocal_basis_Ainv[:, 0]
+            + l1_rod.k * space.config.reciprocal_basis_Ainv[:, 1]
+        )
+        q_axis = float(q_parallel @ mean_axis_crystal) * mean_axis_crystal
+        q_perpendicular = q_parallel - q_axis
+        q_quadrature = np.cross(mean_axis_crystal, q_perpendicular)
+        cosine_coefficient = 2.0 * float(
+            ki_sample_Ainv @ (space.config.crystal_to_sample @ q_perpendicular)
+        )
+        sine_coefficient = 2.0 * float(
+            ki_sample_Ainv @ (space.config.crystal_to_sample @ q_quadrature)
+        )
+        amplitude = math.hypot(cosine_coefficient, sine_coefficient)
+        q_base = q_axis + b3_norm_Ainv * mean_axis_crystal
+        q_unrotated = q_parallel + b3_norm_Ainv * mean_axis_crystal
+        constant = float(
+            q_unrotated @ q_unrotated
+            + 2.0 * ki_sample_Ainv @ (space.config.crystal_to_sample @ q_base)
+        )
+        phase = math.atan2(sine_coefficient, cosine_coefficient)
+        delta = math.acos(-constant / amplitude)
+        l1_beta = np.mod(np.asarray((phase - delta, phase + delta)), 2.0 * np.pi)
+        backward_l1 = context.geometry.map_latent(
+            rod=l1_rod,
+            branch=1,
+            alpha_rad=np.zeros(2),
+            beta_rad=l1_beta,
+        )
+        np.testing.assert_allclose(
+            backward_l1.geometry.ewald_geometry.L,
+            1.0,
+            rtol=0.0,
+            atol=2.0e-13,
+        )
+        np.testing.assert_array_equal(
+            backward_l1.geometry.exit_status,
+            np.asarray(("BACKWARD", "BACKWARD")),
+        )
+        np.testing.assert_allclose(
+            backward_l1.geometry.ewald_geometry.kf_sample_Ainv @ mean_axis_sample,
+            -0.1351386958,
+            rtol=0.0,
+            atol=5.0e-11,
+        )
+        all_pulled_back = context.geometry.evaluate_detector_geometry(
+            markers.column_px,
+            markers.row_px,
+            include_surface_jacobian=False,
+        )
+        assert np.all(all_pulled_back.valid)
+        np.testing.assert_allclose(
+            all_pulled_back.q_sample_Ainv,
+            markers.q_sample_Ainv,
+            rtol=0.0,
+            atol=3.0e-12,
+        )
+        assert np.all((ki_sample_Ainv + markers.q_sample_Ainv) @ mean_axis_sample > 0.0)
+        for family, hk_group in zip(
+            markers.family_m,
+            markers.contributing_rod_hk,
+            strict=True,
+        ):
+            assert len(hk_group) == 6
+            assert all(rods[hk].family_m == family for hk in hk_group)
+    expected_hk = {(rod.h, rod.k) for rod in space.config.rods if rod.family_m == 1}
+    for index in order:
+        assert set(markers.contributing_rod_hk[index]) == expected_hk
+        assert len(markers.contributing_beta_rad[index]) == len(expected_hk) == 6
+        assert markers.family_strength_weight_A2[index] == pytest.approx(
+            sum(markers.per_rod_strength_weight_A2[index]),
+            rel=2.0e-15,
+            abs=0.0,
+        )
+        for hk, beta_rad, strength_weight_A2 in zip(
+            markers.contributing_rod_hk[index],
+            markers.contributing_beta_rad[index],
+            markers.per_rod_strength_weight_A2[index],
+            strict=True,
+        ):
+            rod = rods[hk]
+            assert rod.family_m == 1
+            q_sample_Ainv = space.map_latent(
+                rod=rod,
+                alpha_rad=0.0,
+                beta_rad=beta_rad,
+                u_Ainv=integer_L * b3_norm_Ainv,
+            )
+            np.testing.assert_allclose(
+                q_sample_Ainv,
+                markers.q_sample_Ainv[index],
+                rtol=0.0,
+                atol=3.0e-12,
+            )
+            if index == order[0]:
+                assert strength_weight_A2 == pytest.approx(
+                    rod.population
+                    * space.strength_model.evaluate(
+                        rod=rod,
+                        L=float(integer_L),
+                        k_norm_Ainv=space.config.k_norm_Ainv,
+                    ),
+                    rel=2.0e-15,
+                    abs=0.0,
+                )
+        kf_film_sample_Ainv = ki_sample_Ainv + markers.q_sample_Ainv[index]
+        assert float(kf_film_sample_Ainv @ mean_axis_sample) > 0.0
+        assert abs(float(np.linalg.norm(kf_film_sample_Ainv) - k_norm_Ainv)) < 2.0e-13
+        pulled_back = context.geometry.evaluate_detector_geometry(
+            markers.column_px[index],
+            markers.row_px[index],
+            include_surface_jacobian=False,
+        )
+        assert bool(pulled_back.valid)
+        np.testing.assert_allclose(
+            pulled_back.q_sample_Ainv,
+            markers.q_sample_Ainv[index],
+            rtol=0.0,
+            atol=3.0e-12,
+        )
+
+
+def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
+    from rasim_next.pipeline.configured_simulation import (
+        build_nominal_ewald_context,
+        evaluate_nominal_integer_l_markers,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    base_inputs = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=1))
+    )
+    changed_numerics = replace(
+        config.numerics,
+        detector_macrobin_size_px=100,
+        detector_gauss_order=1,
+        reciprocal_alpha_count=1,
+        reciprocal_beta_count=3,
+        reciprocal_u_count=7,
+        ewald_alpha_count=3,
+        ewald_beta_count=5,
+    )
+    changed_inputs = build_configured_simulation_inputs(
+        replace(
+            config,
+            source=replace(config.source, sample_count=1),
+            numerics=changed_numerics,
+        )
+    )
+
+    base = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(base_inputs))
+    changed = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(changed_inputs))
+
+    np.testing.assert_array_equal(changed.family_m, base.family_m)
+    np.testing.assert_array_equal(changed.integer_L, base.integer_L)
+    np.testing.assert_array_equal(changed.branch, base.branch)
+    np.testing.assert_array_equal(changed.column_px, base.column_px)
+    np.testing.assert_array_equal(changed.row_px, base.row_px)
+    assert changed.contributing_rod_hk == base.contributing_rod_hk
+    assert changed.contributing_beta_rad == base.contributing_beta_rad
+
+    no_marker_config = replace(
+        config,
+        source=replace(config.source, sample_count=1),
+        instrument=replace(
+            config.instrument,
+            detector_shape_rc=(1, 1),
+            detector_reference_coordinate_px=(0.0, 0.0),
+        ),
+    )
+    empty = evaluate_nominal_integer_l_markers(
+        build_nominal_ewald_context(build_configured_simulation_inputs(no_marker_config))
+    )
+    assert empty.column_px.shape == empty.row_px.shape == (0,)
+    assert empty.q_sample_Ainv.shape == (0, 3)
+    assert empty.contributing_rod_hk == ()
+
+
 def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -> None:
     from rasim_next.core.validity import ValidityCode
     from rasim_next.geometry import detector_coordinate_to_ray, project_detector_ray

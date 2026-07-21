@@ -44,7 +44,11 @@ The three optional outputs are views of callable models:
   field.
 
 Sampling used to render the two 3D figures is not retained as physics. The detector figure labels
-its macrobin estimate and shows the direct beam and invalid regions.
+its macrobin estimate and shows the direct beam and invalid regions. It also marks the exact
+nominal-source, peak-mosaic (`alpha=0`) integer-L centers that survive exit refraction and intersect
+the active panel. Each tag declares `m`, integer `L`, and Ewald-root branch; the external diagnostic
+retains the contributing physical `(h,k)` rods and their exact beta coordinates. A center that is
+back-facing or off-panel is deliberately absent even if a nonzero-mosaic tail becomes visible.
 
 ## Quantitative one-state pixel diagnostic
 
