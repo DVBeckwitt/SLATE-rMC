@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "46c26a28b83c4cfe016e0c6bd252ae468ad0866d329230311dbcace0941a91a1",
-      "size_bytes": 39340
+      "sha256": "e89b29184b79d269489e0a6111adbde222544e8426312df11f3a687848ee6d96",
+      "size_bytes": 39326
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -648,8 +648,8 @@
     },
     {
       "path": "src/rasim_next/fitting/geometry.py",
-      "sha256": "21b2ede68d91919ae1ad2ed4b50183ea75938e1edac3b85e1568e0582e6a563d",
-      "size_bytes": 71808
+      "sha256": "2e41161ae4ea1e1ec794d76678955549b48e4ab227e409ae7fc3b2448d6e86d3",
+      "size_bytes": 71744
     },
     {
       "path": "src/rasim_next/geometry/__init__.py",
@@ -778,13 +778,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
-      "sha256": "33127625291ec1feecc709e3e35b76a1ff910c80f69178ffa0c602d445d61ca6",
-      "size_bytes": 40922
+      "sha256": "a6739f4fb2df60bfb64a2459a446dc8d2db2dd4c6991868183d34efc9a6c4282",
+      "size_bytes": 40980
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "d7897ca015620056301488e1cde72302a6d58af4d0101919e725f0754105e242",
-      "size_bytes": 53498
+      "sha256": "3f582db29bfd6040ff41b20e97e602c89f2b755420b7057e1289141d1e197a6f",
+      "size_bytes": 53556
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -798,8 +798,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "457c5508a2971992e73bed4e508ed1894873aa0ca1063c5e6c2420ac58fbeae9",
-      "size_bytes": 96853
+      "sha256": "81cf8cd5f4d5c7892b18bd213158c2dc77ac9c59bb82de69b288d7837e1b0325",
+      "size_bytes": 96837
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
@@ -1148,8 +1148,8 @@
     },
     {
       "path": "tests/test_fitting.py",
-      "sha256": "d39835826d86c8442aeea7e7081f0ae7b836724c79b447c877c4d4ede79fa68d",
-      "size_bytes": 24433
+      "sha256": "a51efed2aaf5363a21a8ff0f95a935fb77ffa6256c7ee48d5769dfdcf2b7ff1c",
+      "size_bytes": 24351
     },
     {
       "path": "tests/test_geometry_optics.py",
@@ -1158,8 +1158,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "54fc1d0a0268d503ff03dfa7dda16c63171c73c74227aafa981cfe033f82ca65",
-      "size_bytes": 102550
+      "sha256": "c707a1481b95c5c06b907a4666af4e5e1d3767e8d49d10d21746adf25fe61926",
+      "size_bytes": 101937
     },
     {
       "path": "tests/test_mosaic_ewald.py",

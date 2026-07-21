@@ -417,12 +417,21 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         atol=0.0,
     )
 
+    seam_rod = Rod(0, -1)
+    seam_seed = detector.map_latent(
+        rod=seam_rod,
+        branch=2,
+        alpha_rad=math.radians(0.2),
+        beta_rad=0.0,
+    )
+    assert bool(seam_seed.geometry.valid)
     proof_column = np.array(
         [
             regular_mapped.geometry.column_px,
             two_branch_seed.geometry.column_px,
             mapped.geometry.column_px,
             -1.0,
+            seam_seed.geometry.column_px,
         ]
     )
     proof_row = np.array(
@@ -431,6 +440,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
             two_branch_seed.geometry.row_px,
             mapped.geometry.row_px,
             -1.0,
+            seam_seed.geometry.row_px,
         ]
     )
     m1_rods = tuple(candidate for candidate in rods if candidate.family_m == 1)
@@ -455,44 +465,13 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     )
     np.testing.assert_array_equal(compiled_count, numpy_proof.per_rod_inverse_branch_count)
     np.testing.assert_array_equal(compiled_caustic, numpy_proof.caustic)
-
-    seam_rod = Rod(0, -1)
-    seam_seed = detector.map_latent(
-        rod=seam_rod,
-        branch=2,
-        alpha_rad=math.radians(0.2),
-        beta_rad=0.0,
-    )
-    assert bool(seam_seed.geometry.valid)
-    seam_density = detector.evaluate_detector_coordinates(
-        np.asarray([seam_seed.geometry.column_px]),
-        np.asarray([seam_seed.geometry.row_px]),
-        rods=(seam_rod,),
-        branch=2,
-    )
-    assert seam_density.per_rod_inverse_branch_count.item() == 2
-    assert not seam_density.caustic.item()
-    assert math.isfinite(float(seam_density.density_A2_per_px2.item()))
-    assert seam_density.density_A2_per_px2 > 0.0
-    seam_compiled_density, seam_compiled_count, seam_compiled_caustic = (
-        detector._evaluate_compiled_coordinates_for_proof(
-            np.asarray([seam_seed.geometry.column_px]),
-            np.asarray([seam_seed.geometry.row_px]),
-            rods=(seam_rod,),
-            branch=2,
-        )
-    )
-    np.testing.assert_allclose(
-        seam_compiled_density,
-        seam_density.per_rod_density_A2_per_px2,
-        rtol=3.0e-12,
-        atol=2.0e-24,
-    )
-    np.testing.assert_array_equal(
-        seam_compiled_count,
-        seam_density.per_rod_inverse_branch_count,
-    )
-    np.testing.assert_array_equal(seam_compiled_caustic, seam_density.caustic)
+    seam_point_index = proof_column.size - 1
+    seam_rod_index = m1_rods.index(seam_rod)
+    seam_density = numpy_proof.per_rod_density_A2_per_px2[seam_point_index, seam_rod_index]
+    assert numpy_proof.per_rod_inverse_branch_count[seam_point_index, seam_rod_index] == 2
+    assert not numpy_proof.caustic[seam_point_index, seam_rod_index]
+    assert math.isfinite(float(seam_density))
+    assert seam_density > 0.0
 
     # The production pixel kernel must integrate the same arbitrary continuous
     # detector-coordinate density as the independent NumPy point evaluator.

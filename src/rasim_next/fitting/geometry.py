@@ -41,6 +41,7 @@ _PARAMETER_NAMES = (
 )
 _RANK_RELATIVE_TOLERANCE = 1.0e-8
 _MAXIMUM_JACOBIAN_CONDITION = 1.0e8
+_GEOMETRY_PARAMETERIZATION_ID = "detector_xy_plus_pivoted_effective_sample_normal_xy.v2"
 _PREDICTION_STATUSES = frozenset(code.value for code in ValidityCode) | {
     "BRANCH_CHANGED",
     "INTEGER_L_MISMATCH",
@@ -510,15 +511,10 @@ class M0IntegerLObservations:
 def _corrected_instrument(
     base: CompiledInstrument,
     corrections: GeometryCorrections,
-    sample_correction_pivot_lab_m: ArrayLike,
+    sample_correction_pivot_lab_m: FloatArray,
 ) -> CompiledInstrument:
     if not isinstance(corrections, GeometryCorrections):
         raise TypeError("corrections must be GeometryCorrections")
-    sample_pivot = _readonly_float_array(
-        sample_correction_pivot_lab_m,
-        (3,),
-        "sample_correction_pivot_lab_m",
-    )
     detector = base.lab_from_detector
     sample = base.lab_from_sample
     detector_rotation = compose_intrinsic_xy_rotation(
@@ -526,18 +522,18 @@ def _corrected_instrument(
         corrections.detector_column_tilt_rad,
         corrections.detector_row_tilt_rad,
     )
-    sample_rotation = compose_intrinsic_xy_rotation(
-        sample.rotation,
-        corrections.sample_normal_x_tilt_rad,
-        corrections.sample_normal_y_tilt_rad,
-    )
     if corrections.sample_normal_x_tilt_rad == 0.0 and corrections.sample_normal_y_tilt_rad == 0.0:
         corrected_sample = sample
     else:
+        sample_rotation = compose_intrinsic_xy_rotation(
+            sample.rotation,
+            corrections.sample_normal_x_tilt_rad,
+            corrections.sample_normal_y_tilt_rad,
+        )
         sample_delta_lab = sample_rotation @ sample.rotation.T
         sample_motion_lab = RigidTransform.around_pivot(
             rotation=sample_delta_lab,
-            pivot_m=sample_pivot,
+            pivot_m=sample_correction_pivot_lab_m,
             frame=FrameId.LAB,
         )
         corrected_sample = sample_motion_lab.compose(sample)
@@ -563,19 +559,23 @@ def _resolved_sample_correction_pivot(
             (3,),
             "sample_correction_pivot_lab_m",
         )
-    configured_pivots = tuple(
-        np.asarray(rotation.pivot_lab_m, dtype=np.float64)
-        for rotation in inputs.config.instrument.axis_rotations
-    )
-    if not configured_pivots or any(
-        not np.array_equal(pivot, configured_pivots[0]) for pivot in configured_pivots[1:]
+    configured_rotations = inputs.config.instrument.axis_rotations
+    if not configured_rotations:
+        raise ValueError(
+            "geometry fitting requires one common configured goniometer pivot or an explicit "
+            "sample_correction_pivot_lab_m"
+        )
+    common_pivot_lab_m = configured_rotations[0].pivot_lab_m
+    if any(
+        not np.array_equal(rotation.pivot_lab_m, common_pivot_lab_m)
+        for rotation in configured_rotations[1:]
     ):
         raise ValueError(
             "geometry fitting requires one common configured goniometer pivot or an explicit "
             "sample_correction_pivot_lab_m"
         )
     return _readonly_float_array(
-        configured_pivots[0],
+        common_pivot_lab_m,
         (3,),
         "sample_correction_pivot_lab_m",
     )
@@ -679,7 +679,7 @@ class _ExactTagGeometry:
     def __init__(
         self,
         inputs: ConfiguredSimulationInputs,
-        sample_correction_pivot_lab_m: ArrayLike,
+        sample_correction_pivot_lab_m: FloatArray,
     ) -> None:
         if not isinstance(inputs, ConfiguredSimulationInputs):
             raise TypeError("inputs must be ConfiguredSimulationInputs")
@@ -689,15 +689,7 @@ class _ExactTagGeometry:
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_nominal_samples", nominal_samples)
         object.__setattr__(self, "_nominal_material", nominal_material)
-        object.__setattr__(
-            self,
-            "_sample_correction_pivot_lab_m",
-            _readonly_float_array(
-                sample_correction_pivot_lab_m,
-                (3,),
-                "sample_correction_pivot_lab_m",
-            ),
-        )
+        object.__setattr__(self, "_sample_correction_pivot_lab_m", sample_correction_pivot_lab_m)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("exact tag geometry is immutable")
@@ -1334,7 +1326,7 @@ class GeometryFitResult:
     model_evaluation_count: int
     optimizer_function_evaluation_count: int
     optimizer_jacobian_evaluation_count: int
-    parameterization_id: str = "detector_xy_plus_pivoted_effective_sample_normal_xy.v2"
+    parameterization_id: str = _GEOMETRY_PARAMETERIZATION_ID
 
     def __post_init__(self) -> None:
         if not isinstance(self.corrections, GeometryCorrections):
@@ -1386,7 +1378,7 @@ class GeometryFitResult:
             object.__setattr__(self, name, int(value))
         if self.model_evaluation_count < self.optimizer_function_evaluation_count:
             raise ValueError("model evaluation count cannot be smaller than optimizer nfev")
-        if self.parameterization_id != "detector_xy_plus_pivoted_effective_sample_normal_xy.v2":
+        if self.parameterization_id != _GEOMETRY_PARAMETERIZATION_ID:
             raise ValueError("unsupported geometry-fit parameterization")
         singular = _readonly_float_array(
             self.scaled_jacobian_singular_values,

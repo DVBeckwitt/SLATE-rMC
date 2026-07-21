@@ -677,6 +677,8 @@ def _evaluate_point_into(
         for x_sign in (-1.0, 1.0):
             x_value = x_sign * x_magnitude
             beta = (azimuth_q - math.atan2(b, x_value)) % two_pi
+            if beta >= two_pi:
+                beta = 0.0
             for w_sign in (-1.0, 1.0):
                 w_value = w_sign * w_magnitude
                 alpha = (math.atan2(w_value, a) - math.atan2(q_local_z, x_value)) % two_pi

@@ -42,10 +42,10 @@ The 2026-07-21 maintenance branch starts from accepted `main`
   feeds the continuous field, nonzero and m=0 exact tags, fitting, and the final marker audit.
   Missing or unequal configured pivots require an explicit override.
 
-All 70 compact permanent tests pass, including real CUDA parity. The four clean-tree-independent
-registered proofs pass. Geometry/optics passes 11 scientific checks and all 17 mutations, and
-mosaic/Ewald passes its continuous-science check and all three mutations; before commit, both
-report only their intentional dirty-tree block. Ruff lint/format and diff whitespace checks pass.
+All 70 compact permanent tests pass, including real CUDA parity. From the clean committed tree, all
+six registered proofs pass: core, references, geometry/optics (11 scientific checks and all 17
+mutations), mosaic/Ewald (continuous-science check and all three mutations), ordered reflectivity,
+and stacking transition. Ruff lint/format and diff whitespace checks pass.
 One unrelated assertion also failed identically on unmodified `main`: batch and scalar evaluation
 of the same exact integer-L strength differed by 10 binary64 ULPs while the relative test budget
 allowed slightly fewer. Its numerical comparison is now explicitly bounded at 16 ULPs; production

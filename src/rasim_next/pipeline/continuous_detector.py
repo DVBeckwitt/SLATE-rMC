@@ -1357,7 +1357,7 @@ class DetectorEwaldMeasure:
         for x_sign in (-1.0, 1.0):
             x_value = x_sign * x_magnitude
             beta = np.remainder(azimuth_q - np.arctan2(b, x_value), two_pi)
-            beta = np.where(beta >= two_pi, 0.0, beta)
+            beta[beta >= two_pi] = 0.0
             for w_sign in (-1.0, 1.0):
                 w_value = w_sign * w_magnitude
                 alpha = np.remainder(

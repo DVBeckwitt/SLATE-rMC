@@ -55,7 +55,7 @@ def _truth_inputs(
     base_inputs: object,
     truth: GeometryCorrections,
     *,
-    sample_correction_pivot_lab_m: object | None = None,
+    sample_correction_pivot_lab_m: object,
 ) -> object:
     """Construct hidden geometry independently of the fit model."""
 
@@ -72,15 +72,7 @@ def _truth_inputs(
         @ _rotation_x(truth.sample_normal_x_tilt_rad)
         @ _rotation_y(truth.sample_normal_y_tilt_rad)
     )
-    if sample_correction_pivot_lab_m is None:
-        pivots = tuple(
-            np.asarray(rotation.pivot_lab_m, dtype=np.float64)
-            for rotation in base_inputs.config.instrument.axis_rotations
-        )
-        assert pivots and all(np.array_equal(pivot, pivots[0]) for pivot in pivots[1:])
-        sample_pivot_lab_m = pivots[0]
-    else:
-        sample_pivot_lab_m = np.asarray(sample_correction_pivot_lab_m, dtype=np.float64)
+    sample_pivot_lab_m = np.asarray(sample_correction_pivot_lab_m, dtype=np.float64)
     sample_delta_lab = sample_rotation @ sample.rotation.T
     sample_translation_m = sample_pivot_lab_m + sample_delta_lab @ (
         sample.translation_m - sample_pivot_lab_m
@@ -107,7 +99,7 @@ def _truth_field_inputs(
     base_inputs: object,
     truth: GeometryCorrections,
     *,
-    sample_correction_pivot_lab_m: object | None = None,
+    sample_correction_pivot_lab_m: object,
 ) -> object:
     """Construct hidden geometry and its incident transport independently of the fit model."""
 
@@ -153,7 +145,11 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     )
     base_inputs = build_configured_simulation_inputs(config)
     truth = GeometryCorrections.from_array(np.radians((0.17, -0.23, 0.11, -0.14)))
-    truth_inputs = _truth_field_inputs(base_inputs, truth)
+    truth_inputs = _truth_field_inputs(
+        base_inputs,
+        truth,
+        sample_correction_pivot_lab_m=shared_pivot_lab_m,
+    )
     assert not np.allclose(
         truth_inputs.instrument.lab_from_sample.translation_m,
         base_inputs.instrument.lab_from_sample.translation_m,
@@ -167,6 +163,7 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     mismatched_pose = _truth_inputs(
         base_inputs,
         GeometryCorrections.from_array(np.radians((-0.31, 0.19, -0.08, 0.16))),
+        sample_correction_pivot_lab_m=shared_pivot_lab_m,
     )
     with pytest.raises(ValueError, match="share one pose"):
         direct_detector.rebind_geometry(
@@ -491,7 +488,13 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
         sample_normal_y_tilt_rad=math.radians(-0.30),
     )
     truth_markers = evaluate_nominal_integer_l_markers(
-        build_nominal_ewald_context(_truth_inputs(base_inputs, truth))
+        build_nominal_ewald_context(
+            _truth_inputs(
+                base_inputs,
+                truth,
+                sample_correction_pivot_lab_m=config.instrument.axis_rotations[0].pivot_lab_m,
+            )
+        )
     )
     observations = IntegerLMarkerObservations.from_markers(truth_markers, sigma_px=0.25)
 
