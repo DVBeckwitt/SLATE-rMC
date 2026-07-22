@@ -792,15 +792,38 @@ def _accumulate_state_block_kernel(
         caustic[rod_index, point] = True
 
 
-def evaluate_source_averaged_all_roots_cuda(
+@cuda.jit(fastmath=False)
+def _reduce_physical_rods_kernel(
+    per_rod_density: Any,
+    per_rod_caustic: Any,
+    density: Any,
+    caustic: Any,
+) -> None:
+    """Reduce rods in stable master-catalog order at each continuous coordinate."""
+
+    point = cuda.grid(1)
+    if point >= density.size:
+        return
+    total = 0.0
+    singular = False
+    for rod_index in range(per_rod_density.shape[0]):
+        total += per_rod_density[rod_index, point]
+        if per_rod_caustic[rod_index, point]:
+            singular = True
+    density[point] = total
+    caustic[point] = singular
+
+
+def _evaluate_source_averaged_all_roots_cuda(
     evaluator_blocks: tuple[tuple[Any, ...], ...],
     column_px: FloatArray,
     row_px: FloatArray,
     *,
     detector_shape_rc: tuple[int, int],
     master_rod_count: int,
+    return_per_rod: bool,
 ) -> tuple[FloatArray, BoolArray, IntArray, str]:
-    """Evaluate all states in stable order with one unique writer per point and rod."""
+    """Evaluate one packed source average and stream only the requested coordinate result."""
 
     device_name = require_cuda_available()
     column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
@@ -808,45 +831,21 @@ def evaluate_source_averaged_all_roots_cuda(
     if column.shape != row.shape:
         raise ValueError("CUDA detector coordinates must have equal shapes")
     if column.size == 0:
+        output_shape = (0, master_rod_count) if return_per_rod else (0,)
         return (
-            np.zeros((0, master_rod_count), dtype=np.float64),
-            np.zeros((0, master_rod_count), dtype=np.bool_),
+            np.zeros(output_shape, dtype=np.float64),
+            np.zeros(output_shape, dtype=np.bool_),
             np.zeros(0, dtype=np.int64),
             device_name,
         )
-    if column.size > _MAX_COORDINATES_PER_CHUNK:
-        density = np.empty((column.size, master_rod_count), dtype=np.float64)
-        caustic = np.empty((column.size, master_rod_count), dtype=np.bool_)
-        valid_source_count = np.empty(column.size, dtype=np.int64)
-        for start in range(0, column.size, _MAX_COORDINATES_PER_CHUNK):
-            stop = min(start + _MAX_COORDINATES_PER_CHUNK, column.size)
-            chunk_density, chunk_caustic, chunk_valid_count, chunk_device = (
-                evaluate_source_averaged_all_roots_cuda(
-                    evaluator_blocks,
-                    column[start:stop],
-                    row[start:stop],
-                    detector_shape_rc=detector_shape_rc,
-                    master_rod_count=master_rod_count,
-                )
-            )
-            if chunk_device != device_name:
-                raise RuntimeError("CUDA device changed while streaming detector coordinates")
-            density[start:stop] = chunk_density
-            caustic[start:stop] = chunk_caustic
-            valid_source_count[start:stop] = chunk_valid_count
-        return density, caustic, valid_source_count, device_name
+    if _MAX_COORDINATES_PER_CHUNK < 1:
+        raise ValueError("_MAX_COORDINATES_PER_CHUNK must be positive")
 
     packed = _pack_source_average(
         evaluator_blocks,
         detector_shape_rc=detector_shape_rc,
         master_rod_count=master_rod_count,
     )
-
-    device_column = cuda.to_device(column)
-    device_row = cuda.to_device(row)
-    device_density = cuda.to_device(np.zeros((master_rod_count, column.size), dtype=np.float64))
-    device_caustic = cuda.to_device(np.zeros((master_rod_count, column.size), dtype=np.bool_))
-    device_valid_count = cuda.to_device(np.zeros(column.size, dtype=np.int64))
     device_detector_zero = cuda.to_device(packed.detector_zero_lab_m)
     device_detector_column_step = cuda.to_device(packed.detector_column_step_lab_m)
     device_detector_row_step = cuda.to_device(packed.detector_row_step_lab_m)
@@ -871,19 +870,6 @@ def evaluate_source_averaged_all_roots_cuda(
     rows, columns = detector_shape_rc
     block_sizes = np.diff(packed.state_block_offset)
     maximum_block_size = int(np.max(block_sizes))
-    device_q_geometry = cuda.device_array(
-        (maximum_block_size, column.size, 8),
-        dtype=np.float64,
-    )
-    device_point_factor = cuda.device_array(
-        (maximum_block_size, column.size, 5),
-        dtype=np.float64,
-    )
-    device_valid = cuda.device_array(
-        (maximum_block_size, column.size),
-        dtype=np.bool_,
-    )
-    device_block_valid_count = cuda.device_array(column.size, dtype=np.int64)
     gaussian_sigma_rad = float(packed.state_real[0, 6])
     lorentzian_hwhm_rad = float(packed.state_real[0, 7])
     lorentzian_probability = float(packed.state_real[0, 8])
@@ -892,80 +878,170 @@ def evaluate_source_averaged_all_roots_cuda(
     lorentzian_rho = math.exp(-lorentzian_hwhm_rad)
     lorentzian_one_minus_rho = -math.expm1(-lorentzian_hwhm_rad)
     lorentzian_numerator = -math.expm1(-2.0 * lorentzian_hwhm_rad)
-    point_blocks = (column.size + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
-    rod_point_work = master_rod_count * column.size
-    rod_point_blocks = (rod_point_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
-    for block_index in range(packed.state_block_offset.size - 1):
-        state_start = int(packed.state_block_offset[block_index])
-        state_stop = int(packed.state_block_offset[block_index + 1])
-        local_state_count = state_stop - state_start
-        geometry_work = local_state_count * column.size
-        geometry_blocks = (geometry_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
-        _prepare_state_block_geometry_kernel[geometry_blocks, _THREADS_PER_BLOCK](
-            state_start,
-            state_stop,
-            rows,
-            columns,
-            device_column,
-            device_row,
-            device_detector_zero,
-            device_detector_column_step,
-            device_detector_row_step,
-            device_detector_pixel_area,
-            device_sample_from_lab,
-            device_sample_from_local,
-            device_ray_origin,
-            device_ki_film,
-            device_state_real,
-            device_state_complex,
-            device_f0_parameters,
-            device_q_geometry,
-            device_point_factor,
-            device_valid,
+
+    if return_per_rod:
+        density = np.empty((column.size, master_rod_count), dtype=np.float64)
+        caustic = np.empty((column.size, master_rod_count), dtype=np.bool_)
+    else:
+        density = np.empty(column.size, dtype=np.float64)
+        caustic = np.empty(column.size, dtype=np.bool_)
+    valid_source_count = np.empty(column.size, dtype=np.int64)
+
+    for start in range(0, column.size, _MAX_COORDINATES_PER_CHUNK):
+        stop = min(start + _MAX_COORDINATES_PER_CHUNK, column.size)
+        chunk_column = column[start:stop]
+        chunk_row = row[start:stop]
+        point_count = chunk_column.size
+        device_column = cuda.to_device(chunk_column)
+        device_row = cuda.to_device(chunk_row)
+        device_per_rod_density = cuda.to_device(
+            np.zeros((master_rod_count, point_count), dtype=np.float64)
         )
-        _count_valid_state_block_kernel[point_blocks, _THREADS_PER_BLOCK](
-            local_state_count,
-            device_valid,
-            device_block_valid_count,
-            device_valid_count,
+        device_per_rod_caustic = cuda.to_device(
+            np.zeros((master_rod_count, point_count), dtype=np.bool_)
         )
-        _accumulate_state_block_kernel[rod_point_blocks, _THREADS_PER_BLOCK](
-            state_start,
-            state_stop,
-            column.size,
-            device_sample_from_local,
-            device_state_real,
-            device_state_complex,
-            device_active_state_rod,
-            device_rod_u_bounds,
-            device_rod_u_tolerance,
-            device_rod_hk_population,
-            device_rod_parallel,
-            device_rod_inverse,
-            device_atom_offset,
-            device_atom_properties,
-            device_rod_inplane,
-            packed.layers,
-            gaussian_sigma_rad,
-            gaussian_probability,
-            gaussian_normalization,
-            lorentzian_probability,
-            lorentzian_rho,
-            lorentzian_one_minus_rho,
-            lorentzian_numerator,
-            device_q_geometry,
-            device_point_factor,
-            device_valid,
-            device_block_valid_count,
-            device_density,
-            device_caustic,
+        device_valid_count = cuda.to_device(np.zeros(point_count, dtype=np.int64))
+        device_q_geometry = cuda.device_array(
+            (maximum_block_size, point_count, 8),
+            dtype=np.float64,
         )
-    return (
-        np.ascontiguousarray(device_density.copy_to_host().T),
-        np.ascontiguousarray(device_caustic.copy_to_host().T),
-        device_valid_count.copy_to_host(),
-        device_name,
+        device_point_factor = cuda.device_array(
+            (maximum_block_size, point_count, 5),
+            dtype=np.float64,
+        )
+        device_valid = cuda.device_array(
+            (maximum_block_size, point_count),
+            dtype=np.bool_,
+        )
+        device_block_valid_count = cuda.device_array(point_count, dtype=np.int64)
+        point_blocks = (point_count + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+        rod_point_work = master_rod_count * point_count
+        rod_point_blocks = (rod_point_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+        for block_index in range(packed.state_block_offset.size - 1):
+            state_start = int(packed.state_block_offset[block_index])
+            state_stop = int(packed.state_block_offset[block_index + 1])
+            local_state_count = state_stop - state_start
+            geometry_work = local_state_count * point_count
+            geometry_blocks = (geometry_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+            _prepare_state_block_geometry_kernel[geometry_blocks, _THREADS_PER_BLOCK](
+                state_start,
+                state_stop,
+                rows,
+                columns,
+                device_column,
+                device_row,
+                device_detector_zero,
+                device_detector_column_step,
+                device_detector_row_step,
+                device_detector_pixel_area,
+                device_sample_from_lab,
+                device_sample_from_local,
+                device_ray_origin,
+                device_ki_film,
+                device_state_real,
+                device_state_complex,
+                device_f0_parameters,
+                device_q_geometry,
+                device_point_factor,
+                device_valid,
+            )
+            _count_valid_state_block_kernel[point_blocks, _THREADS_PER_BLOCK](
+                local_state_count,
+                device_valid,
+                device_block_valid_count,
+                device_valid_count,
+            )
+            _accumulate_state_block_kernel[rod_point_blocks, _THREADS_PER_BLOCK](
+                state_start,
+                state_stop,
+                point_count,
+                device_sample_from_local,
+                device_state_real,
+                device_state_complex,
+                device_active_state_rod,
+                device_rod_u_bounds,
+                device_rod_u_tolerance,
+                device_rod_hk_population,
+                device_rod_parallel,
+                device_rod_inverse,
+                device_atom_offset,
+                device_atom_properties,
+                device_rod_inplane,
+                packed.layers,
+                gaussian_sigma_rad,
+                gaussian_probability,
+                gaussian_normalization,
+                lorentzian_probability,
+                lorentzian_rho,
+                lorentzian_one_minus_rho,
+                lorentzian_numerator,
+                device_q_geometry,
+                device_point_factor,
+                device_valid,
+                device_block_valid_count,
+                device_per_rod_density,
+                device_per_rod_caustic,
+            )
+        if return_per_rod:
+            density[start:stop] = device_per_rod_density.copy_to_host().T
+            caustic[start:stop] = device_per_rod_caustic.copy_to_host().T
+        else:
+            device_density = cuda.device_array(point_count, dtype=np.float64)
+            device_caustic = cuda.device_array(point_count, dtype=np.bool_)
+            _reduce_physical_rods_kernel[point_blocks, _THREADS_PER_BLOCK](
+                device_per_rod_density,
+                device_per_rod_caustic,
+                device_density,
+                device_caustic,
+            )
+            density[start:stop] = device_density.copy_to_host()
+            caustic[start:stop] = device_caustic.copy_to_host()
+        valid_source_count[start:stop] = device_valid_count.copy_to_host()
+    return density, caustic, valid_source_count, device_name
+
+
+def evaluate_source_averaged_all_roots_cuda(
+    evaluator_blocks: tuple[tuple[Any, ...], ...],
+    column_px: FloatArray,
+    row_px: FloatArray,
+    *,
+    detector_shape_rc: tuple[int, int],
+    master_rod_count: int,
+) -> tuple[FloatArray, BoolArray, IntArray, str]:
+    """Return the detailed physical-rod field for proof and diagnostics."""
+
+    return _evaluate_source_averaged_all_roots_cuda(
+        evaluator_blocks,
+        column_px,
+        row_px,
+        detector_shape_rc=detector_shape_rc,
+        master_rod_count=master_rod_count,
+        return_per_rod=True,
     )
 
 
-__all__ = ["evaluate_source_averaged_all_roots_cuda", "require_cuda_available"]
+def evaluate_source_averaged_density_all_roots_cuda(
+    evaluator_blocks: tuple[tuple[Any, ...], ...],
+    column_px: FloatArray,
+    row_px: FloatArray,
+    *,
+    detector_shape_rc: tuple[int, int],
+    master_rod_count: int,
+) -> tuple[FloatArray, BoolArray, IntArray, str]:
+    """Return the rod-reduced continuous density before any pixel integration."""
+
+    return _evaluate_source_averaged_all_roots_cuda(
+        evaluator_blocks,
+        column_px,
+        row_px,
+        detector_shape_rc=detector_shape_rc,
+        master_rod_count=master_rod_count,
+        return_per_rod=False,
+    )
+
+
+__all__ = [
+    "evaluate_source_averaged_all_roots_cuda",
+    "evaluate_source_averaged_density_all_roots_cuda",
+    "require_cuda_available",
+]

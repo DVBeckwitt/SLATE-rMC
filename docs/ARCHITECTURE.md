@@ -12,8 +12,8 @@ strict YAML + CIF
   -> canonical entrance transport and incident film-phase ki
   -> physical reciprocal rods + continuous mosaic/finite-stack strength
   -> analytic rod/Ewald roots and exit optics
-  -> continuous detector-coordinate density
-  -> source-state intensity sum
+  -> per-source, per-physical-rod continuous detector-coordinate density
+  -> all-source, all-rod, all-root intensity sum on the detector function
   -> deterministic detector-pixel box integration
 ```
 

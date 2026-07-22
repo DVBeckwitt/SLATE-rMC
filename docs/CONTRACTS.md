@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **9**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **10**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -103,6 +103,11 @@ integrator is deliberately branch-specific and rejects any model containing `m=0
 all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
 weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
+The source-averaged `integrate_native_pixels(...)` method is a detailed per-rod proof path, not a
+production renderer. It fails closed unless the caller explicitly passes
+`include_per_rod_evidence=True`. The detailed arbitrary-coordinate evaluator remains available
+without that flag because it performs no pixel integration.
+
 ### `ContinuousNormalizedAngleFunction`
 
 Owns one pose-bound `ContinuousDetectorFunction` and one fixed `AngleFrame`. Callers provide only
@@ -125,6 +130,10 @@ consumer and must integrate `S` and `N` before division.
 - `sample_configured_source(source, sample_count=...)` is the one mapping from validated configured
   source parameters to the canonical source sampler, including the exact one-row nominal state.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
+- `evaluate_detector_density_all_roots(column_px, row_px, ...)` returns one continuous-coordinate
+  density after every source state, physical rod, and retained inverse root has been reduced. Its
+  coordinate-shaped caustic flag is the logical OR of the detailed rod flags. The existing
+  per-rod coordinate evaluator remains the proof and diagnostic interface.
 - `evaluate_nominal_integer_l_markers(context)` solves exact integer-L intersections on the
   peak-mosaic (`alpha=0`) manifold, applies the canonical nominal-state exit/refraction and active
   detector visibility path, and retains every physical rod before grouping only coincident display
@@ -134,6 +143,8 @@ consumer and must integrate `S` and `N` before division.
   maxima.
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
+  Macrobin integration consumes only the completed total coordinate density; its result has no
+  per-rod pixel axis.
 
 ## Measured selection and indexing
 

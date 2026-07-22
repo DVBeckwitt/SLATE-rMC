@@ -13,6 +13,7 @@ from time import perf_counter
 import numpy as np
 
 from rasim_next.pipeline.configured_simulation import (
+    CONFIGURED_RESULT_SCHEMA_VERSION,
     DetectorIntegerLMarkers,
     DetectorMacrobinImage,
     EwaldSurfaceDisplay,
@@ -465,7 +466,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             {
                 "detector_column_center_px": detector_image.column_center_px,
                 "detector_image_A2": detector_image.image_A2,
-                "detector_per_rod_image_A2": detector_image.per_rod_image_A2,
                 "detector_row_center_px": detector_image.row_center_px,
                 "detector_valid_source_count_min": detector_image.valid_source_count_min,
             }
@@ -510,7 +510,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     family_values = sorted({rod.family_m for rod in inputs.rods})
     manifest: dict[str, object] = {
-        "schema_version": "rasim-configured-result-v1",
+        "schema_version": CONFIGURED_RESULT_SCHEMA_VERSION,
         "config_path": os.fspath(config.config_path),
         "physics_revision": config.physics_revision,
         "render_revision": config.render_revision,
@@ -574,6 +574,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "detector_macrobin_size_px": config.numerics.detector_macrobin_size_px,
         "detector_gauss_order": config.numerics.detector_gauss_order,
         "detector_integration_quality": "nonquantitative_fixed_quadrature_preview.v1",
+        "detector_reduction_order": "source_rod_root_density_before_pixel_box.v1",
         "reciprocal_reference_wavelength_A": (2.0 * np.pi / inputs.bragg_space.config.k_norm_Ainv),
         "timings": timings,
     }
@@ -585,18 +586,6 @@ def main(argv: Sequence[str] | None = None) -> None:
                 ),
                 "detector_image_sha256": _array_sha256(detector_image.image_A2),
                 "total_detector_mass_A2": float(np.sum(detector_image.image_A2, dtype=np.float64)),
-                "per_family_detector_mass_A2": {
-                    str(family): float(
-                        np.sum(
-                            detector_image.per_rod_image_A2[
-                                ...,
-                                [rod.family_m == family for rod in inputs.rods],
-                            ],
-                            dtype=np.float64,
-                        )
-                    )
-                    for family in family_values
-                },
             }
         )
     manifest["simulation_and_render_wall_time_s"] = perf_counter() - overall_start

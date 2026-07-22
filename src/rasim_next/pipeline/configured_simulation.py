@@ -48,6 +48,7 @@ from rasim_next.sampling.source import sample_gaussian_source_rays
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
+CONFIGURED_RESULT_SCHEMA_VERSION = "rasim-configured-result-v2"
 
 
 def _readonly_float_array(value: Any, shape: tuple[int | None, ...], name: str) -> FloatArray:
@@ -1695,7 +1696,6 @@ def evaluate_nominal_ewald_surface(
 @dataclass(frozen=True, slots=True)
 class DetectorMacrobinImage:
     image_A2: FloatArray
-    per_rod_image_A2: FloatArray
     column_center_px: FloatArray
     row_center_px: FloatArray
     valid_source_count_min: NDArray[np.int64]
@@ -1708,18 +1708,6 @@ class DetectorMacrobinImage:
         image = _readonly_float_array(self.image_A2, (None, None), "image_A2")
         if np.any(image < 0.0):
             raise ValueError("image_A2 must be nonnegative")
-        per_rod = _readonly_float_array(
-            self.per_rod_image_A2,
-            (*image.shape, None),
-            "per_rod_image_A2",
-        )
-        if np.any(per_rod < 0.0) or not np.allclose(
-            image,
-            np.sum(per_rod, axis=-1, dtype=np.float64),
-            rtol=0.0,
-            atol=1024.0 * np.finfo(np.float64).eps * max(float(np.max(image, initial=0.0)), 1.0),
-        ):
-            raise ValueError("macrobin image must equal its physical rod sum")
         column = _readonly_float_array(
             self.column_center_px,
             (image.shape[1],),
@@ -1759,7 +1747,6 @@ class DetectorMacrobinImage:
         valid_count.setflags(write=False)
         for name, value in (
             ("image_A2", image),
-            ("per_rod_image_A2", per_rod),
             ("column_center_px", column),
             ("row_center_px", row),
             ("valid_source_count_min", valid_count),
@@ -1808,7 +1795,7 @@ def integrate_detector_macrobins(
     evaluation_kwargs = (
         {} if execution_backend == "cpu" else {"execution_backend": execution_backend}
     )
-    evaluated = detector.evaluate_detector_coordinates_all_roots(
+    evaluated = detector.evaluate_detector_density_all_roots(
         column_grid + column_offset_grid,
         row_grid + row_offset_grid,
         **evaluation_kwargs,
@@ -1816,14 +1803,13 @@ def integrate_detector_macrobins(
     if np.any(evaluated.caustic):
         raise FloatingPointError("a detector quadrature node lies exactly on a caustic")
     node_weight = mapped_weight[:, None] * mapped_weight[None, :]
-    per_rod = np.sum(
-        evaluated.per_rod_density_A2_per_px2 * node_weight[None, None, :, :, None],
+    image = np.sum(
+        evaluated.density_A2_per_px2 * node_weight[None, None, :, :],
         axis=(2, 3),
         dtype=np.float64,
     )
     return DetectorMacrobinImage(
-        image_A2=np.sum(per_rod, axis=-1, dtype=np.float64),
-        per_rod_image_A2=per_rod,
+        image_A2=image,
         column_center_px=column_center,
         row_center_px=row_center,
         valid_source_count_min=np.min(evaluated.valid_source_count, axis=(2, 3)),
@@ -1838,6 +1824,7 @@ def integrate_detector_macrobins(
 
 
 __all__ = [
+    "CONFIGURED_RESULT_SCHEMA_VERSION",
     "ConfiguredSimulationInputs",
     "DetectorIntegerLMarkers",
     "DetectorMacrobinImage",

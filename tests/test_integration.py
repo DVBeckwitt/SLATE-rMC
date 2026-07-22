@@ -83,6 +83,8 @@ def _intrinsic_detector_tilt(
 def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from numba import cuda
+
     from painted_ewald import (
         BraggSpaceConfig,
         ContinuousEwaldCoating,
@@ -103,6 +105,9 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         DetectorQuadrature,
         IntensityStatus,
         PixelIntegrationMethod,
+    )
+    from rasim_next.pipeline.source_averaged_detector import (
+        SourceAveragedDetectorEwaldMeasure,
     )
 
     inputs = _configured_inputs(sample_count=1)
@@ -261,6 +266,77 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     )
     assert bool(tiny_caustic_density.caustic)
     assert np.isinf(tiny_caustic_density.density_A2_per_px2)
+
+    caustic_rods = (Rod(0, 0), rod)
+    averaged_caustic_detector = SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=bragg.config.reciprocal_basis_Ainv,
+        crystal_to_sample=instrument.sample_from_crystal.rotation,
+        rods=caustic_rods,
+        mosaic=bragg.config.mosaic,
+        strength_model=bragg.strength_model,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    detailed_caustic = averaged_caustic_detector.evaluate_detector_coordinates_all_roots(
+        np.asarray([mapped.geometry.column_px]),
+        np.asarray([mapped.geometry.row_px]),
+        execution_backend="cpu",
+    )
+    assert not detailed_caustic.caustic[0, 0]
+    assert detailed_caustic.caustic[0, 1]
+    averaged_cpu_caustic = averaged_caustic_detector.evaluate_detector_density_all_roots(
+        np.asarray([mapped.geometry.column_px]),
+        np.asarray([mapped.geometry.row_px]),
+        execution_backend="cpu",
+    )
+    assert averaged_cpu_caustic.caustic.item()
+    assert np.isinf(averaged_cpu_caustic.density_A2_per_px2.item())
+
+    averaged_zero_caustic_detector = SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=bragg.config.reciprocal_basis_Ainv,
+        crystal_to_sample=instrument.sample_from_crystal.rotation,
+        rods=caustic_rods,
+        mosaic=bragg.config.mosaic,
+        strength_model=bragg.strength_model,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        phase_population_weight=0.0,
+    )
+    averaged_zero_cpu_caustic = averaged_zero_caustic_detector.evaluate_detector_density_all_roots(
+        np.asarray([mapped.geometry.column_px]),
+        np.asarray([mapped.geometry.row_px]),
+        execution_backend="cpu",
+    )
+    assert averaged_zero_cpu_caustic.caustic.item()
+    assert averaged_zero_cpu_caustic.density_A2_per_px2.item() == 0.0
+
+    if cuda.is_available():
+        averaged_cuda_caustic = averaged_caustic_detector.evaluate_detector_density_all_roots(
+            np.asarray([mapped.geometry.column_px]),
+            np.asarray([mapped.geometry.row_px]),
+            execution_backend="cuda",
+        )
+        assert averaged_cuda_caustic.caustic.item()
+        assert np.isinf(averaged_cuda_caustic.density_A2_per_px2.item())
+        np.testing.assert_array_equal(
+            averaged_cuda_caustic.valid_source_count,
+            averaged_cpu_caustic.valid_source_count,
+        )
+        averaged_zero_cuda_caustic = (
+            averaged_zero_caustic_detector.evaluate_detector_density_all_roots(
+                np.asarray([mapped.geometry.column_px]),
+                np.asarray([mapped.geometry.row_px]),
+                execution_backend="cuda",
+            )
+        )
+        assert averaged_zero_cuda_caustic.caustic.item()
+        assert averaged_zero_cuda_caustic.density_A2_per_px2.item() == 0.0
+        np.testing.assert_array_equal(
+            averaged_zero_cuda_caustic.valid_source_count,
+            averaged_zero_cpu_caustic.valid_source_count,
+        )
 
     regular_alpha = math.radians(2.0)
     regular_beta = math.radians(178.0)
@@ -900,6 +976,48 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
         )
 
 
+def test_total_detector_density_preserves_partial_valid_source_count() -> None:
+    from rasim_next.pipeline.configured_simulation import (
+        build_nominal_ewald_context,
+        build_source_averaged_detector,
+    )
+
+    base = _configured_inputs(sample_count=2)
+    points_sample_m = base.instrument.sample_from_lab.apply_point(
+        base.incident.states.sample_intersection_lab_m
+    )
+    abs_x_m = np.abs(points_sample_m[:, 0])
+    assert abs_x_m[0] != abs_x_m[1]
+
+    finite_config = replace(
+        base.config,
+        instrument=replace(
+            base.config.instrument,
+            sample_support_model_id="finite_rectangle.v1",
+            sample_width_m=float(np.sum(abs_x_m)),
+            sample_length_m=4.0 * float(np.max(np.abs(points_sample_m[:, 1]))),
+        ),
+    )
+    inputs = build_configured_simulation_inputs(finite_config)
+    assert np.count_nonzero(inputs.incident.states.valid) == 1
+
+    nominal = build_nominal_ewald_context(inputs)
+    mapped = nominal.geometry.map_latent(
+        rod=Rod(-1, 1),
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    assert bool(mapped.geometry.valid)
+
+    result = build_source_averaged_detector(inputs).evaluate_detector_density_all_roots(
+        np.asarray([mapped.geometry.column_px]),
+        np.asarray([mapped.geometry.row_px]),
+    )
+    assert result.source_state_count == 2
+    np.testing.assert_array_equal(result.valid_source_count, np.asarray([1]))
+
+
 def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> None:
     from rasim_next.pipeline.continuous_detector import DetectorQuadrature
 
@@ -914,7 +1032,13 @@ def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> 
         row_chunk_size=2,
     )
 
-    result = averaged.integrate_native_pixels(branch=2, quadrature=quadrature)
+    with pytest.raises(ValueError, match="per-rod pixel evidence is disabled by default"):
+        averaged.integrate_native_pixels(branch=2, quadrature=quadrature)
+    result = averaged.integrate_native_pixels(
+        branch=2,
+        quadrature=quadrature,
+        include_per_rod_evidence=True,
+    )
     scalar = tuple(
         detector.integrate_native_pixels(
             rods=averaged.rods,
@@ -938,6 +1062,51 @@ def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> 
     assert result.coordinate_evaluation_count == detector_shape[0] * detector_shape[1] * 2**2
     assert result.execution_backend == "numba_source_averaged.v1"
     assert not result.adaptive_tolerance_satisfied
+
+
+def test_detector_macrobin_total_matches_explicit_per_rod_quadrature_oracle() -> None:
+    from rasim_next.pipeline.configured_simulation import integrate_detector_macrobins
+
+    detector_shape = (8, 8)
+    averaged, _ = _two_state_source_averaged_detector_fixture(detector_shape_rc=detector_shape)
+    bin_size_px = 2
+    gauss_order = 2
+    column_center = -0.5 + (np.arange(detector_shape[1] // bin_size_px) + 0.5) * bin_size_px
+    row_center = -0.5 + (np.arange(detector_shape[0] // bin_size_px) + 0.5) * bin_size_px
+    nodes, weights = np.polynomial.legendre.leggauss(gauss_order)
+    half_width = 0.5 * bin_size_px
+    offset = half_width * nodes
+    mapped_weight = half_width * weights
+    column_grid, row_grid, row_offset_grid, column_offset_grid = np.broadcast_arrays(
+        column_center[None, :, None, None],
+        row_center[:, None, None, None],
+        offset[None, None, :, None],
+        offset[None, None, None, :],
+    )
+    detailed = averaged.evaluate_detector_coordinates_all_roots(
+        column_grid + column_offset_grid,
+        row_grid + row_offset_grid,
+    )
+    assert not np.any(detailed.caustic)
+    node_weight = mapped_weight[:, None] * mapped_weight[None, :]
+    old_order_per_rod_A2 = np.sum(
+        detailed.per_rod_density_A2_per_px2 * node_weight[None, None, :, :, None],
+        axis=(2, 3),
+        dtype=np.float64,
+    )
+    old_order_image_A2 = np.sum(old_order_per_rod_A2, axis=-1, dtype=np.float64)
+    assert np.ptp(old_order_image_A2) > 0.0
+    production = integrate_detector_macrobins(
+        averaged,
+        bin_size_px=bin_size_px,
+        gauss_order=gauss_order,
+    )
+    np.testing.assert_allclose(
+        production.image_A2,
+        old_order_image_A2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
 
 
 def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
@@ -968,6 +1137,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
     with pytest.raises(ValueError, match="pixel integration cannot include m=0"):
         detector.integrate_native_pixels(
             branch=2,
+            include_per_rod_evidence=True,
             quadrature=DetectorQuadrature(
                 pixel_gauss_order=2,
                 fold_gauss_order=2,
@@ -1029,6 +1199,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
     )
 
     all_roots = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    total_density = detector.evaluate_detector_density_all_roots(column_px, row_px)
     explicit_cpu = detector.evaluate_detector_coordinates_all_roots(
         column_px,
         row_px,
@@ -1038,6 +1209,31 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         explicit_cpu.per_rod_density_A2_per_px2,
         all_roots.per_rod_density_A2_per_px2,
     )
+    np.testing.assert_allclose(
+        total_density.density_A2_per_px2,
+        np.sum(all_roots.per_rod_density_A2_per_px2, axis=-1, dtype=np.float64),
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(total_density.caustic, np.any(all_roots.caustic, axis=-1))
+    np.testing.assert_array_equal(
+        total_density.valid_source_count,
+        all_roots.valid_source_count,
+    )
+    assert total_density.source_state_count == all_roots.source_state_count
+    assert total_density.source_revision == all_roots.source_revision
+    assert total_density.root_policy == all_roots.root_policy
+    assert total_density.detector_visible_m0_q_gap_Ainv == (
+        all_roots.detector_visible_m0_q_gap_Ainv
+    )
+    assert total_density.measure_id == all_roots.measure_id
+    assert total_density.execution_backend == all_roots.execution_backend
+    with pytest.raises(ValueError, match="infinite detector density requires a caustic"):
+        replace(
+            total_density,
+            density_A2_per_px2=np.full(column_px.shape, np.inf),
+            caustic=np.zeros(column_px.shape, dtype=np.bool_),
+        )
     with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
         replace(all_roots, execution_device="unexpected device")
     with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
@@ -1197,7 +1393,7 @@ def test_cuda_detector_backend_fails_closed_without_a_device(
     detector = build_source_averaged_detector(build_configured_simulation_inputs(config))
     monkeypatch.setattr(cuda_backend.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="no CUDA device is available"):
-        detector.evaluate_detector_coordinates_all_roots(
+        detector.evaluate_detector_density_all_roots(
             np.asarray([0.0]),
             np.asarray([0.0]),
             execution_backend="cuda",
@@ -1248,7 +1444,17 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
         row_px,
         execution_backend="cpu",
     )
+    cpu_total = detector.evaluate_detector_density_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
     gpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+    gpu_total = detector.evaluate_detector_density_all_roots(
         column_px,
         row_px,
         execution_backend="cuda",
@@ -1260,6 +1466,11 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
     )
     monkeypatch.setattr(cuda_backend, "_MAX_COORDINATES_PER_CHUNK", 2)
     chunked = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+    chunked_total = detector.evaluate_detector_density_all_roots(
         column_px,
         row_px,
         execution_backend="cuda",
@@ -1283,6 +1494,22 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
         rtol=4.0e-11,
         atol=3.0e-24,
     )
+    np.testing.assert_allclose(
+        cpu_total.density_A2_per_px2,
+        cpu.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        gpu_total.density_A2_per_px2,
+        gpu.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(cpu_total.caustic, np.any(cpu.caustic, axis=-1))
+    np.testing.assert_array_equal(gpu_total.caustic, np.any(gpu.caustic, axis=-1))
+    np.testing.assert_array_equal(cpu_total.valid_source_count, cpu.valid_source_count)
+    np.testing.assert_array_equal(gpu_total.valid_source_count, gpu.valid_source_count)
     np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
     np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
     np.testing.assert_array_equal(
@@ -1295,8 +1522,21 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
     )
     np.testing.assert_array_equal(chunked.caustic, gpu.caustic)
     np.testing.assert_array_equal(chunked.valid_source_count, gpu.valid_source_count)
+    np.testing.assert_array_equal(
+        chunked_total.density_A2_per_px2,
+        gpu_total.density_A2_per_px2,
+    )
+    np.testing.assert_array_equal(chunked_total.caustic, gpu_total.caustic)
+    np.testing.assert_array_equal(
+        chunked_total.valid_source_count,
+        gpu_total.valid_source_count,
+    )
     assert gpu.execution_backend == "numba_cuda_source_averaged.v1"
     assert gpu.execution_device
+    assert gpu_total.execution_backend == "numba_cuda_source_averaged.v1"
+    assert gpu_total.execution_device == gpu.execution_device
+    assert chunked_total.execution_backend == gpu_total.execution_backend
+    assert chunked_total.execution_device == gpu_total.execution_device
     assert np.all(gpu.per_rod_density_A2_per_px2[3:] == 0.0)
 
 
@@ -1922,26 +2162,29 @@ def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -
     )
 
 
-def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> None:
+def test_detector_macrobin_preview_integrates_total_continuous_density_once() -> None:
     from types import SimpleNamespace
 
-    from rasim_next.pipeline.configured_simulation import integrate_detector_macrobins
+    from rasim_next.pipeline.configured_simulation import (
+        CONFIGURED_RESULT_SCHEMA_VERSION,
+        integrate_detector_macrobins,
+    )
 
     class ConstantDetector:
         instrument = SimpleNamespace(detector_shape_rc=(4, 6))
 
         @staticmethod
-        def evaluate_detector_coordinates_all_roots(
+        def evaluate_detector_density_all_roots(
             column_px: np.ndarray,
             row_px: np.ndarray,
         ) -> object:
             shape = np.broadcast_shapes(column_px.shape, row_px.shape)
-            per_rod = np.broadcast_to(np.asarray([2.0, 3.0]), (*shape, 2))
             return SimpleNamespace(
-                per_rod_density_A2_per_px2=per_rod,
-                density_A2_per_px2=np.sum(per_rod, axis=-1),
-                caustic=np.zeros((*shape, 2), dtype=np.bool_),
-                valid_source_count=np.ones(shape, dtype=np.int64),
+                density_A2_per_px2=np.full(shape, 5.0),
+                caustic=np.zeros(shape, dtype=np.bool_),
+                valid_source_count=np.full(shape, 7, dtype=np.int64),
+                execution_backend="numba_cpu_source_averaged.v1",
+                execution_device=None,
             )
 
     result = integrate_detector_macrobins(
@@ -1950,10 +2193,11 @@ def test_detector_macrobin_preview_applies_the_fixed_quadrature_area_once() -> N
         gauss_order=2,
     )
     np.testing.assert_allclose(result.image_A2, 20.0, rtol=0.0, atol=2.0e-14)
-    np.testing.assert_allclose(result.per_rod_image_A2[..., 0], 8.0, rtol=0.0, atol=1.0e-14)
-    np.testing.assert_allclose(result.per_rod_image_A2[..., 1], 12.0, rtol=0.0, atol=1.0e-14)
+    np.testing.assert_array_equal(result.valid_source_count_min, 7)
+    assert not hasattr(result, "per_rod_image_A2")
     assert result.coordinate_evaluation_count == 24
     assert result.measure_id == "raw_detector_macrobin_fixed_quadrature_estimate_A2.v1"
+    assert CONFIGURED_RESULT_SCHEMA_VERSION == "rasim-configured-result-v2"
     with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
         replace(result, execution_device="unexpected device")
     with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
@@ -2901,7 +3145,7 @@ def test_normalized_field_freezes_masks_losses_divide_order_and_phi_permutation(
     )
 
 
-def test_interactive_detector_raster_samples_all_roots_without_pixel_integration() -> None:
+def test_interactive_detector_raster_samples_total_density_without_pixel_integration() -> None:
     from types import SimpleNamespace
 
     viewer = runpy.run_path(
@@ -2916,7 +3160,7 @@ def test_interactive_detector_raster_samples_all_roots_without_pixel_integration
         def __init__(self) -> None:
             self.call: tuple[np.ndarray, np.ndarray, str] | None = None
 
-        def evaluate_detector_coordinates_all_roots(
+        def evaluate_detector_density_all_roots(
             self,
             column_px: np.ndarray,
             row_px: np.ndarray,
@@ -2925,16 +3169,21 @@ def test_interactive_detector_raster_samples_all_roots_without_pixel_integration
         ) -> object:
             self.call = (column_px.copy(), row_px.copy(), execution_backend)
             density = column_px + 10.0 * row_px
-            caustic = np.zeros((*density.shape, len(self.rods)), dtype=np.bool_)
-            caustic[1, 0, 2] = True
+            caustic = np.zeros(density.shape, dtype=np.bool_)
+            caustic[1, 0] = True
             return SimpleNamespace(
                 density_A2_per_px2=density,
-                valid_source_count=np.full(density.shape, self.source_state_count),
+                valid_source_count=np.asarray(((7, 0), (1, 0)), dtype=np.int64),
                 caustic=caustic,
                 root_policy="all_retained_roots.v1",
                 execution_backend="numba_cpu_source_averaged.v1",
                 execution_device=None,
             )
+
+        def evaluate_detector_coordinates_all_roots(
+            self, *_args: object, **_kwargs: object
+        ) -> object:
+            raise AssertionError("the display must not request per-rod coordinate evidence")
 
         def integrate_native_pixels(self, **_kwargs: object) -> object:
             raise AssertionError("the display must not integrate detector pixels")
@@ -2952,13 +3201,17 @@ def test_interactive_detector_raster_samples_all_roots_without_pixel_integration
     np.testing.assert_array_equal(column_px, np.array([[2.0, 7.0], [2.0, 7.0]]))
     np.testing.assert_array_equal(row_px, np.array([[1.0, 1.0], [4.0, 4.0]]))
     np.testing.assert_array_equal(raster.density_A2_per_px2, column_px + 10.0 * row_px)
-    np.testing.assert_array_equal(raster.valid, np.ones((2, 2), dtype=np.bool_))
+    np.testing.assert_array_equal(
+        raster.valid,
+        np.asarray(((True, False), (True, False)), dtype=np.bool_),
+    )
     np.testing.assert_array_equal(raster.caustic, np.array([[False, False], [True, False]]))
     assert backend == "cpu"
     assert raster.source_state_count == 7
     assert raster.physical_rod_count == 3
     assert raster.root_policy == "all_retained_roots.v1"
     assert raster.measure_id == "raw_detector_coordinate_density_A2_per_px2.v1"
+    assert not hasattr(raster, "per_rod_density_A2_per_px2")
 
 
 def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:
@@ -3001,6 +3254,8 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
         ),
     )
     bundle = viewer["_build_bundle"](config, 25)
+    assert bundle.detector.source_state_count == 25
+    assert bundle.inputs.config.source.sample_count == 25
     states = bundle.inputs.incident.states
     base_minimum_wavelength_A = float(np.min(states.wavelength_A[states.valid]))
     base_rods = enumerate_rods_within_ewald_sphere(

@@ -144,11 +144,11 @@ The viewer starts with 25 requested incident-ray phase-space samples and 128 con
 detector-coordinate display samples per axis for the settled field. The two numerical controls are
 named **incident-ray samples** (`N_ray`) and **display samples per axis** (`N_disp`): a source sample
 contains origin, direction, and wavelength, while the display count is only an ephemeral view of
-the continuous function. While a pose control moves, one nominal incident ray samples the unbinned
-function on a fixed 32 x 32 grid for responsive feedback. Releasing a changed control starts the
-requested incoherent source-average render in a background thread; the title always distinguishes
-the nominal preview from the completed requested source average. Press `R` to render, `0` to reset,
-or `Q` to close.
+the continuous function. While a pose control moves, one incident-ray state samples the unbinned
+total rod/root density on a fixed 32 x 32 grid for responsive feedback. Releasing a changed control
+starts the requested incoherent source-average render in a background thread; the title always
+distinguishes the one-state preview from the completed settled total density. Press `R` to render,
+`0` to reset, or `Q` to close.
 
 Every geometry slider is a zero-based correction to the configured geometry. The labels use the
 original RA-SIM and manuscript vocabulary while distinguishing mechanical goniometer controls from
@@ -179,9 +179,11 @@ parameters or add the independent beam offset `z_B`. These manual forward contro
 `(alpha, psi_g)` separately identifiable from one measured image; that requires multiple commanded
 goniometer angles and remains outside the current fitting contract.
 
-Every view evaluates all elastically reachable physical `(h,k)` rods and all retained Ewald roots,
-including only the certified detector-visible nonzero `m=0` support. The inverse pullback starts at
-the active panel, so no off-detector Ewald mesh is built. Values are center samples of
+Every view evaluates all selected incident-ray states, elastically reachable physical `(h,k)` rods,
+and retained Ewald roots, including only the certified detector-visible nonzero `m=0` support. They
+are reduced into one continuous detector density before any display-shaped result crosses the
+rendering boundary; no per-rod detector raster is returned. The inverse pullback starts at the
+active panel, so no off-detector Ewald mesh is built. Values are center samples of
 `raw_detector_coordinate_density_A2_per_px2.v1`; the smoothly interpolated raster is display-only
 and is not detector-pixel integration, a PSF, or a normalized physical result.
 Configurations that disable detector-visible `m=0` are rejected because this viewer's contract is

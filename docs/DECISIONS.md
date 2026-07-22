@@ -147,3 +147,15 @@ changed required-field contract.
 Reciprocal-space and Ewald-coating arrays may be sampled for visualization, and detector macrobins
 may be integrated for a preview, but no sampled array, sphere object, mesh, texture, or image becomes
 the authoritative physical field.
+
+## D032: Complete detector-density reduction precedes pixels
+
+Contract API v10 makes the all-source, all-physical-rod, all-root continuous detector-coordinate
+density an explicit public result. Fixed macrobin rendering consumes only that reduced field and
+applies one terminal box quadrature; it no longer carries a per-rod pixel tensor. The configured
+diagnostic is therefore `rasim-configured-result-v2` and omits the former per-rod image and derived
+per-family pixel masses. The detailed per-rod coordinate result remains available for scientific
+proof without becoming the production rendering interface. The former source-averaged per-rod
+native-pixel integrator fails closed unless a caller explicitly requests
+`include_per_rod_evidence=True`; no configured renderer sets that proof-only flag. No v1
+compatibility raster is retained.

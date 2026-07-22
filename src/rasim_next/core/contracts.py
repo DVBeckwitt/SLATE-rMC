@@ -14,7 +14,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.validity import ValidityCode
 
-CONTRACT_API_VERSION = 9
+CONTRACT_API_VERSION = 10
 _ArraySpec = tuple[str, np.dtype[Any] | type[np.generic], tuple[int, ...], bool]
 
 

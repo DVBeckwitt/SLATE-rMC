@@ -262,7 +262,7 @@ def sample_detector_raster(
     display_samples_per_axis: int,
     execution_backend: str,
 ) -> DetectorRaster:
-    """Sample only active-panel coordinates through the all-root continuous API."""
+    """Sample active-panel coordinates after the complete source/rod/root reduction."""
 
     column_centers, row_centers, column_grid, row_grid = _detector_sample_grid(
         detector_shape_rc,
@@ -271,7 +271,7 @@ def sample_detector_raster(
     if execution_backend not in {"cpu", "cuda"}:
         raise ValueError("execution_backend must be 'cpu' or 'cuda'")
     start = perf_counter()
-    evaluated = detector.evaluate_detector_coordinates_all_roots(
+    evaluated = detector.evaluate_detector_density_all_roots(
         column_grid,
         row_grid,
         execution_backend=execution_backend,
@@ -280,7 +280,7 @@ def sample_detector_raster(
     return DetectorRaster(
         density_A2_per_px2=evaluated.density_A2_per_px2,
         valid=evaluated.valid_source_count > 0,
-        caustic=np.any(evaluated.caustic, axis=-1),
+        caustic=evaluated.caustic,
         column_centers_px=column_centers,
         row_centers_px=row_centers,
         source_state_count=detector.source_state_count,
@@ -538,7 +538,7 @@ _CONTROL_SPECS = (
 
 
 class InteractiveDetectorViewer:
-    """Matplotlib controller with a fast nominal preview and settled source-average render."""
+    """Matplotlib controller with a fast one-state preview and settled total density."""
 
     def __init__(
         self,
@@ -604,7 +604,7 @@ class InteractiveDetectorViewer:
             self._image,
             ax=self._image_axis,
             pad=0.02,
-            label=r"raw detector density ($\AA^2$/px$^2$; display log scale)",
+            label=r"total raw detector density ($\AA^2$/px$^2$; display log scale)",
         )
 
         self._sliders: dict[str, Slider] = {}
@@ -704,9 +704,9 @@ class InteractiveDetectorViewer:
         self.figure.text(
             0.70,
             0.012,
-            "Continuous center samples; no detector-pixel integration.\n"
+            "Total source/rod/root density at each coordinate; no pixels integrated.\n"
             f"Drag: {LIVE_DISPLAY_SAMPLES_PER_AXIS}x"
-            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} one-ray preview. Release: requested render.\n"
+            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} one-state preview. Release: requested render.\n"
             "All deltas are relative to the configured pose.\n"
             "Keys: R render, 0 reset, Q close.",
             ha="left",
@@ -856,13 +856,13 @@ class InteractiveDetectorViewer:
         if requested_render:
             self._image.set_norm(LogNorm(vmin=low, vmax=high))
             self._colorbar.update_normal(self._image)
-        state = "REQUESTED SOURCE AVERAGE" if requested_render else "LIVE NOMINAL PREVIEW"
+        state = "SETTLED TOTAL DENSITY" if requested_render else "LIVE 1-STATE TOTAL DENSITY"
         device = f" on {raster.execution_device}" if raster.execution_device else ""
         self._image_axis.set_title(
             f"{state}: {raster.source_state_count} incident-ray states, "
             f"{raster.physical_rod_count} physical rods (all m), all retained roots\n"
             f"{raster.column_centers_px.size}x{raster.row_centers_px.size} continuous samples; "
-            f"{raster.execution_backend}{device}; {raster.wall_time_s:.3f} s"
+            f"{raster.execution_backend}{device}; density eval {raster.wall_time_s:.3f} s"
         )
         if requested_render:
             self._redraw_and_cache()
@@ -888,7 +888,7 @@ class InteractiveDetectorViewer:
         request = self._current_request()
         self._set_status(
             f"updating {LIVE_DISPLAY_SAMPLES_PER_AXIS}x"
-            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} live one-ray preview; "
+            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} live one-state preview; "
             f"requested render={request.source_sample_count} incident rays"
         )
         try:
@@ -903,7 +903,7 @@ class InteractiveDetectorViewer:
             return
         self._show_raster(raster, requested_render=False)
         self._set_status(
-            f"live preview ready in {raster.wall_time_s:.3f} s; "
+            f"live preview density evaluation {raster.wall_time_s:.3f} s; "
             f"release to render {request.source_sample_count} incident rays"
         )
 
@@ -978,7 +978,7 @@ class InteractiveDetectorViewer:
         self._set_status(
             f"rendering {request.source_sample_count} incident rays at "
             f"{request.display_samples_per_axis}x{request.display_samples_per_axis} "
-            f"on {backend}; pose controls remain responsive"
+            f"on {backend}; the latest released pose will be queued"
         )
         self._active_thread = threading.Thread(
             target=run,
@@ -1003,8 +1003,8 @@ class InteractiveDetectorViewer:
         elif outcome.raster is not None and outcome.request == current:
             self._show_raster(outcome.raster, requested_render=True)
             self._set_status(
-                f"requested {current.source_sample_count}-ray source average ready in "
-                f"{outcome.raster.wall_time_s:.3f} s"
+                f"settled {current.source_sample_count}-state total density; "
+                f"density evaluation {outcome.raster.wall_time_s:.3f} s"
             )
         else:
             self._set_status("discarded stale render; current pose remains in live preview")
