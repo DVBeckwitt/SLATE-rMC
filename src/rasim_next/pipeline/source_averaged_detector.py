@@ -158,6 +158,97 @@ class SourceAveragedDetectorCoordinateIntensity:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceAveragedDetectorCoordinateDensity:
+    """All-source, all-rod, all-root density on continuous detector coordinates.
+
+    Physical rods remain explicit provenance, but no rod-valued detector array crosses this
+    boundary. Every state-specific outgoing ray, inverse root, and physical-rod intensity is
+    reduced before a pixel or macrobin integrator receives the result.
+    """
+
+    column_px: FloatArray
+    row_px: FloatArray
+    rods: tuple[Rod, ...]
+    density_A2_per_px2: FloatArray
+    caustic: BoolArray
+    valid_source_count: NDArray[np.int64]
+    source_state_count: int
+    source_revision: str
+    root_policy: str = "all_retained_roots.v1"
+    detector_visible_m0_q_gap_Ainv: float | None = None
+    measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
+    execution_backend: str = "numba_cpu_source_averaged.v1"
+    execution_device: str | None = None
+
+    def __post_init__(self) -> None:
+        supplied_column = np.asarray(self.column_px)
+        if np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0):
+            raise ValueError("column_px must be real")
+        column = np.array(supplied_column.real, dtype=np.float64, copy=True, order="C")
+        shape = column.shape
+        if not np.all(np.isfinite(column)):
+            raise ValueError("column_px must be finite")
+        row = _float_array(self.row_px, shape, "row_px")
+        rods = tuple(self.rods)
+        if not rods or not all(isinstance(rod, Rod) for rod in rods):
+            raise ValueError("rods must contain at least one Rod")
+        if len({(rod.h, rod.k) for rod in rods}) != len(rods):
+            raise ValueError("rods must not repeat a physical rod")
+        supplied_density = np.asarray(self.density_A2_per_px2)
+        if np.iscomplexobj(supplied_density) and np.any(supplied_density.imag != 0.0):
+            raise ValueError("detector density must be real")
+        density = np.array(supplied_density.real, dtype=np.float64, copy=True, order="C")
+        if density.shape != shape or np.any(np.isnan(density)) or np.any(density < 0.0):
+            raise ValueError("detector density must be nonnegative and contain no NaN")
+        caustic = np.array(self.caustic, dtype=np.bool_, copy=True, order="C")
+        if caustic.shape != shape:
+            raise ValueError("caustic must have one flag per detector coordinate")
+        if np.any(np.isinf(density) & ~caustic):
+            raise ValueError("infinite detector density requires a caustic")
+        state_count = positive_integer(self.source_state_count, "source_state_count")
+        valid_count = np.array(self.valid_source_count, dtype=np.int64, copy=True, order="C")
+        if valid_count.shape != shape or np.any((valid_count < 0) | (valid_count > state_count)):
+            raise ValueError("valid_source_count must lie within the source batch")
+        if not isinstance(self.source_revision, str) or not self.source_revision:
+            raise ValueError("source_revision must be nonempty")
+        if self.root_policy != "all_retained_roots.v1":
+            raise ValueError("total detector density requires all_retained_roots.v1")
+        if self.execution_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        }:
+            raise ValueError("unsupported detector-coordinate execution backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be None or a nonempty string")
+        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
+        m0_gap = self.detector_visible_m0_q_gap_Ainv
+        has_m0 = any(rod.family_m == 0 for rod in rods)
+        if has_m0:
+            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) <= 0.0:
+                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            m0_gap = float(m0_gap)
+        elif m0_gap is not None:
+            raise ValueError("an m=0 support gap requires an m=0 rod")
+        if self.measure_id != "raw_detector_coordinate_density_A2_per_px2.v1":
+            raise ValueError("unsupported detector-coordinate measure")
+        for value in (column, row, density, caustic, valid_count):
+            value.setflags(write=False)
+        object.__setattr__(self, "column_px", column)
+        object.__setattr__(self, "row_px", row)
+        object.__setattr__(self, "rods", rods)
+        object.__setattr__(self, "density_A2_per_px2", density)
+        object.__setattr__(self, "caustic", caustic)
+        object.__setattr__(self, "valid_source_count", valid_count)
+        object.__setattr__(self, "source_state_count", state_count)
+        object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
+
+
+@dataclass(frozen=True, slots=True)
 class _IndexedCompiledEvaluator:
     evaluator: CompiledDetectorEvaluator
     master_rod_index: NDArray[np.int64]
@@ -685,6 +776,54 @@ class SourceAveragedDetectorEwaldMeasure:
                 valid_source_count[start:stop] += block_valid_count
         return per_rod, caustic, valid_source_count
 
+    def _evaluate_flat_density_all_roots(
+        self,
+        column_px: FloatArray,
+        row_px: FloatArray,
+        *,
+        executor: ThreadPoolExecutor | None,
+    ) -> tuple[FloatArray, BoolArray, NDArray[np.int64]]:
+        density = np.zeros(column_px.size, dtype=np.float64)
+        caustic = np.zeros(column_px.size, dtype=np.bool_)
+        valid_source_count = np.zeros(column_px.size, dtype=np.int64)
+        for start in range(0, column_px.size, self._COORDINATE_CHUNK_SIZE):
+            stop = min(start + self._COORDINATE_CHUNK_SIZE, column_px.size)
+            chunk_column = column_px[start:stop]
+            chunk_row = row_px[start:stop]
+            chunk_per_rod = np.zeros((stop - start, len(self._rods)), dtype=np.float64)
+            chunk_per_rod_caustic = np.zeros(chunk_per_rod.shape, dtype=np.bool_)
+            if executor is None:
+                block_results = (
+                    _sum_compiled_evaluator_block(
+                        block,
+                        chunk_column,
+                        chunk_row,
+                        None,
+                        len(self._rods),
+                    )
+                    for block in self._evaluator_blocks
+                )
+            else:
+                futures = tuple(
+                    executor.submit(
+                        _sum_compiled_evaluator_block,
+                        block,
+                        chunk_column,
+                        chunk_row,
+                        None,
+                        len(self._rods),
+                    )
+                    for block in self._evaluator_blocks
+                )
+                block_results = (future.result() for future in futures)
+            for block_density, block_caustic, block_valid_count in block_results:
+                chunk_per_rod += block_density
+                chunk_per_rod_caustic |= block_caustic
+                valid_source_count[start:stop] += block_valid_count
+            density[start:stop] = np.sum(chunk_per_rod, axis=1, dtype=np.float64)
+            caustic[start:stop] = np.any(chunk_per_rod_caustic, axis=1)
+        return density, caustic, valid_source_count
+
     def _evaluate_detector_coordinates(
         self,
         column_px: ArrayLike,
@@ -810,13 +949,93 @@ class SourceAveragedDetectorEwaldMeasure:
             execution_backend=execution_backend,
         )
 
+    def evaluate_detector_density_all_roots(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        execution_backend: str = "cpu",
+    ) -> SourceAveragedDetectorCoordinateDensity:
+        """Reduce every source, physical rod, and retained root at each coordinate."""
+
+        supplied_column = np.asarray(column_px)
+        supplied_row = np.asarray(row_px)
+        if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
+            np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
+        ):
+            raise ValueError("detector coordinates must be real")
+        column, row = np.broadcast_arrays(
+            np.asarray(supplied_column.real, dtype=np.float64),
+            np.asarray(supplied_row.real, dtype=np.float64),
+        )
+        if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
+            raise ValueError("detector coordinates must be finite")
+        if execution_backend not in {"cpu", "cuda"}:
+            raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        shape = column.shape
+        flat_column = np.ascontiguousarray(column.reshape(-1))
+        flat_row = np.ascontiguousarray(row.reshape(-1))
+        if execution_backend == "cuda":
+            from rasim_next.pipeline._continuous_detector_cuda import (
+                evaluate_source_averaged_density_all_roots_cuda,
+            )
+
+            density, caustic, valid_source_count, execution_device = (
+                evaluate_source_averaged_density_all_roots_cuda(
+                    self._evaluator_blocks,
+                    flat_column,
+                    flat_row,
+                    detector_shape_rc=self._instrument.detector_shape_rc,
+                    master_rod_count=len(self._rods),
+                )
+            )
+            backend_id = "numba_cuda_source_averaged.v1"
+        else:
+            if self._evaluator_blocks and flat_column.size:
+                self._evaluator_blocks[0][0].evaluator.evaluate_all_roots(
+                    np.empty(0, dtype=np.float64),
+                    np.empty(0, dtype=np.float64),
+                )
+            executor = self._thread_pool()
+            try:
+                density, caustic, valid_source_count = self._evaluate_flat_density_all_roots(
+                    flat_column,
+                    flat_row,
+                    executor=executor,
+                )
+            finally:
+                if executor is not None:
+                    executor.shutdown(wait=True)
+            execution_device = None
+            backend_id = "numba_cpu_source_averaged.v1"
+        return SourceAveragedDetectorCoordinateDensity(
+            column_px=column,
+            row_px=row,
+            rods=self._rods,
+            density_A2_per_px2=density.reshape(shape),
+            caustic=caustic.reshape(shape),
+            valid_source_count=valid_source_count.reshape(shape),
+            source_state_count=self.source_state_count,
+            source_revision=self._incident.states.source_revision,
+            detector_visible_m0_q_gap_Ainv=self._detector_visible_m0_q_gap_Ainv,
+            execution_backend=backend_id,
+            execution_device=execution_device,
+        )
+
     def integrate_native_pixels(
         self,
         *,
         branch: int,
         quadrature: DetectorQuadrature,
+        include_per_rod_evidence: bool = False,
     ) -> DetectorPixelMass:
-        """Apply one tensor quadrature to the already-summed continuous field."""
+        """Integrate detailed per-rod pixel evidence after explicit opt-in."""
+
+        if include_per_rod_evidence is not True:
+            raise ValueError(
+                "per-rod pixel evidence is disabled by default; pass "
+                "include_per_rod_evidence=True explicitly"
+            )
 
         if not isinstance(quadrature, DetectorQuadrature):
             raise TypeError("quadrature must be DetectorQuadrature")
@@ -894,6 +1113,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
 
 __all__ = [
+    "SourceAveragedDetectorCoordinateDensity",
     "SourceAveragedDetectorCoordinateIntensity",
     "SourceAveragedDetectorEwaldMeasure",
 ]

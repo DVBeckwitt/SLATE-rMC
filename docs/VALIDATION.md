@@ -10,7 +10,7 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## Current contract-v9 runtime
+## Current contract-v10 runtime
 
 The production runtime is the continuous detector pushforward described in
 `CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
@@ -19,6 +19,33 @@ analytic line/sphere oracle,
 detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-compiled backend
 agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
 and scientific subsystem cutovers; they do not reinstate retired APIs.
+
+### Complete detector-density reduction cutover
+
+Contract v10 makes the declared reduction order structural: every state-specific outgoing ray,
+physical rod, and retained analytic inverse root is reduced into one continuous detector-coordinate
+density before fixed macrobin quadrature. The coordinate result preserves the physical rod catalog
+as provenance, an all-rod/source caustic flag, valid-source count, source revision, root policy,
+`m=0` support gap, and execution identity without exposing a rod-valued detector array. The detailed
+per-rod coordinate API remains the proof path. The older source-averaged per-rod native-pixel
+integrator requires the explicit proof-only `include_per_rod_evidence=True` opt-in and therefore
+cannot be selected accidentally by configured rendering. Configured-result schema v2 removes the
+old per-rod macrobin array and its derived per-family pixel masses rather than silently retaining
+the old work.
+
+The external Bi2Se3 5 degree proof uses all 1,000 configured incident states, 85 physical rods, all
+retained roots, and 10,000 continuous coordinates for the 50 by 50 fixed-quadrature preview. The
+former per-rod quadrature order and the total-first order agree to `5.4211e-20 A2` maximum absolute
+image error, `1.1877e-16` relative L1 error, zero relative mass error, and
+`3.5527e-15` macrobin centroid shift. The default CPU configured command completed in `21.9575 s`,
+including a `10.2099 s` detector stage, and emitted total mass `0.00262385385236163 A2` with image
+SHA-256 `7eca4b611fa3284a6333870bc2ad984886abffedf621f8087fc017f3ff6c8453`. A warmed CUDA detector
+preview took `9.1118 s`. The returned detector payload shrank from `1,720,000` bytes to `20,000`
+bytes; a separate warmed `tracemalloc` comparison reduced peak Python/NumPy allocation from
+`16,572,495` to `9,589,715` bytes. These host figures exclude CUDA device memory. A direct CUDA
+kernel that removed the internal rod-coordinate workspace was rejected after it regressed the same
+warmed preview to `25.6213 s`; the retained CUDA path reduces that private workspace on-device and
+copies only the completed total coordinate field across the public boundary.
 
 ### Position-free measured selection activation
 
