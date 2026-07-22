@@ -58,8 +58,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
   the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
   fitting, rank diagnostics, and post-fit root re-enumeration.
-- `fitting/indexed_series.py`: exact image-ID joins and one shared, full-rank nine-coordinate
-  detector/sample/axis/pivot fit across an arbitrary nonempty commanded-angle series.
+- `fitting/indexed_series.py`: exact image-ID joins and one shared nine-coordinate
+  detector/sample/axis/pivot correction pack across an arbitrary nonempty commanded-angle series;
+  any nonempty coordinate subset may be active while the complement remains exactly fixed.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback and the finite-pixel angle projector; never part of raw
   rendering.

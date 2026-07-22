@@ -48,9 +48,9 @@ The fitter consumes one immutable data record per image:
 All records use the same source, material, crystal orientation, detector calibration, goniometer
 zero pose, and fit bounds.  Only declared commanded motor angles vary by image.
 
-## Active parameter pack and gauge ownership
+## Parameter pack and gauge ownership
 
-The shared parameter vector has this exact order:
+The complete shared parameter pack has this exact order:
 
 1. detector local-column tilt, radians;
 2. detector current-local-row tilt, radians;
@@ -84,8 +84,9 @@ wavelength, pivot motion along its axis, crystal in-plane roll, detector roll, c
 motor angles, and all per-image corrections remain fixed.  Detector roll is an exact gauge with
 sample-y and axis-pitch corrections; crystal roll is an axial-powder gauge.  Detector distance is
 not fitted with the plane offset because detector calibration owns it.  A parameter pack that is
-not full column rank under the actual image/key set is rejected before optimization; no
-regularization, silent reduction, or parameter freezing is allowed.
+not full column rank under the actual image/key set is rejected before optimization. Any nonempty
+subset may be explicitly activated and the named complement held exactly at its supplied initial
+values; implicit freezing, regularization, and silent rank reduction remain forbidden.
 
 Expected bound-scaled rank for the qualifying key set is 5/9 for 5 degrees alone, 7/9 for 5 plus
 10 degrees, and 9/9 only for all three images.  The accepted full-pack condition ceiling is `1e8`.
@@ -117,7 +118,8 @@ One generic command accepts a series manifest and can:
 1. read every OSC with the one accepted clockwise boundary conversion;
 2. run the existing blind discovery, reciprocal indexing, and cross-image selection once;
 3. build geometry-only nominal models for every commanded angle;
-4. fit the shared nine-coordinate pack against `observations_for(image_id)`;
+4. fit any declared nonempty subset of the shared nine-coordinate pack against
+   `observations_for(image_id)`, holding the complement exactly at its initial values;
 5. report indexed-manifest hashes, fit metrics, held-out predictions, and post-fit audits as JSON.
 
 The existing Bi2Se3 indexing command remains a retained independent qualification path; this task
@@ -133,6 +135,8 @@ Retain only compact tests that protect distinct long-term failures:
   raster, or pixel-integration dependency;
 - a prescribed nonzero nine-parameter hidden truth recovered jointly from 5, 10, and 15 degree
   synthetic observations, including the 5/9 -> 7/9 -> 9/9 rank ladder;
+- constrained seven-coordinate recovery with both detector tilts held exactly, plus a reordered
+  noncontiguous sparse subset proving canonical active order and bit-exact fixed values;
 - exact signed-plane-offset ownership and structural exclusion of arbitrary sample tangent
   translations and axis-parallel pivot motion;
 - deterministic image-ID joining, wavelength/key preservation, per-image metrics, and rejection of
@@ -184,6 +188,15 @@ precision is unqualified and a fourth incidence is recommended. Both the direct 
 oracle and frozen-candidate relabel audit are `SAME`; all 26 selected candidates retain their full
 keys and coherent tracks. Fresh global rediscovery is `CHANGED` because of alternate same-key broad
 lobes and a threshold competitor, and is explicitly diagnostic rather than acceptance-critical.
+
+The requested fixed-detector follow-up uses exact current-basis equivalents of the saved old GUI
+state, `column/row=-0.3935210372/-0.1480545344 deg`, as base tilts and removes both detector
+coordinates from the active pack. Beam center and lattice remain fixed inputs. The resulting
+9/8/7-site fit is rank 7/7 with condition `6338.748`, but pooled RMS/max is
+`5.7518779/8.5759636 px`, per-image RMS is `4.8268629/5.6487485/6.8563219 px`, held-out RMS/max is
+`5.5494945/9.2145733 px`, pivot-yaw reaches its lower bound, and the frozen-candidate audit is
+`CHANGED`. This constrained hypothesis is reported and rejected, not folded into the qualifying
+nine-coordinate profile. Full provenance and corrections are recorded in `docs/VALIDATION.md`.
 
 Initial discovery/indexing took `91.851 s`, the fresh global diagnostic `95.200 s`, geometry-only
 setup `0.05587 s`, the selected solve `7.6590 s`, and frozen-coordinate relabeling `0.3533 s`. Warm

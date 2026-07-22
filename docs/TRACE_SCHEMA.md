@@ -111,11 +111,12 @@ fitting.held_out_metric
 fitting.invalidation_summary
 ```
 
-The additive `rasim-osc-geometry-fit-result-v3` typed proof envelope carries its series manifest,
-image IDs and commanded angles, parameterization, shared corrections, scaled singular spectrum and
-weakest direction, active bounds, per-image native errors, the direct-root and frozen-candidate
-acceptance audits, the frozen-reindexing lineage, optional data-specific qualification profile, and
-the separate global-rediscovery diagnostic. Expected input or numerical rejection in JSON mode uses
+The additive `rasim-osc-geometry-fit-result-v4` typed proof envelope carries its series manifest,
+image IDs and commanded angles, parameterization, canonical fitted/fixed coordinate names, shared
+corrections, selected-coordinate scaled singular spectrum and weakest direction, active bounds,
+per-image native errors, the direct-root and frozen-candidate acceptance audits, the
+frozen-reindexing lineage, optional data-specific qualification profile, and the separate
+global-rediscovery diagnostic. Expected input or numerical rejection in JSON mode uses
 the additive `rasim-osc-geometry-fit-rejection-v1` envelope rather than a traceback. These
 map to the existing `selection.manifest_hash`, `fitting.detector_parameters`,
 `fitting.sample_geometry_parameters`, `fitting.selection_revision`, `fitting.objective_value`,

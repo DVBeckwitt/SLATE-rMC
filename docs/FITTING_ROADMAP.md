@@ -395,8 +395,10 @@ A later joint polish is optional only after the staged solution is stable. It us
 
 The first shared-series fit implementation uses the tracked Bi2Se3 5, 10, and user-authoritative
 15 degree OSC files. Geometry fitting operates in detector-native `(column_px, row_px)`, freezes the
-position-free association manifest once, and applies one full-rank nine-coordinate correction to
-all images. Its one-state exact-tag path is geometry-only: mosaic probability, structure intensity,
+position-free association manifest once, and applies one shared nine-coordinate correction pack to
+all images. Any nonempty subset may be fitted with the complement held exactly fixed; the active
+subset must be full rank. Its one-state exact-tag path is geometry-only: mosaic probability,
+structure intensity,
 rasterization, and pixel integration perform no work. The post-fit acceptance audit relabels the
 unchanged selected native candidates under corrected geometry. Only a changed, missing, or
 nonconfident frozen key requires a new manifest and refit. A separate fresh global search reports

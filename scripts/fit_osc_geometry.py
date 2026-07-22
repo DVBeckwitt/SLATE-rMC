@@ -15,6 +15,7 @@ from time import perf_counter
 import numpy as np
 
 from rasim_next.fitting import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
     IndexedGeometryImage,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
@@ -84,6 +85,8 @@ def _fit_payload(result: object) -> dict[str, object]:
         "success": result.success,
         "message": result.message,
         "parameterization_id": result.parameterization_id,
+        "fitted_parameter_names": result.fitted_parameter_names,
+        "fixed_parameter_names": result.fixed_parameter_names,
         "corrections": asdict(result.corrections),
         "jacobian_rank": result.jacobian_rank,
         "jacobian_condition": result.jacobian_condition,
@@ -135,9 +138,12 @@ def _prediction_payload(
 
 def _deterministic_starts(
     bounds: SharedGeometryCorrectionBounds,
+    fitted_parameter_names: tuple[str, ...],
 ) -> tuple[SharedGeometryCorrections, ...]:
     pattern = np.asarray((1.0, -0.8, 0.6, -0.4, 0.7, -0.5, 0.3, 0.9, -0.7))
     offset = 0.08 * bounds.half_span * pattern
+    fitted = set(fitted_parameter_names)
+    offset[[name not in fitted for name in SHARED_GEOMETRY_PARAMETER_NAMES]] = 0.0
     return (
         SharedGeometryCorrections.zero(),
         SharedGeometryCorrections.from_array(offset),
@@ -179,9 +185,12 @@ def fit_osc_geometry_series(
     *,
     heldout_integer_l: tuple[int, ...] = (),
     benchmark: bool = False,
+    fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
 ) -> dict[str, object]:
     """Index once, fit frozen observations jointly, and audit without reassignment."""
 
+    if not fitted_parameter_names:
+        raise ValueError("at least one shared geometry parameter must remain fitted")
     series = load_osc_geometry_series(manifest_path)
     if series.qualification_profile not in {None, _BI2SE3_QUALIFICATION_PROFILE}:
         raise ValueError(f"unsupported qualification profile {series.qualification_profile!r}")
@@ -193,12 +202,19 @@ def fit_osc_geometry_series(
     images = indexing.indexed_images
     baseline = evaluate_indexed_geometry_series_metrics(images, zero)
 
-    starts = _deterministic_starts(bounds)
+    starts = _deterministic_starts(bounds, fitted_parameter_names)
     fit_results = []
     fit_wall_times = []
     for initial in starts:
         started = perf_counter()
-        fit_results.append(fit_indexed_geometry_series(images, initial=initial, bounds=bounds))
+        fit_results.append(
+            fit_indexed_geometry_series(
+                images,
+                initial=initial,
+                bounds=bounds,
+                fitted_parameter_names=fitted_parameter_names,
+            )
+        )
         fit_wall_times.append(perf_counter() - started)
     fit_objective_sums = []
     for candidate in fit_results:
@@ -313,6 +329,7 @@ def fit_osc_geometry_series(
             training_images,
             initial=zero,
             bounds=bounds,
+            fitted_parameter_names=fitted_parameter_names,
         )
         cross_validation_fit_succeeded = cross_fit.success
         cross_validation = {
@@ -341,7 +358,12 @@ def fit_osc_geometry_series(
             residual_times.append(perf_counter() - started)
         warm_residual_median_seconds = float(np.median(residual_times))
         tracemalloc.start()
-        fit_indexed_geometry_series(images, initial=zero, bounds=bounds)
+        fit_indexed_geometry_series(
+            images,
+            initial=zero,
+            bounds=bounds,
+            fitted_parameter_names=fitted_parameter_names,
+        )
         _, fit_peak_memory_bytes = tracemalloc.get_traced_memory()
         tracemalloc.stop()
 
@@ -402,6 +424,9 @@ def fit_osc_geometry_series(
     qualification_manifest_matches = (
         indexing.selection.manifest_hash == _BI2SE3_INDEXED_MANIFEST_HASH
     )
+    qualification_parameterization_matches = (
+        result.fitted_parameter_names == SHARED_GEOMETRY_PARAMETER_NAMES
+    )
     accepted = all(
         (
             run_completed,
@@ -412,11 +437,12 @@ def fit_osc_geometry_series(
             qualification_requested,
             qualification_evidence_complete,
             qualification_manifest_matches,
+            qualification_parameterization_matches,
         )
     )
 
     return {
-        "schema": "rasim-osc-geometry-fit-result-v3",
+        "schema": "rasim-osc-geometry-fit-result-v4",
         "manifest_path": str(Path(manifest_path).resolve()),
         "indexed_manifest_hash": indexing.selection.manifest_hash,
         "run_completed": run_completed,
@@ -453,6 +479,7 @@ def fit_osc_geometry_series(
             "evidence_complete": qualification_evidence_complete,
             "heldout_integer_l_matches_profile": qualification_heldout_matches,
             "indexed_manifest_matches_profile": qualification_manifest_matches,
+            "parameterization_matches_profile": qualification_parameterization_matches,
             "all_fits_succeeded": all_fits_succeeded,
             "every_image_improved": every_image_improved,
             "fit_metrics_pass": fit_metrics_pass,
@@ -492,17 +519,31 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also run separate warm-residual and traced peak-memory measurements",
     )
+    parser.add_argument(
+        "--freeze-parameter",
+        action="append",
+        choices=SHARED_GEOMETRY_PARAMETER_NAMES,
+        default=None,
+        help="shared geometry coordinate to hold at its configured/initial value; repeatable",
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    frozen = set(arguments.freeze_parameter or ())
+    fitted_parameter_names = tuple(
+        name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in frozen
+    )
     try:
+        if not fitted_parameter_names:
+            raise ValueError("at least one shared geometry parameter must remain fitted")
         payload = fit_osc_geometry_series(
             arguments.manifest,
             heldout_integer_l=tuple(arguments.heldout_integer_l),
             benchmark=arguments.benchmark,
+            fitted_parameter_names=fitted_parameter_names,
         )
     except (OSError, ValueError, RuntimeError) as error:
         if arguments.json:
@@ -541,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
         f"chord_rms_rad={payload['post_fit']['chord_angle_rms_rad']:.6g}"
     )
     print(f"corrections={payload['fit']['corrections']}")
+    print(f"fitted_parameters={payload['fit']['fitted_parameter_names']}")
+    print(f"fixed_parameters={payload['fit']['fixed_parameter_names']}")
     print(
         f"rank={payload['fit']['jacobian_rank']} "
         f"condition={payload['fit']['jacobian_condition']:.6g}"

@@ -240,6 +240,20 @@ initial indexed-manifest hash changes. A generic manifest omits the profile: the
 numerical run completion without applying or claiming the Bi2Se3 thresholds.
 The primary fit always uses every frozen key; `--heldout-integer-l` requests a separate training
 refit and held-out prediction report without changing that primary data set.
+Every geometry coordinate is active by default. Repeat `--freeze-parameter NAME` to hold any
+coordinate at its configured base value; at least one coordinate must remain active. For example,
+to use calibrated detector tilts without refitting them:
+
+```powershell
+uv run python scripts/fit_osc_geometry.py `
+  configs/bi2se3_osc_geometry_fit.yaml `
+  --freeze-parameter detector_column_tilt_rad `
+  --freeze-parameter detector_row_tilt_rad `
+  --json
+```
+
+The JSON fit record lists canonical `fitted_parameter_names` and `fixed_parameter_names`. Beam
+center and lattice constants are calibration/material inputs, not switchable fit coordinates.
 The objective evaluates one ideal nominal incident state and no mosaic, structure intensity,
 raster, or pixel integration. JSON reports the frozen manifest, pooled/per-image metrics, rank and
 weak direction, active bounds, held-out predictions, independent-root audit, and frozen-candidate

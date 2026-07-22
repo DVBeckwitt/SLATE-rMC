@@ -33,7 +33,7 @@ and ordering are validated eagerly.
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
-| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one shared nine-coordinate correction with per-image metrics and rank diagnostics |
+| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared nine-coordinate correction pack, with fixed-coordinate provenance, per-image metrics, and rank diagnostics |
 
 `axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
 active LAB-to-LAB rigid transform about its declared LAB pivot. `compile_instrument` uses the same
@@ -285,9 +285,13 @@ Geometry-only inputs recompute and require the exact configured one-row nominal 
 each fit-ready image also recompiles and compares the complete detector, sample, axis, and pivot
 state before the residual hot path is admitted.
 
-`fit_indexed_geometry_series(...)` applies one nine-coordinate vector to every image, concatenates
-the existing canonical per-image residual blocks in sorted image-ID order, and uses bounded TRF
-least squares. The vector is, in order:
+`fit_indexed_geometry_series(...)` owns one complete nine-coordinate vector shared by every image,
+concatenates the existing canonical per-image residual blocks in sorted image-ID order, and uses
+bounded TRF least squares. `SHARED_GEOMETRY_PARAMETER_NAMES` declares the only accepted coordinate
+names and their canonical order. `fitted_parameter_names` selects any nonempty subset; names are
+canonicalized before optimization and every omitted coordinate is copied bit-exactly from
+`initial` into every residual evaluation and the final correction. The default selects all nine.
+The complete pack is, in order:
 
 ```text
 detector local-column tilt, detector current-local-row tilt,
@@ -306,11 +310,13 @@ axial-powder gauge, and detector center/distance/pitch remain calibration-owned.
 The hard half-spans are `(10 deg, 10 deg, 5 deg, 5 deg, 5 deg, 5 deg, 0.1 mm, 0.1 mm, 0.1 mm)` in
 the declared parameter order.
 
-The actual bound-scaled Jacobian must be rank 9 with condition at most `1e8` before optimization.
-For the qualifying Bi2Se3 keys the rank ladder is 5/9 for 5 degrees, 7/9 after adding 10 degrees,
-and 9/9 only after adding 15 degrees. The result reports per-image and pooled raw-pixel metrics,
-scaled singular values and weakest direction, active bounds, work counts, and optimizer counts.
-Full rank does not imply precise pivot recovery; the weakest direction must be reported.
+The actual bound-scaled Jacobian must have rank equal to the selected coordinate count with
+condition at most `1e8` before optimization. Singular values, weakest direction, and active-bound
+flags have that same selected-coordinate length; the result explicitly reports canonical fitted
+and fixed names. For the default qualifying Bi2Se3 pack the rank ladder is 5/9 for 5 degrees, 7/9
+after adding 10 degrees, and 9/9 only after adding 15 degrees. Full rank does not imply precise
+pivot recovery; the weakest direction must be reported. Beam center and lattice constants are not
+members of this pack and cannot be activated accidentally.
 
 `audit_indexed_geometry_series_roots(...)` brackets
 `F(beta)=q(beta) dot (q(beta)+2 ki)` on its two monotone arcs without calling the production

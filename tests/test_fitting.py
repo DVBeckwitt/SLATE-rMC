@@ -14,6 +14,7 @@ from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
     ExactTagGeometryModel,
@@ -969,6 +970,112 @@ def test_three_incidence_hidden_shared_geometry_recovery(
     assert result.training_site_rms_px < 1.0e-3
     assert result.training_site_max_px < 5.0e-3
     assert result.training_chord_angle_rms_rad < 1.0e-7
+
+    fitted_without_detector_tilts = (
+        "sample_normal_x_tilt_rad",
+        "sample_normal_y_tilt_rad",
+        "goniometer_axis_pitch_rad",
+        "goniometer_axis_yaw_rad",
+        "sample_plane_normal_offset_m",
+        "goniometer_pivot_pitch_offset_m",
+        "goniometer_pivot_yaw_offset_m",
+    )
+    fixed_detector_tilts = replace(
+        SharedGeometryCorrections.zero(),
+        detector_column_tilt_rad=truth.detector_column_tilt_rad,
+        detector_row_tilt_rad=truth.detector_row_tilt_rad,
+    )
+    constrained = fit_indexed_geometry_series(
+        tuple(images),
+        initial=fixed_detector_tilts,
+        bounds=bounds,
+        fitted_parameter_names=fitted_without_detector_tilts,
+    )
+    assert constrained.success, constrained.message
+    assert constrained.fitted_parameter_names == fitted_without_detector_tilts
+    assert constrained.fixed_parameter_names == (
+        "detector_column_tilt_rad",
+        "detector_row_tilt_rad",
+    )
+    assert constrained.jacobian_rank == 7
+    assert constrained.scaled_jacobian_singular_values.shape == (7,)
+    assert constrained.scaled_jacobian_weakest_direction.shape == (7,)
+    assert constrained.active_bounds.shape == (7,)
+    assert constrained.corrections.detector_column_tilt_rad == (
+        fixed_detector_tilts.detector_column_tilt_rad
+    )
+    assert constrained.corrections.detector_row_tilt_rad == (
+        fixed_detector_tilts.detector_row_tilt_rad
+    )
+    np.testing.assert_array_less(
+        np.abs(constrained.corrections.as_array()[2:] - truth.as_array()[2:])
+        / bounds.half_span[2:],
+        np.full(7, 2.5e-5),
+    )
+    with pytest.raises(ValueError, match="unknown shared geometry parameter"):
+        fit_indexed_geometry_series(
+            tuple(images),
+            initial=fixed_detector_tilts,
+            bounds=bounds,
+            fitted_parameter_names=("not_a_parameter",),
+        )
+
+    requested_sparse_names = (
+        "goniometer_pivot_yaw_offset_m",
+        "detector_column_tilt_rad",
+        "sample_plane_normal_offset_m",
+    )
+    expected_sparse_names = (
+        "detector_column_tilt_rad",
+        "sample_plane_normal_offset_m",
+        "goniometer_pivot_yaw_offset_m",
+    )
+    sparse_indices = np.asarray(
+        [SHARED_GEOMETRY_PARAMETER_NAMES.index(name) for name in expected_sparse_names]
+    )
+    sparse_initial_values = truth.as_array().copy()
+    sparse_initial_values[sparse_indices] = 0.0
+    sparse_initial = SharedGeometryCorrections.from_array(sparse_initial_values)
+    sparse = fit_indexed_geometry_series(
+        tuple(images),
+        initial=sparse_initial,
+        bounds=bounds,
+        fitted_parameter_names=requested_sparse_names,
+    )
+    assert sparse.fitted_parameter_names == expected_sparse_names
+    fixed_indices = np.asarray(
+        [
+            index
+            for index, name in enumerate(SHARED_GEOMETRY_PARAMETER_NAMES)
+            if name not in expected_sparse_names
+        ]
+    )
+    np.testing.assert_array_equal(
+        sparse.corrections.as_array()[fixed_indices],
+        sparse_initial.as_array()[fixed_indices],
+    )
+    np.testing.assert_array_less(
+        np.abs(sparse.corrections.as_array()[sparse_indices] - truth.as_array()[sparse_indices])
+        / bounds.half_span[sparse_indices],
+        np.full(3, 2.5e-5),
+    )
+    with pytest.raises(ValueError, match="at least one parameter"):
+        fit_indexed_geometry_series(
+            tuple(images),
+            initial=sparse_initial,
+            bounds=bounds,
+            fitted_parameter_names=(),
+        )
+    with pytest.raises(ValueError, match="must not contain duplicates"):
+        fit_indexed_geometry_series(
+            tuple(images),
+            initial=sparse_initial,
+            bounds=bounds,
+            fitted_parameter_names=(
+                "detector_column_tilt_rad",
+                "detector_column_tilt_rad",
+            ),
+        )
     for image, metrics in zip(images, result.per_image, strict=True):
         assert metrics.image_id == image.image_id
         prediction = image.predict_integer_l_tags(

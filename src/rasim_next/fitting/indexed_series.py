@@ -40,7 +40,7 @@ from rasim_next.pipeline.configured_simulation import (
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
-_PARAMETER_NAMES = (
+SHARED_GEOMETRY_PARAMETER_NAMES = (
     "detector_column_tilt_rad",
     "detector_row_tilt_rad",
     "sample_normal_x_tilt_rad",
@@ -51,6 +51,7 @@ _PARAMETER_NAMES = (
     "goniometer_pivot_pitch_offset_m",
     "goniometer_pivot_yaw_offset_m",
 )
+_PARAMETER_NAMES = SHARED_GEOMETRY_PARAMETER_NAMES
 _PARAMETERIZATION_ID = (
     "shared_detector_xy_axis_tangent_xy_pivot_tangent_xy_sample_normal_xy_plane_offset.v2"
 )
@@ -68,6 +69,23 @@ _OPTIMIZER_SCALE = (
     5.0e-5,
     5.0e-5,
 )
+
+
+def _canonical_fitted_parameter_names(value: tuple[str, ...]) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)):
+        raise TypeError("fitted_parameter_names must be a sequence of parameter names")
+    names = tuple(value)
+    if not names:
+        raise ValueError("fitted_parameter_names must contain at least one parameter")
+    if any(not isinstance(name, str) for name in names):
+        raise TypeError("fitted_parameter_names must contain only strings")
+    if len(set(names)) != len(names):
+        raise ValueError("fitted_parameter_names must not contain duplicates")
+    unknown = set(names) - set(SHARED_GEOMETRY_PARAMETER_NAMES)
+    if unknown:
+        raise ValueError(f"unknown shared geometry parameter names: {sorted(unknown)}")
+    selected = set(names)
+    return tuple(name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name in selected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +493,8 @@ class IndexedGeometryFitResult:
     optimizer_function_evaluation_count: int
     optimizer_jacobian_evaluation_count: int
     parameterization_id: str = _PARAMETERIZATION_ID
+    fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES
+    fixed_parameter_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.corrections, SharedGeometryCorrections):
@@ -483,6 +503,15 @@ class IndexedGeometryFitResult:
             raise TypeError("success must be bool")
         if not isinstance(self.message, str) or not self.message:
             raise ValueError("message must be nonempty")
+        fitted_names = _canonical_fitted_parameter_names(self.fitted_parameter_names)
+        fixed_names = tuple(
+            name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in fitted_names
+        )
+        if tuple(self.fitted_parameter_names) != fitted_names:
+            raise ValueError("fitted_parameter_names must use canonical parameter order")
+        if tuple(self.fixed_parameter_names) != fixed_names:
+            raise ValueError("fixed_parameter_names must be the canonical fitted complement")
+        fitted_count = len(fitted_names)
         if not self.image_ids or len(set(self.image_ids)) != len(self.image_ids):
             raise ValueError("image_ids must contain unique nonempty IDs")
         if any(not isinstance(value, str) or not value for value in self.image_ids):
@@ -503,30 +532,30 @@ class IndexedGeometryFitResult:
         if (
             isinstance(self.jacobian_rank, bool)
             or not isinstance(self.jacobian_rank, int)
-            or not 0 <= self.jacobian_rank <= 9
+            or not 0 <= self.jacobian_rank <= fitted_count
         ):
-            raise ValueError("jacobian_rank must lie in [0, 9]")
+            raise ValueError("jacobian_rank must not exceed the fitted parameter count")
         condition = float(self.jacobian_condition)
         if not math.isfinite(condition) or condition < 1.0:
             raise ValueError("jacobian_condition must be finite and at least one")
         object.__setattr__(self, "jacobian_condition", condition)
         singular = _readonly_float_array(
             self.scaled_jacobian_singular_values,
-            (9,),
+            (fitted_count,),
             "scaled_jacobian_singular_values",
         )
         if np.any(singular < 0.0) or np.any(np.diff(singular) > 0.0):
             raise ValueError("scaled singular values must be nonnegative and descending")
         weakest = _readonly_float_array(
             self.scaled_jacobian_weakest_direction,
-            (9,),
+            (fitted_count,),
             "scaled_jacobian_weakest_direction",
         )
         if not math.isclose(float(np.linalg.norm(weakest)), 1.0, rel_tol=0.0, abs_tol=1.0e-12):
             raise ValueError("scaled weakest direction must have unit norm")
         active = np.array(self.active_bounds, dtype=np.bool_, copy=True)
-        if active.shape != (9,):
-            raise ValueError("active_bounds must contain nine flags")
+        if active.shape != (fitted_count,):
+            raise ValueError("active_bounds must contain one flag per fitted parameter")
         active.setflags(write=False)
         for name in (
             "model_evaluation_count",
@@ -539,9 +568,12 @@ class IndexedGeometryFitResult:
         if self.parameterization_id != _PARAMETERIZATION_ID:
             raise ValueError("unsupported indexed geometry parameterization")
         if self.success and (
-            self.jacobian_rank != 9 or self.jacobian_condition > _MAXIMUM_JACOBIAN_CONDITION
+            self.jacobian_rank != fitted_count
+            or self.jacobian_condition > _MAXIMUM_JACOBIAN_CONDITION
         ):
             raise ValueError("a successful fit must have a full acceptable Jacobian")
+        object.__setattr__(self, "fitted_parameter_names", fitted_names)
+        object.__setattr__(self, "fixed_parameter_names", fixed_names)
         object.__setattr__(self, "scaled_jacobian_singular_values", singular)
         object.__setattr__(self, "scaled_jacobian_weakest_direction", weakest)
         object.__setattr__(self, "active_bounds", active)
@@ -695,14 +727,20 @@ def fit_indexed_geometry_series(
     *,
     initial: SharedGeometryCorrections,
     bounds: SharedGeometryCorrectionBounds,
+    fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
 ) -> IndexedGeometryFitResult:
-    """Fit one nine-coordinate geometry correction to all indexed images at once."""
+    """Fit a selected shared-coordinate subset to all indexed images at once."""
 
     ordered = _canonical_images(images)
     if not isinstance(initial, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections")
     if not isinstance(bounds, SharedGeometryCorrectionBounds):
         raise TypeError("bounds must be SharedGeometryCorrectionBounds")
+    fitted_names = _canonical_fitted_parameter_names(fitted_parameter_names)
+    fitted_indices = np.asarray(
+        [SHARED_GEOMETRY_PARAMETER_NAMES.index(name) for name in fitted_names],
+        dtype=np.int64,
+    )
     lower = bounds.lower.as_array()
     upper = bounds.upper.as_array()
     initial_values = initial.as_array()
@@ -714,64 +752,79 @@ def fit_indexed_geometry_series(
     def residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
+        full_value = np.array(initial_values, copy=True)
+        full_value[fitted_indices] = value
         return evaluate_indexed_geometry_series_residual(
             ordered,
-            SharedGeometryCorrections.from_array(value),
+            SharedGeometryCorrections.from_array(full_value),
         )
 
+    fitted_lower = lower[fitted_indices]
+    fitted_upper = upper[fitted_indices]
+    fitted_initial = initial_values[fitted_indices]
+    fitted_half_span = bounds.half_span[fitted_indices]
     preflight = _finite_difference_jacobian(
         residual,
-        initial_values,
-        lower,
-        upper,
-        step_size=_RANK_STEP,
+        fitted_initial,
+        fitted_lower,
+        fitted_upper,
+        step_size=np.asarray(_RANK_STEP)[fitted_indices],
     )
-    rank, condition, _ = _rank_diagnostics(preflight, bounds.half_span)
-    if rank < 9 or condition > _MAXIMUM_JACOBIAN_CONDITION:
+    fitted_count = len(fitted_names)
+    rank, condition, _ = _rank_diagnostics(preflight, fitted_half_span)
+    if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
-            f"shared geometry Jacobian rank/conditioning failed: rank={rank}/9, "
+            "shared geometry Jacobian rank/conditioning failed: "
+            f"rank={rank}/{fitted_count}, "
             f"condition={condition:.6g}"
         )
 
     optimized = least_squares(
         residual,
-        initial_values,
-        bounds=(lower, upper),
+        fitted_initial,
+        bounds=(fitted_lower, fitted_upper),
         method="trf",
         jac="2-point",
-        x_scale=_OPTIMIZER_SCALE,
+        x_scale=np.asarray(_OPTIMIZER_SCALE)[fitted_indices],
         ftol=1.0e-12,
         xtol=1.0e-12,
         gtol=1.0e-12,
         max_nfev=150,
     )
-    corrections = SharedGeometryCorrections.from_array(optimized.x)
+    fitted_values = np.array(initial_values, copy=True)
+    fitted_values[fitted_indices] = optimized.x
+    corrections = SharedGeometryCorrections.from_array(fitted_values)
     per_image, site_error, chord_angle = _fit_metrics(ordered, corrections)
     rank, condition, singular = _rank_diagnostics(
         np.asarray(optimized.jac, dtype=np.float64),
-        bounds.half_span,
+        fitted_half_span,
     )
-    if rank < 9 or condition > _MAXIMUM_JACOBIAN_CONDITION:
+    if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
-            f"fitted shared geometry Jacobian rank/conditioning failed: rank={rank}/9, "
+            "fitted shared geometry Jacobian rank/conditioning failed: "
+            f"rank={rank}/{fitted_count}, "
             f"condition={condition:.6g}"
         )
-    scaled_jacobian = np.asarray(optimized.jac, dtype=np.float64) * bounds.half_span[None, :]
+    scaled_jacobian = np.asarray(optimized.jac, dtype=np.float64) * fitted_half_span[None, :]
     weakest = np.linalg.svd(scaled_jacobian, full_matrices=False)[2][-1]
     largest_component = int(np.argmax(np.abs(weakest)))
     if weakest[largest_component] < 0.0:
         weakest = -weakest
-    bound_proximity = _ACTIVE_BOUND_RELATIVE_TOLERANCE * bounds.half_span
+    bound_proximity = _ACTIVE_BOUND_RELATIVE_TOLERANCE * fitted_half_span
     active_bounds = np.asarray(
         (optimized.active_mask != 0)
-        | (optimized.x - lower <= bound_proximity)
-        | (upper - optimized.x <= bound_proximity),
+        | (optimized.x - fitted_lower <= bound_proximity)
+        | (fitted_upper - optimized.x <= bound_proximity),
         dtype=np.bool_,
     )
     return IndexedGeometryFitResult(
         corrections=corrections,
         success=bool(optimized.success),
         message=str(optimized.message),
+        fitted_parameter_names=fitted_names,
+        fixed_parameter_names=tuple(
+            name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in fitted_names
+        ),
         image_ids=tuple(image.image_id for image in ordered),
         per_image=per_image,
         training_site_rms_px=float(np.sqrt(np.mean(site_error**2))),
@@ -791,6 +844,7 @@ def fit_indexed_geometry_series(
 
 
 __all__ = [
+    "SHARED_GEOMETRY_PARAMETER_NAMES",
     "IndexedGeometryFitResult",
     "IndexedGeometryImage",
     "IndexedGeometryImageMetrics",

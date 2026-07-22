@@ -704,6 +704,12 @@ fixture monkeypatches Bi2Se3 strength and `MosaicBraggSpace` construction to fai
 both exact-tag prediction and discovery-to-indexing, proving that geometry work does not depend on
 intensity or mosaic quadrature.
 
+The same hidden-truth fixture also removes both detector tilts from the active pack, recovers the
+remaining seven coordinates at rank 7/7, and requires the fixed tilt values to remain bit-exact. A
+second reordered, noncontiguous three-coordinate request proves that caller order is canonicalized,
+fixed coordinates remain bit-exact at arbitrary positions, and diagnostic vector shapes follow the
+active count. Empty, duplicate, and unknown active-name packs fail explicitly.
+
 The root audit is a direct oracle, not a second call to the production integer-`L` solver. It
 brackets the fixed-`L` elastic residual on the two monotone beta arcs, derives root sign from the
 crossing direction and analytic branch from the signed axial derivative, maps the root to native
@@ -737,6 +743,37 @@ Pivot-pitch is within `1e-6` of its normalized upper-bound span, so detector-coo
 passes but parameter precision does not. Widening that bound through 0.2, 0.5, and 1.0 mm changes
 pooled RMS only from about `1.55875` to `1.55815` pixels while the pivot estimate remains
 bound-seeking; a fourth incidence is required for a parameter-level pivot claim.
+
+A follow-up constrained diagnostic freezes both detector corrections and instead uses the saved
+old RA-SIM Bi2Se3 GUI-state tilts as the base detector calibration. The typed state, saved
+2026-07-01, has SHA-256
+`9be8c0eacd2f336946b0fa31afbe6bc01f76f7b487d43d0ad316fc8b29de7f5f` and legacy
+`gamma/Gamma = 0.3935197233/-0.1480580265 deg`. Exact basis conversion gives current intrinsic
+column/row tilts `-0.3935210372/-0.1480545344 deg`, reproducing the legacy basis within
+`1.11e-16`. Detector-tilt corrections remain exactly zero. The beam center remains
+`(column,row)=(1453.12,1596.422) px`; the CIF remains `a=b=4.143 A`, `c=28.636 A`, and
+`alpha=beta=90 deg`, `gamma=120 deg`. Beam center and lattice are structurally absent from the fit
+pack.
+
+Because the base detector geometry participates in position-free discovery, this constrained run
+freezes a different 9/8/7-site selection with manifest
+`sha256-4626d21c9d715f31f7dcf4040b6ac7700d78faead77eb6fb36aa8d9a381f34f2` at 5/10/15 degrees.
+Pooled RMS/max improves from `11.9607623/18.6106543` to `5.7518779/8.5759636 px`; per-image RMS is
+`4.8268629/5.6487485/6.8563219 px`. The seven-coordinate Jacobian is rank 7 with condition
+`6338.748` and scaled singular values `(56.3155, 21.8813, 6.29875, 3.93629, 0.363137,
+0.102267, 0.00888433)`. In active-coordinate order, the corrections are
+`(0.007755561, 0.013951613, -0.034487517, -0.017397246, 63.2707 um, 40.0814 um,
+-99.999999 um)`. The final pivot-yaw coordinate reaches its lower bound. Three starts differ by at
+most `0.0004286 px` in prediction. The `L={4,11}` cross-check gives held-out RMS/max
+`5.5494945/9.2145733 px`.
+
+The independent root audit is `SAME`, but the acceptance-critical frozen-candidate audit is
+`CHANGED`: the 15-degree `L=5` pair is no longer preserved coherently. The run therefore rejects
+the fixed-legacy-tilt hypothesis under the existing observation-space gates; it is not a substitute
+qualification profile. Initial indexing took `113.696 s`, the fresh global diagnostic `111.946 s`,
+the selected solve `2.003 s`, warm residual median `0.01649 s`, and traced fit peak memory
+`144,527 bytes`. Source-state count remained one and fitting performed zero mosaic, intensity,
+raster, or pixel work.
 
 Measured timing was `91.851` seconds for initial OSC discovery/indexing and `95.200` seconds for
 the separate fresh global diagnostic. Geometry-only setup took `0.05587` seconds, the selected

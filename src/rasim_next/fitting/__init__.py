@@ -21,6 +21,7 @@ from rasim_next.fitting.geometry import (
     fit_tagged_detector_function_geometry,
 )
 from rasim_next.fitting.indexed_series import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
     IndexedGeometryFitResult,
     IndexedGeometryImage,
     IndexedGeometryImageMetrics,
@@ -37,6 +38,7 @@ from rasim_next.fitting.indexed_series import (
 )
 
 __all__ = [
+    "SHARED_GEOMETRY_PARAMETER_NAMES",
     "ContinuousDetectorFunction",
     "ContinuousDetectorGeometryModel",
     "ExactTagGeometryModel",

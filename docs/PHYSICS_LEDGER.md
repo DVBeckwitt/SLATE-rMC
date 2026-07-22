@@ -200,7 +200,7 @@ future work.
 | PHY-SEL-005 | measured peak to rod/branch association | geometry Q-group and peak-selection paths | refinement workflow | selection | CORRECTED frozen association |
 | PHY-SEL-006 | detector-native ROI and selected-rod manifests | GUI selection managers | ordered and diffuse objectives | selection | NEW immutable manifest |
 | PHY-FIT-000 | source size, divergence, wavelength, and correlation characterization | distributed beam setup | refinement step 1 | fitting | NEW staged result |
-| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed; active four-angle local pack and nine-coordinate shared series pack |
+| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed; active four-angle local pack and selectable nonempty subsets of the nine-coordinate shared series pack |
 | PHY-FIT-002 | independent detector geometry calibration | calibrant and geometry paths | refinement step 2 | fitting | NEW/CORRECTED detector-native |
 | PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; shared detector/sample/axis/pivot series pack under fixed calibration |
 | PHY-FIT-002B | continuous detector-function exact-tag map from one nominal companion incident state | no single legacy owner | alignment stage | fitting | NEW active; source center, zero divergence, mean wavelength; shared geometry authorities construct no strength/mosaic and exclude the companion from empirical source mass |

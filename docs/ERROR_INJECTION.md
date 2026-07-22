@@ -157,7 +157,8 @@ rank/condition, or post-fit selection classification.
   frozen-identity acceptance oracle.
 
 Expected detection: strict manifest/image-ID joins, commanded-angle/context validation, independent
-nine-coordinate synthetic recovery, gauge exclusion, bound-scaled rank/condition gates,
+nine-coordinate synthetic recovery, arbitrary active-subset ordering with bit-exact fixed-coordinate
+preservation, gauge exclusion, active-subset bound-scaled rank/condition gates,
 intensity/mosaic/pixel spies, direct fixed-`L` root-coordinate oracle, and corrected-geometry
 relabeling of the unchanged selected native candidates.
 
