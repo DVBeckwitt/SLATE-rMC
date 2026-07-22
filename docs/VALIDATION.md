@@ -693,6 +693,64 @@ oracle proves that every visible m=0 landmark maximizes alignment with the unmos
 axis subject to its exact Ewald section; it also freezes `L=1` as backward and `L=20` as outside
 the default panel.
 
+### Multi-incidence indexed geometry proof
+
+The shared-series proof independently constructs a nonzero hidden nine-coordinate pose and exact
+observations at 5, 10, and 15 degrees. It rejects the one-image and two-image subsets at rank 5/9
+and 7/9, then requires rank 9/9 for the three-image fit. The permanent fixture verifies normalized
+parameter recovery, detector-native training and held-out errors, signed final-normal displacement,
+canonical image-ID ordering, and an independent continuous-Ewald root audit. A second-CIF PbI2
+fixture monkeypatches Bi2Se3 strength and `MosaicBraggSpace` construction to fail while exercising
+both exact-tag prediction and discovery-to-indexing, proving that geometry work does not depend on
+intensity or mosaic quadrature.
+
+The root audit is a direct oracle, not a second call to the production integer-`L` solver. It
+brackets the fixed-`L` elastic residual on the two monotone beta arcs, derives root sign from the
+crossing direction and analytic branch from the signed axial derivative, maps the root to native
+coordinates, and compares it with the production prediction. A permanent mutation reverses the
+production beta tuple without reversing `root_sign`; the audit must report `CHANGED`.
+
+The measured qualification consumes the frozen Bi2Se3 5/10/15-degree 10/8/8-site selection once.
+It must report baseline and per-image improvement, raw-pixel fit and held-out errors, the full
+scaled singular spectrum and weakest direction, deterministic multi-start prediction separation,
+optimizer work, wall time, and peak memory. The exact-root audit and measured outer audit are
+separate. The acceptance-critical measured audit relabels only the unchanged selected native
+candidates and preserves all 26 full keys and coherent tracks: 10/10 at 5 degrees, 8/8 at 10
+degrees, and 8/8 at 15 degrees. A fresh global rediscovery is also recorded but is not an identity
+oracle because its cake chart and same-key candidate ownership change with geometry. In the
+qualifying run it is `CHANGED`: alternate broad same-key lobes are selected at 10 and 15 degrees
+and a new just-above-threshold same-key competitor censors one 5-degree decision. Those are
+operational discovery sensitivities, not relabels of the 26 frozen coordinates.
+
+The qualifying real fit uses manifest
+`sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`.
+Pooled raw-pixel RMS improves from `12.8312707` to `1.5589418` and maximum error from
+`21.3000088` to `5.6507942`. Per-image RMS is `1.2531698`, `0.8406037`, and `2.2866603` pixels for
+5, 10, and 15 degrees. The scaled Jacobian is rank 9 with condition `8689.155`; its singular values
+are `(76.2284, 72.4703, 58.1766, 22.8074, 4.35393, 3.33615, 0.256518, 0.100480,
+0.00877282)`. Three deterministic starts differ by at most `3.164e-5` pixels in predicted native
+coordinates. Holding out `L={4,11}` gives RMS/max `1.3173871/2.0219100` pixels.
+
+The fitted corrections, in contract order, are `(-0.004499434, -0.023011841, 0.007325549,
+0.015659150, -0.015187627, -0.015250741, 49.5499 um, 99.999997 um, -27.7328 um)`.
+Pivot-pitch is within `1e-6` of its normalized upper-bound span, so detector-coordinate prediction
+passes but parameter precision does not. Widening that bound through 0.2, 0.5, and 1.0 mm changes
+pooled RMS only from about `1.55875` to `1.55815` pixels while the pivot estimate remains
+bound-seeking; a fourth incidence is required for a parameter-level pivot claim.
+
+Measured timing was `91.851` seconds for initial OSC discovery/indexing and `95.200` seconds for
+the separate fresh global diagnostic. Geometry-only setup took `0.05587` seconds, the selected
+primary solve `7.6590` seconds, frozen-coordinate relabeling `0.3533` seconds, and the warm joint
+residual median `0.007240` seconds. Traced fit peak memory was `99,630` bytes; OSC decoding and the
+global searches are reported separately because they retain detector-sized arrays.
+
+The nine-coordinate rank is a statement under fixed detector calibration and explicit gauge
+ownership, not a claim that every viewer control is estimable. Detector roll, sample/crystal roll,
+axis-parallel pivot motion, sample tangent translations, detector center/pitch/distance, wavelength,
+and per-image corrections stay fixed. The pivot-pitch/pivot-yaw/plane-offset combination is the
+weakest direction for the measured three-angle design, so a fourth incidence is recommended for an
+independent validation and parameter-level pivot uncertainties must be reported honestly.
+
 ## Tolerance freeze and proof sensitivity
 
 The original T02--T05 comparison proofs loaded `proof/stage_tolerances_v1.json` through the strict

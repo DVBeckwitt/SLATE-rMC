@@ -134,6 +134,33 @@ residual-decomposition and independent m=0 constrained-Ewald oracles, synthetic 
 recovery, held-out native-coordinate error, Jacobian
 rank/condition, or post-fit selection classification.
 
+### Multi-OSC shared geometry fitting
+
+- Join images by tuple position, infer the 15-degree angle from legacy 12-degree provenance, use
+  degrees as radians, reverse motor sign, or drop one declared image.
+- Correct the axis after commanded motion, derive pivot tangents from the nominal rather than the
+  corrected axis, add an axis-parallel pivot coordinate, or apply the plane offset along the
+  pre-correction normal.
+- Use the sample-transform translation rather than the actual nominal incident/sample intersection
+  as the selection `AngleFrame` origin, or retain nominal detector axes after a detector-pose
+  correction.
+- Add detector roll, crystal axial roll, sample tangent translation, detector-center translation,
+  or detector distance without an independent calibration owner.
+- Give each image its own correction vector, omit the 5 -> 7 -> 9 rank ladder, or accept a deficient
+  one/two-image subset through regularization.
+- Invoke structure strength, mosaic probability, rasterization, or pixel integration while
+  predicting exact tags from the nominal source-center state.
+- Replace frozen observations after fitting, or let a newly visible key poison an aggregate track
+  and retrospectively delete otherwise unchanged frozen keys.
+- Swap the two analytic beta roots while retaining their `(-1,+1)` root-sign tuple, reuse the
+  production root solver as its own audit, or make a geometry-dependent fresh cake search the
+  frozen-identity acceptance oracle.
+
+Expected detection: strict manifest/image-ID joins, commanded-angle/context validation, independent
+nine-coordinate synthetic recovery, gauge exclusion, bound-scaled rank/condition gates,
+intensity/mosaic/pixel spies, direct fixed-`L` root-coordinate oracle, and corrected-geometry
+relabeling of the unchanged selected native candidates.
+
 ### Measured selection and indexing
 
 - Supply predicted marker coordinates to global discovery, rotate OSC data twice, swap native

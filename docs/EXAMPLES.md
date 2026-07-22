@@ -217,6 +217,36 @@ anchors only after each discrete reciprocal label is frozen. An external 3,000 Ã
 diagnostic may be supplied with `--simulation-diagnostic`; unresolved diagnostics are rejected
 unless the non-accepted override is explicit.
 
+## Joint geometry fitting for an OSC series
+
+Fit one shared full-rank geometry correction to the frozen 5, 10, and user-authoritative 15 degree
+Bi2Se3 observations, cross-validate integer `L={4,11}`, rerun the measured outer audit, and include
+separate timing/memory evidence:
+
+```powershell
+uv run python scripts/fit_osc_geometry.py `
+  configs/bi2se3_osc_geometry_fit.yaml `
+  --heldout-integer-l 4 11 `
+  --benchmark `
+  --json
+```
+
+The manifest is the reusable boundary: each record declares an exact image ID, OSC path, and full
+commanded-angle tuple. A different layered-hexagonal material uses the same command with its own
+simulation configuration and image records. Unrelated materials or mounts are separate fit groups.
+The optional `qualification_profile` names a frozen data-specific acceptance profile. The tracked
+Bi2Se3 profile requires both `--heldout-integer-l 4 11` and `--benchmark`, and it fails closed if the
+initial indexed-manifest hash changes. A generic manifest omits the profile: the command then reports
+numerical run completion without applying or claiming the Bi2Se3 thresholds.
+The primary fit always uses every frozen key; `--heldout-integer-l` requests a separate training
+refit and held-out prediction report without changing that primary data set.
+The objective evaluates one ideal nominal incident state and no mosaic, structure intensity,
+raster, or pixel integration. JSON reports the frozen manifest, pooled/per-image metrics, rank and
+weak direction, active bounds, held-out predictions, independent-root audit, and frozen-candidate
+measured audit. Acceptance relabels the unchanged selected native candidates; the separately
+reported fresh global rediscovery is an operational chart/candidate-stability diagnostic and cannot
+replace fitted observations.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

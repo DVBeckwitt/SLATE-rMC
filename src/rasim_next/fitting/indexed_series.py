@@ -1,0 +1,807 @@
+"""Shared detector-native geometry fitting across indexed OSC images."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, replace
+
+import numpy as np
+from numpy.typing import ArrayLike, NDArray
+from scipy.optimize import least_squares
+
+from rasim_next.core.frames import FrameId
+from rasim_next.core.transforms import RigidTransform
+from rasim_next.fitting.geometry import (
+    ExactTagGeometryModel,
+    GeometryPredictionError,
+    GeometryRankError,
+    IntegerLMarkerKey,
+    IntegerLMarkerObservations,
+    IntegerLMarkerPrediction,
+    IntegerLSelectionAudit,
+    _finite_difference_jacobian,
+    _nonzero_chord_angles_and_residual_px,
+    _rank_diagnostics,
+    _readonly_float_array,
+    audit_exact_tag_geometry_roots,
+    evaluate_tagged_geometry_objective_residual,
+)
+from rasim_next.geometry.instrument import (
+    AxisRotation,
+    CompiledInstrument,
+    axis_rotation_transform,
+    compose_intrinsic_xy_rotation,
+)
+from rasim_next.pipeline.configured_simulation import (
+    AxisRotationConfiguration,
+    rebind_configured_geometry_instrument,
+)
+
+FloatArray = NDArray[np.float64]
+BoolArray = NDArray[np.bool_]
+
+_PARAMETER_NAMES = (
+    "detector_column_tilt_rad",
+    "detector_row_tilt_rad",
+    "sample_normal_x_tilt_rad",
+    "sample_normal_y_tilt_rad",
+    "goniometer_axis_pitch_rad",
+    "goniometer_axis_yaw_rad",
+    "sample_plane_normal_offset_m",
+    "goniometer_pivot_pitch_offset_m",
+    "goniometer_pivot_yaw_offset_m",
+)
+_PARAMETERIZATION_ID = (
+    "shared_detector_xy_axis_tangent_xy_pivot_tangent_xy_sample_normal_xy_plane_offset.v2"
+)
+_MAXIMUM_JACOBIAN_CONDITION = 1.0e8
+_ACTIVE_BOUND_RELATIVE_TOLERANCE = 1.0e-6
+_RANK_STEP = (1.0e-5, 1.0e-5, 1.0e-5, 1.0e-5, 1.0e-5, 1.0e-5, 1.0e-6, 1.0e-6, 1.0e-6)
+_OPTIMIZER_SCALE = (
+    math.radians(0.5),
+    math.radians(0.5),
+    math.radians(0.5),
+    math.radians(0.5),
+    math.radians(0.5),
+    math.radians(0.5),
+    5.0e-5,
+    5.0e-5,
+    5.0e-5,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SharedGeometryCorrections:
+    """Nine uniquely owned corrections shared by one commanded-angle series."""
+
+    detector_column_tilt_rad: float
+    detector_row_tilt_rad: float
+    sample_normal_x_tilt_rad: float
+    sample_normal_y_tilt_rad: float
+    goniometer_axis_pitch_rad: float
+    goniometer_axis_yaw_rad: float
+    sample_plane_normal_offset_m: float
+    goniometer_pivot_pitch_offset_m: float
+    goniometer_pivot_yaw_offset_m: float
+
+    def __post_init__(self) -> None:
+        for name in _PARAMETER_NAMES:
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            object.__setattr__(self, name, value)
+
+    @classmethod
+    def zero(cls) -> SharedGeometryCorrections:
+        return cls(*(0.0 for _ in _PARAMETER_NAMES))
+
+    @classmethod
+    def from_array(cls, value: ArrayLike) -> SharedGeometryCorrections:
+        values = _readonly_float_array(value, (9,), "shared geometry corrections")
+        return cls(*(float(item) for item in values))
+
+    def as_array(self) -> FloatArray:
+        return _readonly_float_array(
+            tuple(getattr(self, name) for name in _PARAMETER_NAMES),
+            (9,),
+            "shared geometry corrections",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SharedGeometryCorrectionBounds:
+    """Hard bounds for the nine shared geometry coordinates."""
+
+    lower: SharedGeometryCorrections
+    upper: SharedGeometryCorrections
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lower, SharedGeometryCorrections) or not isinstance(
+            self.upper, SharedGeometryCorrections
+        ):
+            raise TypeError("lower and upper must be SharedGeometryCorrections")
+        if np.any(self.lower.as_array() >= self.upper.as_array()):
+            raise ValueError("every shared geometry lower bound must be smaller than its upper")
+
+    @classmethod
+    def rasim_multi_angle_pose(cls) -> SharedGeometryCorrectionBounds:
+        half_span = np.asarray(
+            (
+                math.radians(10.0),
+                math.radians(10.0),
+                math.radians(5.0),
+                math.radians(5.0),
+                math.radians(5.0),
+                math.radians(5.0),
+                1.0e-4,
+                1.0e-4,
+                1.0e-4,
+            )
+        )
+        return cls(
+            lower=SharedGeometryCorrections.from_array(-half_span),
+            upper=SharedGeometryCorrections.from_array(half_span),
+        )
+
+    @property
+    def half_span(self) -> FloatArray:
+        return _readonly_float_array(
+            0.5 * (self.upper.as_array() - self.lower.as_array()),
+            (9,),
+            "shared geometry half span",
+        )
+
+
+def _axis_pitch_yaw(axis_lab: ArrayLike) -> tuple[float, float]:
+    axis = np.asarray(axis_lab, dtype=np.float64)
+    if axis.shape != (3,) or not np.all(np.isfinite(axis)):
+        raise ValueError("configured goniometer axis must be a finite three-vector")
+    horizontal = math.hypot(float(axis[0]), float(axis[1]))
+    if horizontal <= 1.0e-12:
+        raise ValueError("goniometer-axis corrections require a nonvertical configured axis")
+    return math.atan2(float(axis[2]), horizontal), math.atan2(-float(axis[1]), float(axis[0]))
+
+
+def _axis_rotation(
+    configuration: AxisRotationConfiguration,
+    axis_lab: ArrayLike,
+    pivot_lab_m: ArrayLike,
+) -> AxisRotation:
+    return AxisRotation(
+        axis_lab=np.asarray(axis_lab, dtype=np.float64),
+        angle_rad=math.radians(configuration.angle_deg),
+        pivot_lab_m=np.asarray(pivot_lab_m, dtype=np.float64),
+    )
+
+
+def apply_shared_geometry_corrections(
+    instrument: CompiledInstrument,
+    configured_axis_rotations: tuple[AxisRotationConfiguration, ...],
+    corrections: SharedGeometryCorrections,
+) -> CompiledInstrument:
+    """Apply the canonical axis, pivoted end-pose, and signed-plane corrections."""
+
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    if not isinstance(corrections, SharedGeometryCorrections):
+        raise TypeError("corrections must be SharedGeometryCorrections")
+    configured = tuple(configured_axis_rotations)
+    if len(configured) != 1 or not isinstance(configured[0], AxisRotationConfiguration):
+        raise ValueError("shared geometry fitting requires exactly one configured goniometer axis")
+    if instrument.sample_support_model_id != "unbounded_plane.v1":
+        raise ValueError("shared geometry fitting currently requires unbounded_plane.v1 support")
+
+    rotation = configured[0]
+    base_pitch, base_yaw = _axis_pitch_yaw(rotation.axis_lab)
+    pitch = base_pitch + corrections.goniometer_axis_pitch_rad
+    yaw = base_yaw + corrections.goniometer_axis_yaw_rad
+    cosine_pitch = math.cos(pitch)
+    corrected_axis = np.asarray(
+        (
+            math.cos(yaw) * cosine_pitch,
+            -math.sin(yaw) * cosine_pitch,
+            math.sin(pitch),
+        ),
+        dtype=np.float64,
+    )
+    pivot_pitch_tangent = np.asarray(
+        (
+            -math.cos(yaw) * math.sin(pitch),
+            math.sin(yaw) * math.sin(pitch),
+            math.cos(pitch),
+        ),
+        dtype=np.float64,
+    )
+    pivot_yaw_tangent = np.asarray(
+        (-math.sin(yaw), -math.cos(yaw), 0.0),
+        dtype=np.float64,
+    )
+    base_pivot = np.asarray(rotation.pivot_lab_m, dtype=np.float64)
+    corrected_pivot = (
+        base_pivot
+        + corrections.goniometer_pivot_pitch_offset_m * pivot_pitch_tangent
+        + corrections.goniometer_pivot_yaw_offset_m * pivot_yaw_tangent
+    )
+    base_motion = axis_rotation_transform(_axis_rotation(rotation, rotation.axis_lab, base_pivot))
+    corrected_motion = axis_rotation_transform(
+        _axis_rotation(rotation, corrected_axis, corrected_pivot)
+    )
+    sample_after_axis = corrected_motion.compose(base_motion.inverse()).compose(
+        instrument.lab_from_sample
+    )
+
+    sample_rotation = compose_intrinsic_xy_rotation(
+        sample_after_axis.rotation,
+        corrections.sample_normal_x_tilt_rad,
+        corrections.sample_normal_y_tilt_rad,
+    )
+    sample_delta_lab = sample_rotation @ sample_after_axis.rotation.T
+    sample_translation = corrected_pivot + sample_delta_lab @ (
+        sample_after_axis.translation_m - corrected_pivot
+    )
+    sample_translation = (
+        sample_translation + corrections.sample_plane_normal_offset_m * sample_rotation[:, 2]
+    )
+    detector = instrument.lab_from_detector
+    detector_rotation = compose_intrinsic_xy_rotation(
+        detector.rotation,
+        corrections.detector_column_tilt_rad,
+        corrections.detector_row_tilt_rad,
+    )
+    return replace(
+        instrument,
+        lab_from_detector=RigidTransform(
+            detector_rotation,
+            detector.translation_m,
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        lab_from_sample=RigidTransform(
+            sample_rotation,
+            sample_translation,
+            FrameId.SAMPLE,
+            FrameId.LAB,
+        ),
+    )
+
+
+def _array_state_signature(value: ArrayLike) -> tuple[str, tuple[int, ...], bytes]:
+    array = np.ascontiguousarray(value)
+    return array.dtype.str, array.shape, array.tobytes()
+
+
+def _transform_state_signature(transform: RigidTransform) -> tuple[object, ...]:
+    return (
+        transform.source_frame.value,
+        transform.target_frame.value,
+        _array_state_signature(transform.rotation),
+        _array_state_signature(transform.translation_m),
+    )
+
+
+def _instrument_state_signature(
+    instrument: CompiledInstrument,
+    *,
+    include_commanded_sample_pose: bool,
+) -> tuple[object, ...]:
+    return (
+        _transform_state_signature(instrument.lab_from_sample)
+        if include_commanded_sample_pose
+        else None,
+        _transform_state_signature(instrument.sample_from_crystal),
+        _transform_state_signature(instrument.lab_from_detector),
+        instrument.detector_shape_rc,
+        instrument.detector_row_pitch_m,
+        instrument.detector_column_pitch_m,
+        instrument.detector_reference_coordinate_px,
+        instrument.sample_support_model_id,
+        instrument.sample_width_m,
+        instrument.sample_length_m,
+        instrument.film_thickness_A,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometryImage:
+    """One immutable indexed image and its exact nominal geometry context."""
+
+    image_id: str
+    commanded_angle_rad: float
+    model: ExactTagGeometryModel
+    observations: IntegerLMarkerObservations
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image_id, str) or not self.image_id.strip():
+            raise ValueError("image_id must be nonempty")
+        if not isinstance(self.model, ExactTagGeometryModel):
+            raise TypeError("model must be ExactTagGeometryModel")
+        if not isinstance(self.observations, IntegerLMarkerObservations):
+            raise TypeError("observations must be IntegerLMarkerObservations")
+        angle = float(self.commanded_angle_rad)
+        if not math.isfinite(angle):
+            raise ValueError("commanded_angle_rad must be finite")
+        configured = self.model.inputs.config.instrument.axis_rotations
+        if len(configured) != 1:
+            raise ValueError("indexed geometry images require exactly one configured axis")
+        expected_angle = math.radians(configured[0].angle_deg)
+        if not math.isclose(angle, expected_angle, rel_tol=0.0, abs_tol=1.0e-14):
+            raise ValueError("commanded angle does not match the image geometry context")
+        expected_instrument = rebind_configured_geometry_instrument(
+            self.model.inputs,
+            self.model.inputs.config,
+        ).instrument
+        if _instrument_state_signature(
+            self.model.instrument,
+            include_commanded_sample_pose=True,
+        ) != _instrument_state_signature(
+            expected_instrument,
+            include_commanded_sample_pose=True,
+        ):
+            raise ValueError("indexed geometry model instrument does not match its declared config")
+        wavelength_scale = max(
+            self.observations.reference_wavelength_A,
+            self.model.reference_wavelength_A,
+            1.0,
+        )
+        if not math.isclose(
+            self.observations.reference_wavelength_A,
+            self.model.reference_wavelength_A,
+            rel_tol=0.0,
+            abs_tol=256.0 * np.finfo(np.float64).eps * wavelength_scale,
+        ):
+            raise ValueError("observation wavelength does not match the image geometry context")
+        object.__setattr__(self, "image_id", self.image_id.strip())
+        object.__setattr__(self, "commanded_angle_rad", angle)
+
+    def corrected_instrument(
+        self,
+        corrections: SharedGeometryCorrections,
+    ) -> CompiledInstrument:
+        return apply_shared_geometry_corrections(
+            self.model.instrument,
+            self.model.inputs.config.instrument.axis_rotations,
+            corrections,
+        )
+
+    def predict_integer_l_tags(
+        self,
+        keys: tuple[IntegerLMarkerKey, ...],
+        corrections: SharedGeometryCorrections,
+    ) -> IntegerLMarkerPrediction:
+        return self.model.predict_integer_l_tags(
+            keys,
+            instrument=self.corrected_instrument(corrections),
+        )
+
+
+def _series_geometry_signature(image: IndexedGeometryImage) -> tuple[object, ...]:
+    inputs = image.model.inputs
+    config = inputs.config
+    normalized_axes = tuple(
+        replace(axis, angle_deg=0.0) for axis in config.instrument.axis_rotations
+    )
+
+    instrument = inputs.instrument
+    actual_state = (
+        inputs.samples.source_revision,
+        inputs.material.material_revision,
+        _array_state_signature(inputs.reciprocal.basis_Ainv),
+        tuple((rod.h, rod.k, rod.family_m, rod.population) for rod in inputs.rods),
+        _instrument_state_signature(instrument, include_commanded_sample_pose=False),
+    )
+    return (
+        config.material,
+        config.source,
+        replace(config.instrument, axis_rotations=normalized_axes),
+        config.bragg,
+        actual_state,
+    )
+
+
+def _canonical_images(images: tuple[IndexedGeometryImage, ...]) -> tuple[IndexedGeometryImage, ...]:
+    supplied = tuple(images)
+    if not supplied or any(not isinstance(image, IndexedGeometryImage) for image in supplied):
+        raise ValueError("images must contain at least one IndexedGeometryImage")
+    ordered = tuple(sorted(supplied, key=lambda image: image.image_id))
+    image_ids = tuple(image.image_id for image in ordered)
+    if len(set(image_ids)) != len(image_ids):
+        raise ValueError("indexed geometry image IDs must be unique")
+    signature = _series_geometry_signature(ordered[0])
+    if any(_series_geometry_signature(image) != signature for image in ordered[1:]):
+        raise ValueError(
+            "indexed geometry images must share declared and actual material, source, mount, "
+            "detector, axis, reciprocal, and Bragg state"
+        )
+    return ordered
+
+
+def evaluate_indexed_geometry_series_residual(
+    images: tuple[IndexedGeometryImage, ...],
+    corrections: SharedGeometryCorrections,
+) -> FloatArray:
+    """Concatenate canonical per-image detector-native residual blocks."""
+
+    if not isinstance(corrections, SharedGeometryCorrections):
+        raise TypeError("corrections must be SharedGeometryCorrections")
+    ordered = _canonical_images(images)
+    blocks = []
+    for image in ordered:
+        prediction = image.predict_integer_l_tags(image.observations.keys, corrections)
+        blocks.append(evaluate_tagged_geometry_objective_residual(image.observations, prediction))
+    residual = np.concatenate(blocks)
+    residual.setflags(write=False)
+    return residual
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometryImageMetrics:
+    image_id: str
+    site_count: int
+    chord_count: int
+    site_rms_px: float
+    site_max_px: float
+    chord_angle_rms_rad: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image_id, str) or not self.image_id:
+            raise ValueError("image metric image_id must be nonempty")
+        for name in ("site_count", "chord_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in ("site_rms_px", "site_max_px", "chord_angle_rms_rad"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometryFitResult:
+    corrections: SharedGeometryCorrections
+    success: bool
+    message: str
+    image_ids: tuple[str, ...]
+    per_image: tuple[IndexedGeometryImageMetrics, ...]
+    training_site_rms_px: float
+    training_site_max_px: float
+    training_chord_angle_rms_rad: float
+    jacobian_rank: int
+    jacobian_condition: float
+    scaled_jacobian_singular_values: FloatArray
+    scaled_jacobian_weakest_direction: FloatArray
+    active_bounds: BoolArray
+    model_evaluation_count: int
+    optimizer_function_evaluation_count: int
+    optimizer_jacobian_evaluation_count: int
+    parameterization_id: str = _PARAMETERIZATION_ID
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.corrections, SharedGeometryCorrections):
+            raise TypeError("corrections must be SharedGeometryCorrections")
+        if not isinstance(self.success, bool):
+            raise TypeError("success must be bool")
+        if not isinstance(self.message, str) or not self.message:
+            raise ValueError("message must be nonempty")
+        if not self.image_ids or len(set(self.image_ids)) != len(self.image_ids):
+            raise ValueError("image_ids must contain unique nonempty IDs")
+        if any(not isinstance(value, str) or not value for value in self.image_ids):
+            raise ValueError("image_ids must contain unique nonempty IDs")
+        if any(not isinstance(metric, IndexedGeometryImageMetrics) for metric in self.per_image):
+            raise TypeError("per_image must contain IndexedGeometryImageMetrics")
+        if self.image_ids != tuple(metric.image_id for metric in self.per_image):
+            raise ValueError("per-image metrics must match the canonical image IDs")
+        for name in (
+            "training_site_rms_px",
+            "training_site_max_px",
+            "training_chord_angle_rms_rad",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+            object.__setattr__(self, name, value)
+        if (
+            isinstance(self.jacobian_rank, bool)
+            or not isinstance(self.jacobian_rank, int)
+            or not 0 <= self.jacobian_rank <= 9
+        ):
+            raise ValueError("jacobian_rank must lie in [0, 9]")
+        condition = float(self.jacobian_condition)
+        if not math.isfinite(condition) or condition < 1.0:
+            raise ValueError("jacobian_condition must be finite and at least one")
+        object.__setattr__(self, "jacobian_condition", condition)
+        singular = _readonly_float_array(
+            self.scaled_jacobian_singular_values,
+            (9,),
+            "scaled_jacobian_singular_values",
+        )
+        if np.any(singular < 0.0) or np.any(np.diff(singular) > 0.0):
+            raise ValueError("scaled singular values must be nonnegative and descending")
+        weakest = _readonly_float_array(
+            self.scaled_jacobian_weakest_direction,
+            (9,),
+            "scaled_jacobian_weakest_direction",
+        )
+        if not math.isclose(float(np.linalg.norm(weakest)), 1.0, rel_tol=0.0, abs_tol=1.0e-12):
+            raise ValueError("scaled weakest direction must have unit norm")
+        active = np.array(self.active_bounds, dtype=np.bool_, copy=True)
+        if active.shape != (9,):
+            raise ValueError("active_bounds must contain nine flags")
+        active.setflags(write=False)
+        for name in (
+            "model_evaluation_count",
+            "optimizer_function_evaluation_count",
+            "optimizer_jacobian_evaluation_count",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        if self.parameterization_id != _PARAMETERIZATION_ID:
+            raise ValueError("unsupported indexed geometry parameterization")
+        if self.success and (
+            self.jacobian_rank != 9 or self.jacobian_condition > _MAXIMUM_JACOBIAN_CONDITION
+        ):
+            raise ValueError("a successful fit must have a full acceptable Jacobian")
+        object.__setattr__(self, "scaled_jacobian_singular_values", singular)
+        object.__setattr__(self, "scaled_jacobian_weakest_direction", weakest)
+        object.__setattr__(self, "active_bounds", active)
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometrySeriesMetrics:
+    image_ids: tuple[str, ...]
+    per_image: tuple[IndexedGeometryImageMetrics, ...]
+    site_rms_px: float
+    site_max_px: float
+    chord_angle_rms_rad: float
+
+    def __post_init__(self) -> None:
+        if self.image_ids != tuple(metric.image_id for metric in self.per_image):
+            raise ValueError("series metrics must match the canonical image IDs")
+        if not self.image_ids or any(
+            not isinstance(metric, IndexedGeometryImageMetrics) for metric in self.per_image
+        ):
+            raise ValueError("series metrics require at least one per-image metric")
+        for name in ("site_rms_px", "site_max_px", "chord_angle_rms_rad"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometryRootAuditImage:
+    image_id: str
+    audit: IntegerLSelectionAudit
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image_id, str) or not self.image_id:
+            raise ValueError("root audit image_id must be nonempty")
+        if not isinstance(self.audit, IntegerLSelectionAudit):
+            raise TypeError("audit must be IntegerLSelectionAudit")
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedGeometrySeriesRootAudit:
+    classification: str
+    images: tuple[IndexedGeometryRootAuditImage, ...]
+
+    def __post_init__(self) -> None:
+        images = tuple(self.images)
+        if not images or any(
+            not isinstance(item, IndexedGeometryRootAuditImage) for item in images
+        ):
+            raise ValueError("images must contain at least one root audit")
+        if tuple(item.image_id for item in images) != tuple(
+            sorted(item.image_id for item in images)
+        ) or len({item.image_id for item in images}) != len(images):
+            raise ValueError("root audits must have unique canonical image IDs")
+        expected = (
+            "SAME" if all(item.audit.classification == "SAME" for item in images) else "CHANGED"
+        )
+        if self.classification != expected:
+            raise ValueError("series root-audit classification disagrees with its images")
+        object.__setattr__(self, "images", images)
+
+
+def audit_indexed_geometry_series_roots(
+    images: tuple[IndexedGeometryImage, ...],
+    corrections: SharedGeometryCorrections,
+) -> IndexedGeometrySeriesRootAudit:
+    """Audit every frozen root through the independent continuous-surface solver."""
+
+    if not isinstance(corrections, SharedGeometryCorrections):
+        raise TypeError("corrections must be SharedGeometryCorrections")
+    ordered = _canonical_images(images)
+    audits = tuple(
+        IndexedGeometryRootAuditImage(
+            image_id=image.image_id,
+            audit=audit_exact_tag_geometry_roots(
+                image.model,
+                image.observations.keys,
+                instrument=image.corrected_instrument(corrections),
+            ),
+        )
+        for image in ordered
+    )
+    return IndexedGeometrySeriesRootAudit(
+        classification=(
+            "SAME" if all(item.audit.classification == "SAME" for item in audits) else "CHANGED"
+        ),
+        images=audits,
+    )
+
+
+def _fit_metrics(
+    images: tuple[IndexedGeometryImage, ...],
+    corrections: SharedGeometryCorrections,
+) -> tuple[tuple[IndexedGeometryImageMetrics, ...], FloatArray, FloatArray]:
+    per_image: list[IndexedGeometryImageMetrics] = []
+    all_site_error: list[FloatArray] = []
+    all_chord_angle: list[FloatArray] = []
+    for image in images:
+        prediction = image.predict_integer_l_tags(image.observations.keys, corrections)
+        if not np.all(prediction.active_panel):
+            raise GeometryPredictionError(
+                "the fitted marker set does not remain on the active panel"
+            )
+        site_error = np.linalg.norm(
+            prediction.coordinates_px - image.observations.coordinates_px,
+            axis=1,
+        )
+        chord_angle, _ = _nonzero_chord_angles_and_residual_px(image.observations, prediction)
+        per_image.append(
+            IndexedGeometryImageMetrics(
+                image_id=image.image_id,
+                site_count=len(image.observations.keys),
+                chord_count=int(chord_angle.size),
+                site_rms_px=float(np.sqrt(np.mean(site_error**2))),
+                site_max_px=float(np.max(site_error)),
+                chord_angle_rms_rad=(
+                    float(np.sqrt(np.mean(chord_angle**2))) if chord_angle.size else 0.0
+                ),
+            )
+        )
+        all_site_error.append(site_error)
+        all_chord_angle.append(chord_angle)
+    return (
+        tuple(per_image),
+        np.concatenate(all_site_error),
+        np.concatenate(all_chord_angle)
+        if any(value.size for value in all_chord_angle)
+        else np.zeros(0),
+    )
+
+
+def evaluate_indexed_geometry_series_metrics(
+    images: tuple[IndexedGeometryImage, ...],
+    corrections: SharedGeometryCorrections,
+) -> IndexedGeometrySeriesMetrics:
+    """Report raw detector-pixel and chord metrics without optimizing."""
+
+    ordered = _canonical_images(images)
+    per_image, site_error, chord_angle = _fit_metrics(ordered, corrections)
+    return IndexedGeometrySeriesMetrics(
+        image_ids=tuple(image.image_id for image in ordered),
+        per_image=per_image,
+        site_rms_px=float(np.sqrt(np.mean(site_error**2))),
+        site_max_px=float(np.max(site_error)),
+        chord_angle_rms_rad=(float(np.sqrt(np.mean(chord_angle**2))) if chord_angle.size else 0.0),
+    )
+
+
+def fit_indexed_geometry_series(
+    images: tuple[IndexedGeometryImage, ...],
+    *,
+    initial: SharedGeometryCorrections,
+    bounds: SharedGeometryCorrectionBounds,
+) -> IndexedGeometryFitResult:
+    """Fit one nine-coordinate geometry correction to all indexed images at once."""
+
+    ordered = _canonical_images(images)
+    if not isinstance(initial, SharedGeometryCorrections):
+        raise TypeError("initial must be SharedGeometryCorrections")
+    if not isinstance(bounds, SharedGeometryCorrectionBounds):
+        raise TypeError("bounds must be SharedGeometryCorrectionBounds")
+    lower = bounds.lower.as_array()
+    upper = bounds.upper.as_array()
+    initial_values = initial.as_array()
+    if np.any(initial_values < lower) or np.any(initial_values > upper):
+        raise ValueError("initial shared geometry corrections must lie inside the bounds")
+
+    model_evaluation_count = 0
+
+    def residual(value: FloatArray) -> FloatArray:
+        nonlocal model_evaluation_count
+        model_evaluation_count += 1
+        return evaluate_indexed_geometry_series_residual(
+            ordered,
+            SharedGeometryCorrections.from_array(value),
+        )
+
+    preflight = _finite_difference_jacobian(
+        residual,
+        initial_values,
+        lower,
+        upper,
+        step_size=_RANK_STEP,
+    )
+    rank, condition, _ = _rank_diagnostics(preflight, bounds.half_span)
+    if rank < 9 or condition > _MAXIMUM_JACOBIAN_CONDITION:
+        raise GeometryRankError(
+            f"shared geometry Jacobian rank/conditioning failed: rank={rank}/9, "
+            f"condition={condition:.6g}"
+        )
+
+    optimized = least_squares(
+        residual,
+        initial_values,
+        bounds=(lower, upper),
+        method="trf",
+        jac="2-point",
+        x_scale=_OPTIMIZER_SCALE,
+        ftol=1.0e-12,
+        xtol=1.0e-12,
+        gtol=1.0e-12,
+        max_nfev=150,
+    )
+    corrections = SharedGeometryCorrections.from_array(optimized.x)
+    per_image, site_error, chord_angle = _fit_metrics(ordered, corrections)
+    rank, condition, singular = _rank_diagnostics(
+        np.asarray(optimized.jac, dtype=np.float64),
+        bounds.half_span,
+    )
+    if rank < 9 or condition > _MAXIMUM_JACOBIAN_CONDITION:
+        raise GeometryRankError(
+            f"fitted shared geometry Jacobian rank/conditioning failed: rank={rank}/9, "
+            f"condition={condition:.6g}"
+        )
+    scaled_jacobian = np.asarray(optimized.jac, dtype=np.float64) * bounds.half_span[None, :]
+    weakest = np.linalg.svd(scaled_jacobian, full_matrices=False)[2][-1]
+    largest_component = int(np.argmax(np.abs(weakest)))
+    if weakest[largest_component] < 0.0:
+        weakest = -weakest
+    bound_proximity = _ACTIVE_BOUND_RELATIVE_TOLERANCE * bounds.half_span
+    active_bounds = np.asarray(
+        (optimized.active_mask != 0)
+        | (optimized.x - lower <= bound_proximity)
+        | (upper - optimized.x <= bound_proximity),
+        dtype=np.bool_,
+    )
+    return IndexedGeometryFitResult(
+        corrections=corrections,
+        success=bool(optimized.success),
+        message=str(optimized.message),
+        image_ids=tuple(image.image_id for image in ordered),
+        per_image=per_image,
+        training_site_rms_px=float(np.sqrt(np.mean(site_error**2))),
+        training_site_max_px=float(np.max(site_error)),
+        training_chord_angle_rms_rad=(
+            float(np.sqrt(np.mean(chord_angle**2))) if chord_angle.size else 0.0
+        ),
+        jacobian_rank=rank,
+        jacobian_condition=condition,
+        scaled_jacobian_singular_values=singular,
+        scaled_jacobian_weakest_direction=weakest,
+        active_bounds=active_bounds,
+        model_evaluation_count=model_evaluation_count,
+        optimizer_function_evaluation_count=int(optimized.nfev),
+        optimizer_jacobian_evaluation_count=int(optimized.njev or 0),
+    )
+
+
+__all__ = [
+    "IndexedGeometryFitResult",
+    "IndexedGeometryImage",
+    "IndexedGeometryImageMetrics",
+    "IndexedGeometryRootAuditImage",
+    "IndexedGeometrySeriesMetrics",
+    "IndexedGeometrySeriesRootAudit",
+    "SharedGeometryCorrectionBounds",
+    "SharedGeometryCorrections",
+    "apply_shared_geometry_corrections",
+    "audit_indexed_geometry_series_roots",
+    "evaluate_indexed_geometry_series_metrics",
+    "evaluate_indexed_geometry_series_residual",
+    "fit_indexed_geometry_series",
+]

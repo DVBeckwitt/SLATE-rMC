@@ -588,6 +588,316 @@ class _MappedArrays:
     propagation_direction: NDArray[np.int8]
 
 
+def _validate_geometry_mapping_context(
+    *,
+    incident: IncidentTransportResult,
+    instrument: CompiledInstrument,
+    ki_sample_Ainv: ArrayLike,
+    material: MaterialOptics | None = None,
+) -> tuple[FloatArray, float]:
+    if not isinstance(incident, IncidentTransportResult):
+        raise TypeError("incident must be IncidentTransportResult")
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    if material is not None and not isinstance(material, MaterialOptics):
+        raise TypeError("material must be MaterialOptics")
+    states = incident.states
+    if states.incident_state_id.size != 1:
+        raise ValueError("detector geometry mapping requires exactly one incident state")
+    if not states.valid[0]:
+        raise ValueError("the incident state must be valid")
+    if states.sample_geometry_revision != instrument.sample_geometry_revision:
+        raise ValueError("incident and detector geometry sample revisions disagree")
+    if material is not None and states.material_revision != material.material_revision:
+        raise ValueError("incident and material revisions disagree")
+    ki_sample = np.asarray(ki_sample_Ainv, dtype=np.float64)
+    if ki_sample.shape != (3,) or not np.all(np.isfinite(ki_sample)):
+        raise ValueError("ki_sample_Ainv must be a finite three-vector")
+    scale = max(float(np.linalg.norm(ki_sample)), 1.0)
+    if not np.allclose(
+        ki_sample,
+        states.k_film_phase_sample_Ainv[0],
+        rtol=0.0,
+        atol=256.0 * np.finfo(np.float64).eps * scale,
+    ):
+        raise ValueError("ki_sample_Ainv must match the canonical incident film-phase vector")
+    return ki_sample, 2.0 * np.pi / float(states.wavelength_A[0])
+
+
+def evaluate_detector_coordinates_geometry(
+    column_px: ArrayLike,
+    row_px: ArrayLike,
+    *,
+    incident: IncidentTransportResult,
+    instrument: CompiledInstrument,
+    ki_sample_Ainv: ArrayLike,
+    include_surface_jacobian: bool = True,
+) -> DetectorCoordinateGeometry:
+    """Map native detector coordinates to internal elastic Q without intensity work."""
+
+    ki_sample, air_k0_Ainv = _validate_geometry_mapping_context(
+        incident=incident,
+        instrument=instrument,
+        ki_sample_Ainv=ki_sample_Ainv,
+    )
+    supplied_column = np.asarray(column_px)
+    supplied_row = np.asarray(row_px)
+    if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
+        np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
+    ):
+        raise ValueError("detector coordinates must be real")
+    column, row = np.broadcast_arrays(
+        np.asarray(supplied_column.real, dtype=np.float64),
+        np.asarray(supplied_row.real, dtype=np.float64),
+    )
+    if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
+        raise ValueError("detector coordinates must be finite")
+    shape = column.shape
+    flat_column = column.reshape(-1)
+    flat_row = row.reshape(-1)
+    size = flat_column.size
+    rows, columns = instrument.detector_shape_rc
+    inside = (
+        (flat_column >= -0.5)
+        & (flat_column <= columns - 0.5)
+        & (flat_row >= -0.5)
+        & (flat_row <= rows - 0.5)
+    )
+    status = np.full(size, ValidityCode.OUTSIDE_SUPPORT.value, dtype="U32")
+    point_lab = _detector_coordinates_to_lab_points(flat_column, flat_row, instrument)
+    origin_lab = incident.states.sample_intersection_lab_m[0]
+    displacement_lab = point_lab - origin_lab
+    distance_m = np.linalg.norm(displacement_lab, axis=1)
+    nonzero = inside & (distance_m > 0.0)
+    status[inside & ~nonzero] = ValidityCode.NO_SOLUTION.value
+    direction_lab = np.zeros((size, 3), dtype=np.float64)
+    direction_lab[nonzero] = displacement_lab[nonzero] / distance_m[nonzero, None]
+    incidence_cosine = _detector_incidence_cosine(direction_lab, instrument)
+    detector_parallel = nonzero & (np.abs(incidence_cosine) <= _DETECTOR_INCIDENCE_COSINE_TOL)
+    status[detector_parallel] = ValidityCode.PARALLEL.value
+    back_facing = nonzero & (incidence_cosine < -_DETECTOR_INCIDENCE_COSINE_TOL)
+    status[back_facing] = ValidityCode.BACKWARD.value
+    front_facing = nonzero & (incidence_cosine > _DETECTOR_INCIDENCE_COSINE_TOL)
+    kf_air_sample = np.zeros((size, 3), dtype=np.float64)
+    kf_air_sample[front_facing] = instrument.sample_from_lab.apply_vector(
+        air_k0_Ainv * direction_lab[front_facing]
+    )
+    top_exit = front_facing & (kf_air_sample[:, 2] > 0.0)
+    status[front_facing & (kf_air_sample[:, 2] < 0.0)] = ValidityCode.BACKWARD.value
+    status[front_facing & (kf_air_sample[:, 2] == 0.0)] = ValidityCode.PARALLEL.value
+
+    incident_norm = float(np.linalg.norm(ki_sample))
+    parallel_squared = np.einsum(
+        "ij,ij->i", kf_air_sample[:, :2], kf_air_sample[:, :2], optimize=True
+    )
+    normal_squared = incident_norm * incident_norm - parallel_squared
+    reachable = top_exit & (normal_squared > 0.0)
+    status[top_exit & (normal_squared == 0.0)] = ValidityCode.PARALLEL.value
+    status[top_exit & (normal_squared < 0.0)] = ValidityCode.NON_PROPAGATING.value
+    status[reachable] = ValidityCode.VALID.value
+    kf_film = np.zeros((size, 3), dtype=np.float64)
+    kf_film[reachable, :2] = kf_air_sample[reachable, :2]
+    kf_film[reachable, 2] = np.sqrt(normal_squared[reachable])
+    q_sample = np.zeros((size, 3), dtype=np.float64)
+    q_sample[reachable] = kf_film[reachable] - ki_sample
+
+    q_surface_jacobian = np.zeros(size, dtype=np.float64)
+    if include_surface_jacobian and np.any(reachable):
+        column_step_lab_m = (
+            instrument.lab_from_detector.rotation[:, 0] * instrument.detector_column_pitch_m
+        )
+        row_step_lab_m = (
+            instrument.lab_from_detector.rotation[:, 1] * instrument.detector_row_pitch_m
+        )
+        selected_direction = direction_lab[reachable]
+        selected_distance = distance_m[reachable]
+        d_direction_column_lab = (
+            column_step_lab_m
+            - selected_direction * (selected_direction @ column_step_lab_m)[:, None]
+        ) / selected_distance[:, None]
+        d_direction_row_lab = (
+            row_step_lab_m - selected_direction * (selected_direction @ row_step_lab_m)[:, None]
+        ) / selected_distance[:, None]
+        d_kair_column_sample = instrument.sample_from_lab.apply_vector(
+            air_k0_Ainv * d_direction_column_lab
+        )
+        d_kair_row_sample = instrument.sample_from_lab.apply_vector(
+            air_k0_Ainv * d_direction_row_lab
+        )
+        selected_kf = kf_film[reachable]
+        d_kfilm_column = d_kair_column_sample.copy()
+        d_kfilm_row = d_kair_row_sample.copy()
+        d_kfilm_column[:, 2] = (
+            -np.einsum(
+                "ij,ij->i",
+                selected_kf[:, :2],
+                d_kair_column_sample[:, :2],
+                optimize=True,
+            )
+            / selected_kf[:, 2]
+        )
+        d_kfilm_row[:, 2] = (
+            -np.einsum(
+                "ij,ij->i",
+                selected_kf[:, :2],
+                d_kair_row_sample[:, :2],
+                optimize=True,
+            )
+            / selected_kf[:, 2]
+        )
+        q_surface_jacobian[reachable] = np.linalg.norm(
+            np.cross(d_kfilm_column, d_kfilm_row), axis=1
+        )
+
+    ewald_residual = np.zeros(size, dtype=np.float64)
+    ewald_residual[reachable] = np.abs(
+        np.linalg.norm(q_sample[reachable] + ki_sample, axis=1) - incident_norm
+    )
+    return DetectorCoordinateGeometry(
+        column_px=column,
+        row_px=row,
+        kf_air_sample_Ainv=kf_air_sample.reshape((*shape, 3)),
+        kf_film_sample_Ainv=kf_film.reshape((*shape, 3)),
+        q_sample_Ainv=q_sample.reshape((*shape, 3)),
+        q_surface_jacobian_Ainv2_per_px2=q_surface_jacobian.reshape(shape),
+        ewald_residual_Ainv=ewald_residual.reshape(shape),
+        status=status.reshape(shape),
+    )
+
+
+def _map_ewald_geometry_arrays(
+    geometry: EwaldLatentGeometry,
+    *,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> _MappedArrays:
+    """Apply canonical exit transport and native detector projection to Ewald geometry."""
+
+    if not isinstance(geometry, EwaldLatentGeometry):
+        raise TypeError("geometry must be EwaldLatentGeometry")
+    if not isinstance(incident, IncidentTransportResult):
+        raise TypeError("incident must be IncidentTransportResult")
+    states = incident.states
+    ki_sample, air_k0_Ainv = _validate_geometry_mapping_context(
+        incident=incident,
+        material=material,
+        instrument=instrument,
+        ki_sample_Ainv=states.k_film_phase_sample_Ainv[0],
+    )
+    root_valid = geometry.valid.reshape(-1)
+    q_sample = geometry.q_sample_Ainv.reshape(-1, 3)
+    kf_sample = geometry.kf_sample_Ainv.reshape(-1, 3)
+    scale = max(float(np.linalg.norm(ki_sample)), 1.0)
+    if np.any(root_valid) and not np.allclose(
+        kf_sample[root_valid],
+        q_sample[root_valid] + ki_sample,
+        rtol=0.0,
+        atol=512.0 * np.finfo(np.float64).eps * scale,
+    ):
+        raise ValueError("Ewald geometry does not satisfy kf = ki + Q for this incident state")
+    computed_residual = np.abs(np.linalg.norm(kf_sample, axis=1) - np.linalg.norm(ki_sample))
+    supplied_residual = geometry.ewald_residual_Ainv.reshape(-1)
+    tolerance = 512.0 * np.finfo(np.float64).eps * scale
+    if np.any(root_valid) and (
+        np.any(computed_residual[root_valid] > tolerance)
+        or not np.allclose(
+            supplied_residual[root_valid],
+            computed_residual[root_valid],
+            rtol=0.0,
+            atol=tolerance,
+        )
+    ):
+        raise ValueError("regular Ewald geometry must satisfy the elastic residual tolerance")
+
+    shape = geometry.alpha_rad.shape
+    size = geometry.alpha_rad.size
+    kf_film = kf_sample
+    exit_status = np.full(size, ValidityCode.NO_SOLUTION.value, dtype="U32")
+    negative = root_valid & (kf_film[:, 2] < 0.0)
+    parallel = root_valid & (kf_film[:, 2] == 0.0)
+    eligible = root_valid & (kf_film[:, 2] > 0.0)
+    exit_status[negative] = ValidityCode.BACKWARD.value
+    exit_status[parallel] = ValidityCode.PARALLEL.value
+
+    kf_air_sample = np.zeros((size, 3), dtype=np.float64)
+    exit_amplitude = np.zeros(size, dtype=np.complex128)
+    kz_film = np.zeros(size, dtype=np.complex128)
+    propagation_direction = np.zeros(size, dtype=np.int8)
+    eligible_rows = np.flatnonzero(eligible)
+    if eligible_rows.size:
+        wavelengths = np.full(eligible_rows.size, states.wavelength_A[0])
+        modes = _solve_exit_mode_arrays(kf_film[eligible_rows], wavelengths, material)
+        exit_status[eligible_rows] = modes.status
+        valid_mode = modes.status == ValidityCode.VALID
+        valid_exit_rows = eligible_rows[valid_mode]
+        kf_air_sample[valid_exit_rows] = modes.k_air_phase_sample_Ainv[valid_mode]
+        exit_amplitude[valid_exit_rows] = modes.exit_amplitude[valid_mode]
+        kz_film[valid_exit_rows] = modes.kz_film_Ainv[valid_mode]
+        propagation_direction[valid_exit_rows] = modes.propagation_direction[valid_mode]
+
+    exit_valid = exit_status == ValidityCode.VALID
+    kf_air_lab = np.zeros((size, 3), dtype=np.float64)
+    kf_air_lab[exit_valid] = instrument.lab_from_sample.apply_vector(kf_air_sample[exit_valid])
+    detector_status = exit_status.copy()
+    column_px = np.zeros(size, dtype=np.float64)
+    row_px = np.zeros(size, dtype=np.float64)
+    ray_distance_m = np.zeros(size, dtype=np.float64)
+    pixel_solid_angle_sr = np.zeros(size, dtype=np.float64)
+    exit_rows = np.flatnonzero(exit_valid)
+    if exit_rows.size:
+        origin = np.broadcast_to(
+            states.sample_intersection_lab_m[0],
+            (exit_rows.size, 3),
+        )
+        projection = _project_detector_rays(
+            origin,
+            kf_air_lab[exit_rows] / air_k0_Ainv,
+            instrument,
+        )
+        detector_status[exit_rows] = projection.status
+        column_px[exit_rows] = projection.column_px
+        row_px[exit_rows] = projection.row_px
+        ray_distance_m[exit_rows] = projection.ray_distance_m
+        pixel_solid_angle_sr[exit_rows] = projection.pixel_solid_angle_sr
+    mapped = DetectorMappedGeometry(
+        ewald_geometry=geometry,
+        kf_air_sample_Ainv=kf_air_sample.reshape((*shape, 3)),
+        kf_air_lab_Ainv=kf_air_lab.reshape((*shape, 3)),
+        column_px=column_px.reshape(shape),
+        row_px=row_px.reshape(shape),
+        ray_distance_m=ray_distance_m.reshape(shape),
+        pixel_solid_angle_sr=pixel_solid_angle_sr.reshape(shape),
+        exit_status=exit_status.reshape(shape),
+        detector_status=detector_status.reshape(shape),
+    )
+    for value in (exit_amplitude, kz_film, propagation_direction):
+        value.setflags(write=False)
+    return _MappedArrays(
+        geometry=mapped,
+        exit_amplitude=exit_amplitude.reshape(shape),
+        kz_film_Ainv=kz_film.reshape(shape),
+        propagation_direction=propagation_direction.reshape(shape),
+    )
+
+
+def map_ewald_geometry_to_detector(
+    geometry: EwaldLatentGeometry,
+    *,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> DetectorMappedGeometry:
+    """Map exact Ewald geometry without intensity, mosaic, raster, or pixel work."""
+
+    return _map_ewald_geometry_arrays(
+        geometry,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    ).geometry
+
+
 def _compile_detector_state(
     *,
     bragg_config: BraggSpaceConfig,
@@ -878,77 +1188,11 @@ class DetectorEwaldMeasure:
         return self._instrument
 
     def _map_geometry(self, geometry: EwaldLatentGeometry) -> _MappedArrays:
-        shape = geometry.alpha_rad.shape
-        size = geometry.alpha_rad.size
-        kf_film = geometry.kf_sample_Ainv.reshape(-1, 3)
-        root_valid = geometry.valid.reshape(-1)
-        exit_status = np.full(size, ValidityCode.NO_SOLUTION.value, dtype="U32")
-        negative = root_valid & (kf_film[:, 2] < 0.0)
-        parallel = root_valid & (kf_film[:, 2] == 0.0)
-        eligible = root_valid & (kf_film[:, 2] > 0.0)
-        exit_status[negative] = ValidityCode.BACKWARD.value
-        exit_status[parallel] = ValidityCode.PARALLEL.value
-
-        kf_air_sample = np.zeros((size, 3), dtype=np.float64)
-        exit_amplitude = np.zeros(size, dtype=np.complex128)
-        kz_film = np.zeros(size, dtype=np.complex128)
-        propagation_direction = np.zeros(size, dtype=np.int8)
-        eligible_rows = np.flatnonzero(eligible)
-        if eligible_rows.size:
-            wavelengths = np.full(eligible_rows.size, self._incident.states.wavelength_A[0])
-            modes = _solve_exit_mode_arrays(kf_film[eligible_rows], wavelengths, self._material)
-            exit_status[eligible_rows] = modes.status
-            valid_exit_rows = eligible_rows[modes.status == ValidityCode.VALID]
-            valid_mode = modes.status == ValidityCode.VALID
-            kf_air_sample[valid_exit_rows] = modes.k_air_phase_sample_Ainv[valid_mode]
-            exit_amplitude[valid_exit_rows] = modes.exit_amplitude[valid_mode]
-            kz_film[valid_exit_rows] = modes.kz_film_Ainv[valid_mode]
-            propagation_direction[valid_exit_rows] = modes.propagation_direction[valid_mode]
-
-        exit_valid = exit_status == ValidityCode.VALID
-        kf_air_lab = np.zeros((size, 3), dtype=np.float64)
-        kf_air_lab[exit_valid] = self._instrument.lab_from_sample.apply_vector(
-            kf_air_sample[exit_valid]
-        )
-        detector_status = exit_status.copy()
-        column_px = np.zeros(size, dtype=np.float64)
-        row_px = np.zeros(size, dtype=np.float64)
-        ray_distance_m = np.zeros(size, dtype=np.float64)
-        pixel_solid_angle_sr = np.zeros(size, dtype=np.float64)
-        exit_rows = np.flatnonzero(exit_valid)
-        if exit_rows.size:
-            origin = np.broadcast_to(
-                self._incident.states.sample_intersection_lab_m[0],
-                (exit_rows.size, 3),
-            )
-            projection = _project_detector_rays(
-                origin,
-                kf_air_lab[exit_rows] / self._air_k0_Ainv,
-                self._instrument,
-            )
-            detector_status[exit_rows] = projection.status
-            column_px[exit_rows] = projection.column_px
-            row_px[exit_rows] = projection.row_px
-            ray_distance_m[exit_rows] = projection.ray_distance_m
-            pixel_solid_angle_sr[exit_rows] = projection.pixel_solid_angle_sr
-        mapped = DetectorMappedGeometry(
-            ewald_geometry=geometry,
-            kf_air_sample_Ainv=kf_air_sample.reshape((*shape, 3)),
-            kf_air_lab_Ainv=kf_air_lab.reshape((*shape, 3)),
-            column_px=column_px.reshape(shape),
-            row_px=row_px.reshape(shape),
-            ray_distance_m=ray_distance_m.reshape(shape),
-            pixel_solid_angle_sr=pixel_solid_angle_sr.reshape(shape),
-            exit_status=exit_status.reshape(shape),
-            detector_status=detector_status.reshape(shape),
-        )
-        for value in (exit_amplitude, kz_film, propagation_direction):
-            value.setflags(write=False)
-        return _MappedArrays(
-            geometry=mapped,
-            exit_amplitude=exit_amplitude.reshape(shape),
-            kz_film_Ainv=kz_film.reshape(shape),
-            propagation_direction=propagation_direction.reshape(shape),
+        return _map_ewald_geometry_arrays(
+            geometry,
+            incident=self._incident,
+            material=self._material,
+            instrument=self._instrument,
         )
 
     def map_latent(
@@ -1114,125 +1358,20 @@ class DetectorEwaldMeasure:
         include_optical: bool = True,
         include_surface_jacobian: bool = True,
     ) -> tuple[DetectorCoordinateGeometry, FloatArray]:
-        supplied_column = np.asarray(column_px)
-        supplied_row = np.asarray(row_px)
-        if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-            np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-        ):
-            raise ValueError("detector coordinates must be real")
-        column, row = np.broadcast_arrays(
-            np.asarray(supplied_column.real, dtype=np.float64),
-            np.asarray(supplied_row.real, dtype=np.float64),
+        geometry = evaluate_detector_coordinates_geometry(
+            column_px,
+            row_px,
+            incident=self._incident,
+            instrument=self._instrument,
+            ki_sample_Ainv=self._coating.ki_sample_Ainv,
+            include_surface_jacobian=include_surface_jacobian,
         )
-        if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-            raise ValueError("detector coordinates must be finite")
-        shape = column.shape
-        flat_column = column.reshape(-1)
-        flat_row = row.reshape(-1)
-        size = flat_column.size
-        rows, columns = self._instrument.detector_shape_rc
-        inside = (
-            (flat_column >= -0.5)
-            & (flat_column <= columns - 0.5)
-            & (flat_row >= -0.5)
-            & (flat_row <= rows - 0.5)
-        )
-        status = np.full(size, ValidityCode.OUTSIDE_SUPPORT.value, dtype="U32")
-        point_lab = _detector_coordinates_to_lab_points(
-            flat_column,
-            flat_row,
-            self._instrument,
-        )
-        origin_lab = self._incident.states.sample_intersection_lab_m[0]
-        displacement_lab = point_lab - origin_lab
-        distance_m = np.linalg.norm(displacement_lab, axis=1)
-        nonzero = inside & (distance_m > 0.0)
-        status[inside & ~nonzero] = ValidityCode.NO_SOLUTION.value
-        direction_lab = np.zeros((size, 3), dtype=np.float64)
-        direction_lab[nonzero] = displacement_lab[nonzero] / distance_m[nonzero, None]
-        incidence_cosine = _detector_incidence_cosine(direction_lab, self._instrument)
-        detector_parallel = nonzero & (np.abs(incidence_cosine) <= _DETECTOR_INCIDENCE_COSINE_TOL)
-        status[detector_parallel] = ValidityCode.PARALLEL.value
-        back_facing = nonzero & (incidence_cosine < -_DETECTOR_INCIDENCE_COSINE_TOL)
-        status[back_facing] = ValidityCode.BACKWARD.value
-        front_facing = nonzero & (incidence_cosine > _DETECTOR_INCIDENCE_COSINE_TOL)
-        kf_air_sample = np.zeros((size, 3), dtype=np.float64)
-        kf_air_sample[front_facing] = self._instrument.sample_from_lab.apply_vector(
-            self._air_k0_Ainv * direction_lab[front_facing]
-        )
-        top_exit = front_facing & (kf_air_sample[:, 2] > 0.0)
-        status[front_facing & (kf_air_sample[:, 2] < 0.0)] = ValidityCode.BACKWARD.value
-        status[front_facing & (kf_air_sample[:, 2] == 0.0)] = ValidityCode.PARALLEL.value
-
-        incident_norm = float(np.linalg.norm(self._coating.ki_sample_Ainv))
-        parallel_squared = np.einsum(
-            "ij,ij->i",
-            kf_air_sample[:, :2],
-            kf_air_sample[:, :2],
-            optimize=True,
-        )
-        normal_squared = incident_norm * incident_norm - parallel_squared
-        reachable = top_exit & (normal_squared > 0.0)
-        status[top_exit & (normal_squared == 0.0)] = ValidityCode.PARALLEL.value
-        status[top_exit & (normal_squared < 0.0)] = ValidityCode.NON_PROPAGATING.value
-        status[reachable] = ValidityCode.VALID.value
-        kf_film = np.zeros((size, 3), dtype=np.float64)
-        kf_film[reachable, :2] = kf_air_sample[reachable, :2]
-        kf_film[reachable, 2] = np.sqrt(normal_squared[reachable])
-        q_sample = np.zeros((size, 3), dtype=np.float64)
-        q_sample[reachable] = kf_film[reachable] - self._coating.ki_sample_Ainv
-
-        q_surface_jacobian = np.zeros(size, dtype=np.float64)
-        if include_surface_jacobian and np.any(reachable):
-            column_step_lab_m = (
-                self._instrument.lab_from_detector.rotation[:, 0]
-                * self._instrument.detector_column_pitch_m
-            )
-            row_step_lab_m = (
-                self._instrument.lab_from_detector.rotation[:, 1]
-                * self._instrument.detector_row_pitch_m
-            )
-            selected_direction = direction_lab[reachable]
-            selected_distance = distance_m[reachable]
-            d_direction_column_lab = (
-                column_step_lab_m
-                - selected_direction * (selected_direction @ column_step_lab_m)[:, None]
-            ) / selected_distance[:, None]
-            d_direction_row_lab = (
-                row_step_lab_m - selected_direction * (selected_direction @ row_step_lab_m)[:, None]
-            ) / selected_distance[:, None]
-            d_kair_column_sample = self._instrument.sample_from_lab.apply_vector(
-                self._air_k0_Ainv * d_direction_column_lab
-            )
-            d_kair_row_sample = self._instrument.sample_from_lab.apply_vector(
-                self._air_k0_Ainv * d_direction_row_lab
-            )
-            selected_kf = kf_film[reachable]
-            d_kfilm_column = d_kair_column_sample.copy()
-            d_kfilm_row = d_kair_row_sample.copy()
-            d_kfilm_column[:, 2] = (
-                -np.einsum(
-                    "ij,ij->i",
-                    selected_kf[:, :2],
-                    d_kair_column_sample[:, :2],
-                    optimize=True,
-                )
-                / selected_kf[:, 2]
-            )
-            d_kfilm_row[:, 2] = (
-                -np.einsum(
-                    "ij,ij->i",
-                    selected_kf[:, :2],
-                    d_kair_row_sample[:, :2],
-                    optimize=True,
-                )
-                / selected_kf[:, 2]
-            )
-            q_surface_jacobian[reachable] = np.linalg.norm(
-                np.cross(d_kfilm_column, d_kfilm_row),
-                axis=1,
-            )
-
+        shape = geometry.column_px.shape
+        size = geometry.column_px.size
+        status = np.asarray(geometry.status).reshape(-1).copy()
+        reachable = np.asarray(geometry.valid).reshape(-1)
+        kf_air_sample = geometry.kf_air_sample_Ainv.reshape(-1, 3)
+        kf_film = geometry.kf_film_sample_Ainv.reshape(-1, 3)
         optical = np.zeros(size, dtype=np.float64)
         reachable_rows = np.flatnonzero(reachable)
         if include_optical and reachable_rows.size:
@@ -1274,21 +1413,23 @@ class DetectorEwaldMeasure:
                     attenuation,
                 )
 
-        valid = status == ValidityCode.VALID
-        ewald_residual = np.zeros(size, dtype=np.float64)
-        ewald_residual[valid] = np.abs(
-            np.linalg.norm(q_sample[valid] + self._coating.ki_sample_Ainv, axis=1) - incident_norm
-        )
-        geometry = DetectorCoordinateGeometry(
-            column_px=column,
-            row_px=row,
-            kf_air_sample_Ainv=kf_air_sample.reshape((*shape, 3)),
-            kf_film_sample_Ainv=kf_film.reshape((*shape, 3)),
-            q_sample_Ainv=q_sample.reshape((*shape, 3)),
-            q_surface_jacobian_Ainv2_per_px2=q_surface_jacobian.reshape(shape),
-            ewald_residual_Ainv=ewald_residual.reshape(shape),
-            status=status.reshape(shape),
-        )
+        if include_optical:
+            valid = status == ValidityCode.VALID
+            ewald_residual = np.where(
+                valid,
+                geometry.ewald_residual_Ainv.reshape(-1),
+                0.0,
+            )
+            geometry = DetectorCoordinateGeometry(
+                column_px=geometry.column_px,
+                row_px=geometry.row_px,
+                kf_air_sample_Ainv=geometry.kf_air_sample_Ainv,
+                kf_film_sample_Ainv=geometry.kf_film_sample_Ainv,
+                q_sample_Ainv=geometry.q_sample_Ainv,
+                q_surface_jacobian_Ainv2_per_px2=(geometry.q_surface_jacobian_Ainv2_per_px2),
+                ewald_residual_Ainv=ewald_residual.reshape(shape),
+                status=status.reshape(shape),
+            )
         optical = optical.reshape(shape)
         optical.setflags(write=False)
         return geometry, optical
@@ -2203,4 +2344,6 @@ __all__ = [
     "IntensityStatus",
     "PixelIntegrationMethod",
     "SpecularDetectorGeometry",
+    "evaluate_detector_coordinates_geometry",
+    "map_ewald_geometry_to_detector",
 ]

@@ -1665,6 +1665,29 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     assert config.structure_factor.shared_disorder_epsilon == pytest.approx(0.001)
     assert not config.output_directory.is_relative_to(root)
 
+    with pytest.raises(ValueError, match="active Gaussian mosaic width"):
+        build_configured_simulation_inputs(
+            replace(
+                config,
+                mosaic=replace(
+                    config.mosaic,
+                    gaussian_sigma_deg=0.0,
+                    lorentzian_probability=0.0,
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="active Lorentzian mosaic width"):
+        build_configured_simulation_inputs(
+            replace(
+                config,
+                mosaic=replace(
+                    config.mosaic,
+                    lorentzian_hwhm_deg=0.0,
+                    lorentzian_probability=0.5,
+                ),
+            )
+        )
+
     inputs = build_configured_simulation_inputs(config)
     assert 2.0 * np.pi / inputs.bragg_space.config.k_norm_Ainv == pytest.approx(
         config.source.mean_wavelength_A,

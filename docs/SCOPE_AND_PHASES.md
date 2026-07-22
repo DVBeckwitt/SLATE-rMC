@@ -25,6 +25,10 @@ detector geometry.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
   detector-tilt and effective sample-normal correction pack.
+- Strict OSC-series manifests and geometry-only exact-tag contexts for repeatable fitting across
+  varying layered-hexagonal materials in separate material/mount groups.
+- Full-rank shared 5/10/15-degree decomposition of detector tilt, sample normal, goniometer-axis,
+  signed sample-plane offset, and axis-perpendicular pivot offsets, with frozen-key outer audits.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
@@ -48,8 +52,8 @@ these functions. They are not stored model state.
 - Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
-- Multi-angle decomposition of sample and goniometer mechanics, and intensity-profile fitting
-  beyond the accepted measured-peak association boundary.
+- General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and
+  intensity-profile fitting beyond the accepted layered-hexagonal geometry boundary.
 - Continuous-`S/N` angular-bin reduction and reciprocal remapping beyond the accepted finite-pixel
   angle projector.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.

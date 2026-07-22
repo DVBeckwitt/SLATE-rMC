@@ -22,9 +22,13 @@ phases but do not override these owners.
 | detector-native measured image + mask + angle geometry | `MeasuredPeakDiscovery` | reciprocal indexing | global angle-chart discovery accepts no marker catalogue or predicted coordinates; proposals are refined once in native coordinates |
 | measured discovery + canonical detector/Ewald geometry | per-image indexing decisions | branch-track selection | infer `m`, integer `L`, Ewald branch, and root sign only from discovered `Q`; deterministically drop ambiguous ownership |
 | distinct-incidence image decisions | immutable `MeasuredIndexingResult` | staged fitting | require replicated branch tracks and shared site identities; all image, mask, calibration, reciprocal, and policy hashes remain frozen |
+| strict OSC-series manifest | image IDs, paths, commanded angles, and geometry-only contexts | measured indexing / joint fit | join by exact image ID; never infer motor angle from filename or OSC header; one material/mount per fit group |
 | exact integer-L marker solver | frozen root identities and native coordinates | geometry fitter | every physical rod precedes grouping; analytic root sign is part of identity |
 | bound continuous detector function | key-aligned exact-tag predictions | bounded least squares | private geometry-only tag engine; no intensity evaluation or dynamic reassignment inside the objective |
-| geometry fitter | pivoted pose corrections plus rank/residual diagnostics | outer marker audit | one fixed LAB sample pivot and a full-rank local pack are required; final visible roots are independently re-enumerated |
+| geometry fitter | pivoted pose corrections plus rank/residual diagnostics | outer marker audit | the local pack uses one fixed LAB pivot; the shared-series pack fits only its two transported axis-perpendicular offsets; each pack must be full rank |
+| frozen observations + per-image exact-tag models | canonical joint residual and nine shared corrections | qualification / downstream staged fits | 5/10/15-degree rank ladder is 5/9 -> 7/9 -> 9/9; detector calibration and gauge coordinates stay fixed |
+| corrected geometry + selected position-free native candidates | corrected reciprocal labels on unchanged coordinates | frozen-key acceptance audit | require every original full key and coherent frozen tracks; no cake search, coordinate refinement, dynamic reassignment, or censor/refit |
+| corrected geometry + original OSC series | fresh global marker decisions | operational discovery diagnostic | report chart/candidate and same-key lobe changes separately; this geometry-dependent pass cannot replace frozen observations |
 
 ## Factor reduction order
 

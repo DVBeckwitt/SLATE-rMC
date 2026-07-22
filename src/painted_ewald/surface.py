@@ -8,7 +8,7 @@ from math import sqrt
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from painted_ewald.bragg import MosaicBraggSpace
+from painted_ewald.bragg import MosaicBraggSpace, map_tied_rotation_latent
 from painted_ewald.ewald import _solve_batched_infinite_rod_ewald
 from painted_ewald.types import Rod, RootStatus
 from painted_ewald.validation import finite_scalar, readonly_float_array
@@ -122,6 +122,137 @@ class EwaldLatentIntensity:
             object.__setattr__(self, name, value)
 
 
+def _evaluate_infinite_rod_geometry(
+    *,
+    rod: Rod,
+    branch: int,
+    reciprocal_basis_Ainv: ArrayLike,
+    crystal_to_sample: ArrayLike,
+    ki_sample_Ainv: ArrayLike,
+    alpha_rad: ArrayLike,
+    beta_rad: ArrayLike,
+    root_tolerance_rel: float,
+    residual_tolerance_rel: float,
+) -> tuple[EwaldLatentGeometry, FloatArray]:
+    if not isinstance(rod, Rod):
+        raise TypeError("rod must be a Rod")
+    if branch not in {0, 1, 2}:
+        raise ValueError("branch must be 0, 1, or 2")
+    incident = readonly_float_array(ki_sample_Ainv, (3,), "ki_sample_Ainv")
+    incident_norm = sqrt(float(np.dot(incident, incident)))
+    if incident_norm == 0.0:
+        raise ValueError("ki_sample_Ainv must be nonzero")
+    root_tolerance = finite_scalar(root_tolerance_rel, "root_tolerance_rel")
+    residual_tolerance = finite_scalar(residual_tolerance_rel, "residual_tolerance_rel")
+    if root_tolerance < 0.0 or residual_tolerance < 0.0:
+        raise ValueError("root and residual tolerances must be nonnegative")
+    alpha, beta = np.broadcast_arrays(
+        np.asarray(alpha_rad, dtype=np.float64),
+        np.asarray(beta_rad, dtype=np.float64),
+    )
+    q0 = map_tied_rotation_latent(
+        rod=rod,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        alpha_rad=alpha,
+        beta_rad=beta,
+        u_Ainv=0.0,
+    )
+    q1 = map_tied_rotation_latent(
+        rod=rod,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        alpha_rad=alpha,
+        beta_rad=beta,
+        u_Ainv=1.0,
+    )
+    basis = np.asarray(reciprocal_basis_Ainv, dtype=np.float64)
+    b3_norm_Ainv = float(np.linalg.norm(basis[:, 2]))
+    shape = alpha.shape
+    result = _solve_batched_infinite_rod_ewald(
+        incident=incident,
+        incident_norm=incident_norm,
+        q0=q0.reshape(-1, 3),
+        q0_parallel_Ainv=None,
+        direction=(q1 - q0).reshape(-1, 3),
+        b3_norm_Ainv=b3_norm_Ainv,
+        rod_is_m0=rod.family_m == 0,
+        root_tolerance_rel=root_tolerance,
+        residual_tolerance_rel=residual_tolerance,
+    )
+    selected = next((root for root in result.roots if root.branch == branch), None)
+    if selected is None:
+        raise ValueError(f"branch {branch} is not defined for rod ({rod.h}, {rod.k})")
+    size = alpha.size
+    status = np.full(size, RootStatus.REGULAR.value, dtype="U32")
+    status[result.no_root] = RootStatus.NO_ROOT.value
+    status[result.tangent] = RootStatus.TANGENT.value
+    status[result.collapsed_direct] = RootStatus.COLLAPSED_DIRECT.value
+    regular = selected.orientation_index
+    u_Ainv = np.zeros(size, dtype=np.float64)
+    ell = np.zeros(size, dtype=np.float64)
+    q_sample = np.zeros((size, 3), dtype=np.float64)
+    kf_sample = np.zeros((size, 3), dtype=np.float64)
+    residual = np.zeros(size, dtype=np.float64)
+    coarea = np.zeros(size, dtype=np.float64)
+    u_Ainv[regular] = selected.u_Ainv
+    ell[regular] = selected.L
+    q_sample[regular] = selected.q_sample_Ainv
+    kf_sample[regular] = selected.kf_sample_Ainv
+    residual[regular] = selected.ewald_residual_Ainv
+    coarea[regular] = selected.coarea_jacobian
+    geometry = EwaldLatentGeometry(
+        rod=rod,
+        branch=branch,
+        alpha_rad=alpha,
+        beta_rad=beta,
+        u_Ainv=u_Ainv.reshape(shape),
+        L=ell.reshape(shape),
+        q_sample_Ainv=q_sample.reshape((*shape, 3)),
+        kf_sample_Ainv=kf_sample.reshape((*shape, 3)),
+        ewald_residual_Ainv=residual.reshape(shape),
+        status=status.reshape(shape),
+    )
+    coarea = coarea.reshape(shape)
+    coarea.setflags(write=False)
+    return geometry, coarea
+
+
+def evaluate_infinite_rod_ewald_geometry(
+    *,
+    rod: Rod,
+    branch: int,
+    reciprocal_basis_Ainv: ArrayLike,
+    crystal_to_sample: ArrayLike,
+    ki_sample_Ainv: ArrayLike,
+    alpha_rad: ArrayLike,
+    beta_rad: ArrayLike,
+    root_tolerance_rel: float = 0.0,
+    residual_tolerance_rel: float = 512.0 * np.finfo(np.float64).eps,
+) -> EwaldLatentGeometry:
+    """Evaluate analytic rod/Ewald geometry without strength or mosaic state."""
+
+    if not isinstance(rod, Rod):
+        raise TypeError("rod must be a Rod")
+    if rod.family_m == 0:
+        if branch != 0:
+            raise ValueError("an m=0 rod requires branch 0")
+    elif branch not in {1, 2}:
+        raise ValueError("a nonzero rod requires branch 1 or 2")
+    geometry, _ = _evaluate_infinite_rod_geometry(
+        rod=rod,
+        branch=branch,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+        alpha_rad=alpha_rad,
+        beta_rad=beta_rad,
+        root_tolerance_rel=root_tolerance_rel,
+        residual_tolerance_rel=residual_tolerance_rel,
+    )
+    return geometry
+
+
 class ContinuousEwaldCoating:
     """Callable zero-width rod coating in continuous curvilinear coordinates.
 
@@ -131,8 +262,6 @@ class ContinuousEwaldCoating:
     """
 
     __slots__ = (
-        "_b3_norm_Ainv",
-        "_incident_norm_Ainv",
         "_ki_sample_Ainv",
         "_residual_tolerance_rel",
         "_root_tolerance_rel",
@@ -163,12 +292,6 @@ class ContinuousEwaldCoating:
             raise ValueError("root and residual tolerances must be nonnegative")
         object.__setattr__(self, "_space", bragg_space)
         object.__setattr__(self, "_ki_sample_Ainv", incident)
-        object.__setattr__(self, "_incident_norm_Ainv", incident_norm)
-        object.__setattr__(
-            self,
-            "_b3_norm_Ainv",
-            float(np.linalg.norm(bragg_space.config.reciprocal_basis_Ainv[:, 2])),
-        )
         object.__setattr__(self, "_root_tolerance_rel", root_tolerance)
         object.__setattr__(self, "_residual_tolerance_rel", residual_tolerance)
 
@@ -211,70 +334,17 @@ class ContinuousEwaldCoating:
         beta_rad: ArrayLike,
     ) -> tuple[EwaldLatentGeometry, FloatArray]:
         configured = self._configured_rod(rod)
-        alpha, beta = np.broadcast_arrays(
-            np.asarray(alpha_rad, dtype=np.float64),
-            np.asarray(beta_rad, dtype=np.float64),
-        )
-        q0 = self._space.map_latent(
+        return _evaluate_infinite_rod_geometry(
             rod=configured,
-            alpha_rad=alpha,
-            beta_rad=beta,
-            u_Ainv=0.0,
-        )
-        q1 = self._space.map_latent(
-            rod=configured,
-            alpha_rad=alpha,
-            beta_rad=beta,
-            u_Ainv=1.0,
-        )
-        shape = alpha.shape
-        result = _solve_batched_infinite_rod_ewald(
-            incident=self._ki_sample_Ainv,
-            incident_norm=self._incident_norm_Ainv,
-            q0=q0.reshape(-1, 3),
-            q0_parallel_Ainv=None,
-            direction=(q1 - q0).reshape(-1, 3),
-            b3_norm_Ainv=self._b3_norm_Ainv,
-            rod_is_m0=configured.family_m == 0,
+            branch=branch,
+            reciprocal_basis_Ainv=self._space.config.reciprocal_basis_Ainv,
+            crystal_to_sample=self._space.config.crystal_to_sample,
+            ki_sample_Ainv=self._ki_sample_Ainv,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
             root_tolerance_rel=self._root_tolerance_rel,
             residual_tolerance_rel=self._residual_tolerance_rel,
         )
-        selected = next((root for root in result.roots if root.branch == branch), None)
-        if selected is None:
-            raise ValueError(f"branch {branch} is not defined for rod ({rod.h}, {rod.k})")
-        size = alpha.size
-        status = np.full(size, RootStatus.REGULAR.value, dtype="U32")
-        status[result.no_root] = RootStatus.NO_ROOT.value
-        status[result.tangent] = RootStatus.TANGENT.value
-        status[result.collapsed_direct] = RootStatus.COLLAPSED_DIRECT.value
-        regular = selected.orientation_index
-        u_Ainv = np.zeros(size, dtype=np.float64)
-        ell = np.zeros(size, dtype=np.float64)
-        q_sample = np.zeros((size, 3), dtype=np.float64)
-        kf_sample = np.zeros((size, 3), dtype=np.float64)
-        residual = np.zeros(size, dtype=np.float64)
-        coarea = np.zeros(size, dtype=np.float64)
-        u_Ainv[regular] = selected.u_Ainv
-        ell[regular] = selected.L
-        q_sample[regular] = selected.q_sample_Ainv
-        kf_sample[regular] = selected.kf_sample_Ainv
-        residual[regular] = selected.ewald_residual_Ainv
-        coarea[regular] = selected.coarea_jacobian
-        geometry = EwaldLatentGeometry(
-            rod=configured,
-            branch=branch,
-            alpha_rad=alpha,
-            beta_rad=beta,
-            u_Ainv=u_Ainv.reshape(shape),
-            L=ell.reshape(shape),
-            q_sample_Ainv=q_sample.reshape((*shape, 3)),
-            kf_sample_Ainv=kf_sample.reshape((*shape, 3)),
-            ewald_residual_Ainv=residual.reshape(shape),
-            status=status.reshape(shape),
-        )
-        coarea = coarea.reshape(shape)
-        coarea.setflags(write=False)
-        return geometry, coarea
 
     def evaluate_geometry(
         self,
@@ -368,4 +438,5 @@ __all__ = [
     "ContinuousEwaldCoating",
     "EwaldLatentGeometry",
     "EwaldLatentIntensity",
+    "evaluate_infinite_rod_ewald_geometry",
 ]

@@ -1,17 +1,17 @@
-"""Strict YAML boundary and reusable calculations for configured Bi2Se3 views."""
+"""Strict YAML boundary and reusable configured detector calculations."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import yaml
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 from yaml.events import AliasEvent
 from yaml.nodes import MappingNode
 
@@ -22,6 +22,7 @@ from painted_ewald import (
     MosaicParameters,
     Rod,
     enumerate_rods_within_ewald_sphere,
+    evaluate_infinite_rod_ewald_geometry,
 )
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
@@ -41,7 +42,13 @@ from rasim_next.geometry.instrument import (
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.materials import CrystalStructure, material_optics, read_crystal
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
-from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+from rasim_next.pipeline.continuous_detector import (
+    DetectorCoordinateGeometry,
+    DetectorEwaldMeasure,
+    DetectorMappedGeometry,
+    evaluate_detector_coordinates_geometry,
+    map_ewald_geometry_to_detector,
+)
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.sampling.source import sample_gaussian_source_rays
@@ -399,7 +406,10 @@ def _artifact(value: Any, path: str) -> ArtifactConfiguration:
     )
 
 
-def _load_one_yaml(path: Path) -> dict[str, Any]:
+def load_strict_yaml_mapping(path: str | Path) -> dict[str, Any]:
+    """Load exactly one alias-free YAML mapping with duplicate-key rejection."""
+
+    path = Path(path)
     text = path.read_text(encoding="utf-8")
     if any(isinstance(event, AliasEvent) for event in yaml.parse(text)):
         raise ValueError("YAML aliases are not supported")
@@ -425,7 +435,7 @@ def load_simulation_config(
         else Path(__file__).resolve().parents[3]
     )
     document = _mapping(
-        _load_one_yaml(config_path),
+        load_strict_yaml_mapping(config_path),
         "configuration",
         required={
             "schema_version",
@@ -623,11 +633,6 @@ def load_simulation_config(
     )
     if not 0.0 <= mosaic.lorentzian_probability <= 1.0:
         raise ValueError("mosaic.lorentzian_probability must lie in [0, 1]")
-    if mosaic.lorentzian_probability < 1.0 and mosaic.gaussian_sigma_deg == 0.0:
-        raise ValueError("active Gaussian mosaic width must be nonzero")
-    if mosaic.lorentzian_probability > 0.0 and mosaic.lorentzian_hwhm_deg == 0.0:
-        raise ValueError("active Lorentzian mosaic width must be nonzero")
-
     sf_data = _mapping(
         document["structure_factor"],
         "structure_factor",
@@ -641,13 +646,6 @@ def load_simulation_config(
             sf_data["shared_disorder_epsilon"], "structure_factor.shared_disorder_epsilon"
         ),
     )
-    if structure_factor.model_id != "bi2se3_finite_2h.v1":
-        raise ValueError("structure_factor.model_id must be bi2se3_finite_2h.v1")
-    if structure_factor.normalization != "FINITE_TOTAL":
-        raise ValueError("structure_factor.normalization must be FINITE_TOTAL")
-    if not 0.0 <= structure_factor.shared_disorder_epsilon <= 1.0:
-        raise ValueError("structure_factor.shared_disorder_epsilon must lie in [0, 1]")
-
     bragg_data = _mapping(
         document["bragg"],
         "bragg",
@@ -891,6 +889,243 @@ def _mosaic(configured: MosaicInputConfiguration) -> MosaicParameters:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredGeometryInputs:
+    """Nominal exact-tag state with no intensity or mosaic numerical objects."""
+
+    config: SimulationConfiguration
+    samples: IncidentSampleBatch
+    instrument: CompiledInstrument
+    crystal: CrystalStructure
+    material: MaterialOptics
+    reciprocal: ReciprocalLattice
+    rods: tuple[Rod, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.config, SimulationConfiguration):
+            raise TypeError("config must be SimulationConfiguration")
+        if not isinstance(self.samples, IncidentSampleBatch):
+            raise TypeError("samples must be IncidentSampleBatch")
+        if self.samples.incident_sample_id.size != 1:
+            raise ValueError("configured geometry requires exactly one source sample")
+        expected_samples = sample_configured_source(self.config.source, sample_count=1)
+        if self.samples.source_revision != expected_samples.source_revision:
+            raise ValueError(
+                "configured geometry sample must be the source-center, zero-divergence, "
+                "mean-wavelength companion state"
+            )
+        if not isinstance(self.instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        if not isinstance(self.crystal, CrystalStructure):
+            raise TypeError("crystal must be CrystalStructure")
+        if not isinstance(self.material, MaterialOptics):
+            raise TypeError("material must be MaterialOptics")
+        if not isinstance(self.reciprocal, ReciprocalLattice):
+            raise TypeError("reciprocal must be ReciprocalLattice")
+        rods = tuple(self.rods)
+        if not rods or any(not isinstance(rod, Rod) for rod in rods):
+            raise ValueError("rods must contain at least one Rod")
+        if len({(rod.h, rod.k) for rod in rods}) != len(rods):
+            raise ValueError("rods must not repeat physical (h, k) lines")
+        if not np.array_equal(self.material.wavelength_A, self.samples.wavelength_A):
+            raise ValueError("geometry material wavelengths must match the source sample")
+        object.__setattr__(self, "rods", rods)
+
+
+@dataclass(frozen=True, slots=True)
+class GeometryOnlyEwaldContext:
+    """Nominal one-ray Ewald geometry with no strength or mosaic numerical state."""
+
+    reciprocal_basis_Ainv: FloatArray
+    crystal_to_sample: FloatArray
+    rods: tuple[Rod, ...]
+    incident: IncidentTransportResult
+    material: MaterialOptics
+    instrument: CompiledInstrument
+
+    def __post_init__(self) -> None:
+        basis = _readonly_float_array(
+            self.reciprocal_basis_Ainv,
+            (3, 3),
+            "reciprocal_basis_Ainv",
+        )
+        crystal_to_sample = _readonly_float_array(
+            self.crystal_to_sample,
+            (3, 3),
+            "crystal_to_sample",
+        )
+        if not np.allclose(
+            crystal_to_sample.T @ crystal_to_sample,
+            np.eye(3),
+            rtol=0.0,
+            atol=1.0e-12,
+        ) or not np.isclose(np.linalg.det(crystal_to_sample), 1.0, rtol=0.0, atol=1.0e-12):
+            raise ValueError("crystal_to_sample must be a proper rotation")
+        rods = tuple(self.rods)
+        if not rods or any(not isinstance(rod, Rod) for rod in rods):
+            raise ValueError("rods must contain at least one Rod")
+        if not isinstance(self.incident, IncidentTransportResult):
+            raise TypeError("incident must be IncidentTransportResult")
+        if not isinstance(self.material, MaterialOptics):
+            raise TypeError("material must be MaterialOptics")
+        if not isinstance(self.instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        states = self.incident.states
+        if states.incident_state_id.size != 1 or not bool(states.valid[0]):
+            raise ValueError("geometry-only Ewald context requires one valid incident state")
+        if states.sample_geometry_revision != self.instrument.sample_geometry_revision:
+            raise ValueError("incident and instrument sample revisions disagree")
+        if states.material_revision != self.material.material_revision:
+            raise ValueError("incident and material revisions disagree")
+        if not np.array_equal(crystal_to_sample, self.instrument.sample_from_crystal.rotation):
+            raise ValueError("crystal_to_sample must match the configured instrument")
+        object.__setattr__(self, "reciprocal_basis_Ainv", basis)
+        object.__setattr__(self, "crystal_to_sample", crystal_to_sample)
+        object.__setattr__(self, "rods", rods)
+
+    @property
+    def ki_sample_Ainv(self) -> FloatArray:
+        return self.incident.states.k_film_phase_sample_Ainv[0]
+
+    def map_latent_geometry(
+        self,
+        *,
+        rod: Rod,
+        branch: int,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+    ) -> DetectorMappedGeometry:
+        configured = next(
+            (candidate for candidate in self.rods if (candidate.h, candidate.k) == (rod.h, rod.k)),
+            None,
+        )
+        if configured is None:
+            raise ValueError(f"rod ({rod.h}, {rod.k}) is not configured")
+        geometry = evaluate_infinite_rod_ewald_geometry(
+            rod=configured,
+            branch=branch,
+            reciprocal_basis_Ainv=self.reciprocal_basis_Ainv,
+            crystal_to_sample=self.crystal_to_sample,
+            ki_sample_Ainv=self.ki_sample_Ainv,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+        )
+        return map_ewald_geometry_to_detector(
+            geometry,
+            incident=self.incident,
+            material=self.material,
+            instrument=self.instrument,
+        )
+
+    def evaluate_detector_geometry(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        include_surface_jacobian: bool = True,
+    ) -> DetectorCoordinateGeometry:
+        return evaluate_detector_coordinates_geometry(
+            column_px,
+            row_px,
+            incident=self.incident,
+            instrument=self.instrument,
+            ki_sample_Ainv=self.ki_sample_Ainv,
+            include_surface_jacobian=include_surface_jacobian,
+        )
+
+
+def build_geometry_only_ewald_context(
+    inputs: ConfiguredGeometryInputs,
+    *,
+    instrument: CompiledInstrument | None = None,
+) -> GeometryOnlyEwaldContext:
+    """Build the nominal Ewald indexing context without intensity or mosaic setup."""
+
+    if not isinstance(inputs, ConfiguredGeometryInputs):
+        raise TypeError("inputs must be ConfiguredGeometryInputs")
+    active_instrument = inputs.instrument if instrument is None else instrument
+    if not isinstance(active_instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    incident = build_incident_states(inputs.samples, inputs.material, active_instrument)
+    if not bool(incident.states.valid[0]):
+        raise ValueError("nominal geometry-only incident state is invalid")
+    return GeometryOnlyEwaldContext(
+        reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+        crystal_to_sample=active_instrument.sample_from_crystal.rotation,
+        rods=inputs.rods,
+        incident=incident,
+        material=inputs.material,
+        instrument=active_instrument,
+    )
+
+
+def build_configured_geometry_inputs(
+    config: SimulationConfiguration,
+) -> ConfiguredGeometryInputs:
+    """Build the one-ray material and reciprocal state needed by exact geometry tags."""
+
+    if not isinstance(config, SimulationConfiguration):
+        raise TypeError("config must be SimulationConfiguration")
+    samples = sample_configured_source(config.source, sample_count=1)
+    instrument = _compile_instrument(config.instrument)
+    crystal = read_crystal(config.material.cif_path, phase_id=config.material.phase_id)
+    material = material_optics(crystal, samples.wavelength_A)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    air_k_Ainv = 2.0 * np.pi / float(samples.wavelength_A[0])
+    rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+        k_norm_Ainv=air_k_Ainv,
+        population=config.bragg.rod_population,
+    )
+    if not config.bragg.include_detector_visible_m0:
+        rods = tuple(rod for rod in rods if rod.family_m != 0)
+    return ConfiguredGeometryInputs(
+        config=config,
+        samples=samples,
+        instrument=instrument,
+        crystal=crystal,
+        material=material,
+        reciprocal=reciprocal,
+        rods=rods,
+    )
+
+
+def rebind_configured_geometry_instrument(
+    inputs: ConfiguredGeometryInputs,
+    config: SimulationConfiguration,
+) -> ConfiguredGeometryInputs:
+    """Reuse material/reciprocal state when only commanded axis angles change."""
+
+    if not isinstance(inputs, ConfiguredGeometryInputs):
+        raise TypeError("inputs must be ConfiguredGeometryInputs")
+    if not isinstance(config, SimulationConfiguration):
+        raise TypeError("config must be SimulationConfiguration")
+    before = inputs.config
+    before_instrument = replace(
+        before.instrument,
+        axis_rotations=tuple(
+            replace(axis, angle_deg=0.0) for axis in before.instrument.axis_rotations
+        ),
+    )
+    after_instrument = replace(
+        config.instrument,
+        axis_rotations=tuple(
+            replace(axis, angle_deg=0.0) for axis in config.instrument.axis_rotations
+        ),
+    )
+    if (
+        config.material != before.material
+        or config.source != before.source
+        or config.bragg != before.bragg
+        or after_instrument != before_instrument
+    ):
+        raise ValueError(
+            "geometry reuse requires identical material, source, Bragg state, and instrument "
+            "apart from commanded axis angles"
+        )
+    return replace(inputs, config=config, instrument=_compile_instrument(config.instrument))
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredSimulationInputs:
     config: SimulationConfiguration
     samples: IncidentSampleBatch
@@ -912,6 +1147,18 @@ def build_configured_simulation_inputs(
 
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
+    if config.structure_factor.model_id != "bi2se3_finite_2h.v1":
+        raise ValueError("structure_factor.model_id must be bi2se3_finite_2h.v1 for intensity")
+    if config.structure_factor.normalization != "FINITE_TOTAL":
+        raise ValueError("structure_factor.normalization must be FINITE_TOTAL for intensity")
+    if not 0.0 <= config.structure_factor.shared_disorder_epsilon <= 1.0:
+        raise ValueError(
+            "structure_factor.shared_disorder_epsilon must lie in [0, 1] for intensity"
+        )
+    if config.mosaic.lorentzian_probability < 1.0 and config.mosaic.gaussian_sigma_deg == 0.0:
+        raise ValueError("active Gaussian mosaic width must be nonzero for intensity")
+    if config.mosaic.lorentzian_probability > 0.0 and config.mosaic.lorentzian_hwhm_deg == 0.0:
+        raise ValueError("active Lorentzian mosaic width must be nonzero for intensity")
     samples = sample_configured_source(config.source)
     instrument = _compile_instrument(config.instrument)
     crystal = read_crystal(config.material.cif_path, phase_id=config.material.phase_id)
@@ -995,6 +1242,54 @@ def build_source_averaged_detector(
 class NominalEwaldContext:
     geometry: DetectorEwaldMeasure
     incident: IncidentTransportResult
+
+    @property
+    def reciprocal_basis_Ainv(self) -> FloatArray:
+        return self.geometry.coating.bragg_space.config.reciprocal_basis_Ainv
+
+    @property
+    def crystal_to_sample(self) -> FloatArray:
+        return self.geometry.coating.bragg_space.config.crystal_to_sample
+
+    @property
+    def rods(self) -> tuple[Rod, ...]:
+        return self.geometry.coating.bragg_space.config.rods
+
+    @property
+    def instrument(self) -> CompiledInstrument:
+        return self.geometry.instrument
+
+    @property
+    def ki_sample_Ainv(self) -> FloatArray:
+        return self.geometry.coating.ki_sample_Ainv
+
+    def map_latent_geometry(
+        self,
+        *,
+        rod: Rod,
+        branch: int,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+    ) -> DetectorMappedGeometry:
+        return self.geometry.map_latent_geometry(
+            rod=rod,
+            branch=branch,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+        )
+
+    def evaluate_detector_geometry(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        include_surface_jacobian: bool = True,
+    ) -> DetectorCoordinateGeometry:
+        return self.geometry.evaluate_detector_geometry(
+            column_px,
+            row_px,
+            include_surface_jacobian=include_surface_jacobian,
+        )
 
 
 def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEwaldContext:
@@ -1825,19 +2120,25 @@ def integrate_detector_macrobins(
 
 __all__ = [
     "CONFIGURED_RESULT_SCHEMA_VERSION",
+    "ConfiguredGeometryInputs",
     "ConfiguredSimulationInputs",
     "DetectorIntegerLMarkers",
     "DetectorMacrobinImage",
     "EwaldSurfaceDisplay",
+    "GeometryOnlyEwaldContext",
     "NominalEwaldContext",
     "ReciprocalSpaceDisplay",
     "SimulationConfiguration",
+    "build_configured_geometry_inputs",
     "build_configured_simulation_inputs",
+    "build_geometry_only_ewald_context",
     "build_nominal_ewald_context",
     "build_source_averaged_detector",
     "evaluate_nominal_ewald_surface",
     "evaluate_nominal_integer_l_markers",
     "integrate_detector_macrobins",
     "load_simulation_config",
+    "load_strict_yaml_mapping",
+    "rebind_configured_geometry_instrument",
     "sample_reciprocal_space",
 ]

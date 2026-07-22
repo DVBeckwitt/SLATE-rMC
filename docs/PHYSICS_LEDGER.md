@@ -187,9 +187,9 @@ Every non-deferred row must have one proof case or a documented reason that it i
 
 ## Selection and staged fitting
 
-Position-free measured peak discovery, frozen reciprocal association, and cross-incidence branch
-selection are active alongside the exact integer-L local-geometry slice. Multi-angle mechanical
-decomposition and intensity fitting remain future work.
+Position-free measured peak discovery, frozen reciprocal association, cross-incidence branch
+selection, and the exact integer-L multi-angle geometry fit are active. Intensity fitting remains
+future work.
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|
@@ -200,15 +200,16 @@ decomposition and intensity fitting remain future work.
 | PHY-SEL-005 | measured peak to rod/branch association | geometry Q-group and peak-selection paths | refinement workflow | selection | CORRECTED frozen association |
 | PHY-SEL-006 | detector-native ROI and selected-rod manifests | GUI selection managers | ordered and diffuse objectives | selection | NEW immutable manifest |
 | PHY-FIT-000 | source size, divergence, wavelength, and correlation characterization | distributed beam setup | refinement step 1 | fitting | NEW staged result |
-| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed, active local four-angle pack |
+| PHY-FIT-001 | fit parameter, bounds, units, and dependency metadata | `fitting/geometry_fit_parameters.py` and GUI runtime | refinement workflow | fitting | CORRECTED typed; active four-angle local pack and nine-coordinate shared series pack |
 | PHY-FIT-002 | independent detector geometry calibration | calibrant and geometry paths | refinement step 2 | fitting | NEW/CORRECTED detector-native |
-| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; pivoted effective sample normal only |
-| PHY-FIT-002B | continuous detector-function exact-tag map from one nominal companion incident state | no single legacy owner | alignment stage | fitting | NEW active; source center, zero divergence, mean wavelength; excluded from empirical source mass |
+| PHY-FIT-002A | detector-native sample/goniometer residual | caked geometry objective and solver | refinement step 3 | fitting | CORRECTED active native marker coordinates; shared detector/sample/axis/pivot series pack under fixed calibration |
+| PHY-FIT-002B | continuous detector-function exact-tag map from one nominal companion incident state | no single legacy owner | alignment stage | fitting | NEW active; source center, zero divergence, mean wavelength; shared geometry authorities construct no strength/mosaic and exclude the companion from empirical source mass |
 | PHY-FIT-002C | paired tag-branch half-angle and m=0 increasing-L TLS-line residuals | caked line/peak geometry objectives | alignment stage | fitting | CORRECTED active simultaneous coordinate-plus-angle objective |
 | PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |
-| PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active exact-marker audit |
+| PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active direct fixed-L root oracle plus corrected-geometry relabeling of unchanged selected native candidates; fresh global search is diagnostic only |
 | PHY-FIT-003B | exact-L m=0 minimum-mosaic-tilt detector landmark (`tag_branch=0`) | no legacy point identity for the m=0 orientation curve | constrained Ewald geometry | fitting/mosaic | NEW active geometry landmark, not an intensity maximum |
-| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active exact-marker proof |
+| PHY-FIT-003C | strict arbitrary-length OSC-series schema and provenance-bound image-ID join | hard-coded GUI/script image lists | repeatable staged fitting | fitting/selection | NEW active; explicit motor angles and one material/mount per fit group |
+| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active single-image and 5/10/15-degree nine-coordinate exact-marker proofs |
 | PHY-FIT-005 | normalized local mosaic-profile objective | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED |
 | PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED |
 | PHY-FIT-007 | frozen geometry during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle |

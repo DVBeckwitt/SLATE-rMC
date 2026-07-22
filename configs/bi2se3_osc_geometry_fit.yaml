@@ -1,0 +1,14 @@
+schema_version: rasim-osc-geometry-fit-v1
+simulation_config: bi2se3_simulation.yaml
+incidence_axis_index: 0
+qualification_profile: bi2se3-osc-5-10-15.v1
+images:
+  - image_id: Bi2Se3_5m_5d
+    osc_path: ../examples/bi2se3/osc/Bi2Se3_5m_5d.osc.gz
+    axis_rotation_angles_deg: [5.0]
+  - image_id: Bi2Se3_10d_5m
+    osc_path: ../examples/bi2se3/osc/Bi2Se3_10d_5m.osc.gz
+    axis_rotation_angles_deg: [10.0]
+  - image_id: Bi2Se3_15d_5m
+    osc_path: ../examples/bi2se3/osc/Bi2Se3_15d_5m.osc.gz
+    axis_rotation_angles_deg: [15.0]

@@ -6,6 +6,7 @@ from painted_ewald.bragg import (
     LatentBraggIntensity,
     MosaicBraggSpace,
     WeightedMosaicSlice,
+    map_tied_rotation_latent,
 )
 from painted_ewald.mosaic import (
     MosaicSpace,
@@ -17,6 +18,7 @@ from painted_ewald.surface import (
     ContinuousEwaldCoating,
     EwaldLatentGeometry,
     EwaldLatentIntensity,
+    evaluate_infinite_rod_ewald_geometry,
 )
 from painted_ewald.types import (
     BasisBoundStrengthModel,
@@ -43,5 +45,7 @@ __all__ = [
     "WeightedMosaicSlice",
     "build_mosaic_space",
     "enumerate_rods_within_ewald_sphere",
+    "evaluate_infinite_rod_ewald_geometry",
+    "map_tied_rotation_latent",
     "wrapped_mosaic_line_density_rad_inv",
 ]

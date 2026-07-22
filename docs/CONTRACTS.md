@@ -31,6 +31,9 @@ and ordering are validated eagerly.
 | `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
 | `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
+| `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
+| `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
+| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one shared nine-coordinate correction with per-image metrics and rank diagnostics |
 
 `axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
 active LAB-to-LAB rigid transform about its declared LAB pivot. `compile_instrument` uses the same
@@ -60,6 +63,10 @@ Owns exact `(h,k)`, family metadata, and population. Rod identity is never a flo
 - `rod_u_bounds_Ainv(rod)` returns the full elastic-reach axial interval.
 
 The map and density are functions; a quadrature node set is never the model.
+
+`map_tied_rotation_latent(...)` is the public geometry-only authority for the same tied rotation,
+without constructing `MosaicBraggSpace`. `evaluate_infinite_rod_ewald_geometry(...)` is the matching
+geometry-only continuous Ewald-section authority.
 
 ### `ContinuousEwaldCoating`
 
@@ -108,6 +115,10 @@ production renderer. It fails closed unless the caller explicitly passes
 `include_per_rod_evidence=True`. The detailed arbitrary-coordinate evaluator remains available
 without that flag because it performs no pixel integration.
 
+`evaluate_detector_coordinates_geometry(...)` owns the geometry-only native-coordinate inverse
+map, and `map_ewald_geometry_to_detector(...)` owns the corresponding forward exit/refraction and
+detector intersection. Intensity-bearing detector measures delegate to these authorities.
+
 ### `ContinuousNormalizedAngleFunction`
 
 Owns one pose-bound `ContinuousDetectorFunction` and one fixed `AngleFrame`. Callers provide only
@@ -127,6 +138,9 @@ consumer and must integrate `S` and `N` before division.
   `rasim-simulation-v2` YAML document. Unknown, duplicate, aliased, or missing fields fail.
 - `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
   material, rods, finite-2H strength, and Bragg space once.
+- `build_configured_geometry_inputs(config)` creates only source rows, material, reciprocal basis,
+  rods, and compiled instrument. `build_geometry_only_ewald_context(...)` adds one nominal incident
+  state. Neither boundary constructs structure strength or mosaic probability.
 - `sample_configured_source(source, sample_count=...)` is the one mapping from validated configured
   source parameters to the canonical source sampler, including the exact one-row nominal state.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
@@ -245,6 +259,77 @@ One image at one commanded goniometer angle cannot distinguish raw sample-zero t
 yaw/pitch, crystal rotation about the rod axis, detector tangent translation/beam-center shifts, or
 sample-normal offset/detector-distance gauges. Those parameters require additional constrained data,
 especially multiple commanded goniometer angles; they are not exposed by this fit contract.
+
+### Indexed multi-OSC geometry series
+
+`load_osc_geometry_series(...)` accepts one strict `rasim-osc-geometry-fit-v1` manifest with a
+simulation configuration, one commanded-axis index, and a nonempty list of unique image IDs, OSC
+paths, and complete numeric axis-angle tuples. Paths are manifest-relative. Motor angles are
+explicit declarations: neither filenames nor OSC headers are an authority. Version 1 requires one
+configured axis at index zero, allows repeated commanded angles, and requires one material/mount
+per shared fit group. The same contract is reusable for different materials in separate groups;
+its first discrete marker identity remains layered-hexagonal `(m,L,branch,root_sign,rod)`.
+The selection `AngleFrame` origin is the transported nominal incident/sample intersection, never
+the sample-transform translation; its column/row directions come from the active corrected detector
+pose rather than stale nominal detector axes.
+
+`index_osc_geometry_series(...)` compiles shared material/reciprocal state once, reads each OSC,
+performs the one clockwise I/O conversion, runs position-free discovery and reciprocal indexing
+with a geometry-only context, and freezes the cross-image selection once. Its
+`OscGeometryIndexingRun` retains the source discoveries, geometry inputs, geometry contexts, and
+exact fit-ready models from that provenance-bound run. Model, discovery, data, mask, policy,
+commanded-angle, and indexing-context hashes are checked together; corrected global-rediscovery
+runs deliberately expose no fit-ready images.
+Missing, extra, duplicate, angle-mismatched, or image-provenance-mismatched IDs fail before fitting.
+Geometry-only inputs recompute and require the exact configured one-row nominal source revision;
+each fit-ready image also recompiles and compares the complete detector, sample, axis, and pivot
+state before the residual hot path is admitted.
+
+`fit_indexed_geometry_series(...)` applies one nine-coordinate vector to every image, concatenates
+the existing canonical per-image residual blocks in sorted image-ID order, and uses bounded TRF
+least squares. The vector is, in order:
+
+```text
+detector local-column tilt, detector current-local-row tilt,
+sample local-x tilt, sample current-local-y tilt,
+goniometer-axis pitch, goniometer-axis yaw,
+signed sample-plane normal offset,
+goniometer-pivot pitch-tangent offset, goniometer-pivot yaw-tangent offset
+```
+
+The corrected axis owns a transported orthonormal pitch/yaw tangent basis. Pivot offsets are
+applied in that basis; axis-parallel pivot motion is a gauge. The ordered rigid transformation is
+corrected axis/pivot, commanded motion, sample intrinsic x/current-y correction about that pivot,
+signed displacement along the final sample normal, and detector intrinsic x/current-y correction.
+Detector roll is an exact gauge with sample-y/axis-pitch coordinates, crystal roll is an
+axial-powder gauge, and detector center/distance/pitch remain calibration-owned.
+The hard half-spans are `(10 deg, 10 deg, 5 deg, 5 deg, 5 deg, 5 deg, 0.1 mm, 0.1 mm, 0.1 mm)` in
+the declared parameter order.
+
+The actual bound-scaled Jacobian must be rank 9 with condition at most `1e8` before optimization.
+For the qualifying Bi2Se3 keys the rank ladder is 5/9 for 5 degrees, 7/9 after adding 10 degrees,
+and 9/9 only after adding 15 degrees. The result reports per-image and pooled raw-pixel metrics,
+scaled singular values and weakest direction, active bounds, work counts, and optimizer counts.
+Full rank does not imply precise pivot recovery; the weakest direction must be reported.
+
+`audit_indexed_geometry_series_roots(...)` brackets
+`F(beta)=q(beta) dot (q(beta)+2 ki)` on its two monotone arcs without calling the production
+integer-`L` root solver, assigns root sign from the oriented crossing and branch from the signed
+axial derivative, and compares independent and production detector coordinates per full key. A
+swapped beta/root assignment therefore fails even when the key set is unchanged.
+
+`reindex_frozen_osc_geometry_series(...)` returns a typed `FrozenOscGeometryReindexing` bound to the
+source manifest and discovery hashes. `audit_frozen_osc_geometry_reindexing(...)` independently
+recomputes the exact typed relabeling from the source run, requires manifest equality, reconstructs
+each corrected geometry context, and verifies the context digest, which also owns the frozen keys,
+native coordinates, and covariance hashes, before comparing visibility. The operation
+preserves exactly the selected position-free native coordinates, support matrices, scores,
+image/mask hashes, and policy, recomputes only their corrected angles and reciprocal labels, and
+requires the same full keys with coherent tracks. It performs no OSC I/O, cake search, or
+native-coordinate refinement.
+A complete corrected-geometry `index_osc_geometry_series(...)` pass is a separate operational
+diagnostic because its cake grid and same-key candidate ownership change with geometry. Newly
+visible or differently selected unfitted lobes are reported but never censor or replace frozen data.
 
 ## Once-only factor ownership
 

@@ -26,6 +26,80 @@ from painted_ewald.validation import (
 FloatArray = NDArray[np.float64]
 
 
+def _latent_arrays(
+    alpha_rad: ArrayLike,
+    beta_rad: ArrayLike,
+    u_Ainv: ArrayLike,
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    for value, name in (
+        (alpha_rad, "alpha_rad"),
+        (beta_rad, "beta_rad"),
+        (u_Ainv, "u_Ainv"),
+    ):
+        reject_complex(value, name)
+    alpha, beta, axial = np.broadcast_arrays(
+        np.asarray(alpha_rad, dtype=np.float64),
+        np.asarray(beta_rad, dtype=np.float64),
+        np.asarray(u_Ainv, dtype=np.float64),
+    )
+    if not all(np.all(np.isfinite(value)) for value in (alpha, beta, axial)):
+        raise ValueError("latent Bragg coordinates must be finite")
+    if np.any((alpha < 0.0) | (alpha > np.pi)):
+        raise ValueError("alpha_rad must lie in [0, pi]")
+    if np.any((beta < 0.0) | (beta >= 2.0 * np.pi)):
+        raise ValueError("beta_rad must lie in [0, 2*pi)")
+    return alpha, beta, axial
+
+
+def _map_tied_rotation_arrays(
+    rod: Rod,
+    basis: FloatArray,
+    crystal_to_sample: FloatArray,
+    mean_axis: FloatArray,
+    tilt_axis: FloatArray,
+    alpha: FloatArray,
+    beta: FloatArray,
+    axial: FloatArray,
+) -> FloatArray:
+    shape = alpha.shape
+    tilt = axis_angle_rotation_batch(tilt_axis, alpha.reshape(-1))
+    azimuth = axis_angle_rotation_batch(mean_axis, beta.reshape(-1))
+    rotations = np.einsum("nij,njk->nik", azimuth, tilt, optimize=True)
+    q_parallel = rod.h * basis[:, 0] + rod.k * basis[:, 1]
+    q_crystal = q_parallel + axial.reshape(-1, 1) * mean_axis
+    rotated = np.einsum("nij,nj->ni", rotations, q_crystal, optimize=True)
+    return np.asarray((rotated @ crystal_to_sample.T).reshape((*shape, 3)), dtype=np.float64)
+
+
+def map_tied_rotation_latent(
+    *,
+    rod: Rod,
+    reciprocal_basis_Ainv: ArrayLike,
+    crystal_to_sample: ArrayLike,
+    alpha_rad: ArrayLike,
+    beta_rad: ArrayLike,
+    u_Ainv: ArrayLike,
+) -> FloatArray:
+    """Map one reciprocal rod through the authoritative tied mosaic rotation."""
+
+    if not isinstance(rod, Rod):
+        raise TypeError("rod must be a Rod")
+    basis = reciprocal_basis(reciprocal_basis_Ainv)
+    sample_rotation = proper_rotation(crystal_to_sample)
+    alpha, beta, axial = _latent_arrays(alpha_rad, beta_rad, u_Ainv)
+    mean_axis, tilt_axis = mosaic_axes(basis)
+    return _map_tied_rotation_arrays(
+        rod,
+        basis,
+        sample_rotation,
+        mean_axis,
+        tilt_axis,
+        alpha,
+        beta,
+        axial,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BraggSpaceConfig:
     """Complete elastic-reach domain for a continuous pre-Ewald rod measure."""
@@ -352,39 +426,17 @@ class MosaicBraggSpace:
         """Evaluate the continuous tied-rotation map at arbitrary latent coordinates."""
 
         configured = self._configured_rod(rod)
-        for value, name in (
-            (alpha_rad, "alpha_rad"),
-            (beta_rad, "beta_rad"),
-            (u_Ainv, "u_Ainv"),
-        ):
-            reject_complex(value, name)
-        alpha, beta, axial = np.broadcast_arrays(
-            np.asarray(alpha_rad, dtype=np.float64),
-            np.asarray(beta_rad, dtype=np.float64),
-            np.asarray(u_Ainv, dtype=np.float64),
+        alpha, beta, axial = _latent_arrays(alpha_rad, beta_rad, u_Ainv)
+        return _map_tied_rotation_arrays(
+            configured,
+            self._config.reciprocal_basis_Ainv,
+            self._config.crystal_to_sample,
+            self._mean_axis,
+            self._tilt_axis,
+            alpha,
+            beta,
+            axial,
         )
-        if not all(np.all(np.isfinite(value)) for value in (alpha, beta, axial)):
-            raise ValueError("latent Bragg coordinates must be finite")
-        if np.any((alpha < 0.0) | (alpha > np.pi)):
-            raise ValueError("alpha_rad must lie in [0, pi]")
-        if np.any((beta < 0.0) | (beta >= 2.0 * np.pi)):
-            raise ValueError("beta_rad must lie in [0, 2*pi)")
-
-        shape = alpha.shape
-        alpha_flat = alpha.reshape(-1)
-        beta_flat = beta.reshape(-1)
-        axial_flat = axial.reshape(-1)
-        tilt = axis_angle_rotation_batch(self._tilt_axis, alpha_flat)
-        azimuth = axis_angle_rotation_batch(self._mean_axis, beta_flat)
-        rotations = np.einsum("nij,njk->nik", azimuth, tilt, optimize=True)
-        q_parallel = (
-            configured.h * self._config.reciprocal_basis_Ainv[:, 0]
-            + configured.k * self._config.reciprocal_basis_Ainv[:, 1]
-        )
-        q_crystal = q_parallel + axial_flat[:, None] * self._mean_axis
-        rotated = np.einsum("nij,nj->ni", rotations, q_crystal, optimize=True)
-        q_sample = rotated @ self._config.crystal_to_sample.T
-        return np.asarray(q_sample.reshape((*shape, 3)), dtype=np.float64)
 
     def _strength_profile(self, rod: Rod, ell: FloatArray) -> FloatArray:
         evaluate_profile = getattr(self._strength_model, "evaluate_profile", None)
@@ -519,4 +571,5 @@ __all__ = [
     "LatentBraggIntensity",
     "MosaicBraggSpace",
     "WeightedMosaicSlice",
+    "map_tied_rotation_latent",
 ]

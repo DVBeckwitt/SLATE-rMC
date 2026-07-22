@@ -2,7 +2,7 @@
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
-API v9 does not renumber historical evidence.
+API v10 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
@@ -110,6 +110,17 @@ fitting.objective_value
 fitting.held_out_metric
 fitting.invalidation_summary
 ```
+
+The additive `rasim-osc-geometry-fit-result-v3` typed proof envelope carries its series manifest,
+image IDs and commanded angles, parameterization, shared corrections, scaled singular spectrum and
+weakest direction, active bounds, per-image native errors, the direct-root and frozen-candidate
+acceptance audits, the frozen-reindexing lineage, optional data-specific qualification profile, and
+the separate global-rediscovery diagnostic. Expected input or numerical rejection in JSON mode uses
+the additive `rasim-osc-geometry-fit-rejection-v1` envelope rather than a traceback. These
+map to the existing `selection.manifest_hash`, `fitting.detector_parameters`,
+`fitting.sample_geometry_parameters`, `fitting.selection_revision`, `fitting.objective_value`,
+`fitting.held_out_metric`, and `fitting.invalidation_summary` stages; they do not extend or renumber
+frozen trace schema v4.
 
 ## Required metadata
 

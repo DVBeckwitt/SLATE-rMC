@@ -8,17 +8,25 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.optimize import least_squares
+from scipy.optimize import brentq, least_squares
 
-from painted_ewald import ContinuousEwaldCoating
+from painted_ewald import (
+    ContinuousEwaldCoating,
+    EwaldLatentGeometry,
+    map_tied_rotation_latent,
+)
 from painted_ewald.rotations import mosaic_axes
+from painted_ewald.types import Rod, RootStatus
+from rasim_next.core.contracts import MaterialOptics
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry import build_incident_states, compose_intrinsic_xy_rotation
 from rasim_next.geometry.instrument import CompiledInstrument
+from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.materials import material_optics
 from rasim_next.pipeline.configured_simulation import (
+    ConfiguredGeometryInputs,
     ConfiguredSimulationInputs,
     DetectorIntegerLMarkers,
     build_nominal_ewald_context,
@@ -27,7 +35,10 @@ from rasim_next.pipeline.configured_simulation import (
     sample_configured_source,
     solve_integer_l_ewald_roots,
 )
-from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+from rasim_next.pipeline.continuous_detector import (
+    DetectorEwaldMeasure,
+    map_ewald_geometry_to_detector,
+)
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorCoordinateIntensity
 
 FloatArray = NDArray[np.float64]
@@ -666,10 +677,454 @@ class ContinuousDetectorGeometryModel:
         )
 
 
+def _frozen_nonzero_keys(
+    keys: tuple[IntegerLMarkerKey, ...],
+) -> tuple[IntegerLMarkerKey, ...]:
+    frozen = tuple(keys)
+    if not frozen or any(not isinstance(key, IntegerLMarkerKey) for key in frozen):
+        raise ValueError("keys must contain at least one IntegerLMarkerKey")
+    if len(set(frozen)) != len(frozen):
+        raise ValueError("prediction keys must be unique")
+    return frozen
+
+
+class ExactTagGeometryModel:
+    """One-ray exact integer-L predictor with no intensity or mosaic dependency."""
+
+    __slots__ = ("_inputs",)
+
+    def __init__(self, inputs: ConfiguredGeometryInputs) -> None:
+        if not isinstance(inputs, ConfiguredGeometryInputs):
+            raise TypeError("inputs must be ConfiguredGeometryInputs")
+        if inputs.samples.incident_sample_id.size != 1:
+            raise ValueError("exact-tag geometry requires exactly one nominal source state")
+        object.__setattr__(self, "_inputs", inputs)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("ExactTagGeometryModel is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("ExactTagGeometryModel is immutable")
+
+    @property
+    def inputs(self) -> ConfiguredGeometryInputs:
+        return self._inputs
+
+    @property
+    def instrument(self) -> CompiledInstrument:
+        return self._inputs.instrument
+
+    @property
+    def reference_wavelength_A(self) -> float:
+        return float(self._inputs.samples.wavelength_A[0])
+
+    def predict_integer_l_tags(
+        self,
+        keys: tuple[IntegerLMarkerKey, ...],
+        *,
+        instrument: CompiledInstrument | None = None,
+    ) -> IntegerLMarkerPrediction:
+        """Predict frozen tags through direct Ewald geometry and native projection."""
+
+        frozen_keys = _frozen_nonzero_keys(keys)
+        active_instrument = self._inputs.instrument if instrument is None else instrument
+        if not isinstance(active_instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        incident = build_incident_states(
+            self._inputs.samples,
+            self._inputs.material,
+            active_instrument,
+        )
+        if not bool(incident.states.valid[0]):
+            raise GeometryPredictionError(
+                f"nominal incident state became {incident.states.status[0].value}"
+            )
+
+        rods = {(rod.h, rod.k): rod for rod in self._inputs.rods}
+        basis = self._inputs.reciprocal.basis_Ainv
+        crystal_to_sample = active_instrument.sample_from_crystal.rotation
+        ki_sample_Ainv = incident.states.k_film_phase_sample_Ainv[0]
+        b3_norm_Ainv = float(np.linalg.norm(basis[:, 2]))
+        size = len(frozen_keys)
+        coordinates = np.zeros((size, 2), dtype=np.float64)
+        residual = np.zeros(size, dtype=np.float64)
+        status = np.full(size, "ROOT_MISSING", dtype="U32")
+        root_problems: dict[tuple[tuple[int, int], int], list[tuple[int, IntegerLMarkerKey]]] = {}
+        for marker_index, key in enumerate(frozen_keys):
+            rod = rods.get(key.representative_rod_hk)
+            if rod is None or rod.family_m != key.family_m:
+                raise ValueError(
+                    f"marker rod {key.representative_rod_hk} does not belong to m={key.family_m}"
+                )
+            root_problems.setdefault((key.representative_rod_hk, key.integer_L), []).append(
+                (marker_index, key)
+            )
+
+        batches: dict[tuple[tuple[int, int], int], list[tuple[int, float]]] = {}
+        for (rod_hk, integer_l), markers in root_problems.items():
+            roots = solve_integer_l_ewald_roots(
+                rod=rods[rod_hk],
+                integer_l=integer_l,
+                reciprocal_basis_Ainv=basis,
+                crystal_to_sample=crystal_to_sample,
+                ki_sample_Ainv=ki_sample_Ainv,
+            )
+            for marker_index, key in markers:
+                if roots is None:
+                    continue
+                if roots.branch != key.branch:
+                    status[marker_index] = "BRANCH_CHANGED"
+                    continue
+                if key.root_sign not in roots.root_sign:
+                    status[marker_index] = (
+                        "ROOT_TANGENT" if roots.root_sign == (0,) else "ROOT_MISSING"
+                    )
+                    continue
+                root_index = roots.root_sign.index(key.root_sign)
+                batches.setdefault((rod_hk, key.branch), []).append(
+                    (marker_index, roots.beta_rad[root_index])
+                )
+
+        for (rod_hk, branch), candidates in batches.items():
+            rod = rods[rod_hk]
+            indices = np.asarray([item[0] for item in candidates], dtype=np.int64)
+            beta = np.asarray([item[1] for item in candidates], dtype=np.float64)
+            integer_l = np.asarray(
+                [frozen_keys[int(index)].integer_L for index in indices],
+                dtype=np.float64,
+            )
+            q_sample = map_tied_rotation_latent(
+                rod=rod,
+                reciprocal_basis_Ainv=basis,
+                crystal_to_sample=crystal_to_sample,
+                alpha_rad=np.zeros(beta.size, dtype=np.float64),
+                beta_rad=beta,
+                u_Ainv=integer_l * b3_norm_Ainv,
+            )
+            kf_sample = q_sample + ki_sample_Ainv[None, :]
+            ewald_residual = np.abs(
+                np.linalg.norm(kf_sample, axis=1) - np.linalg.norm(ki_sample_Ainv)
+            )
+            geometry = EwaldLatentGeometry(
+                rod=rod,
+                branch=branch,
+                alpha_rad=np.zeros(beta.size, dtype=np.float64),
+                beta_rad=beta,
+                u_Ainv=integer_l * b3_norm_Ainv,
+                L=integer_l,
+                q_sample_Ainv=q_sample,
+                kf_sample_Ainv=kf_sample,
+                ewald_residual_Ainv=ewald_residual,
+                status=np.full(beta.size, RootStatus.REGULAR.value, dtype="U32"),
+            )
+            mapped = map_ewald_geometry_to_detector(
+                geometry,
+                incident=incident,
+                material=self._inputs.material,
+                instrument=active_instrument,
+            )
+            coordinates[indices, 0] = mapped.column_px
+            coordinates[indices, 1] = mapped.row_px
+            residual[indices] = ewald_residual
+            status[indices] = mapped.detector_status
+        return IntegerLMarkerPrediction(
+            keys=frozen_keys,
+            coordinates_px=coordinates,
+            detector_status=status,
+            ewald_residual_Ainv=residual,
+        )
+
+
+def _direct_integer_l_root_coordinates(
+    *,
+    rod: Rod,
+    integer_l: int,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> tuple[dict[tuple[int, int], FloatArray], bool]:
+    """Directly bracket fixed-L elastic roots without the prediction solver."""
+
+    tau = 2.0 * np.pi
+    b3_norm_Ainv = float(np.linalg.norm(reciprocal_basis_Ainv[:, 2]))
+    u_Ainv = integer_l * b3_norm_Ainv
+    mean_axis, _ = mosaic_axes(reciprocal_basis_Ainv)
+    mean_axis_sample = crystal_to_sample @ mean_axis
+
+    def q_at_beta(beta_rad: float) -> FloatArray:
+        return map_tied_rotation_latent(
+            rod=rod,
+            reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+            crystal_to_sample=crystal_to_sample,
+            alpha_rad=0.0,
+            beta_rad=beta_rad % tau,
+            u_Ainv=u_Ainv,
+        )
+
+    q_zero = q_at_beta(0.0)
+    incident_norm = float(np.linalg.norm(ki_sample_Ainv))
+    q_norm = float(np.linalg.norm(q_zero))
+    q_perpendicular_norm = float(np.linalg.norm(np.cross(mean_axis_sample, q_zero)))
+    equation_scale = max(q_norm**2, 2.0 * incident_norm * q_norm, incident_norm**2, 1.0)
+    derivative_scale = max(2.0 * incident_norm * q_perpendicular_norm, 1.0)
+    equation_tolerance = 4096.0 * np.finfo(np.float64).eps * equation_scale
+    derivative_tolerance = 4096.0 * np.finfo(np.float64).eps * derivative_scale
+
+    def elastic_equation(beta_rad: float) -> float:
+        q_sample = q_at_beta(beta_rad)
+        return math.fsum(
+            float(q_component * (q_component + 2.0 * ki_component))
+            for q_component, ki_component in zip(q_sample, ki_sample_Ainv, strict=True)
+        )
+
+    def elastic_derivative(beta_rad: float) -> float:
+        q_sample = q_at_beta(beta_rad)
+        derivative = np.cross(mean_axis_sample, q_sample)
+        return 2.0 * math.fsum(
+            float((ki_component + q_component) * derivative_component)
+            for ki_component, q_component, derivative_component in zip(
+                ki_sample_Ainv,
+                q_sample,
+                derivative,
+                strict=True,
+            )
+        )
+
+    edges = np.linspace(0.0, tau, 9)
+    derivative_at_edges = tuple(elastic_derivative(float(edge)) for edge in edges)
+    if max(abs(value) for value in derivative_at_edges) <= derivative_tolerance:
+        equation_at_edges = tuple(elastic_equation(float(edge)) for edge in edges)
+        separated = (
+            min(equation_at_edges) > equation_tolerance
+            or max(equation_at_edges) < -equation_tolerance
+        )
+        return ({}, False) if separated else ({}, True)
+    extrema: list[float] = []
+    for left, right, left_value, right_value in zip(
+        edges[:-1],
+        edges[1:],
+        derivative_at_edges[:-1],
+        derivative_at_edges[1:],
+        strict=True,
+    ):
+        if abs(left_value) <= derivative_tolerance:
+            extrema.append(float(left % tau))
+        elif left_value * right_value < 0.0:
+            extrema.append(
+                float(
+                    brentq(
+                        elastic_derivative,
+                        float(left),
+                        float(right),
+                        xtol=64.0 * np.finfo(np.float64).eps,
+                        rtol=8.0 * np.finfo(np.float64).eps,
+                    )
+                    % tau
+                )
+            )
+    unique_extrema: list[float] = []
+    angular_tolerance = 1024.0 * np.finfo(np.float64).eps * tau
+    for beta in sorted(extrema):
+        if not any(
+            abs((beta - existing + np.pi) % tau - np.pi) <= angular_tolerance
+            for existing in unique_extrema
+        ):
+            unique_extrema.append(beta)
+    if len(unique_extrema) != 2:
+        return {}, True
+    first_extremum, second_extremum = unique_extrema
+    first_value = elastic_equation(first_extremum)
+    second_value = elastic_equation(second_extremum)
+    if abs(first_value) <= equation_tolerance or abs(second_value) <= equation_tolerance:
+        return {}, True
+    if first_value * second_value > 0.0:
+        return {}, False
+
+    roots = (
+        (
+            float(
+                brentq(
+                    elastic_equation,
+                    first_extremum,
+                    second_extremum,
+                    xtol=64.0 * np.finfo(np.float64).eps,
+                    rtol=8.0 * np.finfo(np.float64).eps,
+                )
+                % tau
+            ),
+            -1 if first_value < second_value else 1,
+        ),
+        (
+            float(
+                brentq(
+                    elastic_equation,
+                    second_extremum,
+                    first_extremum + tau,
+                    xtol=64.0 * np.finfo(np.float64).eps,
+                    rtol=8.0 * np.finfo(np.float64).eps,
+                )
+                % tau
+            ),
+            -1 if second_value < first_value else 1,
+        ),
+    )
+
+    coordinates: dict[tuple[int, int], FloatArray] = {}
+    branch_tolerance = (
+        4096.0 * np.finfo(np.float64).eps * max(incident_norm, q_norm, abs(u_Ainv), 1.0)
+    )
+    residual_tolerance = 512.0 * np.finfo(np.float64).eps * max(incident_norm, 1.0)
+    for beta, root_sign in roots:
+        q_sample = q_at_beta(beta)
+        kf_sample = q_sample + ki_sample_Ainv
+        branch_derivative = float(kf_sample @ mean_axis_sample)
+        if abs(branch_derivative) <= branch_tolerance:
+            return {}, True
+        branch = 1 if branch_derivative < 0.0 else 2
+        ewald_residual = abs(float(np.linalg.norm(kf_sample)) - incident_norm)
+        if ewald_residual > residual_tolerance:
+            return {}, True
+        geometry = EwaldLatentGeometry(
+            rod=rod,
+            branch=branch,
+            alpha_rad=np.asarray(0.0),
+            beta_rad=np.asarray(beta),
+            u_Ainv=np.asarray(u_Ainv),
+            L=np.asarray(float(integer_l)),
+            q_sample_Ainv=q_sample,
+            kf_sample_Ainv=kf_sample,
+            ewald_residual_Ainv=np.asarray(ewald_residual),
+            status=np.asarray(RootStatus.REGULAR.value),
+        )
+        mapped = map_ewald_geometry_to_detector(
+            geometry,
+            incident=incident,
+            material=material,
+            instrument=instrument,
+        )
+        if str(mapped.detector_status) != ValidityCode.VALID.value:
+            continue
+        coordinate = np.asarray(
+            (float(mapped.column_px), float(mapped.row_px)),
+            dtype=np.float64,
+        )
+        coordinate.setflags(write=False)
+        coordinates[(branch, root_sign)] = coordinate
+    return coordinates, False
+
+
+def audit_exact_tag_geometry_roots(
+    model: ExactTagGeometryModel,
+    expected_keys: tuple[IntegerLMarkerKey, ...],
+    *,
+    instrument: CompiledInstrument | None = None,
+) -> IntegerLSelectionAudit:
+    """Compare predicted roots with direct fixed-L elastic-root enumeration."""
+
+    if not isinstance(model, ExactTagGeometryModel):
+        raise TypeError("model must be ExactTagGeometryModel")
+    expected = _frozen_nonzero_keys(expected_keys)
+    active_instrument = model.instrument if instrument is None else instrument
+    if not isinstance(active_instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    incident = build_incident_states(model.inputs.samples, model.inputs.material, active_instrument)
+    if not bool(incident.states.valid[0]):
+        return IntegerLSelectionAudit(
+            classification="MISSING",
+            missing_keys=expected,
+            unexpected_keys=(),
+            expected_count=len(expected),
+            enumerated_count=0,
+        )
+    rods = {(rod.h, rod.k): rod for rod in model.inputs.rods}
+    basis = model.inputs.reciprocal.basis_Ainv
+    crystal_to_sample = active_instrument.sample_from_crystal.rotation
+    ki_sample = incident.states.k_film_phase_sample_Ainv[0]
+    try:
+        predicted = model.predict_integer_l_tags(expected, instrument=active_instrument)
+    except GeometryPredictionError:
+        return IntegerLSelectionAudit(
+            classification="MISSING",
+            missing_keys=expected,
+            unexpected_keys=(),
+            expected_count=len(expected),
+            enumerated_count=0,
+        )
+    direct_by_problem: dict[
+        tuple[tuple[int, int], int], tuple[dict[tuple[int, int], FloatArray], bool]
+    ] = {}
+    for key in expected:
+        rod = rods.get(key.representative_rod_hk)
+        if rod is None or rod.family_m != key.family_m:
+            continue
+        problem = (key.representative_rod_hk, key.integer_L)
+        if problem in direct_by_problem:
+            continue
+        direct_by_problem[problem] = _direct_integer_l_root_coordinates(
+            rod=rod,
+            integer_l=key.integer_L,
+            reciprocal_basis_Ainv=basis,
+            crystal_to_sample=crystal_to_sample,
+            ki_sample_Ainv=ki_sample,
+            incident=incident,
+            material=model.inputs.material,
+            instrument=active_instrument,
+        )
+    if any(ambiguous for _, ambiguous in direct_by_problem.values()):
+        return IntegerLSelectionAudit(
+            classification="AMBIGUOUS",
+            missing_keys=(),
+            unexpected_keys=(),
+            expected_count=len(expected),
+            enumerated_count=sum(len(item) for item, _ in direct_by_problem.values()),
+        )
+
+    missing: list[IntegerLMarkerKey] = []
+    mismatched: list[IntegerLMarkerKey] = []
+    matched_count = 0
+    coordinate_tolerance_px = 1.0e-5
+    for index, key in enumerate(expected):
+        direct = direct_by_problem.get((key.representative_rod_hk, key.integer_L))
+        oracle_coordinate = None if direct is None else direct[0].get((key.branch, key.root_sign))
+        if (
+            oracle_coordinate is None
+            or str(predicted.detector_status[index]) != ValidityCode.VALID.value
+        ):
+            missing.append(key)
+            continue
+        coordinate_error = float(
+            np.linalg.norm(predicted.coordinates_px[index] - oracle_coordinate)
+        )
+        if coordinate_error > coordinate_tolerance_px:
+            missing.append(key)
+            mismatched.append(key)
+            continue
+        matched_count += 1
+    missing_keys = tuple(sorted(missing))
+    unexpected_keys = tuple(sorted(mismatched))
+    if unexpected_keys:
+        classification = "CHANGED"
+    elif missing_keys:
+        classification = "MISSING"
+    else:
+        classification = "SAME"
+    return IntegerLSelectionAudit(
+        classification=classification,
+        missing_keys=missing_keys,
+        unexpected_keys=unexpected_keys,
+        expected_count=len(expected),
+        enumerated_count=matched_count + len(unexpected_keys),
+    )
+
+
 class _ExactTagGeometry:
     """Internal one-state exact-tag geometry owned by the continuous field model."""
 
     __slots__ = (
+        "_exact_model",
         "_inputs",
         "_nominal_material",
         "_nominal_samples",
@@ -686,6 +1141,18 @@ class _ExactTagGeometry:
         build_nominal_ewald_context(inputs)
         nominal_samples = sample_configured_source(inputs.config.source, sample_count=1)
         nominal_material = material_optics(inputs.crystal, nominal_samples.wavelength_A)
+        exact_model = ExactTagGeometryModel(
+            ConfiguredGeometryInputs(
+                config=inputs.config,
+                samples=nominal_samples,
+                instrument=inputs.instrument,
+                crystal=inputs.crystal,
+                material=nominal_material,
+                reciprocal=inputs.reciprocal,
+                rods=inputs.bragg_space.config.rods,
+            )
+        )
+        object.__setattr__(self, "_exact_model", exact_model)
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_nominal_samples", nominal_samples)
         object.__setattr__(self, "_nominal_material", nominal_material)
@@ -705,12 +1172,7 @@ class _ExactTagGeometry:
     def _frozen_nonzero_keys(
         keys: tuple[IntegerLMarkerKey, ...],
     ) -> tuple[IntegerLMarkerKey, ...]:
-        frozen = tuple(keys)
-        if not frozen or any(not isinstance(key, IntegerLMarkerKey) for key in frozen):
-            raise ValueError("keys must contain at least one IntegerLMarkerKey")
-        if len(set(frozen)) != len(frozen):
-            raise ValueError("prediction keys must be unique")
-        return frozen
+        return _frozen_nonzero_keys(keys)
 
     @staticmethod
     def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
@@ -763,85 +1225,12 @@ class _ExactTagGeometry:
         keys: tuple[IntegerLMarkerKey, ...],
         corrections: GeometryCorrections,
     ) -> IntegerLMarkerPrediction:
-        frozen_keys = self._frozen_nonzero_keys(keys)
-        coating, detector = self._detector_context(corrections)
-        return self._predict_nonzero_with_context(frozen_keys, coating, detector)
-
-    def _predict_nonzero_with_context(
-        self,
-        frozen_keys: tuple[IntegerLMarkerKey, ...],
-        coating: ContinuousEwaldCoating,
-        detector: DetectorEwaldMeasure,
-    ) -> IntegerLMarkerPrediction:
-        rods = {(rod.h, rod.k): rod for rod in self._inputs.bragg_space.config.rods}
-        basis = self._inputs.bragg_space.config.reciprocal_basis_Ainv
-        crystal_to_sample = self._inputs.bragg_space.config.crystal_to_sample
-        ki_sample_Ainv = coating.ki_sample_Ainv
-        size = len(frozen_keys)
-        coordinates = np.zeros((size, 2), dtype=np.float64)
-        residual = np.zeros(size, dtype=np.float64)
-        status = np.full(size, "ROOT_MISSING", dtype="U32")
-        batches: dict[tuple[tuple[int, int], int], list[tuple[int, float]]] = {}
-        for index, key in enumerate(frozen_keys):
-            rod = rods.get(key.representative_rod_hk)
-            if rod is None or rod.family_m != key.family_m:
-                raise ValueError(
-                    f"marker rod {key.representative_rod_hk} does not belong to m={key.family_m}"
-                )
-            roots = solve_integer_l_ewald_roots(
-                rod=rod,
-                integer_l=key.integer_L,
-                reciprocal_basis_Ainv=basis,
-                crystal_to_sample=crystal_to_sample,
-                ki_sample_Ainv=ki_sample_Ainv,
-            )
-            if roots is None:
-                continue
-            if roots.branch != key.branch:
-                status[index] = "BRANCH_CHANGED"
-                continue
-            if key.root_sign not in roots.root_sign:
-                status[index] = "ROOT_TANGENT" if roots.root_sign == (0,) else "ROOT_MISSING"
-                continue
-            root_index = roots.root_sign.index(key.root_sign)
-            batches.setdefault((key.representative_rod_hk, key.branch), []).append(
-                (index, roots.beta_rad[root_index])
-            )
-
-        for (rod_hk, branch), candidates in batches.items():
-            indices = np.asarray([item[0] for item in candidates], dtype=np.int64)
-            beta = np.asarray([item[1] for item in candidates], dtype=np.float64)
-            mapped = detector.map_latent_geometry(
-                rod=rods[rod_hk],
-                branch=branch,
-                alpha_rad=np.zeros(beta.size, dtype=np.float64),
-                beta_rad=beta,
-            )
-            actual_l = mapped.ewald_geometry.L
-            for batch_index, marker_index in enumerate(indices):
-                key = frozen_keys[int(marker_index)]
-                l_tolerance = (
-                    131072.0
-                    * np.finfo(np.float64).eps
-                    * max(abs(float(actual_l[batch_index])), abs(key.integer_L), 1.0)
-                )
-                if abs(float(actual_l[batch_index]) - key.integer_L) > l_tolerance:
-                    status[marker_index] = "INTEGER_L_MISMATCH"
-                    continue
-                coordinates[marker_index] = (
-                    float(mapped.column_px[batch_index]),
-                    float(mapped.row_px[batch_index]),
-                )
-                residual[marker_index] = float(
-                    mapped.ewald_geometry.ewald_residual_Ainv[batch_index]
-                )
-                status[marker_index] = str(mapped.detector_status[batch_index])
-        return IntegerLMarkerPrediction(
-            keys=frozen_keys,
-            coordinates_px=coordinates,
-            detector_status=status,
-            ewald_residual_Ainv=residual,
+        instrument = _corrected_instrument(
+            self._inputs.instrument,
+            corrections,
+            self._sample_correction_pivot_lab_m,
         )
+        return self._exact_model.predict_integer_l_tags(keys, instrument=instrument)
 
     def predict_m0_minimum_tilt_exact_l_landmarks(
         self,
@@ -961,13 +1350,16 @@ class _ExactTagGeometry:
         m0_integer_L: tuple[int, ...],
         corrections: GeometryCorrections,
     ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction]:
-        """Predict both tag groups while constructing incident/detector geometry once."""
+        """Predict both exact tag groups for one correction state."""
 
         frozen_keys = self._frozen_nonzero_keys(nonzero_keys)
         frozen_l = self._frozen_m0_integer_l(m0_integer_L)
         coating, detector = self._detector_context(corrections)
         return (
-            self._predict_nonzero_with_context(frozen_keys, coating, detector),
+            self._exact_model.predict_integer_l_tags(
+                frozen_keys,
+                instrument=detector.instrument,
+            ),
             self._predict_m0_with_context(frozen_l, coating, detector),
         )
 
@@ -1275,12 +1667,24 @@ def _finite_difference_jacobian(
     lower: FloatArray,
     upper: FloatArray,
     *,
-    step_rad: float = 1.0e-5,
+    step_size: ArrayLike = 1.0e-5,
 ) -> FloatArray:
     baseline = np.asarray(function(values), dtype=np.float64)
     jacobian = np.empty((baseline.size, values.size), dtype=np.float64)
+    supplied_step = np.asarray(step_size, dtype=np.float64)
+    if supplied_step.ndim == 0:
+        steps = np.full(values.size, float(supplied_step), dtype=np.float64)
+    else:
+        steps = np.array(supplied_step, dtype=np.float64, copy=True)
+    if steps.shape != values.shape or not np.all(np.isfinite(steps)) or np.any(steps <= 0.0):
+        raise ValueError(
+            "finite-difference step_size must be positive with one value per parameter"
+        )
     for parameter_index in range(values.size):
-        step = min(step_rad, 0.25 * float(upper[parameter_index] - lower[parameter_index]))
+        step = min(
+            float(steps[parameter_index]),
+            0.25 * float(upper[parameter_index] - lower[parameter_index]),
+        )
         forward = values.copy()
         backward = values.copy()
         if values[parameter_index] - step >= lower[parameter_index] and (

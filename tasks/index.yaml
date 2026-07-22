@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: continuous_angle_measurement
+current_phase: multi_osc_geometry_fit
 
 tasks:
   - id: T00
@@ -87,3 +87,8 @@ tasks:
     branch: codex/continuous-angle-render
     status: READY
     depends_on: [T07]
+  - id: T18
+    file: tasks/18_multi_osc_geometry_fit.md
+    branch: codex/multi-osc-geometry-fit
+    status: READY
+    depends_on: [T08]

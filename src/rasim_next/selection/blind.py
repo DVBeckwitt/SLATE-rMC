@@ -10,7 +10,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.ndimage import gaussian_filter, map_coordinates, maximum_filter, minimum_filter
 
 from painted_ewald import Rod
-from rasim_next.fitting import IntegerLMarkerKey
+from rasim_next.fitting import IntegerLMarkerKey, IntegerLMarkerObservations
 from rasim_next.geometry import (
     AngleFrame,
     CompiledInstrument,
@@ -18,6 +18,7 @@ from rasim_next.geometry import (
     detector_coordinates_to_angles,
 )
 from rasim_next.pipeline.configured_simulation import (
+    GeometryOnlyEwaldContext,
     NominalEwaldContext,
     solve_integer_l_ewald_roots,
 )
@@ -37,6 +38,7 @@ from rasim_next.selection.indexing import (
 )
 
 FloatArray = NDArray[np.float64]
+type _GeometryIndexingContext = NominalEwaldContext | GeometryOnlyEwaldContext
 
 
 def _finite(value: float, name: str) -> float:
@@ -573,9 +575,9 @@ class _ReciprocalLabel:
     predicted_row_px: float
 
 
-def _family_rods(context: NominalEwaldContext) -> dict[int, tuple[Rod, ...]]:
+def _family_rods(context: _GeometryIndexingContext) -> dict[int, tuple[Rod, ...]]:
     rods: dict[int, list[Rod]] = {}
-    for rod in context.geometry.coating.bragg_space.config.rods:
+    for rod in context.rods:
         if rod.family_m > 0:
             rods.setdefault(rod.family_m, []).append(rod)
     return {
@@ -588,13 +590,12 @@ def _label_q_point(
     q_sample_Ainv: FloatArray,
     covariance_q_sample_Ainv2: FloatArray,
     *,
-    context: NominalEwaldContext,
+    context: _GeometryIndexingContext,
     policy: BlindIndexingPolicy,
 ) -> _ReciprocalLabel | None:
-    config = context.geometry.coating.bragg_space.config
-    basis = config.reciprocal_basis_Ainv
-    crystal_to_sample = config.crystal_to_sample
-    ki_sample = context.geometry.coating.ki_sample_Ainv
+    basis = context.reciprocal_basis_Ainv
+    crystal_to_sample = context.crystal_to_sample
+    ki_sample = context.ki_sample_Ainv
     q_crystal = crystal_to_sample.T @ q_sample_Ainv
     covariance_q_crystal = crystal_to_sample.T @ covariance_q_sample_Ainv2 @ crystal_to_sample
     b3 = basis[:, 2]
@@ -700,7 +701,7 @@ def _label_q_point(
 
     mapped_labels: list[tuple[IntegerLMarkerKey, Rod, float, float, float, float, FloatArray]] = []
     for key, rod, beta_rad, score in labels:
-        mapped = context.geometry.map_latent_geometry(
+        mapped = context.map_latent_geometry(
             rod=rod,
             branch=key.branch,
             alpha_rad=0.0,
@@ -724,7 +725,7 @@ def _label_q_point(
     coordinate_tolerance_px = (
         32768.0
         * np.finfo(np.float64).eps
-        * max(float(max(context.geometry.instrument.detector_shape_rc)), 1.0)
+        * max(float(max(context.instrument.detector_shape_rc)), 1.0)
     )
     q_tolerance_Ainv = (
         32768.0 * np.finfo(np.float64).eps * max(float(np.linalg.norm(ki_sample)), 1.0)
@@ -771,18 +772,17 @@ def _label_q_point(
 
 def _indexing_context_hash(
     discovery: MeasuredPeakDiscovery,
-    context: NominalEwaldContext,
+    context: _GeometryIndexingContext,
     angle_frame: AngleFrame,
 ) -> str:
-    geometry = context.geometry
-    config = geometry.coating.bragg_space.config
-    states = geometry.incident.states
-    rods = tuple((rod.h, rod.k, rod.family_m, _float_token(rod.population)) for rod in config.rods)
+    states = context.incident.states
+    rods = tuple((rod.h, rod.k, rod.family_m, _float_token(rod.population)) for rod in context.rods)
+    air_k_Ainv = 2.0 * np.pi / float(states.wavelength_A[0])
     payload = {
         "schema": "position-free-reciprocal-indexing-context.v2",
         "discovery_hash": discovery.discovery_hash,
         "discovery_geometry_context_hash": discovery.geometry_context_hash,
-        "sample_from_lab_rotation": _array_payload(geometry.instrument.sample_from_lab.rotation),
+        "sample_from_lab_rotation": _array_payload(context.instrument.sample_from_lab.rotation),
         "sample_intersection_lab_m": _array_payload(states.sample_intersection_lab_m),
         "incident_wavelength_A": _array_payload(states.wavelength_A),
         "incident_states": {
@@ -804,21 +804,19 @@ def _indexing_context_hash(
             "incident_model_id": states.incident_model_id,
         },
         "instrument": {
-            "lab_from_sample_rotation": _array_payload(
-                geometry.instrument.lab_from_sample.rotation
-            ),
+            "lab_from_sample_rotation": _array_payload(context.instrument.lab_from_sample.rotation),
             "lab_from_sample_translation_m": _array_payload(
-                geometry.instrument.lab_from_sample.translation_m
+                context.instrument.lab_from_sample.translation_m
             ),
-            "sample_geometry_revision": geometry.instrument.sample_geometry_revision,
-            "film_thickness_A": _float_token(geometry.instrument.film_thickness_A),
+            "sample_geometry_revision": context.instrument.sample_geometry_revision,
+            "film_thickness_A": _float_token(context.instrument.film_thickness_A),
         },
-        "reciprocal_basis_Ainv": _array_payload(config.reciprocal_basis_Ainv),
-        "crystal_to_sample": _array_payload(config.crystal_to_sample),
-        "bragg_k_norm_Ainv": _float_token(config.k_norm_Ainv),
-        "ki_sample_Ainv": _array_payload(geometry.coating.ki_sample_Ainv),
-        "root_tolerance_rel": _float_token(geometry.coating.root_tolerance_rel),
-        "residual_tolerance_rel": _float_token(geometry.coating.residual_tolerance_rel),
+        "reciprocal_basis_Ainv": _array_payload(context.reciprocal_basis_Ainv),
+        "crystal_to_sample": _array_payload(context.crystal_to_sample),
+        "bragg_k_norm_Ainv": _float_token(air_k_Ainv),
+        "ki_sample_Ainv": _array_payload(context.ki_sample_Ainv),
+        "root_tolerance_rel": _float_token(0.0),
+        "residual_tolerance_rel": _float_token(512.0 * np.finfo(np.float64).eps),
         "material_revision": states.material_revision,
         "rods": rods,
         "positive_b3_convention": True,
@@ -827,41 +825,26 @@ def _indexing_context_hash(
     return _sha256_payload(payload)
 
 
-def index_discovered_integer_l_peaks(
-    discovery: MeasuredPeakDiscovery,
+def _canonicalized_peak_angles(
+    peaks: tuple[DiscoveredCakePeak, ...],
     *,
-    ewald_context: NominalEwaldContext,
+    instrument: CompiledInstrument,
     angle_frame: AngleFrame,
-    incidence_angle_rad: float,
-) -> MeasuredImageIndexingResult:
-    """Assign geometry-only labels after a position-free discovery is frozen."""
-
-    if not isinstance(discovery, MeasuredPeakDiscovery):
-        raise TypeError("discovery must be a MeasuredPeakDiscovery")
-    if not isinstance(ewald_context, NominalEwaldContext):
-        raise TypeError("ewald_context must be a NominalEwaldContext")
-    if not isinstance(angle_frame, AngleFrame):
-        raise TypeError("angle_frame must be an AngleFrame")
-    if ewald_context.geometry.instrument.detector_shape_rc != discovery.detector_shape_rc:
-        raise ValueError("discovery and Ewald context detector shapes disagree")
-    expected_geometry_hash = _discovery_geometry_hash(
-        ewald_context.geometry.instrument,
-        angle_frame,
+    validate_supplied: bool,
+) -> tuple[DiscoveredCakePeak, ...]:
+    if not peaks:
+        return peaks
+    canonical_angles = detector_coordinates_to_angles(
+        np.asarray([peak.column_px for peak in peaks], dtype=np.float64),
+        np.asarray([peak.row_px for peak in peaks], dtype=np.float64),
+        instrument=instrument,
+        angle_frame=angle_frame,
     )
-    if discovery.geometry_context_hash != expected_geometry_hash:
-        raise ValueError("discovery geometry does not match the Ewald instrument and angle frame")
-    peaks = discovery.peaks
-    if peaks:
-        canonical_angles = detector_coordinates_to_angles(
-            np.asarray([peak.column_px for peak in peaks], dtype=np.float64),
-            np.asarray([peak.row_px for peak in peaks], dtype=np.float64),
-            instrument=ewald_context.geometry.instrument,
-            angle_frame=angle_frame,
-        )
-        if not np.all(canonical_angles.valid & canonical_angles.azimuth_valid):
-            raise ValueError("discovered peak detector coordinates have no valid canonical angles")
-        canonical_two_theta = np.asarray(canonical_angles.two_theta_rad, dtype=np.float64)
-        canonical_phi = np.asarray(canonical_angles.phi_rad, dtype=np.float64)
+    if not np.all(canonical_angles.valid & canonical_angles.azimuth_valid):
+        raise ValueError("discovered peak detector coordinates have no valid canonical angles")
+    canonical_two_theta = np.asarray(canonical_angles.two_theta_rad, dtype=np.float64)
+    canonical_phi = np.asarray(canonical_angles.phi_rad, dtype=np.float64)
+    if validate_supplied:
         supplied_two_theta = np.asarray([peak.two_theta_rad for peak in peaks], dtype=np.float64)
         supplied_phi = np.asarray([peak.phi_rad for peak in peaks], dtype=np.float64)
         tolerance = 32768.0 * np.finfo(np.float64).eps
@@ -871,31 +854,46 @@ def index_discovered_integer_l_peaks(
             two_theta_error > tolerance * np.maximum(1.0, np.abs(canonical_two_theta))
         ) or np.any(phi_error > tolerance):
             raise ValueError("discovered peak detector and angle coordinates disagree")
-        peaks = tuple(
-            replace(
-                peak,
-                two_theta_rad=float(two_theta),
-                phi_rad=float(phi),
-            )
-            for peak, two_theta, phi in zip(
-                peaks,
-                canonical_two_theta,
-                canonical_phi,
-                strict=True,
-            )
+    return tuple(
+        replace(
+            peak,
+            two_theta_rad=float(two_theta),
+            phi_rad=float(phi),
         )
-    states = ewald_context.geometry.incident.states
-    if (
-        states.sample_geometry_revision
-        != ewald_context.geometry.instrument.sample_geometry_revision
-    ):
+        for peak, two_theta, phi in zip(
+            peaks,
+            canonical_two_theta,
+            canonical_phi,
+            strict=True,
+        )
+    )
+
+
+def _index_peak_coordinates(
+    peaks: tuple[DiscoveredCakePeak, ...],
+    *,
+    image_id: str,
+    detector_data_hash: str,
+    detector_mask_hash: str,
+    detector_mask_revision: str,
+    policy: BlindIndexingPolicy,
+    context_hash: str,
+    decision_reason: str,
+    ewald_context: _GeometryIndexingContext,
+    angle_frame: AngleFrame,
+    incidence_angle_rad: float,
+) -> MeasuredImageIndexingResult:
+    """Label one immutable set of detector-native candidate coordinates."""
+
+    states = ewald_context.incident.states
+    if states.sample_geometry_revision != ewald_context.instrument.sample_geometry_revision:
         raise ValueError("incident and detector geometry sample revisions disagree")
     if peaks:
         column = np.asarray([item.column_px for item in peaks], dtype=np.float64)
         row = np.asarray([item.row_px for item in peaks], dtype=np.float64)
         sample_column = np.column_stack((column, column + 0.5, column - 0.5, column, column))
         sample_row = np.column_stack((row, row, row, row + 0.5, row - 0.5))
-        geometry = ewald_context.geometry.evaluate_detector_geometry(
+        geometry = ewald_context.evaluate_detector_geometry(
             sample_column,
             sample_row,
             include_surface_jacobian=False,
@@ -905,7 +903,7 @@ def index_discovered_integer_l_peaks(
     indexed: list[tuple[DiscoveredCakePeak, _ReciprocalLabel, FloatArray]] = []
     for peak_index, peak in enumerate(peaks):
         assert geometry is not None
-        if peak.z_score < discovery.policy.track_policy.minimum_site_z:
+        if peak.z_score < policy.track_policy.minimum_site_z:
             continue
         if not np.all(geometry.valid[peak_index]):
             continue
@@ -922,7 +920,7 @@ def index_discovered_integer_l_peaks(
             q,
             covariance_q,
             context=ewald_context,
-            policy=discovery.policy,
+            policy=policy,
         )
         if label is not None:
             indexed.append((peak, label, covariance_q))
@@ -946,18 +944,18 @@ def index_discovered_integer_l_peaks(
         predicted_row = label.predicted_row_px
         delta = np.asarray((peak.column_px - predicted_column, peak.row_px - predicted_row))
         anchor_distance = float(np.linalg.norm(delta))
-        if anchor_distance > discovery.policy.maximum_anchor_distance_px:
+        if anchor_distance > policy.maximum_anchor_distance_px:
             continue
         predicted_angles = detector_coordinates_to_angles(
             predicted_column,
             predicted_row,
-            instrument=ewald_context.geometry.instrument,
+            instrument=ewald_context.instrument,
             angle_frame=angle_frame,
         )
         if not bool(predicted_angles.valid) or not bool(predicted_angles.azimuth_valid):
             continue
         covariance = np.asarray(peak.covariance_px2) + (
-            discovery.policy.track_policy.assignment_model_sigma_px**2 * np.eye(2)
+            policy.track_policy.assignment_model_sigma_px**2 * np.eye(2)
         )
         cost = label.score * label.score + float(delta @ np.linalg.solve(covariance, delta))
         ownership.setdefault(key, []).append(
@@ -977,7 +975,7 @@ def index_discovered_integer_l_peaks(
         assignment_margin = None if len(owners) == 1 else owners[1][0] - owners[0][0]
         if (
             assignment_margin is not None
-            and assignment_margin < discovery.policy.track_policy.minimum_assignment_margin
+            and assignment_margin < policy.track_policy.minimum_assignment_margin
         ):
             continue
         (
@@ -997,10 +995,7 @@ def index_discovered_integer_l_peaks(
                 predicted_two_theta_rad=predicted_two_theta,
                 predicted_phi_rad=predicted_phi,
                 status=MarkerIndexingStatus.VISIBLE_CONFIDENT,
-                reason=(
-                    "globally discovered before q-space label; exact alpha-zero anchor "
-                    "generated only after the label was frozen"
-                ),
+                reason=decision_reason,
                 observed_column_px=peak.column_px,
                 observed_row_px=peak.row_px,
                 observed_two_theta_rad=peak.two_theta_rad,
@@ -1011,15 +1006,176 @@ def index_discovered_integer_l_peaks(
                 assignment_margin=assignment_margin,
             )
         )
-    wavelength = float(ewald_context.geometry.incident.states.wavelength_A[0])
+    wavelength = float(ewald_context.incident.states.wavelength_A[0])
     return MeasuredImageIndexingResult(
-        image_id=discovery.image_id,
+        image_id=image_id,
         incidence_angle_rad=incidence_angle_rad,
         reference_wavelength_A=wavelength,
         marker_decisions=tuple(decisions),
+        detector_data_hash=detector_data_hash,
+        detector_mask_hash=detector_mask_hash,
+        detector_mask_revision=detector_mask_revision,
+        context_hash=context_hash,
+        policy=policy.track_policy,
+    )
+
+
+def index_discovered_integer_l_peaks(
+    discovery: MeasuredPeakDiscovery,
+    *,
+    ewald_context: _GeometryIndexingContext,
+    angle_frame: AngleFrame,
+    incidence_angle_rad: float,
+) -> MeasuredImageIndexingResult:
+    """Assign geometry-only labels after a position-free discovery is frozen."""
+
+    if not isinstance(discovery, MeasuredPeakDiscovery):
+        raise TypeError("discovery must be a MeasuredPeakDiscovery")
+    if not isinstance(ewald_context, (NominalEwaldContext, GeometryOnlyEwaldContext)):
+        raise TypeError("ewald_context must be a nominal geometry indexing context")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    if ewald_context.instrument.detector_shape_rc != discovery.detector_shape_rc:
+        raise ValueError("discovery and Ewald context detector shapes disagree")
+    expected_geometry_hash = _discovery_geometry_hash(
+        ewald_context.instrument,
+        angle_frame,
+    )
+    if discovery.geometry_context_hash != expected_geometry_hash:
+        raise ValueError("discovery geometry does not match the Ewald instrument and angle frame")
+    peaks = _canonicalized_peak_angles(
+        discovery.peaks,
+        instrument=ewald_context.instrument,
+        angle_frame=angle_frame,
+        validate_supplied=True,
+    )
+    return _index_peak_coordinates(
+        peaks,
+        image_id=discovery.image_id,
         detector_data_hash=discovery.detector_data_hash,
         detector_mask_hash=discovery.detector_mask_hash,
         detector_mask_revision=discovery.detector_mask_revision,
+        policy=discovery.policy,
         context_hash=_indexing_context_hash(discovery, ewald_context, angle_frame),
-        policy=discovery.policy.track_policy,
+        decision_reason=(
+            "globally discovered before q-space label; exact alpha-zero anchor "
+            "generated only after the label was frozen"
+        ),
+        ewald_context=ewald_context,
+        angle_frame=angle_frame,
+        incidence_angle_rad=incidence_angle_rad,
+    )
+
+
+def _frozen_reindexing_context_hash(
+    discovery: MeasuredPeakDiscovery,
+    frozen_observations: IntegerLMarkerObservations,
+    ewald_context: _GeometryIndexingContext,
+    angle_frame: AngleFrame,
+) -> str:
+    corrected_geometry_hash = _discovery_geometry_hash(
+        ewald_context.instrument,
+        angle_frame,
+    )
+    return _sha256_payload(
+        {
+            "schema": "frozen-position-free-coordinate-reindexing-context.v1",
+            "source_discovery_hash": discovery.discovery_hash,
+            "source_discovery_geometry_context_hash": discovery.geometry_context_hash,
+            "corrected_discovery_geometry_context_hash": corrected_geometry_hash,
+            "corrected_reciprocal_context_hash": _indexing_context_hash(
+                discovery,
+                ewald_context,
+                angle_frame,
+            ),
+            "frozen_keys": tuple(
+                (
+                    key.family_m,
+                    key.integer_L,
+                    key.branch,
+                    key.root_sign,
+                    key.representative_rod_hk,
+                )
+                for key in frozen_observations.keys
+            ),
+            "frozen_coordinates_px": _array_hash(frozen_observations.coordinates_px),
+            "frozen_covariance_px2": _array_hash(frozen_observations.covariance_px2),
+        }
+    )
+
+
+def reindex_frozen_discovery_coordinates(
+    discovery: MeasuredPeakDiscovery,
+    *,
+    frozen_observations: IntegerLMarkerObservations,
+    ewald_context: _GeometryIndexingContext,
+    angle_frame: AngleFrame,
+    incidence_angle_rad: float,
+) -> MeasuredImageIndexingResult:
+    """Relabel immutable native candidates under corrected geometry.
+
+    This is an identity audit of the selected position-free candidates. It
+    performs no cake search and preserves every selected native coordinate,
+    covariance, z-score, image hash, mask hash, and policy from ``discovery``.
+    """
+
+    if not isinstance(discovery, MeasuredPeakDiscovery):
+        raise TypeError("discovery must be a MeasuredPeakDiscovery")
+    if not isinstance(frozen_observations, IntegerLMarkerObservations):
+        raise TypeError("frozen_observations must be IntegerLMarkerObservations")
+    if not isinstance(ewald_context, (NominalEwaldContext, GeometryOnlyEwaldContext)):
+        raise TypeError("ewald_context must be a nominal geometry indexing context")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    if ewald_context.instrument.detector_shape_rc != discovery.detector_shape_rc:
+        raise ValueError("discovery and Ewald context detector shapes disagree")
+    wavelength = float(ewald_context.incident.states.wavelength_A[0])
+    if not math.isclose(
+        frozen_observations.reference_wavelength_A,
+        wavelength,
+        rel_tol=0.0,
+        abs_tol=256.0
+        * np.finfo(np.float64).eps
+        * max(frozen_observations.reference_wavelength_A, wavelength, 1.0),
+    ):
+        raise ValueError("frozen observations and corrected geometry wavelengths disagree")
+    discovery_peaks = {(peak.column_px, peak.row_px): peak for peak in discovery.peaks}
+    selected_peaks = []
+    for index, coordinate in enumerate(frozen_observations.coordinates_px):
+        peak = discovery_peaks.get((float(coordinate[0]), float(coordinate[1])))
+        if peak is None:
+            raise ValueError("a frozen observation is absent from its source discovery")
+        if not np.array_equal(
+            np.asarray(peak.covariance_px2),
+            frozen_observations.covariance_px2[index],
+        ):
+            raise ValueError("a frozen observation covariance differs from its source discovery")
+        selected_peaks.append(peak)
+    peaks = _canonicalized_peak_angles(
+        tuple(selected_peaks),
+        instrument=ewald_context.instrument,
+        angle_frame=angle_frame,
+        validate_supplied=False,
+    )
+    context_hash = _frozen_reindexing_context_hash(
+        discovery,
+        frozen_observations,
+        ewald_context,
+        angle_frame,
+    )
+    return _index_peak_coordinates(
+        peaks,
+        image_id=discovery.image_id,
+        detector_data_hash=discovery.detector_data_hash,
+        detector_mask_hash=discovery.detector_mask_hash,
+        detector_mask_revision=discovery.detector_mask_revision,
+        policy=discovery.policy,
+        context_hash=context_hash,
+        decision_reason=(
+            "original position-free native candidate relabeled under corrected geometry; "
+            "no global discovery or coordinate refinement rerun"
+        ),
+        ewald_context=ewald_context,
+        angle_frame=angle_frame,
+        incidence_angle_rad=incidence_angle_rad,
     )

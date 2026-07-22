@@ -159,3 +159,21 @@ proof without becoming the production rendering interface. The former source-ave
 native-pixel integrator fails closed unless a caller explicitly requests
 `include_per_rod_evidence=True`; no configured renderer sets that proof-only flag. No v1
 compatibility raster is retained.
+
+## D033: Multi-OSC geometry uses one geometry-only spine and immutable frozen keys
+
+An OSC geometry fit compiles one ideal source-center, zero-divergence, mean-wavelength material and
+reciprocal context, reuses it across declared commanded angles, and performs no structure-strength,
+mosaic-probability, raster, or pixel work. Under fixed detector center/distance/pitch and explicit
+gauge ownership, the maximum accepted 5/10/15-degree pack has nine shared coordinates: detector
+x/y tilt, sample x/y tilt, goniometer-axis pitch/yaw, signed sample-plane normal offset, and two
+transported axis-perpendicular pivot offsets. Detector roll, crystal axial roll, sample tangent
+translations, and axis-parallel pivot motion remain gauges and are not regularized into the fit.
+
+The optimizer never changes a frozen full `(m,L,analytic branch,root sign,rod)` key. After fitting,
+one audit directly brackets the fixed-`L` elastic equation independently of the production root
+solver. A second acceptance audit relabels exactly the frozen position-free native candidates under
+the corrected geometry and requires coherent unchanged keys. A fresh global cake search is retained
+only as an operational diagnostic because chart sampling and same-key lobe ownership are
+geometry-dependent. Newly visible keys or alternate lobes cannot delete original observations or
+trigger an automatic censor-and-refit cycle.

@@ -13,7 +13,6 @@ from time import perf_counter
 
 import numpy as np
 
-from rasim_next.geometry import AngleFrame
 from rasim_next.io.osc import read_osc
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredSimulationInputs,
@@ -31,6 +30,8 @@ from rasim_next.selection import (
     MeasuredIndexingResult,
     MeasuredPeakDiscovery,
     PeakIndexingPolicy,
+    build_osc_angle_frame,
+    detector_valid_mask_from_counts,
     discover_measured_cake_peaks,
     index_discovered_integer_l_peaks,
     select_confident_branch_tracks,
@@ -62,33 +63,6 @@ def _inputs_for_incidence(
         ),
     )
     return build_configured_simulation_inputs(configured)
-
-
-def _angle_frame(inputs: ConfiguredSimulationInputs, image_id: str) -> AngleFrame:
-    direct_beam = np.asarray(inputs.config.source.mean_direction_lab, dtype=np.float64)
-    direct_beam /= np.linalg.norm(direct_beam)
-    detector_column_lab = inputs.instrument.lab_from_detector.apply_vector(
-        np.asarray((1.0, 0.0, 0.0))
-    )
-    column_right = detector_column_lab - float(detector_column_lab @ direct_beam) * direct_beam
-    if np.linalg.norm(column_right) <= 1.0e-12:
-        raise ValueError("detector column axis is parallel to the direct beam")
-    column_right /= np.linalg.norm(column_right)
-    row_down = np.cross(direct_beam, column_right)
-    return AngleFrame(
-        origin_lab_m=inputs.instrument.lab_from_sample.translation_m,
-        row_down_lab=row_down,
-        column_right_lab=column_right,
-        direct_beam_lab=direct_beam,
-        revision=f"bi2se3-detector-image-angle-frame.{image_id}.v1",
-    )
-
-
-def _detector_mask(counts: np.ndarray) -> np.ndarray:
-    mask = np.ones(counts.shape, dtype=np.bool_)
-    mask[np.all(counts == 0, axis=1), :] = False
-    mask[:, np.all(counts == 0, axis=0)] = False
-    return mask
 
 
 def _track_record(track: BranchTrackDecision) -> dict[str, object]:
@@ -311,7 +285,12 @@ def _simulation_qualification_payload(
         raise ValueError("simulation diagnostic is neither converged nor an unresolved audit")
     config = load_simulation_config(ROOT / "configs" / "bi2se3_simulation.yaml")
     inputs = _inputs_for_incidence(config, incidence_deg)
-    frame = _angle_frame(inputs, f"simulated-{incidence_deg:g}deg")
+    frame = build_osc_angle_frame(
+        mean_direction_lab=inputs.config.source.mean_direction_lab,
+        instrument=inputs.instrument,
+        sample_intersection_lab_m=inputs.incident.states.sample_intersection_lab_m[0],
+        revision=(f"bi2se3-detector-image-angle-frame.simulated-{incidence_deg:g}deg.v1"),
+    )
     context = build_nominal_ewald_context(inputs)
     if (
         detector_image.shape != inputs.instrument.detector_shape_rc
@@ -631,13 +610,18 @@ def main(argv: list[str] | None = None) -> int:
         inputs = _inputs_for_incidence(config, incidence_deg)
         osc = read_osc(osc_directory / filename)
         image_id = filename.removesuffix(".gz").removesuffix(".osc")
-        frame = _angle_frame(inputs, image_id)
+        frame = build_osc_angle_frame(
+            mean_direction_lab=inputs.config.source.mean_direction_lab,
+            instrument=inputs.instrument,
+            sample_intersection_lab_m=inputs.incident.states.sample_intersection_lab_m[0],
+            revision=f"bi2se3-detector-image-angle-frame.{image_id}.v1",
+        )
         discovery = discover_measured_cake_peaks(
             osc.detector_native_counts,
             instrument=inputs.instrument,
             angle_frame=frame,
             image_id=image_id,
-            detector_valid_mask=_detector_mask(osc.detector_native_counts),
+            detector_valid_mask=detector_valid_mask_from_counts(osc.detector_native_counts),
             detector_mask_revision="osc-all-zero-edge-mask.v1",
             policy=blind_policy,
         )

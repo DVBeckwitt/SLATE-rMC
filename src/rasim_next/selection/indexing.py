@@ -492,6 +492,238 @@ class MeasuredIndexingResult:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenMarkerVisibilityImageAudit:
+    image_id: str
+    expected_count: int
+    visible_confident_count: int
+    missing_keys: tuple[IntegerLMarkerKey, ...]
+    nonconfident_keys: tuple[IntegerLMarkerKey, ...]
+    moved_keys: tuple[IntegerLMarkerKey, ...]
+    newly_visible_keys: tuple[IntegerLMarkerKey, ...]
+    frozen_subset_track_coherent: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.image_id, str) or not self.image_id:
+            raise ValueError("audit image_id must be nonempty")
+        for name in ("expected_count", "visible_confident_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+        for name in ("missing_keys", "nonconfident_keys", "moved_keys", "newly_visible_keys"):
+            values = tuple(getattr(self, name))
+            if any(not isinstance(key, IntegerLMarkerKey) for key in values):
+                raise TypeError(f"{name} must contain IntegerLMarkerKey values")
+            if len(set(values)) != len(values):
+                raise ValueError(f"{name} must not contain duplicate keys")
+            object.__setattr__(self, name, tuple(sorted(values)))
+        if not isinstance(self.frozen_subset_track_coherent, bool):
+            raise TypeError("frozen_subset_track_coherent must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenMarkerVisibilityAudit:
+    classification: str
+    images: tuple[FrozenMarkerVisibilityImageAudit, ...]
+    same_ridge_tolerance_px: float
+
+    def __post_init__(self) -> None:
+        images = tuple(self.images)
+        if not images or any(
+            not isinstance(item, FrozenMarkerVisibilityImageAudit) for item in images
+        ):
+            raise ValueError("images must contain at least one visibility audit")
+        if tuple(item.image_id for item in images) != tuple(
+            sorted(item.image_id for item in images)
+        ) or len({item.image_id for item in images}) != len(images):
+            raise ValueError("visibility audits must have unique canonical image IDs")
+        tolerance = _positive(self.same_ridge_tolerance_px, "same_ridge_tolerance_px")
+        expected = (
+            "SAME"
+            if all(
+                not item.missing_keys
+                and not item.nonconfident_keys
+                and not item.moved_keys
+                and item.frozen_subset_track_coherent
+                for item in images
+            )
+            else "CHANGED"
+        )
+        if self.classification != expected:
+            raise ValueError("visibility-audit classification disagrees with its images")
+        object.__setattr__(self, "images", images)
+        object.__setattr__(self, "same_ridge_tolerance_px", tolerance)
+
+
+def audit_frozen_marker_visibility(
+    frozen: MeasuredIndexingResult,
+    reindexed: MeasuredIndexingResult,
+    *,
+    same_ridge_tolerance_px: float | None = None,
+) -> FrozenMarkerVisibilityAudit:
+    """Audit frozen fitted keys without reapplying mutable all-candidate track gates."""
+
+    if not isinstance(frozen, MeasuredIndexingResult) or not isinstance(
+        reindexed, MeasuredIndexingResult
+    ):
+        raise TypeError("frozen and reindexed must be MeasuredIndexingResult")
+    if frozen.policy != reindexed.policy:
+        raise ValueError("frozen and reindexed policies differ")
+    frozen_by_id = {item.image_id: item for item in frozen.image_results}
+    fresh_by_id = {item.image_id: item for item in reindexed.image_results}
+    if set(frozen_by_id) != set(fresh_by_id):
+        raise ValueError("frozen and reindexed image IDs differ")
+    tolerance = (
+        frozen.policy.candidate_merge_radius_px
+        if same_ridge_tolerance_px is None
+        else _positive(same_ridge_tolerance_px, "same_ridge_tolerance_px")
+    )
+    subset_results: list[MeasuredImageIndexingResult] = []
+    partial: list[
+        tuple[
+            str,
+            tuple[IntegerLMarkerKey, ...],
+            tuple[IntegerLMarkerKey, ...],
+            tuple[IntegerLMarkerKey, ...],
+            tuple[IntegerLMarkerKey, ...],
+            tuple[IntegerLMarkerKey, ...],
+            int,
+        ]
+    ] = []
+    for image_id in sorted(frozen_by_id):
+        before = frozen_by_id[image_id]
+        after = fresh_by_id[image_id]
+        if (
+            before.detector_data_hash != after.detector_data_hash
+            or before.detector_mask_hash != after.detector_mask_hash
+            or before.detector_mask_revision != after.detector_mask_revision
+            or not math.isclose(
+                before.incidence_angle_rad,
+                after.incidence_angle_rad,
+                rel_tol=0.0,
+                abs_tol=1.0e-14,
+            )
+            or not math.isclose(
+                before.reference_wavelength_A,
+                after.reference_wavelength_A,
+                rel_tol=0.0,
+                abs_tol=256.0
+                * np.finfo(np.float64).eps
+                * max(before.reference_wavelength_A, after.reference_wavelength_A, 1.0),
+            )
+        ):
+            raise ValueError(f"image {image_id!r} has incomparable measured provenance")
+        observations = frozen.observations_for(image_id)
+        expected_keys = observations.keys
+        expected_coordinates = {
+            key: observations.coordinates_px[index] for index, key in enumerate(expected_keys)
+        }
+        fresh_decisions = {decision.key: decision for decision in after.marker_decisions}
+        missing: list[IntegerLMarkerKey] = []
+        nonconfident: list[IntegerLMarkerKey] = []
+        moved: list[IntegerLMarkerKey] = []
+        matched: list[MarkerIndexingDecision] = []
+        for key in expected_keys:
+            decision = fresh_decisions.get(key)
+            if decision is None:
+                missing.append(key)
+                continue
+            if decision.status != MarkerIndexingStatus.VISIBLE_CONFIDENT:
+                nonconfident.append(key)
+                continue
+            assert decision.observed_column_px is not None
+            assert decision.observed_row_px is not None
+            distance = math.hypot(
+                decision.observed_column_px - float(expected_coordinates[key][0]),
+                decision.observed_row_px - float(expected_coordinates[key][1]),
+            )
+            if distance > tolerance:
+                moved.append(key)
+            matched.append(decision)
+        before_visible = {
+            decision.key
+            for decision in before.marker_decisions
+            if decision.status == MarkerIndexingStatus.VISIBLE_CONFIDENT
+        }
+        newly_visible = tuple(
+            sorted(
+                decision.key
+                for decision in after.marker_decisions
+                if decision.status == MarkerIndexingStatus.VISIBLE_CONFIDENT
+                and decision.key not in before_visible
+            )
+        )
+        if not missing and not nonconfident:
+            subset_results.append(
+                MeasuredImageIndexingResult(
+                    image_id=after.image_id,
+                    incidence_angle_rad=after.incidence_angle_rad,
+                    reference_wavelength_A=after.reference_wavelength_A,
+                    marker_decisions=tuple(matched),
+                    detector_data_hash=after.detector_data_hash,
+                    detector_mask_hash=after.detector_mask_hash,
+                    detector_mask_revision=after.detector_mask_revision,
+                    context_hash=after.context_hash,
+                    policy=after.policy,
+                )
+            )
+        partial.append(
+            (
+                image_id,
+                expected_keys,
+                tuple(missing),
+                tuple(nonconfident),
+                tuple(moved),
+                newly_visible,
+                len(matched),
+            )
+        )
+
+    coherent_ids: set[str] = set()
+    if len(subset_results) == len(frozen_by_id):
+        subset = MeasuredIndexingResult(tuple(subset_results), frozen.policy)
+        for image_id, expected_keys, *_ in partial:
+            try:
+                exported = subset.observations_for(image_id).keys
+            except ValueError:
+                continue
+            if set(exported) == set(expected_keys) and len(exported) == len(expected_keys):
+                coherent_ids.add(image_id)
+    images = tuple(
+        FrozenMarkerVisibilityImageAudit(
+            image_id=image_id,
+            expected_count=len(expected_keys),
+            visible_confident_count=matched_count,
+            missing_keys=missing,
+            nonconfident_keys=nonconfident,
+            moved_keys=moved,
+            newly_visible_keys=newly_visible,
+            frozen_subset_track_coherent=image_id in coherent_ids,
+        )
+        for (
+            image_id,
+            expected_keys,
+            missing,
+            nonconfident,
+            moved,
+            newly_visible,
+            matched_count,
+        ) in partial
+    )
+    classification = (
+        "SAME"
+        if all(
+            not item.missing_keys
+            and not item.nonconfident_keys
+            and not item.moved_keys
+            and item.frozen_subset_track_coherent
+            for item in images
+        )
+        else "CHANGED"
+    )
+    return FrozenMarkerVisibilityAudit(classification, images, tolerance)
+
+
+@dataclass(frozen=True, slots=True)
 class _Candidate:
     column_px: float
     row_px: float

@@ -50,12 +50,16 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
   fields and compiled CPU/CUDA evaluation.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
-  display-only raster evaluation.
+  display-only raster evaluation. Its geometry-only input/context builders stop before structure
+  strength or mosaic construction.
 - `selection`: position-free angle-chart discovery, detector-native peak refinement, reciprocal
-  identity inference, and immutable cross-incidence branch manifests.
+  identity inference, immutable cross-incidence branch manifests, strict OSC-series ingestion, and
+  frozen-key post-fit visibility audits.
 - `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
   the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
   fitting, rank diagnostics, and post-fit root re-enumeration.
+- `fitting/indexed_series.py`: exact image-ID joins and one shared, full-rank nine-coordinate
+  detector/sample/axis/pivot fit across an arbitrary nonempty commanded-angle series.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback and the finite-pixel angle projector; never part of raw
   rendering.
@@ -78,6 +82,13 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 8. Measured selection discovers peaks without predicted coordinates, refines them on the native
    detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
    fitting consumes them.
+9. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
+   frozen observations by image ID. The joint fitter concatenates canonical per-image residual
+   blocks while applying one correction vector to every image.
+10. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
+    solver, then relabels exactly the selected native candidates under corrected geometry. A full
+    corrected-geometry rediscovery is reported separately as a chart/candidate robustness
+    diagnostic; it cannot delete or replace accepted observations.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never
@@ -91,11 +102,12 @@ module-global or import-time side effects.
   detector evaluator state.
 - Detector pose, distance, pitch, shape, or either detector tilt rebuilds detector geometry and its
   compiled evaluator, but not detector-independent structure amplitudes.
-- The tagged-function fitter never rasterizes either detector field. It fits exact landmarks and
-  their line angles, so it does not need mosaic/SF intensity values, centroids, or detector
-  quadrature. Detector/sample pose trials reuse the reciprocal basis, rods, finite-2H model, and
-  mosaic contract; pivoted sample-normal trials update the complete sample rigid transform and
-  rebuild nominal incident transport, and every trial rebuilds exit-refraction/detector geometry.
+- The tagged-function fitters never rasterize a detector field. The OSC-series
+  `ExactTagGeometryModel` constructs neither mosaic probability nor structure strength. The older
+  `ContinuousDetectorGeometryModel` may receive already prepared intensity state, but its exact-tag
+  trials evaluate none of it. Geometry-only trials reuse the reciprocal basis and rods, update the
+  complete sample and detector rigid transforms, rebuild nominal incident transport, and rebuild
+  exit-refraction and detector geometry.
 - A measured selection manifest is invalidated by any image, mask, detector/cake calibration,
   reciprocal context, or policy hash change. A fitter never silently relabels a frozen manifest.
 - Display limits and colormaps never invalidate physics.

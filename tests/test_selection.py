@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,7 +10,12 @@ import pytest
 import rasim_next.selection.blind as blind_module
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.fitting import IntegerLMarkerKey, IntegerLMarkerPrediction
+from rasim_next.fitting import (
+    ExactTagGeometryModel,
+    IndexedGeometryImage,
+    IntegerLMarkerKey,
+    IntegerLMarkerPrediction,
+)
 from rasim_next.geometry import (
     AngleFrame,
     CompiledInstrument,
@@ -19,26 +25,38 @@ from rasim_next.geometry import (
 from rasim_next.pipeline.configured_simulation import (
     IntegerLEwaldRoots,
     NominalEwaldContext,
+    build_configured_geometry_inputs,
     build_configured_simulation_inputs,
+    build_geometry_only_ewald_context,
     build_nominal_ewald_context,
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
+    rebind_configured_geometry_instrument,
 )
 from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
 from rasim_next.selection import (
     BlindIndexingPolicy,
     DiscoveredCakePeak,
+    FrozenOscGeometryReindexing,
     MarkerIndexingDecision,
     MarkerIndexingStatus,
     MeasuredImageIndexingResult,
+    MeasuredIndexingResult,
     MeasuredPeakDiscovery,
+    OscGeometryIndexingRun,
     PeakIndexingPolicy,
+    audit_frozen_marker_visibility,
+    audit_frozen_osc_geometry_reindexing,
+    build_osc_angle_frame,
     discover_measured_cake_peaks,
     index_discovered_integer_l_peaks,
     index_measured_integer_l_branches,
+    load_osc_geometry_series,
+    reindex_frozen_osc_geometry_series,
     select_confident_branch_tracks,
+    simulation_config_for_osc_image,
 )
-from rasim_next.selection.blind import _discovery_geometry_hash
+from rasim_next.selection.blind import _discovery_geometry_hash, _indexing_context_hash
 
 
 def _instrument() -> CompiledInstrument:
@@ -240,6 +258,269 @@ def test_overlapping_replication_chains_retain_all_qualified_images_and_sites() 
     assert track.image_ids == ("A", "B", "C")
     assert {key.integer_L for key in manifest.observations_for("B").keys} == {2, 4, 6, 8}
     assert {key.integer_L for key in manifest.observations_for("C").keys} == {6, 8}
+
+
+def test_frozen_visibility_audit_ignores_new_candidate_track_censoring() -> None:
+    original_results = tuple(
+        _synthetic_image_result(
+            image_id,
+            incidence,
+            (2, 4, 6),
+            geometry_offset_px=offset,
+            detector_hash_digit=detector_digit,
+            context_hash_digit=context_digit,
+        )
+        for image_id, incidence, offset, detector_digit, context_digit in (
+            ("A", 5.0, 0.0, "1", "a"),
+            ("B", 10.0, 1.0, "2", "b"),
+            ("C", 15.0, 2.0, "3", "c"),
+        )
+    )
+    frozen = select_confident_branch_tracks(original_results, policy=_policy())
+    second = original_results[1]
+    extra = MarkerIndexingDecision(
+        key=_key(1, 8, -1),
+        predicted_column_px=59.0,
+        predicted_row_px=46.0,
+        predicted_two_theta_rad=0.081,
+        predicted_phi_rad=0.2,
+        status=MarkerIndexingStatus.VISIBLE_CONFIDENT,
+        reason="new post-fit candidate",
+        observed_column_px=79.0,
+        observed_row_px=46.0,
+        observed_two_theta_rad=0.081,
+        observed_phi_rad=0.2,
+        covariance_px2=((0.25, 0.0), (0.0, 0.25)),
+        z_score=20.0,
+        assignment_cost=18.0,
+        assignment_margin=1.0,
+    )
+    corrected_second = MeasuredImageIndexingResult(
+        image_id=second.image_id,
+        incidence_angle_rad=second.incidence_angle_rad,
+        reference_wavelength_A=second.reference_wavelength_A,
+        marker_decisions=(*second.marker_decisions, extra),
+        detector_data_hash=second.detector_data_hash,
+        detector_mask_hash=second.detector_mask_hash,
+        detector_mask_revision=second.detector_mask_revision,
+        context_hash="sha256-" + "d" * 64,
+        policy=second.policy,
+    )
+    reindexed = select_confident_branch_tracks(
+        (original_results[0], corrected_second, original_results[2]),
+        policy=_policy(),
+    )
+    assert not next(track for track in corrected_second.branch_tracks).accepted
+    with pytest.raises(ValueError, match="no accepted visible"):
+        reindexed.observations_for("B")
+
+    audit = audit_frozen_marker_visibility(frozen, reindexed)
+    assert audit.classification == "SAME"
+    second_audit = next(item for item in audit.images if item.image_id == "B")
+    assert second_audit.newly_visible_keys == (_key(1, 8, -1),)
+    assert second_audit.frozen_subset_track_coherent
+
+    missing_second = replace(
+        corrected_second,
+        marker_decisions=tuple(
+            item for item in corrected_second.marker_decisions if item.key != _key(1, 4, -1)
+        ),
+    )
+    changed = select_confident_branch_tracks(
+        (original_results[0], missing_second, original_results[2]),
+        policy=_policy(),
+    )
+    changed_audit = audit_frozen_marker_visibility(frozen, changed)
+    assert changed_audit.classification == "CHANGED"
+    assert next(item for item in changed_audit.images if item.image_id == "B").missing_keys == (
+        _key(1, 4, -1),
+    )
+    with pytest.raises(ValueError, match="incomparable measured provenance"):
+        audit_frozen_marker_visibility(
+            frozen,
+            select_confident_branch_tracks(
+                (
+                    original_results[0],
+                    replace(
+                        corrected_second,
+                        detector_data_hash="sha256-" + "9" * 64,
+                    ),
+                    original_results[2],
+                ),
+                policy=_policy(),
+            ),
+        )
+
+
+def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
+    root = Path(__file__).resolve().parents[1]
+    series = load_osc_geometry_series(root / "configs" / "bi2se3_osc_geometry_fit.yaml")
+    base = load_simulation_config(series.config_path)
+    inputs_by_image = []
+    contexts = []
+    models = []
+    results = []
+    discoveries = []
+    shared_inputs = None
+    for index, image in enumerate(series.images):
+        config = simulation_config_for_osc_image(base, image)
+        inputs = (
+            build_configured_geometry_inputs(config)
+            if shared_inputs is None
+            else rebind_configured_geometry_instrument(shared_inputs, config)
+        )
+        if shared_inputs is None:
+            shared_inputs = inputs
+        context = build_geometry_only_ewald_context(inputs)
+        frame = build_osc_angle_frame(
+            mean_direction_lab=inputs.config.source.mean_direction_lab,
+            instrument=context.instrument,
+            sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
+            revision=f"osc-geometry-angle-frame.{image.image_id}.v1",
+        )
+        result = _synthetic_image_result(
+            image.image_id,
+            image.axis_rotation_angles_deg[0],
+            (2, 4, 6),
+            geometry_offset_px=float(index),
+            detector_hash_digit=str(index + 1),
+            context_hash_digit="abcdef"[index],
+            wavelength_A=1.540592925,
+        )
+        discovery = MeasuredPeakDiscovery(
+            image_id=result.image_id,
+            detector_shape_rc=context.instrument.detector_shape_rc,
+            peaks=tuple(
+                DiscoveredCakePeak(
+                    column_px=float(decision.observed_column_px),
+                    row_px=float(decision.observed_row_px),
+                    two_theta_rad=float(decision.observed_two_theta_rad),
+                    phi_rad=float(decision.observed_phi_rad),
+                    covariance_px2=decision.covariance_px2,
+                    localization_covariance_px2=decision.covariance_px2,
+                    z_score=float(decision.z_score),
+                )
+                for decision in result.marker_decisions
+            ),
+            detector_data_hash=result.detector_data_hash,
+            detector_mask_hash=result.detector_mask_hash,
+            detector_mask_revision=result.detector_mask_revision,
+            geometry_context_hash=_discovery_geometry_hash(context.instrument, frame),
+            policy=BlindIndexingPolicy(track_policy=_policy()),
+        )
+        results.append(
+            replace(
+                result,
+                context_hash=_indexing_context_hash(discovery, context, frame),
+            )
+        )
+        discoveries.append(discovery)
+        inputs_by_image.append(inputs)
+        contexts.append(context)
+        models.append(ExactTagGeometryModel(inputs))
+    results = tuple(results)
+    discoveries = tuple(discoveries)
+    selection = select_confident_branch_tracks(tuple(reversed(results)), policy=_policy())
+    indexed_images = tuple(
+        IndexedGeometryImage(
+            image_id=image.image_id,
+            commanded_angle_rad=math.radians(image.axis_rotation_angles_deg[0]),
+            model=model,
+            observations=selection.observations_for(image.image_id),
+        )
+        for image, model in zip(series.images, models, strict=True)
+    )
+    run = OscGeometryIndexingRun(
+        series=series,
+        selection=selection,
+        discoveries=discoveries,
+        geometry_inputs=tuple(inputs_by_image),
+        geometry_contexts=tuple(contexts),
+        indexed_images=indexed_images,
+        geometry_setup_seconds=0.0,
+        elapsed_seconds=0.0,
+    )
+    instruments = {
+        image.image_id: model.instrument for image, model in zip(series.images, models, strict=True)
+    }
+    expected_reindexing = reindex_frozen_osc_geometry_series(
+        run,
+        instrument_by_image_id=instruments,
+    )
+    first_reindexed = expected_reindexing.selection.image_results[0]
+    fabricated_selection = MeasuredIndexingResult(
+        image_results=(
+            replace(
+                first_reindexed,
+                context_hash="sha256-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            ),
+            *expected_reindexing.selection.image_results[1:],
+        ),
+        policy=expected_reindexing.selection.policy,
+    )
+    fabricated_reindexing = FrozenOscGeometryReindexing(
+        selection=fabricated_selection,
+        source_manifest_hash=expected_reindexing.source_manifest_hash,
+        source_discovery_hashes=expected_reindexing.source_discovery_hashes,
+    )
+    with pytest.raises(ValueError, match="not the exact source-coordinate relabeling"):
+        audit_frozen_osc_geometry_reindexing(
+            run,
+            fabricated_reindexing,
+            instrument_by_image_id=instruments,
+        )
+    with pytest.raises(ValueError, match="selection image IDs"):
+        OscGeometryIndexingRun(
+            series=series,
+            selection=select_confident_branch_tracks(results[:2], policy=_policy()),
+            discoveries=discoveries,
+            geometry_inputs=tuple(inputs_by_image),
+            geometry_contexts=tuple(contexts),
+            indexed_images=indexed_images,
+            geometry_setup_seconds=0.0,
+            elapsed_seconds=0.0,
+        )
+    changed_angle = replace(results[2], incidence_angle_rad=np.deg2rad(12.0))
+    with pytest.raises(ValueError, match="selection incidence"):
+        OscGeometryIndexingRun(
+            series=series,
+            selection=select_confident_branch_tracks(
+                (*results[:2], changed_angle), policy=_policy()
+            ),
+            discoveries=discoveries,
+            geometry_inputs=tuple(inputs_by_image),
+            geometry_contexts=tuple(contexts),
+            indexed_images=indexed_images,
+            geometry_setup_seconds=0.0,
+            elapsed_seconds=0.0,
+        )
+
+    detector = models[0].instrument.lab_from_detector
+    angle = math.radians(3.0)
+    tilt = np.asarray(
+        (
+            (1.0, 0.0, 0.0),
+            (0.0, math.cos(angle), -math.sin(angle)),
+            (0.0, math.sin(angle), math.cos(angle)),
+        )
+    )
+    wrong_inputs = replace(
+        inputs_by_image[0],
+        instrument=replace(
+            models[0].instrument,
+            lab_from_detector=RigidTransform(
+                detector.rotation @ tilt,
+                detector.translation_m,
+                FrameId.DETECTOR,
+                FrameId.LAB,
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="instrument does not match its declared config"):
+        replace(
+            indexed_images[0],
+            model=ExactTagGeometryModel(wrong_inputs),
+        )
 
 
 def test_changed_wavelength_does_not_make_repeated_detector_geometry_distinct() -> None:
