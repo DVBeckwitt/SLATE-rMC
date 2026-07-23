@@ -47,6 +47,7 @@ from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 FloatArray = NDArray[np.float64]
 ComplexArray = NDArray[np.complex128]
 BoolArray = NDArray[np.bool_]
+IntArray = NDArray[np.int64]
 
 
 class IntensityStatus(StrEnum):
@@ -363,6 +364,100 @@ class DetectorCoordinateIntensity:
         object.__setattr__(self, "density_A2_per_px2", total)
         object.__setattr__(self, "per_rod_inverse_branch_count", counts)
         object.__setattr__(self, "caustic", caustic)
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorStructureResponse:
+    """Sparse fixed-geometry coefficients multiplying candidate rod strengths."""
+
+    rods: tuple[Rod, ...]
+    coordinate_valid: BoolArray
+    term_coordinate_index: IntArray
+    term_rod_index: IntArray
+    term_L: FloatArray
+    term_fixed_density_per_strength_px2_inv: FloatArray
+    term_root_sign: NDArray[np.int8]
+    per_rod_caustic: BoolArray
+    k_norm_Ainv: float
+    root_policy: str = "all_retained_roots.v1"
+    measure_id: str = "fixed_detector_density_per_structure_strength_px2_inv.v1"
+
+    def __post_init__(self) -> None:
+        rods = tuple(self.rods)
+        if not rods or any(not isinstance(rod, Rod) for rod in rods):
+            raise ValueError("rods must contain at least one physical Rod")
+        if len({(rod.h, rod.k) for rod in rods}) != len(rods):
+            raise ValueError("rods must not repeat a physical line")
+        coordinate_valid = np.array(self.coordinate_valid, dtype=np.bool_, copy=True, order="C")
+        if coordinate_valid.ndim != 1:
+            raise ValueError("coordinate_valid must be one-dimensional")
+        coordinate_count = coordinate_valid.size
+        term_coordinate = np.array(
+            self.term_coordinate_index,
+            dtype=np.int64,
+            copy=True,
+            order="C",
+        )
+        term_rod = np.array(self.term_rod_index, dtype=np.int64, copy=True, order="C")
+        term_l = np.array(self.term_L, dtype=np.float64, copy=True, order="C")
+        term_fixed = np.array(
+            self.term_fixed_density_per_strength_px2_inv,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        root_sign = np.array(self.term_root_sign, dtype=np.int8, copy=True, order="C")
+        term_shape = term_coordinate.shape
+        if (
+            term_coordinate.ndim != 1
+            or term_rod.shape != term_shape
+            or term_l.shape != term_shape
+            or term_fixed.shape != term_shape
+            or root_sign.shape != term_shape
+        ):
+            raise ValueError("all sparse structure-response term arrays must align")
+        if (
+            np.any((term_coordinate < 0) | (term_coordinate >= coordinate_count))
+            or np.any((term_rod < 0) | (term_rod >= len(rods)))
+            or np.any(~coordinate_valid[term_coordinate])
+        ):
+            raise ValueError("structure-response terms must reference valid coordinates and rods")
+        if (
+            not np.all(np.isfinite(term_l))
+            or not np.all(np.isfinite(term_fixed))
+            or np.any(term_fixed < 0.0)
+            or np.any(~np.isin(root_sign, (-1, 0, 1)))
+        ):
+            raise ValueError("structure-response terms must be finite and physically nonnegative")
+        caustic = np.array(self.per_rod_caustic, dtype=np.bool_, copy=True, order="C")
+        if caustic.shape != (coordinate_count, len(rods)):
+            raise ValueError("per_rod_caustic must align with coordinates and rods")
+        k_norm = float(self.k_norm_Ainv)
+        if not isfinite(k_norm) or k_norm <= 0.0:
+            raise ValueError("k_norm_Ainv must be finite and positive")
+        if self.root_policy != "all_retained_roots.v1":
+            raise ValueError("structure response requires all retained inverse roots")
+        if self.measure_id != "fixed_detector_density_per_structure_strength_px2_inv.v1":
+            raise ValueError("unsupported structure-response measure")
+        for value in (
+            coordinate_valid,
+            term_coordinate,
+            term_rod,
+            term_l,
+            term_fixed,
+            root_sign,
+            caustic,
+        ):
+            value.setflags(write=False)
+        object.__setattr__(self, "rods", rods)
+        object.__setattr__(self, "coordinate_valid", coordinate_valid)
+        object.__setattr__(self, "term_coordinate_index", term_coordinate)
+        object.__setattr__(self, "term_rod_index", term_rod)
+        object.__setattr__(self, "term_L", term_l)
+        object.__setattr__(self, "term_fixed_density_per_strength_px2_inv", term_fixed)
+        object.__setattr__(self, "term_root_sign", root_sign)
+        object.__setattr__(self, "per_rod_caustic", caustic)
+        object.__setattr__(self, "k_norm_Ainv", k_norm)
 
 
 @dataclass(frozen=True, slots=True)
@@ -916,6 +1011,8 @@ def _compile_detector_state(
         ComplexArray,
         int,
         float,
+        float,
+        float,
     ]
     | None = None,
 ) -> CompiledDetectorState:
@@ -974,6 +1071,8 @@ def _compile_detector_state(
         anomalous,
         layers,
         normalization_divisor,
+        u_radial_A2,
+        u_normal_A2,
     ) = packed_structure
 
     detector_rotation = instrument.lab_from_detector.rotation
@@ -995,9 +1094,6 @@ def _compile_detector_state(
         [(rod.h, rod.k, rod.population) for rod in rods],
         dtype=np.float64,
     )
-    common_u_iso_A2 = float(atom_properties[0, 1])
-    if not np.all(atom_properties[:, 1] == common_u_iso_A2):
-        raise ValueError("compiled Bi2Se3 integration requires one shared isotropic displacement")
     inplane_angle = 2.0 * np.pi * (rod_hk_population[:, :2] @ atom_offsets[:, :2].T)
     rod_atom_inplane_factor = np.cos(inplane_angle) + 1j * np.sin(inplane_angle)
     rod_parallel_crystal = np.asarray(
@@ -1071,9 +1167,10 @@ def _compile_detector_state(
         lorentzian_hwhm_rad=mosaic.lorentzian_half_width_rad,
         lorentzian_probability=mosaic.lorentzian_probability,
         atom_fractional_offset=atom_offsets,
-        atom_occupancy_u_iso_element=atom_properties,
+        atom_occupancy_element=atom_properties,
         rod_atom_inplane_factor=rod_atom_inplane_factor,
-        common_u_iso_A2=common_u_iso_A2,
+        u_radial_A2=u_radial_A2,
+        u_normal_A2=u_normal_A2,
         f0_parameters=f0_parameters,
         anomalous_factor_e=anomalous,
         layers=layers,
@@ -1098,6 +1195,7 @@ class DetectorEwaldMeasure:
         "_incident",
         "_instrument",
         "_material",
+        "_rod_catalog_revision",
         "_source_phase_weight",
     )
 
@@ -1108,6 +1206,7 @@ class DetectorEwaldMeasure:
         incident: IncidentTransportResult,
         material: MaterialOptics,
         instrument: CompiledInstrument,
+        rod_catalog_revision: str | None = None,
         phase_population_weight: float = 1.0,
         polarization_weight: float = 1.0,
     ) -> None:
@@ -1119,6 +1218,10 @@ class DetectorEwaldMeasure:
             raise TypeError("material must be MaterialOptics")
         if not isinstance(instrument, CompiledInstrument):
             raise TypeError("instrument must be CompiledInstrument")
+        if rod_catalog_revision is not None and (
+            not isinstance(rod_catalog_revision, str) or not rod_catalog_revision
+        ):
+            raise ValueError("rod_catalog_revision must be nonempty when supplied")
         if coating.root_tolerance_rel != 0.0:
             raise ValueError(
                 "detector measure requires strict Ewald root classification without a finite "
@@ -1164,6 +1267,7 @@ class DetectorEwaldMeasure:
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_material", material)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
         object.__setattr__(self, "_air_k0_Ainv", air_k0_Ainv)
         object.__setattr__(self, "_crystal_from_local", crystal_from_local)
         object.__setattr__(self, "_crystal_to_sample", crystal_to_sample)
@@ -1186,6 +1290,12 @@ class DetectorEwaldMeasure:
     @property
     def instrument(self) -> CompiledInstrument:
         return self._instrument
+
+    @property
+    def rod_catalog_revision(self) -> str | None:
+        """Configured physical-rod authority, when this low-level measure has one."""
+
+        return self._rod_catalog_revision
 
     def _map_geometry(self, geometry: EwaldLatentGeometry) -> _MappedArrays:
         return _map_ewald_geometry_arrays(
@@ -1441,7 +1551,14 @@ class DetectorEwaldMeasure:
         optical_weight: FloatArray,
         rod: Rod,
         branch: int,
+        response_blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]]
+        | None = None,
+        rod_index: int | None = None,
     ) -> tuple[FloatArray, NDArray[np.int64], NDArray[np.bool_]]:
+        if branch not in {0, 1, 2}:
+            raise ValueError("branch must be 0, 1, or 2")
+        if (response_blocks is None) != (rod_index is None):
+            raise ValueError("response_blocks and rod_index must be supplied together")
         shape = geometry.column_px.shape
         density = np.zeros(shape, dtype=np.float64)
         inverse_count = np.zeros(shape, dtype=np.int64)
@@ -1528,7 +1645,7 @@ class DetectorEwaldMeasure:
                 )
                 if branch == 2:
                     folded &= root_sign > 0.0
-                else:
+                elif branch == 1:
                     folded &= root_sign < 0.0
                 if not np.any(folded):
                     continue
@@ -1551,7 +1668,11 @@ class DetectorEwaldMeasure:
                     ]
                     singular[singular_rows] = True
                     flat_caustic[valid_rows[singular]] = True
-                    if self._source_phase_weight > 0.0 and np.any(singular):
+                    if (
+                        response_blocks is None
+                        and self._source_phase_weight > 0.0
+                        and np.any(singular)
+                    ):
                         singular_latent = self._coating.bragg_space.evaluate_latent(
                             rod=rod,
                             alpha_rad=alpha[singular],
@@ -1570,19 +1691,46 @@ class DetectorEwaldMeasure:
                 if not np.any(regular):
                     continue
                 selected_rows = valid_rows[regular]
+                if response_blocks is not None:
+                    ell, mosaic_density = self._coating.bragg_space.evaluate_latent_mosaic_density(
+                        rod=rod,
+                        alpha_rad=alpha[regular],
+                        beta_rad=beta[regular],
+                        u_Ainv=u_value[regular],
+                    )
+                    fixed_density = (
+                        mosaic_density
+                        * rod.population
+                        * area_jacobian[regular]
+                        * optical[regular]
+                        * self._source_phase_weight
+                        / jacobian[regular]
+                    )
+                    response_blocks.append(
+                        (
+                            np.array(selected_rows, dtype=np.int64, copy=True),
+                            np.full(selected_rows.size, int(rod_index), dtype=np.int64),
+                            np.array(ell, dtype=np.float64, copy=True),
+                            np.array(fixed_density, dtype=np.float64, copy=True),
+                            np.sign(root_sign[regular]).astype(np.int8, copy=False),
+                        )
+                    )
+                    continue
                 latent = self._coating.bragg_space.evaluate_latent(
                     rod=rod,
                     alpha_rad=alpha[regular],
                     beta_rad=beta[regular],
                     u_Ainv=u_value[regular],
                 )
-                contribution = (
-                    latent.intensity_density_A2_rad2_inv
+                fixed_density = (
+                    latent.mosaic_probability_density_rad2_inv
+                    * rod.population
                     * area_jacobian[regular]
                     * optical[regular]
                     * self._source_phase_weight
                     / jacobian[regular]
                 )
+                contribution = fixed_density * latent.rod_strength_A2
                 flat_density[selected_rows] += contribution
                 flat_count[selected_rows] += 1
 
@@ -1640,6 +1788,76 @@ class DetectorEwaldMeasure:
             caustic=caustic,
         )
 
+    def evaluate_detector_structure_response(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        rods: tuple[Rod, ...],
+    ) -> DetectorStructureResponse:
+        """Compile all regular inverse roots without dividing by a reference strength."""
+
+        selected = self._validated_configured_rods(rods)
+        geometry, optical = self._detector_coordinate_state(column_px, row_px)
+        coordinate_count = geometry.column_px.size
+        caustic = np.zeros((coordinate_count, len(selected)), dtype=np.bool_)
+        blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]] = []
+        for response_rod_index, rod in enumerate(selected):
+            _, _, rod_caustic = self._inverse_rod_density(
+                geometry=geometry,
+                optical_weight=optical,
+                rod=rod,
+                branch=0,
+                response_blocks=blocks,
+                rod_index=response_rod_index,
+            )
+            caustic[:, response_rod_index] = rod_caustic.reshape(-1)
+
+        if blocks:
+            term_coordinate = np.concatenate([block[0] for block in blocks])
+            term_rod = np.concatenate([block[1] for block in blocks])
+            term_l = np.concatenate([block[2] for block in blocks])
+            term_fixed = np.concatenate([block[3] for block in blocks])
+            term_root_sign = np.concatenate([block[4] for block in blocks])
+            positive = term_fixed > 0.0
+            term_coordinate = term_coordinate[positive]
+            term_rod = term_rod[positive]
+            term_l = term_l[positive]
+            term_fixed = term_fixed[positive]
+            term_root_sign = term_root_sign[positive]
+        else:
+            term_coordinate = np.empty(0, dtype=np.int64)
+            term_rod = np.empty(0, dtype=np.int64)
+            term_l = np.empty(0, dtype=np.float64)
+            term_fixed = np.empty(0, dtype=np.float64)
+            term_root_sign = np.empty(0, dtype=np.int8)
+
+        m0_rod_index = np.asarray(
+            [rod_index for rod_index, rod in enumerate(selected) if rod.family_m == 0],
+            dtype=np.int64,
+        )
+        if m0_rod_index.size:
+            incident_normal = float(self._coating.ki_sample_Ainv[2])
+            if incident_normal >= 0.0:
+                raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
+            m0_term = np.isin(term_rod, m0_rod_index)
+            if np.any(m0_term):
+                q_norm = np.linalg.norm(geometry.q_sample_Ainv.reshape(-1, 3), axis=1)
+                if np.any(q_norm[term_coordinate[m0_term]] <= -incident_normal):
+                    raise FloatingPointError("detector-visible m=0 violated its reciprocal gap")
+
+        return DetectorStructureResponse(
+            rods=selected,
+            coordinate_valid=geometry.valid.reshape(-1),
+            term_coordinate_index=term_coordinate,
+            term_rod_index=term_rod,
+            term_L=term_l,
+            term_fixed_density_per_strength_px2_inv=term_fixed,
+            term_root_sign=term_root_sign,
+            per_rod_caustic=caustic,
+            k_norm_Ainv=self._coating.bragg_space.config.k_norm_Ainv,
+        )
+
     def evaluate_detector_geometry(
         self,
         column_px: ArrayLike,
@@ -1662,6 +1880,12 @@ class DetectorEwaldMeasure:
         )[0]
 
     def _validated_intensity_rods(self, rods: tuple[Rod, ...]) -> tuple[Rod, ...]:
+        selected = self._validated_configured_rods(rods)
+        if any(rod.family_m == 0 for rod in selected):
+            raise ValueError("m=0 intensity is excluded without physical direct-beam support")
+        return selected
+
+    def _validated_configured_rods(self, rods: tuple[Rod, ...]) -> tuple[Rod, ...]:
         selected = tuple(rods)
         if not selected or not all(isinstance(rod, Rod) for rod in selected):
             raise ValueError("rods must contain at least one Rod")
@@ -1674,8 +1898,6 @@ class DetectorEwaldMeasure:
                 canonical = configured[(rod.h, rod.k)]
             except KeyError as error:
                 raise ValueError(f"rod ({rod.h}, {rod.k}) is not configured") from error
-            if canonical.family_m == 0:
-                raise ValueError("m=0 intensity is excluded without physical direct-beam support")
             result.append(canonical)
         return tuple(result)
 

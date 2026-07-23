@@ -10,6 +10,7 @@ from rasim_next.ordered.finite_stack import (
     uniform_finite_stack,
 )
 from rasim_next.ordered.motifs import (
+    Bi2Se3QuintupleLayerParameters,
     MotifAtom,
     PbI2Motif,
     bi2se3_ql_amplitudes,
@@ -18,6 +19,7 @@ from rasim_next.ordered.motifs import (
 )
 
 __all__ = [
+    "Bi2Se3QuintupleLayerParameters",
     "MotifAtom",
     "PbI2Motif",
     "StructureAmplitudeResult",

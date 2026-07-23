@@ -467,6 +467,46 @@ class MosaicBraggSpace:
             raise ValueError("rod strength must be nonnegative")
         return strength
 
+    def _latent_mosaic_density_arrays(
+        self,
+        *,
+        rod: Rod,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+        u_Ainv: ArrayLike,
+    ) -> tuple[Rod, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+        configured = self._configured_rod(rod)
+        alpha, beta, axial = _latent_arrays(alpha_rad, beta_rad, u_Ainv)
+        lower, upper = self.rod_u_bounds_Ainv(configured)
+        tolerance = 256.0 * np.finfo(np.float64).eps * max(abs(lower), abs(upper), 1.0)
+        if np.any((axial < lower - tolerance) | (axial > upper + tolerance)):
+            raise ValueError("u_Ainv lies outside the elastic-reach domain for this rod")
+        ell = axial / self._b3_norm_Ainv
+        mosaic_density = (
+            2.0 * wrapped_mosaic_line_density_rad_inv(alpha, self._config.mosaic) / (2.0 * np.pi)
+        )
+        return configured, alpha, beta, axial, ell, mosaic_density
+
+    def evaluate_latent_mosaic_density(
+        self,
+        *,
+        rod: Rod,
+        alpha_rad: ArrayLike,
+        beta_rad: ArrayLike,
+        u_Ainv: ArrayLike,
+    ) -> tuple[FloatArray, FloatArray]:
+        """Evaluate latent ``L`` and mosaic density without structure strength."""
+
+        _, _, _, _, ell, mosaic_density = self._latent_mosaic_density_arrays(
+            rod=rod,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+            u_Ainv=u_Ainv,
+        )
+        ell.setflags(write=False)
+        mosaic_density.setflags(write=False)
+        return ell, mosaic_density
+
     def evaluate_latent(
         self,
         *,
@@ -477,33 +517,17 @@ class MosaicBraggSpace:
     ) -> LatentBraggIntensity:
         """Evaluate continuous CIF strength times mosaic density off any quadrature grid."""
 
-        configured = self._configured_rod(rod)
-        for value, name in (
-            (alpha_rad, "alpha_rad"),
-            (beta_rad, "beta_rad"),
-            (u_Ainv, "u_Ainv"),
-        ):
-            reject_complex(value, name)
-        alpha, beta, axial = np.broadcast_arrays(
-            np.asarray(alpha_rad, dtype=np.float64),
-            np.asarray(beta_rad, dtype=np.float64),
-            np.asarray(u_Ainv, dtype=np.float64),
+        configured, alpha, beta, axial, ell, mosaic_density = self._latent_mosaic_density_arrays(
+            rod=rod,
+            alpha_rad=alpha_rad,
+            beta_rad=beta_rad,
+            u_Ainv=u_Ainv,
         )
-        if not all(np.all(np.isfinite(value)) for value in (alpha, beta, axial)):
-            raise ValueError("latent Bragg coordinates must be finite")
-        lower, upper = self.rod_u_bounds_Ainv(configured)
-        tolerance = 256.0 * np.finfo(np.float64).eps * max(abs(lower), abs(upper), 1.0)
-        if np.any((axial < lower - tolerance) | (axial > upper + tolerance)):
-            raise ValueError("u_Ainv lies outside the elastic-reach domain for this rod")
-        ell = axial / self._b3_norm_Ainv
         points = self.map_latent(
             rod=configured,
             alpha_rad=alpha,
             beta_rad=beta,
             u_Ainv=axial,
-        )
-        mosaic_density = (
-            2.0 * wrapped_mosaic_line_density_rad_inv(alpha, self._config.mosaic) / (2.0 * np.pi)
         )
         strength = self._strength_profile(configured, ell)
         return LatentBraggIntensity(

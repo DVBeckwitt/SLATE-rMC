@@ -298,7 +298,7 @@ def _render(
         rf"Bi$_2$Se$_3$: {source_sample_count} nominal source state, {rod_count} physical rods, "
         "all retained roots\n"
         rf"each field is {detector_image.shape[0]}x{detector_image.shape[1]} center-sampled; "
-        r"labels are positive-strength exact integer-$L$, $\alpha=0$ landmarks (not raster maxima)"
+        r"labels are geometry-visible exact integer-$L$, $\alpha=0$ landmarks (not raster maxima)"
     )
     figure.savefig(output_path, dpi=190)
     plt.close(figure)
@@ -340,7 +340,7 @@ def main() -> None:
         angle_frame=angle_frame,
     )
     if not np.all(marker_angles.valid & marker_angles.azimuth_valid):
-        raise RuntimeError("a non-extinct detector marker has no canonical angle coordinate")
+        raise RuntimeError("a geometry-visible detector marker has no canonical angle coordinate")
     two_theta_max_rad = _panel_two_theta_max_rad(inputs, angle_frame)
     build_seconds = perf_counter() - build_start
 
@@ -379,7 +379,7 @@ def main() -> None:
         output_path=output_path,
     )
     print(
-        f"wrote {output_path} with {markers.column_px.size} non-extinct labels; "
+        f"wrote {output_path} with {markers.column_px.size} geometry-visible labels; "
         f"build={build_seconds:.3f}s detector={detector_seconds:.3f}s "
         f"angle={angle_seconds:.3f}s"
     )

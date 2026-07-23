@@ -168,6 +168,73 @@ support boundary bins from both truth and every component response, while retain
 the 32 profiles and at least 38 bins per profile. A general topology-split cubature that retains
 those boundary bins is not yet implemented.
 
+### Fixed-position ordered-intensity fitting
+
+`compile_ordered_intensity_response(...)` freezes detector geometry, source, optics, mosaic,
+physical rods, finite angular ROIs, and the atomic coordinates. Each regular inverse root retains
+its observation index, physical rod, exact `L`, root sign, fixed mass coefficient, and crystal-frame
+`Qr^2/Qz^2`. It also compiles the six coefficients of the homogeneous occupancy quadratic for the
+three unique Bi2Se3 source sites. No detector raster, pixel deposition, detector reprojection, or
+full structure-factor calculation occurs in an optimizer iteration.
+
+Each profile response is the integrated contribution of the rods explicitly named by that frozen
+reflection group. It is therefore a selected-group component mass, not the unseparated total counts
+inside the same raw detector ROI. A real-image consumer must provide a provenance-bound component
+extraction/deblending step or prove that omitted rods and background are below its declared error
+budget. The current synthetic Bi2Se3 proof uses exact selected-component observations; it does not
+claim raw-OSC intensity recovery.
+
+For fixed Bi and Se2 Wyckoff coordinates, every term is evaluated as
+
+```text
+S = [oBi^2, oSe1^2, oSe2^2, oBi*oSe1, oBi*oSe2, oSe1*oSe2] dot C
+I = fixed_mass * S * exp[-Ur*Qr^2 - Uz*Qz^2]
+```
+
+The coefficient compiler retains the configured finite-stack normalization and stacking-disorder
+law. `predict_mass_direct_A2(...)` evaluates the authoritative CIF-derived quintuple-layer
+amplitude and configured finite-stack model on the same frozen roots and exists as the independent
+acceleration oracle; fitting uses
+`predict_mass_A2(...)` only. Within every admitted reflection group, weak and baseline-extinct roots
+are retained. The nominal integer-L marker catalog admits sites from geometry and detector topology
+only; its aligned strength arrays are diagnostics that may be exactly zero. A zero-occupancy control
+must therefore produce the same profile identities as the CIF baseline even though every diagnostic
+strength vanishes. The tracked proof also freezes the expected per-incidence group counts.
+
+`fit_ordered_intensity_series(...)` accepts an explicit active-name tuple and freezes its exact
+complement. This first phase permits only the three occupancies and `Ur/Uz`; attempting to activate
+either Wyckoff coordinate fails explicitly. Absolute-calibrated data may fit all three occupancies.
+With one analytic scale per image, their common multiplier is an exact gauge, so one occupancy must
+be fixed as a positive ratio reference and only occupancy ratios may be interpreted. Ratio
+coordinates are nonnegative and may exceed one. The returned Bi2Se3 parameter object is merely the
+admissible representative obtained by dividing all ratios by their maximum; frozen occupancy names
+refer to the optimizer's ratio coordinates, not to the representative's numeric fields. Mixed
+nonzero-`m` radial families are required
+to distinguish `Ur` from a common intensity scale. All admitted `m=0` and nonzero profiles use the
+same kinematic ordered-mass observable; Parratt and composite specular outputs are not mixed into
+this fit.
+
+Every response carries a derived digest of its immutable roots, coefficients, `Qr/Qz`, detector
+weights, wavelength, profile identities, and source/material/geometry revisions. Its structure and
+physical mosaic compatibility revisions are checked across the simultaneous series. Observations
+are immutable `(dataset_id, observable_revision, mass)` records and are joined by exact dataset ID;
+the observable revision hashes profile identities, angle-frame layout, finite ROI boundaries, bin
+count, and frozen topology exclusions but intentionally excludes quadrature order. Thus a refined
+truth/data evaluation and a cheaper converged prediction may share one declared observable while
+retaining different numerical response digests. Tuple position is never an authority. Profile
+rod-catalog revisions must equal the detector's
+configured catalog before response compilation. Different wavelength-specific response digests and
+reach-limited rod catalogs are allowed when the shared structure and mosaic remain compatible.
+The reported rank, condition, and correlation matrix are local inverse-sensitivity diagnostics,
+not statistical covariance or uncertainty: this phase declares no noise model. One bound-contact
+flag is reported for every active coordinate and accepted deterministic recoveries require all of
+them to be false.
+
+The current response compiler applies a fixed geometry-only 17-by-17 inverse-root signature probe
+to every phi bin and freezes a conservative exclusion mask before quadrature. This finite probe is
+not a general topology certificate. Each new material/ROI set must additionally pass an independent
+response-order convergence check; topology-split cubature remains future work.
+
 ### Configured simulation
 
 - `load_simulation_config(path, repository_root=...)` accepts one strict
@@ -189,7 +256,7 @@ those boundary bins is not yet implemented.
   detector visibility path, and retains every physical rod before grouping only coincident display
   labels. The seam-safe `root_sign = sign(sin(beta - phase))` distinguishes the analytic
   `phase-delta` and `phase+delta` sites even when `(m,L,branch)` labels coincide. These are
-  `peak_mosaic_alpha0_integer_L_center.v2` nominal-source references, not source-averaged raster
+  `peak_mosaic_alpha0_integer_L_center.v3` nominal-source references, not source-averaged raster
   maxima.
 - `sample_reciprocal_space`, `evaluate_nominal_ewald_surface`, and
   `integrate_detector_macrobins` generate optional display data without becoming model authority.

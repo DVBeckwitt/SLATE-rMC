@@ -239,6 +239,70 @@ class _AllRootDetector(Protocol):
     ) -> object: ...
 
 
+def _mosaic_profile_quadrature(
+    definitions: tuple[MosaicProfileDefinition, ...],
+) -> tuple[FloatArray, FloatArray, FloatArray, BoolArray, FloatArray, FloatArray]:
+    """Build the one authoritative tensor rule for fixed angular profile bins."""
+
+    layouts = {
+        (item.phi_bin_count, item.two_theta_gauss_order, item.phi_gauss_order)
+        for item in definitions
+    }
+    if len(layouts) != 1:
+        raise ValueError("profile quadrature requires one shared layout")
+    phi_bin_count, theta_order, phi_order = next(iter(layouts))
+    theta_node, theta_weight = np.polynomial.legendre.leggauss(theta_order)
+    phi_node, phi_weight = np.polynomial.legendre.leggauss(phi_order)
+    shape = (len(definitions), phi_bin_count, theta_order, phi_order)
+    two_theta = np.empty(shape, dtype=np.float64)
+    phi = np.empty(shape, dtype=np.float64)
+    integration_weight = np.empty(shape, dtype=np.float64)
+    included_node = np.ones(shape, dtype=np.bool_)
+    phi_bin_edges = np.empty((len(definitions), phi_bin_count + 1), dtype=np.float64)
+    two_theta_bounds = np.empty((len(definitions), 2), dtype=np.float64)
+    for profile_index, definition in enumerate(definitions):
+        mapped_theta = (
+            definition.center_two_theta_rad + definition.two_theta_half_width_rad * theta_node
+        )
+        mapped_theta_weight = definition.two_theta_half_width_rad * theta_weight
+        phi_edges = np.linspace(
+            definition.center_phi_rad - definition.phi_half_width_rad,
+            definition.center_phi_rad + definition.phi_half_width_rad,
+            phi_bin_count + 1,
+        )
+        phi_bin_edges[profile_index] = phi_edges
+        two_theta_bounds[profile_index] = (
+            definition.center_two_theta_rad - definition.two_theta_half_width_rad,
+            definition.center_two_theta_rad + definition.two_theta_half_width_rad,
+        )
+        phi_midpoint = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+        phi_bin_half_width = 0.5 * (phi_edges[1] - phi_edges[0])
+        mapped_phi = phi_midpoint[:, None] + phi_bin_half_width * phi_node[None, :]
+        mapped_phi_weight = phi_bin_half_width * phi_weight
+        two_theta[profile_index] = np.broadcast_to(
+            mapped_theta[None, :, None],
+            shape[1:],
+        )
+        phi[profile_index] = np.broadcast_to(
+            mapped_phi[:, None, :],
+            shape[1:],
+        )
+        integration_weight[profile_index] = np.broadcast_to(
+            mapped_theta_weight[None, :, None] * mapped_phi_weight[None, None, :],
+            shape[1:],
+        )
+        if definition.excluded_phi_bin_indices:
+            included_node[profile_index, definition.excluded_phi_bin_indices, :, :] = False
+    return (
+        two_theta,
+        phi,
+        integration_weight,
+        included_node,
+        phi_bin_edges,
+        two_theta_bounds,
+    )
+
+
 def evaluate_continuous_mosaic_profiles(
     detector: _AllRootDetector,
     *,
@@ -347,48 +411,15 @@ def evaluate_continuous_mosaic_profiles(
         raise ValueError("profile_revision must be a nonempty string")
 
     phi_bin_count, theta_order, phi_order = next(iter(layouts))
-    theta_node, theta_weight = np.polynomial.legendre.leggauss(theta_order)
-    phi_node, phi_weight = np.polynomial.legendre.leggauss(phi_order)
+    (
+        two_theta,
+        phi,
+        integration_weight,
+        included_node,
+        phi_bin_edges,
+        two_theta_bounds,
+    ) = _mosaic_profile_quadrature(frozen)
     shape = (len(frozen), phi_bin_count, theta_order, phi_order)
-    two_theta = np.empty(shape, dtype=np.float64)
-    phi = np.empty(shape, dtype=np.float64)
-    integration_weight = np.empty(shape, dtype=np.float64)
-    included_node = np.ones(shape, dtype=np.bool_)
-    phi_bin_edges = np.empty((len(frozen), phi_bin_count + 1), dtype=np.float64)
-    two_theta_bounds = np.empty((len(frozen), 2), dtype=np.float64)
-    for profile_index, definition in enumerate(frozen):
-        mapped_theta = (
-            definition.center_two_theta_rad + definition.two_theta_half_width_rad * theta_node
-        )
-        mapped_theta_weight = definition.two_theta_half_width_rad * theta_weight
-        phi_edges = np.linspace(
-            definition.center_phi_rad - definition.phi_half_width_rad,
-            definition.center_phi_rad + definition.phi_half_width_rad,
-            phi_bin_count + 1,
-        )
-        phi_bin_edges[profile_index] = phi_edges
-        two_theta_bounds[profile_index] = (
-            definition.center_two_theta_rad - definition.two_theta_half_width_rad,
-            definition.center_two_theta_rad + definition.two_theta_half_width_rad,
-        )
-        phi_midpoint = 0.5 * (phi_edges[:-1] + phi_edges[1:])
-        phi_bin_half_width = 0.5 * (phi_edges[1] - phi_edges[0])
-        mapped_phi = phi_midpoint[:, None] + phi_bin_half_width * phi_node[None, :]
-        mapped_phi_weight = phi_bin_half_width * phi_weight
-        two_theta[profile_index] = np.broadcast_to(
-            mapped_theta[None, :, None],
-            shape[1:],
-        )
-        phi[profile_index] = np.broadcast_to(
-            mapped_phi[:, None, :],
-            shape[1:],
-        )
-        integration_weight[profile_index] = np.broadcast_to(
-            mapped_theta_weight[None, :, None] * mapped_phi_weight[None, None, :],
-            shape[1:],
-        )
-        if definition.excluded_phi_bin_indices:
-            included_node[profile_index, definition.excluded_phi_bin_indices, :, :] = False
 
     included_flat = np.flatnonzero(included_node.ravel())
     angle_values = evaluate_continuous_per_rod_angle_signal(

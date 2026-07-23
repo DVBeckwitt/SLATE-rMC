@@ -44,7 +44,7 @@ class _PackedSourceAverage:
     rod_parallel_local_Ainv: FloatArray
     rod_inverse_constants: FloatArray
     atom_fractional_offset: FloatArray
-    atom_occupancy_u_iso_element: FloatArray
+    atom_occupancy_element: FloatArray
     rod_atom_inplane_factor: NDArray[np.complex128]
     f0_parameters: FloatArray
     layers: int
@@ -81,7 +81,7 @@ def _pack_source_average(
     state_count = len(indexed_evaluators)
     ray_origin = np.empty((state_count, 3), dtype=np.float64)
     ki_film = np.empty((state_count, 3), dtype=np.float64)
-    state_real = np.empty((state_count, 13), dtype=np.float64)
+    state_real = np.empty((state_count, 14), dtype=np.float64)
     state_complex = np.empty((state_count, 4), dtype=np.complex128)
     state_block_offset = np.concatenate(
         (
@@ -111,12 +111,13 @@ def _pack_source_average(
         ("sample_from_lab", first.sample_from_lab),
         ("sample_from_local", first.sample_from_local),
         ("atom_fractional_offset", first.atom_fractional_offset),
-        ("atom_occupancy_u_iso_element", first.atom_occupancy_u_iso_element),
+        ("atom_occupancy_element", first.atom_occupancy_element),
         ("f0_parameters", first.f0_parameters),
     )
     shared_scalars = (
         "layers",
-        "common_u_iso_A2",
+        "u_radial_A2",
+        "u_normal_A2",
         "shared_disorder_epsilon",
         "normalization_divisor",
         "b3_norm_Ainv",
@@ -194,7 +195,8 @@ def _pack_source_average(
             state.gaussian_sigma_rad,
             state.lorentzian_hwhm_rad,
             state.lorentzian_probability,
-            state.common_u_iso_A2,
+            state.u_radial_A2,
+            state.u_normal_A2,
             state.shared_disorder_epsilon,
             state.normalization_divisor,
             4096.0 * _FLOAT_EPS * max(ki_norm, 1.0),
@@ -230,7 +232,7 @@ def _pack_source_average(
         rod_parallel_local_Ainv=rod_parallel,
         rod_inverse_constants=rod_inverse,
         atom_fractional_offset=np.ascontiguousarray(first.atom_fractional_offset),
-        atom_occupancy_u_iso_element=np.ascontiguousarray(first.atom_occupancy_u_iso_element),
+        atom_occupancy_element=np.ascontiguousarray(first.atom_occupancy_element),
         rod_atom_inplane_factor=rod_inplane,
         f0_parameters=np.ascontiguousarray(first.f0_parameters),
         layers=int(first.layers),
@@ -298,7 +300,7 @@ def _two_h_strength_A2(
     element_factor_1: complex,
     rod_atom_inplane_factor: Any,
     atom_fractional_offset: Any,
-    atom_occupancy_u_iso_element: Any,
+    atom_occupancy_element: Any,
     layers: int,
     shared_disorder_epsilon: float,
     rod_hk_population: Any,
@@ -307,8 +309,8 @@ def _two_h_strength_A2(
     amplitude_plus = 0.0 + 0.0j
     amplitude_minus = 0.0 + 0.0j
     for atom in range(atom_fractional_offset.shape[0]):
-        occupancy = atom_occupancy_u_iso_element[atom, 0]
-        element = int(atom_occupancy_u_iso_element[atom, 2])
+        occupancy = atom_occupancy_element[atom, 0]
+        element = int(atom_occupancy_element[atom, 1])
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
@@ -579,11 +581,8 @@ def _prepare_state_block_geometry_kernel(
     q_geometry[local_state, point, 7] = math.atan2(q_local_y, q_local_x)
     point_factor[local_state, point, 0] = area_jacobian
     point_factor[local_state, point, 1] = optical_weight
-    point_factor[local_state, point, 2] = math.exp(
-        -0.5 * q_norm_squared * state_real[state_index, 9]
-    )
-    point_factor[local_state, point, 3] = f0_0
-    point_factor[local_state, point, 4] = f0_1
+    point_factor[local_state, point, 2] = f0_0
+    point_factor[local_state, point, 3] = f0_1
     valid[local_state, point] = True
 
 
@@ -620,7 +619,7 @@ def _accumulate_state_block_kernel(
     rod_parallel_local_Ainv: Any,
     rod_inverse_constants: Any,
     atom_fractional_offset: Any,
-    atom_occupancy_u_iso_element: Any,
+    atom_occupancy_element: Any,
     rod_atom_inplane_factor: Any,
     layers: int,
     gaussian_sigma_rad: float,
@@ -682,12 +681,13 @@ def _accumulate_state_block_kernel(
         upper_u = rod_u_bounds_Ainv[state_index, rod_index, 1]
         u_tolerance = rod_u_tolerance_Ainv[state_index, rod_index]
         b3_norm_Ainv = state_real[state_index, 5]
-        shared_disorder_epsilon = state_real[state_index, 10]
-        normalization_divisor = state_real[state_index, 11]
-        reconstruction_tolerance = state_real[state_index, 12]
-        common_damping = point_factor[local_state, point, 2]
-        element_factor_0 = point_factor[local_state, point, 3] + state_complex[state_index, 2]
-        element_factor_1 = point_factor[local_state, point, 4] + state_complex[state_index, 3]
+        u_radial_A2 = state_real[state_index, 9]
+        u_normal_A2 = state_real[state_index, 10]
+        shared_disorder_epsilon = state_real[state_index, 11]
+        normalization_divisor = state_real[state_index, 12]
+        reconstruction_tolerance = state_real[state_index, 13]
+        element_factor_0 = point_factor[local_state, point, 2] + state_complex[state_index, 2]
+        element_factor_1 = point_factor[local_state, point, 3] + state_complex[state_index, 3]
         area_jacobian = point_factor[local_state, point, 0]
         optical_weight = point_factor[local_state, point, 1]
         source_phase_weight = state_real[state_index, 4]
@@ -711,6 +711,16 @@ def _accumulate_state_block_kernel(
                 u_value = w_value - c0
                 if u_value < lower_u - u_tolerance or u_value > upper_u + u_tolerance:
                     continue
+                if u_radial_A2 == u_normal_A2:
+                    common_damping = math.exp(-0.5 * q_norm_squared * u_radial_A2)
+                else:
+                    common_damping = math.exp(
+                        -0.5
+                        * (
+                            u_radial_A2 * parallel_norm * parallel_norm
+                            + u_normal_A2 * w_value * w_value
+                        )
+                    )
                 strength = _two_h_strength_A2(
                     rod_index,
                     u_value / b3_norm_Ainv,
@@ -719,7 +729,7 @@ def _accumulate_state_block_kernel(
                     element_factor_1,
                     rod_atom_inplane_factor,
                     atom_fractional_offset,
-                    atom_occupancy_u_iso_element,
+                    atom_occupancy_element,
                     layers,
                     shared_disorder_epsilon,
                     rod_hk_population,
@@ -863,7 +873,7 @@ def _evaluate_source_averaged_all_roots_cuda(
     device_rod_parallel = cuda.to_device(packed.rod_parallel_local_Ainv)
     device_rod_inverse = cuda.to_device(packed.rod_inverse_constants)
     device_atom_offset = cuda.to_device(packed.atom_fractional_offset)
-    device_atom_properties = cuda.to_device(packed.atom_occupancy_u_iso_element)
+    device_atom_properties = cuda.to_device(packed.atom_occupancy_element)
     device_rod_inplane = cuda.to_device(packed.rod_atom_inplane_factor)
     device_f0_parameters = cuda.to_device(packed.f0_parameters)
 
@@ -906,7 +916,7 @@ def _evaluate_source_averaged_all_roots_cuda(
             dtype=np.float64,
         )
         device_point_factor = cuda.device_array(
-            (maximum_block_size, point_count, 5),
+            (maximum_block_size, point_count, 4),
             dtype=np.float64,
         )
         device_valid = cuda.device_array(

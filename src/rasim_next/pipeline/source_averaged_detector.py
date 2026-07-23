@@ -473,6 +473,8 @@ class SourceAveragedDetectorEwaldMeasure:
             anomalous_factors,
             layers,
             normalization_divisor,
+            u_radial_A2,
+            u_normal_A2,
         ) = pack_bi2se3_two_h_structures(
             strength_model,
             wavelength_A=states.wavelength_A[valid_state_index],
@@ -508,6 +510,8 @@ class SourceAveragedDetectorEwaldMeasure:
                 anomalous_factors[valid_position],
                 layers,
                 normalization_divisor,
+                u_radial_A2,
+                u_normal_A2,
             )
             evaluators.append(
                 _IndexedCompiledEvaluator(

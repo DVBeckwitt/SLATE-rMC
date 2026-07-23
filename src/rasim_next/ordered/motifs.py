@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import combinations, product
 
 import numpy as np
@@ -32,6 +32,89 @@ class PbI2Motif:
 
     orientation: str
     atoms: tuple[MotifAtom, MotifAtom, MotifAtom]
+
+
+@dataclass(frozen=True, slots=True)
+class Bi2Se3QuintupleLayerParameters:
+    """Symmetry-preserving Bi2Se3 quintuple-layer structure parameters."""
+
+    bi_fractional_z: float
+    se2_fractional_z: float
+    bi_occupancy: float
+    se1_occupancy: float
+    se2_occupancy: float
+    u_radial_A2: float
+    u_normal_A2: float
+
+    def __post_init__(self) -> None:
+        scalar_names = (
+            "bi_fractional_z",
+            "se2_fractional_z",
+            "bi_occupancy",
+            "se1_occupancy",
+            "se2_occupancy",
+            "u_radial_A2",
+            "u_normal_A2",
+        )
+        for name in scalar_names:
+            value = float(getattr(self, name))
+            if not np.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            object.__setattr__(self, name, value)
+        if not 1.0 / 3.0 < self.bi_fractional_z < 0.5:
+            raise ValueError("bi_fractional_z must preserve the Bi 6c orbit ordering")
+        if not 1.0 / 6.0 < self.se2_fractional_z < 1.0 / 3.0:
+            raise ValueError("se2_fractional_z must preserve the Se2 6c orbit ordering")
+        if self.bi_fractional_z + self.se2_fractional_z >= 2.0 / 3.0:
+            raise ValueError("Bi and Se2 coordinates cross within the quintuple layer")
+        for name in ("bi_occupancy", "se1_occupancy", "se2_occupancy"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"{name} must lie in [0, 1]")
+        if self.u_radial_A2 < 0.0 or self.u_normal_A2 < 0.0:
+            raise ValueError("directional displacement parameters must be nonnegative")
+
+    @classmethod
+    def from_crystal(cls, crystal: CrystalStructure) -> Bi2Se3QuintupleLayerParameters:
+        """Derive the accepted seven-parameter baseline from one expanded R-3m CIF."""
+
+        atoms = _bi2se3_quintuple_layers(crystal)[0]
+        by_label = {
+            label: tuple(atom for atom in atoms if atom.source_label == label)
+            for label in ("Bi", "Se1", "Se2")
+        }
+        if tuple(len(by_label[label]) for label in ("Bi", "Se1", "Se2")) != (2, 1, 2):
+            raise ValueError("Bi2Se3 quintuple layer must contain Bi2-Se1-Se2 sites")
+
+        def shared_property(label: str, name: str) -> float:
+            values = {getattr(atom, name) for atom in by_label[label]}
+            if len(values) != 1:
+                raise ValueError(f"Bi2Se3 {label} atoms must share {name}")
+            value = values.pop()
+            if value is None:
+                raise ValueError(f"Bi2Se3 {label} requires a declared isotropic displacement")
+            return float(value)
+
+        def symmetric_offset(label: str) -> float:
+            offsets = np.abs([atom.fractional_offset[2] for atom in by_label[label]])
+            if not np.allclose(offsets, offsets[0], rtol=0.0, atol=2.0e-15):
+                raise ValueError("Bi2Se3 symmetry mates must have equal normal offsets")
+            return float(np.mean(offsets))
+
+        bi_offset = symmetric_offset("Bi")
+        se2_offset = symmetric_offset("Se2")
+        u_values = {atom.u_iso_A2 for atom in atoms}
+        if len(u_values) != 1 or None in u_values:
+            raise ValueError("Bi2Se3 baseline requires one shared isotropic displacement")
+        u_iso = float(u_values.pop())
+        return cls(
+            bi_fractional_z=1.0 / 3.0 + bi_offset,
+            se2_fractional_z=1.0 / 3.0 - se2_offset,
+            bi_occupancy=shared_property("Bi", "occupancy"),
+            se1_occupancy=shared_property("Se1", "occupancy"),
+            se2_occupancy=shared_property("Se2", "occupancy"),
+            u_radial_A2=u_iso,
+            u_normal_A2=u_iso,
+        )
 
 
 def _nearest_periodic_offset(
@@ -389,11 +472,53 @@ def _bi2se3_quintuple_layers(
     return tuple(motifs)
 
 
+def _parameterized_bi2se3_quintuple_layer(
+    crystal: CrystalStructure,
+    parameters: Bi2Se3QuintupleLayerParameters,
+) -> tuple[MotifAtom, ...]:
+    """Apply only the symmetry-allowed coordinates and source-site occupancies."""
+
+    if not isinstance(parameters, Bi2Se3QuintupleLayerParameters):
+        raise TypeError("parameters must be Bi2Se3QuintupleLayerParameters")
+    baseline = _bi2se3_quintuple_layers(crystal)[0]
+    occupancy_by_label = {
+        "Bi": parameters.bi_occupancy,
+        "Se1": parameters.se1_occupancy,
+        "Se2": parameters.se2_occupancy,
+    }
+    normal_distance_by_label = {
+        "Bi": parameters.bi_fractional_z - 1.0 / 3.0,
+        "Se1": 0.0,
+        "Se2": 1.0 / 3.0 - parameters.se2_fractional_z,
+    }
+    atoms: list[MotifAtom] = []
+    for atom in baseline:
+        try:
+            occupancy = occupancy_by_label[atom.source_label]
+            normal_distance = normal_distance_by_label[atom.source_label]
+        except KeyError as error:
+            raise ValueError("Bi2Se3 motif contains an unsupported source site") from error
+        baseline_z = atom.fractional_offset[2]
+        fractional_z = 0.0 if normal_distance == 0.0 else np.copysign(normal_distance, baseline_z)
+        atoms.append(
+            replace(
+                atom,
+                occupancy=occupancy,
+                fractional_offset=(
+                    atom.fractional_offset[0],
+                    atom.fractional_offset[1],
+                    float(fractional_z),
+                ),
+            )
+        )
+    return tuple(atoms)
+
+
 def bi2se3_ql_amplitudes(
     crystal: CrystalStructure,
     query: RodQueryBatch,
     *,
-    unknown_u_iso_A2: float | None = None,
+    structure_parameters: Bi2Se3QuintupleLayerParameters | None = None,
 ) -> LayerAmplitudeResult:
     """Return Se1-centered Bi2Se3 quintuple-layer F+ and F- in electron units.
 
@@ -403,25 +528,42 @@ def bi2se3_ql_amplitudes(
 
     if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
         raise ValueError("query phase does not match the Bi2Se3 crystal")
-    plus_atoms = _bi2se3_quintuple_layers(crystal)[0]
+    baseline_parameters = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
+    parameters = baseline_parameters if structure_parameters is None else structure_parameters
+    baseline_unchanged = parameters == baseline_parameters
+    plus_atoms = (
+        _bi2se3_quintuple_layers(crystal)[0]
+        if baseline_unchanged
+        else _parameterized_bi2se3_quintuple_layer(crystal, parameters)
+    )
     minus_atoms = _reflected_atoms(plus_atoms)
     hkl = np.column_stack((query.h, query.k, query.l_coordinate))
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
+        layer_normal = -layer_normal
+    if baseline_unchanged:
+        displacement_tensor = None
+    elif parameters.u_radial_A2 == parameters.u_normal_A2:
+        displacement_tensor = parameters.u_radial_A2 * np.eye(3)
+    else:
+        normal_projector = np.outer(layer_normal, layer_normal)
+        displacement_tensor = (
+            parameters.u_radial_A2 * (np.eye(3) - normal_projector)
+            + parameters.u_normal_A2 * normal_projector
+        )
     f_plus = unit_cell_amplitude(
         _motif_crystal(crystal, plus_atoms, f"{crystal.phase_id}:ql-plus"),
         hkl,
         query.wavelength_A,
-        unknown_u_iso_A2=unknown_u_iso_A2,
+        shared_displacement_tensor_A2=displacement_tensor,
     ).amplitude_e
     f_minus = unit_cell_amplitude(
         _motif_crystal(crystal, minus_atoms, f"{crystal.phase_id}:ql-minus"),
         hkl,
         query.wavelength_A,
-        unknown_u_iso_A2=unknown_u_iso_A2,
+        shared_displacement_tensor_A2=displacement_tensor,
     ).amplitude_e
-    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
-    layer_normal /= np.linalg.norm(layer_normal)
-    if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
-        layer_normal = -layer_normal
     return LayerAmplitudeResult(
         event_id=query.event_id,
         rod_id=query.rod_id,

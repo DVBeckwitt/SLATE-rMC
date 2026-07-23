@@ -36,6 +36,7 @@ def unit_cell_amplitude(
     wavelength_A: ArrayLike,
     *,
     unknown_u_iso_A2: float | None = None,
+    shared_displacement_tensor_A2: ArrayLike | None = None,
 ) -> StructureAmplitudeResult:
     """Evaluate the positive-phase structure sum at arbitrary Miller coordinates."""
 
@@ -53,8 +54,32 @@ def unit_cell_amplitude(
         not np.isfinite(unknown_u_iso_A2) or unknown_u_iso_A2 < 0.0
     ):
         raise ValueError("unknown_u_iso_A2 must be finite and nonnegative")
+    if unknown_u_iso_A2 is not None and shared_displacement_tensor_A2 is not None:
+        raise ValueError(
+            "unknown_u_iso_A2 and shared_displacement_tensor_A2 are mutually exclusive"
+        )
+    displacement_tensor = None
+    if shared_displacement_tensor_A2 is not None:
+        displacement_tensor = np.asarray(shared_displacement_tensor_A2, dtype=np.float64)
+        if displacement_tensor.shape != (3, 3) or not np.all(np.isfinite(displacement_tensor)):
+            raise ValueError("shared_displacement_tensor_A2 must be finite with shape (3, 3)")
+        scale = max(float(np.linalg.norm(displacement_tensor, ord=2)), 1.0)
+        tolerance = 256.0 * np.finfo(np.float64).eps * scale
+        if (
+            not np.allclose(
+                displacement_tensor,
+                displacement_tensor.T,
+                rtol=0.0,
+                atol=tolerance,
+            )
+            or np.min(np.linalg.eigvalsh(displacement_tensor)) < -tolerance
+        ):
+            raise ValueError(
+                "shared_displacement_tensor_A2 must be symmetric positive semidefinite"
+            )
+        displacement_tensor = 0.5 * (displacement_tensor + displacement_tensor.T)
     has_unknown_u_iso = any(site.u_iso_A2 is None for site in crystal.sites)
-    if unknown_u_iso_A2 is None and has_unknown_u_iso:
+    if displacement_tensor is None and unknown_u_iso_A2 is None and has_unknown_u_iso:
         raise ValueError("unknown isotropic displacement requires an explicit calculation value")
 
     lattice = ReciprocalLattice.from_crystal(crystal)
@@ -64,11 +89,28 @@ def unit_cell_amplitude(
     fractional = np.asarray([site.fractional for site in crystal.sites], dtype=np.float64)
     positions_A = fractional @ crystal.direct_basis_A.T
     phase = np.exp(1.0j * (q_vectors @ positions_A.T))
-    u_iso = np.asarray(
-        [unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2 for site in crystal.sites],
-        dtype=np.float64,
-    )
-    damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
+    if displacement_tensor is None:
+        u_iso = np.asarray(
+            [
+                unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2
+                for site in crystal.sites
+            ],
+            dtype=np.float64,
+        )
+        damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
+    else:
+        isotropic_u_A2 = float(displacement_tensor[0, 0])
+        if np.array_equal(displacement_tensor, isotropic_u_A2 * np.eye(3)):
+            exponent = q_magnitude**2 * isotropic_u_A2
+        else:
+            exponent = np.einsum(
+                "ni,ij,nj->n",
+                q_vectors,
+                displacement_tensor,
+                q_vectors,
+                optimize=True,
+            )
+        damping = np.exp(-0.5 * np.maximum(exponent, 0.0))[:, None]
     occupancy = np.asarray([site.occupancy for site in crystal.sites], dtype=np.float64)
     site_sum = phase * damping * occupancy[None, :]
 
@@ -101,7 +143,16 @@ def unit_cell_amplitude(
             f"database={xraydb.get_xraydb().get_version().split(',')[0].removeprefix('XrayDB Version: ')}; "
             "f=f0+f1+i*f2; q=|Q|/(4*pi); "
             f"species={','.join(mappings)}"
-            + (f"; unknown_u_iso_A2={unknown_u_iso_A2:g}" if has_unknown_u_iso else "")
+            + (
+                f"; unknown_u_iso_A2={unknown_u_iso_A2:g}"
+                if has_unknown_u_iso and displacement_tensor is None
+                else ""
+            )
+            + (
+                "; shared_displacement_tensor_A2=declared"
+                if displacement_tensor is not None
+                else ""
+            )
         ),
     )
 

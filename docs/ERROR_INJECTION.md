@@ -197,6 +197,26 @@ frozen `m=0` support evidence, per-profile scale invariance, physical-source and
 rejection, boundary and within-cell global-alias fixtures, extreme-scale invariance, or local
 rank/condition failure.
 
+### Fixed-position ordered-intensity fitting
+
+- Swap `Qr^2` and `Qz^2`, omit the one-half amplitude exponent, or apply the directional
+  Debye-Waller factor twice.
+- Recompute detector projection or the full structure factor inside an optimizer iteration instead
+  of contracting the frozen six-column occupancy quadratic and cached `Qr/Qz` arrays.
+- Prune a weak or baseline-extinct root, omit an admitted `m=0` profile, or weight residuals by
+  planted peak intensity.
+- Join observations by tuple order, reuse a stale observable-layout revision, or silently bind data
+  generated on a different ROI/topology mask.
+- Treat a refined numerical response digest as the observable identity, or accept a coarse response
+  without planted-mass and occupancy-basis quadrature convergence.
+- Fit all three occupancies together with free image scales, report an arbitrary absolute
+  occupancy representative as identified, ignore a rank deficiency, or accept an active bound.
+
+Expected detection: cached-versus-direct structure oracle, asymmetric directional-displacement
+regression, zero-strength-versus-CIF marker-identity invariance, explicit all-profile and `m=0`
+counts, dataset/observable revision rejection, independent response-order convergence,
+common-scale-gauge rejection, and rank/condition/bound diagnostics.
+
 ## Control record
 
 Each proof mutation records `mutation_id`, fixture, expected first stage, expected metric, observed

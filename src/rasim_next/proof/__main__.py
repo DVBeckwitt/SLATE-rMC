@@ -13,6 +13,10 @@ _COMMANDS = {
     "references": ("rasim_next.proof.reference", "run_reference_proof"),
     "geometry-optics": ("rasim_next.geometry.proof", "run_proof"),
     "mosaic-ewald": ("rasim_next.reciprocal.proof", "run_proof"),
+    "ordered-intensity-fit": (
+        "rasim_next.fitting.proof",
+        "run_ordered_intensity_proof",
+    ),
     "ordered-reflectivity": ("rasim_next.ordered.proof", "run_proof"),
     "stacking-transition": ("rasim_next.stacking.proof", "run_proof"),
 }

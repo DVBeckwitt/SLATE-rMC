@@ -1413,6 +1413,8 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
     if not cuda.is_available():
         pytest.skip("requires a CUDA device")
 
+    from painted_ewald import MosaicBraggSpace
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
     from rasim_next.pipeline import _continuous_detector_cuda as cuda_backend
     from rasim_next.pipeline.configured_simulation import (
         build_configured_simulation_inputs,
@@ -1427,6 +1429,23 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
         repository_root=root,
     )
     inputs = build_configured_simulation_inputs(config)
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    candidate_strength = replace(
+        inputs.strength,
+        structure_parameters=replace(
+            baseline,
+            bi_occupancy=0.91,
+            se1_occupancy=0.83,
+            se2_occupancy=0.74,
+            u_radial_A2=0.006,
+            u_normal_A2=0.032,
+        ),
+    )
+    inputs = replace(
+        inputs,
+        strength=candidate_strength,
+        bragg_space=MosaicBraggSpace(inputs.bragg_space.config, candidate_strength),
+    )
     detector = build_source_averaged_detector(inputs)
     assert inputs.strength.shared_disorder_epsilon == pytest.approx(0.001)
     unique_count, frequency = np.unique(
@@ -1875,7 +1894,7 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
     inputs = _configured_inputs(sample_count=1, sample_angle_deg=sample_angle_deg)
     context = build_nominal_ewald_context(inputs)
     markers = evaluate_nominal_integer_l_markers(context)
-    assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v2"
+    assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v3"
     assert markers.source_state_policy == "mean_source_state.v1"
     assert markers.reference_wavelength_A == pytest.approx(1.540592925, abs=2.0e-15)
     if sample_angle_deg == 5.0:
@@ -2066,7 +2085,8 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
         )
 
 
-def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
+def test_integer_l_marker_sites_do_not_depend_on_render_sampling_or_strength() -> None:
+    from painted_ewald import MosaicBraggSpace
     from rasim_next.pipeline.configured_simulation import (
         build_nominal_ewald_context,
         evaluate_nominal_integer_l_markers,
@@ -2085,27 +2105,49 @@ def test_integer_l_marker_sites_do_not_depend_on_render_sampling() -> None:
         ewald_alpha_count=3,
         ewald_beta_count=5,
     )
-    base = evaluate_nominal_integer_l_markers(
-        build_nominal_ewald_context(build_configured_simulation_inputs(one_state))
-    )
+    base_inputs = build_configured_simulation_inputs(one_state)
+    base = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(base_inputs))
     changed = evaluate_nominal_integer_l_markers(
         build_nominal_ewald_context(
             build_configured_simulation_inputs(replace(one_state, numerics=changed_numerics))
         )
     )
+    zero_parameters = replace(
+        base_inputs.strength.structure_parameters,
+        bi_occupancy=0.0,
+        se1_occupancy=0.0,
+        se2_occupancy=0.0,
+    )
+    zero_strength = replace(base_inputs.strength, structure_parameters=zero_parameters)
+    zero_strength_inputs = replace(
+        base_inputs,
+        strength=zero_strength,
+        bragg_space=MosaicBraggSpace(base_inputs.bragg_space.config, zero_strength),
+    )
+    zero_strength_markers = evaluate_nominal_integer_l_markers(
+        build_nominal_ewald_context(zero_strength_inputs)
+    )
 
-    for name in (
-        "family_m",
-        "integer_L",
-        "branch",
-        "root_sign",
-        "column_px",
-        "row_px",
-        "q_sample_Ainv",
-    ):
-        np.testing.assert_array_equal(getattr(changed, name), getattr(base, name))
-    assert changed.contributing_rod_hk == base.contributing_rod_hk
-    assert changed.contributing_beta_rad == base.contributing_beta_rad
+    for candidate in (changed, zero_strength_markers):
+        for name in (
+            "family_m",
+            "integer_L",
+            "branch",
+            "root_sign",
+            "column_px",
+            "row_px",
+            "q_sample_Ainv",
+        ):
+            np.testing.assert_array_equal(getattr(candidate, name), getattr(base, name))
+        assert candidate.contributing_rod_hk == base.contributing_rod_hk
+        assert candidate.contributing_beta_rad == base.contributing_beta_rad
+    assert np.all(base.family_strength_weight_A2 > 0.0)
+    assert np.all(zero_strength_markers.family_strength_weight_A2 == 0.0)
+    assert all(
+        strength == 0.0
+        for group in zero_strength_markers.per_rod_strength_weight_A2
+        for strength in group
+    )
 
 
 def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -> None:

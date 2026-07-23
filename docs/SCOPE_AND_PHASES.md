@@ -32,6 +32,8 @@ detector geometry.
   varying layered-hexagonal materials in separate material/mount groups.
 - Full-rank shared 5/10/15-degree decomposition of detector tilt, sample normal, goniometer-axis,
   signed sample-plane offset, and axis-perpendicular pivot offsets, with frozen-key outer audits.
+- Fixed-position simultaneous ordered-intensity recovery for Bi2Se3 using cached occupancy
+  quadratics and directional `Ur/Uz` damping on frozen selected-group angular component masses.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
@@ -61,6 +63,9 @@ these functions. They are not stored model state.
   finite-profile fitting boundary.
 - Mosaic-fit backgrounds, masks, detector PSF, counting noise, covariance/uncertainty intervals,
   held-out subsets, and real-OSC recovery.
+- General-material structure-parameter bases and profile identity catalogs, per-site anisotropic
+  `Uij`, raw-OSC ordered-component extraction/deblending, and ordered-intensity
+  noise/background/uncertainty models.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 
 ## Phase discipline

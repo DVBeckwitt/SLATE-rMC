@@ -292,6 +292,26 @@ amplitudes; they are neither recovered-model renders nor fit inputs. The JSON, n
 distribution comparison, and images are generated artifacts and must remain outside the repository.
 Use `--skip-images` for the faster numerical recovery check.
 
+## Recover fixed-position Bi2Se3 occupancies and directional displacement
+
+After accepting the geometry and mosaic stages, run the deterministic three-incidence structure
+recovery:
+
+```powershell
+python scripts/recover_bi2se3_ordered_intensity.py --json
+```
+
+The tracked case uses one ideal source-center ray at 5, 10, and 15 degrees, the accepted nine
+geometry corrections, the recovered 2-degree Gaussian plus 0.5-degree Lorentzian mosaic with
+mixture probability 0.1, every detector-visible positive nonzero integer-`L` marker, and the six
+admitted `00L` profiles. Bi and Se2 Wyckoff coordinates remain exactly at their CIF values. The
+absolute proof fits three occupancies plus `Ur/Uz`; the relative proof fixes `oBi=1`, reports the two
+Se/Bi ratios, and solves one nonnegative scale per image analytically. Synthetic observations use
+the full structure-factor/stacking oracle on an independently refined frozen response, while fitting
+uses the compiled quadratic/Debye-Waller kernel on the same observable layout. These are exact
+selected-reflection-group component masses, not raw unseparated OSC ROI counts. The runner reports
+both quadrature convergence and the cached-versus-direct structure-factor error.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

@@ -17,7 +17,7 @@ from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.materials.optics import HC_EV_A, _f0_species
-from rasim_next.ordered.motifs import _bi2se3_quintuple_layers
+from rasim_next.ordered.motifs import _parameterized_bi2se3_quintuple_layer
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 
 FloatArray = NDArray[np.float64]
@@ -66,9 +66,10 @@ class CompiledDetectorState:
     lorentzian_hwhm_rad: float
     lorentzian_probability: float
     atom_fractional_offset: FloatArray
-    atom_occupancy_u_iso_element: FloatArray
+    atom_occupancy_element: FloatArray
     rod_atom_inplane_factor: NDArray[np.complex128]
-    common_u_iso_A2: float
+    u_radial_A2: float
+    u_normal_A2: float
     f0_parameters: FloatArray
     anomalous_factor_e: NDArray[np.complex128]
     layers: int
@@ -92,7 +93,7 @@ class CompiledDetectorState:
             "rod_u_bounds_Ainv": (rod_count, 2),
             "rod_inverse_constants": (rod_count, 4),
             "atom_fractional_offset": (atom_count, 3),
-            "atom_occupancy_u_iso_element": (atom_count, 3),
+            "atom_occupancy_element": (atom_count, 2),
             "f0_parameters": (2, 11),
         }
         if rod_count == 0 or atom_count == 0:
@@ -133,7 +134,8 @@ class CompiledDetectorState:
             "gaussian_sigma_rad",
             "lorentzian_hwhm_rad",
             "lorentzian_probability",
-            "common_u_iso_A2",
+            "u_radial_A2",
+            "u_normal_A2",
             "shared_disorder_epsilon",
             "normalization_divisor",
         )
@@ -223,21 +225,31 @@ def pack_bi2se3_two_h_structure(
     strength: Bi2Se3TwoHStrength,
     *,
     wavelength_A: float,
-) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float]:
+) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float, float, float]:
     """Pack the existing CIF/XrayDB authorities once for exact compiled evaluation."""
 
-    offsets, properties, parameters, anomalous, layers, divisor = pack_bi2se3_two_h_structures(
+    packed = pack_bi2se3_two_h_structures(
         strength,
         wavelength_A=np.asarray([wavelength_A], dtype=np.float64),
     )
-    return offsets, properties, parameters, anomalous[0], layers, divisor
+    offsets, properties, parameters, anomalous, layers, divisor, u_radial, u_normal = packed
+    return offsets, properties, parameters, anomalous[0], layers, divisor, u_radial, u_normal
 
 
 def pack_bi2se3_two_h_structures(
     strength: Bi2Se3TwoHStrength,
     *,
     wavelength_A: NDArray[np.float64],
-) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float]:
+) -> tuple[
+    FloatArray,
+    FloatArray,
+    FloatArray,
+    NDArray[np.complex128],
+    int,
+    float,
+    float,
+    float,
+]:
     """Pack shared structure data and vectorized anomalous factors for many wavelengths."""
 
     if not isinstance(strength, Bi2Se3TwoHStrength):
@@ -247,14 +259,15 @@ def pack_bi2se3_two_h_structures(
         raise ValueError("wavelength_A must be a finite nonempty one-dimensional array")
     if np.any(wavelength <= 0.0):
         raise ValueError("wavelength_A must be positive")
-    atoms = _bi2se3_quintuple_layers(strength.crystal)[0]
-    if any(atom.u_iso_A2 is None for atom in atoms):
-        raise ValueError("compiled Bi2Se3 integration requires declared isotropic displacement")
+    structure = strength.structure_parameters
+    if structure is None:
+        raise ValueError("compiled Bi2Se3 integration requires structure parameters")
+    atoms = _parameterized_bi2se3_quintuple_layer(strength.crystal, structure)
     elements = ("Bi", "Se")
     element_index = {element: position for position, element in enumerate(elements)}
     offsets = np.asarray([atom.fractional_offset for atom in atoms], dtype=np.float64)
     properties = np.asarray(
-        [(atom.occupancy, float(atom.u_iso_A2), element_index[atom.element]) for atom in atoms],
+        [(atom.occupancy, element_index[atom.element]) for atom in atoms],
         dtype=np.float64,
     )
 
@@ -298,7 +311,16 @@ def pack_bi2se3_two_h_structures(
     )
     for value in (offsets, properties, parameters, anomalous):
         value.setflags(write=False)
-    return offsets, properties, parameters, anomalous, strength.layers, divisor
+    return (
+        offsets,
+        properties,
+        parameters,
+        anomalous,
+        strength.layers,
+        divisor,
+        structure.u_radial_A2,
+        structure.u_normal_A2,
+    )
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
@@ -365,7 +387,7 @@ def _two_h_strength_A2(
     element_factor_1: complex,
     rod_atom_inplane_factor: NDArray[np.complex128],
     atom_fractional_offset: FloatArray,
-    atom_occupancy_u_iso_element: FloatArray,
+    atom_occupancy_element: FloatArray,
     layers: int,
     shared_disorder_epsilon: float,
     rod_hk_population: FloatArray,
@@ -374,8 +396,8 @@ def _two_h_strength_A2(
     amplitude_plus = 0.0 + 0.0j
     amplitude_minus = 0.0 + 0.0j
     for atom in range(atom_fractional_offset.shape[0]):
-        occupancy = atom_occupancy_u_iso_element[atom, 0]
-        element = int(atom_occupancy_u_iso_element[atom, 2])
+        occupancy = atom_occupancy_element[atom, 0]
+        element = int(atom_occupancy_element[atom, 1])
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
@@ -511,9 +533,10 @@ def _evaluate_point_into(
     lorentzian_one_minus_rho: float,
     lorentzian_numerator: float,
     atom_fractional_offset: FloatArray,
-    atom_occupancy_u_iso_element: FloatArray,
+    atom_occupancy_element: FloatArray,
     rod_atom_inplane_factor: NDArray[np.complex128],
-    common_u_iso_A2: float,
+    u_radial_A2: float,
+    u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
@@ -652,8 +675,6 @@ def _evaluate_point_into(
         )
     element_factor_0 = f0_0 + anomalous_factor_e[0]
     element_factor_1 = f0_1 + anomalous_factor_e[1]
-    common_damping = math.exp(-0.5 * q_norm_squared * common_u_iso_A2)
-
     transverse_norm = math.hypot(q_local_x, q_local_y)
     azimuth_q = math.atan2(q_local_y, q_local_x)
     for rod_index in range(rod_count):
@@ -717,6 +738,16 @@ def _evaluate_point_into(
                 if (branch == 2 and root_sign <= 0.0) or (branch == 1 and root_sign >= 0.0):
                     continue
                 ell = u_value / b3_norm_Ainv
+                if u_radial_A2 == u_normal_A2:
+                    common_damping = math.exp(-0.5 * q_norm_squared * u_radial_A2)
+                else:
+                    common_damping = math.exp(
+                        -0.5
+                        * (
+                            u_radial_A2 * parallel_norm * parallel_norm
+                            + u_normal_A2 * w_value * w_value
+                        )
+                    )
                 strength = _two_h_strength_A2(
                     rod_index,
                     ell,
@@ -725,7 +756,7 @@ def _evaluate_point_into(
                     element_factor_1,
                     rod_atom_inplane_factor,
                     atom_fractional_offset,
-                    atom_occupancy_u_iso_element,
+                    atom_occupancy_element,
                     layers,
                     shared_disorder_epsilon,
                     rod_hk_population,
@@ -823,9 +854,10 @@ def _evaluate_points_kernel(
     lorentzian_hwhm_rad: float,
     lorentzian_probability: float,
     atom_fractional_offset: FloatArray,
-    atom_occupancy_u_iso_element: FloatArray,
+    atom_occupancy_element: FloatArray,
     rod_atom_inplane_factor: NDArray[np.complex128],
-    common_u_iso_A2: float,
+    u_radial_A2: float,
+    u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
@@ -884,9 +916,10 @@ def _evaluate_points_kernel(
             lorentzian_one_minus_rho,
             lorentzian_numerator,
             atom_fractional_offset,
-            atom_occupancy_u_iso_element,
+            atom_occupancy_element,
             rod_atom_inplane_factor,
-            common_u_iso_A2,
+            u_radial_A2,
+            u_normal_A2,
             f0_parameters,
             anomalous_factor_e,
             layers,
@@ -933,9 +966,10 @@ def _integrate_pixel_boxes_kernel(
     lorentzian_hwhm_rad: float,
     lorentzian_probability: float,
     atom_fractional_offset: FloatArray,
-    atom_occupancy_u_iso_element: FloatArray,
+    atom_occupancy_element: FloatArray,
     rod_atom_inplane_factor: NDArray[np.complex128],
-    common_u_iso_A2: float,
+    u_radial_A2: float,
+    u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
@@ -1021,9 +1055,10 @@ def _integrate_pixel_boxes_kernel(
                     lorentzian_one_minus_rho,
                     lorentzian_numerator,
                     atom_fractional_offset,
-                    atom_occupancy_u_iso_element,
+                    atom_occupancy_element,
                     rod_atom_inplane_factor,
-                    common_u_iso_A2,
+                    u_radial_A2,
+                    u_normal_A2,
                     f0_parameters,
                     anomalous_factor_e,
                     layers,
@@ -1086,9 +1121,10 @@ def _integrate_pixel_boxes_kernel(
                 lorentzian_one_minus_rho,
                 lorentzian_numerator,
                 atom_fractional_offset,
-                atom_occupancy_u_iso_element,
+                atom_occupancy_element,
                 rod_atom_inplane_factor,
-                common_u_iso_A2,
+                u_radial_A2,
+                u_normal_A2,
                 f0_parameters,
                 anomalous_factor_e,
                 layers,
@@ -1180,9 +1216,10 @@ class CompiledDetectorEvaluator:
             state.lorentzian_hwhm_rad,
             state.lorentzian_probability,
             state.atom_fractional_offset,
-            state.atom_occupancy_u_iso_element,
+            state.atom_occupancy_element,
             state.rod_atom_inplane_factor,
-            state.common_u_iso_A2,
+            state.u_radial_A2,
+            state.u_normal_A2,
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
@@ -1277,9 +1314,10 @@ class CompiledDetectorEvaluator:
             state.lorentzian_hwhm_rad,
             state.lorentzian_probability,
             state.atom_fractional_offset,
-            state.atom_occupancy_u_iso_element,
+            state.atom_occupancy_element,
             state.rod_atom_inplane_factor,
-            state.common_u_iso_A2,
+            state.u_radial_A2,
+            state.u_normal_A2,
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,

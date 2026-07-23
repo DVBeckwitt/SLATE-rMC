@@ -166,10 +166,11 @@ respectively. Forty-one points had regular positive support; maximum intensity e
 error was `6.66e-16 inverse angstrom`, coarea-Jacobian error was `4.44e-16`, and elastic residual was
 zero for the independent root fixture.
 
-The retained limitations are explicit: the direct `m=0`, `Q=0` root remains excluded; only regular
+The limitations at this historical proof point were explicit: the direct `m=0`, `Q=0` root remains excluded; only regular
 detector-visible `m=0` support with a positive reciprocal gap is admitted. Fixed macrobin output is
 a preview estimate, not an adaptive convergence claim. Detector response, background, finite
-caking, and intensity fitting remain deferred.
+caking, and intensity fitting were deferred. The later fixed-position ordered-intensity section
+supersedes only that final intensity-fitting statement.
 
 ## Historical BKI-15 incident-boundary proof
 
@@ -862,6 +863,83 @@ counting noise, covariance/uncertainty, held-out subsets, additional truth regim
 arbitrary-material support-boundary planning, topology-split cubature, and real-OSC profile
 extraction/recovery remain unproven. The material-neutral profile and fitter contracts are reusable;
 the tracked end-to-end runner and its frozen boundary audit remain Bi2Se3-specific.
+
+## Fixed-position three-incidence ordered-intensity recovery
+
+The first T13 slice freezes the accepted unconstrained nine-coordinate geometry (including its
+detector-tilt corrections), detector center, lattice, one ideal source-center ray, the recovered
+`(2 deg Gaussian, 0.5 deg Lorentzian, eta=0.1)` mosaic, the 52-layer 2H stacking law, and both
+Bi2Se3 Wyckoff coordinates.
+Only `oBi`, `oSe1`, `oSe2`, `Ur`, and `Uz` are active. The directional intensity factor is
+`exp[-Ur*Qr^2-Uz*Qz^2]` in the crystal/layer frame; optimizer iterations use only cached occupancy-
+quadratic coefficients and cached `Qr^2/Qz^2`, with no detector reprojection or full structure-
+factor call.
+
+The frozen 5/10/15-degree profile catalogs contain `88/78/72` selected-group component masses:
+`86/76/70` nonzero-`m` profiles plus `{003,006}`, `{006,009}`, and `{006,009}`. Their exact identity
+catalog revisions are `198eb585e118e0e719e13303c480cc61a5ef3f0628e64220d26844875bc1114f`,
+`4e448c4c05b32813d6a998db3da65622ee4ef3a3e1757b349da9ea869984f679`, and
+`73ce9345df429759d17445f9d7aa48ab4a07600be5575886c4f6a208fab652b3`. The geometry-
+only signature probe conservatively excludes `186/142/135` of the `4,998` total phi bins, all from
+nonzero-`m` profiles; every profile retains at least 12 of 21 bins and every one of the six `m=0`
+profiles retains all 21. The probe is finite, not a general topology certificate.
+
+The fit response uses `(two-theta,phi)` Gauss orders `(12,4)` and the independent full-strength
+truth response uses `(16,8)` on the identical observable layout and topology mask. This is a
+current-case refined-order agreement check, not a generalized convergence sequence. Maximum
+relative planted-mass difference is `2.156462178e-4`; maximum relative six-column occupancy-basis
+row-norm difference over `(Ur,Uz)={(0,0),(0.007,0.034),(0.1,0),(0,0.1),(0.1,0.1)}` is
+`2.337281382e-4`.
+The cached quadratic/Debye-Waller prediction agrees with the direct CIF-derived quintuple-layer and
+finite-stack strength to `2.220446049e-15` relative error.
+
+Both fits start from the CIF baseline `(oBi,oSe1,oSe2,Ur,Uz)=(1,1,1,0.019,0.019 A^2)`, without the
+planted values. Hidden truth and the absolute-calibration recovery are:
+
+```text
+parameter  truth        recovered          absolute error
+oBi        0.940000000  0.940001214771     1.214770939e-6
+oSe1       0.780000000  0.779997717285     2.282714591e-6
+oSe2       0.860000000  0.860001681396     1.681395706e-6
+Ur A^2     0.007000000  0.00699952894625   4.710537540e-7
+Uz A^2     0.034000000  0.0340003452570    3.452569843e-7
+```
+
+All 238 positive profiles enter the objective without intensity pruning. Their truth masses span
+`5.444143579e-11` to `6.180650421e-4 A^2`, a factor of `1.135284243e7`; the maximum fractional
+residual over that entire set is `2.032132531e-4`. Absolute sensitivity is rank 5 with condition
+`9.47517`; no coordinate contacts a bound. With independent image scales, the exact common-
+occupancy gauge is rejected, Bi is fixed as the positive ratio reference, and the recovered
+`Se1/Bi` and `Se2/Bi` ratios are `0.829783719037` and `0.914894138913` versus truths
+`0.829787234043` and `0.914893617021`. Relative sensitivity is rank 4 with condition `4.38329`,
+maximum residual `1.997180831e-4`, and no active bound. Four predeclared noninteger-L points not
+present as exact quadrature terms in any fit response agree to `1.300307410e-5`; this is exact-
+model interpolation, not independent experimental validation.
+
+The reusable q12x4 responses contain `850,944/773,568/682,752` sparse terms; the q16x8 proof
+responses contain `2,269,184/2,062,848/1,820,672`. Fixed-response compilation took `351.889 s`
+and refined proof compilation `891.714 s`. One equivalent three-angle full-structure prediction
+took `55.0579 s`, while the cached quadratic/`Qr/Qz` prediction took `0.0468517 s`, a `1175.15x`
+speedup. Absolute and relative joint solves took `2.6785 s` and `2.1458 s`; total proof wall time
+was `1506.118 s`, including `147.549 s` for refined direct-truth generation. Traced peak memory was
+`1,305,641,960` bytes and the observed OS peak working set was `1,497,780,224` bytes. Bounded
+coordinate and structure-kernel blocks replaced the initial `5.205 GB` temporary build; a forced
+multi-block parity audit retained all 2,208 fixture terms and matched unbounded cached masses to
+`1.55e-15` relative error. Block order is numerical-response provenance and does not enter the
+observable-layout revision.
+
+The observable is the selected reflection-group contribution, not raw total counts inside an OSC
+ROI. A spot audit of the weakest problematic 5-degree `m=4,L=2` profile found omitted all-rod tails
+of `0.03708%`, below this case's `0.2%` response gate, but arbitrary materials require an all-rod
+contamination audit or explicit component extraction. The upstream nominal marker catalog now
+admits sites from geometry and detector topology only. Replacing all three CIF occupancies by zero
+makes every diagnostic marker strength exactly zero while leaving every marker identity, coordinate,
+rod group, and root unchanged. A structure-parameter trial therefore cannot add or remove profiles.
+
+This result is `NO_ORACLE` for raw-OSC structure recovery, counting noise, background, detector
+PSF, component deblending, model discrepancy, calibrated uncertainty, general per-site `Uij`, atom
+motion, and arbitrary-material structure bases. The four interpolation points and local
+correlations are not substitutes for independent data validation or statistical uncertainty.
 
 ## Tolerance freeze and proof sensitivity
 

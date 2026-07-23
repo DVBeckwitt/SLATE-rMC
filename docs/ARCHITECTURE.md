@@ -65,6 +65,12 @@ all contributing rod/orientation branches. Only the active detector panel is eva
   per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
   search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
   fitting-boundary adapter over the canonical measurement transform, not another angle mapping.
+- `fitting/ordered_intensity.py`: fixed detector/mosaic sparse responses, fixed-position Bi2Se3
+  occupancy quadratics, directional `Qr/Qz` damping, analytic image-scale projection, and
+  structural rank/correlation diagnostics. Dataset-ID-bound observations use a quadrature-
+  independent observable-layout revision, while derived numerical-response, structure, mosaic,
+  and rod-catalog revisions preserve prediction provenance. The full strength model is retained as
+  a proof oracle, not called by optimizer iterations.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, and the finite-pixel angle
   projector; never part of raw rendering.
@@ -100,6 +106,12 @@ all contributing rod/orientation branches. Only the active detector panel is eva
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
+12. Ordered-intensity fitting compiles detector roots and their structure-independent weights once,
+    then contracts only occupancy coefficients and directional Debye-Waller factors for every
+    candidate. Atomic positions, geometry, mosaic, lattice, optics, and stacking law are immutable
+    in the first fixed-position phase. Multi-incidence observations join by dataset ID and exact
+    observable-layout digest rather than tuple position; the separate response digest identifies
+    the numerical quadrature used to predict that observable.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never

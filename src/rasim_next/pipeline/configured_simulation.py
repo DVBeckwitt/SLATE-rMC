@@ -1369,6 +1369,9 @@ def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEw
         incident=incident,
         material=material,
         instrument=inputs.instrument,
+        rod_catalog_revision=configured_rod_catalog_revision(inputs),
+        phase_population_weight=inputs.config.weights.phase_population,
+        polarization_weight=inputs.config.weights.polarization,
     )
     return NominalEwaldContext(geometry=geometry, incident=incident)
 
@@ -1380,7 +1383,8 @@ class DetectorIntegerLMarkers:
     The coordinates use the nominal mean incident state and the continuous
     ``alpha=0`` mosaic center.  Coincident family sites are stored once for
     display, while every independently evaluated physical rod remains in the
-    aligned provenance tuples.
+    aligned provenance tuples. Strengths are nonnegative diagnostics and never
+    determine which geometry-visible sites are retained.
     """
 
     column_px: FloatArray
@@ -1396,7 +1400,7 @@ class DetectorIntegerLMarkers:
     contributing_beta_rad: tuple[tuple[float, ...], ...]
     per_rod_strength_weight_A2: tuple[tuple[float, ...], ...]
     reference_wavelength_A: float
-    definition_id: str = "peak_mosaic_alpha0_integer_L_center.v2"
+    definition_id: str = "peak_mosaic_alpha0_integer_L_center.v3"
     source_state_policy: str = "mean_source_state.v1"
 
     def __post_init__(self) -> None:
@@ -1431,7 +1435,7 @@ class DetectorIntegerLMarkers:
             or np.any((family == 0) & (root_sign != 0))
             or np.any((family != 0) & ~np.isin(root_sign, (-1, 0, 1)))
             or np.any(residual < 0.0)
-            or np.any(family_strength <= 0.0)
+            or np.any(family_strength < 0.0)
         ):
             raise ValueError("integer-L marker arrays contain invalid values")
         rod_hk = tuple(
@@ -1465,7 +1469,7 @@ class DetectorIntegerLMarkers:
             ):
                 raise ValueError("integer-L marker provenance is inconsistent")
         wavelength = _positive(self.reference_wavelength_A, "reference_wavelength_A")
-        if self.definition_id != "peak_mosaic_alpha0_integer_L_center.v2":
+        if self.definition_id != "peak_mosaic_alpha0_integer_L_center.v3":
             raise ValueError("unsupported integer-L marker definition")
         if self.source_state_policy != "mean_source_state.v1":
             raise ValueError("unsupported integer-L marker source-state policy")
@@ -1611,7 +1615,8 @@ def evaluate_nominal_integer_l_markers(
     """Return exact visible integer-L centers for the nominal incident state.
 
     Each physical rod is evaluated independently at exact integer L before
-    symmetry-coincident detector sites are grouped for legible display.
+    symmetry-coincident detector sites are grouped for legible display. The
+    geometry-visible catalog is retained even when its diagnostic strength is zero.
     """
 
     if not isinstance(context, NominalEwaldContext):
@@ -1794,10 +1799,6 @@ def evaluate_nominal_integer_l_markers(
             grouped.append([contribution])
         else:
             matched.append(contribution)
-
-    grouped = [
-        group for group in grouped if math.fsum(member.strength_weight_A2 for member in group) > 0.0
-    ]
 
     grouped.sort(
         key=lambda group: (

@@ -30,6 +30,7 @@ from rasim_next.materials import (
 )
 from rasim_next.materials.optics import HC_EV_A
 from rasim_next.ordered import (
+    Bi2Se3QuintupleLayerParameters,
     bi2se3_ql_amplitudes,
     coherent_finite_stack,
     extract_pbi2_motifs,
@@ -271,6 +272,227 @@ def test_bi2se3_quintuple_layer_and_finite_two_h_strength_match_direct_sums() ->
     )
 
 
+def test_bi2se3_structure_parameters_match_directional_direct_sum() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    parameters = Bi2Se3QuintupleLayerParameters(
+        bi_fractional_z=0.405,
+        se2_fractional_z=0.207,
+        bi_occupancy=0.91,
+        se1_occupancy=0.83,
+        se2_occupancy=0.74,
+        u_radial_A2=0.006,
+        u_normal_A2=0.032,
+    )
+    h = np.asarray((0, 1, -1), dtype=np.int32)
+    k = np.asarray((0, 0, 1), dtype=np.int32)
+    ell = np.asarray((6.2, 4.3, 9.1))
+    query = RodQueryBatch(
+        event_id=np.arange(3, dtype=np.int64),
+        rod_id=np.arange(3, dtype=np.int64),
+        phase_id=(crystal.phase_id,) * 3,
+        h=h,
+        k=k,
+        q_sample_normal_Ainv=np.zeros(3),
+        l_coordinate=ell,
+        wavelength_A=np.full(3, WAVELENGTH_A),
+    )
+    actual = bi2se3_ql_amplitudes(
+        crystal,
+        query,
+        structure_parameters=parameters,
+    )
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    q = reciprocal.q_cartesian_Ainv(np.column_stack((h, k, ell)))
+    normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    normal /= np.linalg.norm(normal)
+    if np.dot(normal, crystal.direct_basis_A[:, 2]) < 0.0:
+        normal = -normal
+    q_normal = q @ normal
+    q_radial_squared = np.maximum(np.einsum("ij,ij->i", q, q) - q_normal**2, 0.0)
+    damping = np.exp(
+        -0.5 * (parameters.u_radial_A2 * q_radial_squared + parameters.u_normal_A2 * q_normal**2)
+    )
+    d_bi = parameters.bi_fractional_z - 1.0 / 3.0
+    d_se2 = 1.0 / 3.0 - parameters.se2_fractional_z
+    rows = (
+        ("Se2", parameters.se2_occupancy, (1.0 / 3.0, 2.0 / 3.0, -d_se2)),
+        ("Bi", parameters.bi_occupancy, (2.0 / 3.0, 1.0 / 3.0, -d_bi)),
+        ("Se1", parameters.se1_occupancy, (0.0, 0.0, 0.0)),
+        ("Bi", parameters.bi_occupancy, (1.0 / 3.0, 2.0 / 3.0, d_bi)),
+        ("Se2", parameters.se2_occupancy, (2.0 / 3.0, 1.0 / 3.0, d_se2)),
+    )
+    source_by_label = {
+        label: next(site for site in crystal.sites if site.source_label == label)
+        for label in ("Bi", "Se1", "Se2")
+    }
+
+    def direct(reflected: bool) -> np.ndarray:
+        result = np.zeros(ell.size, dtype=np.complex128)
+        for label, occupancy, fractional in rows:
+            source = source_by_label[label]
+            position = np.asarray(fractional)
+            if reflected:
+                position[2] *= -1.0
+            factor = np.asarray(
+                [
+                    _factor_e(
+                        source.species,
+                        source.element,
+                        source.charge,
+                        float(np.linalg.norm(q_row)),
+                        WAVELENGTH_A,
+                    )
+                    for q_row in q
+                ]
+            )
+            result += (
+                occupancy
+                * factor
+                * np.exp(
+                    2.0j * np.pi * np.einsum("ij,j->i", np.column_stack((h, k, ell)), position)
+                )
+            )
+        return damping * result
+
+    np.testing.assert_allclose(actual.f_plus_e, direct(False), rtol=3.0e-13, atol=3.0e-12)
+    np.testing.assert_allclose(actual.f_minus_e, direct(True), rtol=3.0e-13, atol=3.0e-12)
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
+    explicit_baseline = bi2se3_ql_amplitudes(crystal, query, structure_parameters=baseline)
+    implicit_baseline = bi2se3_ql_amplitudes(crystal, query)
+    np.testing.assert_allclose(explicit_baseline.f_plus_e, implicit_baseline.f_plus_e, rtol=0.0)
+    np.testing.assert_allclose(explicit_baseline.f_minus_e, implicit_baseline.f_minus_e, rtol=0.0)
+
+
+@pytest.mark.parametrize(
+    ("epsilon", "normalization"),
+    (
+        (0.0, EventIntensityNormalization.FINITE_TOTAL),
+        (0.001, EventIntensityNormalization.FINITE_TOTAL),
+        (0.001, EventIntensityNormalization.FINITE_PER_LAYER),
+    ),
+)
+def test_fixed_position_occupancy_quadratic_matches_full_strength(
+    epsilon: float,
+    normalization: EventIntensityNormalization,
+) -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
+    candidate = replace(
+        baseline,
+        bi_occupancy=0.91,
+        se1_occupancy=0.83,
+        se2_occupancy=0.74,
+        u_radial_A2=0.006,
+        u_normal_A2=0.032,
+    )
+    h = np.asarray((0, 1, -1, 3), dtype=np.int32)
+    k = np.asarray((0, 0, 1, 0), dtype=np.int32)
+    ell = np.asarray((6.2, 4.3, 9.1, -2.7))
+    k_norm = 2.0 * np.pi / WAVELENGTH_A
+    model = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=52,
+        normalization=normalization,
+        shared_disorder_epsilon=epsilon,
+        structure_parameters=baseline,
+    )
+    quadratic = model.fixed_position_occupancy_quadratic(
+        h=h,
+        k=k,
+        L=ell,
+        k_norm_Ainv=k_norm,
+    )
+    occupancy_products = np.asarray(
+        (
+            candidate.bi_occupancy**2,
+            candidate.se1_occupancy**2,
+            candidate.se2_occupancy**2,
+            candidate.bi_occupancy * candidate.se1_occupancy,
+            candidate.bi_occupancy * candidate.se2_occupancy,
+            candidate.se1_occupancy * candidate.se2_occupancy,
+        )
+    )
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    q = reciprocal.q_cartesian_Ainv(np.column_stack((h, k, ell)))
+    normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    normal /= np.linalg.norm(normal)
+    q_normal_squared = (q @ normal) ** 2
+    q_radial_squared = np.maximum(
+        np.einsum("ij,ij->i", q, q) - q_normal_squared,
+        0.0,
+    )
+    expected = (quadratic @ occupancy_products) * np.exp(
+        -candidate.u_radial_A2 * q_radial_squared - candidate.u_normal_A2 * q_normal_squared
+    )
+    actual = replace(model, structure_parameters=candidate).evaluate_hkl(
+        h=h,
+        k=k,
+        L=ell,
+        k_norm_Ainv=k_norm,
+    )
+    np.testing.assert_allclose(expected, actual, rtol=3.0e-12, atol=2.0e-22)
+
+
+def test_occupancy_quadratic_retains_a_disorder_extinction_as_nonnegative() -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
+    model = Bi2Se3TwoHStrength(
+        crystal=crystal,
+        layers=52,
+        normalization=EventIntensityNormalization.FINITE_PER_LAYER,
+        shared_disorder_epsilon=0.001,
+        structure_parameters=baseline,
+    )
+    quadratic = model.fixed_position_occupancy_quadratic(
+        h=np.asarray((-3,), dtype=np.int32),
+        k=np.asarray((-3,), dtype=np.int32),
+        L=np.asarray((-11.25,)),
+        k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+    )[0]
+    matrix = np.asarray(
+        (
+            (quadratic[0], 0.5 * quadratic[3], 0.5 * quadratic[4]),
+            (0.5 * quadratic[3], quadratic[1], 0.5 * quadratic[5]),
+            (0.5 * quadratic[4], 0.5 * quadratic[5], quadratic[2]),
+        )
+    )
+    eigenvalues = np.linalg.eigvalsh(matrix)
+    assert eigenvalues[0] >= -64.0 * np.finfo(np.float64).eps * eigenvalues[-1]
+
+    occupancy = np.asarray((0.94, 0.78, 0.86))
+    cached = float(occupancy @ matrix @ occupancy)
+    candidate = replace(
+        model,
+        structure_parameters=replace(
+            baseline,
+            bi_occupancy=float(occupancy[0]),
+            se1_occupancy=float(occupancy[1]),
+            se2_occupancy=float(occupancy[2]),
+        ),
+    )
+    direct = float(
+        candidate.evaluate_hkl(
+            h=np.asarray((-3,), dtype=np.int32),
+            k=np.asarray((-3,), dtype=np.int32),
+            L=np.asarray((-11.25,)),
+            k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+        )[0]
+    )
+    numerical_null_A2 = 1.0e-30
+    assert 0.0 <= cached < numerical_null_A2
+    assert 0.0 <= direct < numerical_null_A2
+    assert abs(cached - direct) <= 1.0e-32
+
+
 def test_bi2se3_near_ideal_two_h_strength_matches_shared_disorder_oracle() -> None:
     crystal = read_crystal(
         STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
@@ -373,6 +595,18 @@ def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:
     np.testing.assert_allclose(production.amplitude_e, expected, rtol=1e-12, atol=1e-10)
     assert abs(production.amplitude_e[1]) <= 1e-10
     assert not production.amplitude_e.flags.writeable
+    unknown_displacement = replace(
+        crystal,
+        sites=tuple(replace(site, u_iso_A2=None) for site in crystal.sites),
+    )
+    tensor_result = unit_cell_amplitude(
+        unknown_displacement,
+        hkl,
+        wavelength,
+        shared_displacement_tensor_A2=np.diag((0.007, 0.007, 0.034)),
+    )
+    assert np.all(np.isfinite(tensor_result.amplitude_e))
+    assert "shared_displacement_tensor_A2=declared" in tensor_result.provenance
 
     for atom_count in (1, 2):
         small = replace(

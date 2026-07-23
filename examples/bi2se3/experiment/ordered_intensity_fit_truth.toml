@@ -1,0 +1,47 @@
+schema_version = "rasim-ordered-intensity-recovery-v1"
+mosaic_case = "mosaic_fit_truth.toml"
+
+[truth]
+bi_occupancy = 0.94
+se1_occupancy = 0.78
+se2_occupancy = 0.86
+u_radial_A2 = 0.007
+u_normal_A2 = 0.034
+
+[profiles]
+two_theta_half_width_deg = 0.04
+phi_half_width_deg = 5.0
+phi_bin_count = 21
+response_two_theta_gauss_order = 12
+truth_two_theta_gauss_order = 16
+response_phi_gauss_order = 4
+truth_phi_gauss_order = 8
+expected_total_count = [88, 78, 72]
+expected_nonzero_count = [86, 76, 70]
+expected_m0_count = [2, 2, 2]
+expected_catalog_revision = [
+  "198eb585e118e0e719e13303c480cc61a5ef3f0628e64220d26844875bc1114f",
+  "4e448c4c05b32813d6a998db3da65622ee4ef3a3e1757b349da9ea869984f679",
+  "73ce9345df429759d17445f9d7aa48ab4a07600be5575886c4f6a208fab652b3",
+]
+supported_m0_integer_L_5deg = [3, 6]
+supported_m0_integer_L_10deg = [6, 9]
+supported_m0_integer_L_15deg = [6, 9]
+
+[relative_mode]
+fixed_occupancy = "bi_occupancy"
+synthetic_image_scales = [0.61, 1.37, 2.23]
+
+[held_out]
+h = [-1, -1, -2, -2]
+k = [0, -1, 0, -1]
+L = [-4.5, -7.25, 5.5, 10.25]
+
+[acceptance]
+maximum_absolute_occupancy_error = 0.005
+maximum_relative_occupancy_ratio_error = 0.005
+maximum_displacement_error_A2 = 0.0005
+maximum_relative_peak_residual = 0.002
+maximum_held_out_relative_error = 0.002
+maximum_response_quadrature_relative_error = 0.002
+maximum_sensitivity_condition = 100000.0

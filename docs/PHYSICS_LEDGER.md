@@ -93,7 +93,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-ORD-005 | atomic `f0(Q)` | structure-factor modules | `eq:structure_factor` | ordered | MATCH after data decision |
 | PHY-ORD-006 | anomalous `f' + i f''` | VESTA/package modes | `eq:structure_factor` | ordered | CORRECTED |
 | PHY-ORD-007 | isotropic displacement | motif form factor | `eq:structure_factor` | ordered | MATCH |
-| PHY-ORD-008 | anisotropic `Uij` | incomplete old support | `eq:structure_factor` | ordered | NEW required |
+| PHY-ORD-008 | anisotropic `Uij` | incomplete old support | `eq:structure_factor` | ordered | PARTIAL active shared transverse-isotropic `Ur/Uz`; general per-site `Uij` DEFERRED |
 | PHY-ORD-009 | complex structure amplitude | `motif_form_factor.py:473-543` | `eq:structure_factor` | ordered | MATCH |
 | PHY-ORD-010 | remove normalization to 100 and rounding | `diffraction_tools.py:135-207` | none | ordered | CORRECTED |
 | PHY-ORD-011 | distinct `(h,k)` rods with family metadata | Miller/grouping paths | Methods lines 64-78 | ordered | CORRECTED |
@@ -213,15 +213,15 @@ future work.
 | PHY-FIT-005 | finite-bin mosaic-profile objective with integrate-`S/N`-before-divide and exact per-profile nuisance amplitudes | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED active deterministic synthetic slice; absolute and cross-peak intensities excluded from weighting |
 | PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture with exact faces and finite centered-logit audit | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED active deterministic synthetic slice |
 | PHY-FIT-007 | frozen geometry/source/material/profile revisions during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle, active deterministic synthetic slice |
-| PHY-FIT-008 | detector-native ordered ROI mass objective | `gui/ordered_structure_fit.py:322-540` | refinement step 5 and SI detector objectives | fitting | CORRECTED |
-| PHY-FIT-009 | analytic nonnegative per-image scale | `ordered_structure_fit.py:53-99` | nuisance image scale | fitting | MATCH/verify |
-| PHY-FIT-010 | event and detector-response reuse for intensity fits | old code rerenders broadly | future performance requirement | fitting | NEW |
+| PHY-FIT-008 | detector-native ordered selected-group ROI component-mass objective | `gui/ordered_structure_fit.py:322-540` | refinement step 5 and SI detector objectives | fitting | CORRECTED active deterministic 5/10/15-degree slice; raw-OSC component extraction DEFERRED |
+| PHY-FIT-009 | analytic nonnegative per-image scale and explicit common-occupancy gauge | `ordered_structure_fit.py:53-99` | nuisance image scale | fitting | MATCH principle, active exact profiling and ratio recovery |
+| PHY-FIT-010 | fixed detector-response reuse for intensity fits | old code rerenders broadly | performance requirement | fitting | NEW active cached occupancy quadratic plus `Qr/Qz` damping; no detector reprojection per trial |
 | PHY-FIT-011 | selected `Qr` and branch stacking objective | rod-profile and branch-selection paths | SI lines 704-749 | fitting | CORRECTED |
 | PHY-FIT-012 | signal and normalization summed before division in future caking | `fitting/rod_profiles.py:91-308` | SI selected-rod profile equation | fitting | MATCH when caking is added |
 | PHY-FIT-013 | upstream parameters frozen before stacking fit | staged runtime | refinement step 6 | fitting | MATCH principle |
-| PHY-FIT-014 | stage-specific synthetic parameter recovery | absent as one system | scientific validation | fitting | NEW required |
+| PHY-FIT-014 | stage-specific synthetic parameter recovery | absent as one system | scientific validation | fitting | NEW active for geometry, mosaic, and fixed-position ordered intensity |
 | PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | DEFERRED beyond exact nuisance scales; no noise/background/covariance model in the deterministic slice |
-| PHY-FIT-015 | dependency-aware cache invalidation | distributed runtime caches | performance requirement | fitting | NEW |
+| PHY-FIT-015 | dependency-aware cache invalidation | distributed runtime caches | performance requirement | fitting | NEW active response/observable/structure/mosaic/source/material revision boundaries |
 | PHY-FIT-016 | optional final joint polish after staged stability | global old optimization paths | refinement discussion | fitting | FUTURE with safeguards |
 | PHY-MAP-001B | finite `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | none | DEFERRED until native fits pass |
 

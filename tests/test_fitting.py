@@ -2191,6 +2191,410 @@ def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_di
         )
 
 
+def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profiles() -> None:
+    from rasim_next.fitting import (
+        compile_ordered_intensity_response,
+        probe_ordered_intensity_inverse_boundary_bins,
+    )
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.pipeline.configured_simulation import configured_rod_catalog_revision
+
+    base = load_simulation_config(
+        Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
+    )
+    config = replace(
+        base,
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        mosaic=replace(
+            base.mosaic,
+            gaussian_sigma_deg=2.0,
+            lorentzian_hwhm_deg=0.5,
+            lorentzian_probability=0.1,
+        ),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    context = build_nominal_ewald_context(inputs)
+    frame = build_osc_angle_frame(
+        mean_direction_lab=config.source.mean_direction_lab,
+        instrument=inputs.instrument,
+        sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
+        revision="ordered-response-test.v1",
+    )
+    markers = evaluate_nominal_integer_l_markers(context)
+    m0_prediction = ExactTagGeometryModel(
+        build_configured_geometry_inputs(config)
+    ).predict_m0_minimum_tilt_exact_l_landmarks((6,))
+    assert tuple(m0_prediction.detector_status) == ("VALID",)
+    nonzero_index = int(np.flatnonzero((markers.family_m == 1) & (markers.root_sign != 0))[0])
+    marker_angles = detector_coordinates_to_angles(
+        np.asarray((m0_prediction.coordinates_px[0, 0], markers.column_px[nonzero_index])),
+        np.asarray((m0_prediction.coordinates_px[0, 1], markers.row_px[nonzero_index])),
+        instrument=inputs.instrument,
+        angle_frame=frame,
+    )
+    assert np.all(marker_angles.valid & marker_angles.azimuth_valid)
+    revision = configured_rod_catalog_revision(inputs)
+    dataset_id = "five-degree-response-test"
+    definitions: list[MosaicProfileDefinition] = []
+    for profile_index in range(2):
+        index = nonzero_index
+        family = 0 if profile_index == 0 else int(markers.family_m[index])
+        integer_l = 6 if profile_index == 0 else int(markers.integer_L[index])
+        root_sign = 0 if profile_index == 0 else int(markers.root_sign[index])
+        collapsed = family == 0
+        definitions.append(
+            MosaicProfileDefinition(
+                identity=MosaicProfileIdentity(
+                    dataset_id=dataset_id,
+                    incidence_angle_rad=math.radians(5.0),
+                    group_key=MosaicReflectionGroupKey(
+                        group_id=f"response:m={family}:L={integer_l}",
+                        rod_catalog_revision=revision,
+                        member_rod_hk=(
+                            ((0, 0),) if collapsed else markers.contributing_rod_hk[index]
+                        ),
+                        branch_mode="COLLAPSED_00L" if collapsed else "EXPLICIT_NONZERO",
+                        layered_family_m=family,
+                        layered_integer_L=integer_l,
+                    ),
+                    branch_id=None if collapsed else (1 if root_sign < 0 else 2),
+                    analytic_branch_id=0 if collapsed else int(markers.branch[index]),
+                ),
+                center_two_theta_rad=float(marker_angles.two_theta_rad[profile_index]),
+                center_phi_rad=float(marker_angles.phi_rad[profile_index]),
+                two_theta_half_width_rad=math.radians(0.04),
+                phi_half_width_rad=math.radians(5.0),
+                phi_bin_count=21,
+                two_theta_gauss_order=4,
+                phi_gauss_order=4,
+            )
+        )
+    frozen_definitions = tuple(definitions)
+    audited_definitions = probe_ordered_intensity_inverse_boundary_bins(
+        context.geometry,
+        angle_frame=frame,
+        definitions=frozen_definitions,
+    )
+    assert tuple(definition.excluded_phi_bin_indices for definition in audited_definitions) == (
+        (),
+        (6, 8, 9, 10, 11, 12, 13),
+    )
+    assert (
+        probe_ordered_intensity_inverse_boundary_bins(
+            context.geometry,
+            angle_frame=frame,
+            definitions=audited_definitions,
+        )
+        == audited_definitions
+    )
+    stale_identity = frozen_definitions[0].identity
+    stale_definitions = (
+        replace(
+            frozen_definitions[0],
+            identity=replace(
+                stale_identity,
+                group_key=replace(
+                    stale_identity.group_key,
+                    rod_catalog_revision="stale-ordered-response-rods.v1",
+                ),
+            ),
+        ),
+        *frozen_definitions[1:],
+    )
+    with pytest.raises(ValueError, match="rod catalog revision"):
+        compile_ordered_intensity_response(
+            context.geometry,
+            angle_frame=frame,
+            definitions=stale_definitions,
+        )
+    response = compile_ordered_intensity_response(
+        context.geometry,
+        angle_frame=frame,
+        definitions=frozen_definitions,
+    )
+    assert response.excluded_phi_bin_indices == ((), (6, 8, 9, 10, 11, 12, 13))
+    assert response.topology_probe_revision == "inverse_root_signature_grid_17x17.v1"
+
+    def direct(strength: Bi2Se3TwoHStrength) -> np.ndarray:
+        candidate_inputs = replace(
+            inputs,
+            strength=strength,
+            bragg_space=MosaicBraggSpace(inputs.bragg_space.config, strength),
+        )
+        profiles = evaluate_continuous_mosaic_profiles(
+            build_source_averaged_detector(candidate_inputs),
+            angle_frame=frame,
+            definitions=audited_definitions,
+            profile_revision="ordered-response-test.v1",
+        )
+        return np.sum(profiles.signal, axis=1, dtype=np.float64)
+
+    baseline_predicted = response.predict_mass_A2(inputs.strength.structure_parameters)
+    np.testing.assert_allclose(baseline_predicted, direct(inputs.strength), rtol=5.0e-11)
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    candidate = replace(
+        inputs.strength,
+        structure_parameters=replace(
+            baseline,
+            bi_occupancy=0.93,
+            se1_occupancy=0.81,
+            se2_occupancy=0.72,
+            u_radial_A2=0.007,
+            u_normal_A2=0.034,
+        ),
+    )
+    np.testing.assert_allclose(
+        response.predict_mass_A2(candidate.structure_parameters),
+        direct(candidate),
+        rtol=5.0e-11,
+    )
+    np.testing.assert_allclose(
+        response.predict_mass_direct_A2(candidate),
+        direct(candidate),
+        rtol=5.0e-11,
+    )
+    m0_term = response.term_observation_index == 0
+    m0_rod = response.rods.index(next(rod for rod in response.rods if rod.family_m == 0))
+    m0_term &= response.term_rod_index == m0_rod
+    assert set(response.term_root_sign[m0_term]) == {-1, 1}
+
+
+def test_ordered_intensity_fit_enforces_freeze_gauge_revision_and_rank_contracts() -> None:
+    from rasim_next.fitting import (
+        OrderedIntensityDatasetResponse,
+        OrderedIntensityIdentifiabilityError,
+        OrderedIntensityObservations,
+        fit_ordered_intensity_series,
+        ordered_intensity_structure_model_revision,
+    )
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+
+    config = load_simulation_config(
+        Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
+    )
+    inputs = build_configured_simulation_inputs(config)
+    strength = inputs.strength
+    fixed = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    rods = (Rod(-1, 0),)
+    term_l = np.arange(1.0, 9.0)
+    amplitude_basis = np.asarray(
+        (
+            (1.0, 0.2, 0.1),
+            (0.2, 1.0, 0.3),
+            (0.1, 0.4, 1.0),
+            (1.0, 1.0, 0.2),
+            (0.3, 1.0, 1.0),
+            (1.0, 0.3, 1.0),
+            (0.7, 0.5, 1.2),
+            (1.1, 0.8, 0.4),
+        )
+    )
+    quadratic = np.column_stack(
+        (
+            amplitude_basis[:, 0] ** 2,
+            amplitude_basis[:, 1] ** 2,
+            amplitude_basis[:, 2] ** 2,
+            2.0 * amplitude_basis[:, 0] * amplitude_basis[:, 1],
+            2.0 * amplitude_basis[:, 0] * amplitude_basis[:, 2],
+            2.0 * amplitude_basis[:, 1] * amplitude_basis[:, 2],
+        )
+    )
+    dataset_id = "ordered-intensity-contract"
+    catalog_revision = "ordered-intensity-contract-rods.v1"
+    identities = tuple(
+        MosaicProfileIdentity(
+            dataset_id=dataset_id,
+            incidence_angle_rad=math.radians(10.0),
+            group_key=MosaicReflectionGroupKey(
+                group_id=f"contract:L={int(ell)}",
+                rod_catalog_revision=catalog_revision,
+                member_rod_hk=((-1, 0),),
+                branch_mode="EXPLICIT_NONZERO",
+                layered_family_m=1,
+                layered_integer_L=int(ell),
+            ),
+            branch_id=2,
+            analytic_branch_id=2,
+        )
+        for ell in term_l
+    )
+    response = OrderedIntensityDatasetResponse(
+        dataset_id=dataset_id,
+        incidence_angle_rad=math.radians(10.0),
+        identities=identities,
+        rods=rods,
+        term_observation_index=np.arange(term_l.size),
+        term_rod_index=np.zeros(term_l.size, dtype=np.int64),
+        term_L=term_l,
+        term_fixed_mass_per_strength=np.linspace(0.8, 1.2, term_l.size),
+        term_root_sign=np.ones(term_l.size, dtype=np.int8),
+        term_occupancy_quadratic_strength_A2=quadratic,
+        term_q_radial_squared_Ainv2=np.asarray((0.2, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5)),
+        term_q_normal_squared_Ainv2=np.asarray((3.2, 2.8, 2.1, 1.7, 1.2, 0.8, 0.4, 3.7)),
+        normalization_mass_px2=np.ones(term_l.size),
+        reciprocal_basis_Ainv=strength.reciprocal_basis_Ainv,
+        k_norm_Ainv=inputs.bragg_space.config.k_norm_Ainv,
+        fixed_structure_parameters=fixed,
+        rod_catalog_revision=catalog_revision,
+        structure_model_revision=ordered_intensity_structure_model_revision(strength),
+        mosaic_model_revision="ordered-intensity-contract-mosaic.v1",
+        angle_frame_revision="ordered-intensity-contract-frame.v1",
+        source_revision="ordered-intensity-contract-source.v1",
+        sample_geometry_revision="ordered-intensity-contract-sample.v1",
+        material_revision="ordered-intensity-contract-material.v1",
+        observable_revision="ordered-intensity-contract-observable.v1",
+        excluded_phi_bin_indices=((),) * len(identities),
+        topology_probe_revision="ordered-intensity-contract-topology.v1",
+    )
+    truth = replace(
+        fixed,
+        bi_occupancy=0.7,
+        se1_occupancy=0.9,
+        se2_occupancy=0.8,
+        u_radial_A2=0.007,
+        u_normal_A2=0.034,
+    )
+    observation = OrderedIntensityObservations(
+        dataset_id=dataset_id,
+        observable_revision=response.observable_revision,
+        mass_A2=response.predict_mass_A2(truth),
+    )
+    relative_initial = replace(fixed, bi_occupancy=0.7)
+    relative = fit_ordered_intensity_series(
+        (response,),
+        (observation,),
+        base_strength=strength,
+        active_parameter_names=(
+            "se1_occupancy",
+            "se2_occupancy",
+            "u_radial_A2",
+            "u_normal_A2",
+        ),
+        initial_parameters=relative_initial,
+        relative_scale_mode=True,
+    )
+    np.testing.assert_allclose(
+        relative.occupancy_ratios,
+        (1.0, 0.9 / 0.7, 0.8 / 0.7),
+        rtol=0.0,
+        atol=2.0e-10,
+    )
+    assert relative.occupancy_ratio_reference == "bi_occupancy"
+    np.testing.assert_allclose(
+        (
+            relative.structure_representative.bi_occupancy,
+            relative.structure_representative.se1_occupancy,
+            relative.structure_representative.se2_occupancy,
+        ),
+        (0.7 / 0.9, 1.0, 0.8 / 0.9),
+        rtol=0.0,
+        atol=2.0e-10,
+    )
+    np.testing.assert_allclose(
+        relative.dataset_scales[0] * relative.predicted_mass_A2[0],
+        observation.mass_A2,
+        rtol=2.0e-10,
+    )
+
+    inactive_outside_optimizer_bounds = replace(fixed, u_radial_A2=0.2)
+    fully_frozen = fit_ordered_intensity_series(
+        (response,),
+        (observation,),
+        base_strength=strength,
+        active_parameter_names=(),
+        initial_parameters=inactive_outside_optimizer_bounds,
+        relative_scale_mode=False,
+    )
+    assert fully_frozen.structure_representative == inactive_outside_optimizer_bounds
+    assert fully_frozen.active_parameter_names == ()
+
+    with pytest.raises(OrderedIntensityIdentifiabilityError, match="common-scale gauge"):
+        fit_ordered_intensity_series(
+            (response,),
+            (observation,),
+            base_strength=strength,
+            active_parameter_names=(
+                "bi_occupancy",
+                "se1_occupancy",
+                "se2_occupancy",
+                "u_radial_A2",
+                "u_normal_A2",
+            ),
+        )
+    with pytest.raises(ValueError, match="atomic positions are fixed"):
+        fit_ordered_intensity_series(
+            (response,),
+            (observation,),
+            base_strength=strength,
+            active_parameter_names=("bi_delta_z_fractional",),
+            relative_scale_mode=False,
+        )
+    with pytest.raises(ValueError, match="observable revision"):
+        fit_ordered_intensity_series(
+            (response,),
+            (replace(observation, observable_revision="stale-observable.v1"),),
+            base_strength=strength,
+            active_parameter_names=(),
+        )
+    with pytest.raises(RuntimeError, match="optimization failed"):
+        fit_ordered_intensity_series(
+            (response,),
+            (observation,),
+            base_strength=strength,
+            active_parameter_names=(
+                "bi_occupancy",
+                "se1_occupancy",
+                "se2_occupancy",
+                "u_radial_A2",
+                "u_normal_A2",
+            ),
+            initial_parameters=fixed,
+            relative_scale_mode=False,
+            maximum_function_evaluations=1,
+        )
+
+    deficient = replace(
+        response,
+        identities=response.identities[:3],
+        term_observation_index=np.arange(3),
+        term_rod_index=response.term_rod_index[:3],
+        term_L=response.term_L[:3],
+        term_fixed_mass_per_strength=response.term_fixed_mass_per_strength[:3],
+        term_root_sign=response.term_root_sign[:3],
+        term_occupancy_quadratic_strength_A2=response.term_occupancy_quadratic_strength_A2[:3],
+        term_q_radial_squared_Ainv2=response.term_q_radial_squared_Ainv2[:3],
+        term_q_normal_squared_Ainv2=response.term_q_normal_squared_Ainv2[:3],
+        normalization_mass_px2=response.normalization_mass_px2[:3],
+        excluded_phi_bin_indices=response.excluded_phi_bin_indices[:3],
+    )
+    deficient_observation = OrderedIntensityObservations(
+        dataset_id=dataset_id,
+        observable_revision=deficient.observable_revision,
+        mass_A2=deficient.predict_mass_A2(truth),
+    )
+    with pytest.raises(OrderedIntensityIdentifiabilityError, match="rank 3/5"):
+        fit_ordered_intensity_series(
+            (deficient,),
+            (deficient_observation,),
+            base_strength=strength,
+            active_parameter_names=(
+                "bi_occupancy",
+                "se1_occupancy",
+                "se2_occupancy",
+                "u_radial_A2",
+                "u_normal_A2",
+            ),
+            initial_parameters=fixed,
+            relative_scale_mode=False,
+        )
+
+
 def test_mosaic_component_profiles_refuse_nuisance_projected_rank_deficiency() -> None:
     bank, planted_scale = _analytic_mosaic_profile_bank()
     reference = bank.gaussian_profiles[0].profile
