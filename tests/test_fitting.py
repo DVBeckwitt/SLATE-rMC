@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,7 @@ import pytest
 
 import rasim_next.fitting.geometry as fitting_geometry_module
 import rasim_next.selection.blind as blind_module
-from painted_ewald import MosaicBraggSpace
+from painted_ewald import MosaicBraggSpace, Rod
 from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
@@ -28,17 +29,32 @@ from rasim_next.fitting import (
     IntegerLMarkerPrediction,
     M0IntegerLObservations,
     M0IntegerLPrediction,
+    MosaicComponentProfile,
+    MosaicComponentProfileBank,
+    MosaicIdentifiabilityError,
+    MosaicProfileDefinition,
+    MosaicProfileIdentity,
+    MosaicProfileSet,
+    MosaicReflectionGroupKey,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
     apply_shared_geometry_corrections,
     audit_indexed_geometry_series_roots,
     audit_integer_l_marker_selection,
+    evaluate_continuous_mosaic_profiles,
     evaluate_indexed_geometry_series_residual,
     evaluate_tagged_geometry_objective_residual,
     fit_indexed_geometry_series,
+    fit_mosaic_component_profiles,
+    fit_refined_mosaic_component_profiles,
     fit_tagged_detector_function_geometry,
 )
-from rasim_next.geometry import AngleFrame, build_incident_states, detector_coordinates_to_angles
+from rasim_next.geometry import (
+    AngleFrame,
+    angles_to_detector_coordinate_area_measure,
+    build_incident_states,
+    detector_coordinates_to_angles,
+)
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_geometry_inputs,
@@ -52,7 +68,9 @@ from rasim_next.pipeline.configured_simulation import (
     sample_configured_source,
     solve_integer_l_ewald_roots,
 )
-from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+from rasim_next.pipeline.continuous_detector import (
+    DetectorEwaldMeasure,
+)
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.selection import (
     BlindIndexingPolicy,
@@ -65,6 +83,170 @@ from rasim_next.selection import (
     simulation_config_for_osc_image,
 )
 from rasim_next.selection.blind import _discovery_geometry_hash
+
+
+def _analytic_mosaic_profile_bank() -> tuple[
+    MosaicComponentProfileBank,
+    dict[MosaicProfileIdentity, float],
+]:
+    from painted_ewald import MosaicParameters, wrapped_mosaic_line_density_rad_inv
+
+    group_keys = (
+        MosaicReflectionGroupKey(
+            group_id="synthetic-00L-6",
+            rod_catalog_revision="synthetic-rods.v1",
+            member_rod_hk=((0, 0),),
+            branch_mode="COLLAPSED_00L",
+            layered_family_m=0,
+            layered_integer_L=6,
+        ),
+        MosaicReflectionGroupKey(
+            group_id="synthetic-m1-L8",
+            rod_catalog_revision="synthetic-rods.v1",
+            member_rod_hk=((1, 0),),
+            branch_mode="EXPLICIT_NONZERO",
+            layered_family_m=1,
+            layered_integer_L=8,
+        ),
+        MosaicReflectionGroupKey(
+            group_id="synthetic-m3-L10",
+            rod_catalog_revision="synthetic-rods.v1",
+            member_rod_hk=((1, 1),),
+            branch_mode="EXPLICIT_NONZERO",
+            layered_family_m=3,
+            layered_integer_L=10,
+        ),
+    )
+    identities: list[MosaicProfileIdentity] = []
+    alpha_rows: list[np.ndarray] = []
+    response_rows: list[np.ndarray] = []
+    sample_axis = np.linspace(-1.0, 1.0, 41)
+    for incidence_index, incidence_deg in enumerate((5.0, 10.0, 15.0)):
+        for group_index, group_key in enumerate(group_keys):
+            branches = (None,) if group_key.branch_mode == "COLLAPSED_00L" else (1, 2)
+            for branch_id in branches:
+                identities.append(
+                    MosaicProfileIdentity(
+                        dataset_id=f"synthetic-{incidence_deg:g}",
+                        incidence_angle_rad=math.radians(incidence_deg),
+                        group_key=group_key,
+                        branch_id=branch_id,
+                        analytic_branch_id=0 if branch_id is None else 1,
+                    )
+                )
+                branch_shift = 0.0 if branch_id is None else (branch_id - 1.5) * 0.11
+                center_deg = 0.35 + 0.55 * group_index + 0.42 * incidence_index + branch_shift
+                alpha_rows.append(
+                    np.radians(np.abs(center_deg + (0.8 + 0.1 * group_index) * sample_axis))
+                )
+                response_rows.append(
+                    (1.0 + 0.12 * sample_axis + 0.03 * sample_axis**2)
+                    * (1.0 + 0.2 * incidence_index + 0.07 * group_index)
+                )
+
+    alpha = np.asarray(alpha_rows)
+    response = np.asarray(response_rows)
+    normalization = np.broadcast_to(
+        0.8 + 0.3 * (sample_axis + 1.0),
+        alpha.shape,
+    ).copy()
+    valid = np.ones(alpha.shape, dtype=np.bool_)
+    valid[:, (0, -1)] = False
+    phi_bin_edges = np.broadcast_to(
+        np.linspace(-1.05, 1.05, sample_axis.size + 1),
+        (len(identities), sample_axis.size + 1),
+    ).copy()
+    two_theta_bounds = np.broadcast_to((0.2, 0.3), (len(identities), 2)).copy()
+    frame_revisions = ("analytic-response-frame.v1",) * len(identities)
+    gaussian_width_deg = np.asarray((0.65, 1.1, 2.0, 3.3))
+    lorentzian_width_deg = np.asarray((0.12, 0.3, 0.5, 0.9, 1.8))
+
+    def component_signal(width_deg: float, component: str) -> np.ndarray:
+        if component == "gaussian":
+            parameters = MosaicParameters(math.radians(width_deg), 1.0, 0.0)
+        else:
+            parameters = MosaicParameters(1.0, math.radians(width_deg), 1.0)
+        density = wrapped_mosaic_line_density_rad_inv(alpha, parameters) / np.pi
+        return density * response * normalization
+
+    gaussian_signal = np.asarray(
+        [component_signal(width, "gaussian") for width in gaussian_width_deg]
+    )
+    lorentzian_signal = np.asarray(
+        [component_signal(width, "lorentzian") for width in lorentzian_width_deg]
+    )
+    gaussian_signal[:, ~valid] = 0.0
+    lorentzian_signal[:, ~valid] = 0.0
+    normalization[~valid] = 0.0
+    truth_gaussian_index = int(np.flatnonzero(gaussian_width_deg == 2.0)[0])
+    truth_lorentzian_index = int(np.flatnonzero(lorentzian_width_deg == 0.5)[0])
+    eta = 0.1
+    unscaled_truth = (1.0 - eta) * gaussian_signal[truth_gaussian_index] + eta * lorentzian_signal[
+        truth_lorentzian_index
+    ]
+    planted_scale = {
+        identity: float(scale)
+        for identity, scale in zip(
+            identities,
+            np.geomspace(2.5e-4, 1.4e4, len(identities)),
+            strict=True,
+        )
+    }
+    observed_signal = np.asarray(
+        [
+            planted_scale[identity] * profile
+            for identity, profile in zip(identities, unscaled_truth, strict=True)
+        ]
+    )
+    observations = MosaicProfileSet(
+        identities=tuple(identities),
+        signal=observed_signal,
+        normalization=normalization,
+        valid=valid,
+        profile_revision="analytic-response.v1",
+        phi_bin_edges_rad=phi_bin_edges,
+        two_theta_bounds_rad=two_theta_bounds,
+        angle_frame_revisions=frame_revisions,
+        source_revision="analytic-source.v1",
+    )
+
+    def component_profile(signal: np.ndarray) -> MosaicProfileSet:
+        return MosaicProfileSet(
+            identities=tuple(identities),
+            signal=signal,
+            normalization=normalization,
+            valid=valid,
+            profile_revision="analytic-response.v1",
+            phi_bin_edges_rad=phi_bin_edges,
+            two_theta_bounds_rad=two_theta_bounds,
+            angle_frame_revisions=frame_revisions,
+            source_revision="analytic-source.v1",
+        )
+
+    return (
+        MosaicComponentProfileBank(
+            observations=observations,
+            gaussian_sigma_rad=np.radians(gaussian_width_deg),
+            gaussian_profiles=tuple(
+                MosaicComponentProfile(
+                    "gaussian",
+                    math.radians(float(width)),
+                    component_profile(signal),
+                )
+                for width, signal in zip(gaussian_width_deg, gaussian_signal, strict=True)
+            ),
+            lorentzian_half_width_rad=np.radians(lorentzian_width_deg),
+            lorentzian_profiles=tuple(
+                MosaicComponentProfile(
+                    "lorentzian",
+                    math.radians(float(width)),
+                    component_profile(signal),
+                )
+                for width, signal in zip(lorentzian_width_deg, lorentzian_signal, strict=True)
+            ),
+        ),
+        planted_scale,
+    )
 
 
 def _rotation_x(angle_rad: float) -> np.ndarray:
@@ -1406,3 +1588,706 @@ def test_osc_geometry_series_manifest_owns_ids_paths_and_commanded_angles() -> N
     expected_column -= float(expected_column @ direct_beam) * direct_beam
     expected_column /= np.linalg.norm(expected_column)
     np.testing.assert_allclose(frame.column_right_lab, expected_column, rtol=0.0, atol=1.0e-15)
+
+
+def test_configured_build_rejects_cif_changed_after_its_revision_was_frozen(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    original = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    cif_copy = tmp_path / original.material.cif_path.name
+    source_bytes = original.material.cif_path.read_bytes()
+    cif_copy.write_bytes(source_bytes)
+    frozen = replace(
+        original,
+        material=replace(original.material, cif_path=cif_copy),
+    )
+    cif_copy.write_bytes(source_bytes + b"\n")
+
+    with pytest.raises(ValueError, match="CIF content changed after"):
+        build_configured_geometry_inputs(frozen)
+
+
+def test_configured_geometry_rebind_rejects_new_content_at_the_same_cif_path(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    original = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    cif_copy = tmp_path / original.material.cif_path.name
+    source_bytes = original.material.cif_path.read_bytes()
+    cif_copy.write_bytes(source_bytes)
+    frozen = replace(original, material=replace(original.material, cif_path=cif_copy))
+    inputs = build_configured_geometry_inputs(frozen)
+
+    cif_copy.write_bytes(source_bytes + b"\n")
+    refreshed = replace(frozen)
+    assert refreshed.cif_sha256 != frozen.cif_sha256
+    with pytest.raises(ValueError, match="CIF content"):
+        rebind_configured_geometry_instrument(inputs, refreshed)
+
+
+def test_mosaic_component_profiles_recover_widths_with_unknown_profile_scales() -> None:
+    bank, planted_scale = _analytic_mosaic_profile_bank()
+    result = fit_mosaic_component_profiles(bank)
+
+    assert math.degrees(result.gaussian_sigma_rad) == pytest.approx(2.0, abs=1.0e-12)
+    assert math.degrees(result.lorentzian_half_width_rad) == pytest.approx(0.5, abs=1.0e-12)
+    assert result.lorentzian_probability == pytest.approx(0.1, abs=2.0e-9)
+    assert result.objective <= 2.0e-20
+    assert result.sensitivity_rank == 3
+    assert np.isfinite(result.sensitivity_condition)
+    assert result.objective == pytest.approx(
+        float(result.profile_relative_l2_residual @ result.profile_relative_l2_residual),
+        abs=2.0e-20,
+    )
+    for identity in result.profile_identities:
+        assert result.scale_for_profile(identity) == pytest.approx(
+            planted_scale[identity],
+            rel=1.0e-9,
+        )
+
+    order = np.arange(len(bank.observations.identities))[::-1]
+    reordered = fit_mosaic_component_profiles(bank.reorder_profiles(order))
+    assert reordered.gaussian_sigma_rad == pytest.approx(result.gaussian_sigma_rad, abs=0.0)
+    assert reordered.lorentzian_half_width_rad == pytest.approx(
+        result.lorentzian_half_width_rad,
+        abs=0.0,
+    )
+    assert reordered.lorentzian_probability == pytest.approx(
+        result.lorentzian_probability,
+        abs=2.0e-13,
+    )
+    assert reordered.objective == pytest.approx(result.objective, abs=1.0e-22)
+    np.testing.assert_allclose(
+        reordered.predicted_intensity,
+        result.predicted_intensity[order],
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    with pytest.raises(ValueError, match="source-profile provenance"):
+        replace(
+            bank,
+            observations=replace(bank.observations, source_revision="stale-source.v1"),
+        )
+    with pytest.raises(ValueError, match="layered_family_m disagrees"):
+        MosaicReflectionGroupKey(
+            "contradictory-m0",
+            "contradictory-rods.v1",
+            ((0, 0),),
+            "COLLAPSED_00L",
+            layered_family_m=1,
+            layered_integer_L=2,
+        )
+    shifted_layout = replace(
+        bank.gaussian_profiles[0].profile,
+        phi_bin_edges_rad=bank.gaussian_profiles[0].profile.phi_bin_edges_rad + 0.01,
+    )
+    with pytest.raises(ValueError, match="changed component or frozen profile provenance"):
+        replace(
+            bank,
+            gaussian_profiles=(
+                replace(bank.gaussian_profiles[0], profile=shifted_layout),
+                *bank.gaussian_profiles[1:],
+            ),
+        )
+    with pytest.raises(ValueError, match="changed component or frozen profile provenance"):
+        replace(
+            bank,
+            gaussian_profiles=(
+                replace(bank.gaussian_profiles[0], component_kind="lorentzian"),
+                *bank.gaussian_profiles[1:],
+            ),
+        )
+
+    explicit_nonzero = next(
+        identity for identity in bank.observations.identities if identity.branch_id == 2
+    )
+    assert replace(explicit_nonzero, analytic_branch_id=2).analytic_branch_id == 2
+    with pytest.raises(ValueError, match="explicit nonzero profiles"):
+        replace(explicit_nonzero, analytic_branch_id=0)
+
+
+def test_mosaic_profile_weighting_preserves_weak_profile_shape_leverage() -> None:
+    bank, _ = _analytic_mosaic_profile_bank()
+    profile_index = 0
+    m0_identity = bank.observations.identities[profile_index]
+    assert m0_identity.group_key.layered_family_m == 0
+    assert m0_identity.branch_id is None
+    assert m0_identity.analytic_branch_id == 0
+    perturbation = 1.0 + 0.03 * np.linspace(-1.0, 1.0, bank.observations.signal.shape[1])
+    observed_signal = np.array(bank.observations.signal, copy=True)
+    observed_signal[profile_index] *= perturbation
+    perturbed = replace(
+        bank,
+        observations=replace(bank.observations, signal=observed_signal),
+    )
+
+    weak_factor = 1.0e-6
+    weak_observed_signal = np.array(observed_signal, copy=True)
+    weak_observed_signal[profile_index] *= weak_factor
+
+    def weaken_profile(component: MosaicComponentProfile) -> MosaicComponentProfile:
+        signal = np.array(component.profile.signal, copy=True)
+        signal[profile_index] *= weak_factor
+        return replace(component, profile=replace(component.profile, signal=signal))
+
+    weak = replace(
+        perturbed,
+        observations=replace(perturbed.observations, signal=weak_observed_signal),
+        gaussian_profiles=tuple(weaken_profile(item) for item in perturbed.gaussian_profiles),
+        lorentzian_profiles=tuple(weaken_profile(item) for item in perturbed.lorentzian_profiles),
+    )
+
+    baseline = fit_mosaic_component_profiles(bank)
+    reference = fit_mosaic_component_profiles(perturbed)
+    rescaled = fit_mosaic_component_profiles(weak)
+
+    assert reference.weighting_id == "profile_shape_profiled_scale_angle_intensity_l2.v3"
+    assert reference.objective > baseline.objective + 1.0e-8
+    assert reference.profile_relative_l2_residual[profile_index] > 0.0
+    np.testing.assert_allclose(
+        rescaled.width_pair_objective,
+        reference.width_pair_objective,
+        rtol=2.0e-13,
+        atol=2.0e-13,
+    )
+    np.testing.assert_allclose(
+        rescaled.width_pair_eta,
+        reference.width_pair_eta,
+        rtol=2.0e-12,
+        atol=2.0e-13,
+    )
+
+
+@pytest.mark.parametrize(
+    ("observation_scale", "component_scale"),
+    (
+        (1.0e150, 1.0e-150),
+        (1.0e-150, 1.0e150),
+    ),
+)
+def test_mosaic_normalization_is_stable_at_extreme_scales(
+    observation_scale: float,
+    component_scale: float,
+) -> None:
+    bank, planted_scale = _analytic_mosaic_profile_bank()
+
+    def scaled_component(component: MosaicComponentProfile) -> MosaicComponentProfile:
+        return replace(
+            component,
+            profile=replace(
+                component.profile,
+                signal=component.profile.signal * component_scale,
+            ),
+        )
+
+    scaled_bank = replace(
+        bank,
+        observations=replace(
+            bank.observations,
+            signal=bank.observations.signal * observation_scale,
+        ),
+        gaussian_profiles=tuple(scaled_component(item) for item in bank.gaussian_profiles),
+        lorentzian_profiles=tuple(scaled_component(item) for item in bank.lorentzian_profiles),
+    )
+
+    result = fit_mosaic_component_profiles(scaled_bank)
+    assert math.degrees(result.gaussian_sigma_rad) == pytest.approx(2.0, abs=1.0e-12)
+    assert math.degrees(result.lorentzian_half_width_rad) == pytest.approx(0.5, abs=1.0e-12)
+    assert result.lorentzian_probability == pytest.approx(0.1, abs=2.0e-9)
+    for identity in result.profile_identities:
+        assert result.scale_for_profile(identity) == pytest.approx(
+            planted_scale[identity] * observation_scale / component_scale,
+            rel=1.0e-9,
+        )
+
+
+@pytest.mark.parametrize(
+    ("component_name", "component_index", "expected_probability"),
+    (("gaussian", 2, 0.0), ("lorentzian", 2, 1.0)),
+)
+def test_mosaic_component_profiles_report_identifiable_boundary_models(
+    component_name: str,
+    component_index: int,
+    expected_probability: float,
+) -> None:
+    bank, planted_scale = _analytic_mosaic_profile_bank()
+    profiles = bank.gaussian_profiles if component_name == "gaussian" else bank.lorentzian_profiles
+    truth = profiles[component_index].profile
+    active_widths = (
+        bank.gaussian_sigma_rad if component_name == "gaussian" else bank.lorentzian_half_width_rad
+    )
+    active_intensity = np.asarray([item.profile.intensity for item in profiles])
+    active_derivative = (active_intensity[3] - active_intensity[1]) / math.log(
+        active_widths[3] / active_widths[1]
+    )
+    dependent_probe_intensity = truth.intensity + 0.01 * active_derivative
+    dormant = bank.lorentzian_profiles if component_name == "gaussian" else bank.gaussian_profiles
+    dependent_probe = replace(
+        dormant[0],
+        profile=replace(
+            dormant[0].profile,
+            signal=np.where(
+                truth.valid,
+                dependent_probe_intensity * truth.normalization,
+                0.0,
+            ),
+        ),
+    )
+    if component_name == "gaussian":
+        bank = replace(bank, lorentzian_profiles=(dependent_probe, *dormant[1:]))
+    else:
+        bank = replace(bank, gaussian_profiles=(dependent_probe, *dormant[1:]))
+    observed_signal = np.asarray(
+        [
+            planted_scale[identity] * profile
+            for identity, profile in zip(
+                bank.observations.identities,
+                truth.signal,
+                strict=True,
+            )
+        ]
+    )
+    result = fit_mosaic_component_profiles(
+        replace(bank, observations=replace(bank.observations, signal=observed_signal))
+    )
+
+    assert result.lorentzian_probability == expected_probability
+    assert result.sensitivity_rank == 2
+    assert np.isfinite(result.sensitivity_condition)
+    if expected_probability == 0.0:
+        assert result.gaussian_sigma_rad == pytest.approx(bank.gaussian_sigma_rad[component_index])
+        assert result.lorentzian_half_width_rad is None
+        assert result.active_parameter_names == (
+            "log_gaussian_sigma",
+            "lorentzian_probability_from_zero",
+        )
+    else:
+        assert result.gaussian_sigma_rad is None
+        assert result.lorentzian_half_width_rad == pytest.approx(
+            bank.lorentzian_half_width_rad[component_index]
+        )
+        assert result.active_parameter_names == (
+            "log_lorentzian_half_width",
+            "gaussian_probability_from_one",
+        )
+
+
+def test_refined_mosaic_search_finds_an_interior_basin_hidden_between_face_widths() -> None:
+    key = MosaicReflectionGroupKey(
+        "hidden-interior",
+        "hidden-interior-rods.v1",
+        ((0, 0),),
+        "COLLAPSED_00L",
+    )
+    identities = (MosaicProfileIdentity("hidden-interior", 0.1, key, None),)
+    base = np.full(8, 10.0)
+    direction = np.asarray((1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    gaussian_shape = np.asarray((0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, 0.0))
+    lorentzian_shape = np.asarray((0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0))
+    normalization = np.ones((1, 8))
+    valid = np.ones((1, 8), dtype=np.bool_)
+    phi_bin_edges = np.linspace(-1.0, 1.0, 9)[None, :]
+    two_theta_bounds = np.asarray(((0.2, 0.3),))
+
+    def profile(intensity: np.ndarray) -> MosaicProfileSet:
+        return MosaicProfileSet(
+            identities,
+            np.asarray(intensity)[None, :],
+            normalization,
+            valid,
+            "hidden-interior-response.v1",
+            phi_bin_edges,
+            two_theta_bounds,
+            ("hidden-interior-frame.v1",),
+            "analytic-source.v1",
+        )
+
+    def gaussian_field(width: float) -> np.ndarray:
+        return base + 0.25 * math.log(width / 2.0) * gaussian_shape
+
+    def lorentzian_field(width: float) -> np.ndarray:
+        coordinate = math.log(width / 2.0, 2.0)
+        return (
+            base
+            + (-1.0 + (16.0 / 3.0) * coordinate * (coordinate**2 - 1.0)) * direction
+            + 0.2 * (coordinate + 0.5) * lorentzian_shape
+        )
+
+    gaussian_calls: list[float] = []
+    lorentzian_calls: list[float] = []
+
+    def gaussian_callback(width: float) -> MosaicProfileSet:
+        gaussian_calls.append(width)
+        return profile(gaussian_field(width))
+
+    def lorentzian_callback(width: float) -> MosaicProfileSet:
+        lorentzian_calls.append(width)
+        return profile(lorentzian_field(width))
+
+    search = fit_refined_mosaic_component_profiles(
+        profile(base + 0.1 * direction),
+        evaluate_gaussian_profile=gaussian_callback,
+        evaluate_lorentzian_profile=lorentzian_callback,
+        gaussian_sigma_bounds_rad=(1.0, 4.0),
+        lorentzian_half_width_bounds_rad=(1.0, 4.0),
+        coarse_width_count=3,
+        refinement_width_count=5,
+        refinement_levels=2,
+        near_optimal_objective_delta=0.0,
+    )
+
+    assert search.fit.gaussian_sigma_rad == pytest.approx(2.0)
+    assert search.fit.lorentzian_half_width_rad == pytest.approx(math.sqrt(2.0))
+    assert search.fit.lorentzian_probability == pytest.approx(0.1, abs=2.0e-9)
+    assert search.fit.objective < 1.0e-28
+    assert math.sqrt(2.0) in lorentzian_calls
+    assert search.bank.gaussian_sigma_rad.size == len(gaussian_calls)
+    assert search.bank.lorentzian_half_width_rad.size == len(lorentzian_calls)
+    assert len(gaussian_calls) == len(set(gaussian_calls))
+    assert len(lorentzian_calls) == len(set(lorentzian_calls))
+
+
+def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_division() -> None:
+    from types import SimpleNamespace
+
+    base = load_simulation_config(
+        Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
+    )
+    config = replace(base, source=replace(base.source, sample_count=1))
+    inputs = build_configured_simulation_inputs(config)
+    frame = build_osc_angle_frame(
+        mean_direction_lab=config.source.mean_direction_lab,
+        instrument=inputs.instrument,
+        sample_intersection_lab_m=inputs.incident.states.sample_intersection_lab_m[0],
+        revision="mosaic-profile-test.v1",
+    )
+    center = detector_coordinates_to_angles(
+        config.instrument.detector_reference_coordinate_px[0],
+        config.instrument.detector_reference_coordinate_px[1] - 100.0,
+        instrument=inputs.instrument,
+        angle_frame=frame,
+    )
+    assert bool(center.valid)
+    test_rods = (Rod(0, 0), Rod(1, 0))
+    reference_column = config.instrument.detector_reference_coordinate_px[0]
+    reference_row = config.instrument.detector_reference_coordinate_px[1]
+
+    def spatial_density(
+        column_px: np.ndarray,
+        row_px: np.ndarray,
+    ) -> np.ndarray:
+        return np.stack(
+            (
+                2.0
+                + 2.0e-3 * (column_px - reference_column)
+                + 1.0e-5 * (row_px - reference_row) ** 2,
+                3.0
+                + 1.0e-3 * (row_px - reference_row)
+                + 2.0e-5 * (column_px - reference_column) ** 2,
+            ),
+            axis=-1,
+        )
+
+    class ConstantPerRodDetector:
+        instrument = inputs.instrument
+        rods = test_rods
+        rod_catalog_revision = "test-rods.v1"
+        returned_rods = test_rods
+        evaluated_node_count = 0
+
+        @classmethod
+        def evaluate_detector_coordinates_all_roots(
+            cls,
+            column_px: np.ndarray,
+            row_px: np.ndarray,
+            *,
+            execution_backend: str = "cpu",
+        ) -> object:
+            assert execution_backend == "cpu"
+            shape = np.broadcast_shapes(column_px.shape, row_px.shape)
+            cls.evaluated_node_count += int(np.prod(shape))
+            column, row = np.broadcast_arrays(column_px, row_px)
+            per_rod = spatial_density(column, row)
+            return SimpleNamespace(
+                column_px=np.asarray(column_px),
+                row_px=np.asarray(row_px),
+                rods=cls.returned_rods,
+                rod_catalog_revision=cls.rod_catalog_revision,
+                branch=None,
+                per_rod_density_A2_per_px2=per_rod,
+                caustic=np.zeros((*shape, 2), dtype=np.bool_),
+                root_policy="all_retained_roots.v1",
+                measure_id="raw_detector_coordinate_density_A2_per_px2.v1",
+                source_revision="constant-source.v1",
+                execution_backend="numba_cpu_source_averaged.v1",
+                execution_device=None,
+            )
+
+    definitions = (
+        MosaicProfileDefinition(
+            identity=MosaicProfileIdentity(
+                dataset_id="five-degree",
+                incidence_angle_rad=math.radians(5.0),
+                group_key=MosaicReflectionGroupKey(
+                    group_id="test-00L-6",
+                    rod_catalog_revision="test-rods.v1",
+                    member_rod_hk=((0, 0),),
+                    branch_mode="COLLAPSED_00L",
+                    layered_family_m=0,
+                    layered_integer_L=6,
+                ),
+                branch_id=None,
+            ),
+            center_two_theta_rad=float(center.two_theta_rad),
+            center_phi_rad=float(center.phi_rad),
+            two_theta_half_width_rad=math.radians(0.02),
+            phi_half_width_rad=math.radians(0.2),
+            phi_bin_count=7,
+            two_theta_gauss_order=4,
+            phi_gauss_order=4,
+        ),
+        MosaicProfileDefinition(
+            identity=MosaicProfileIdentity(
+                dataset_id="five-degree",
+                incidence_angle_rad=math.radians(5.0),
+                group_key=MosaicReflectionGroupKey(
+                    group_id="test-m1-L8",
+                    rod_catalog_revision="test-rods.v1",
+                    member_rod_hk=((1, 0),),
+                    branch_mode="EXPLICIT_NONZERO",
+                    layered_family_m=1,
+                    layered_integer_L=8,
+                ),
+                branch_id=1,
+                analytic_branch_id=1,
+            ),
+            center_two_theta_rad=float(center.two_theta_rad),
+            center_phi_rad=float(center.phi_rad),
+            two_theta_half_width_rad=math.radians(0.02),
+            phi_half_width_rad=math.radians(0.2),
+            phi_bin_count=7,
+            excluded_phi_bin_indices=(1, 5),
+        ),
+        MosaicProfileDefinition(
+            identity=MosaicProfileIdentity(
+                dataset_id="five-degree",
+                incidence_angle_rad=math.radians(5.0),
+                group_key=MosaicReflectionGroupKey(
+                    group_id="test-m1-L8",
+                    rod_catalog_revision="test-rods.v1",
+                    member_rod_hk=((1, 0),),
+                    branch_mode="EXPLICIT_NONZERO",
+                    layered_family_m=1,
+                    layered_integer_L=8,
+                ),
+                branch_id=2,
+                analytic_branch_id=1,
+            ),
+            center_two_theta_rad=float(center.two_theta_rad),
+            center_phi_rad=float(center.phi_rad) + math.radians(0.5),
+            two_theta_half_width_rad=math.radians(0.02),
+            phi_half_width_rad=math.radians(0.2),
+            phi_bin_count=7,
+        ),
+    )
+    profiles = evaluate_continuous_mosaic_profiles(
+        ConstantPerRodDetector(),
+        angle_frame=frame,
+        definitions=definitions,
+        profile_revision="constant-density.v1",
+    )
+
+    assert profiles.signal.shape == (3, 7)
+    expected_node_count = 7 * 4 * 4 + (7 - 2) * 2 * 2 + 7 * 2 * 2
+    assert ConstantPerRodDetector.evaluated_node_count == expected_node_count
+    expected_valid = np.ones((3, 7), dtype=np.bool_)
+    expected_valid[1, (1, 5)] = False
+    np.testing.assert_array_equal(profiles.valid, expected_valid)
+    assert profiles.source_revision == "constant-source.v1"
+    assert profiles.source_revision != profiles.profile_revision
+    np.testing.assert_allclose(
+        profiles.signal,
+        profiles.intensity * profiles.normalization,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+
+    expected_signal = np.zeros_like(profiles.signal)
+    expected_normalization = np.zeros_like(profiles.normalization)
+    pointwise_average = np.zeros_like(profiles.intensity)
+    for profile_index, definition in enumerate(definitions):
+        theta_node, theta_rule_weight = np.polynomial.legendre.leggauss(
+            definition.two_theta_gauss_order
+        )
+        phi_node, phi_rule_weight = np.polynomial.legendre.leggauss(definition.phi_gauss_order)
+        theta = definition.center_two_theta_rad + definition.two_theta_half_width_rad * theta_node
+        theta_weight = definition.two_theta_half_width_rad * theta_rule_weight
+        phi_edges = np.linspace(
+            definition.center_phi_rad - definition.phi_half_width_rad,
+            definition.center_phi_rad + definition.phi_half_width_rad,
+            definition.phi_bin_count + 1,
+        )
+        for bin_index, (phi_lower, phi_upper) in enumerate(pairwise(phi_edges)):
+            if bin_index in definition.excluded_phi_bin_indices:
+                continue
+            phi_half_width = 0.5 * (phi_upper - phi_lower)
+            phi = 0.5 * (phi_lower + phi_upper) + phi_half_width * phi_node
+            theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="ij")
+            measure = angles_to_detector_coordinate_area_measure(
+                theta_grid,
+                phi_grid,
+                instrument=inputs.instrument,
+                angle_frame=frame,
+            )
+            area_weight = theta_weight[:, None] * (phi_half_width * phi_rule_weight)[None, :]
+            density = spatial_density(
+                measure.coordinates.column_px,
+                measure.coordinates.row_px,
+            )[..., 0 if profile_index == 0 else 1]
+            jacobian = measure.detector_area_jacobian_px2_per_rad2
+            expected_signal[profile_index, bin_index] = np.sum(density * jacobian * area_weight)
+            expected_normalization[profile_index, bin_index] = np.sum(jacobian * area_weight)
+            pointwise_average[profile_index, bin_index] = np.sum(density * area_weight) / np.sum(
+                area_weight
+            )
+    np.testing.assert_allclose(profiles.signal, expected_signal, rtol=3.0e-15, atol=0.0)
+    np.testing.assert_allclose(
+        profiles.normalization,
+        expected_normalization,
+        rtol=3.0e-15,
+        atol=0.0,
+    )
+    assert (
+        np.max(np.abs(profiles.intensity[profiles.valid] - pointwise_average[profiles.valid]))
+        > 1.0e-7
+    )
+
+    ConstantPerRodDetector.returned_rods = tuple(reversed(test_rods))
+    with pytest.raises(ValueError, match="changed the physical rod axis or ordering"):
+        evaluate_continuous_mosaic_profiles(
+            ConstantPerRodDetector(),
+            angle_frame=frame,
+            definitions=definitions,
+            profile_revision="constant-density.v1",
+        )
+
+    ConstantPerRodDetector.returned_rods = test_rods
+    stale_group = replace(
+        definitions[0].identity.group_key,
+        rod_catalog_revision="stale-test-rods.v1",
+    )
+    stale_definition = replace(
+        definitions[0],
+        identity=replace(definitions[0].identity, group_key=stale_group),
+    )
+    with pytest.raises(ValueError, match="detector rod catalog revision"):
+        evaluate_continuous_mosaic_profiles(
+            ConstantPerRodDetector(),
+            angle_frame=frame,
+            definitions=(stale_definition,),
+            profile_revision="constant-density.v1",
+        )
+
+
+def test_mosaic_component_profiles_refuse_nuisance_projected_rank_deficiency() -> None:
+    bank, planted_scale = _analytic_mosaic_profile_bank()
+    reference = bank.gaussian_profiles[0].profile
+    observed_signal = np.asarray(
+        [
+            planted_scale[identity] * profile
+            for identity, profile in zip(
+                bank.observations.identities,
+                reference.signal,
+                strict=True,
+            )
+        ]
+    )
+    degenerate = replace(
+        bank,
+        observations=replace(bank.observations, signal=observed_signal),
+        lorentzian_profiles=tuple(
+            replace(component, profile=reference) for component in bank.lorentzian_profiles
+        ),
+    )
+
+    with pytest.raises(MosaicIdentifiabilityError) as caught:
+        fit_mosaic_component_profiles(degenerate)
+    assert caught.value.rank == 1
+    assert caught.value.active_parameter_names == (
+        "log_gaussian_sigma",
+        "lorentzian_probability_from_zero",
+    )
+    assert caught.value.singular_values.shape == (len(caught.value.active_parameter_names),)
+    assert not np.isfinite(caught.value.condition) or caught.value.condition > 1.0e8
+
+
+def test_mosaic_component_profiles_reject_two_interior_eta_minima_for_one_width_pair() -> None:
+    key = MosaicReflectionGroupKey(
+        "eta-alias",
+        "eta-alias-rods.v1",
+        ((0, 0),),
+        "COLLAPSED_00L",
+    )
+    identities = (
+        MosaicProfileIdentity("eta-alias-a", 0.1, key, None),
+        MosaicProfileIdentity("eta-alias-b", 0.2, key, None),
+    )
+    normalization = np.ones((2, 4))
+    valid = np.ones((2, 4), dtype=np.bool_)
+    phi_bin_edges = np.broadcast_to(np.linspace(-1.0, 1.0, 5), (2, 5)).copy()
+    two_theta_bounds = np.asarray(((0.2, 0.3), (0.2, 0.3)))
+
+    def profile(intensity: np.ndarray) -> MosaicProfileSet:
+        return MosaicProfileSet(
+            identities,
+            intensity,
+            normalization,
+            valid,
+            "eta-alias-response.v1",
+            phi_bin_edges,
+            two_theta_bounds,
+            ("eta-alias-frame.v1",) * 2,
+            "analytic-source.v1",
+        )
+
+    widths = np.asarray((1.0, 2.0))
+    observed = np.asarray(((7.0, 22.0, 28.0, 25.0), (7.0, 22.0, 28.0, 25.0)))
+    gaussian = (
+        np.asarray(((23.0, 16.0, 30.0, 10.0), (2.0, 1.0, 3.0, 6.0))),
+        np.asarray(((21.0, 5.0, 29.0, 7.0), (28.0, 19.0, 8.0, 6.0))),
+    )
+    lorentzian = (
+        np.asarray(((2.0, 1.0, 3.0, 6.0), (23.0, 16.0, 30.0, 10.0))),
+        np.asarray(((13.0, 23.0, 24.0, 1.0), (12.0, 21.0, 9.0, 28.0))),
+    )
+    bank = MosaicComponentProfileBank(
+        observations=profile(observed),
+        gaussian_sigma_rad=widths,
+        gaussian_profiles=tuple(
+            MosaicComponentProfile("gaussian", width, profile(component))
+            for width, component in zip(widths, gaussian, strict=True)
+        ),
+        lorentzian_half_width_rad=widths,
+        lorentzian_profiles=tuple(
+            MosaicComponentProfile("lorentzian", width, profile(component))
+            for width, component in zip(widths, lorentzian, strict=True)
+        ),
+    )
+
+    with pytest.raises(MosaicIdentifiabilityError) as caught:
+        fit_mosaic_component_profiles(bank)
+    assert caught.value.reason == "global_alias"
+    assert caught.value.rank == len(caught.value.active_parameter_names)
+    assert np.isfinite(caught.value.condition)
+    competing = caught.value.competing_solution_keys
+    assert len(competing) == 2
+    assert {
+        (kind, gaussian_index, lorentzian_index)
+        for kind, gaussian_index, lorentzian_index, _ in competing
+    } == {("GL", 0, 0)}
+    eta = sorted(item[3] for item in competing)
+    assert 0.0 < eta[0] < 0.25
+    assert 0.75 < eta[1] < 1.0
+    assert sum(eta) == pytest.approx(1.0, abs=2.0e-12)

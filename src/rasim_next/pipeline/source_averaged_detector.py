@@ -47,6 +47,7 @@ class SourceAveragedDetectorCoordinateIntensity:
     column_px: FloatArray
     row_px: FloatArray
     rods: tuple[Rod, ...]
+    rod_catalog_revision: str
     branch: int | None
     per_rod_density_A2_per_px2: FloatArray
     density_A2_per_px2: FloatArray
@@ -79,6 +80,8 @@ class SourceAveragedDetectorCoordinateIntensity:
             raise ValueError("rods must contain at least one Rod")
         if len({(rod.h, rod.k) for rod in rods}) != len(rods):
             raise ValueError("rods must not repeat a physical rod")
+        if not isinstance(self.rod_catalog_revision, str) or not self.rod_catalog_revision:
+            raise ValueError("rod_catalog_revision must be nonempty")
         if self.branch is None:
             if self.root_policy != "all_retained_roots.v1":
                 raise ValueError("all-root results require all_retained_roots.v1")
@@ -354,6 +357,7 @@ class SourceAveragedDetectorEwaldMeasure:
         "_instrument",
         "_phase_polarization_weight",
         "_reachable_rod_count_per_source_state",
+        "_rod_catalog_revision",
         "_rods",
         "_valid_state_count",
         "_worker_count",
@@ -369,6 +373,7 @@ class SourceAveragedDetectorEwaldMeasure:
         reciprocal_basis_Ainv: ArrayLike,
         crystal_to_sample: ArrayLike,
         rods: tuple[Rod, ...],
+        rod_catalog_revision: str,
         mosaic: MosaicParameters,
         strength_model: Bi2Se3TwoHStrength,
         incident: IncidentTransportResult,
@@ -395,6 +400,8 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("rods must contain at least one Rod")
         if len({(rod.h, rod.k) for rod in selected}) != len(selected):
             raise ValueError("rods must not repeat a physical rod")
+        if not isinstance(rod_catalog_revision, str) or not rod_catalog_revision:
+            raise ValueError("rod_catalog_revision must be nonempty")
         phase_weight = float(phase_population_weight)
         polarization = float(polarization_weight)
         if not isfinite(phase_weight) or phase_weight < 0.0:
@@ -538,6 +545,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_instrument", instrument)
         object.__setattr__(self, "_phase_polarization_weight", phase_weight * polarization)
         object.__setattr__(self, "_reachable_rod_count_per_source_state", reachable_count)
+        object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
         object.__setattr__(self, "_rods", selected)
         object.__setattr__(self, "_valid_state_count", len(evaluators))
         object.__setattr__(self, "_worker_count", workers)
@@ -559,6 +567,10 @@ class SourceAveragedDetectorEwaldMeasure:
     @property
     def rods(self) -> tuple[Rod, ...]:
         return self._rods
+
+    @property
+    def rod_catalog_revision(self) -> str:
+        return self._rod_catalog_revision
 
     @property
     def source_state_count(self) -> int:
@@ -722,6 +734,7 @@ class SourceAveragedDetectorEwaldMeasure:
             "_reachable_rod_count_per_source_state",
             self._reachable_rod_count_per_source_state,
         )
+        object.__setattr__(rebound, "_rod_catalog_revision", self._rod_catalog_revision)
         object.__setattr__(rebound, "_rods", self._rods)
         object.__setattr__(rebound, "_valid_state_count", self._valid_state_count)
         object.__setattr__(rebound, "_worker_count", self._worker_count)
@@ -900,6 +913,7 @@ class SourceAveragedDetectorEwaldMeasure:
             column_px=column,
             row_px=row,
             rods=self._rods,
+            rod_catalog_revision=self._rod_catalog_revision,
             branch=branch,
             per_rod_density_A2_per_px2=reshaped_per_rod,
             density_A2_per_px2=np.sum(reshaped_per_rod, axis=-1, dtype=np.float64),

@@ -46,6 +46,11 @@ size_bytes = 1229
 sha256 = "1d01c18580886bbbceaeb0eb3d030de98909a93cbe4fd609fb592b948141af81"
 
 [[file]]
+path = "examples/bi2se3/experiment/mosaic_fit_truth.toml"
+size_bytes = 15491
+sha256 = "2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295"
+
+[[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
 size_bytes = 15895
 sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"

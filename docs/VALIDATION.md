@@ -788,6 +788,81 @@ and per-image corrections stay fixed. The pivot-pitch/pivot-yaw/plane-offset com
 weakest direction for the measured three-angle design, so a fourth incidence is recommended for an
 independent validation and parameter-level pivot uncertainties must be reported honestly.
 
+## Deterministic three-incidence mosaic recovery
+
+The T12 slice fixes accepted nine-coordinate geometry manifest
+`1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`, detector center
+`(column,row)=(1453.12,1596.422) px`, lattice, material, and one source-center ray at
+`1.540592925 A` with zero spatial spread, divergence, and bandwidth. Synthetic truth is Gaussian
+sigma `2 deg`, Lorentzian HWHM `0.5 deg`, and Lorentzian probability `0.1`.
+
+The objective contains 32 profiles in one simultaneous 5/10/15-degree fit: the frozen OSC-indexed
+nonzero selection contributes 10, 8, and 8 profiles, and the raw-supported fixed-model `m=0`
+selection contributes `{003,006}`, `{006,009}`, and `{006,009}`. Every profile owns one
+independent analytically profiled nonnegative amplitude. Deterministic planted amplitudes span
+`1.480148585e-6` to `1.136487411e5`; rescaling any observed or simulated profile leaves the
+relative-shape objective unchanged. Absolute peak heights, structure-factor amplitudes, and
+cross-reflection intensity ratios therefore do not weight the shared mosaic parameters.
+
+Raw OSC evidence also contains significant `003` at 10 and 15 degrees. The fixed top-exit forward
+model classifies both minimum-tilt landmarks as `BACKWARD`, and direct 6-by-6 truth-mosaic probes at
+their frozen native centroids have 41/41 normalization-valid bins but exactly zero `m=0` signal.
+They are reported as `RAW_SIGNIFICANT_UNSUPPORTED_FORWARD_CHANNEL` and are not silently called
+absent or fitted. Thus the six fitted `m=0` profiles are exhaustive for the current forward model,
+not for every feature in the raw OSC files.
+
+A kernel-certified geometry audit found an oblique alpha-support seam in 43 bins across all 26
+nonzero profiles; two 15-degree `m=1,L=5` bins also cross an exit fold. These are numerical-support
+boundaries, not intensity thresholds. The frozen case excludes the same 43 bins from independent
+truth and every component response, retaining every profile, at least 38 of 41 bins per nonzero
+profile, and all 41 bins per `m=0` profile. Before exclusion, the 6-by-6 versus 8-by-8 same-mosaic
+maximum relative shape discrepancy was `3.30581%`; afterward it was `0.0286901%` with RMS
+`0.0051565%`. Each mask record and the aggregate topology hash bind the dataset, `m`, `L`,
+analytic branch, exit side, representative rod, and excluded indices. A general topology-split
+cubature that retains these bins remains unimplemented.
+
+The immutable case bytes have SHA-256
+`2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295`; the runner captures those
+bytes before setup and rejects any change before writing its manifest. With the predeclared
+maximum per-profile relative-L2 gate restored to `0.02`, the masked independent-order recovery is
+accepted:
+
+```text
+truth       = (2.000000000 deg, 0.500000000 deg, 0.100000000)
+recovered   = (2.004344901 deg, 0.499233477 deg, 0.101409964)
+signed error= (+0.004344901 deg, -0.000766523 deg, +0.001409964)
+```
+
+The joint objective is `3.826850872e-5`. All 32 profile-shape gates pass: maximum relative L2 is
+`0.001368725`, median `0.001097962`, and RMS `0.001093568`; the six `m=0` profiles have
+maximum `0.001311679`. Nuisance-projected sensitivity has rank 3, singular values
+`(3.454657208, 0.248925672, 0.153301368)`, and condition `22.5351`. Direct mixed profiles agree
+with the two pure-component decomposition to `3.43424e-16` relative error and component
+normalization differs by exactly zero.
+
+Distribution total variation is `0.0008826134` and Wasserstein-1 distance is
+`0.00360309 deg`. Absolute `q50/q90/q99` errors are
+`0.00116582/0.00670307/0.01888996 deg`. Setup, independent truth profiles, response-bank fitting,
+and post-fit component checks took `82.564`, `9.214`, `134.913`, and `1.505 s`;
+skip-image total wall time was `228.543 s` and traced Python/NumPy peak memory was
+`122,905,229` bytes. CUDA profile evaluation used an NVIDIA GeForce RTX 3060. The accepted
+numeric artifact is external under
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\mosaic_recovery_provenance_final`.
+The only source-byte changes after that successful run were Ruff formatting; subsequent edits were
+to validation and manifest text. No numerical statement or case byte changed after proof import.
+
+The separately generated 3,000 by 3,000 truth images use all 85 rods, every retained inverse root,
+and include `m=0`. They do not use planted nuisance amplitudes and are neither fitted observations
+nor recovered-model renders. Their forward model is unchanged by the profile-bin mask.
+
+This proof is `NO_ORACLE` for real-OSC mosaic recovery: it is synthetic self-recovery with a
+denser independent angle-bin rule on the retained smooth support. The fit consumes presegmented,
+indexed continuous profiles; no detector raster enters the objective. Background, detector PSF,
+counting noise, covariance/uncertainty, held-out subsets, additional truth regimes, automatic
+arbitrary-material support-boundary planning, topology-split cubature, and real-OSC profile
+extraction/recovery remain unproven. The material-neutral profile and fitter contracts are reusable;
+the tracked end-to-end runner and its frozen boundary audit remain Bi2Se3-specific.
+
 ## Tolerance freeze and proof sensitivity
 
 The original T02--T05 comparison proofs loaded `proof/stage_tolerances_v1.json` through the strict

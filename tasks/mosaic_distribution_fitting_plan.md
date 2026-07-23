@@ -2,21 +2,28 @@
 
 Status: PROPOSED. Planning only; no production implementation is authorized by this document.
 
-This is the proposed execution plan for a post-angle mosaic-fit task. Its task ID and owned paths
-are intentionally not assigned yet. It begins only after all three phases of
+Implemented slice (2026-07-22): revised T12 provides only the user-authorized deterministic
+synthetic recovery for truth `(2 deg, 0.5 deg, eta=0.1)` at 5, 10, and 15 degrees, with the frozen
+10/8/8 indexed nonzero selection and six raw-supported collapsed `00L` profiles representable by
+the fixed forward model. It uses one independent nuisance amplitude per profile and a frozen
+43-bin inverse-support boundary mask. The full/half/quarter subsets,
+held-out tests, additional regimes, stochastic tier, uncertainty, CPU/GPU crossover, and real-OSC
+recovery below remain proposed and unchecked.
+
+This is the remaining proposed qualification plan around the accepted T12 slice. Its additional
+owned paths and execution task are intentionally not assigned yet. It begins only after all three phases of
 [the simulation and geometry-fitting plan](parallel_simulation_geometry_fitting_plan.md) are
 accepted, including its frozen finite-bin angle-space measurement boundary. T07 through T11,
 the associated selection audit, and the relevant CPU/GPU proof paths must also be accepted.
 
-The current task graph assigns T12 a detector-native fit, places the angle transform downstream,
-and prohibits angle-coordinate code in T12. Before implementation, choose and document exactly one
-acyclic resolution:
+When this plan was written, the task graph assigned T12 a detector-native fit and placed the angle
+transform downstream. The accepted slice chose the first of the two proposed acyclic resolutions:
 
 1. move the accepted angle transform before a formally revised T12 and update its contracts,
    dependencies, prompt, and owned paths; or
 2. keep T12 detector-native and assign this plan a separate task after the accepted angle phase.
 
-Under either resolution, this fitter consumes prepared angle profiles. It does not implement
+The fitter consumes prepared angle profiles. It does not implement
 detector-to-angle geometry, redefine branches, or create a second projection path.
 
 ## Goal
@@ -173,63 +180,45 @@ smallest reviewed upstream contract addition. The fitting module must not recons
 
 ### Nuisance intensity and objective
 
-For the controlled mocks, relative image exposures are known. The preferred scale block is one
-exact reflection group containing every available incidence dataset and both nonzero-`m` branches
-at each included incidence, or the one branchless `m=0` profile at each included incidence. This
-retains cross-angle and cross-branch redistribution.
+Absolute and cross-reflection peak intensities are not trusted in the mosaic stage. Each individual
+dataset/reflection/branch profile therefore owns an independent nonnegative nuisance amplitude.
+This deliberately discards structure-factor amplitudes, exposure ratios, and branch-to-branch peak
+heights while preserving relative angular shape inside every profile. Individual rods remain
+distinct through projection and are summed only by the declared profile membership.
 
-One shared scale is valid only when the accepted templates include every exact rod contribution and
-all relative exposure, optics, and branch-response factors. A display label such as `(m,L)` alone
-does not prove that scale sharing is valid. Individual rods remain distinct through projection.
-
-Assemble one globally ordered profile vector for each rendered image/pool, covering every selected
-group, branch, and valid bin. Concatenate all image vectors without discarding covariance between
-groups or shared-source images. Let `A(theta)` contain one nonnegative nuisance-scale column per exact reflection
-group, including known relative exposure factors and zeros outside that group. With a fixed
-whitening operator `L`, eliminate all scales jointly:
+For one profile `p`, with fixed valid-bin mask and no additive background,
 
 \[
-\mathbf a^*(\theta)
-=
-\operatorname*{argmin}_{\mathbf a\ge 0}
-\left\|
-L\left[\mathbf y-A(\theta)\mathbf a\right]
-\right\|_2^2.
-\]
-
-Use the scalar closed form only after proving the covariance is block diagonal across the proposed
-scale blocks. For one such block, let `W_o = L_o.T @ L_o`. With no additive background and a
-denominator above its frozen tolerance,
-
-\[
-a_o^*
+a_p^*
 =
 \max\!\left(
 0,
-\frac{\boldsymbol\mu_o^{\mathsf T}W_o\mathbf y_o}
-{\boldsymbol\mu_o^{\mathsf T}W_o\boldsymbol\mu_o}
+\frac{\mathbf f_p^{\mathsf T}\mathbf y_p}
+{\mathbf f_p^{\mathsf T}\mathbf f_p}
 \right).
 \]
 
-The profiled objective is
+The deterministic objective is
 
 \[
-Q(\sigma,\Gamma,\eta)
-=
-\left\|
-L\left[\mathbf y-A(\sigma,\Gamma,\eta)\mathbf a^*\right]
-\right\|_2^2.
+J=\sum_p \frac{\lVert a_p^*\mathbf f_p-\mathbf y_p\rVert_2^2}
+{\lVert\mathbf y_p\rVert_2^2}.
 \]
+
+Every admitted weak or strong profile contributes one equal relative-shape term. Multiplying any
+observed or simulated profile by an arbitrary positive scalar leaves the objective surface
+unchanged. Unknown binwise intensity variation is not removable and remains confounded with mosaic
+shape.
 
 The primary mock has exactly zero background. If a later dataset requires a frozen linear
 background basis, append its columns and solve the small constrained linear nuisance problem
-jointly. Do not claim the scalar closed form when cross-group covariance is present, covariance
-depends on trial parameters or scale, or the proposed group-by-image factors are bilinear.
+within that profile. Do not claim the scalar closed form when its covariance is not diagonal in the
+declared residual basis or depends on trial parameters or scale.
 
 Fixed-total sampling can make covariance singular. Freeze its eigenspace threshold before fitting,
 remove only declared analytic or numerically converged null modes, and require positive definiteness
-on the retained residual subspace. Reject a scale block when its retained
-`mu.T @ W @ mu` is below tolerance. Never let a trial change the retained covariance rank.
+on the retained residual subspace. Reject a profile when its retained response energy is below
+tolerance. Never let a trial change the retained covariance rank.
 
 The expected-field tier may use a predeclared deterministic weighting. The stochastic tier uses a
 fixed covariance or whitening operator derived before fitting. Empty and valid zero-signal bins
@@ -624,9 +613,8 @@ Recover a globally credible initial estimate without random starts or intensity 
 
 1. Assemble fixed profile vectors in canonical dataset/group/branch/bin order.
 2. Build fixed whitening operators from the declared expected-field or stochastic covariance model.
-3. Profile all valid nonnegative reflection-group scales jointly by constrained GLS, with zero
-   background for the initial mocks; use independent scalar formulas only after block-diagonal
-   covariance is proven.
+3. Profile one valid nonnegative amplitude per individual profile analytically, with zero
+   background for the initial mocks and equal relative-shape leverage.
 4. Evaluate all coarse width pairs and a bounded deterministic eta search.
 5. Retain near-optimal cells and refine exact width templates until the predeclared physical
    resolution is reached.
@@ -722,7 +710,8 @@ Prove estimator correctness before stochastic image variation is introduced.
 - [ ] The full fit passes independent Tier B prediction, and the auxiliary audit passes untouched
       group prediction without redefining `full`.
 - [ ] Tier B demonstrates convergence rather than identical-discretization memorization.
-- [ ] Geometry, selection, masks, normalization, and nuisance grouping remain byte-for-byte stable.
+- [ ] Geometry, selection, masks, normalization, and per-profile nuisance-amplitude identities remain
+  byte-for-byte stable.
 - [ ] Truth is absent from fitter inputs and start construction.
 
 ## Verification
@@ -879,7 +868,7 @@ Dependencies: Phases 6-7.
 | Sphere geometry describes support | dense scalar intersections | omit a preimage or tangent bin |
 | Angle profiles are well-defined | direct `S`, `N`, mask enumeration | divide before summing or move a mask |
 | Identities remain physical | selection manifest and branch oracle | swap branches or collapse rods |
-| Joint nuisance projection is exact | direct constrained minimization | discard cross-group covariance |
+| Per-profile nuisance projection is exact | direct scalar/profile minimization and scaling invariance | let bright peaks dominate or share unjustified scales |
 | Global estimate is credible | dense toy surface and retained basins | force one poor local start |
 | Subsets are informative | projected sensitivity and held-out data | use a tail-only or disconnected set |
 | Expected recovery is not an inverse artifact | Tier B source/quadrature | reuse a stale truth/template revision |
@@ -893,8 +882,8 @@ Dependencies: Phases 6-7.
 | Width-dependent quadrature is mistaken for a fixed response matrix | Critical | Use exact pure-component profiles through the accepted forward path |
 | Sphere intersections become a competing intensity model | Critical | Restrict them to coverage, support, design, and independent proof |
 | `eta` is mixed as peak amplitude | Critical | Use authoritative probability masses and direct mixed-profile proof |
-| Profile normalization destroys component linearity | High | Sum `S` and `N`, mix components, and profile proven group scales jointly |
-| Independent branch scales erase redistribution | High | Share a proven exact-group scale across branches and known exposures |
+| Profile normalization destroys component linearity | High | Sum `S` and `N`, mix components, and profile one amplitude only after the mixture |
+| Peak amplitudes or SF ratios bias mosaic width | High | Use one independent nuisance amplitude and equal relative-shape term per profile |
 | Quarter coverage cannot identify all parameters | High | Pre-fit rank/coverage gate and typed refusal |
 | `m=0` azimuth is singular | High | Frozen conditioning gate, exclusion, or compatible diagnostic-only use |
 | Geometry/source error biases mosaic widths | Critical | Freeze accepted revisions and require Tier B plus held-out prediction |

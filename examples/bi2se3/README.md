@@ -11,3 +11,16 @@ arrays are indexed `[row, column]`.
 
 The measured OSC files are gzip-compressed to keep the repository modest. A proof may stream them
 through `gzip.open`; it must not create uncompressed copies under the repository root.
+
+The tracked mosaic-recovery case is
+`experiment/mosaic_fit_truth.toml`. Run
+`uv run python scripts/recover_bi2se3_mosaic.py --output-directory <external-directory>` to recover
+the prescribed `(2 deg Gaussian sigma, 0.5 deg Lorentzian HWHM, eta=0.1)` distribution jointly from
+the 5, 10, and 15 degree continuous profiles. The fit jointly uses the frozen 10/8/8 indexed
+nonzero profiles and six raw-supported branchless `00L` profiles representable by the fixed
+top-exit model. Every profile has its own nuisance amplitude, so peak heights and cross-reflection
+structure-factor ratios do not weight the answer. A frozen geometry audit excludes 43 inverse-
+support boundary bins identically from truth and every component, while retaining all profiles.
+Its 3,000 x 3,000 images are external configured-truth forward visualizations without the planted
+nuisance amplitudes, not fitted observations or recovered-model renders. Raw-significant `003` at
+10 and 15 degrees is reported but not fitted because this forward model predicts zero signal there.

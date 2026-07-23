@@ -1,81 +1,66 @@
-# T12: mosaic fit
+# T12: response-folded mosaic fit
 
-Status: `NEEDS_REPLAN`.
+Status: `READY_DETERMINISTIC_FULL_SET_SLICE`.
 
-This is a historical design note, not an executable task. Replan it against the contract-v9
-continuous detector boundary before implementation.
+Branch: `codex/mosaic-response-fit`
 
-Branch: `feat/mosaic-fit`
+Dependencies: T17 continuous angle measurement and T18 accepted fixed multi-OSC geometry.
 
-## Goal
+## Accepted slice
 
-Fit the Gaussian core, Lorentzian tail, and mixture of the orientation distribution from fixed detector-native profile observations without allowing intensity or geometry to compensate.
+Recover Gaussian sigma, Lorentzian HWHM, and mixture probability from immutable finite-bin
+`(phi,2theta)` response profiles while geometry, source, material, rods, wavelength, detector center,
+and lattice stay fixed. The objective integrates `S` and `N` before division and profiles one exact
+nonnegative nuisance amplitude per individual profile. Absolute peak heights and cross-reflection
+intensity ratios therefore do not weight the shared mosaic parameters.
+
+The tracked proof uses one source-center, zero-divergence, mean-wavelength state at 5, 10, and 15
+degrees. It jointly includes the frozen 10/8/8 indexed nonzero profiles and six raw-supported
+collapsed `|00L|` profiles representable by the fixed top-exit model. The 43 independently audited
+inverse-support boundary bins are excluded identically from truth and every component; every
+profile remains in the objective. It fits no detector raster; the three 3,000 x 3,000 images are
+external configured-truth forward visualizations. Raw-significant `003` at 10 and 15 degrees is
+reported as outside the current forward channel.
 
 ## Owned paths
 
 ```text
 src/rasim_next/fitting/mosaic.py
+src/rasim_next/measurement/continuous_angle.py
+scripts/recover_bi2se3_mosaic.py
+examples/bi2se3/experiment/mosaic_fit_truth.toml
 tests/test_fitting.py
-this task's execution-plan and handoff sections
+tests/test_integration.py
+this task and the live contract/validation documentation
 ```
 
-## Reference map
+## Public result
 
-```text
-original RASIM
-    ra_sim/fitting/optimization_mosaic_profiles.py
-    ra_sim/fitting/optimization.py
-    ra_sim/simulation/mosaic_profiles.py
+- material-neutral finite-profile identities and component banks;
+- explicit nonzero branch and collapsed `00L` cardinality;
+- deterministic width refinement with repeated-pair caching;
+- exact eta faces plus a finite 8,193-point centered-logit stationary audit;
+- nuisance-projected rank/condition and typed local/global identifiability failures;
+- CUDA forward-profile and image evaluation with CPU-side profile search.
 
-manuscript
-    sections/refinement_workflow.tex:34-38,55-57
-    sections/mosaicity_texture.tex
-    2D_Supplemental/SI_failure_modes.tex:109-134,241-263
+## Proof command
+
+```powershell
+uv run python scripts/recover_bi2se3_mosaic.py `
+  --output-directory C:\path\outside\the\repository\mosaic-recovery
 ```
 
-## Required work
+## Remaining proposed work
 
-- consume accepted source, detector, sample, and selection revisions
-- compile fixed local detector ROIs and profile axes
-- use normalized profile shapes or exact analytic nuisance scales
-- use fixed deterministic quadrature throughout one run
-- change quadrature density only between convergence stages
-- keep beam divergence, bandwidth, Gaussian width, Lorentzian width, and mixture semantics distinct
-- provide held-out rod and specular-tail validation
-
-## Proof
-
-- synthetic recovery for narrow, mixed, and tail-dominated cases
-- quadrature convergence at the final observable
-- geometry immutability
-- identifiability/correlation report
-- held-out profile prediction
-- original-RASIM selected-profile `MATCH` or `CORRECTED` evidence
-
-## Commands
-
-```bash
-python -m compileall -q src
-ruff check src/rasim_next/fitting/mosaic.py tests/test_fitting.py
-pytest -q tests/test_fitting.py
-python -m rasim_next.proof mosaic-fit --json
-git diff --check
-```
-
-## Execution plan
-
-State: NEEDS_REPLAN
+`tasks/mosaic_distribution_fitting_plan.md` remains `PROPOSED` for topology-split cubature that
+retains the excluded boundary bins, automatic arbitrary-material boundary planning, half/quarter subsets,
+leave-group-out prediction, additional truth regimes, stochastic noise/background/covariance,
+uncertainty intervals, CPU/GPU crossover studies, and real-OSC profile extraction/recovery. The
+masked independent-order calculation is an angle-bin convergence check on smooth retained bins,
+not the broader plan's independent source/orientation Tier-B qualification.
 
 ## Handoff
 
-Status:
-
-Commit SHA:
-
-Accepted mosaic revision:
-
-Proof summary:
-
-Identifiability:
-
-Held-out performance:
+The numerical recovery, distribution distances, convergence, timing, memory, external artifact
+paths, and retained limitations are recorded in `docs/VALIDATION.md`; the final handoff response
+records the resulting commit SHA and retained-test rationale.

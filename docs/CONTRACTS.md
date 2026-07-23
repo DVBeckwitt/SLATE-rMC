@@ -34,6 +34,7 @@ and ordering are validated eagerly.
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared nine-coordinate correction pack, with fixed-coordinate provenance, per-image metrics, and rank diagnostics |
+| `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 
 `axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
 active LAB-to-LAB rigid transform about its declared LAB pivot. `compile_instrument` uses the same
@@ -132,6 +133,41 @@ caustic flags, and pointwise validity. It applies no detector solid-angle accept
 The exact pole and every invalid/off-panel direction have `S=N=I=0`. Finite bins are a separate
 consumer and must integrate `S` and `N` before division.
 
+### Finite-bin mosaic-profile fitting
+
+`evaluate_continuous_mosaic_profiles(...)` is the narrow fitting-boundary adapter over the
+canonical all-root angle pullback. For every frozen profile bin it integrates angular signal `S`
+and detector-area normalization `N` independently and exposes `I=sum(S)/sum(N)`. It evaluates
+continuous coordinates only; no detector raster, pixel deposition, interpolation, or pointwise
+average of `S/N` enters the fit.
+
+`MosaicReflectionGroupKey` owns physical-rod membership and reflection identity; it does not imply
+that peak amplitudes are known or shared. `EXPLICIT_NONZERO` profiles retain each frozen indexed
+branch with independent analytic-branch and root-side identities. `COLLAPSED_00L` has
+`branch_id=None` and `analytic_branch_id=0`, because the regular `m=0` inverse preimages are summed
+by one all-root profile. Profile, angle-frame, physical source, backend/device, rod, layout, and
+any predeclared bin exclusions are immutable and must agree throughout a component bank.
+`MosaicProfileSet.source_revision` is the detector result's actual source realization revision; a
+profile-layout hash cannot substitute for it.
+
+For every individual `(dataset, reflection, analytic branch, root side)` profile, the fitter
+analytically profiles an independent nonnegative amplitude and minimizes relative squared shape
+error. Absolute peak heights, structure-factor amplitudes, and cross-peak intensity ratios therefore
+cannot determine the mosaic distribution; every admitted weak or strong profile has equal
+profile-level leverage. Relative intensity across bins within one profile remains essential mosaic
+information. Gaussian sigma and Lorentzian HWHM are selected from exact component responses; eta
+is searched on both exact faces and a scale-centered logit coordinate. Repeated width pairs are
+cached during deterministic refinement. A fit fails with a typed identifiability error when the
+nuisance-projected local sensitivity is deficient or when the finite global audit finds distinct
+tied solutions. The 8,193-point stationary audit is deterministic numerical evidence, not a formal
+theorem excluding arbitrarily narrower sub-grid aliases.
+
+`MosaicProfileDefinition.excluded_phi_bin_indices` is a frozen, provenance-bound numerical-support
+mask, never an intensity threshold. The Bi2Se3 proof excludes 43 independently audited inverse-
+support boundary bins from both truth and every component response, while retaining every one of
+the 32 profiles and at least 38 bins per profile. A general topology-split cubature that retains
+those boundary bins is not yet implemented.
+
 ### Configured simulation
 
 - `load_simulation_config(path, repository_root=...)` accepts one strict
@@ -197,9 +233,10 @@ are the two analytic beta-root sides; they are not two Ewald branches. User-faci
 is `root_sign=-1`, and `tag_branch=2` is `root_sign=+1`; the analytic Ewald branch remains separate
 provenance. Exactly one tag is allowed for each `(m,L,tag_branch)`. Missing, tangent, or
 branch-changing roots fail instead of being reassigned. For `m=0`, exact `L` alone leaves a
-continuous orientation curve, so the only admitted landmark policy selects the unique exact-L
-reciprocal-axis direction with minimum mosaic tilt relative to the unmosaicked axis. This is a
-geometry landmark, not a claimed m=0 intensity peak; its user-facing branch is `tag_branch=0`.
+continuous orientation curve. The tagged geometry-fit policy selects the unique exact-L
+reciprocal-axis direction with minimum mosaic tilt relative to the unmosaicked axis. It is a
+reproducible geometry landmark, not an `m=0` intensity maximum; its user-facing branch is
+`tag_branch=0`.
 
 An exact landmark may lie on an integrable caustic of the zero-transverse-width detector density.
 The tagged-coordinate observable is still well defined there, but its pointwise scalar intensity

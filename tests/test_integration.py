@@ -272,6 +272,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         reciprocal_basis_Ainv=bragg.config.reciprocal_basis_Ainv,
         crystal_to_sample=instrument.sample_from_crystal.rotation,
         rods=caustic_rods,
+        rod_catalog_revision="integration-test-rods.v1",
         mosaic=bragg.config.mosaic,
         strength_model=bragg.strength_model,
         incident=incident,
@@ -297,6 +298,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         reciprocal_basis_Ainv=bragg.config.reciprocal_basis_Ainv,
         crystal_to_sample=instrument.sample_from_crystal.rotation,
         rods=caustic_rods,
+        rod_catalog_revision="integration-test-rods.v1",
         mosaic=bragg.config.mosaic,
         strength_model=bragg.strength_model,
         incident=incident,
@@ -905,6 +907,7 @@ def _two_state_source_averaged_detector_fixture(
         reciprocal_basis_Ainv=reciprocal.basis_Ainv,
         crystal_to_sample=instrument.sample_from_crystal.rotation,
         rods=rods,
+        rod_catalog_revision="integration-test-rods.v1",
         mosaic=mosaic,
         strength_model=strength,
         incident=incident,
@@ -1127,6 +1130,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         reciprocal_basis_Ainv=scalar_detectors[0].coating.bragg_space.config.reciprocal_basis_Ainv,
         crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
         rods=rods,
+        rod_catalog_revision="integration-test-rods.v1",
         mosaic=scalar_detectors[0].coating.bragg_space.config.mosaic,
         strength_model=strength,
         incident=nonzero.incident,
@@ -1344,6 +1348,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
             reciprocal_basis_Ainv=first_m0_oracle.coating.bragg_space.config.reciprocal_basis_Ainv,
             crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
             rods=rods,
+            rod_catalog_revision="integration-test-rods.v1",
             mosaic=first_m0_oracle.coating.bragg_space.config.mosaic,
             strength_model=strength,
             incident=positive_incident,
@@ -2185,13 +2190,19 @@ def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -
     )
 
 
-def test_detector_macrobin_preview_integrates_total_continuous_density_once() -> None:
+def test_detector_macrobin_preview_integrates_total_continuous_density_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from types import SimpleNamespace
 
+    import rasim_next.pipeline.configured_simulation as configured_simulation_module
     from rasim_next.pipeline.configured_simulation import (
         CONFIGURED_RESULT_SCHEMA_VERSION,
         integrate_detector_macrobins,
     )
+
+    evaluated_shapes: list[tuple[int, ...]] = []
+    monkeypatch.setattr(configured_simulation_module, "_MAXIMUM_MACROBIN_COORDINATES_PER_CALL", 4)
 
     class ConstantDetector:
         instrument = SimpleNamespace(detector_shape_rc=(4, 6))
@@ -2202,6 +2213,7 @@ def test_detector_macrobin_preview_integrates_total_continuous_density_once() ->
             row_px: np.ndarray,
         ) -> object:
             shape = np.broadcast_shapes(column_px.shape, row_px.shape)
+            evaluated_shapes.append(shape)
             return SimpleNamespace(
                 density_A2_per_px2=np.full(shape, 5.0),
                 caustic=np.zeros(shape, dtype=np.bool_),
@@ -2219,6 +2231,7 @@ def test_detector_macrobin_preview_integrates_total_continuous_density_once() ->
     np.testing.assert_array_equal(result.valid_source_count_min, 7)
     assert not hasattr(result, "per_rod_image_A2")
     assert result.coordinate_evaluation_count == 24
+    assert evaluated_shapes == [(1, 3)] * 8
     assert result.measure_id == "raw_detector_macrobin_fixed_quadrature_estimate_A2.v1"
     assert CONFIGURED_RESULT_SCHEMA_VERSION == "rasim-configured-result-v2"
     with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
@@ -2480,6 +2493,7 @@ class _AnalyticDetectorDensity:
             column_px=column,
             row_px=row,
             rods=(Rod(1, 0),),
+            rod_catalog_revision="analytic-angle-bin-rods.v1",
             branch=2,
             per_rod_density_A2_per_px2=density[..., None],
             density_A2_per_px2=density,

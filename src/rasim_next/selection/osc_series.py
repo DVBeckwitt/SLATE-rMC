@@ -42,6 +42,8 @@ from rasim_next.selection.indexing import (
 )
 
 _SCHEMA_VERSION = "rasim-osc-geometry-fit-v1"
+DETECTOR_VALID_MASK_REVISION = "wholly-zero-rows-and-columns.v1"
+M0_PEAK_EVIDENCE_REVISION = "expected-point.circular-core-annulus-median-mad.excess-pixel-gates.v1"
 
 
 def _mapping(
@@ -274,6 +276,298 @@ def detector_valid_mask_from_counts(counts: ArrayLike) -> NDArray[np.bool_]:
     mask[:, np.all(array == 0, axis=0)] = False
     mask.setflags(write=False)
     return mask
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedM0Peak:
+    """One caller-supplied expected branchless 00L site under fixed detector geometry."""
+
+    integer_L: int
+    column_px: float
+    row_px: float
+
+    def __post_init__(self) -> None:
+        integer_l = self.integer_L
+        if (
+            isinstance(integer_l, bool)
+            or not isinstance(integer_l, (int, np.integer))
+            or int(integer_l) <= 0
+        ):
+            raise ValueError("integer_L must be a positive crystallographic integer")
+        column = float(self.column_px)
+        row = float(self.row_px)
+        if not math.isfinite(column) or not math.isfinite(row):
+            raise ValueError("expected m=0 detector coordinates must be finite")
+        object.__setattr__(self, "integer_L", int(integer_l))
+        object.__setattr__(self, "column_px", column)
+        object.__setattr__(self, "row_px", row)
+
+
+@dataclass(frozen=True, slots=True)
+class M0PeakEvidencePolicy:
+    """Frozen circular core/annulus gates for expected 00L signal in a native OSC image."""
+
+    core_radius_px: float = 5.0
+    background_inner_radius_px: float = 10.0
+    background_outer_radius_px: float = 25.0
+    minimum_peak_z: float = 5.0
+    minimum_integrated_z: float = 5.0
+    minimum_valid_fraction: float = 0.8
+    mad_scale: float = 1.4826
+    sigma_floor_counts: float = 1.0
+    excess_pixel_z: float = 3.0
+    minimum_excess_pixel_count: int = 3
+    revision: str = M0_PEAK_EVIDENCE_REVISION
+
+    def __post_init__(self) -> None:
+        values = {
+            name: float(getattr(self, name))
+            for name in (
+                "core_radius_px",
+                "background_inner_radius_px",
+                "background_outer_radius_px",
+                "minimum_peak_z",
+                "minimum_integrated_z",
+                "minimum_valid_fraction",
+                "mad_scale",
+                "sigma_floor_counts",
+                "excess_pixel_z",
+            )
+        }
+        if not all(math.isfinite(value) and value > 0.0 for value in values.values()):
+            raise ValueError("m=0 evidence policy values must be finite and positive")
+        if not (
+            values["core_radius_px"]
+            < values["background_inner_radius_px"]
+            < values["background_outer_radius_px"]
+        ):
+            raise ValueError("m=0 evidence radii must be strictly increasing")
+        if values["minimum_valid_fraction"] > 1.0:
+            raise ValueError("minimum_valid_fraction must not exceed one")
+        if self.revision != M0_PEAK_EVIDENCE_REVISION:
+            raise ValueError("m=0 evidence policy revision does not match the implementation")
+        if (
+            isinstance(self.minimum_excess_pixel_count, bool)
+            or not isinstance(self.minimum_excess_pixel_count, (int, np.integer))
+            or int(self.minimum_excess_pixel_count) <= 0
+        ):
+            raise ValueError("minimum_excess_pixel_count must be a positive integer")
+        for name, value in values.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(
+            self,
+            "minimum_excess_pixel_count",
+            int(self.minimum_excess_pixel_count),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class M0PeakEvidence:
+    """Raw-count evidence for one expected branchless 00L profile."""
+
+    candidate: ExpectedM0Peak
+    classification: str
+    core_pixel_count: int
+    background_pixel_count: int
+    excess_pixel_count: int
+    background_counts: float | None
+    robust_sigma_counts: float | None
+    maximum_core_counts: float | None
+    peak_z: float | None
+    integrated_z: float | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.candidate, ExpectedM0Peak):
+            raise TypeError("candidate must be ExpectedM0Peak")
+        allowed = {
+            "LOCAL_SIGNAL_SUPPORTED",
+            "LOCAL_SIGNAL_BELOW_GATE",
+            "OUTSIDE_PANEL",
+            "INSUFFICIENT_VALID_SUPPORT",
+        }
+        if self.classification not in allowed:
+            raise ValueError("unsupported m=0 peak-evidence classification")
+        for name in ("core_pixel_count", "background_pixel_count", "excess_pixel_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+            object.__setattr__(self, name, int(value))
+        numeric = (
+            self.background_counts,
+            self.robust_sigma_counts,
+            self.maximum_core_counts,
+            self.peak_z,
+            self.integrated_z,
+        )
+        if self.classification in {"OUTSIDE_PANEL", "INSUFFICIENT_VALID_SUPPORT"}:
+            if any(value is not None for value in numeric):
+                raise ValueError("unmeasured m=0 evidence fields must be None")
+        elif any(value is None or not math.isfinite(float(value)) for value in numeric):
+            raise ValueError("measured m=0 evidence fields must be finite")
+
+    @property
+    def integer_L(self) -> int:
+        return self.candidate.integer_L
+
+    @property
+    def accepted(self) -> bool:
+        return self.classification == "LOCAL_SIGNAL_SUPPORTED"
+
+
+def evaluate_expected_m0_peak_evidence(
+    detector_native_counts: ArrayLike,
+    *,
+    candidates: tuple[ExpectedM0Peak, ...],
+    detector_valid_mask: ArrayLike | None = None,
+    policy: M0PeakEvidencePolicy | None = None,
+) -> tuple[M0PeakEvidence, ...]:
+    """Test structure-selected fixed-geometry 00L sites against raw native counts.
+
+    This is an eligibility gate, not an intensity residual. Its z statistics and candidate
+    structure-factor magnitude are not residual weights; a configured response may still contain
+    within-profile structure-factor variation.
+    """
+
+    frozen = tuple(candidates)
+    if any(not isinstance(item, ExpectedM0Peak) for item in frozen):
+        raise ValueError("candidates must contain ExpectedM0Peak values")
+    if not frozen:
+        return ()
+    frozen = tuple(sorted(frozen, key=lambda item: item.integer_L))
+    if len({item.integer_L for item in frozen}) != len(frozen):
+        raise ValueError("expected m=0 integer L identities must be unique")
+
+    supplied_counts = np.asarray(detector_native_counts)
+    if (
+        supplied_counts.ndim != 2
+        or np.iscomplexobj(supplied_counts)
+        or not np.all(np.isfinite(supplied_counts))
+        or np.any(supplied_counts < 0.0)
+    ):
+        raise ValueError("detector_native_counts must be a finite nonnegative real 2-D array")
+    counts = supplied_counts
+    if detector_valid_mask is None:
+        valid_mask = np.ones(counts.shape, dtype=np.bool_)
+    else:
+        supplied_mask = np.asarray(detector_valid_mask)
+        if supplied_mask.dtype.kind != "b" or supplied_mask.shape != counts.shape:
+            raise ValueError("detector_valid_mask must be boolean with the detector shape")
+        valid_mask = np.asarray(supplied_mask, dtype=np.bool_)
+    active_policy = M0PeakEvidencePolicy() if policy is None else policy
+    if not isinstance(active_policy, M0PeakEvidencePolicy):
+        raise TypeError("policy must be M0PeakEvidencePolicy")
+
+    rows, columns = counts.shape
+    outer = active_policy.background_outer_radius_px
+    evidence: list[M0PeakEvidence] = []
+    for candidate in frozen:
+        if not (-0.5 <= candidate.column_px <= columns - 0.5) or not (
+            -0.5 <= candidate.row_px <= rows - 0.5
+        ):
+            evidence.append(
+                M0PeakEvidence(candidate, "OUTSIDE_PANEL", 0, 0, 0, None, None, None, None, None)
+            )
+            continue
+        full_column_start = math.floor(candidate.column_px - outer)
+        full_column_stop = math.ceil(candidate.column_px + outer) + 1
+        full_row_start = math.floor(candidate.row_px - outer)
+        full_row_stop = math.ceil(candidate.row_px + outer) + 1
+        full_row, full_column = np.ogrid[
+            full_row_start:full_row_stop,
+            full_column_start:full_column_stop,
+        ]
+        full_radius_squared = (full_column - candidate.column_px) ** 2 + (
+            full_row - candidate.row_px
+        ) ** 2
+        expected_core_count = int(
+            np.count_nonzero(full_radius_squared <= active_policy.core_radius_px**2)
+        )
+        expected_background_count = int(
+            np.count_nonzero(
+                (full_radius_squared >= active_policy.background_inner_radius_px**2)
+                & (full_radius_squared <= outer**2)
+            )
+        )
+        column_start = max(0, full_column_start)
+        column_stop = min(columns, full_column_stop)
+        row_start = max(0, full_row_start)
+        row_stop = min(rows, full_row_stop)
+        local_row, local_column = np.ogrid[row_start:row_stop, column_start:column_stop]
+        radius_squared = (local_column - candidate.column_px) ** 2 + (
+            local_row - candidate.row_px
+        ) ** 2
+        core_support = radius_squared <= active_policy.core_radius_px**2
+        background_support = (radius_squared >= active_policy.background_inner_radius_px**2) & (
+            radius_squared <= outer**2
+        )
+        local_valid = valid_mask[row_start:row_stop, column_start:column_stop]
+        core_valid = core_support & local_valid
+        background_valid = background_support & local_valid
+        core_count = int(np.count_nonzero(core_valid))
+        background_count = int(np.count_nonzero(background_valid))
+        if (
+            expected_core_count == 0
+            or expected_background_count == 0
+            or core_count < active_policy.minimum_valid_fraction * expected_core_count
+            or background_count < active_policy.minimum_valid_fraction * expected_background_count
+        ):
+            evidence.append(
+                M0PeakEvidence(
+                    candidate,
+                    "INSUFFICIENT_VALID_SUPPORT",
+                    core_count,
+                    background_count,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            )
+            continue
+        crop = np.asarray(
+            counts[row_start:row_stop, column_start:column_stop],
+            dtype=np.float64,
+        )
+        core = crop[core_valid]
+        background = crop[background_valid]
+        background_counts = float(np.median(background))
+        mad = float(np.median(np.abs(background - background_counts)))
+        robust_sigma = max(
+            active_policy.mad_scale * mad,
+            active_policy.sigma_floor_counts,
+        )
+        maximum_core = float(np.max(core))
+        peak_z = (maximum_core - background_counts) / robust_sigma
+        integrated_z = float(np.sum(core - background_counts)) / (
+            robust_sigma * math.sqrt(core_count)
+        )
+        excess_pixel_count = int(
+            np.count_nonzero(core > background_counts + active_policy.excess_pixel_z * robust_sigma)
+        )
+        classification = (
+            "LOCAL_SIGNAL_SUPPORTED"
+            if peak_z >= active_policy.minimum_peak_z
+            and integrated_z >= active_policy.minimum_integrated_z
+            and excess_pixel_count >= active_policy.minimum_excess_pixel_count
+            else "LOCAL_SIGNAL_BELOW_GATE"
+        )
+        evidence.append(
+            M0PeakEvidence(
+                candidate,
+                classification,
+                core_count,
+                background_count,
+                excess_pixel_count,
+                background_counts,
+                robust_sigma,
+                maximum_core,
+                peak_z,
+                integrated_z,
+            )
+        )
+    return tuple(evidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,13 +940,19 @@ def audit_frozen_osc_geometry_reindexing(
 
 
 __all__ = [
+    "DETECTOR_VALID_MASK_REVISION",
+    "M0_PEAK_EVIDENCE_REVISION",
+    "ExpectedM0Peak",
     "FrozenOscGeometryReindexing",
+    "M0PeakEvidence",
+    "M0PeakEvidencePolicy",
     "OscGeometryImageConfiguration",
     "OscGeometryIndexingRun",
     "OscGeometrySeriesConfiguration",
     "audit_frozen_osc_geometry_reindexing",
     "build_osc_angle_frame",
     "detector_valid_mask_from_counts",
+    "evaluate_expected_m0_peak_evidence",
     "index_osc_geometry_series",
     "load_osc_geometry_series",
     "reindex_frozen_osc_geometry_series",

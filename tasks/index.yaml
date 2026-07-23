@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: multi_osc_geometry_fit
+current_phase: mosaic_fit
 
 tasks:
   - id: T00
@@ -62,11 +62,21 @@ tasks:
     branch: feat/sample-geometry-fit
     status: NEEDS_REPLAN
     depends_on: [T08, T10]
+  - id: T17
+    file: tasks/17_continuous_angle_measure.md
+    branch: codex/continuous-angle-render
+    status: READY
+    depends_on: [T07]
+  - id: T18
+    file: tasks/18_multi_osc_geometry_fit.md
+    branch: codex/multi-osc-geometry-fit
+    status: READY
+    depends_on: [T08]
   - id: T12
     file: tasks/12_mosaic_fit.md
-    branch: feat/mosaic-fit
-    status: NEEDS_REPLAN
-    depends_on: [T11]
+    branch: codex/mosaic-response-fit
+    status: READY_DETERMINISTIC_FULL_SET_SLICE
+    depends_on: [T17, T18]
   - id: T13
     file: tasks/13_ordered_intensity_fit.md
     branch: feat/ordered-intensity-fit
@@ -82,13 +92,3 @@ tasks:
     branch: feat/caking-qspace
     status: DEFERRED_REPLAN
     depends_on: [T14]
-  - id: T17
-    file: tasks/17_continuous_angle_measure.md
-    branch: codex/continuous-angle-render
-    status: READY
-    depends_on: [T07]
-  - id: T18
-    file: tasks/18_multi_osc_geometry_fit.md
-    branch: codex/multi-osc-geometry-fit
-    status: READY
-    depends_on: [T08]

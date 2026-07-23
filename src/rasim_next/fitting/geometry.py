@@ -11,7 +11,6 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import brentq, least_squares
 
 from painted_ewald import (
-    ContinuousEwaldCoating,
     EwaldLatentGeometry,
     map_tied_rotation_latent,
 )
@@ -36,7 +35,6 @@ from rasim_next.pipeline.configured_simulation import (
     solve_integer_l_ewald_roots,
 )
 from rasim_next.pipeline.continuous_detector import (
-    DetectorEwaldMeasure,
     map_ewald_geometry_to_detector,
 )
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorCoordinateIntensity
@@ -53,9 +51,9 @@ _PARAMETER_NAMES = (
 _RANK_RELATIVE_TOLERANCE = 1.0e-8
 _MAXIMUM_JACOBIAN_CONDITION = 1.0e8
 _GEOMETRY_PARAMETERIZATION_ID = "detector_xy_plus_pivoted_effective_sample_normal_xy.v2"
+_M0_MINIMUM_TILT_LANDMARK_POLICY = "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1"
 _PREDICTION_STATUSES = frozenset(code.value for code in ValidityCode) | {
     "BRANCH_CHANGED",
-    "INTEGER_L_MISMATCH",
     "ROOT_MISSING",
     "ROOT_TANGENT",
 }
@@ -369,7 +367,7 @@ class IntegerLMarkerPrediction:
 
 @dataclass(frozen=True, slots=True)
 class M0IntegerLPrediction:
-    """Minimum-mosaic-tilt exact-L landmarks on the m=0 detector function."""
+    """Declared exact-L landmarks on the m=0 detector function."""
 
     integer_L: tuple[int, ...]
     coordinates_px: FloatArray
@@ -379,7 +377,7 @@ class M0IntegerLPrediction:
     ewald_residual_Ainv: FloatArray
     reference_wavelength_A: float
     active_panel: BoolArray = field(init=False)
-    landmark_policy: str = "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1"
+    landmark_policy: str = _M0_MINIMUM_TILT_LANDMARK_POLICY
 
     def __post_init__(self) -> None:
         integer_l = tuple(self.integer_L)
@@ -389,10 +387,10 @@ class M0IntegerLPrediction:
                 isinstance(value, bool) or not isinstance(value, (int, np.integer))
                 for value in integer_l
             )
-            or any(int(value) == 0 for value in integer_l)
+            or any(int(value) <= 0 for value in integer_l)
             or len(set(integer_l)) != len(integer_l)
         ):
-            raise ValueError("integer_L must contain unique nonzero integer identities")
+            raise ValueError("integer_L must contain unique positive |L| identities")
         integer_l = tuple(int(value) for value in integer_l)
         size = len(integer_l)
         coordinates = _readonly_float_array(self.coordinates_px, (size, 2), "coordinates_px")
@@ -420,7 +418,7 @@ class M0IntegerLPrediction:
         if invalid_status:
             raise ValueError(f"unsupported detector prediction status: {invalid_status}")
         active = status == ValidityCode.VALID.value
-        if self.landmark_policy != "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1":
+        if self.landmark_policy != _M0_MINIMUM_TILT_LANDMARK_POLICY:
             raise ValueError("unsupported m=0 exact-L landmark policy")
         for value in (status, active):
             value.setflags(write=False)
@@ -449,7 +447,7 @@ class M0IntegerLObservations:
     covariance_px2: FloatArray
     reference_wavelength_A: float
     whitening_matrix_px_inv: FloatArray = field(init=False, repr=False)
-    landmark_policy: str = "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1"
+    landmark_policy: str = _M0_MINIMUM_TILT_LANDMARK_POLICY
 
     def __post_init__(self) -> None:
         integer_l = tuple(self.integer_L)
@@ -459,11 +457,11 @@ class M0IntegerLObservations:
                 isinstance(value, bool) or not isinstance(value, (int, np.integer))
                 for value in integer_l
             )
-            or any(int(value) == 0 for value in integer_l)
+            or any(int(value) <= 0 for value in integer_l)
             or len(set(integer_l)) != len(integer_l)
         ):
             raise ValueError(
-                "m=0 line observations require at least two unique nonzero integer L values"
+                "m=0 line observations require at least two unique positive |L| identities"
             )
         integer_l = tuple(int(value) for value in integer_l)
         size = len(integer_l)
@@ -484,7 +482,7 @@ class M0IntegerLObservations:
         wavelength = float(self.reference_wavelength_A)
         if not math.isfinite(wavelength) or wavelength <= 0.0:
             raise ValueError("reference_wavelength_A must be finite and positive")
-        if self.landmark_policy != "minimum_mosaic_tilt_exact_L.m0.mean_source_state.v1":
+        if self.landmark_policy != _M0_MINIMUM_TILT_LANDMARK_POLICY:
             raise ValueError("unsupported m=0 exact-L landmark policy")
         object.__setattr__(self, "integer_L", integer_l)
         object.__setattr__(self, "coordinates_px", coordinates)
@@ -688,6 +686,20 @@ def _frozen_nonzero_keys(
     return frozen
 
 
+def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
+    frozen = tuple(integer_L)
+    if (
+        not frozen
+        or any(
+            isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in frozen
+        )
+        or any(int(value) <= 0 for value in frozen)
+        or len(set(frozen)) != len(frozen)
+    ):
+        raise ValueError("integer_L must contain unique positive |L| identities")
+    return tuple(int(value) for value in frozen)
+
+
 class ExactTagGeometryModel:
     """One-ray exact integer-L predictor with no intensity or mosaic dependency."""
 
@@ -832,6 +844,118 @@ class ExactTagGeometryModel:
             coordinates_px=coordinates,
             detector_status=status,
             ewald_residual_Ainv=residual,
+        )
+
+    def predict_m0_minimum_tilt_exact_l_landmarks(
+        self,
+        integer_L: tuple[int, ...],
+        *,
+        instrument: CompiledInstrument | None = None,
+    ) -> M0IntegerLPrediction:
+        """Map the unconstrained minimum-tilt point on each exact nonzero ``00L`` curve."""
+
+        frozen_l = _frozen_m0_integer_l(integer_L)
+        active_instrument = self._inputs.instrument if instrument is None else instrument
+        if not isinstance(active_instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        incident = build_incident_states(
+            self._inputs.samples,
+            self._inputs.material,
+            active_instrument,
+        )
+        if not bool(incident.states.valid[0]):
+            raise GeometryPredictionError(
+                f"nominal incident state became {incident.states.status[0].value}"
+            )
+        specular_rods = tuple(rod for rod in self._inputs.rods if rod.family_m == 0)
+        if len(specular_rods) != 1:
+            raise ValueError("minimum-tilt exact-L landmarks require one physical m=0 rod")
+        rod = specular_rods[0]
+        basis = self._inputs.reciprocal.basis_Ainv
+        crystal_to_sample = active_instrument.sample_from_crystal.rotation
+        mean_axis_crystal, tilt_axis_crystal = mosaic_axes(basis)
+        reference_axis_crystal = np.cross(tilt_axis_crystal, mean_axis_crystal)
+        mean_axis_sample = crystal_to_sample @ mean_axis_crystal
+        ki_sample = incident.states.k_film_phase_sample_Ainv[0]
+        k_norm = float(np.linalg.norm(ki_sample))
+        incident_direction = ki_sample / k_norm
+        perpendicular_mean = mean_axis_sample - float(mean_axis_sample @ incident_direction) * (
+            incident_direction
+        )
+        perpendicular_norm = float(np.linalg.norm(perpendicular_mean))
+        if perpendicular_norm <= 1024.0 * np.finfo(np.float64).eps:
+            raise GeometryPredictionError(
+                "minimum-tilt m=0 landmark is ambiguous when ki is parallel to the mean axis"
+            )
+        closest_perpendicular = perpendicular_mean / perpendicular_norm
+        b3_norm = float(np.linalg.norm(basis[:, 2]))
+        size = len(frozen_l)
+        coordinates = np.zeros((size, 2), dtype=np.float64)
+        alpha = np.zeros(size, dtype=np.float64)
+        beta = np.zeros(size, dtype=np.float64)
+        residual = np.zeros(size, dtype=np.float64)
+        status = np.full(size, "ROOT_MISSING", dtype="U32")
+        q_sample = np.zeros((size, 3), dtype=np.float64)
+        feasible_indices: list[int] = []
+        for index, integer_l in enumerate(frozen_l):
+            u_Ainv = integer_l * b3_norm
+            z = -u_Ainv / (2.0 * k_norm)
+            tolerance = 4096.0 * np.finfo(np.float64).eps
+            if abs(z) > 1.0 + tolerance:
+                continue
+            z = min(1.0, max(-1.0, z))
+            direction_sample = (
+                z * incident_direction + math.sqrt(max(0.0, 1.0 - z * z)) * closest_perpendicular
+            )
+            direction_crystal = crystal_to_sample.T @ direction_sample
+            cosine_alpha = min(
+                1.0,
+                max(-1.0, float(direction_crystal @ mean_axis_crystal)),
+            )
+            alpha[index] = math.acos(cosine_alpha)
+            beta[index] = math.atan2(
+                float(direction_crystal @ tilt_axis_crystal),
+                float(direction_crystal @ reference_axis_crystal),
+            ) % (2.0 * np.pi)
+            q_sample[index] = u_Ainv * direction_sample
+            feasible_indices.append(index)
+
+        if feasible_indices:
+            indices = np.asarray(feasible_indices, dtype=np.int64)
+            integer_l = np.asarray([frozen_l[int(index)] for index in indices], dtype=np.float64)
+            selected_q = q_sample[indices]
+            kf_sample = selected_q + ki_sample[None, :]
+            selected_residual = np.abs(np.linalg.norm(kf_sample, axis=1) - k_norm)
+            geometry = EwaldLatentGeometry(
+                rod=rod,
+                branch=0,
+                alpha_rad=alpha[indices],
+                beta_rad=beta[indices],
+                u_Ainv=integer_l * b3_norm,
+                L=integer_l,
+                q_sample_Ainv=selected_q,
+                kf_sample_Ainv=kf_sample,
+                ewald_residual_Ainv=selected_residual,
+                status=np.full(indices.size, RootStatus.REGULAR.value, dtype="U32"),
+            )
+            mapped = map_ewald_geometry_to_detector(
+                geometry,
+                incident=incident,
+                material=self._inputs.material,
+                instrument=active_instrument,
+            )
+            coordinates[indices, 0] = mapped.column_px
+            coordinates[indices, 1] = mapped.row_px
+            residual[indices] = selected_residual
+            status[indices] = mapped.detector_status
+        return M0IntegerLPrediction(
+            integer_L=frozen_l,
+            coordinates_px=coordinates,
+            alpha_rad=alpha,
+            beta_rad=beta,
+            detector_status=status,
+            ewald_residual_Ainv=residual,
+            reference_wavelength_A=self.reference_wavelength_A,
         )
 
 
@@ -1126,7 +1250,6 @@ class _ExactTagGeometry:
     __slots__ = (
         "_exact_model",
         "_inputs",
-        "_nominal_material",
         "_nominal_samples",
         "_sample_correction_pivot_lab_m",
     )
@@ -1155,7 +1278,6 @@ class _ExactTagGeometry:
         object.__setattr__(self, "_exact_model", exact_model)
         object.__setattr__(self, "_inputs", inputs)
         object.__setattr__(self, "_nominal_samples", nominal_samples)
-        object.__setattr__(self, "_nominal_material", nominal_material)
         object.__setattr__(self, "_sample_correction_pivot_lab_m", sample_correction_pivot_lab_m)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -1176,49 +1298,7 @@ class _ExactTagGeometry:
 
     @staticmethod
     def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
-        frozen = tuple(integer_L)
-        if (
-            not frozen
-            or any(
-                isinstance(value, bool) or not isinstance(value, (int, np.integer))
-                for value in frozen
-            )
-            or any(int(value) == 0 for value in frozen)
-            or len(set(frozen)) != len(frozen)
-        ):
-            raise ValueError("integer_L must contain unique nonzero integer identities")
-        return tuple(int(value) for value in frozen)
-
-    def _detector_context(
-        self,
-        corrections: GeometryCorrections,
-    ) -> tuple[ContinuousEwaldCoating, DetectorEwaldMeasure]:
-        if not isinstance(corrections, GeometryCorrections):
-            raise TypeError("corrections must be GeometryCorrections")
-        instrument = _corrected_instrument(
-            self._inputs.instrument,
-            corrections,
-            self._sample_correction_pivot_lab_m,
-        )
-        incident = build_incident_states(
-            self._nominal_samples,
-            self._nominal_material,
-            instrument,
-        )
-        if not bool(incident.states.valid[0]):
-            raise GeometryPredictionError(
-                f"nominal incident state became {incident.states.status[0].value}"
-            )
-        coating = ContinuousEwaldCoating(
-            self._inputs.bragg_space,
-            ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
-        )
-        return coating, DetectorEwaldMeasure(
-            coating=coating,
-            incident=incident,
-            material=self._nominal_material,
-            instrument=instrument,
-        )
+        return _frozen_m0_integer_l(integer_L)
 
     def predict(
         self,
@@ -1245,103 +1325,14 @@ class _ExactTagGeometry:
         intensity maximum or centroid.
         """
 
-        frozen_l = self._frozen_m0_integer_l(integer_L)
-        coating, detector = self._detector_context(corrections)
-        return self._predict_m0_with_context(frozen_l, coating, detector)
-
-    def _predict_m0_with_context(
-        self,
-        frozen_l: tuple[int, ...],
-        coating: ContinuousEwaldCoating,
-        detector: DetectorEwaldMeasure,
-    ) -> M0IntegerLPrediction:
-        specular_rods = tuple(
-            rod for rod in self._inputs.bragg_space.config.rods if rod.family_m == 0
+        instrument = _corrected_instrument(
+            self._inputs.instrument,
+            corrections,
+            self._sample_correction_pivot_lab_m,
         )
-        if len(specular_rods) != 1:
-            raise ValueError("minimum-tilt exact-L landmarks require one physical m=0 rod")
-        rod = specular_rods[0]
-        basis = self._inputs.bragg_space.config.reciprocal_basis_Ainv
-        crystal_to_sample = self._inputs.bragg_space.config.crystal_to_sample
-        mean_axis_crystal, tilt_axis_crystal = mosaic_axes(basis)
-        reference_axis_crystal = np.cross(tilt_axis_crystal, mean_axis_crystal)
-        mean_axis_sample = crystal_to_sample @ mean_axis_crystal
-        ki_sample = coating.ki_sample_Ainv
-        k_norm = float(np.linalg.norm(ki_sample))
-        incident_direction = ki_sample / k_norm
-        perpendicular_mean = mean_axis_sample - float(mean_axis_sample @ incident_direction) * (
-            incident_direction
-        )
-        perpendicular_norm = float(np.linalg.norm(perpendicular_mean))
-        if perpendicular_norm <= 1024.0 * np.finfo(np.float64).eps:
-            raise GeometryPredictionError(
-                "minimum-tilt m=0 landmark is ambiguous when ki is parallel to the mean axis"
-            )
-        closest_perpendicular = perpendicular_mean / perpendicular_norm
-        b3_norm = float(np.linalg.norm(basis[:, 2]))
-        size = len(frozen_l)
-        coordinates = np.zeros((size, 2), dtype=np.float64)
-        alpha = np.zeros(size, dtype=np.float64)
-        beta = np.zeros(size, dtype=np.float64)
-        residual = np.zeros(size, dtype=np.float64)
-        status = np.full(size, "ROOT_MISSING", dtype="U32")
-        feasible_indices: list[int] = []
-        for index, integer_l in enumerate(frozen_l):
-            u_Ainv = integer_l * b3_norm
-            z = -u_Ainv / (2.0 * k_norm)
-            tolerance = 4096.0 * np.finfo(np.float64).eps
-            if abs(z) > 1.0 + tolerance:
-                continue
-            z = min(1.0, max(-1.0, z))
-            direction_sample = (
-                z * incident_direction + math.sqrt(max(0.0, 1.0 - z * z)) * closest_perpendicular
-            )
-            direction_crystal = crystal_to_sample.T @ direction_sample
-            cosine_alpha = min(
-                1.0,
-                max(-1.0, float(direction_crystal @ mean_axis_crystal)),
-            )
-            alpha[index] = math.acos(cosine_alpha)
-            beta[index] = math.atan2(
-                float(direction_crystal @ tilt_axis_crystal),
-                float(direction_crystal @ reference_axis_crystal),
-            ) % (2.0 * np.pi)
-            feasible_indices.append(index)
-
-        if feasible_indices:
-            indices = np.asarray(feasible_indices, dtype=np.int64)
-            mapped = detector.map_specular_geometry(
-                rod=rod,
-                alpha_rad=alpha[indices],
-                beta_rad=beta[indices],
-            ).geometry
-            actual_l = mapped.ewald_geometry.L
-            for batch_index, landmark_index in enumerate(indices):
-                integer_l = frozen_l[int(landmark_index)]
-                l_tolerance = (
-                    131072.0
-                    * np.finfo(np.float64).eps
-                    * max(abs(float(actual_l[batch_index])), abs(integer_l), 1.0)
-                )
-                if abs(float(actual_l[batch_index]) - integer_l) > l_tolerance:
-                    status[landmark_index] = "INTEGER_L_MISMATCH"
-                    continue
-                coordinates[landmark_index] = (
-                    float(mapped.column_px[batch_index]),
-                    float(mapped.row_px[batch_index]),
-                )
-                residual[landmark_index] = float(
-                    mapped.ewald_geometry.ewald_residual_Ainv[batch_index]
-                )
-                status[landmark_index] = str(mapped.detector_status[batch_index])
-        return M0IntegerLPrediction(
-            integer_L=frozen_l,
-            coordinates_px=coordinates,
-            alpha_rad=alpha,
-            beta_rad=beta,
-            detector_status=status,
-            ewald_residual_Ainv=residual,
-            reference_wavelength_A=self.reference_wavelength_A,
+        return self._exact_model.predict_m0_minimum_tilt_exact_l_landmarks(
+            integer_L,
+            instrument=instrument,
         )
 
     def predict_tagged_landmarks(
@@ -1354,13 +1345,20 @@ class _ExactTagGeometry:
 
         frozen_keys = self._frozen_nonzero_keys(nonzero_keys)
         frozen_l = self._frozen_m0_integer_l(m0_integer_L)
-        coating, detector = self._detector_context(corrections)
+        instrument = _corrected_instrument(
+            self._inputs.instrument,
+            corrections,
+            self._sample_correction_pivot_lab_m,
+        )
         return (
             self._exact_model.predict_integer_l_tags(
                 frozen_keys,
-                instrument=detector.instrument,
+                instrument=instrument,
             ),
-            self._predict_m0_with_context(frozen_l, coating, detector),
+            self._exact_model.predict_m0_minimum_tilt_exact_l_landmarks(
+                frozen_l,
+                instrument=instrument,
+            ),
         )
 
 

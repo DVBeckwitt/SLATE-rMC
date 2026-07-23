@@ -19,6 +19,9 @@ detector geometry.
 - Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
 - Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
   normalization densities before division.
+- Prepared finite-bin angle profiles that integrate signal and detector-area normalization
+  separately, plus response-bank recovery of Gaussian mosaic width, Lorentzian HWHM, and mixture
+  probability with one exact nuisance amplitude per individual profile profiled out.
 - Position-free measured-peak discovery in an angle chart, detector-native refinement, reciprocal
   integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
 - Incoherent source/wavelength/phase summation before deterministic detector box integration.
@@ -52,10 +55,12 @@ these functions. They are not stored model state.
 - Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
-- General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and
-  intensity-profile fitting beyond the accepted layered-hexagonal geometry boundary.
-- Continuous-`S/N` angular-bin reduction and reciprocal remapping beyond the accepted finite-pixel
-  angle projector.
+- General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and raw-image
+  profile extraction beyond the accepted layered-hexagonal synthetic mosaic-recovery slice.
+- General continuous-`S/N` angular-bin products and reciprocal remapping beyond the prepared
+  finite-profile fitting boundary.
+- Mosaic-fit backgrounds, masks, detector PSF, counting noise, covariance/uncertainty intervals,
+  held-out subsets, and real-OSC recovery.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 
 ## Phase discipline

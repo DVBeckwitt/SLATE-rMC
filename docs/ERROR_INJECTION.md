@@ -175,6 +175,28 @@ Expected detection: position-free discovery boundary, once-only OSC/cake round t
 label and ownership-gate rejection, exact manifest hash, or distinct-incidence and shared-site
 replication gates.
 
+### Mosaic response-profile fitting
+
+- Average pointwise `S/N` values instead of integrating finite-bin `S` and `N` separately, or fit a
+  detector raster rather than the frozen continuous profiles.
+- Drop a detector-visible explicit nonzero branch, fabricate signed duplicates for a collapsed
+  `|00L|` profile, omit a frozen admitted raw-supported `m=0` profile, use an off-panel minimum-tilt
+  landmark as evidence that its full exact-L circle is absent, or impose a mosaic-tilt cutoff on
+  configured support.
+- Share one nuisance amplitude across distinct profiles, or use peak heights, cross-profile ratios,
+  or planted structure-factor amplitudes as fit weights.
+- Reuse a component profile after changing its layout, frame, physical source, backend/device, rod
+  catalogue, material, or fixed geometry provenance; substitute a layout hash for the source
+  revision or mix source revisions inside one component bank.
+- Search eta locally, omit either exact face, miss a second tied interior basin within a coarse
+  interval, or accept a nuisance-projected rank-deficient solution.
+- Square unnormalized extreme response amplitudes so that per-profile scales underflow or overflow.
+
+Expected detection: integrate-before-divide oracle, explicit branch/cardinality validation,
+frozen `m=0` support evidence, per-profile scale invariance, physical-source and profile-revision
+rejection, boundary and within-cell global-alias fixtures, extreme-scale invariance, or local
+rank/condition failure.
+
 ## Control record
 
 Each proof mutation records `mutation_id`, fixture, expected first stage, expected metric, observed

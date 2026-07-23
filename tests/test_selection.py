@@ -37,7 +37,9 @@ from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
 from rasim_next.selection import (
     BlindIndexingPolicy,
     DiscoveredCakePeak,
+    ExpectedM0Peak,
     FrozenOscGeometryReindexing,
+    M0PeakEvidencePolicy,
     MarkerIndexingDecision,
     MarkerIndexingStatus,
     MeasuredImageIndexingResult,
@@ -49,6 +51,7 @@ from rasim_next.selection import (
     audit_frozen_osc_geometry_reindexing,
     build_osc_angle_frame,
     discover_measured_cake_peaks,
+    evaluate_expected_m0_peak_evidence,
     index_discovered_integer_l_peaks,
     index_measured_integer_l_branches,
     load_osc_geometry_series,
@@ -1216,3 +1219,81 @@ def _configured_angle_frame(inputs: object) -> AngleFrame:
         direct_beam_lab=direct_beam,
         revision="configured-selection-test-angle-frame.v1",
     )
+
+
+def test_expected_m0_peak_evidence_requires_raw_local_significance() -> None:
+    row, column = np.indices((81, 81))
+    background = 20.0 + ((3 * row + 5 * column) % 7)
+    counts = np.asarray(background, dtype=np.float64)
+    accepted_center = (20.25, 30.5)
+    accepted_radius = np.hypot(column - accepted_center[0], row - accepted_center[1]) <= 2.0
+    counts[accepted_radius] += 80.0
+    rejected_center = (55.0, 55.0)
+    rejected_radius = np.hypot(column - rejected_center[0], row - rejected_center[1]) <= 2.0
+    counts[rejected_radius] += 2.0
+    candidates = (
+        ExpectedM0Peak(integer_L=3, column_px=accepted_center[0], row_px=accepted_center[1]),
+        ExpectedM0Peak(integer_L=6, column_px=rejected_center[0], row_px=rejected_center[1]),
+        ExpectedM0Peak(integer_L=9, column_px=-20.0, row_px=40.0),
+        ExpectedM0Peak(integer_L=12, column_px=0.0, row_px=40.0),
+    )
+    policy = M0PeakEvidencePolicy(
+        core_radius_px=2.0,
+        background_inner_radius_px=4.0,
+        background_outer_radius_px=8.0,
+        minimum_peak_z=5.0,
+        minimum_integrated_z=5.0,
+    )
+
+    evidence = evaluate_expected_m0_peak_evidence(
+        counts,
+        detector_valid_mask=np.ones(counts.shape, dtype=np.bool_),
+        candidates=candidates,
+        policy=policy,
+    )
+    scaled = evaluate_expected_m0_peak_evidence(
+        13.0 * counts,
+        detector_valid_mask=np.ones(counts.shape, dtype=np.bool_),
+        candidates=candidates,
+        policy=policy,
+    )
+
+    assert tuple(item.integer_L for item in evidence) == (3, 6, 9, 12)
+    assert tuple(item.classification for item in evidence) == (
+        "LOCAL_SIGNAL_SUPPORTED",
+        "LOCAL_SIGNAL_BELOW_GATE",
+        "OUTSIDE_PANEL",
+        "INSUFFICIENT_VALID_SUPPORT",
+    )
+    assert np.allclose(
+        [item.peak_z for item in evidence[:2]],
+        [item.peak_z for item in scaled[:2]],
+        rtol=1.0e-14,
+        atol=1.0e-14,
+    )
+    assert np.allclose(
+        [item.integrated_z for item in evidence[:2]],
+        [item.integrated_z for item in scaled[:2]],
+        rtol=1.0e-14,
+        atol=1.0e-14,
+    )
+    assert evaluate_expected_m0_peak_evidence(counts, candidates=()) == ()
+
+    hot_pixel_counts = np.full((81, 81), 20.0)
+    hot_pixel_counts[40, 40] = 200.0
+    hot_pixel = evaluate_expected_m0_peak_evidence(
+        hot_pixel_counts,
+        candidates=(ExpectedM0Peak(integer_L=3, column_px=40.0, row_px=40.0),),
+    )
+    assert hot_pixel[0].classification == "LOCAL_SIGNAL_BELOW_GATE"
+
+    empty_support = evaluate_expected_m0_peak_evidence(
+        counts,
+        candidates=(ExpectedM0Peak(integer_L=3, column_px=40.5, row_px=40.5),),
+        policy=M0PeakEvidencePolicy(
+            core_radius_px=0.1,
+            background_inner_radius_px=0.2,
+            background_outer_radius_px=0.3,
+        ),
+    )
+    assert empty_support[0].classification == "INSUFFICIENT_VALID_SUPPORT"

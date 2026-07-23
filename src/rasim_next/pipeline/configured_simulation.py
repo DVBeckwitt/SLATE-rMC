@@ -28,6 +28,7 @@ from rasim_next.core.contracts import (
     EventIntensityNormalization,
     IncidentSampleBatch,
     MaterialOptics,
+    canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
@@ -56,6 +57,7 @@ from rasim_next.sampling.source import sample_gaussian_source_rays
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 CONFIGURED_RESULT_SCHEMA_VERSION = "rasim-configured-result-v2"
+_MAXIMUM_MACROBIN_COORDINATES_PER_CALL = 1_500_000
 
 
 def _readonly_float_array(value: Any, shape: tuple[int | None, ...], name: str) -> FloatArray:
@@ -228,13 +230,15 @@ class SimulationConfiguration:
     numerics: NumericalConfiguration
     output_directory: Path
     outputs: SimulationOutputConfiguration
+    cif_sha256: str = field(init=False)
     physics_revision: str = field(init=False)
     render_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
+        cif_sha256 = hashlib.sha256(self.material.cif_path.read_bytes()).hexdigest()
         payload = {
             "schema_version": self.schema_version,
-            "cif_sha256": hashlib.sha256(self.material.cif_path.read_bytes()).hexdigest(),
+            "cif_sha256": cif_sha256,
             "material_phase_id": self.material.phase_id,
             "source": asdict(self.source),
             "instrument": asdict(self.instrument),
@@ -261,6 +265,7 @@ class SimulationConfiguration:
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8")
+        object.__setattr__(self, "cif_sha256", cif_sha256)
         object.__setattr__(self, "physics_revision", physics_revision)
         object.__setattr__(self, "render_revision", hashlib.sha256(render_encoded).hexdigest())
 
@@ -1067,7 +1072,11 @@ def build_configured_geometry_inputs(
         raise TypeError("config must be SimulationConfiguration")
     samples = sample_configured_source(config.source, sample_count=1)
     instrument = _compile_instrument(config.instrument)
-    crystal = read_crystal(config.material.cif_path, phase_id=config.material.phase_id)
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
     material = material_optics(crystal, samples.wavelength_A)
     reciprocal = ReciprocalLattice.from_crystal(crystal)
     air_k_Ainv = 2.0 * np.pi / float(samples.wavelength_A[0])
@@ -1114,13 +1123,14 @@ def rebind_configured_geometry_instrument(
     )
     if (
         config.material != before.material
+        or config.cif_sha256 != before.cif_sha256
         or config.source != before.source
         or config.bragg != before.bragg
         or after_instrument != before_instrument
     ):
         raise ValueError(
-            "geometry reuse requires identical material, source, Bragg state, and instrument "
-            "apart from commanded axis angles"
+            "geometry reuse requires identical material and CIF content, source, Bragg state, "
+            "and instrument apart from commanded axis angles"
         )
     return replace(inputs, config=config, instrument=_compile_instrument(config.instrument))
 
@@ -1138,6 +1148,22 @@ class ConfiguredSimulationInputs:
     strength: Bi2Se3TwoHStrength
     bragg_space: MosaicBraggSpace
     material: MaterialOptics
+
+
+def configured_rod_catalog_revision(inputs: ConfiguredSimulationInputs) -> str:
+    """Return the material-, lattice-, and order-bound physical rod catalog revision."""
+
+    if not isinstance(inputs, ConfiguredSimulationInputs):
+        raise TypeError("inputs must be ConfiguredSimulationInputs")
+    return canonical_revision_sha256(
+        ("definition_id", "configured_physical_rods.v1"),
+        ("phase_id", inputs.config.material.phase_id),
+        ("cif_sha256", inputs.config.cif_sha256),
+        ("reciprocal_basis_Ainv", inputs.reciprocal.basis_Ainv),
+        ("rod_h", np.asarray([rod.h for rod in inputs.rods], dtype=np.int64)),
+        ("rod_k", np.asarray([rod.k for rod in inputs.rods], dtype=np.int64)),
+        ("rod_population", np.asarray([rod.population for rod in inputs.rods], dtype=np.float64)),
+    )
 
 
 def build_configured_simulation_inputs(
@@ -1161,7 +1187,11 @@ def build_configured_simulation_inputs(
         raise ValueError("active Lorentzian mosaic width must be nonzero for intensity")
     samples = sample_configured_source(config.source)
     instrument = _compile_instrument(config.instrument)
-    crystal = read_crystal(config.material.cif_path, phase_id=config.material.phase_id)
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
     material = material_optics(crystal, samples.wavelength_A)
     incident = build_incident_states(samples, material, instrument)
     valid_index = np.flatnonzero(incident.states.valid)
@@ -1227,6 +1257,7 @@ def build_source_averaged_detector(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
         rods=inputs.rods,
+        rod_catalog_revision=configured_rod_catalog_revision(inputs),
         mosaic=inputs.mosaic,
         strength_model=inputs.strength,
         incident=inputs.incident,
@@ -2079,42 +2110,59 @@ def integrate_detector_macrobins(
     half_width = 0.5 * bin_size_px
     offset = half_width * nodes
     mapped_weight = half_width * weights
-    column_grid, row_grid, row_offset_grid, column_offset_grid = np.broadcast_arrays(
-        column_center[None, :, None, None],
-        row_center[:, None, None, None],
-        offset[None, None, :, None],
-        offset[None, None, None, :],
-    )
     if execution_backend not in {"cpu", "cuda"}:
         raise ValueError("execution_backend must be 'cpu' or 'cuda'")
     evaluation_kwargs = (
         {} if execution_backend == "cpu" else {"execution_backend": execution_backend}
     )
-    evaluated = detector.evaluate_detector_density_all_roots(
-        column_grid + column_offset_grid,
-        row_grid + row_offset_grid,
-        **evaluation_kwargs,
-    )
-    if np.any(evaluated.caustic):
-        raise FloatingPointError("a detector quadrature node lies exactly on a caustic")
-    node_weight = mapped_weight[:, None] * mapped_weight[None, :]
-    image = np.sum(
-        evaluated.density_A2_per_px2 * node_weight[None, None, :, :],
-        axis=(2, 3),
-        dtype=np.float64,
-    )
+    shape = (row_center.size, column_center.size)
+    image = np.zeros(shape, dtype=np.float64)
+    valid_source_count_min = np.full(shape, np.iinfo(np.int64).max, dtype=np.int64)
+    row_chunk_size = max(1, _MAXIMUM_MACROBIN_COORDINATES_PER_CALL // column_center.size)
+    result_backend: str | None = None
+    result_device: str | None = None
+    for row_offset, row_weight in zip(offset, mapped_weight, strict=True):
+        for column_offset, column_weight in zip(offset, mapped_weight, strict=True):
+            for row_start in range(0, row_center.size, row_chunk_size):
+                row_stop = min(row_start + row_chunk_size, row_center.size)
+                column_grid, row_grid = np.broadcast_arrays(
+                    column_center[None, :] + column_offset,
+                    row_center[row_start:row_stop, None] + row_offset,
+                )
+                evaluated = detector.evaluate_detector_density_all_roots(
+                    column_grid,
+                    row_grid,
+                    **evaluation_kwargs,
+                )
+                if np.any(evaluated.caustic):
+                    raise FloatingPointError("a detector quadrature node lies exactly on a caustic")
+                image[row_start:row_stop] += (
+                    row_weight * column_weight * evaluated.density_A2_per_px2
+                )
+                np.minimum(
+                    valid_source_count_min[row_start:row_stop],
+                    evaluated.valid_source_count,
+                    out=valid_source_count_min[row_start:row_stop],
+                )
+                current_backend = getattr(
+                    evaluated,
+                    "execution_backend",
+                    "numba_cpu_source_averaged.v1",
+                )
+                current_device = getattr(evaluated, "execution_device", None)
+                if result_backend is None:
+                    result_backend = current_backend
+                    result_device = current_device
+                elif (current_backend, current_device) != (result_backend, result_device):
+                    raise RuntimeError("detector execution backend changed during quadrature")
     return DetectorMacrobinImage(
         image_A2=image,
         column_center_px=column_center,
         row_center_px=row_center,
-        valid_source_count_min=np.min(evaluated.valid_source_count, axis=(2, 3)),
-        coordinate_evaluation_count=int(evaluated.density_A2_per_px2.size),
-        execution_backend=getattr(
-            evaluated,
-            "execution_backend",
-            "numba_cpu_source_averaged.v1",
-        ),
-        execution_device=getattr(evaluated, "execution_device", None),
+        valid_source_count_min=valid_source_count_min,
+        coordinate_evaluation_count=image.size * gauss_order**2,
+        execution_backend=(result_backend or "numba_cpu_source_averaged.v1"),
+        execution_device=result_device,
     )
 
 
@@ -2134,6 +2182,7 @@ __all__ = [
     "build_geometry_only_ewald_context",
     "build_nominal_ewald_context",
     "build_source_averaged_detector",
+    "configured_rod_catalog_revision",
     "evaluate_nominal_ewald_surface",
     "evaluate_nominal_integer_l_markers",
     "integrate_detector_macrobins",

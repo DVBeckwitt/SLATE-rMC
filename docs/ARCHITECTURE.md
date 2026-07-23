@@ -61,9 +61,13 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `fitting/indexed_series.py`: exact image-ID joins and one shared nine-coordinate
   detector/sample/axis/pivot correction pack across an arbitrary nonempty commanded-angle series;
   any nonempty coordinate subset may be active while the complement remains exactly fixed.
+- `fitting/mosaic.py`: immutable finite-bin profile identities and response banks, exact
+  per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
+  search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
+  fitting-boundary adapter over the canonical measurement transform, not another angle mapping.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
-  `(phi, 2theta)` coordinate pullback and the finite-pixel angle projector; never part of raw
-  rendering.
+  `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, and the finite-pixel angle
+  projector; never part of raw rendering.
 - `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
 ## Public runtime layers
@@ -80,13 +84,19 @@ all contributing rod/orientation branches. Only the active detector panel is eva
    exit-refraction, and detector geometry for each landmark trial.
 7. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
    coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
-8. Measured selection discovers peaks without predicted coordinates, refines them on the native
+8. The mosaic-profile adapter evaluates only frozen angular quadrature nodes, integrates `S` and
+   `N` before division, and caches exact component responses by width. CUDA performs the expensive
+   detector evaluations; the small deterministic profile search remains on the CPU. Explicit
+   nonzero profiles use the frozen OSC indexing selection, while branchless `00L` profiles require
+   raw-significant observed support and a representable fixed-model landmark. Geometry-audited
+   inverse-support boundary bins may be frozen out identically from truth and every component.
+9. Measured selection discovers peaks without predicted coordinates, refines them on the native
    detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
    fitting consumes them.
-9. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
+10. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
    frozen observations by image ID. The joint fitter concatenates canonical per-image residual
    blocks while applying one correction vector to every image.
-10. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
+11. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
@@ -111,6 +121,9 @@ module-global or import-time side effects.
   exit-refraction and detector geometry.
 - A measured selection manifest is invalidated by any image, mask, detector/cake calibration,
   reciprocal context, or policy hash change. A fitter never silently relabels a frozen manifest.
+- A mosaic response bank is invalidated by any profile layout, angle frame, source, backend/device,
+  material/rod catalogue, or fixed geometry revision change. Mosaic width and mixture changes reuse
+  the frozen upstream geometry but require their exact component response.
 - Display limits and colormaps never invalidate physics.
 
 ## Deliberately absent runtime structures

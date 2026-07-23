@@ -1,0 +1,211 @@
+schema_version = "rasim-mosaic-recovery-v2"
+simulation_config = "../../../configs/bi2se3_simulation.yaml"
+incidence_angles_deg = [5.0, 10.0, 15.0]
+
+# Canonical order from SHARED_GEOMETRY_PARAMETER_NAMES. The first six values are radians;
+# the final three are metres. This is the accepted unconstrained nine-coordinate OSC fit.
+shared_geometry_corrections = [
+  -0.00449943391543809,
+  -0.023011840834110096,
+  0.007325549165585003,
+  0.01565915036224212,
+  -0.015187627126648262,
+  -0.015250740996104902,
+  4.954992196687335e-05,
+  9.999999689372352e-05,
+  -2.7732760149498375e-05,
+]
+geometry_manifest_sha256 = "1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132"
+
+[nonzero_centroid_provenance]
+series_config = "../../../configs/bi2se3_osc_geometry_fit.yaml"
+series_config_sha256 = "cab32982caf1b3f95c3da5cdf57b88094007592d626e65119f5d13c0759acda0"
+selection_manifest_revision = "sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132"
+coordinate_convention = "detector_native_continuous_column_row.v1"
+selection_role = "frozen position-free indexed OSC observations"
+
+[m0_centroid_provenance]
+source_file = "../observations/legacy_peak_selections.csv"
+source_file_sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"
+coordinate_convention = "legacy_raw_x_is_native_column.legacy_raw_y_is_native_row.v1"
+legacy_classification = "CORRECTED"
+first_divergence = "third-image legacy 12-degree metadata replaced by user-authoritative 15 degrees"
+selection_role = "frozen legacy-labeled centroids validated by expected-point OSC evidence; not automatic discovery"
+
+[[m0_observations]]
+dataset_id = "Bi2Se3-5deg"
+incidence_angle_deg = 5.0
+osc_file = "../osc/Bi2Se3_5m_5d.osc.gz"
+osc_file_sha256 = "cba9d38d9cae1e8e3be3c2ad58ad130e04ce1958f0d2d986a947ab3a90818e36"
+detector_native_dtype = "int32"
+detector_native_shape_rc = [3000, 3000]
+detector_native_bytes_sha256 = "81a5bbf7b772879a3b8ee4b1db55493e78e9f455aa72c00ac9dbae12257fa29d"
+indexing_discovery_revision = "sha256-7b693a5891dc0a4f6dd37752f4c6d4ca47a5e1f02e6d1a0633efa50241d91fb4"
+indexed_nonzero_peaks = [
+  { family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1817.7588517038384, row_px = 1424.8374461205754 },
+  { family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1101.6156606966617, row_px = 1416.8065717588831 },
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1822.5528084831101, row_px = 1375.0705270170126 },
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1098.6810344280873, row_px = 1367.9277511226428 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1838.8340311723409, row_px = 1214.4050583006715 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1088.6137720449869, row_px = 1209.6431293098908 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1849.2060534401865, row_px = 1081.8587854288294 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1082.0278985187695, row_px = 1079.2025867569332 },
+  { family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1852.5426699203456, row_px = 1007.4061266763083 },
+  { family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1082.7572163632501, row_px = 1008.1493540921124 },
+]
+unsupported_observed_peaks = []
+observed_peaks = [
+  { reduced_order = 1, integer_L = 3, column_px = 1455.246663897277, row_px = 1472.9363426415914 },
+  { reduced_order = 2, integer_L = 6, column_px = 1458.0170005465461, row_px = 1342.6689237204969 },
+]
+
+[[m0_observations]]
+dataset_id = "Bi2Se3-10deg"
+incidence_angle_deg = 10.0
+osc_file = "../osc/Bi2Se3_10d_5m.osc.gz"
+osc_file_sha256 = "faaa8f77785ddcd51c741d3b53c3ab7694fb8dacb961cd414d20daa5c21ccd67"
+detector_native_dtype = "int32"
+detector_native_shape_rc = [3000, 3000]
+detector_native_bytes_sha256 = "2c4e512740e123a9e3f44068c1545cc757ddceec334d8460cebb0f592e4401ff"
+indexing_discovery_revision = "sha256-592e8819855a3bdc0dbd334e7ac3bc2a4591b71e186d219ef9f6836e1ed79490"
+indexed_nonzero_peaks = [
+  { family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1820.2449423506625, row_px = 1432.941383608842 },
+  { family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1100.2635563545009, row_px = 1423.1957885404884 },
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1826.3003930711125, row_px = 1384.1477497149233 },
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1096.1389165606454, row_px = 1375.8025996839715 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1849.2412140997192, row_px = 1226.6365299049701 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1079.6853208163468, row_px = 1221.6605563065748 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1868.2207008658277, row_px = 1098.7030940440275 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1066.6286655438942, row_px = 1096.6448164666665 },
+]
+unsupported_observed_peaks = [
+  { integer_L = 3, column_px = 1453.6756163775779, row_px = 1481.0156524968525, reason = "UNSUPPORTED_BY_TOP_EXIT_MINIMUM_TILT_FORWARD_MODEL" },
+]
+observed_peaks = [
+  { reduced_order = 2, integer_L = 6, column_px = 1458.0766725305305, row_px = 1343.3123763150988 },
+  { reduced_order = 3, integer_L = 9, column_px = 1457.906865627117, row_px = 1195.8763281018082 },
+]
+
+[[m0_observations]]
+dataset_id = "Bi2Se3-15deg"
+incidence_angle_deg = 15.0
+osc_file = "../osc/Bi2Se3_15d_5m.osc.gz"
+osc_file_sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
+detector_native_dtype = "int32"
+detector_native_shape_rc = [3000, 3000]
+detector_native_bytes_sha256 = "edb09afbe7125ad09d983901a0813133492dbc0b5d971e13b8d25da8d6db234e"
+indexing_discovery_revision = "sha256-fa3fefbd4dee80cac142c5660050c317518d19b865a453f057461fc577e745d6"
+indexed_nonzero_peaks = [
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1826.0743998485073, row_px = 1382.8505583248896 },
+  { family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1094.7962892072442, row_px = 1376.6566318932876 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1856.6991445010722, row_px = 1235.5822760585029 },
+  { family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1073.9292350232979, row_px = 1228.8811653428568 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1881.5164658785002, row_px = 1111.1305302966637 },
+  { family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1055.0123527555611, row_px = 1107.139548396193 },
+  { family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], column_px = 1896.9520862838426, row_px = 1041.0155266750537 },
+  { family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], column_px = 1044.1152655066337, row_px = 1038.2081593328789 },
+]
+unsupported_observed_peaks = [
+  { integer_L = 3, column_px = 1454.7843986755113, row_px = 1472.9611791398756, reason = "UNSUPPORTED_BY_TOP_EXIT_MINIMUM_TILT_FORWARD_MODEL" },
+]
+observed_peaks = [
+  { reduced_order = 2, integer_L = 6, column_px = 1459.947109214949, row_px = 1343.640035478175 },
+  { reduced_order = 3, integer_L = 9, column_px = 1461.4935735688343, row_px = 1196.4476320507986 },
+]
+
+[truth]
+gaussian_sigma_deg = 2.0
+lorentzian_hwhm_deg = 0.5
+lorentzian_probability = 0.1
+
+[profiles]
+two_theta_half_width_deg = 0.04
+nonzero_phi_half_width_deg = 5.0
+m0_phi_half_width_deg = 8.0
+m0_structure_candidate_integer_L = [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36]
+m0_reduced_order_divisor = 3
+m0_evidence_core_radius_px = 5.0
+m0_evidence_background_inner_radius_px = 10.0
+m0_evidence_background_outer_radius_px = 25.0
+m0_evidence_minimum_peak_z = 5.0
+m0_evidence_minimum_integrated_z = 5.0
+m0_evidence_minimum_valid_fraction = 0.8
+m0_evidence_mad_scale = 1.4826
+m0_evidence_sigma_floor_counts = 1.0
+m0_evidence_excess_pixel_z = 3.0
+m0_evidence_minimum_excess_pixel_count = 3
+m0_evidence_revision = "expected-point.circular-core-annulus-median-mad.excess-pixel-gates.v1"
+m0_maximum_observed_anchor_distance_px = 5.0
+nonzero_maximum_observed_anchor_distance_px = 8.0
+phi_bin_count = 41
+two_theta_gauss_order = 6
+phi_gauss_order = 6
+m0_two_theta_gauss_order = 4
+m0_phi_gauss_order = 4
+execution_backend = "cuda"
+excluded_bin_policy = "frozen_inverse_support_boundary_audit.v1"
+excluded_bin_topology = "43_alpha_seam_bins_including_two_dual_exit_fold_bins.v1"
+excluded_bin_topology_sha256 = "07a329cbd803c50d76adcd81960fcad3303b9d91bdd59c4db9f243ac06768fb3"
+geometry_excluded_phi_bins = [
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [19, 20, 21] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-5deg", family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20, 21] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20, 21] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 4, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20, 21] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20, 21] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [19, 20] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-10deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [17] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 5, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [21] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20, 21] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 8, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 10, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 1, representative_rod_hk = [-1, 0], indices = [20] },
+  { dataset_id = "Bi2Se3-15deg", family_m = 1, integer_L = 11, analytic_branch_id = 2, root_side_branch_id = 2, representative_rod_hk = [-1, 0], indices = [20, 21] },
+]
+
+[validation]
+# Generate the fitted observations with a denser rule than the response bank so recovery is not
+# an identical-discretization inversion.
+truth_two_theta_gauss_order = 8
+truth_phi_gauss_order = 8
+m0_truth_two_theta_gauss_order = 6
+m0_truth_phi_gauss_order = 6
+normalization_probe_gaussian_sigma_deg = 1.0
+unknown_intensity_scale_bounds = [1.0e-6, 1.0e6]
+unknown_intensity_scale_revision = "sha256-loguniform-independent-profile.v2"
+
+[acceptance]
+maximum_gaussian_sigma_error_deg = 0.03
+maximum_lorentzian_hwhm_error_deg = 0.03
+maximum_lorentzian_probability_error = 0.005
+maximum_total_variation = 0.01
+maximum_wasserstein_1_deg = 0.02
+maximum_component_decomposition_relative_error = 1.0e-12
+maximum_sensitivity_condition = 1.0e4
+maximum_profile_relative_l2_residual = 0.02
+
+[search]
+gaussian_sigma_bounds_deg = [0.35, 5.0]
+lorentzian_hwhm_bounds_deg = [0.08, 3.0]
+coarse_width_count = 7
+refinement_width_count = 5
+refinement_levels = 4
+near_optimal_objective_delta = 0.01
+maximum_sensitivity_condition = 1.0e8
+
+[render]
+image_size = 3000
+pixel_gauss_order = 2
+execution_backend = "cuda"

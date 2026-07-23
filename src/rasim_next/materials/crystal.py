@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from dataclasses import dataclass
 from operator import index
@@ -133,12 +134,28 @@ def _canonical_fractional(position: gemmi.Fractional) -> tuple[float, float, flo
     return tuple(float(value) for value in fractional)
 
 
-def read_crystal(path: str | Path, *, phase_id: str | None = None) -> CrystalStructure:
+def read_crystal(
+    path: str | Path,
+    *,
+    phase_id: str | None = None,
+    expected_sha256: str | None = None,
+) -> CrystalStructure:
     """Read exactly one CIF structure and expand its symmetry exactly once."""
 
     source_path = Path(path)
     try:
-        document = gemmi.cif.read_file(str(source_path))
+        source_bytes = source_path.read_bytes()
+        if expected_sha256 is not None:
+            if (
+                not isinstance(expected_sha256, str)
+                or len(expected_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in expected_sha256)
+            ):
+                raise ValueError("expected_sha256 must be one lowercase SHA-256 digest")
+            actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
+            if actual_sha256 != expected_sha256:
+                raise ValueError("CIF content changed after its configuration revision was frozen")
+        document = gemmi.cif.read_string(source_bytes.decode("utf-8"))
         document.check_for_missing_values()
         document.check_for_duplicates()
         for source_block in document:
@@ -154,7 +171,7 @@ def read_crystal(path: str | Path, *, phase_id: str | None = None) -> CrystalStr
                 frame = item.frame
                 if frame is not None:
                     pending_blocks.append(frame)
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, UnicodeError, ValueError) as error:
         raise ValueError(f"failed to read CIF {source_path}: {error}") from error
     if len(document) != 1:
         raise ValueError("CIF must contain exactly one data block")

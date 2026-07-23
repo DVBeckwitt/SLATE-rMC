@@ -207,12 +207,12 @@ future work.
 | PHY-FIT-002C | paired tag-branch half-angle and m=0 increasing-L TLS-line residuals | caked line/peak geometry objectives | alignment stage | fitting | CORRECTED active simultaneous coordinate-plus-angle objective |
 | PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |
 | PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active direct fixed-L root oracle plus corrected-geometry relabeling of unchanged selected native candidates; fresh global search is diagnostic only |
-| PHY-FIT-003B | exact-L m=0 minimum-mosaic-tilt detector landmark (`tag_branch=0`) | no legacy point identity for the m=0 orientation curve | constrained Ewald geometry | fitting/mosaic | NEW active geometry landmark, not an intensity maximum |
+| PHY-FIT-003B | exact-L m=0 minimum-tilt geometry landmark (`tag_branch=0`) with signed inverse orientations collapsed by positive `|L|` | no legacy point identity for the m=0 orientation curve | constrained Ewald geometry | fitting/mosaic | NEW active; deterministic geometry landmark, not claimed intensity maximum or exhaustive visible-circle scan |
 | PHY-FIT-003C | strict arbitrary-length OSC-series schema and provenance-bound image-ID join | hard-coded GUI/script image lists | repeatable staged fitting | fitting/selection | NEW active; explicit motor angles and one material/mount per fit group |
 | PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active single-image and 5/10/15-degree nine-coordinate exact-marker proofs |
-| PHY-FIT-005 | normalized local mosaic-profile objective | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED |
-| PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED |
-| PHY-FIT-007 | frozen geometry during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle |
+| PHY-FIT-005 | finite-bin mosaic-profile objective with integrate-`S/N`-before-divide and exact per-profile nuisance amplitudes | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED active deterministic synthetic slice; absolute and cross-peak intensities excluded from weighting |
+| PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture with exact faces and finite centered-logit audit | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED active deterministic synthetic slice |
+| PHY-FIT-007 | frozen geometry/source/material/profile revisions during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle, active deterministic synthetic slice |
 | PHY-FIT-008 | detector-native ordered ROI mass objective | `gui/ordered_structure_fit.py:322-540` | refinement step 5 and SI detector objectives | fitting | CORRECTED |
 | PHY-FIT-009 | analytic nonnegative per-image scale | `ordered_structure_fit.py:53-99` | nuisance image scale | fitting | MATCH/verify |
 | PHY-FIT-010 | event and detector-response reuse for intensity fits | old code rerenders broadly | future performance requirement | fitting | NEW |
@@ -220,7 +220,7 @@ future work.
 | PHY-FIT-012 | signal and normalization summed before division in future caking | `fitting/rod_profiles.py:91-308` | SI selected-rod profile equation | fitting | MATCH when caking is added |
 | PHY-FIT-013 | upstream parameters frozen before stacking fit | staged runtime | refinement step 6 | fitting | MATCH principle |
 | PHY-FIT-014 | stage-specific synthetic parameter recovery | absent as one system | scientific validation | fitting | NEW required |
-| PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | CORRECTED explicit |
+| PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | DEFERRED beyond exact nuisance scales; no noise/background/covariance model in the deterministic slice |
 | PHY-FIT-015 | dependency-aware cache invalidation | distributed runtime caches | performance requirement | fitting | NEW |
 | PHY-FIT-016 | optional final joint polish after staged stability | global old optimization paths | refinement discussion | fitting | FUTURE with safeguards |
 | PHY-MAP-001B | finite `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | none | DEFERRED until native fits pass |
