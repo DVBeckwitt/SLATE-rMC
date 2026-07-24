@@ -14,7 +14,7 @@ strict YAML + CIF
   -> analytic rod/Ewald roots and exit optics
   -> per-source, per-physical-rod continuous detector-coordinate density
   -> all-source, all-rod, all-root intensity sum on the detector function
-  -> deterministic detector-pixel box integration
+  -> selected-center comparison, display-only center sampling, or detector-pixel box integration
 ```
 
 No physical Ewald-sphere object is created. A detector coordinate determines an outgoing air ray;
@@ -48,10 +48,10 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `pipeline/continuous_detector.py`: one-incident-state detector pullback and native-pixel
   integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
-  fields and compiled CPU/CUDA evaluation.
+  fields, linear rod restriction/physics rebinding, and compiled CPU/CUDA evaluation.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
-  display-only raster evaluation. Its geometry-only input/context builders stop before structure
-  strength or mosaic construction.
+  quantitative pixel integration or display-only native-center density sampling. Its geometry-only
+  input/context builders stop before structure strength or mosaic construction.
 - `selection`: position-free angle-chart discovery, detector-native peak refinement, reciprocal
   identity inference, immutable cross-incidence branch manifests, strict OSC-series ingestion, and
   frozen-key post-fit visibility audits.
@@ -65,15 +65,18 @@ all contributing rod/orientation branches. Only the active detector panel is eva
   per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
   search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
   fitting-boundary adapter over the canonical measurement transform, not another angle mapping.
-- `fitting/ordered_intensity.py`: fixed detector/mosaic sparse responses, fixed-position Bi2Se3
-  occupancy quadratics, directional `Qr/Qz` damping, analytic image-scale projection, and
-  structural rank/correlation diagnostics. Dataset-ID-bound observations use a quadrature-
-  independent observable-layout revision, while derived numerical-response, structure, mosaic,
-  and rod-catalog revisions preserve prediction provenance. The full strength model is retained as
-  a proof oracle, not called by optimizer iterations.
+- `fitting/ordered_intensity.py`: fixed detector/mosaic sparse ROI-mass responses plus certified
+  source-averaged selected-center responses, fixed-position Bi2Se3 occupancy quadratics,
+  directional `Qr/Qz` damping, analytic image-scale projection, and structural rank/correlation
+  diagnostics. The source-averaged path sums every incident state into one detector function per
+  incidence before comparison and certifies its `Uz` interpolation against full-detector probes.
+  Dataset-ID-bound observations carry distinct mass/density measures, while numerical-response,
+  structure, mosaic, source, instrument, backend, and rod-catalog revisions preserve provenance.
+  The full strength model is retained as a proof oracle, not called by optimizer iterations.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
-  `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, and the finite-pixel angle
-  projector; never part of raw rendering.
+  `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, the full finite-pixel angle
+  projector, and an exact cropped physical-pixel projector for fully panel-contained measured
+  profiles; never part of raw rendering.
 - `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
 ## Public runtime layers
@@ -82,8 +85,8 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 2. `ContinuousEwaldCoating` restricts one rod to one analytic Ewald root for intrinsic diagnostics.
 3. `DetectorEwaldMeasure` pulls all inverse branches onto arbitrary detector coordinates and
    integrates one incident state's pixels.
-4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before the one
-   requested detector integration.
+4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before any
+   selected-center comparison, display sample, or requested detector integration.
 5. `configured_simulation` assembles those objects from one validated YAML document.
 6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
    structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
@@ -92,10 +95,14 @@ all contributing rod/orientation branches. Only the active detector panel is eva
    coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
 8. The mosaic-profile adapter evaluates only frozen angular quadrature nodes, integrates `S` and
    `N` before division, and caches exact component responses by width. CUDA performs the expensive
-   detector evaluations; the small deterministic profile search remains on the CPU. Explicit
-   nonzero profiles use the frozen OSC indexing selection, while branchless `00L` profiles require
-   raw-significant observed support and a representable fixed-model landmark. Geometry-audited
-   inverse-support boundary bins may be frozen out identically from truth and every component.
+   detector evaluations; the small deterministic profile search remains on the CPU. The measured
+   path projects only cropped raw-OSC pixels into the identical local-bin layout with exact polygon
+   overlap. A frozen sideband gate removes whole weak profiles, and explicit policy identities
+   remove whole secondary-lobe profiles before the one joint fit; neither operation masks bins by
+   their central-profile intensity. Explicit nonzero profiles use the frozen OSC indexing
+   selection, while branchless `00L` profiles require raw-significant observed support and a
+   representable fixed-model landmark. Geometry-audited inverse-support boundary bins may be frozen
+   out identically from every simulated component.
 9. Measured selection discovers peaks without predicted coordinates, refines them on the native
    detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
    fitting consumes them.
@@ -106,12 +113,18 @@ all contributing rod/orientation branches. Only the active detector panel is eva
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
-12. Ordered-intensity fitting compiles detector roots and their structure-independent weights once,
-    then contracts only occupancy coefficients and directional Debye-Waller factors for every
-    candidate. Atomic positions, geometry, mosaic, lattice, optics, and stacking law are immutable
-    in the first fixed-position phase. Multi-incidence observations join by dataset ID and exact
-    observable-layout digest rather than tuple position; the separate response digest identifies
-    the numerical quadrature used to predict that observable.
+12. Ordered-intensity fitting retains the finite-ROI mass path and a certified source-averaged
+    selected-center path. The latter produces one combined detector function per incidence before
+    any dataset scale or residual, retains every weak nonzero anchor and admitted `m=0` anchor, and
+    contracts only occupancy coefficients and directional Debye-Waller factors. Atomic positions,
+    geometry, mosaic, lattice, optics, and stacking law are immutable. Multi-incidence observations
+    join by dataset ID and exact observable-layout digest rather than tuple position. The active
+    Unfiltered Bi2Se3 proof mode uses 250 shared-revision source rows and `88/78/72` centers,
+    including six `m=0`; a measured-mosaic handoff instead propagates its exact fit-eligible
+    identity set. Both prove synthetic selected-component recovery, not unresolved raw-OSC
+    intensity recovery.
+13. Native-center rendering samples the final combined detector density once per native pixel. It
+    is display-only `A^2/px^2`, not pixel-integrated mass, OSC counts, or a count-calibrated fit.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never
@@ -136,6 +149,12 @@ module-global or import-time side effects.
 - A mosaic response bank is invalidated by any profile layout, angle frame, source, backend/device,
   material/rod catalogue, or fixed geometry revision change. Mosaic width and mixture changes reuse
   the frozen upstream geometry but require their exact component response.
+- A measured mosaic observation is additionally invalidated by any OSC bytes, detector-valid mask,
+  exact local projector, measured-selection policy, or nuisance-basis profile revision change.
+- A source-averaged selected-center response is invalidated by source count/revision, selected-center
+  layout, rods, mosaic or structure physics, instrument, backend, or device. Geometry tag/marker
+  construction independently rebuilds exactly one ideal source-center, zero-divergence,
+  mean-wavelength companion state and never inherits the intensity ensemble size.
 - Display limits and colormaps never invalidate physics.
 
 ## Deliberately absent runtime structures

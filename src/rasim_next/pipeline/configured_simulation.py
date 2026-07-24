@@ -1173,8 +1173,14 @@ def build_configured_simulation_inputs(
 
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
-    if config.structure_factor.model_id != "bi2se3_finite_2h.v1":
-        raise ValueError("structure_factor.model_id must be bi2se3_finite_2h.v1 for intensity")
+    if config.structure_factor.model_id not in {
+        "bi2se3_finite_2h.v1",
+        "r3m_quintuple_finite_2h.v1",
+    }:
+        raise ValueError(
+            "structure_factor.model_id must select the finite R-3m quintuple-layer model "
+            "for intensity"
+        )
     if config.structure_factor.normalization != "FINITE_TOTAL":
         raise ValueError("structure_factor.normalization must be FINITE_TOTAL for intensity")
     if not 0.0 <= config.structure_factor.shared_disorder_epsilon <= 1.0:
@@ -2053,11 +2059,9 @@ class DetectorMacrobinImage:
         )
         if valid_count.shape != image.shape or np.any(valid_count < 0):
             raise ValueError("valid_source_count_min has invalid values")
-        count = _integer(
-            self.coordinate_evaluation_count,
-            "coordinate_evaluation_count",
-            positive=True,
-        )
+        count = _integer(self.coordinate_evaluation_count, "coordinate_evaluation_count")
+        if count < 1:
+            raise ValueError("coordinate_evaluation_count must be positive")
         if self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
@@ -2080,6 +2084,177 @@ class DetectorMacrobinImage:
         ):
             object.__setattr__(self, name, value)
         object.__setattr__(self, "coordinate_evaluation_count", count)
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorCoordinateDensityImage:
+    """Exact samples of the combined detector function at native pixel centers."""
+
+    image_A2_per_px2: FloatArray
+    column_center_px: FloatArray
+    row_center_px: FloatArray
+    valid_source_count: NDArray[np.int64]
+    coordinate_evaluation_count: int
+    measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
+    sampling_grid_id: str = "native_pixel_centers.v1"
+    execution_backend: str = "numba_cpu_source_averaged.v1"
+    execution_device: str | None = None
+
+    def __post_init__(self) -> None:
+        image = _readonly_float_array(
+            self.image_A2_per_px2,
+            (None, None),
+            "image_A2_per_px2",
+        )
+        if np.any(image < 0.0):
+            raise ValueError("image_A2_per_px2 must be nonnegative")
+        column = _readonly_float_array(
+            self.column_center_px,
+            (image.shape[1],),
+            "column_center_px",
+        )
+        row = _readonly_float_array(
+            self.row_center_px,
+            (image.shape[0],),
+            "row_center_px",
+        )
+        valid_count = np.array(
+            self.valid_source_count,
+            dtype=np.int64,
+            copy=True,
+            order="C",
+        )
+        if valid_count.shape != image.shape or np.any(valid_count < 0):
+            raise ValueError("valid_source_count has invalid values")
+        count = _integer(self.coordinate_evaluation_count, "coordinate_evaluation_count")
+        if count < 0:
+            raise ValueError("coordinate_evaluation_count must be nonnegative")
+        if self.measure_id != "raw_detector_coordinate_density_A2_per_px2.v1":
+            raise ValueError("unsupported detector-coordinate density measure")
+        if self.sampling_grid_id != "native_pixel_centers.v1":
+            raise ValueError("unsupported detector-coordinate sampling grid")
+        if self.execution_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        }:
+            raise ValueError("unsupported detector-coordinate execution backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be None or a nonempty string")
+        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
+        valid_count.setflags(write=False)
+        for name, value in (
+            ("image_A2_per_px2", image),
+            ("column_center_px", column),
+            ("row_center_px", row),
+            ("valid_source_count", valid_count),
+        ):
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "coordinate_evaluation_count", count)
+
+
+def sample_detector_pixel_center_density(
+    detector: SourceAveragedDetectorEwaldMeasure,
+    *,
+    execution_backend: str = "cpu",
+) -> DetectorCoordinateDensityImage:
+    """Sample the final all-source, all-rod, all-root detector function once per pixel."""
+
+    if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+        raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
+    if execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("execution_backend must be cpu or cuda")
+    rows, columns = detector.instrument.detector_shape_rc
+    column_center = np.arange(columns, dtype=np.float64)
+    row_center = np.arange(rows, dtype=np.float64)
+    image = np.zeros((rows, columns), dtype=np.float64)
+    valid_source_count = np.zeros((rows, columns), dtype=np.int64)
+    instrument = detector.instrument
+    detector_rotation = instrument.lab_from_detector.rotation
+    column_step_lab = detector_rotation[:, 0] * instrument.detector_column_pitch_m
+    row_step_lab = detector_rotation[:, 1] * instrument.detector_row_pitch_m
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
+    detector_zero_lab = (
+        instrument.lab_from_detector.translation_m
+        - reference_column * column_step_lab
+        - reference_row * row_step_lab
+    )
+    sample_normal_lab = instrument.sample_from_lab.rotation[2]
+    valid_state = detector.incident.states.valid
+    origin_normal_coordinate = (
+        detector.incident.states.sample_intersection_lab_m[valid_state] @ sample_normal_lab
+    )
+    if not origin_normal_coordinate.size:
+        raise ValueError("detector contains no valid source state")
+    minimum_origin_normal_coordinate = float(np.min(origin_normal_coordinate))
+    row_chunk_size = max(1, _MAXIMUM_MACROBIN_COORDINATES_PER_CALL // columns)
+    result_backend: str | None = None
+    result_device: str | None = None
+    coordinate_evaluation_count = 0
+    for row_start in range(0, rows, row_chunk_size):
+        row_stop = min(row_start + row_chunk_size, rows)
+        column_grid, row_grid = np.broadcast_arrays(
+            column_center[None, :],
+            row_center[row_start:row_stop, None],
+        )
+        point_normal_coordinate = (
+            detector_zero_lab @ sample_normal_lab
+            + column_grid * (column_step_lab @ sample_normal_lab)
+            + row_grid * (row_step_lab @ sample_normal_lab)
+        )
+        projection_scale = max(
+            float(np.max(np.abs(point_normal_coordinate))),
+            abs(minimum_origin_normal_coordinate),
+            1.0,
+        )
+        projection_tolerance = 1024.0 * np.finfo(np.float64).eps * projection_scale
+        candidate = (
+            point_normal_coordinate > minimum_origin_normal_coordinate - projection_tolerance
+        )
+        selected = np.flatnonzero(candidate.ravel())
+        if not selected.size:
+            continue
+        evaluated = detector.evaluate_detector_density_all_roots(
+            column_grid.ravel()[selected],
+            row_grid.ravel()[selected],
+            execution_backend=execution_backend,
+        )
+        if np.any(evaluated.caustic):
+            raise FloatingPointError("a native pixel center lies exactly on a detector caustic")
+        if result_backend is None:
+            result_backend = evaluated.execution_backend
+            result_device = evaluated.execution_device
+        elif (
+            evaluated.execution_backend != result_backend
+            or evaluated.execution_device != result_device
+        ):
+            raise RuntimeError("detector center sampling changed execution backend")
+        chunk_image = image[row_start:row_stop].ravel()
+        chunk_valid_count = valid_source_count[row_start:row_stop].ravel()
+        chunk_image[selected] = evaluated.density_A2_per_px2
+        chunk_valid_count[selected] = evaluated.valid_source_count
+        coordinate_evaluation_count += int(selected.size)
+    if result_backend is None:
+        empty = detector.evaluate_detector_density_all_roots(
+            np.empty(0, dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+            execution_backend=execution_backend,
+        )
+        result_backend = empty.execution_backend
+        result_device = empty.execution_device
+    return DetectorCoordinateDensityImage(
+        image_A2_per_px2=image,
+        column_center_px=column_center,
+        row_center_px=row_center,
+        valid_source_count=valid_source_count,
+        coordinate_evaluation_count=coordinate_evaluation_count,
+        execution_backend=result_backend,
+        execution_device=result_device,
+    )
 
 
 def integrate_detector_macrobins(
@@ -2171,6 +2346,7 @@ __all__ = [
     "CONFIGURED_RESULT_SCHEMA_VERSION",
     "ConfiguredGeometryInputs",
     "ConfiguredSimulationInputs",
+    "DetectorCoordinateDensityImage",
     "DetectorIntegerLMarkers",
     "DetectorMacrobinImage",
     "EwaldSurfaceDisplay",
@@ -2190,5 +2366,6 @@ __all__ = [
     "load_simulation_config",
     "load_strict_yaml_mapping",
     "rebind_configured_geometry_instrument",
+    "sample_detector_pixel_center_density",
     "sample_reciprocal_space",
 ]

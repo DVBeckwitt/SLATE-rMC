@@ -1,4 +1,4 @@
-"""Recover a chosen Bi2Se3 mosaic law from three fixed-geometry synthetic views."""
+"""Fit Bi2Se3 mosaic profiles jointly from synthetic or measured 5/10/15-degree views."""
 
 from __future__ import annotations
 
@@ -16,27 +16,42 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.ndimage import map_coordinates
 
 from painted_ewald import MosaicParameters, Rod, wrapped_mosaic_line_density_rad_inv
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.fitting import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
     ExactTagGeometryModel,
+    MosaicIdentifiabilityError,
     MosaicProfileDefinition,
     MosaicProfileFitResult,
     MosaicProfileIdentity,
+    MosaicProfileNuisanceBasis,
     MosaicProfileSearchResult,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
     SharedGeometryCorrections,
     apply_shared_geometry_corrections,
     evaluate_continuous_mosaic_profiles,
+    fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,
+    source_averaged_profile_has_support,
 )
-from rasim_next.geometry import AngleFrame, build_incident_states, detector_coordinates_to_angles
+from rasim_next.geometry import (
+    AngleFrame,
+    angles_to_detector_coordinates,
+    build_incident_states,
+    detector_coordinates_to_angles,
+)
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.io.osc import read_osc
+from rasim_next.measurement import (
+    compile_detector_profile_projector,
+    project_detector_profiles,
+)
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredGeometryInputs,
@@ -64,6 +79,9 @@ FloatArray = NDArray[np.float64]
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASE = ROOT / "examples" / "bi2se3" / "experiment" / "mosaic_fit_truth.toml"
+DEFAULT_MEASURED_PROFILE_POLICY = (
+    ROOT / "examples" / "bi2se3" / "experiment" / "mosaic_fit_measured_policy.toml"
+)
 _ACCEPTED_INDEXED_MANIFEST_SHA256 = (
     "1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132"
 )
@@ -103,6 +121,15 @@ class _ProfileGeometryContext:
     instrument: CompiledInstrument
 
 
+@dataclass(frozen=True, slots=True)
+class _MeasuredProfilePolicy:
+    sha256: str
+    minimum_excess_energy_over_side_scatter: float
+    sideband_two_theta_offsets_rad: tuple[float, ...]
+    excluded_profile_keys: frozenset[tuple[str, int, int, int, int | None]]
+    excluded_profiles: tuple[dict[str, object], ...]
+
+
 def _profile_forward_contexts(
     base: ConfiguredSimulationInputs,
     series: tuple[ConfiguredSimulationInputs, ...],
@@ -128,6 +155,35 @@ def _profile_forward_contexts(
         for item in series
     )
     return physics, geometry
+
+
+def _source_model_record(base: ConfiguredSimulationInputs) -> dict[str, object]:
+    source = base.config.source
+    samples = base.samples
+    return {
+        "reduction": "one_incoherent_weighted_detector_function_per_incidence.v1",
+        "sample_count": int(samples.incident_sample_id.size),
+        "mean_origin_lab_m": list(source.mean_origin_lab_m),
+        "mean_direction_lab": list(source.mean_direction_lab),
+        "spatial_sigma_m": list(source.spatial_sigma_m),
+        "divergence_sigma_rad": list(source.divergence_sigma_rad),
+        "mean_wavelength_A": source.mean_wavelength_A,
+        "wavelength_sigma_A": source.wavelength_sigma_A,
+        "sampled_wavelength_range_A": [
+            float(np.min(samples.wavelength_A)),
+            float(np.max(samples.wavelength_A)),
+        ],
+        "source_seed": samples.source_seed,
+        "source_sampling_model_id": samples.source_sampling_model_id,
+        "source_rng_model_id": samples.source_rng_model_id,
+        "source_parameter_revision": samples.source_parameter_revision,
+        "source_revision": samples.source_revision,
+        "nominal_geometry_companion": {
+            "sample_count": 1,
+            "policy": "source-center-zero-divergence-mean-wavelength.v1",
+            "contributes_detector_intensity": False,
+        },
+    }
 
 
 def _external_directory(path: Path) -> Path:
@@ -459,6 +515,98 @@ def _case(path: Path) -> tuple[dict[str, Any], bytes, str]:
     return case, case_bytes, hashlib.sha256(case_bytes).hexdigest()
 
 
+def _measured_profile_policy(
+    path: Path,
+    *,
+    case_sha256: str,
+    definitions: tuple[tuple[MosaicProfileDefinition, ...], ...],
+) -> _MeasuredProfilePolicy:
+    policy_bytes = path.read_bytes()
+    policy = tomllib.loads(policy_bytes.decode("utf-8"))
+    if policy.get("schema_version") != "rasim-measured-mosaic-profile-policy-v1":
+        raise ValueError("unsupported measured mosaic profile policy schema")
+    if policy.get("base_case_sha256") != case_sha256:
+        raise ValueError("measured profile policy does not bind the selected base case")
+    threshold = float(policy.get("minimum_excess_energy_over_side_scatter", math.nan))
+    if not math.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("measured profile significance threshold must be positive and finite")
+    raw_offsets = policy.get("sideband_two_theta_offsets_deg")
+    if (
+        not isinstance(raw_offsets, list)
+        or len(raw_offsets) < 2
+        or any(not math.isfinite(float(value)) or float(value) == 0.0 for value in raw_offsets)
+    ):
+        raise ValueError("measured profile sideband offsets must be finite and nonzero")
+    offsets_deg = tuple(float(value) for value in raw_offsets)
+    if (
+        len(set(offsets_deg)) != len(offsets_deg)
+        or offsets_deg != tuple(sorted(offsets_deg))
+        or not (offsets_deg[0] < 0.0 < offsets_deg[-1])
+    ):
+        raise ValueError("measured profile sideband offsets must be unique and ordered")
+
+    available = {
+        (
+            definition.identity.dataset_id,
+            definition.identity.group_key.layered_family_m,
+            definition.identity.group_key.layered_integer_L,
+            definition.identity.analytic_branch_id,
+            definition.identity.branch_id,
+        )
+        for dataset in definitions
+        for definition in dataset
+    }
+    audit: list[dict[str, object]] = []
+    seen: set[tuple[str, int, int, int, int | None]] = set()
+    required_keys = {
+        "dataset_id",
+        "family_m",
+        "integer_L",
+        "analytic_branch_id",
+        "reason",
+    }
+    records = policy.get("excluded_profiles", [])
+    if not isinstance(records, list):
+        raise ValueError("measured excluded-profile records must be a list")
+    for record in records:
+        if not isinstance(record, dict) or frozenset(record) not in {
+            frozenset(required_keys),
+            frozenset(required_keys | {"root_side_branch_id"}),
+        }:
+            raise ValueError("measured excluded-profile records have an invalid layout")
+        raw_branch_id = record.get("root_side_branch_id")
+        key = (
+            str(record["dataset_id"]),
+            int(record["family_m"]),
+            int(record["integer_L"]),
+            int(record["analytic_branch_id"]),
+            None if raw_branch_id is None else int(raw_branch_id),
+        )
+        if key in seen or key not in available:
+            raise ValueError("measured excluded-profile record is repeated or has no profile")
+        seen.add(key)
+        reason = str(record["reason"])
+        if reason != "USER_AUTHORIZED_SECONDARY_LOBE":
+            raise ValueError("measured profile exclusion lacks the accepted reason")
+        audit.append(
+            {
+                "dataset_id": key[0],
+                "family_m": key[1],
+                "integer_L": key[2],
+                "analytic_branch_id": key[3],
+                "root_side_branch_id": key[4],
+                "reason": reason,
+            }
+        )
+    return _MeasuredProfilePolicy(
+        sha256=hashlib.sha256(policy_bytes).hexdigest(),
+        minimum_excess_energy_over_side_scatter=threshold,
+        sideband_two_theta_offsets_rad=tuple(math.radians(value) for value in offsets_deg),
+        excluded_profile_keys=frozenset(seen),
+        excluded_profiles=tuple(audit),
+    )
+
+
 def _mosaic_parameters(
     *,
     gaussian_sigma_rad: float,
@@ -480,10 +628,34 @@ def _mosaic_parameters(
 def _fixed_geometry_inputs(
     case_path: Path,
     case: dict[str, Any],
-) -> tuple[ConfiguredSimulationInputs, tuple[ConfiguredSimulationInputs, ...]]:
+    *,
+    source_sample_count: int,
+) -> tuple[
+    ConfiguredSimulationInputs,
+    tuple[ConfiguredSimulationInputs, ...],
+    tuple[ConfiguredSimulationInputs, ...],
+]:
+    if isinstance(source_sample_count, bool) or source_sample_count < 1:
+        raise ValueError("source_sample_count must be a positive integer")
     config_path = (case_path.parent / str(case["simulation_config"])).resolve()
     config = load_simulation_config(config_path)
+    first_incidence_deg = float(case["incidence_angles_deg"][0])
     config = replace(
+        config,
+        source=replace(
+            config.source,
+            sample_count=int(source_sample_count),
+        ),
+        instrument=replace(
+            config.instrument,
+            axis_rotations=tuple(
+                replace(axis, angle_deg=first_incidence_deg)
+                for axis in config.instrument.axis_rotations
+            ),
+        ),
+    )
+    base = build_configured_simulation_inputs(config)
+    nominal_config = replace(
         config,
         source=replace(
             config.source,
@@ -492,26 +664,20 @@ def _fixed_geometry_inputs(
             wavelength_sigma_A=0.0,
             sample_count=1,
         ),
-        instrument=replace(
-            config.instrument,
-            axis_rotations=tuple(
-                replace(axis, angle_deg=float(case["incidence_angles_deg"][0]))
-                for axis in config.instrument.axis_rotations
-            ),
-        ),
     )
-    base = build_configured_simulation_inputs(config)
+    nominal_base = build_configured_simulation_inputs(nominal_config)
     geometry_base = ConfiguredGeometryInputs(
-        config=base.config,
-        samples=base.samples,
-        instrument=base.instrument,
-        crystal=base.crystal,
-        material=base.material,
-        reciprocal=base.reciprocal,
-        rods=base.rods,
+        config=nominal_base.config,
+        samples=nominal_base.samples,
+        instrument=nominal_base.instrument,
+        crystal=nominal_base.crystal,
+        material=nominal_base.material,
+        reciprocal=nominal_base.reciprocal,
+        rods=nominal_base.rods,
     )
     corrections = SharedGeometryCorrections.from_array(case["shared_geometry_corrections"])
     series: list[ConfiguredSimulationInputs] = []
+    nominal_series: list[ConfiguredSimulationInputs] = []
     for incidence_deg in case["incidence_angles_deg"]:
         angle_config = replace(
             config,
@@ -523,15 +689,27 @@ def _fixed_geometry_inputs(
                 ),
             ),
         )
-        geometry = rebind_configured_geometry_instrument(geometry_base, angle_config)
+        nominal_angle_config = replace(angle_config, source=nominal_config.source)
+        geometry = rebind_configured_geometry_instrument(geometry_base, nominal_angle_config)
         corrected_instrument = apply_shared_geometry_corrections(
             geometry.instrument,
-            angle_config.instrument.axis_rotations,
+            nominal_angle_config.instrument.axis_rotations,
             corrections,
         )
         incident = build_incident_states(base.samples, base.material, corrected_instrument)
-        if incident.states.incident_state_id.size != 1 or not bool(incident.states.valid[0]):
-            raise RuntimeError("the fixed-geometry proof requires one valid ideal incident state")
+        if incident.states.incident_state_id.size != source_sample_count or not bool(
+            np.all(incident.states.valid)
+        ):
+            raise RuntimeError("every configured source state must produce a valid incident state")
+        nominal_incident = build_incident_states(
+            nominal_base.samples,
+            nominal_base.material,
+            corrected_instrument,
+        )
+        if nominal_incident.states.incident_state_id.size != 1 or not bool(
+            nominal_incident.states.valid[0]
+        ):
+            raise RuntimeError("the nominal geometry companion incident state must be valid")
         series.append(
             replace(
                 base,
@@ -540,7 +718,15 @@ def _fixed_geometry_inputs(
                 incident=incident,
             )
         )
-    return base, tuple(series)
+        nominal_series.append(
+            replace(
+                nominal_base,
+                config=nominal_angle_config,
+                instrument=corrected_instrument,
+                incident=nominal_incident,
+            )
+        )
+    return base, tuple(series), tuple(nominal_series)
 
 
 def _geometry_excluded_bin_map(
@@ -631,6 +817,8 @@ def _geometry_excluded_bin_map(
 def _profile_definitions(
     inputs: ConfiguredSimulationInputs,
     *,
+    source_inputs: ConfiguredSimulationInputs,
+    include_nominally_unsupported_m0: bool,
     case_path: Path,
     incidence_deg: float,
     osc_observation: dict[str, Any],
@@ -800,7 +988,13 @@ def _profile_definitions(
             rods=inputs.rods,
         )
     )
-    wavevector_magnitude_Ainv = float(np.linalg.norm(context.ki_sample_Ainv))
+    wavevector_magnitude_Ainv = (
+        float(
+            np.max(np.linalg.norm(source_inputs.incident.states.k_film_phase_sample_Ainv, axis=1))
+        )
+        if include_nominally_unsupported_m0
+        else float(np.linalg.norm(context.ki_sample_Ainv))
+    )
     reciprocal_c_Ainv = float(np.linalg.norm(context.reciprocal_basis_Ainv[:, 2]))
     kinematic_l_limit_float = 2.0 * wavevector_magnitude_Ainv / reciprocal_c_Ainv
     kinematic_l_limit = math.floor(
@@ -932,14 +1126,22 @@ def _profile_definitions(
     )
     if not all(item.accepted for item in unsupported_evidence):
         raise RuntimeError("a forward-unsupported observed m=0 peak lacks raw OSC significance")
-    observed_angles = detector_coordinates_to_angles(
-        np.asarray([item.column_px for item in observed_candidates]),
-        np.asarray([item.row_px for item in observed_candidates]),
+    provisional_candidates = (
+        observed_candidates + unsupported_candidates
+        if include_nominally_unsupported_m0
+        else observed_candidates
+    )
+    provisional_integer_l = {item.integer_L for item in provisional_candidates}
+    provisional_angles = detector_coordinates_to_angles(
+        np.asarray([item.column_px for item in provisional_candidates]),
+        np.asarray([item.row_px for item in provisional_candidates]),
         instrument=inputs.instrument,
         angle_frame=frame,
     )
-    if not np.all(observed_angles.valid & observed_angles.azimuth_valid):
-        raise RuntimeError("a frozen observed m=0 centroid has no valid angle coordinate")
+    if not np.all(provisional_angles.valid & provisional_angles.azimuth_valid):
+        raise RuntimeError(
+            "a provisional raw-significant m=0 centroid has no valid angle coordinate"
+        )
     maximum_anchor_distance = float(profile_config["m0_maximum_observed_anchor_distance_px"])
     observed_anchor_distance_by_l: dict[int, float] = {}
     for observed in observed_candidates:
@@ -955,7 +1157,7 @@ def _profile_definitions(
                 "fixed-geometry landmark"
             )
 
-    for observed_index, observed in enumerate(observed_candidates):
+    for observed_index, observed in enumerate(provisional_candidates):
         integer_l_value = observed.integer_L
         definitions.append(
             MosaicProfileDefinition(
@@ -973,8 +1175,8 @@ def _profile_definitions(
                     branch_id=None,
                     analytic_branch_id=0,
                 ),
-                center_two_theta_rad=float(observed_angles.two_theta_rad[observed_index]),
-                center_phi_rad=float(observed_angles.phi_rad[observed_index]),
+                center_two_theta_rad=float(provisional_angles.two_theta_rad[observed_index]),
+                center_phi_rad=float(provisional_angles.phi_rad[observed_index]),
                 phi_half_width_rad=math.radians(float(profile_config["m0_phi_half_width_deg"])),
                 **common,
                 **m0_quadrature,
@@ -996,7 +1198,7 @@ def _profile_definitions(
 
     candidate_records: list[dict[str, object]] = []
     unsupported_evidence_by_l = {item.integer_L: item for item in unsupported_evidence}
-    strength_k_norm = float(np.linalg.norm(inputs.incident.states.k_film_phase_sample_Ainv[0]))
+    strength_k_norm = float(np.linalg.norm(context.ki_sample_Ainv))
     for index, integer_l_value in enumerate(m0.integer_L):
         integer_l = int(integer_l_value)
         status = str(m0.detector_status[index])
@@ -1021,10 +1223,15 @@ def _profile_definitions(
                 if integer_l not in unsupported_evidence_by_l
                 else evidence_record(unsupported_evidence_by_l[integer_l])
             ),
-            "selected": integer_l in observed_integer_l,
+            "forward_supported_candidate": integer_l in observed_integer_l,
+            **(
+                {"combined_source_gate_candidate": integer_l in provisional_integer_l}
+                if include_nominally_unsupported_m0
+                else {}
+            ),
         }
         candidate_records.append(record)
-        if integer_l not in observed_integer_l:
+        if integer_l not in provisional_integer_l:
             if status != "VALID":
                 exclusion_reason = status
             elif not bool(m0_angles.valid[index]):
@@ -1093,13 +1300,30 @@ def _profile_definitions(
         "raw_significant_unsupported_forward_peaks": [
             {
                 **dict(item),
-                "classification": "RAW_SIGNIFICANT_UNSUPPORTED_FORWARD_CHANNEL",
-                "fit_eligible": False,
+                "classification": (
+                    "RAW_SIGNIFICANT_NOMINAL_LANDMARK_UNSUPPORTED_PENDING_COMBINED_SOURCE_GATE"
+                    if include_nominally_unsupported_m0
+                    else "RAW_SIGNIFICANT_UNSUPPORTED_FORWARD_CHANNEL"
+                ),
+                **(
+                    {"combined_source_gate_candidate": True}
+                    if include_nominally_unsupported_m0
+                    else {"fit_eligible": False}
+                ),
                 "raw_evidence": evidence_record(unsupported_evidence_by_l[int(item["integer_L"])]),
             }
             for item in unsupported_observed_peaks
         ],
-        "fitted_integer_L": list(observed_integer_l),
+        "forward_supported_candidate_integer_L": list(observed_integer_l),
+        **(
+            {
+                "combined_source_gate_candidate_integer_L": [
+                    item.integer_L for item in provisional_candidates
+                ]
+            }
+            if include_nominally_unsupported_m0
+            else {}
+        ),
         "signed_l_policy": "POSITIVE_ABS_L_WITH_COLLAPSED_INVERSE_ORIENTATIONS",
         "zero_l_policy": "DIRECT_BEAM_NOT_BRAGG_PEAK",
     }
@@ -1123,6 +1347,8 @@ def _profile_revision(
     configured_physics_revision: str,
     cif_sha256: str,
     rod_catalog_revision: str,
+    source_revision: str,
+    measured_profile_policy_sha256: str | None = None,
 ) -> str:
     payload = {
         "geometry_manifest_sha256": case["geometry_manifest_sha256"],
@@ -1131,7 +1357,8 @@ def _profile_revision(
         "cif_sha256": cif_sha256,
         "rod_catalog_revision": rod_catalog_revision,
         "shared_geometry_corrections": case["shared_geometry_corrections"],
-        "source_policy": "one-center-zero-divergence-mean-wavelength.v1",
+        "source_policy": "seeded-empirical-source-ensemble.v1",
+        "source_revision": source_revision,
         "excluded_bin_policy": case["profiles"]["excluded_bin_policy"],
         "excluded_bin_topology": case["profiles"]["excluded_bin_topology"],
         "selection_policy": (
@@ -1174,6 +1401,8 @@ def _profile_revision(
             for item in dataset
         ],
     }
+    if measured_profile_policy_sha256 is not None:
+        payload["measured_profile_policy_sha256"] = measured_profile_policy_sha256
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256-{hashlib.sha256(encoded).hexdigest()}"
 
@@ -1182,12 +1411,14 @@ def _detector_series(
     physics: _ProfilePhysicsContext,
     geometry: tuple[_ProfileGeometryContext, ...],
     mosaic: MosaicParameters,
+    *,
+    rods: tuple[Rod, ...] | None = None,
 ) -> tuple[SourceAveragedDetectorEwaldMeasure, ...]:
     first = geometry[0]
     detector = SourceAveragedDetectorEwaldMeasure(
         reciprocal_basis_Ainv=physics.reciprocal_basis_Ainv,
         crystal_to_sample=physics.crystal_to_sample,
-        rods=physics.rods,
+        rods=physics.rods if rods is None else rods,
         rod_catalog_revision=physics.rod_catalog_revision,
         mosaic=mosaic,
         strength_model=physics.strength,
@@ -1205,6 +1436,23 @@ def _detector_series(
             for item in geometry[1:]
         ),
     )
+
+
+def _profile_rods(
+    rods: tuple[Rod, ...],
+    definitions: tuple[tuple[MosaicProfileDefinition, ...], ...],
+) -> tuple[Rod, ...]:
+    required_hk = {
+        member_hk
+        for dataset in definitions
+        for definition in dataset
+        for member_hk in definition.identity.group_key.member_rod_hk
+    }
+    selected = tuple(rod for rod in rods if (rod.h, rod.k) in required_hk)
+    selected_hk = {(rod.h, rod.k) for rod in selected}
+    if selected_hk != required_hk:
+        raise ValueError(f"profile definitions reference absent rods: {required_hk - selected_hk}")
+    return selected
 
 
 def _combine_profile_sets(
@@ -1237,6 +1485,313 @@ def _combine_profile_sets(
         source_revision=next(iter(source_revisions)),
         execution_backend=execution_backend,
         execution_device=execution_device,
+    )
+
+
+def _affine_profile_background_basis(
+    observations: MosaicProfileSet,
+    *,
+    revision: str = "local-phi-constant-plus-linear.v1",
+) -> MosaicProfileNuisanceBasis:
+    centers = 0.5 * (observations.phi_bin_edges_rad[:, :-1] + observations.phi_bin_edges_rad[:, 1:])
+    midpoint = 0.5 * (
+        observations.phi_bin_edges_rad[:, :1] + observations.phi_bin_edges_rad[:, -1:]
+    )
+    half_span = 0.5 * (
+        observations.phi_bin_edges_rad[:, -1:] - observations.phi_bin_edges_rad[:, :1]
+    )
+    coordinate = (centers - midpoint) / half_span
+    basis = np.stack((np.ones(coordinate.shape), coordinate), axis=-1)
+    basis[~observations.valid] = 0.0
+    return MosaicProfileNuisanceBasis(
+        identities=observations.identities,
+        basis=basis,
+        valid=observations.valid,
+        revision=revision,
+        profile_revision=observations.profile_revision,
+    )
+
+
+def _constant_profile_background_basis(
+    observations: MosaicProfileSet,
+) -> MosaicProfileNuisanceBasis:
+    basis = np.ones((*observations.valid.shape, 1), dtype=np.float64)
+    basis[~observations.valid] = 0.0
+    return MosaicProfileNuisanceBasis(
+        identities=observations.identities,
+        basis=basis,
+        valid=observations.valid,
+        revision="local-phi-constant.v1",
+        profile_revision=observations.profile_revision,
+    )
+
+
+_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION = (
+    "detector-native-bilinear-profile-centerline-sidebands.v1"
+)
+
+
+def _sample_profile_centerline_sidebands(
+    *,
+    detector_counts: NDArray[np.int32],
+    detector_valid_mask: NDArray[np.bool_],
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+    two_theta_bounds_rad: FloatArray,
+    phi_bin_edges_rad: FloatArray,
+    offsets_rad: tuple[float, ...],
+) -> FloatArray:
+    phi_center = 0.5 * (phi_bin_edges_rad[:, :-1] + phi_bin_edges_rad[:, 1:])
+    theta_center = np.mean(two_theta_bounds_rad, axis=1)
+    shape = (len(offsets_rad), theta_center.size, phi_center.shape[1])
+    theta = (
+        np.broadcast_to(theta_center[None, :, None], shape)
+        + np.asarray(
+            offsets_rad,
+            dtype=np.float64,
+        )[:, None, None]
+    )
+    phi = np.broadcast_to(phi_center[None, :, :], shape)
+    coordinates = angles_to_detector_coordinates(
+        theta,
+        phi,
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    if not np.all(coordinates.valid):
+        raise RuntimeError("measured profile sideband centerline leaves the active detector")
+    sampled_valid = map_coordinates(
+        detector_valid_mask,
+        [coordinates.row_px, coordinates.column_px],
+        order=0,
+        mode="constant",
+        cval=False,
+        prefilter=False,
+    )
+    if not np.all(sampled_valid):
+        raise RuntimeError("measured profile sideband centerline crosses masked detector pixels")
+    sampled = map_coordinates(
+        detector_counts,
+        [coordinates.row_px, coordinates.column_px],
+        output=np.float64,
+        order=1,
+        mode="constant",
+        cval=0.0,
+        prefilter=False,
+    )
+    if not np.all(np.isfinite(sampled)) or np.any(sampled < 0.0):
+        raise RuntimeError("measured profile sideband sampling produced invalid counts")
+    return np.asarray(sampled, dtype=np.float64)
+
+
+def _real_osc_profile_observations(
+    *,
+    case_path: Path,
+    case: dict[str, Any],
+    series: tuple[ConfiguredSimulationInputs, ...],
+    frames: tuple[AngleFrame, ...],
+    definitions: tuple[tuple[MosaicProfileDefinition, ...], ...],
+    model_layout: MosaicProfileSet,
+    profile_revision: str,
+    measured_policy: _MeasuredProfilePolicy,
+) -> tuple[
+    MosaicProfileSet,
+    MosaicProfileNuisanceBasis,
+    tuple[dict[str, object], ...],
+    tuple[tuple[MosaicProfileDefinition, ...], ...],
+    tuple[dict[str, object], ...],
+]:
+    signal_parts: list[FloatArray] = []
+    normalization_parts: list[FloatArray] = []
+    audit: list[dict[str, object]] = []
+    selection_audit: list[dict[str, object]] = []
+    selected_definitions: list[tuple[MosaicProfileDefinition, ...]] = []
+    selected_identities: list[MosaicProfileIdentity] = []
+    selected_valid: list[NDArray[np.bool_]] = []
+    selected_phi_edges: list[FloatArray] = []
+    selected_theta_bounds: list[FloatArray] = []
+    selected_frame_revisions: list[str] = []
+    projector_keys: list[str] = []
+    start = 0
+    for inputs, frame, dataset_definitions, record in zip(
+        series,
+        frames,
+        definitions,
+        case["m0_observations"],
+        strict=True,
+    ):
+        stop = start + len(dataset_definitions)
+        model_valid = model_layout.valid[start:stop]
+        model_signal = model_layout.signal[start:stop]
+        phi_edges = model_layout.phi_bin_edges_rad[start:stop]
+        theta_bounds = model_layout.two_theta_bounds_rad[start:stop]
+        osc_path = (case_path.parent / str(record["osc_file"])).resolve()
+        compressed_sha256 = hashlib.sha256(osc_path.read_bytes()).hexdigest()
+        if compressed_sha256 != record["osc_file_sha256"]:
+            raise RuntimeError(f"OSC content changed: {osc_path}")
+        counts = read_osc(osc_path).detector_native_counts
+        expected_shape = tuple(int(value) for value in record["detector_native_shape_rc"])
+        if counts.shape != expected_shape or str(counts.dtype) != record["detector_native_dtype"]:
+            raise RuntimeError(f"OSC detector-native layout changed: {osc_path}")
+        native_sha256 = hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+        if native_sha256 != record["detector_native_bytes_sha256"]:
+            raise RuntimeError(f"OSC detector-native values changed: {osc_path}")
+        detector_mask = detector_valid_mask_from_counts(counts)
+        projector = compile_detector_profile_projector(
+            instrument=inputs.instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=theta_bounds,
+            phi_bin_edges_rad=phi_edges,
+            detector_valid_mask=detector_mask,
+            profile_bin_valid_mask=model_valid,
+        )
+        profiles = project_detector_profiles(projector, counts)
+        if not np.array_equal(profiles.valid, model_valid):
+            raise RuntimeError(
+                f"OSC detector support changed the frozen model profile validity for "
+                f"{record['dataset_id']}"
+            )
+        stacked_side = _sample_profile_centerline_sidebands(
+            detector_counts=counts,
+            detector_valid_mask=detector_mask,
+            instrument=inputs.instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=theta_bounds,
+            phi_bin_edges_rad=phi_edges,
+            offsets_rad=measured_policy.sideband_two_theta_offsets_rad,
+        )
+        background = np.median(stacked_side, axis=0)
+        side_scatter = 1.4826 * np.median(
+            np.abs(stacked_side - background[None, ...]),
+            axis=0,
+        )
+        central_intensity = profiles.I
+        selected_local: list[int] = []
+        for local_index, definition in enumerate(dataset_definitions):
+            active = model_valid[local_index]
+            positive_excess = np.maximum(
+                central_intensity[local_index, active] - background[local_index, active],
+                0.0,
+            )
+            noise = np.maximum(side_scatter[local_index, active], 1.0)
+            significance = float(np.linalg.norm(positive_excess) / np.linalg.norm(noise))
+            identity = definition.identity
+            key = (
+                identity.dataset_id,
+                int(identity.group_key.layered_family_m),
+                int(identity.group_key.layered_integer_L),
+                identity.analytic_branch_id,
+                identity.branch_id,
+            )
+            secondary_lobe = key in measured_policy.excluded_profile_keys
+            weak = significance < measured_policy.minimum_excess_energy_over_side_scatter
+            modeled_signal = float(np.sum(model_signal[local_index, active], dtype=np.float64))
+            modeled_support = source_averaged_profile_has_support(
+                family_m=key[1],
+                profile_signal_A2=modeled_signal,
+            )
+            fitted = bool(modeled_support and not (secondary_lobe or weak))
+            if fitted:
+                selected_local.append(local_index)
+            selection_audit.append(
+                {
+                    "dataset_id": identity.dataset_id,
+                    "family_m": key[1],
+                    "integer_L": key[2],
+                    "analytic_branch_id": key[3],
+                    "root_side_branch_id": key[4],
+                    "excess_energy_over_side_scatter": significance,
+                    "minimum_required": (measured_policy.minimum_excess_energy_over_side_scatter),
+                    "source_averaged_modeled_signal_A2": modeled_signal,
+                    "source_averaged_modeled_support": modeled_support,
+                    "fit_eligible": fitted,
+                    "classification": (
+                        "SOURCE_AVERAGED_FORWARD_MODEL_UNSUPPORTED"
+                        if not modeled_support
+                        else "USER_AUTHORIZED_SECONDARY_LOBE"
+                        if secondary_lobe
+                        else "WEAK_LOCAL_PROFILE"
+                        if weak
+                        else "FITTED_SIGNIFICANT_PROFILE"
+                    ),
+                }
+            )
+        if not selected_local:
+            raise RuntimeError(
+                f"measured profile gate removed every {record['dataset_id']} profile"
+            )
+        local_indices = np.asarray(selected_local, dtype=np.int64)
+        selected_dataset_definitions = tuple(dataset_definitions[index] for index in selected_local)
+        selected_definitions.append(selected_dataset_definitions)
+        selected_identities.extend(item.identity for item in selected_dataset_definitions)
+        signal_parts.append(profiles.S[local_indices])
+        normalization_parts.append(profiles.N[local_indices])
+        selected_valid.extend(model_valid[local_indices])
+        selected_phi_edges.extend(phi_edges[local_indices])
+        selected_theta_bounds.extend(theta_bounds[local_indices])
+        selected_frame_revisions.extend(frame.revision for _ in selected_local)
+        projector_keys.append(projector.cache_key)
+        audit.append(
+            {
+                "dataset_id": record["dataset_id"],
+                "incidence_angle_deg": float(record["incidence_angle_deg"]),
+                "osc_path": str(osc_path),
+                "osc_file_sha256": compressed_sha256,
+                "detector_native_bytes_sha256": native_sha256,
+                "detector_native_shape_rc": list(counts.shape),
+                "count_range": [int(np.min(counts)), int(np.max(counts))],
+                "detector_valid_fraction": float(np.mean(detector_mask)),
+                "candidate_profile_count": len(dataset_definitions),
+                "fitted_profile_count": len(selected_local),
+                "projector_cache_key": projector.cache_key,
+                "profile_selection_sampler_revision": (
+                    _MEASURED_PROFILE_SELECTION_SAMPLER_REVISION
+                ),
+                "projector_coverage_record_count": int(projector.weight.size),
+                "profile_pixel_bounds_cr": projector.profile_pixel_bounds_cr.tolist(),
+            }
+        )
+        start = stop
+    if start != len(model_layout.identities):
+        raise RuntimeError("OSC dataset partitions do not cover the model profile layout")
+    observation_payload = {
+        "contract": "three-osc-exact-cropped-profile-observation.v1",
+        "detector_valid_mask_revision": DETECTOR_VALID_MASK_REVISION,
+        "profile_revision": profile_revision,
+        "measured_profile_policy_sha256": measured_policy.sha256,
+        "selection_audit": selection_audit,
+        "projector_cache_keys": projector_keys,
+        "profile_selection_sampler_revision": (_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION),
+        "source_averaged_modeled_support_gate_revision": (
+            SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION
+        ),
+        "osc_file_sha256": [item["osc_file_sha256"] for item in audit],
+        "detector_native_bytes_sha256": [item["detector_native_bytes_sha256"] for item in audit],
+    }
+    observation_revision = (
+        "sha256-"
+        + hashlib.sha256(
+            json.dumps(observation_payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+    )
+    observations = MosaicProfileSet(
+        identities=tuple(selected_identities),
+        signal=np.concatenate(signal_parts, axis=0),
+        normalization=np.concatenate(normalization_parts, axis=0),
+        valid=np.asarray(selected_valid, dtype=np.bool_),
+        profile_revision=profile_revision,
+        phi_bin_edges_rad=np.asarray(selected_phi_edges, dtype=np.float64),
+        two_theta_bounds_rad=np.asarray(selected_theta_bounds, dtype=np.float64),
+        angle_frame_revisions=tuple(selected_frame_revisions),
+        source_revision=None,
+        observation_revision=observation_revision,
+    )
+    return (
+        observations,
+        _constant_profile_background_basis(observations),
+        tuple(audit),
+        tuple(selected_definitions),
+        tuple(selection_audit),
     )
 
 
@@ -1287,7 +1842,30 @@ def _evaluate_profile_series(
     profile_revision: str,
     execution_backend: str,
 ) -> tuple[MosaicProfileSet, tuple[SourceAveragedDetectorEwaldMeasure, ...]]:
-    detectors = _detector_series(physics, geometry, mosaic)
+    detectors = _detector_series(
+        physics,
+        geometry,
+        mosaic,
+        rods=_profile_rods(physics.rods, definitions),
+    )
+    profiles = _evaluate_bound_profile_series(
+        detectors,
+        frames,
+        definitions,
+        profile_revision=profile_revision,
+        execution_backend=execution_backend,
+    )
+    return profiles, detectors
+
+
+def _evaluate_bound_profile_series(
+    detectors: tuple[SourceAveragedDetectorEwaldMeasure, ...],
+    frames: tuple[AngleFrame, ...],
+    definitions: tuple[tuple[MosaicProfileDefinition, ...], ...],
+    *,
+    profile_revision: str,
+    execution_backend: str,
+) -> MosaicProfileSet:
     sets = tuple(
         evaluate_continuous_mosaic_profiles(
             detector,
@@ -1303,7 +1881,7 @@ def _evaluate_profile_series(
             strict=True,
         )
     )
-    return _combine_profile_sets(sets, profile_revision), detectors
+    return _combine_profile_sets(sets, profile_revision)
 
 
 def _component_profile_evaluators(
@@ -1316,40 +1894,46 @@ def _component_profile_evaluators(
     execution_backend: str,
 ) -> tuple[Callable[[float], MosaicProfileSet], Callable[[float], MosaicProfileSet]]:
     backend = execution_backend
+    detector_templates = _detector_series(
+        physics,
+        geometry,
+        _mosaic_parameters(
+            gaussian_sigma_rad=1.0,
+            lorentzian_half_width_rad=1.0,
+            lorentzian_probability=0.5,
+            context=physics,
+        ),
+        rods=_profile_rods(physics.rods, definitions),
+    )
 
-    def gaussian_profile(width_rad: float) -> MosaicProfileSet:
-        profiles, _ = _evaluate_profile_series(
-            physics,
-            geometry,
+    def evaluate(mosaic: MosaicParameters) -> MosaicProfileSet:
+        return _evaluate_bound_profile_series(
+            tuple(detector.rebind_physics(mosaic=mosaic) for detector in detector_templates),
             frames,
             definitions,
+            profile_revision=profile_revision,
+            execution_backend=backend,
+        )
+
+    def gaussian_profile(width_rad: float) -> MosaicProfileSet:
+        return evaluate(
             _mosaic_parameters(
                 gaussian_sigma_rad=width_rad,
                 lorentzian_half_width_rad=1.0,
                 lorentzian_probability=0.0,
                 context=physics,
-            ),
-            profile_revision=profile_revision,
-            execution_backend=backend,
+            )
         )
-        return profiles
 
     def lorentzian_profile(width_rad: float) -> MosaicProfileSet:
-        profiles, _ = _evaluate_profile_series(
-            physics,
-            geometry,
-            frames,
-            definitions,
+        return evaluate(
             _mosaic_parameters(
                 gaussian_sigma_rad=1.0,
                 lorentzian_half_width_rad=width_rad,
                 lorentzian_probability=1.0,
                 context=physics,
-            ),
-            profile_revision=profile_revision,
-            execution_backend=backend,
+            )
         )
-        return profiles
 
     return gaussian_profile, lorentzian_profile
 
@@ -1360,6 +1944,7 @@ def _fit_profiles(
     evaluate_gaussian_profile: Callable[[float], MosaicProfileSet],
     evaluate_lorentzian_profile: Callable[[float], MosaicProfileSet],
     search_config: dict[str, Any],
+    nuisance_basis: MosaicProfileNuisanceBasis | None = None,
 ) -> tuple[MosaicProfileSearchResult, list[dict[str, object]]]:
     search = search_config
 
@@ -1373,6 +1958,7 @@ def _fit_profiles(
         refinement_width_count=int(search["refinement_width_count"]),
         refinement_levels=int(search["refinement_levels"]),
         near_optimal_objective_delta=float(search["near_optimal_objective_delta"]),
+        nuisance_basis=nuisance_basis,
         maximum_sensitivity_condition=float(search["maximum_sensitivity_condition"]),
     )
     history = [
@@ -1491,6 +2077,7 @@ def _render_images(
     *,
     output_directory: Path,
     render_config: dict[str, Any],
+    execution_backend: str,
 ) -> tuple[
     tuple[FloatArray, ...],
     tuple[Path, ...],
@@ -1510,7 +2097,7 @@ def _render_images(
             detector,
             bin_size_px=1,
             gauss_order=int(render_config["pixel_gauss_order"]),
-            execution_backend=str(render_config["execution_backend"]),
+            execution_backend=execution_backend,
         )
         if rendered.image_A2.shape != (int(render_config["image_size"]),) * 2:
             raise RuntimeError("rendered detector image does not match the requested size")
@@ -1543,27 +2130,504 @@ def _render_images(
     return tuple(images), tuple(paths), tuple(execution_provenance), perf_counter() - start
 
 
+def _fitted_distribution(result: MosaicProfileFitResult) -> tuple[FloatArray, FloatArray]:
+    alpha = np.linspace(0.0, math.pi, 200_001)
+    parameters = MosaicParameters(
+        1.0 if result.gaussian_sigma_rad is None else result.gaussian_sigma_rad,
+        1.0 if result.lorentzian_half_width_rad is None else result.lorentzian_half_width_rad,
+        result.lorentzian_probability,
+    )
+    density = 2.0 * wrapped_mosaic_line_density_rad_inv(alpha, parameters)
+    return alpha, density
+
+
+def _parameter_summary(result: MosaicProfileFitResult) -> dict[str, float | None]:
+    return {
+        "gaussian_sigma_deg": (
+            None if result.gaussian_sigma_rad is None else math.degrees(result.gaussian_sigma_rad)
+        ),
+        "gaussian_fwhm_deg": (
+            None
+            if result.gaussian_sigma_rad is None
+            else math.degrees(result.gaussian_sigma_rad) * 2.0 * math.sqrt(2.0 * math.log(2.0))
+        ),
+        "lorentzian_hwhm_deg": (
+            None
+            if result.lorentzian_half_width_rad is None
+            else math.degrees(result.lorentzian_half_width_rad)
+        ),
+        "lorentzian_fwhm_deg": (
+            None
+            if result.lorentzian_half_width_rad is None
+            else 2.0 * math.degrees(result.lorentzian_half_width_rad)
+        ),
+        "lorentzian_probability": result.lorentzian_probability,
+    }
+
+
+def _run_real_osc_fit(
+    *,
+    case_path: Path,
+    case: dict[str, Any],
+    case_sha256: str,
+    output_directory: Path,
+    base: ConfiguredSimulationInputs,
+    series: tuple[ConfiguredSimulationInputs, ...],
+    profile_physics: _ProfilePhysicsContext,
+    profile_geometry: tuple[_ProfileGeometryContext, ...],
+    frames: tuple[AngleFrame, ...],
+    definitions: tuple[tuple[MosaicProfileDefinition, ...], ...],
+    profile_revision: str,
+    profile_exclusions: tuple[dict[str, object], ...],
+    m0_support_audits: tuple[dict[str, object], ...],
+    measured_profile_policy_path: Path,
+    measured_profile_policy: _MeasuredProfilePolicy,
+    execution_backend: str,
+    setup_seconds: float,
+    total_start: float,
+) -> None:
+    observation_start = perf_counter()
+    model_layout, _ = _evaluate_profile_series(
+        profile_physics,
+        profile_geometry,
+        frames,
+        definitions,
+        _mosaic_parameters(
+            gaussian_sigma_rad=math.radians(
+                float(case["validation"]["normalization_probe_gaussian_sigma_deg"])
+            ),
+            lorentzian_half_width_rad=1.0,
+            lorentzian_probability=0.0,
+            context=profile_physics,
+        ),
+        profile_revision=profile_revision,
+        execution_backend=execution_backend,
+    )
+    (
+        observations,
+        nuisance_basis,
+        osc_audit,
+        fitted_definitions,
+        measured_selection_audit,
+    ) = _real_osc_profile_observations(
+        case_path=case_path,
+        case=case,
+        series=series,
+        frames=frames,
+        definitions=definitions,
+        model_layout=model_layout,
+        profile_revision=profile_revision,
+        measured_policy=measured_profile_policy,
+    )
+    observation_seconds = perf_counter() - observation_start
+
+    gaussian_evaluator, lorentzian_evaluator = _component_profile_evaluators(
+        physics=profile_physics,
+        geometry=profile_geometry,
+        frames=frames,
+        definitions=fitted_definitions,
+        profile_revision=profile_revision,
+        execution_backend=execution_backend,
+    )
+    fit_start = perf_counter()
+    search_result, refinement_history = _fit_profiles(
+        observations=observations,
+        evaluate_gaussian_profile=gaussian_evaluator,
+        evaluate_lorentzian_profile=lorentzian_evaluator,
+        search_config=case["search"],
+        nuisance_basis=nuisance_basis,
+    )
+    result = search_result.fit
+    fit_seconds = perf_counter() - fit_start
+
+    robustness_start = perf_counter()
+    affine_background: dict[str, object]
+    try:
+        affine_result = fit_mosaic_component_profiles(
+            search_result.bank,
+            nuisance_basis=_affine_profile_background_basis(observations),
+            maximum_sensitivity_condition=float(case["search"]["maximum_sensitivity_condition"]),
+        )
+        affine_background = {
+            "status": "FIT",
+            "parameters": _parameter_summary(affine_result),
+            "objective": affine_result.objective,
+            "delta_from_constant": {
+                key: (
+                    None
+                    if value is None or _parameter_summary(result)[key] is None
+                    else value - float(_parameter_summary(result)[key])
+                )
+                for key, value in _parameter_summary(affine_result).items()
+                if key
+                in {
+                    "gaussian_sigma_deg",
+                    "lorentzian_hwhm_deg",
+                    "lorentzian_probability",
+                }
+            },
+        }
+    except (MosaicIdentifiabilityError, ValueError) as error:
+        affine_background = {
+            "status": "NOT_IDENTIFIABLE",
+            "reason": str(error),
+        }
+    robustness_seconds = perf_counter() - robustness_start
+
+    m0_mask = np.asarray(
+        [
+            identity.group_key.branch_mode == "COLLAPSED_00L"
+            for identity in result.profile_identities
+        ],
+        dtype=np.bool_,
+    )
+    fitted_m0_by_dataset = {
+        dataset_id: sorted(
+            int(identity.group_key.layered_integer_L)
+            for identity in result.profile_identities
+            if identity.dataset_id == dataset_id
+            and identity.group_key.branch_mode == "COLLAPSED_00L"
+        )
+        for dataset_id in sorted({identity.dataset_id for identity in result.profile_identities})
+    }
+    candidate_m0_by_dataset = {
+        str(item["dataset_id"]): set(
+            item.get(
+                "combined_source_gate_candidate_integer_L",
+                item["forward_supported_candidate_integer_L"],
+            )
+        )
+        for item in m0_support_audits
+    }
+    if any(
+        not set(fitted).issubset(candidate_m0_by_dataset[dataset_id])
+        for dataset_id, fitted in fitted_m0_by_dataset.items()
+    ):
+        raise RuntimeError("fitted m=0 identities escaped the combined-source candidate set")
+    profile_records: list[dict[str, object]] = []
+    background_prediction = result.predicted_total_intensity - result.predicted_intensity
+    for index, identity in enumerate(result.profile_identities):
+        active = observations.valid[index]
+        observed = observations.intensity[index, active]
+        total_prediction = result.predicted_total_intensity[index, active]
+        group = identity.group_key
+        profile_records.append(
+            {
+                "profile_index": index,
+                "dataset_id": identity.dataset_id,
+                "group_id": group.group_id,
+                "family_m": group.layered_family_m,
+                "integer_L": group.layered_integer_L,
+                "analytic_branch_id": identity.analytic_branch_id,
+                "root_side_branch_id": identity.branch_id,
+                "valid_bin_count": int(np.count_nonzero(active)),
+                "relative_projected_shape_residual": float(
+                    result.profile_relative_l2_residual[index]
+                ),
+                "nuisance_peak_scale": float(result.profile_scales[index]),
+                "signed_background_coefficients": result.background_coefficients[index].tolist(),
+                "observed_count_density_range": [
+                    float(np.min(observed)),
+                    float(np.max(observed)),
+                ],
+                "peak_prediction_range": [
+                    float(np.min(result.predicted_intensity[index, active])),
+                    float(np.max(result.predicted_intensity[index, active])),
+                ],
+                "total_prediction_rmse_counts_per_px": float(
+                    np.sqrt(np.mean((total_prediction - observed) ** 2))
+                ),
+            }
+        )
+
+    zero_scale_profile_indices = np.flatnonzero(result.profile_scales <= 0.0)
+    high_residual_profile_indices = np.flatnonzero(result.profile_relative_l2_residual >= 0.65)
+    active_total_prediction = result.predicted_total_intensity[observations.valid]
+    negative_total_prediction_bin_count = int(np.count_nonzero(active_total_prediction < 0.0))
+
+    def residual_summary(mask: NDArray[np.bool_]) -> dict[str, object]:
+        selected = np.flatnonzero(mask)
+        residual = result.profile_relative_l2_residual[selected]
+        worst = int(selected[int(np.argmax(residual))])
+        return {
+            "count": int(selected.size),
+            "median": float(np.median(residual)),
+            "root_mean_square": float(np.sqrt(np.mean(residual * residual))),
+            "maximum": float(result.profile_relative_l2_residual[worst]),
+            "worst_profile_index": worst,
+        }
+
+    alpha, density = _fitted_distribution(result)
+    component_execution = {
+        (component.profile.execution_backend, component.profile.execution_device)
+        for component in (
+            *search_result.bank.gaussian_profiles,
+            *search_result.bank.lorentzian_profiles,
+        )
+    }
+    if len(component_execution) != 1:
+        raise RuntimeError("mosaic component bank changed execution backend or device")
+    component_execution_backend, component_execution_device = next(iter(component_execution))
+    diagnostic_path = output_directory / "bi2se3_real_mosaic_fit.ra_diag.npz"
+    np.savez_compressed(
+        diagnostic_path,
+        profile_observed_signal=observations.signal,
+        profile_observed_normalization=observations.normalization,
+        profile_observed_intensity=observations.intensity,
+        profile_valid=observations.valid,
+        profile_phi_bin_edges_rad=observations.phi_bin_edges_rad,
+        profile_two_theta_bounds_rad=observations.two_theta_bounds_rad,
+        profile_predicted_peak_intensity=result.predicted_intensity,
+        profile_predicted_background_intensity=background_prediction,
+        profile_predicted_total_intensity=result.predicted_total_intensity,
+        profile_total_residual_intensity=(
+            observations.intensity - result.predicted_total_intensity
+        ),
+        profile_peak_scales=result.profile_scales,
+        profile_background_coefficients=result.background_coefficients,
+        profile_relative_projected_shape_residual=result.profile_relative_l2_residual,
+        width_pair_objective=result.width_pair_objective,
+        width_pair_eta=result.width_pair_eta,
+        distribution_alpha_rad=alpha,
+        distribution_density_rad_inv=density,
+    )
+    current_bytes, peak_bytes = tracemalloc.get_traced_memory()
+    manifest = {
+        "schema_version": "rasim-bi2se3-real-mosaic-fit-v2",
+        "status": "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE",
+        "legacy_classification": "NO_ORACLE",
+        "interpretation": (
+            "A common axisymmetric probability mixture of one wrapped Gaussian and one wrapped "
+            "Lorentzian, folded through the fixed nine-coordinate geometry. It is not a Voigt "
+            "convolution. Without a calibrated source/detector resolution function, this "
+            "effective radial envelope is not uniquely attributable to intrinsic sample mosaic."
+        ),
+        "recovered_effective_distribution": _parameter_summary(result),
+        "fit": {
+            "objective": result.objective,
+            "weighting_id": result.weighting_id,
+            "eta_search_id": result.eta_search_id,
+            "nuisance_basis_revision": result.nuisance_basis_revision,
+            "active_parameter_names": list(result.active_parameter_names),
+            "sensitivity_rank": result.sensitivity_rank,
+            "sensitivity_condition": result.sensitivity_condition,
+            "sensitivity_singular_values": result.sensitivity_singular_values.tolist(),
+            "profile_count": len(result.profile_identities),
+            "m0_profile_count": int(np.count_nonzero(m0_mask)),
+            "nonzero_m_profile_count": int(np.count_nonzero(~m0_mask)),
+            "residual_summary": {
+                "all": residual_summary(np.ones(m0_mask.shape, dtype=np.bool_)),
+                "m0": residual_summary(m0_mask),
+                "nonzero_m": residual_summary(~m0_mask),
+                "by_dataset": {
+                    dataset_id: residual_summary(
+                        np.asarray(
+                            [
+                                identity.dataset_id == dataset_id
+                                for identity in result.profile_identities
+                            ],
+                            dtype=np.bool_,
+                        )
+                    )
+                    for dataset_id in sorted(
+                        {identity.dataset_id for identity in result.profile_identities}
+                    )
+                },
+            },
+            "profiles": profile_records,
+            "refinement_history": refinement_history,
+            "adequacy": {
+                "all_profiles_have_positive_fitted_amplitude": bool(
+                    zero_scale_profile_indices.size == 0
+                ),
+                "zero_amplitude_profile_indices": zero_scale_profile_indices.tolist(),
+                "profile_residual_at_least_0p65_indices": (high_residual_profile_indices.tolist()),
+                "signed_detrended_total_prediction_nonnegative": bool(
+                    negative_total_prediction_bin_count == 0
+                ),
+                "negative_signed_detrended_total_bin_count": (negative_total_prediction_bin_count),
+                "minimum_signed_detrended_total_counts_per_px": float(
+                    np.min(active_total_prediction)
+                ),
+                "model_limitations_present": True,
+            },
+        },
+        "robustness": {
+            "affine_instead_of_constant_background": affine_background,
+            "scope": (
+                "Deterministic model-form sensitivity only; no statistical confidence interval "
+                "is claimed because OSC covariance and instrument PSF are not calibrated."
+            ),
+        },
+        "fixed_geometry": {
+            "nine_coordinate_manifest_sha256": case["geometry_manifest_sha256"],
+            "corrections": {
+                name: value
+                for name, value in zip(
+                    SHARED_GEOMETRY_PARAMETER_NAMES,
+                    case["shared_geometry_corrections"],
+                    strict=True,
+                )
+            },
+            "beam_center_column_row_px": list(
+                base.config.instrument.detector_reference_coordinate_px
+            ),
+            "geometry_parameters_fitted_here": False,
+        },
+        "observations": {
+            "joint_dataset_count": len(osc_audit),
+            "datasets": list(osc_audit),
+            "observation_revision": observations.observation_revision,
+            "profile_revision": profile_revision,
+            "detector_valid_mask_revision": DETECTOR_VALID_MASK_REVISION,
+            "intensity_policy": (
+                "one independent nonnegative amplitude per profile; equal normalized shape "
+                "leverage; one signed constant offset projected before fitting"
+            ),
+            "candidate_profile_count": len(model_layout.identities),
+            "fitted_profile_count": len(observations.identities),
+            "measured_profile_policy": {
+                "path": str(measured_profile_policy_path),
+                "sha256": measured_profile_policy.sha256,
+                "minimum_excess_energy_over_side_scatter": (
+                    measured_profile_policy.minimum_excess_energy_over_side_scatter
+                ),
+                "sideband_two_theta_offsets_deg": [
+                    math.degrees(value)
+                    for value in measured_profile_policy.sideband_two_theta_offsets_rad
+                ],
+                "selection_sampler_revision": (_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION),
+                "source_averaged_modeled_support_gate_revision": (
+                    SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION
+                ),
+                "selection_measure": (
+                    "Selection-only detector-native bilinear centerline samples; the fitted "
+                    "central profiles use exact physical-pixel polygon overlap."
+                ),
+                "explicitly_excluded_profiles": list(measured_profile_policy.excluded_profiles),
+                "profile_selection": list(measured_selection_audit),
+                "scope": (
+                    "Entire weak profiles and both user-authorized 10-degree secondary-lobe "
+                    "profiles are excluded before fitting; no profile is partially trimmed."
+                ),
+            },
+            "excluded_profile_atoms": list(profile_exclusions),
+            "m0_support_audits": list(m0_support_audits),
+            "fitted_m0_integer_L_by_dataset": fitted_m0_by_dataset,
+            "unsupported_observed_peaks": [
+                {
+                    "dataset_id": record["dataset_id"],
+                    "peaks": record["unsupported_observed_peaks"],
+                }
+                for record in case["m0_observations"]
+            ],
+        },
+        "source_model": _source_model_record(base),
+        "simulation_execution": {
+            "backend": component_execution_backend,
+            "device": component_execution_device,
+        },
+        "provenance": {
+            "case_sha256": case_sha256,
+            "cif_sha256": base.config.cif_sha256,
+            "physics_revision": base.config.physics_revision,
+            "rod_catalog_revision": configured_rod_catalog_revision(base),
+        },
+        "artifact": str(diagnostic_path),
+        "timing_seconds": {
+            "setup": setup_seconds,
+            "osc_projection_and_model_layout": observation_seconds,
+            "component_bank_and_constant_background_fit": fit_seconds,
+            "affine_background_robustness": robustness_seconds,
+            "total": perf_counter() - total_start,
+        },
+        "python_tracemalloc": {
+            "current_bytes": current_bytes,
+            "peak_bytes": peak_bytes,
+        },
+    }
+    manifest_path = output_directory / "bi2se3_real_mosaic_fit.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    tracemalloc.stop()
+    print(
+        json.dumps(
+            {
+                "status": manifest["status"],
+                "recovered_effective_distribution": manifest["recovered_effective_distribution"],
+                "fit": {
+                    key: manifest["fit"][key]
+                    for key in (
+                        "objective",
+                        "sensitivity_rank",
+                        "sensitivity_condition",
+                        "profile_count",
+                        "m0_profile_count",
+                        "nonzero_m_profile_count",
+                        "residual_summary",
+                    )
+                },
+                "robustness": manifest["robustness"],
+                "artifact": manifest["artifact"],
+                "manifest": str(manifest_path),
+                "timing_seconds": manifest["timing_seconds"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Fit a fixed-geometry 5/10/15-degree synthetic Bi2Se3 mosaic triplet."
+        description="Fit a fixed-geometry 5/10/15-degree Bi2Se3 mosaic triplet."
     )
     parser.add_argument("--case", type=Path, default=DEFAULT_CASE)
     parser.add_argument("--output-directory", type=Path, required=True)
+    parser.add_argument(
+        "--observation-mode",
+        choices=("synthetic", "osc"),
+        default="synthetic",
+        help="fit the planted synthetic proof or the three measured OSC images",
+    )
+    parser.add_argument(
+        "--measured-profile-policy",
+        type=Path,
+        default=DEFAULT_MEASURED_PROFILE_POLICY,
+        help="case-bound explicit measured-profile exclusions used only in OSC mode",
+    )
+    parser.add_argument(
+        "--source-sample-count",
+        type=int,
+        default=250,
+        help="number of deterministic source states summed into each detector function",
+    )
+    parser.add_argument(
+        "--execution-backend",
+        choices=("cpu", "cuda"),
+        help="override the configured profile and render backend",
+    )
     parser.add_argument("--skip-images", action="store_true")
     args = parser.parse_args(argv)
     case_path = args.case.resolve()
     output_directory = _external_directory(args.output_directory)
     case, case_bytes, case_sha256 = _case(case_path)
+    execution_backend = args.execution_backend or str(case["profiles"]["execution_backend"])
     tracemalloc.start()
     total_start = perf_counter()
 
     setup_start = perf_counter()
-    base, series = _fixed_geometry_inputs(case_path, case)
+    base, series, nominal_series = _fixed_geometry_inputs(
+        case_path,
+        case,
+        source_sample_count=args.source_sample_count,
+    )
     profile_physics, profile_geometry = _profile_forward_contexts(base, series)
     rod_catalog_revision = configured_rod_catalog_revision(base)
     profile_pairs = tuple(
         _profile_definitions(
             inputs,
+            source_inputs=source_inputs,
+            include_nominally_unsupported_m0=args.observation_mode == "osc",
             case_path=case_path,
             incidence_deg=float(incidence_deg),
             osc_observation=osc_observation,
@@ -1572,7 +2636,8 @@ def main(argv: list[str] | None = None) -> None:
             profile_config=case["profiles"],
             rod_catalog_revision=rod_catalog_revision,
         )
-        for inputs, incidence_deg, osc_observation in zip(
+        for inputs, source_inputs, incidence_deg, osc_observation in zip(
+            nominal_series,
             series,
             case["incidence_angles_deg"],
             case["m0_observations"],
@@ -1581,6 +2646,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     frames = tuple(item[0] for item in profile_pairs)
     definitions = tuple(item[1] for item in profile_pairs)
+    measured_profile_policy_path = args.measured_profile_policy.resolve()
+    measured_profile_policy: _MeasuredProfilePolicy | None = None
+    if args.observation_mode == "osc":
+        measured_profile_policy = _measured_profile_policy(
+            measured_profile_policy_path,
+            case_sha256=case_sha256,
+            definitions=definitions,
+        )
     truth_definitions = tuple(
         tuple(
             replace(
@@ -1622,6 +2695,8 @@ def main(argv: list[str] | None = None) -> None:
         base.config.physics_revision,
         base.config.cif_sha256,
         rod_catalog_revision,
+        base.samples.source_revision,
+        None if measured_profile_policy is None else measured_profile_policy.sha256,
     )
     truth_profile_revision = _profile_revision(
         truth_definitions,
@@ -1633,8 +2708,34 @@ def main(argv: list[str] | None = None) -> None:
         base.config.physics_revision,
         base.config.cif_sha256,
         rod_catalog_revision,
+        base.samples.source_revision,
     )
     setup_seconds = perf_counter() - setup_start
+
+    if args.observation_mode == "osc":
+        if measured_profile_policy is None:
+            raise RuntimeError("OSC mode lacks a measured profile policy")
+        _run_real_osc_fit(
+            case_path=case_path,
+            case=case,
+            case_sha256=case_sha256,
+            output_directory=output_directory,
+            base=base,
+            series=series,
+            profile_physics=profile_physics,
+            profile_geometry=profile_geometry,
+            frames=frames,
+            definitions=definitions,
+            profile_revision=profile_revision,
+            profile_exclusions=profile_exclusions,
+            m0_support_audits=m0_support_audits,
+            measured_profile_policy_path=measured_profile_policy_path,
+            measured_profile_policy=measured_profile_policy,
+            execution_backend=execution_backend,
+            setup_seconds=setup_seconds,
+            total_start=total_start,
+        )
+        return
 
     truth = case["truth"]
     truth_mosaic = _mosaic_parameters(
@@ -1651,7 +2752,7 @@ def main(argv: list[str] | None = None) -> None:
         truth_definitions,
         truth_mosaic,
         profile_revision=truth_profile_revision,
-        execution_backend=str(case["profiles"]["execution_backend"]),
+        execution_backend=execution_backend,
     )
     m0_profile_mask = np.asarray(
         [
@@ -1684,11 +2785,11 @@ def main(argv: list[str] | None = None) -> None:
             context=profile_physics,
         ),
         profile_revision=profile_revision,
-        execution_backend=str(case["profiles"]["execution_backend"]),
+        execution_backend=execution_backend,
     )
     common_valid = independent_truth_profiles.valid & normalization_probe.valid
     if independent_truth_profiles.source_revision != normalization_probe.source_revision:
-        raise RuntimeError("truth and fit quadrature changed the ideal source realization")
+        raise RuntimeError("truth and fit quadrature changed the configured source realization")
     planted_profile_scales = _deterministic_unknown_profile_intensity_scales(
         normalization_probe.identities,
         case["validation"],
@@ -1723,7 +2824,7 @@ def main(argv: list[str] | None = None) -> None:
         frames=frames,
         definitions=definitions,
         profile_revision=profile_revision,
-        execution_backend=str(case["profiles"]["execution_backend"]),
+        execution_backend=execution_backend,
     )
     fit_start = perf_counter()
     search_result, refinement_history = _fit_profiles(
@@ -1755,7 +2856,7 @@ def main(argv: list[str] | None = None) -> None:
             context=profile_physics,
         ),
         profile_revision=truth_profile_revision,
-        execution_backend=str(case["profiles"]["execution_backend"]),
+        execution_backend=execution_backend,
     )
     exact_lorentzian, _ = _evaluate_profile_series(
         profile_physics,
@@ -1769,7 +2870,7 @@ def main(argv: list[str] | None = None) -> None:
             context=profile_physics,
         ),
         profile_revision=truth_profile_revision,
-        execution_backend=str(case["profiles"]["execution_backend"]),
+        execution_backend=execution_backend,
     )
     truth_component_seconds = perf_counter() - component_truth_start
     eta_truth = float(truth["lorentzian_probability"])
@@ -1795,6 +2896,7 @@ def main(argv: list[str] | None = None) -> None:
             tuple(float(value) for value in case["incidence_angles_deg"]),
             output_directory=output_directory,
             render_config=case["render"],
+            execution_backend=execution_backend,
         )
 
     diagnostic_path = output_directory / "bi2se3_mosaic_recovery.ra_diag.npz"
@@ -2105,13 +3207,7 @@ def main(argv: list[str] | None = None) -> None:
                 base.config.instrument.detector_reference_coordinate_px
             ),
         },
-        "source": {
-            "sample_count": 1,
-            "spatial_sigma_m": [0.0, 0.0],
-            "divergence_sigma_rad": [0.0, 0.0],
-            "wavelength_sigma_A": 0.0,
-            "wavelength_A": base.config.source.mean_wavelength_A,
-        },
+        "source": _source_model_record(base),
         "mosaic_orientation_quadrature": {
             "alpha_panel_count": profile_physics.alpha_panel_count,
             "alpha_gauss_order": profile_physics.alpha_gauss_order,

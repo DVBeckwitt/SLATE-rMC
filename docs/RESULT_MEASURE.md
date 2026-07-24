@@ -122,6 +122,14 @@ The measure IDs are `raw_detector_angle_signal_density_A2_per_rad2.v1`,
 `S`, `N`, and `I`. At `t=0` the azimuth is undefined and `J=0`, so the duplicated point is invalid
 for pointwise normalization even when the direct-beam detector coordinate exists.
 
+An ordered-intensity selected-center observation first restricts the already source-summed detector
+function to the rods named by one frozen reflection group and then samples `S(t,phi)` at its frozen
+center. Its measure ID is `selected_group_angular_signal_density_A2_per_rad2.v1`. Source states and
+retained roots are reduced before this selection; no per-source normalization, recentering, scale,
+or residual is defined. This point density is neither the finite-bin integral below nor a native
+pixel count. It can be compared only with an observation carrying the same selected-component
+extraction contract.
+
 For a finite angular bin `B`, the only admitted reduction is
 
 ```text
@@ -145,6 +153,11 @@ I_ij = integral_Pij d(c,r) dc dr.
 quadrature evaluates the continuous function inside the box. A display macrobin uses the same box
 integral over a larger declared rectangle and is labelled
 `raw_detector_macrobin_fixed_quadrature_estimate_A2.v1`.
+
+`DetectorCoordinateDensityImage` is different: `sample_detector_pixel_center_density(...)` samples
+the completed all-source, all-rod, all-root function once at each native center and retains
+`raw_detector_coordinate_density_A2_per_px2.v1`. It is a display-only coordinate-density sample,
+not a pixel-box mass, macrobin mass, calibrated count expectation, or raw OSC count image.
 
 No point deposition, histogram, pixel supersampling claim, per-reflection normalization, or image
 maximum normalization belongs to the physical result. Masks, background, saturation, detector

@@ -1,7 +1,7 @@
 # T12 Codex prompt
 
-> Historical draft; do not execute. T12 is `NEEDS_REPLAN` against the contract-v9 continuous
-> detector boundary.
+> Historical draft; do not execute. Its `NEEDS_REPLAN` status described the pre-contract-v10 task;
+> the current T12 status and execution record are in `tasks/12_mosaic_fit.md`.
 
 ## Goal
 

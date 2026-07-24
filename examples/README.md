@@ -8,6 +8,8 @@ fitting without access to the original RASIM repository, manuscript checkout, or
 - `bi2se3` contains the supplied structures, three compressed measured OSC images, a sanitized
   detector-native experiment configuration, legacy peak observations converted to explicit
   `(column_px, row_px)`, and VESTA-parity structure-factor references.
+- `bi2te3` contains the normalized full-occupancy COD 9011962 structure used by the
+  material-generic R-3m quintuple-layer configuration; measured OSC images remain external.
 - `calibration/hbn` contains the supplied compressed calibrant and dark OSC images plus a compact
   calibration reference stripped of full derived images and absolute paths.
 - `pbi2` contains 2H, 4H, and 6H structures and declared transition-model parameters.

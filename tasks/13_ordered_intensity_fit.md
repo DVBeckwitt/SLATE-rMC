@@ -1,147 +1,135 @@
 # T13: ordered intensity fit
 
-Status: `COMPLETE_FIXED_POSITION_SYNTHETIC_SLICE`.
+Status: `COMPLETE_FIXED_POSITION_250_STATE_SYNTHETIC_SELECTED_CENTER_SLICE`.
 
-This is the completed contract-v10 fixed-position slice. References to historical event geometry,
-hits, or detector responses do not authorize restoring deleted APIs.
+Branch: `codex/bi2se3-250ki-refit`
 
-Branch: `codex/structure-factor-intensity-fit`
+This contract-v10 slice preserves the finite-ROI mass API but uses the distinct source-averaged
+selected-center response for the active Bi2Se3 proof. It does not restore retired event/hit APIs.
 
 ## Goal
 
-Fit relative ordered Bragg intensities from immutable detector-native ROI selections while reusing
-the continuous Bragg and detector mappings.
+With geometry, detector center, lattice, mosaic, atom positions, optics, and stacking frozen, fit
+the three unique site occupancies and directional `Ur/Uz` factors to three incidence datasets at
+once. Every incident state must contribute to one detector function per incidence before any
+normalization, scale projection, comparison, or residual.
+
+The accepted slice proves synthetic selected-component identifiability and acceleration. It does
+not claim ordered-intensity extraction or structure recovery from unresolved raw OSC counts.
 
 ## Owned paths
 
 ```text
 src/rasim_next/fitting/ordered_intensity.py
+src/rasim_next/fitting/__init__.py
+src/rasim_next/pipeline/_continuous_detector_kernel.py
+src/rasim_next/pipeline/configured_simulation.py
+src/rasim_next/pipeline/source_averaged_detector.py
+scripts/recover_bi2se3_mosaic.py
+scripts/recover_bi2se3_ordered_intensity.py
 tests/test_fitting.py
-this task's execution-plan and handoff sections
+tests/test_integration.py
+the live contracts, architecture, validation, examples, ledger, roadmap, and task records
 ```
 
-## Reference map
+## Required behavior
 
-```text
-original RASIM
-    ra_sim/gui/ordered_structure_fit.py:53-99,322-540
-    ra_sim/fitting/rod_profiles.py
+- use one shared 250-row source realization across 5, 10, and 15 degrees;
+- bind every response to exact source count and source revision;
+- reduce source intensities incoherently into one detector function per incidence;
+- retain all `88/78/72` frozen selected centers, including every weak nonzero identity and all six
+  admitted branchless `m=0` anchors in unfiltered synthetic mode;
+- when a measured mosaic is supplied, compile exactly its fit-eligible identities and reject stale,
+  missing, or unknown-dataset selection records;
+- require positive finite baseline support from the complete source-averaged detector for every
+  admitted `m=0` anchor;
+- reject mixed point-density and finite-ROI-mass observations;
+- fit any enabled subset of `oBi`, `oSe1`, `oSe2`, `Ur`, and `Uz`, freezing the complement exactly;
+- reject attempts to move the two Wyckoff coordinates in this phase;
+- reject the exact common-occupancy gauge when analytic image scales are enabled unless one positive
+  occupancy is fixed as ratio reference; and
+- keep structural parameters global and dataset scales dataset-specific, with no per-source or
+  per-peak fit amplitudes.
 
-manuscript
-    sections/refinement_workflow.tex:39-43,57
-    2D_Supplemental/SI_failure_modes.tex:691-703
-```
+## Implementation
 
-## Required work
+For each frozen selected center, the compiler evaluates six occupancy probes through the selected-
+group view of the complete source-averaged, all-root detector. Thirteen Chebyshev-Lobatto `Uz`
+nodes compile the noncommuting source/root `Qz` response; 12 interlaced full-detector nodes must pass
+the declared `2e-3` maximum occupancy-contracted signal-error gate. The conservative profile-local
+generalized-eigenvalue certificate covers every occupancy direction with a declared `1e-12`
+extinct-mode floor; no weak profile borrows a scale from a stronger profile.
+Accepted rod-family `Qr^2` damping is exact. Optimizer
+iterations contract only the occupancy quadratic and directional damping; they do not project the
+detector or recalculate the full structure factor.
 
-- freeze source, detector, sample, mosaic, selection, ROI, mask, and background-policy revisions
-- record every individual rod contributing to each ROI
-- compare measured and simulated detector mass under one declared noise model
-- support exact nonnegative per-image scale where applicable
-- keep structural parameters global and nuisance scales/backgrounds separate
-- reuse analytic root geometry and continuous detector-coordinate response
-- fit raw amplitudes/relative intensities without maximum normalization, pruning, or independent peak amplitudes
-- expose held-out reflection validation and parameter identifiability
+Recovery schema v3 records compiler contract
+`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2` and its `1e-12` spectral
+floor. Rendering rejects stale schema/compiler provenance before evaluating the detector.
 
-## Proof
+Synthetic truth is generated independently through a fresh authoritative combined-detector
+evaluation at the same frozen selected centers. The selected-center measure is
+`selected_group_angular_signal_density_A2_per_rad2.v1`, not integrated peak mass or raw OSC counts.
 
-- synthetic structural recovery
-- ROI mass conservation
-- exact scale solution
-- held-out exact-model interpolation checks (not independent experimental validation)
-- parameter rank/correlation evidence
-- original-RASIM raw-intensity comparison before normalization and rounding
+## Proof commands
 
-## Commands
-
-```bash
+```powershell
 python -m compileall -q src
-ruff check src/rasim_next/fitting/ordered_intensity.py tests/test_fitting.py
-pytest -q tests/test_fitting.py
-python -m rasim_next.proof ordered-intensity-fit --json
+ruff check src scripts/recover_bi2se3_ordered_intensity.py tests
+pytest -q
+python scripts/recover_bi2se3_ordered_intensity.py `
+  --source-sample-count 250 `
+  --mosaic-result C:\path\outside\the\repository\bi2se3-real-mosaic\bi2se3_real_mosaic_fit.json `
+  --execution-backend cuda `
+  --output C:\path\outside\the\repository\bi2se3-sf\ordered_intensity_result.json `
+  --json
 git diff --check
 ```
 
-## Execution plan
-
-State: COMPLETE
-
-This branch implements the first contract-v10 ordered-intensity slice for the tracked Bi2Se3
-three-incidence case. It does not restore the retired event/hit runtime.
-
-1. Extend the existing CIF-derived quintuple-layer strength with one occupancy per unique source
-   label and one shared transverse-isotropic displacement tensor `U_radial/U_normal`. Keep the two
-   symmetry-allowed 6c fractional-z coordinates available to the explicit freeze mask, but freeze
-   both at their CIF values for this first user-requested recovery. The directional Debye-Waller
-   amplitude replaces the current shared isotropic factor and reproduces it exactly when both
-   components are `0.019 A^2`.
-2. Keep source, nine-coordinate geometry, lattice, material optics, layer count, stacking law, and
-   recovered mosaic immutable. Prepare detector-native finite-angle profile masses once and cache
-   their fixed response relative to the exact ordered strength; no detector raster is evaluated in
-   an optimizer iteration.
-3. Fit every geometry-visible positive nonzero integer-L marker in the 5, 10, and 15 degree
-   simulations, including weak `m=1,3,4` groups, plus the six admitted `00L` profiles. Use one
-   analytically profiled scale per image and equal relative peak leverage. Never fit per-peak
-   amplitudes.
-4. Record both Wyckoff coordinates explicitly as frozen state and reject attempts to activate them
-   in this first phase. Permit any subset of the three occupancies and two displacement factors.
-   With relative image scales, reject the exact common-occupancy gauge unless one occupancy is
-   fixed; report occupancy ratios in that case. Also prove the absolute-calibration mode in which
-   all three occupancies are recoverable.
-5. Generate hidden truth with the authoritative full structure-factor and 52-layer stacking model
-   on an independently refined frozen detector response, then fit it with the cached occupancy quadratic and
-   directional damping. Recover from a deterministic non-truth start, verify the acceleration
-   kernel against the direct oracle, report rank, singular values, correlations, held-out
-   exact-model interpolation points, wall time, and peak memory, then retain only compact invariant and integration
-   tests. Bind both numerical responses to one quadrature-independent observable-layout revision
-   and require planted-mass plus six-column occupancy-basis convergence before acceptance.
-
 ## Handoff
 
-Status: COMPLETE — fixed-position deterministic synthetic slice
+Commit SHA: recorded in the final branch handoff because a commit cannot contain its own SHA.
 
-Commit SHA: recorded in the final branch handoff (a commit cannot contain its own SHA)
+Accepted ordered-model revision: `bi2se3_fixed_position_occ_directional_u.v1`.
 
-Accepted ordered-model revision: `bi2se3_fixed_position_occ_directional_u.v1`
+The unfiltered simultaneous 5/10/15-degree proof retains 238 centers (`88/78/72`), including six
+`m=0` and every frozen weak nonzero identity. The measured-mosaic command above instead retains its
+exact `2/5/8 = 15` fit-eligible profiles, including five `m=0`. All three responses require source revision
+`42e8108b3ba9c66cb7752bc7e9d2f9fdb8401987a8f9a0eb272d3f4edeaa39a7` and 250 states.
 
-Proof summary: one simultaneous 5/10/15-degree fit retains 238 profiles (`88/78/72`), including
-all six admitted `m=0` profiles and all frozen weak nonzero identities. The q12x4 cached response
-agrees with an independently refined q16x8 full-strength response to `2.1565e-4` maximum relative
-planted-mass error and `2.3373e-4` maximum six-column basis row-norm error. Cached and direct
-strength agree to `2.22e-15`. Absolute recovery is rank 5 with condition `9.475`; relative ratio
-recovery is rank 4 with condition `4.383`; neither contacts a bound. The exact common-occupancy
-scale gauge is rejected.
+For the current measured-selection handoff, the maximum 13-node/12-interlaced-node `Uz` certificate
+is `1.19096e-11`; the compact response agrees with a fresh combined-detector prediction to
+`8.09542e-16`. Absolute recovery identifies all five coordinates with rank 5, condition `31.1434`,
+maximum residual `1.9984e-15`, and maximum parameter error `1.22e-15`. Relative recovery fixes
+`oBi=1`, identifies the two occupancy ratios and `Ur/Uz` with rank 4, condition `12.8583`, maximum
+residual `1.1102e-15`, and maximum parameter error `1.17e-16`. No coordinate contacts a bound.
 
-Benchmark: q12x4 fit-response compilation `351.889 s`; q16x8 refined-proof compilation
-`891.714 s`; cached versus direct equivalent three-angle prediction `0.0468517/55.0579 s`
-(`1175.15x`); absolute/relative fits `2.6785/2.1458 s`; total proof `1506.118 s`. Traced/observed
-peak memory `1,305,641,960/1,497,780,224` bytes. Response term counts are
-`850,944/773,568/682,752`; refined-proof counts are `2,269,184/2,062,848/1,820,672`.
+The measured-selection responses contain `156/390/624` coefficients. Compilation took `171.912 s`;
+fresh versus cached equivalent truth prediction took `3.83954/0.0007503 s` (`5117.35x`); absolute
+and relative fits took `0.04147/0.02670 s`; total proof time was `249.477 s`. Traced peak memory was
+`62,674,047` bytes. The current ordered JSON SHA-256 is
+`432a402bf675c0411c399fd7f0327175be36b54576a611dfc431cdaef5a048ea`; it binds mosaic SHA-256
+`69c782f67216ea595b72abced82a9660833d1acbee7b38ffaedb2de7d81df829` and is external at
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_sf_gate_v2\ordered_intensity_result.json`.
 
-Held-out exact-model interpolation errors: maximum `1.3003e-5` at four predeclared noninteger-L
-points that do not occur as exact quadrature terms; this is not independent experimental
-validation.
+The separate unfiltered full-catalog proof has `6864/6084/5616` coefficients, a
+`2.084780066e-10` certificate, and `8.976202640e-15` direct parity. Its `88/78/72` catalog is not
+the measured `--mosaic-result` handoff.
 
-Identifiability: absolute calibrated masses identify the three occupancies and `Ur/Uz`. Free image
-scales remove the common occupancy multiplier, so Bi is fixed as a positive ratio reference and
-only `Se1/Bi`, `Se2/Bi`, `Ur`, and `Uz` are identified. Correlations are local inverse-sensitivity
-diagnostics, not statistical covariance.
+The separate display-only 3,000-by-3,000 render used CUDA, all 250 states, all 85 rods, all roots,
+and `m=0`. It took `3839.456 s` for the three incidences and evaluated
+`4,577,845/4,377,290/4,170,019` detector centers after the conservative top-exit cull. This raster
+was generated after fitting and is not a fit input or a count-calibrated comparison.
 
-Legacy classification: `CORRECTED` for raw, unrounded CIF-derived strength with explicit occupancy
-and directional damping; `NO_ORACLE` for raw-OSC component extraction, background/noise/PSF, and
-real-data parameter recovery.
+Legacy classification is `CORRECTED` for raw, unrounded CIF-derived strength with explicit
+occupancy and directional damping, and `NO_ORACLE` for raw-OSC component extraction, background,
+noise, PSF, count calibration, or real-data parameter recovery.
 
-Permanent tests retained: direct directional structure sum; fixed-position quadratic versus full
-strength; PSD behavior at a numerical extinction; sparse `m=0` plus nonzero response/topology/direct
-oracle; geometry-only marker identity under zero versus CIF strength; freeze/gauge/revision/rank/
-bound contracts; and asymmetric scalar/CPU/CUDA parity. Each protects a distinct public or
-scientific invariant.
+Permanent tests retain the combined source-sum contract, m=0 and nonzero direct-oracle parity,
+occupancy-quadratic/direct-strength parity, directional damping, source count/revision binding,
+mixed-measure rejection, freeze/gauge/rank/bound contracts, and native-center sampling. Each
+protects a distinct public or scientific invariant.
 
-Limitations: Bi2Se3-specific five-parameter basis and finite topology probe; selected-group
-component masses rather than raw total ROI counts; no atom motion, per-site `Uij`, background,
-noise model, uncertainty, or real-OSC deblending. New materials require their own structure basis,
-identity catalog, support audit, and response-order proof.
-
-Minimum integration request: consume immutable `(dataset_id, observable_revision, mass)` records
-from a separately proven component-extraction boundary; do not join by tuple order or numerical
-response digest.
+Limitations: the current structure basis is Bi2Se3-specific; atom motion, per-site `Uij`, calibrated
+background/noise/PSF, uncertainty, raw-OSC deblending, and material-neutral structure bases remain
+unproven. New materials require their own structure basis, identity catalog, and response proof.

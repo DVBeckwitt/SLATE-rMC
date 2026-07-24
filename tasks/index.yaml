@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: mosaic_fit
+current_phase: ordered_intensity_fit
 
 tasks:
   - id: T00
@@ -74,13 +74,13 @@ tasks:
     depends_on: [T08]
   - id: T12
     file: tasks/12_mosaic_fit.md
-    branch: codex/mosaic-response-fit
-    status: READY_DETERMINISTIC_FULL_SET_SLICE
+    branch: codex/bi2se3-250ki-refit
+    status: READY_250_STATE_MODEL_LIMITED_REAL_OSC_SLICE
     depends_on: [T17, T18]
   - id: T13
     file: tasks/13_ordered_intensity_fit.md
-    branch: feat/ordered-intensity-fit
-    status: NEEDS_REPLAN
+    branch: codex/bi2se3-250ki-refit
+    status: COMPLETE_FIXED_POSITION_250_STATE_SYNTHETIC_SELECTED_CENTER_SLICE
     depends_on: [T12]
   - id: T14
     file: tasks/14_stacking_intensity_fit.md

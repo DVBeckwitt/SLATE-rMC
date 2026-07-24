@@ -20,6 +20,7 @@ from rasim_next.materials import CrystalStructure
 from rasim_next.ordered import (
     Bi2Se3QuintupleLayerParameters,
     bi2se3_ql_amplitudes,
+    quintuple_layer_site_labels,
     uniform_finite_stack,
 )
 from rasim_next.reciprocal.lattice import ReciprocalLattice
@@ -117,7 +118,7 @@ def _physical_rod_id(rod: Rod) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Bi2Se3TwoHStrength:
-    """Finite parent-2H strength from a CIF-derived Bi2Se3 quintuple layer.
+    """Finite parent-2H strength from a CIF-derived Bi2-chalcogen3 layer.
 
     ``Parent.TWO_H`` is the registry-fixed AA sequence. The source R-3m CIF
     supplies the internal quintuple-layer motif but its native registry-cycling
@@ -167,6 +168,12 @@ class Bi2Se3TwoHStrength:
         """CIF-derived basis to which this strength model is bound."""
 
         return self._lattice.basis_Ainv
+
+    @property
+    def site_labels(self) -> tuple[str, str, str]:
+        """CIF labels for Bi, central chalcogen, and outer chalcogen."""
+
+        return quintuple_layer_site_labels(self.crystal)
 
     def evaluate_profile(
         self,

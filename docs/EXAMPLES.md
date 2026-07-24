@@ -99,6 +99,22 @@ unique common pivot must pass `sample_correction_pivot_lab_m` when constructing 
 intentionally does not report separate sample-mount and goniometer-axis errors; that decomposition
 requires tags from multiple commanded goniometer angles.
 
+## Bi2Te3 quintuple-layer configuration
+
+[`configs/bi2te3_simulation.yaml`](../configs/bi2te3_simulation.yaml) exercises the same finite
+quintuple-layer implementation with the tracked COD 9011962 Bi2Te3 structure. The generic
+`r3m_quintuple_finite_2h.v1` model resolves the Bi, central-chalcogen, and outer-chalcogen CIF
+orbits from their expanded multiplicities, so Te form factors and site labels come from the
+Bi2Te3 CIF rather than a Bi2Se3-specific constant. The historical Python parameter type retains
+its `se1` and `se2` field names for compatibility; those fields mean central and outer chalcogen
+for this material-generic path.
+
+The configuration is a reusable forward-model input, not an accepted fit result. Its detector
+tilts and beam center are fixed calibration values; its 250 source states are reduced
+incoherently into one detector function before any mosaic profile, ordered-intensity comparison,
+or image display. Experimental Bi2Te3 OSC files remain external and are not part of the tracked
+example pack.
+
 ## Quantitative one-state pixel diagnostic
 
 The retained one-state CLI exercises native-pixel fixed or adaptive integration and emits an
@@ -271,12 +287,13 @@ uv run python scripts/recover_bi2se3_mosaic.py `
   --output-directory C:\path\outside\the\repository\mosaic-recovery
 ```
 
-The case fixes the accepted nine-coordinate geometry, beam center, lattice, one source-center ray,
-zero divergence, and mean wavelength. It fits only Gaussian sigma, Lorentzian HWHM, and mixture
-probability from prepared continuous angle profiles. Every individual profile receives an exact
-profiled nuisance amplitude. Thus absolute peak heights, structure-factor amplitudes, and
-cross-reflection intensity ratios do not weight the answer; relative angular shape within each
-profile remains the mosaic observable.
+The case fixes the accepted nine-coordinate geometry, beam center, and lattice. Geometry marker
+centers use one exact source-center, zero-divergence, mean-wavelength companion state, but that state
+contributes no detector intensity. By default each incidence instead reduces the same 250 sampled
+positions, directions, and wavelengths into one detector function before profile comparison. The
+fit varies only Gaussian sigma, Lorentzian HWHM, and mixture probability. Every individual profile
+receives an exact profiled nuisance amplitude, so absolute peak heights, structure-factor
+amplitudes, and cross-reflection intensity ratios do not weight the answer.
 
 The joint fit uses 32 profiles across all three datasets: the frozen 10/8/8 indexed nonzero
 selection plus `00L={003,006}` at 5 degrees, `{006,009}` at 10 degrees, and `{006,009}` at 15
@@ -292,25 +309,68 @@ amplitudes; they are neither recovered-model renders nor fit inputs. The JSON, n
 distribution comparison, and images are generated artifacts and must remain outside the repository.
 Use `--skip-images` for the faster numerical recovery check.
 
+To fit the same fixed geometry to the three detector-native Bi2Se3 OSC images, run:
+
+```powershell
+uv run python scripts/recover_bi2se3_mosaic.py `
+  --observation-mode osc `
+  --source-sample-count 250 `
+  --skip-images `
+  --output-directory C:\path\outside\the\repository\bi2se3-real-mosaic
+```
+
+The tracked `mosaic_fit_measured_policy.toml` binds the selection to the immutable case. It excludes
+each weak profile as a whole when its central excess energy is less than five times the local
+sideband scatter, and excludes both 10-degree `m=1,L=4` profiles as the paired secondary-lobe case.
+No central-profile bin is intensity-masked. The surviving `m=0` set is `003/006` at 5 degrees,
+`006` at 10 degrees, and `006/009` at 15 degrees. Every surviving peak still receives an
+independent nonnegative amplitude, so the fit uses shape rather than absolute or cross-peak
+intensity. The output is an effective common radial envelope: uncalibrated detector/source
+resolution and remaining forward-model disagreement prevent interpreting it as a unique intrinsic
+mosaic distribution or a statistical confidence interval.
+
 ## Recover fixed-position Bi2Se3 occupancies and directional displacement
 
 After accepting the geometry and mosaic stages, run the deterministic three-incidence structure
-recovery:
+recovery with the accepted external mosaic result:
 
 ```powershell
-python scripts/recover_bi2se3_ordered_intensity.py --json
+python scripts/recover_bi2se3_ordered_intensity.py `
+  --source-sample-count 250 `
+  --mosaic-result C:\path\outside\the\repository\bi2se3-real-mosaic\bi2se3_real_mosaic_fit.json `
+  --output C:\path\outside\the\repository\bi2se3-sf\ordered_intensity_result.json `
+  --json
 ```
 
-The tracked case uses one ideal source-center ray at 5, 10, and 15 degrees, the accepted nine
-geometry corrections, the recovered 2-degree Gaussian plus 0.5-degree Lorentzian mosaic with
-mixture probability 0.1, every detector-visible positive nonzero integer-`L` marker, and the six
-admitted `00L` profiles. Bi and Se2 Wyckoff coordinates remain exactly at their CIF values. The
-absolute proof fits three occupancies plus `Ur/Uz`; the relative proof fixes `oBi=1`, reports the two
-Se/Bi ratios, and solves one nonnegative scale per image analytically. Synthetic observations use
-the full structure-factor/stacking oracle on an independently refined frozen response, while fitting
-uses the compiled quadratic/Debye-Waller kernel on the same observable layout. These are exact
-selected-reflection-group component masses, not raw unseparated OSC ROI counts. The runner reports
-both quadrature convergence and the cached-versus-direct structure-factor error.
+The tracked case uses one shared 250-state source realization at 5, 10, and 15 degrees, the accepted
+nine geometry corrections, and the supplied recovered mosaic. With the shown measured-mosaic
+handoff, its exact fit-eligible selection is authoritative: `2/5/8 = 15` centers, including five
+`00L` anchors, enter one joint fit. Running without `--mosaic-result` is the separate full-catalog
+synthetic proof and retains `88/78/72 = 238` centers and six `00L` anchors. Each view produces one
+incoherently source-summed detector function before any comparison. Bi and Se2 Wyckoff coordinates
+remain exactly at their CIF values. The absolute proof
+fits three occupancies plus `Ur/Uz`; the relative proof fixes `oBi=1`, reports the two Se/Bi ratios,
+and solves one nonnegative scale per image analytically. The cached response uses the exact
+occupancy quadratic, exact family `Qr`, and a 13-node `Uz` response certified at 12 interlaced
+full-detector nodes. Its synthetic observations are selected-group point densities in `A^2/rad^2`,
+not integrated peak masses or raw unseparated OSC counts.
+
+To render the three raw OSCs beside three 3,000 by 3,000 source-averaged forward-model density
+images after an accepted recovery, rerun with `--render-only`, both result JSON paths, and an
+external `--render-directory`. The simulated PNGs sample the continuous detector function at pixel
+centers; they are not pixel-integrated count predictions. Raw and simulated rows use separate
+declared log transforms and are display-only, not intensity calibrated to each other.
+
+```powershell
+python scripts/recover_bi2se3_ordered_intensity.py `
+  --render-only `
+  --source-sample-count 250 `
+  --mosaic-result C:\path\outside\the\repository\bi2se3-real-mosaic\bi2se3_real_mosaic_fit.json `
+  --ordered-result C:\path\outside\the\repository\bi2se3-sf\ordered_intensity_result.json `
+  --execution-backend cpu `
+  --render-directory C:\path\outside\the\repository\bi2se3-250ki-images `
+  --json
+```
 
 ## Reference and observed data
 

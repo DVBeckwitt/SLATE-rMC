@@ -24,6 +24,20 @@ _MIXTURE_Z_LIMIT = 32.0
 _MIXTURE_Z_GRID_COUNT = 8193
 _MIXTURE_Z_LENGTH_TOLERANCE = 1.0e-6
 _MIXTURE_Z_LOCAL_HALF_WIDTH = 0.05
+SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION = "positive-combined-detector-m0-profile-signal.v2"
+
+
+def source_averaged_profile_has_support(
+    *,
+    family_m: int,
+    profile_signal_A2: float,
+) -> bool:
+    """Return whether a candidate has support in the combined-source detector."""
+
+    signal = float(profile_signal_A2)
+    if not math.isfinite(signal) or signal < 0.0:
+        raise ValueError("profile_signal_A2 must be finite and nonnegative")
+    return bool(int(family_m) != 0 or signal > np.finfo(np.float64).tiny)
 
 
 def _readonly_float(
@@ -522,9 +536,10 @@ class MosaicProfileSet:
     phi_bin_edges_rad: FloatArray
     two_theta_bounds_rad: FloatArray
     angle_frame_revisions: tuple[str, ...]
-    source_revision: str
+    source_revision: str | None
     execution_backend: str | None = None
     execution_device: str | None = None
+    observation_revision: str | None = None
 
     def __post_init__(self) -> None:
         identities = tuple(self.identities)
@@ -606,8 +621,20 @@ class MosaicProfileSet:
             raise ValueError("every profile requires at least three valid bins")
         if not isinstance(self.profile_revision, str) or not self.profile_revision:
             raise ValueError("profile_revision must be a nonempty string")
-        if not isinstance(self.source_revision, str) or not self.source_revision:
-            raise ValueError("source_revision must be a nonempty string")
+        source_revision = self.source_revision
+        observation_revision = self.observation_revision
+        if source_revision is not None and (
+            not isinstance(source_revision, str) or not source_revision
+        ):
+            raise ValueError("source_revision must be None or a nonempty string")
+        if observation_revision is not None and (
+            not isinstance(observation_revision, str) or not observation_revision
+        ):
+            raise ValueError("observation_revision must be None or a nonempty string")
+        if (source_revision is None) == (observation_revision is None):
+            raise ValueError(
+                "exactly one of source_revision and observation_revision must be supplied"
+            )
         if self.execution_backend is not None and self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
@@ -621,6 +648,10 @@ class MosaicProfileSet:
             self.execution_device is not None
         ):
             raise ValueError("execution_device must identify exactly the CUDA profile backend")
+        if observation_revision is not None and (
+            self.execution_backend is not None or self.execution_device is not None
+        ):
+            raise ValueError("measured observations must not claim simulation execution provenance")
         object.__setattr__(self, "identities", identities)
         object.__setattr__(self, "signal", signal)
         object.__setattr__(self, "normalization", normalization)
@@ -658,6 +689,84 @@ class MosaicProfileSet:
             source_revision=self.source_revision,
             execution_backend=self.execution_backend,
             execution_device=self.execution_device,
+            observation_revision=self.observation_revision,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MosaicProfileNuisanceBasis:
+    """Frozen per-profile additive nuisance basis eliminated before shape fitting."""
+
+    identities: tuple[MosaicProfileIdentity, ...]
+    basis: FloatArray
+    valid: BoolArray
+    revision: str
+    profile_revision: str
+    orthonormal_basis: FloatArray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        identities = tuple(self.identities)
+        if not identities or any(
+            not isinstance(identity, MosaicProfileIdentity) for identity in identities
+        ):
+            raise ValueError("identities must contain MosaicProfileIdentity values")
+        if len(set(identities)) != len(identities):
+            raise ValueError("nuisance-basis identities must be unique")
+        supplied = np.asarray(self.basis)
+        if supplied.ndim != 3 or supplied.shape[0] != len(identities) or supplied.shape[2] == 0:
+            raise ValueError("basis must have shape (profile, bin, coefficient)")
+        basis = _readonly_float(supplied, supplied.shape, "basis")
+        valid = _readonly_bool(
+            self.valid,
+            (len(identities), supplied.shape[1]),
+            "valid",
+        )
+        if np.any(basis[~valid] != 0.0):
+            raise ValueError("nuisance basis must be zero outside valid profile bins")
+        coefficient_count = basis.shape[2]
+        orthonormal = np.zeros(basis.shape, dtype=np.float64)
+        for profile_index in range(len(identities)):
+            active = basis[profile_index, valid[profile_index]]
+            if active.shape[0] <= coefficient_count:
+                raise ValueError("each profile needs more valid bins than nuisance coefficients")
+            singular = np.linalg.svd(active, compute_uv=False)
+            tolerance = 64.0 * np.finfo(np.float64).eps * max(active.shape) * float(singular[0])
+            if int(np.count_nonzero(singular > tolerance)) != coefficient_count:
+                raise ValueError("each nuisance basis must have full column rank")
+            q, _ = np.linalg.qr(active, mode="reduced")
+            for column in range(coefficient_count):
+                pivot = int(np.argmax(np.abs(q[:, column])))
+                if q[pivot, column] < 0.0:
+                    q[:, column] *= -1.0
+            orthonormal[profile_index, valid[profile_index]] = q
+        if not isinstance(self.revision, str) or not self.revision:
+            raise ValueError("revision must be a nonempty string")
+        if not isinstance(self.profile_revision, str) or not self.profile_revision:
+            raise ValueError("profile_revision must be a nonempty string")
+        orthonormal.setflags(write=False)
+        object.__setattr__(self, "identities", identities)
+        object.__setattr__(self, "basis", basis)
+        object.__setattr__(self, "valid", valid)
+        object.__setattr__(self, "orthonormal_basis", orthonormal)
+
+    @property
+    def coefficient_count(self) -> int:
+        return self.basis.shape[2]
+
+    def reorder(self, order: ArrayLike) -> MosaicProfileNuisanceBasis:
+        supplied = np.asarray(order)
+        expected = np.arange(len(self.identities), dtype=np.int64)
+        if supplied.ndim != 1 or not np.issubdtype(supplied.dtype, np.integer):
+            raise ValueError("profile order must be a one-dimensional integer permutation")
+        indices = np.asarray(supplied, dtype=np.int64)
+        if indices.shape != expected.shape or not np.array_equal(np.sort(indices), expected):
+            raise ValueError("profile order must be a complete permutation")
+        return MosaicProfileNuisanceBasis(
+            identities=tuple(self.identities[int(index)] for index in indices),
+            basis=self.basis[indices],
+            valid=self.valid[indices],
+            revision=self.revision,
+            profile_revision=self.profile_revision,
         )
 
 
@@ -706,25 +815,36 @@ def _validated_component_profiles(
         not isinstance(profile, MosaicComponentProfile) for profile in profiles
     ):
         raise ValueError(f"{name} must contain one MosaicComponentProfile per width")
+    model_reference = profiles[0].profile
     for expected_width, component in zip(widths, profiles, strict=True):
         profile = component.profile
         if (
             component.component_kind != component_kind
             or component.width_rad != float(expected_width)
+            or profile.source_revision is None
+            or profile.observation_revision is not None
             or profile.identities != observations.identities
             or profile.profile_revision != observations.profile_revision
             or profile.angle_frame_revisions != observations.angle_frame_revisions
-            or profile.execution_backend != observations.execution_backend
-            or profile.execution_device != observations.execution_device
             or not np.array_equal(profile.phi_bin_edges_rad, observations.phi_bin_edges_rad)
             or not np.array_equal(
                 profile.two_theta_bounds_rad,
                 observations.two_theta_bounds_rad,
             )
-            or not np.array_equal(profile.normalization, observations.normalization)
             or not np.array_equal(profile.valid, observations.valid)
+            or profile.source_revision != model_reference.source_revision
+            or profile.execution_backend != model_reference.execution_backend
+            or profile.execution_device != model_reference.execution_device
+            or not np.array_equal(profile.normalization, model_reference.normalization)
         ):
             raise ValueError(f"{name} changed component or frozen profile provenance")
+        if observations.source_revision is not None and (
+            profile.source_revision != observations.source_revision
+            or profile.execution_backend != observations.execution_backend
+            or profile.execution_device != observations.execution_device
+            or not np.array_equal(profile.normalization, observations.normalization)
+        ):
+            raise ValueError(f"{name} changed source-profile provenance")
     return profiles
 
 
@@ -761,10 +881,22 @@ class MosaicComponentProfileBank:
             "lorentzian",
         )
         source_revisions = {
-            self.observations.source_revision,
-            *(component.profile.source_revision for component in (*gaussian, *lorentzian)),
+            component.profile.source_revision for component in (*gaussian, *lorentzian)
         }
+        if self.observations.source_revision is not None:
+            source_revisions.add(self.observations.source_revision)
         if len(source_revisions) != 1:
+            raise ValueError("component profiles changed source-profile provenance")
+        model_reference = gaussian[0].profile
+        if any(
+            component.profile.execution_backend != model_reference.execution_backend
+            or component.profile.execution_device != model_reference.execution_device
+            or not np.array_equal(
+                component.profile.normalization,
+                model_reference.normalization,
+            )
+            for component in lorentzian
+        ):
             raise ValueError("component profiles changed source-profile provenance")
         object.__setattr__(self, "gaussian_sigma_rad", gaussian_width)
         object.__setattr__(self, "gaussian_profiles", gaussian)
@@ -814,18 +946,23 @@ class MosaicIdentifiabilityError(ValueError):
             nonnegative=True,
         )
         self.condition = float(condition)
-        if reason not in {"local_sensitivity", "global_alias"}:
-            raise ValueError("reason must be 'local_sensitivity' or 'global_alias'")
+        if reason not in {"local_sensitivity", "global_alias", "nonattained_boundary"}:
+            raise ValueError(
+                "reason must be 'local_sensitivity', 'global_alias', or 'nonattained_boundary'"
+            )
         self.reason = reason
         self.competing_solution_keys = tuple(competing_solution_keys)
         if self.reason == "global_alias" and len(self.competing_solution_keys) < 2:
             raise ValueError("global_alias requires at least two competing solution keys")
-        detail = (
-            f"global_aliases={self.competing_solution_keys}"
-            if self.reason == "global_alias"
-            else f"rank={self.rank}/{len(self.active_parameter_names)} "
-            f"condition={self.condition:.6g}"
-        )
+        if self.reason == "global_alias":
+            detail = f"global_aliases={self.competing_solution_keys}"
+        elif self.reason == "nonattained_boundary":
+            detail = "one-sided zero-energy component limit is not attained"
+        else:
+            detail = (
+                f"rank={self.rank}/{len(self.active_parameter_names)} "
+                f"condition={self.condition:.6g}"
+            )
         super().__init__(
             f"mosaic distribution is not identifiable after profile-scale projection: {detail}"
         )
@@ -844,6 +981,9 @@ class MosaicProfileFitResult:
     profile_relative_l2_residual: FloatArray
     objective: float
     predicted_intensity: FloatArray
+    background_coefficients: FloatArray
+    predicted_total_intensity: FloatArray
+    nuisance_basis_revision: str | None
     sensitivity_singular_values: FloatArray
     sensitivity_rank: int
     sensitivity_condition: float
@@ -854,9 +994,11 @@ class MosaicProfileFitResult:
     gaussian_activation_probe_width_rad: float | None = None
     lorentzian_activation_probe_width_rad: float | None = None
 
-    weighting_id: ClassVar[str] = "profile_shape_profiled_scale_angle_intensity_l2.v3"
+    weighting_id: ClassVar[str] = (
+        "profile_shape_profiled_scale_optional_additive_basis_angle_intensity_l2.v5"
+    )
     eta_search_id: ClassVar[str] = (
-        "eta_centered_logit_direct_finite_8193_stationary_audit_exact_faces.v1"
+        "eta_centered_logit_direct_finite_8193_stationary_audit_exact_faces.v2"
     )
 
     def __post_init__(self) -> None:
@@ -957,6 +1099,28 @@ class MosaicProfileFitResult:
             "predicted_intensity",
             nonnegative=True,
         )
+        coefficients = _readonly_float(
+            self.background_coefficients,
+            (len(identities), None),
+            "background_coefficients",
+        )
+        predicted_total = _readonly_float(
+            self.predicted_total_intensity,
+            predicted.shape,
+            "predicted_total_intensity",
+        )
+        nuisance_revision = self.nuisance_basis_revision
+        if nuisance_revision is None:
+            if coefficients.shape[1] != 0 or not np.array_equal(predicted_total, predicted):
+                raise ValueError(
+                    "a background-free result needs zero coefficients and peak-only prediction"
+                )
+        elif (
+            not isinstance(nuisance_revision, str)
+            or not nuisance_revision
+            or coefficients.shape[1] == 0
+        ):
+            raise ValueError("nuisance_basis_revision must identify nonempty coefficients")
         singular = _readonly_float(
             self.sensitivity_singular_values,
             (len(active),),
@@ -984,6 +1148,8 @@ class MosaicProfileFitResult:
         object.__setattr__(self, "profile_scales", scales)
         object.__setattr__(self, "profile_relative_l2_residual", profile_residual)
         object.__setattr__(self, "predicted_intensity", predicted)
+        object.__setattr__(self, "background_coefficients", coefficients)
+        object.__setattr__(self, "predicted_total_intensity", predicted_total)
         object.__setattr__(self, "sensitivity_singular_values", singular)
         object.__setattr__(self, "width_pair_objective", objective_surface)
         object.__setattr__(self, "width_pair_eta", eta_surface)
@@ -1027,28 +1193,55 @@ def _canonical_profile_order(
     )
 
 
+def _project_profile_nuisance(
+    values: FloatArray,
+    nuisance_basis: MosaicProfileNuisanceBasis | None,
+) -> FloatArray:
+    projected = np.array(values, dtype=np.float64, copy=True, order="C")
+    if nuisance_basis is None:
+        return projected
+    for profile_index in range(projected.shape[0]):
+        valid = nuisance_basis.valid[profile_index]
+        q = nuisance_basis.orthonormal_basis[profile_index, valid]
+        active = projected[profile_index, valid]
+        projected[profile_index, valid] = active - q @ (q.T @ active)
+        projected[profile_index, ~valid] = 0.0
+    return projected
+
+
 def _valid_fit_vectors(
     observations: MosaicProfileSet,
+    nuisance_basis: MosaicProfileNuisanceBasis | None,
 ) -> tuple[NDArray[np.int64], FloatArray, FloatArray, FloatArray]:
     valid_profile = np.broadcast_to(
         np.arange(len(observations.identities), dtype=np.int64)[:, None],
         observations.valid.shape,
     )[observations.valid]
-    observed = observations.intensity[observations.valid]
+    raw_observed = observations.intensity
+    observed = raw_observed[observations.valid]
     if not np.all(np.isfinite(observed)):
         raise ValueError("valid observed intensities must be finite")
     observed_scale = np.zeros(len(observations.identities), dtype=np.float64)
     np.maximum.at(observed_scale, valid_profile, observed)
     if np.any(observed_scale <= 0.0):
         raise ValueError("every profile requires nonzero observed signal")
-    observed = observed / observed_scale[valid_profile]
+    normalized_observed = np.zeros(raw_observed.shape, dtype=np.float64)
+    normalized_observed[observations.valid] = observed / observed_scale[valid_profile]
+    observed = _project_profile_nuisance(normalized_observed, nuisance_basis)[observations.valid]
     profile_energy = np.bincount(
         valid_profile,
         weights=observed * observed,
         minlength=len(observations.identities),
     )
-    if np.any(profile_energy <= np.finfo(np.float64).tiny):
-        raise ValueError("every profile requires nonzero observed energy")
+    energy_floor = np.finfo(np.float64).tiny
+    if nuisance_basis is not None:
+        valid_count = np.bincount(
+            valid_profile,
+            minlength=len(observations.identities),
+        )
+        energy_floor = (256.0 * np.finfo(np.float64).eps) ** 2 * valid_count
+    if np.any(profile_energy <= energy_floor):
+        raise ValueError("every profile requires nonzero nuisance-projected observed energy")
     return valid_profile, observed, 1.0 / profile_energy[valid_profile], observed_scale
 
 
@@ -1065,14 +1258,19 @@ def _profiled_scales_and_objective(
         weights=weighted_model * model,
         minlength=profile_count,
     )
-    if np.any(denominator <= np.finfo(np.float64).tiny):
-        return np.zeros(profile_count, dtype=np.float64), math.inf
     numerator = np.bincount(
         valid_profile,
         weights=weighted_model * observed,
         minlength=profile_count,
     )
-    scales = np.maximum(0.0, numerator / denominator)
+    scales = np.zeros(profile_count, dtype=np.float64)
+    np.divide(
+        numerator,
+        denominator,
+        out=scales,
+        where=denominator > np.finfo(np.float64).tiny,
+    )
+    np.maximum(0.0, scales, out=scales)
     residual = scales[valid_profile] * model - observed
     return scales, float(weight @ (residual * residual))
 
@@ -1146,9 +1344,14 @@ def _best_eta(
             + 2.0 * gaussian_probability * intrinsic_probability * gaussian_lorentzian
             + intrinsic_probability * intrinsic_probability * lorentzian_lorentzian
         )
-        if np.any(denominator <= np.finfo(np.float64).tiny):
-            return math.inf
-        group_objective = observed_energy - numerator * numerator / denominator
+        fitted_reduction = np.zeros(profile_count, dtype=np.float64)
+        np.divide(
+            numerator * numerator,
+            denominator,
+            out=fitted_reduction,
+            where=denominator > np.finfo(np.float64).tiny,
+        )
+        group_objective = observed_energy - fitted_reduction
         return float(np.sum(np.maximum(0.0, group_objective)))
 
     def scalar_coefficient_objective(centered_logit: float) -> float:
@@ -1157,14 +1360,17 @@ def _best_eta(
     def scalar_coefficient_derivative(centered_logit: float) -> float:
         intrinsic_probability = float(sigmoid(centered_logit))
         gaussian_probability = 1.0 - intrinsic_probability
-        numerator = (
-            gaussian_probability * gaussian_observed + intrinsic_probability * lorentzian_observed
+        numerator = np.maximum(
+            0.0,
+            gaussian_probability * gaussian_observed + intrinsic_probability * lorentzian_observed,
         )
         denominator = (
             gaussian_probability * gaussian_probability * gaussian_gaussian
             + 2.0 * gaussian_probability * intrinsic_probability * gaussian_lorentzian
             + intrinsic_probability * intrinsic_probability * lorentzian_lorentzian
         )
+        if np.any(denominator <= np.finfo(np.float64).tiny):
+            return math.nan
         numerator_derivative = lorentzian_observed - gaussian_observed
         denominator_derivative = 2.0 * (
             gaussian_lorentzian
@@ -1272,7 +1478,7 @@ def _best_eta(
     direction_tolerance = 512.0 * np.finfo(np.float64).eps * direction_scale
     candidate_centered_logit: set[float] = set()
     if np.all(np.abs(direction_determinant) <= direction_tolerance):
-        pass
+        candidate_centered_logit.update((-1.0, 1.0))
     else:
         global_result = direct(
             coefficient_objective,
@@ -1315,9 +1521,10 @@ def _best_eta(
             )
             intrinsic_grid = np.asarray(sigmoid(centered_logit_grid))
             gaussian_probability_grid = 1.0 - intrinsic_grid
-            numerator_grid = (
+            numerator_grid = np.maximum(
+                0.0,
                 gaussian_probability_grid[:, None] * gaussian_observed
-                + intrinsic_grid[:, None] * lorentzian_observed
+                + intrinsic_grid[:, None] * lorentzian_observed,
             )
             denominator_grid = (
                 gaussian_probability_grid[:, None] ** 2 * gaussian_gaussian
@@ -1327,10 +1534,18 @@ def _best_eta(
                 * gaussian_lorentzian
                 + intrinsic_grid[:, None] ** 2 * lorentzian_lorentzian
             )
-            objective_grid = np.sum(
+            finite_denominator = np.all(
+                denominator_grid > np.finfo(np.float64).tiny,
+                axis=1,
+            )
+            objective_grid = np.full(centered_logit_grid.shape, math.inf, dtype=np.float64)
+            objective_grid[finite_denominator] = np.sum(
                 np.maximum(
                     0.0,
-                    observed_energy - numerator_grid * numerator_grid / denominator_grid,
+                    observed_energy
+                    - numerator_grid[finite_denominator]
+                    * numerator_grid[finite_denominator]
+                    / denominator_grid[finite_denominator],
                 ),
                 axis=1,
             )
@@ -1342,13 +1557,19 @@ def _best_eta(
             denominator_derivative_grid = (
                 denominator_linear + 2.0 * intrinsic_grid[:, None] * denominator_quadratic
             )
-            objective_derivative_grid = -np.sum(
-                numerator_grid
+            objective_derivative_grid = np.full(
+                centered_logit_grid.shape,
+                math.nan,
+                dtype=np.float64,
+            )
+            objective_derivative_grid[finite_denominator] = -np.sum(
+                numerator_grid[finite_denominator]
                 * (
-                    2.0 * numerator_derivative * denominator_grid
-                    - numerator_grid * denominator_derivative_grid
+                    2.0 * numerator_derivative * denominator_grid[finite_denominator]
+                    - numerator_grid[finite_denominator]
+                    * denominator_derivative_grid[finite_denominator]
                 )
-                / (denominator_grid * denominator_grid),
+                / (denominator_grid[finite_denominator] * denominator_grid[finite_denominator]),
                 axis=1,
             )
             brackets: set[tuple[int, int]] = set()
@@ -1499,7 +1720,14 @@ def _sensitivity_diagnostics(
             weights=weighted_nuisance * jacobian[:, column],
             minlength=scales.size,
         )
-        jacobian[:, column] -= (numerator / denominator)[valid_profile] * model
+        projection = np.zeros(scales.size, dtype=np.float64)
+        np.divide(
+            numerator,
+            denominator,
+            out=projection,
+            where=denominator > np.finfo(np.float64).tiny,
+        )
+        jacobian[:, column] -= projection[valid_profile] * model
     whitened = np.sqrt(weight)[:, None] * jacobian
     singular = np.linalg.svd(whitened, compute_uv=False)
     if singular.size < len(active_parameter_names):
@@ -1520,6 +1748,7 @@ def _sensitivity_diagnostics(
 def fit_mosaic_component_profiles(
     bank: MosaicComponentProfileBank,
     *,
+    nuisance_basis: MosaicProfileNuisanceBasis | None = None,
     maximum_sensitivity_condition: float = _MAXIMUM_SENSITIVITY_CONDITION,
     _pair_result_cache: dict[tuple[float, float], tuple[float, float, tuple[float, ...]]]
     | None = None,
@@ -1528,39 +1757,88 @@ def fit_mosaic_component_profiles(
 
     Widths are selected only from the supplied exact response bank. Eta is optimized on
     ``[0, 1]`` for every width pair, including both boundary faces. The residual uses one
-    nonnegative scale per profile. Absolute and relative peak heights therefore do not enter the
-    mosaic objective; only each profile's finite-bin shape is shared across the joint fit.
+    nonnegative scale per profile. An optional frozen additive basis is projected out before the
+    scale fit. Absolute and relative peak heights therefore do not enter the mosaic objective;
+    only each profile's finite-bin shape is shared across the joint fit.
     """
 
     if not isinstance(bank, MosaicComponentProfileBank):
         raise TypeError("bank must be a MosaicComponentProfileBank")
+    if nuisance_basis is not None:
+        if not isinstance(nuisance_basis, MosaicProfileNuisanceBasis):
+            raise TypeError("nuisance_basis must be a MosaicProfileNuisanceBasis")
+        if (
+            nuisance_basis.identities != bank.observations.identities
+            or not np.array_equal(nuisance_basis.valid, bank.observations.valid)
+            or nuisance_basis.profile_revision != bank.observations.profile_revision
+        ):
+            raise ValueError("nuisance_basis changed the frozen profile layout or revision")
     maximum_condition = float(maximum_sensitivity_condition)
     if not math.isfinite(maximum_condition) or maximum_condition <= 1.0:
         raise ValueError("maximum_sensitivity_condition must be finite and greater than one")
     order = _canonical_profile_order(bank.observations.identities)
     inverse_order = np.argsort(order)
     canonical_bank = bank.reorder_profiles(order)
+    canonical_nuisance = None if nuisance_basis is None else nuisance_basis.reorder(order)
     observations = canonical_bank.observations
     profile_count = len(observations.identities)
-    valid_profile, observed, weight, observed_scale = _valid_fit_vectors(observations)
+    valid_profile, observed, weight, observed_scale = _valid_fit_vectors(
+        observations,
+        canonical_nuisance,
+    )
     gaussian_intensity = np.asarray(
         [component.profile.intensity for component in canonical_bank.gaussian_profiles]
     )
     lorentzian_intensity = np.asarray(
         [component.profile.intensity for component in canonical_bank.lorentzian_profiles]
     )
-    gaussian_valid = gaussian_intensity[:, observations.valid]
-    lorentzian_valid = lorentzian_intensity[:, observations.valid]
+    gaussian_raw_valid = gaussian_intensity[:, observations.valid]
+    lorentzian_raw_valid = lorentzian_intensity[:, observations.valid]
     point_reference = np.maximum(
-        np.max(gaussian_valid, axis=0),
-        np.max(lorentzian_valid, axis=0),
+        np.max(gaussian_raw_valid, axis=0),
+        np.max(lorentzian_raw_valid, axis=0),
     )
     component_reference = np.zeros(profile_count, dtype=np.float64)
     np.maximum.at(component_reference, valid_profile, point_reference)
     if np.any(component_reference <= 0.0):
         raise ValueError("every profile requires positive component intensity")
-    gaussian_valid = gaussian_valid / component_reference[valid_profile]
-    lorentzian_valid = lorentzian_valid / component_reference[valid_profile]
+    gaussian_normalized = gaussian_intensity / component_reference[None, :, None]
+    lorentzian_normalized = lorentzian_intensity / component_reference[None, :, None]
+    gaussian_projected = np.asarray(
+        [
+            _project_profile_nuisance(component, canonical_nuisance)
+            for component in gaussian_normalized
+        ]
+    )
+    lorentzian_projected = np.asarray(
+        [
+            _project_profile_nuisance(component, canonical_nuisance)
+            for component in lorentzian_normalized
+        ]
+    )
+    gaussian_valid = gaussian_projected[:, observations.valid]
+    lorentzian_valid = lorentzian_projected[:, observations.valid]
+    component_energy_floor: float | FloatArray = np.finfo(np.float64).tiny
+    if canonical_nuisance is not None:
+        valid_count = np.bincount(valid_profile, minlength=profile_count)
+        component_energy_floor = (256.0 * np.finfo(np.float64).eps) ** 2 * valid_count
+    component_energy = tuple(
+        np.asarray(
+            [
+                np.bincount(
+                    valid_profile,
+                    weights=profile * profile,
+                    minlength=profile_count,
+                )
+                for profile in component
+            ]
+        )
+        for component in (gaussian_valid, lorentzian_valid)
+    )
+    gaussian_low_energy = component_energy[0] <= component_energy_floor
+    lorentzian_low_energy = component_energy[1] <= component_energy_floor
+    gaussian_valid[gaussian_low_energy[:, valid_profile]] = 0.0
+    lorentzian_valid[lorentzian_low_energy[:, valid_profile]] = 0.0
     objective_surface = np.empty(
         (gaussian_valid.shape[0], lorentzian_valid.shape[0]),
         dtype=np.float64,
@@ -1572,6 +1850,12 @@ def fit_mosaic_component_profiles(
     best: tuple[float, int, int, float] | None = None
     for gaussian_index, gaussian in enumerate(gaussian_valid):
         for lorentzian_index, lorentzian in enumerate(lorentzian_valid):
+            if np.any(
+                gaussian_low_energy[gaussian_index] ^ lorentzian_low_energy[lorentzian_index]
+            ):
+                objective_surface[gaussian_index, lorentzian_index] = float(profile_count + 1)
+                eta_surface[gaussian_index, lorentzian_index] = 0.5
+                continue
             pair_key = (
                 float(canonical_bank.gaussian_sigma_rad[gaussian_index]),
                 float(canonical_bank.lorentzian_half_width_rad[lorentzian_index]),
@@ -1598,7 +1882,18 @@ def fit_mosaic_component_profiles(
             if best is None or candidate < best:
                 best = candidate
     if best is None or not math.isfinite(best[0]):
-        raise ValueError("no finite mosaic-profile solution exists on the supplied bank")
+        active_names = (
+            "log_gaussian_sigma",
+            "log_lorentzian_half_width",
+            "logit_lorentzian_probability",
+        )
+        raise MosaicIdentifiabilityError(
+            0,
+            np.zeros(len(active_names), dtype=np.float64),
+            math.inf,
+            active_names,
+            reason="nonattained_boundary",
+        )
     objective, gaussian_index, lorentzian_index, eta = best
     best_gaussian = gaussian_valid[gaussian_index]
     best_lorentzian = lorentzian_valid[lorentzian_index]
@@ -1612,9 +1907,35 @@ def fit_mosaic_component_profiles(
     )
     prediction_scales = normalized_scales * observed_scale
     scales = prediction_scales / component_reference
+    best_gaussian_raw = gaussian_normalized[gaussian_index]
+    best_lorentzian_raw = lorentzian_normalized[lorentzian_index]
+    best_model_raw = (1.0 - eta) * best_gaussian_raw + eta * best_lorentzian_raw
     canonical_predicted = np.zeros(observations.signal.shape, dtype=np.float64)
-    canonical_predicted[observations.valid] = prediction_scales[valid_profile] * best_model
+    canonical_predicted[observations.valid] = (prediction_scales[:, None] * best_model_raw)[
+        observations.valid
+    ]
     predicted = canonical_predicted[inverse_order]
+    if canonical_nuisance is None:
+        canonical_background_coefficients = np.empty((profile_count, 0), dtype=np.float64)
+        canonical_total_prediction = canonical_predicted.copy()
+    else:
+        canonical_background_coefficients = np.empty(
+            (profile_count, canonical_nuisance.coefficient_count),
+            dtype=np.float64,
+        )
+        canonical_total_prediction = canonical_predicted.copy()
+        observed_intensity = observations.intensity
+        for profile_index in range(profile_count):
+            active = observations.valid[profile_index]
+            basis = canonical_nuisance.basis[profile_index, active]
+            coefficients, _, _, _ = np.linalg.lstsq(
+                basis,
+                observed_intensity[profile_index, active]
+                - canonical_predicted[profile_index, active],
+                rcond=None,
+            )
+            canonical_background_coefficients[profile_index] = coefficients
+            canonical_total_prediction[profile_index, active] += basis @ coefficients
     normalized_residual = normalized_scales[valid_profile] * best_model - observed
     canonical_profile_residual = np.sqrt(
         np.bincount(
@@ -1758,6 +2079,11 @@ def fit_mosaic_component_profiles(
         profile_relative_l2_residual=canonical_profile_residual[inverse_order],
         objective=objective,
         predicted_intensity=predicted,
+        background_coefficients=canonical_background_coefficients[inverse_order],
+        predicted_total_intensity=canonical_total_prediction[inverse_order],
+        nuisance_basis_revision=(
+            None if canonical_nuisance is None else canonical_nuisance.revision
+        ),
         sensitivity_singular_values=singular,
         sensitivity_rank=rank,
         sensitivity_condition=condition,
@@ -1856,12 +2182,20 @@ def fit_refined_mosaic_component_profiles(
     refinement_width_count: int,
     refinement_levels: int,
     near_optimal_objective_delta: float,
+    nuisance_basis: MosaicProfileNuisanceBasis | None = None,
     maximum_sensitivity_condition: float = _MAXIMUM_SENSITIVITY_CONDITION,
 ) -> MosaicProfileSearchResult:
     """Globally scan eta and refine every near-optimal exact width-grid basin."""
 
     if not isinstance(observations, MosaicProfileSet):
         raise TypeError("observations must be a MosaicProfileSet")
+    if nuisance_basis is not None and (
+        not isinstance(nuisance_basis, MosaicProfileNuisanceBasis)
+        or nuisance_basis.identities != observations.identities
+        or not np.array_equal(nuisance_basis.valid, observations.valid)
+        or nuisance_basis.profile_revision != observations.profile_revision
+    ):
+        raise ValueError("nuisance_basis must match the frozen observations")
     if not callable(evaluate_gaussian_profile) or not callable(evaluate_lorentzian_profile):
         raise TypeError("component profile evaluators must be callable")
     gaussian_bounds = _readonly_float(
@@ -1933,6 +2267,7 @@ def fit_refined_mosaic_component_profiles(
         try:
             result = fit_mosaic_component_profiles(
                 bank,
+                nuisance_basis=nuisance_basis,
                 maximum_sensitivity_condition=maximum_sensitivity_condition,
                 _pair_result_cache=pair_result_cache,
             )
@@ -2038,6 +2373,7 @@ __all__ = [
     "MosaicProfileDefinition",
     "MosaicProfileFitResult",
     "MosaicProfileIdentity",
+    "MosaicProfileNuisanceBasis",
     "MosaicProfileRefinementStep",
     "MosaicProfileSearchResult",
     "MosaicProfileSet",

@@ -34,6 +34,7 @@ from rasim_next.fitting import (
     MosaicIdentifiabilityError,
     MosaicProfileDefinition,
     MosaicProfileIdentity,
+    MosaicProfileNuisanceBasis,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
     SharedGeometryCorrectionBounds,
@@ -1743,7 +1744,9 @@ def test_mosaic_profile_weighting_preserves_weak_profile_shape_leverage() -> Non
     reference = fit_mosaic_component_profiles(perturbed)
     rescaled = fit_mosaic_component_profiles(weak)
 
-    assert reference.weighting_id == "profile_shape_profiled_scale_angle_intensity_l2.v3"
+    assert reference.weighting_id == (
+        "profile_shape_profiled_scale_optional_additive_basis_angle_intensity_l2.v5"
+    )
     assert reference.objective > baseline.objective + 1.0e-8
     assert reference.profile_relative_l2_residual[profile_index] > 0.0
     np.testing.assert_allclose(
@@ -1758,6 +1761,151 @@ def test_mosaic_profile_weighting_preserves_weak_profile_shape_leverage() -> Non
         rtol=2.0e-12,
         atol=2.0e-13,
     )
+
+
+def test_mosaic_fit_projects_affine_background_and_accepts_measured_provenance() -> None:
+    bank, planted_scale = _analytic_mosaic_profile_bank()
+    observations = bank.observations
+    centers = 0.5 * (observations.phi_bin_edges_rad[:, :-1] + observations.phi_bin_edges_rad[:, 1:])
+    coordinate = centers / np.max(np.abs(centers), axis=1, keepdims=True)
+    background = 4.0 + 0.7 * coordinate
+    background[~observations.valid] = 0.0
+    measured_intensity = observations.intensity + background
+    measured_normalization = np.array(observations.normalization, copy=True)
+    measured_normalization[observations.valid] *= 1.0 + 0.2 * (coordinate[observations.valid] + 1.0)
+    measured_signal = measured_intensity * measured_normalization
+    measured = replace(
+        observations,
+        signal=measured_signal,
+        normalization=measured_normalization,
+        source_revision=None,
+        observation_revision="measured-affine-background.v1",
+    )
+    basis_values = np.stack((np.ones(coordinate.shape), coordinate), axis=-1)
+    basis_values[~measured.valid] = 0.0
+    nuisance = MosaicProfileNuisanceBasis(
+        measured.identities,
+        basis_values,
+        measured.valid,
+        "constant-plus-linear.v1",
+        measured.profile_revision,
+    )
+    measured_bank = replace(bank, observations=measured)
+    result = fit_mosaic_component_profiles(measured_bank, nuisance_basis=nuisance)
+
+    with pytest.raises(ValueError, match="layout or revision"):
+        fit_mosaic_component_profiles(
+            measured_bank,
+            nuisance_basis=replace(nuisance, profile_revision="stale-profile-revision.v1"),
+        )
+
+    assert math.degrees(result.gaussian_sigma_rad) == pytest.approx(2.0, abs=1.0e-12)
+    assert math.degrees(result.lorentzian_half_width_rad) == pytest.approx(0.5, abs=1.0e-12)
+    assert result.lorentzian_probability == pytest.approx(0.1, abs=2.0e-9)
+    assert result.objective <= 3.0e-20
+    assert result.nuisance_basis_revision == nuisance.revision
+    np.testing.assert_allclose(
+        result.predicted_total_intensity[measured.valid],
+        measured.intensity[measured.valid],
+        rtol=2.0e-12,
+        atol=2.0e-12,
+    )
+    for identity in result.profile_identities:
+        assert result.scale_for_profile(identity) == pytest.approx(
+            planted_scale[identity],
+            rel=2.0e-9,
+        )
+
+    profile_multiplier = np.geomspace(1.0e-6, 1.0e6, len(measured.identities))
+    rescaled_signal = measured.signal * profile_multiplier[:, None]
+    rescaled = replace(
+        measured_bank,
+        observations=replace(measured, signal=rescaled_signal),
+    )
+    rescaled_result = fit_mosaic_component_profiles(rescaled, nuisance_basis=nuisance)
+    np.testing.assert_allclose(
+        rescaled_result.width_pair_objective,
+        result.width_pair_objective,
+        rtol=3.0e-12,
+        atol=3.0e-12,
+    )
+    assert rescaled_result.lorentzian_probability == pytest.approx(
+        result.lorentzian_probability,
+        abs=3.0e-12,
+    )
+
+    affine_only = 8.0 + coordinate
+    affine_only[~measured.valid] = 0.0
+    with pytest.raises(ValueError, match="nuisance-projected observed energy"):
+        fit_mosaic_component_profiles(
+            replace(
+                measured_bank,
+                observations=replace(
+                    measured,
+                    signal=affine_only * measured.normalization,
+                ),
+            ),
+            nuisance_basis=nuisance,
+        )
+
+    alternating = np.where(np.arange(coordinate.shape[1]) % 2 == 0, 1.0, -1.0)
+    nearly_spanned_intensity = 0.01 * (1.0 + 0.2 * coordinate[0]) + 1.0e-16 * alternating
+
+    def with_first_profile_intensity(
+        component: MosaicComponentProfile,
+        intensity: np.ndarray,
+    ) -> MosaicComponentProfile:
+        signal = np.array(component.profile.signal, copy=True)
+        signal[0] = intensity * component.profile.normalization[0]
+        return replace(component, profile=replace(component.profile, signal=signal))
+
+    nearly_spanned_gaussian = with_first_profile_intensity(
+        bank.gaussian_profiles[0],
+        nearly_spanned_intensity,
+    )
+    nearly_spanned_lorentzian = with_first_profile_intensity(
+        bank.lorentzian_profiles[0],
+        nearly_spanned_intensity,
+    )
+    near_span_result = fit_mosaic_component_profiles(
+        replace(
+            measured_bank,
+            gaussian_profiles=(nearly_spanned_gaussian, *bank.gaussian_profiles[1:]),
+            lorentzian_profiles=(nearly_spanned_lorentzian, *bank.lorentzian_profiles[1:]),
+        ),
+        nuisance_basis=nuisance,
+    )
+    assert 1.0 <= near_span_result.width_pair_objective[0, 0] <= len(measured.identities)
+
+    asymmetric_result = fit_mosaic_component_profiles(
+        replace(
+            measured_bank,
+            gaussian_profiles=(nearly_spanned_gaussian, *bank.gaussian_profiles[1:]),
+        ),
+        nuisance_basis=nuisance,
+    )
+    np.testing.assert_array_equal(
+        asymmetric_result.width_pair_objective[0],
+        np.full(bank.lorentzian_half_width_rad.shape, len(measured.identities) + 1.0),
+    )
+
+    cancelling_gaussian = with_first_profile_intensity(
+        bank.gaussian_profiles[0],
+        2.0 + alternating,
+    )
+    cancelling_lorentzian = with_first_profile_intensity(
+        bank.lorentzian_profiles[0],
+        2.0 - alternating,
+    )
+    cancellation_result = fit_mosaic_component_profiles(
+        replace(
+            measured_bank,
+            gaussian_profiles=(cancelling_gaussian, *bank.gaussian_profiles[1:]),
+            lorentzian_profiles=(cancelling_lorentzian, *bank.lorentzian_profiles[1:]),
+        ),
+        nuisance_basis=nuisance,
+    )
+    assert math.isfinite(cancellation_result.objective)
 
 
 @pytest.mark.parametrize(
@@ -2193,7 +2341,11 @@ def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_di
 
 def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profiles() -> None:
     from rasim_next.fitting import (
+        OrderedIntensityObservations,
+        OrderedIntensityPeakCenterObservations,
         compile_ordered_intensity_response,
+        compile_source_averaged_ordered_intensity_response,
+        fit_ordered_intensity_series,
         probe_ordered_intensity_inverse_boundary_bins,
     )
     from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
@@ -2363,6 +2515,139 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     m0_rod = response.rods.index(next(rod for rod in response.rods if rod.family_m == 0))
     m0_term &= response.term_rod_index == m0_rod
     assert set(response.term_root_sign[m0_term]) == {-1, 1}
+
+    distributed_config = replace(config, source=replace(base.source, sample_count=2))
+    distributed_inputs = build_configured_simulation_inputs(distributed_config)
+    assert configured_rod_catalog_revision(distributed_inputs) == revision
+    distributed_detector = build_source_averaged_detector(distributed_inputs)
+    distributed_response = compile_source_averaged_ordered_intensity_response(
+        distributed_detector,
+        angle_frame=frame,
+        definitions=audited_definitions,
+        execution_backend="cpu",
+    )
+
+    def distributed_direct(strength: Bi2Se3TwoHStrength) -> np.ndarray:
+        from rasim_next.measurement import evaluate_continuous_per_rod_angle_signal
+
+        points = evaluate_continuous_per_rod_angle_signal(
+            distributed_detector.rebind_physics(strength_model=strength),
+            angle_frame=frame,
+            two_theta_rad=np.asarray(
+                [definition.center_two_theta_rad for definition in audited_definitions]
+            ),
+            phi_rad=np.asarray([definition.center_phi_rad for definition in audited_definitions]),
+            execution_backend="cpu",
+        )
+        rod_lookup = {(rod.h, rod.k): index for index, rod in enumerate(points.rods)}
+        return np.asarray(
+            [
+                np.sum(
+                    points.per_rod_signal_density_A2_per_rad2[
+                        profile_index,
+                        [
+                            rod_lookup[rod_hk]
+                            for rod_hk in definition.identity.group_key.member_rod_hk
+                        ],
+                    ]
+                )
+                for profile_index, definition in enumerate(audited_definitions)
+            ]
+        )
+
+    zero_u = replace(candidate.structure_parameters, u_radial_A2=0.0, u_normal_A2=0.0)
+    zero_u_strength = replace(distributed_inputs.strength, structure_parameters=zero_u)
+    distributed_candidate = replace(
+        distributed_inputs.strength,
+        structure_parameters=candidate.structure_parameters,
+    )
+    np.testing.assert_allclose(
+        distributed_response.predict_signal_density_A2_per_rad2(zero_u),
+        distributed_direct(zero_u_strength),
+        rtol=8.0e-11,
+    )
+    np.testing.assert_allclose(
+        distributed_response.predict_signal_density_A2_per_rad2(candidate.structure_parameters),
+        distributed_direct(distributed_candidate),
+        rtol=2.0e-4,
+    )
+    assert distributed_response.source_state_count == 2
+    assert distributed_response.source_revision == distributed_inputs.samples.source_revision
+
+    second_dataset_id = "second-five-degree-response-test"
+    second_response = replace(
+        distributed_response,
+        dataset_id=second_dataset_id,
+        identities=tuple(
+            replace(identity, dataset_id=second_dataset_id)
+            for identity in distributed_response.identities
+        ),
+        occupancy_quadratic_chebyshev_signal_density_A2_per_rad2=(
+            distributed_response.occupancy_quadratic_chebyshev_signal_density_A2_per_rad2
+            * np.asarray((1.0, 1.2))[:, None, None]
+        ),
+        observable_revision="second-point-observable.v1",
+    )
+    point_truth = candidate.structure_parameters
+    point_observations = tuple(
+        OrderedIntensityPeakCenterObservations(
+            dataset_id=point_response.dataset_id,
+            observable_revision=point_response.observable_revision,
+            signal_density_A2_per_rad2=point_response.predict_signal_density_A2_per_rad2(
+                point_truth
+            ),
+        )
+        for point_response in (distributed_response, second_response)
+    )
+    point_fit = fit_ordered_intensity_series(
+        (distributed_response, second_response),
+        point_observations,
+        base_strength=distributed_inputs.strength,
+        active_parameter_names=("u_normal_A2",),
+        initial_parameters=replace(point_truth, u_normal_A2=0.02),
+        relative_scale_mode=False,
+        required_source_state_count=2,
+        required_source_revision=distributed_inputs.samples.source_revision,
+    )
+    assert point_fit.predicted_mass_A2 == ()
+    assert len(point_fit.predicted_signal_density_A2_per_rad2) == 2
+    assert point_fit.observable_measure_id == (
+        "selected_group_angular_signal_density_A2_per_rad2.v1"
+    )
+    assert point_fit.structure_representative.u_normal_A2 == pytest.approx(
+        point_truth.u_normal_A2,
+        abs=2.0e-6,
+    )
+    with pytest.raises(ValueError, match="peak-center responses require"):
+        fit_ordered_intensity_series(
+            (distributed_response, second_response),
+            (
+                OrderedIntensityObservations(
+                    dataset_id=distributed_response.dataset_id,
+                    observable_revision=distributed_response.observable_revision,
+                    mass_A2=point_observations[0].signal_density_A2_per_rad2,
+                ),
+                point_observations[1],
+            ),
+            base_strength=distributed_inputs.strength,
+            active_parameter_names=(),
+        )
+    with pytest.raises(ValueError, match="required source-state count"):
+        fit_ordered_intensity_series(
+            (distributed_response, second_response),
+            point_observations,
+            base_strength=distributed_inputs.strength,
+            active_parameter_names=(),
+            required_source_state_count=250,
+        )
+    with pytest.raises(ValueError, match="required source revision"):
+        fit_ordered_intensity_series(
+            (distributed_response, second_response),
+            point_observations,
+            base_strength=distributed_inputs.strength,
+            active_parameter_names=(),
+            required_source_revision="stale-source-revision",
+        )
 
 
 def test_ordered_intensity_fit_enforces_freeze_gauge_revision_and_rank_contracts() -> None:
@@ -2695,3 +2980,190 @@ def test_mosaic_component_profiles_reject_two_interior_eta_minima_for_one_width_
     assert 0.0 < eta[0] < 0.25
     assert 0.75 < eta[1] < 1.0
     assert sum(eta) == pytest.approx(1.0, abs=2.0e-12)
+
+
+def test_mosaic_component_profiles_reject_eta_alias_after_constant_projection() -> None:
+    key = MosaicReflectionGroupKey(
+        "projected-eta-alias",
+        "projected-eta-alias-rods.v1",
+        ((0, 0),),
+        "COLLAPSED_00L",
+    )
+    identities = (
+        MosaicProfileIdentity("projected-eta-a", 0.1, key, None),
+        MosaicProfileIdentity("projected-eta-b", 0.2, key, None),
+    )
+    gaussian_row = np.asarray(
+        (
+            -0.5002908599651601,
+            0.662805580105935,
+            -0.45770187046739114,
+            -0.05267588575647031,
+            0.3478630360830864,
+        )
+    )
+    lorentzian_row = np.asarray(
+        (
+            1.3715226089283317,
+            -0.36140526514948973,
+            0.2528490373494388,
+            -0.7685581033334808,
+            -0.49440827779479984,
+        )
+    )
+    observed_row = np.asarray(
+        (
+            -0.6042013846407788,
+            -0.062061226398191977,
+            0.8628575607932455,
+            -1.0103157251245258,
+            0.813720775370251,
+        )
+    )
+    normalization = np.ones((2, 5))
+    valid = np.ones((2, 5), dtype=np.bool_)
+    phi_bin_edges = np.broadcast_to(np.linspace(-1.0, 1.0, 6), (2, 6)).copy()
+    two_theta_bounds = np.asarray(((0.2, 0.3), (0.2, 0.3)))
+
+    def profile(intensity: np.ndarray, *, measured: bool = False) -> MosaicProfileSet:
+        return MosaicProfileSet(
+            identities=identities,
+            signal=intensity,
+            normalization=normalization,
+            valid=valid,
+            profile_revision="projected-eta-alias-response.v1",
+            phi_bin_edges_rad=phi_bin_edges,
+            two_theta_bounds_rad=two_theta_bounds,
+            angle_frame_revisions=("projected-eta-alias-frame.v1",) * 2,
+            source_revision=None if measured else "analytic-source.v1",
+            observation_revision="projected-eta-alias-observation.v1" if measured else None,
+        )
+
+    offset = 2.0
+    observed = profile(
+        np.asarray((observed_row + offset, observed_row + offset)),
+        measured=True,
+    )
+    gaussian = profile(
+        np.asarray((gaussian_row + offset, lorentzian_row + offset)),
+    )
+    lorentzian = profile(
+        np.asarray((lorentzian_row + offset, gaussian_row + offset)),
+    )
+    widths = np.asarray((1.0, 2.0))
+    bank = MosaicComponentProfileBank(
+        observations=observed,
+        gaussian_sigma_rad=widths,
+        gaussian_profiles=tuple(
+            MosaicComponentProfile("gaussian", width, gaussian) for width in widths
+        ),
+        lorentzian_half_width_rad=widths,
+        lorentzian_profiles=tuple(
+            MosaicComponentProfile("lorentzian", width, lorentzian) for width in widths
+        ),
+    )
+    constant = np.ones((2, 5, 1))
+    nuisance = MosaicProfileNuisanceBasis(
+        identities,
+        constant,
+        valid,
+        "constant-projection.v1",
+        observed.profile_revision,
+    )
+
+    with pytest.raises(MosaicIdentifiabilityError) as caught:
+        fit_mosaic_component_profiles(bank, nuisance_basis=nuisance)
+    assert caught.value.reason == "global_alias"
+    eta = sorted(
+        key[3]
+        for key in caught.value.competing_solution_keys
+        if key[0] == "GL" and key[1:3] == (0, 0)
+    )
+    assert len(eta) == 2
+    assert 0.0 < eta[0] < 0.25
+    assert 0.75 < eta[1] < 1.0
+    assert sum(eta) == pytest.approx(1.0, abs=2.0e-12)
+
+
+def test_mosaic_component_profiles_report_crossed_zero_energy_nonattainment() -> None:
+    key = MosaicReflectionGroupKey(
+        "crossed-zero-energy",
+        "crossed-zero-energy-rods.v1",
+        ((0, 0),),
+        "COLLAPSED_00L",
+    )
+    identities = (
+        MosaicProfileIdentity("crossed-a", 0.1, key, None),
+        MosaicProfileIdentity("crossed-b", 0.2, key, None),
+    )
+    normalization = np.ones((2, 3))
+    valid = np.ones((2, 3), dtype=np.bool_)
+    phi_edges = np.broadcast_to(np.linspace(-1.0, 1.0, 4), (2, 4)).copy()
+    theta_bounds = np.asarray(((0.2, 0.3), (0.2, 0.3)))
+    gaussian_signal = np.asarray(((3.0, 3.0, 3.0), (4.0, 2.0, 3.0)))
+    lorentzian_signal = np.asarray(((4.0, 4.0, 1.0), (3.0, 3.0, 3.0)))
+
+    def profile(signal: np.ndarray, *, measured: bool = False) -> MosaicProfileSet:
+        return MosaicProfileSet(
+            identities=identities,
+            signal=signal,
+            normalization=normalization,
+            valid=valid,
+            profile_revision="crossed-zero-energy-response.v1",
+            phi_bin_edges_rad=phi_edges,
+            two_theta_bounds_rad=theta_bounds,
+            angle_frame_revisions=("crossed-zero-energy-frame.v1",) * 2,
+            source_revision=None if measured else "analytic-source.v1",
+            observation_revision="crossed-zero-energy-observation.v1" if measured else None,
+        )
+
+    widths = np.asarray((1.0, 2.0))
+    bank = MosaicComponentProfileBank(
+        observations=profile(
+            np.asarray(((4.0, 4.0, 1.0), (4.0, 2.0, 3.0))),
+            measured=True,
+        ),
+        gaussian_sigma_rad=widths,
+        gaussian_profiles=tuple(
+            MosaicComponentProfile("gaussian", width, profile(gaussian_signal)) for width in widths
+        ),
+        lorentzian_half_width_rad=widths,
+        lorentzian_profiles=tuple(
+            MosaicComponentProfile("lorentzian", width, profile(lorentzian_signal))
+            for width in widths
+        ),
+    )
+    nuisance = MosaicProfileNuisanceBasis(
+        identities,
+        np.ones((2, 3, 1)),
+        valid,
+        "crossed-zero-energy-constant.v1",
+        bank.observations.profile_revision,
+    )
+
+    with pytest.raises(MosaicIdentifiabilityError) as caught:
+        fit_mosaic_component_profiles(bank, nuisance_basis=nuisance)
+    assert caught.value.reason == "nonattained_boundary"
+
+
+def test_bi2te3_config_builds_material_generic_quintuple_layer_strength() -> None:
+    config = load_simulation_config(
+        Path(__file__).resolve().parents[1] / "configs" / "bi2te3_simulation.yaml"
+    )
+    inputs = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=1))
+    )
+
+    assert config.structure_factor.model_id == "r3m_quintuple_finite_2h.v1"
+    assert {site.element for site in inputs.crystal.sites} == {"Bi", "Te"}
+    assert len(inputs.crystal.sites) == 15
+    assert inputs.strength.site_labels == ("Bi", "Te1", "Te2")
+    detector = build_source_averaged_detector(inputs)
+    density = detector.evaluate_detector_density_all_roots(
+        np.asarray([1453.0]),
+        np.asarray([1360.0]),
+        execution_backend="cpu",
+    )
+    assert density.source_state_count == 1
+    assert np.isfinite(density.density_A2_per_px2[0])
+    assert density.density_A2_per_px2[0] >= 0.0

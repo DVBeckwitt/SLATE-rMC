@@ -1,0 +1,22 @@
+schema_version = "rasim-measured-mosaic-profile-policy-v1"
+base_case_sha256 = "2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295"
+minimum_excess_energy_over_side_scatter = 5.0
+sideband_two_theta_offsets_deg = [-1.0, -0.75, -0.5, -0.3, 0.3, 0.5, 0.75, 1.0]
+
+# The user authorized leaving profiles with secondary lobes out of the fit. Both 10-degree L=4
+# profiles are excluded as a paired identity; no bins are silently trimmed.
+[[excluded_profiles]]
+dataset_id = "Bi2Se3-10deg"
+family_m = 1
+integer_L = 4
+analytic_branch_id = 2
+root_side_branch_id = 1
+reason = "USER_AUTHORIZED_SECONDARY_LOBE"
+
+[[excluded_profiles]]
+dataset_id = "Bi2Se3-10deg"
+family_m = 1
+integer_L = 4
+analytic_branch_id = 2
+root_side_branch_id = 2
+reason = "USER_AUTHORIZED_SECONDARY_LOBE"

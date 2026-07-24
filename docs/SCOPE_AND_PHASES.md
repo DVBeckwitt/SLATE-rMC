@@ -24,7 +24,8 @@ detector geometry.
   probability with one exact nuisance amplitude per individual profile profiled out.
 - Position-free measured-peak discovery in an angle chart, detector-native refinement, reciprocal
   integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
-- Incoherent source/wavelength/phase summation before deterministic detector box integration.
+- Incoherent source/wavelength/phase summation before selected-center comparison, display-only
+  center sampling, or deterministic detector box integration.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
   detector-tilt and effective sample-normal correction pack.
@@ -33,7 +34,9 @@ detector geometry.
 - Full-rank shared 5/10/15-degree decomposition of detector tilt, sample normal, goniometer-axis,
   signed sample-plane offset, and axis-perpendicular pivot offsets, with frozen-key outer audits.
 - Fixed-position simultaneous ordered-intensity recovery for Bi2Se3 using cached occupancy
-  quadratics and directional `Ur/Uz` damping on frozen selected-group angular component masses.
+  quadratics and directional `Ur/Uz` damping on either frozen selected-group angular component
+  masses or certified source-averaged selected-center densities. The distributed proof reduces all
+  source states to one detector function per incidence before one joint fit.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
@@ -58,11 +61,12 @@ these functions. They are not stored model state.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
 - General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and raw-image
-  profile extraction beyond the accepted layered-hexagonal synthetic mosaic-recovery slice.
+  profile extraction beyond the accepted layered-hexagonal Bi2Se3 real-OSC mosaic slice.
 - General continuous-`S/N` angular-bin products and reciprocal remapping beyond the prepared
   finite-profile fitting boundary.
-- Mosaic-fit backgrounds, masks, detector PSF, counting noise, covariance/uncertainty intervals,
-  held-out subsets, and real-OSC recovery.
+- Physical/nonnegative mosaic-fit backgrounds and general masks, detector PSF, counting noise,
+  covariance/uncertainty intervals, held-out subsets, and intrinsic real-OSC recovery beyond the
+  accepted model-limited effective radial estimate.
 - General-material structure-parameter bases and profile identity catalogs, per-site anisotropic
   `Uij`, raw-OSC ordered-component extraction/deblending, and ordered-intensity
   noise/background/uncertainty models.

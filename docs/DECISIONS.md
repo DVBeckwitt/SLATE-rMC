@@ -59,9 +59,12 @@ is retired; D029 is the current detector measure.
 
 Rod metadata is produced by the ordered subsystem, but measured association and branch selection are defined only after the forward subsystems compose. They are frozen in a selection manifest before one fit run.
 
-## D015: Initial fits use detector-native coordinates
+## D015: Geometry fitting remains detector-native
 
-Geometry, mosaic, and ordered intensity fitting do not require `2theta/phi` or caking. Caking is a later measurement transformation.
+Geometry fitting uses native detector coordinates. Mosaic fitting may use the continuous
+`(2theta,phi)` pullback, and selected-center ordered-intensity fitting may compare continuous angular
+signal density. Neither path requires or fits a caked raster; finite caking remains a downstream
+measurement product.
 
 ## D016: Staged fitting
 
@@ -146,7 +149,8 @@ changed required-field contract.
 
 Reciprocal-space and Ewald-coating arrays may be sampled for visualization, and detector macrobins
 may be integrated for a preview, but no sampled array, sphere object, mesh, texture, or image becomes
-the authoritative physical field.
+the authoritative physical field. Native-center density images are likewise display samples of the
+completed detector function, not pixel-mass or count observables.
 
 ## D032: Complete detector-density reduction precedes pixels
 
@@ -159,6 +163,11 @@ proof without becoming the production rendering interface. The former source-ave
 native-pixel integrator fails closed unless a caller explicitly requests
 `include_per_rod_evidence=True`; no configured renderer sets that proof-only flag. No v1
 compatibility raster is retained.
+
+Selected-center fitting and native-center display sampling are additional terminal consumers of the
+same completed field. Every source intensity is reduced before any dataset scale, normalization,
+comparison, or residual. Selected-center density, center-sampled detector density, finite-ROI mass,
+and pixel-box mass remain distinct declared measures.
 
 ## D033: Multi-OSC geometry uses one geometry-only spine and immutable frozen keys
 
