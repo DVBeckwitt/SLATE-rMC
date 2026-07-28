@@ -3301,12 +3301,9 @@ def test_stacking_population_fit_keeps_identifiable_phase_totals_when_hands_alia
     assert not result.domain_response_full_rank
 
 
-def test_pbi2_stacking_profile_response_matches_parent_oracles_and_rejects_m3_only() -> None:
-    from rasim_next.core.contracts import (
-        EventIntensityNormalization,
-        LayerNormalQBatch,
-        RodQueryBatch,
-    )
+def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m3_only() -> None:
+    from rasim_next.core.contracts import RodQueryBatch
+    from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
     from rasim_next.materials import read_crystal
     from rasim_next.ordered import pbi2_layer_amplitudes
     from rasim_next.reciprocal.lattice import ReciprocalLattice
@@ -3315,8 +3312,9 @@ def test_pbi2_stacking_profile_response_matches_parent_oracles_and_rejects_m3_on
         Parent,
         RegistryPhaseModel,
         RichEpsilonModel,
-        finite_event_intensity,
+        registry_phase,
     )
+    from rasim_next.stacking.enumeration import finite_intensity_by_enumeration
 
     root = Path(__file__).resolve().parents[1]
     crystal_revision = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"
@@ -3356,34 +3354,44 @@ def test_pbi2_stacking_profile_response_matches_parent_oracles_and_rejects_m3_on
         wavelength_A=wavelength,
     )
     amplitudes = pbi2_layer_amplitudes(crystal, query, unknown_u_iso_A2=0.0)
-    layer_batch = LayerNormalQBatch(
-        event_id=event_id,
-        rod_id=rod_id,
-        phase_id=query.phase_id,
-        layer_normal_q_Ainv=layer_q,
-        gauge_id=amplitudes.gauge_id,
-    )
-    expected = []
-    for parent in Parent:
-        expected.append(
-            finite_event_intensity(
-                query,
-                amplitudes,
-                RichEpsilonModel(parent, epsilon).transition_law(),
-                layer_normal_q=layer_batch,
-                layers=layers,
-                initial=InitialPopulation.plus_only(),
-                model_component_id=parent.value,
-                population_group_id="canonical-parent-oracles",
-                normalization=EventIntensityNormalization.FINITE_PER_LAYER,
-                phase_model=RegistryPhaseModel.FORWARD_H_PLUS_2K,
-            ).scattering_strength_A2
+    omega = np.asarray(registry_phase(query.h, query.k, RegistryPhaseModel.FORWARD_H_PLUS_2K))
+    vertical_phase = np.exp(1j * layer_q * amplitudes.layer_repeat_A)
+    expected = electron_squared_to_scattering_strength_A2(
+        np.column_stack(
+            tuple(
+                np.asarray(
+                    [
+                        finite_intensity_by_enumeration(
+                            layers,
+                            amplitudes.f_plus_e[event],
+                            amplitudes.f_minus_e[event],
+                            omega[event],
+                            vertical_phase[event],
+                            RichEpsilonModel(parent, epsilon).transition_law(),
+                            InitialPopulation.plus_only(),
+                        )
+                        for event in range(ell.size)
+                    ]
+                )
+                / layers
+                for parent in Parent
+            )
         )
+    )
 
     assert response.component_ids == STACKING_COMPONENT_IDS
     np.testing.assert_array_equal(response.signed_hk, signed_hk)
-    np.testing.assert_allclose(response.component_response_A2, np.column_stack(expected))
+    np.testing.assert_allclose(response.component_response_A2, expected, rtol=5.0e-13, atol=1.0e-18)
     assert not response.component_response_A2.flags.writeable
+
+    planted_domain = np.asarray((0.60, 0.16, 0.09, 0.10, 0.05))
+    independent_signal = expected @ (1.0e6 * planted_domain)
+    independent_fit = fit_stacking_phase_totals(
+        response, independent_signal, np.ones(independent_signal.size)
+    )
+    np.testing.assert_allclose(
+        independent_fit.phase_fraction, (0.60, 0.25, 0.15), rtol=0.0, atol=2.0e-12
+    )
 
     control_hk = np.tile((-2, 1), (17, 1))
     control = compile_pbi2_stacking_profile_response(
