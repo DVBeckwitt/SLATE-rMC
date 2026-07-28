@@ -16,6 +16,9 @@ from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    STACKING_COMPONENT_IDS,
+    STACKING_PHASE_IDS,
+    CompiledStackingResponse,
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
     ExactTagGeometryModel,
@@ -38,15 +41,18 @@ from rasim_next.fitting import (
     MosaicReflectionGroupKey,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
+    StackingPopulationIdentifiabilityError,
     apply_shared_geometry_corrections,
     audit_indexed_geometry_series_roots,
     audit_integer_l_marker_selection,
+    compile_pbi2_stacking_profile_response,
     evaluate_continuous_mosaic_profiles,
     evaluate_indexed_geometry_series_residual,
     evaluate_tagged_geometry_objective_residual,
     fit_indexed_geometry_series,
     fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,
+    fit_stacking_phase_totals,
     fit_tagged_detector_function_geometry,
 )
 from rasim_next.geometry import (
@@ -2695,3 +2701,184 @@ def test_mosaic_component_profiles_reject_two_interior_eta_minima_for_one_width_
     assert 0.0 < eta[0] < 0.25
     assert 0.75 < eta[1] < 1.0
     assert sum(eta) == pytest.approx(1.0, abs=2.0e-12)
+
+
+def _synthetic_stacking_response(matrix: np.ndarray) -> CompiledStackingResponse:
+    row_count = matrix.shape[0]
+    return CompiledStackingResponse(
+        component_response_A2=matrix,
+        signed_hk=np.column_stack((np.arange(row_count), -np.arange(row_count))),
+        l_coordinate=np.linspace(0.0, 1.0, row_count),
+        wavelength_A=np.full(row_count, 1.540592925),
+        fixed_model_revision="synthetic-fixed-model.v1",
+    )
+
+
+def test_stacking_population_fit_recovers_global_scale_and_profiles_phase_totals() -> None:
+    rng = np.random.default_rng(20260728)
+    matrix = rng.lognormal(mean=0.0, sigma=0.7, size=(40, 5))
+    matrix += np.linspace(0.0, 1.0, 40)[:, None] ** np.arange(1, 6)[None, :]
+    response = _synthetic_stacking_response(matrix)
+    planted_domain = np.asarray((0.60, 0.16, 0.09, 0.10, 0.05))
+    planted_phase = np.asarray((0.60, 0.25, 0.15))
+    planted_scale = 7.25
+    signal = matrix @ (planted_scale * planted_domain)
+    variance = np.full(signal.size, 0.04)
+
+    result = fit_stacking_phase_totals(
+        response,
+        signal,
+        variance,
+        profile_delta_chi_square=1.0,
+    )
+
+    assert result.component_ids == STACKING_COMPONENT_IDS
+    assert result.phase_ids == STACKING_PHASE_IDS
+    np.testing.assert_allclose(result.domain_amount, planted_scale * planted_domain, atol=2.0e-13)
+    np.testing.assert_allclose(result.domain_fraction, planted_domain, atol=3.0e-14)
+    np.testing.assert_allclose(result.phase_fraction, planted_phase, atol=3.0e-14)
+    np.testing.assert_allclose(result.predicted_strength_A2, signal, atol=2.0e-13)
+    assert result.global_scale == pytest.approx(planted_scale, abs=2.0e-13)
+    assert result.chi_square < 1.0e-24
+    assert result.response_rank == 5
+    assert result.phase_contrast_rank == 2
+    assert result.domain_response_full_rank
+    assert result.active_component_ids == STACKING_COMPONENT_IDS
+    assert np.all(result.phase_profile_bounds[:, 0] < planted_phase)
+    assert np.all(result.phase_profile_bounds[:, 1] > planted_phase)
+    assert not result.domain_fraction.flags.writeable
+    assert not result.phase_profile_bounds.flags.writeable
+
+    scale_factor = 1.0e-15 / planted_scale
+    scaled = fit_stacking_phase_totals(
+        response,
+        scale_factor * signal,
+        scale_factor**2 * variance,
+    )
+    assert scaled.global_scale == pytest.approx(1.0e-15, rel=2.0e-12)
+    np.testing.assert_allclose(scaled.phase_fraction, planted_phase, atol=3.0e-14)
+    np.testing.assert_allclose(scaled.phase_profile_bounds, result.phase_profile_bounds, atol=2e-13)
+
+    pure = fit_stacking_phase_totals(response, planted_scale * matrix[:, 0], variance)
+    np.testing.assert_allclose(pure.phase_fraction, (1.0, 0.0, 0.0), atol=2.0e-16)
+    np.testing.assert_array_equal(pure.phase_estimate_on_boundary, (True, True, True))
+    np.testing.assert_array_equal(
+        (pure.phase_profile_bounds[0, 1], *pure.phase_profile_bounds[1:, 0]),
+        (1.0, 0.0, 0.0),
+    )
+
+
+def test_stacking_population_fit_keeps_identifiable_phase_totals_when_hands_alias() -> None:
+    coordinate = np.linspace(-1.0, 1.0, 31)
+    two_h = 1.0 + coordinate**2
+    four_h = 1.4 + 0.3 * coordinate + coordinate**4
+    six_h = 0.8 - 0.2 * coordinate + np.exp(0.4 * coordinate)
+    matrix = np.column_stack((two_h, four_h, four_h, six_h, six_h))
+    response = _synthetic_stacking_response(matrix)
+    planted_domain = np.asarray((0.55, 0.20, 0.10, 0.09, 0.06))
+    signal = matrix @ (3.0 * planted_domain)
+
+    result = fit_stacking_phase_totals(response, signal, np.ones(signal.size))
+
+    np.testing.assert_allclose(result.phase_fraction, (0.55, 0.30, 0.15), atol=2.0e-13)
+    assert result.response_rank == 3
+    assert result.phase_contrast_rank == 2
+    assert not result.domain_response_full_rank
+
+
+def test_pbi2_stacking_profile_response_matches_parent_oracles_and_rejects_m3_only() -> None:
+    from rasim_next.core.contracts import (
+        EventIntensityNormalization,
+        LayerNormalQBatch,
+        RodQueryBatch,
+    )
+    from rasim_next.materials import read_crystal
+    from rasim_next.ordered import pbi2_layer_amplitudes
+    from rasim_next.reciprocal.lattice import ReciprocalLattice
+    from rasim_next.stacking import (
+        InitialPopulation,
+        Parent,
+        RegistryPhaseModel,
+        RichEpsilonModel,
+        finite_event_intensity,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    crystal_revision = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"
+    crystal = read_crystal(
+        root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+        phase_id="pbi2-2h",
+        expected_sha256=crystal_revision,
+    )
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    signed_hk = np.asarray(((-1, 0), (-1, 0), (0, 1), (1, -1), (-2, 0), (-2, 0), (0, 2), (2, -2)))
+    ell = np.asarray((1.1, 1.7, 2.2, 2.8, 3.1, 3.6, 4.2, 4.7))
+    wavelength = np.linspace(1.53, 1.55, ell.size)
+    layers = 7
+    epsilon = 0.001
+    response = compile_pbi2_stacking_profile_response(
+        crystal=crystal,
+        crystal_revision=crystal_revision,
+        signed_hk=signed_hk,
+        l_coordinate=ell,
+        wavelength_A=wavelength,
+        layers=layers,
+    )
+    event_id = np.arange(ell.size, dtype=np.int64)
+    _, rod_id = np.unique(signed_hk, axis=0, return_inverse=True)
+    hkl = np.column_stack((signed_hk, ell))
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    layer_q = reciprocal.q_cartesian_Ainv(hkl) @ layer_normal
+    query = RodQueryBatch(
+        event_id=event_id,
+        rod_id=rod_id,
+        phase_id=(crystal.phase_id,) * ell.size,
+        h=signed_hk[:, 0].astype(np.int32),
+        k=signed_hk[:, 1].astype(np.int32),
+        q_sample_normal_Ainv=layer_q,
+        l_coordinate=ell,
+        wavelength_A=wavelength,
+    )
+    amplitudes = pbi2_layer_amplitudes(crystal, query, unknown_u_iso_A2=0.0)
+    layer_batch = LayerNormalQBatch(
+        event_id=event_id,
+        rod_id=rod_id,
+        phase_id=query.phase_id,
+        layer_normal_q_Ainv=layer_q,
+        gauge_id=amplitudes.gauge_id,
+    )
+    expected = []
+    for parent in Parent:
+        expected.append(
+            finite_event_intensity(
+                query,
+                amplitudes,
+                RichEpsilonModel(parent, epsilon).transition_law(),
+                layer_normal_q=layer_batch,
+                layers=layers,
+                initial=InitialPopulation.plus_only(),
+                model_component_id=parent.value,
+                population_group_id="canonical-parent-oracles",
+                normalization=EventIntensityNormalization.FINITE_PER_LAYER,
+                phase_model=RegistryPhaseModel.FORWARD_H_PLUS_2K,
+            ).scattering_strength_A2
+        )
+
+    assert response.component_ids == STACKING_COMPONENT_IDS
+    np.testing.assert_array_equal(response.signed_hk, signed_hk)
+    np.testing.assert_allclose(response.component_response_A2, np.column_stack(expected))
+    assert not response.component_response_A2.flags.writeable
+
+    control_hk = np.tile((-2, 1), (17, 1))
+    control = compile_pbi2_stacking_profile_response(
+        crystal,
+        crystal_revision,
+        signed_hk=control_hk,
+        l_coordinate=np.linspace(0.4, 5.6, control_hk.shape[0]),
+        wavelength_A=1.540592925,
+        layers=layers,
+    )
+    control_signal = control.component_response_A2 @ np.asarray((0.6, 0.15, 0.1, 0.1, 0.05))
+    with pytest.raises(StackingPopulationIdentifiabilityError, match="cannot separate"):
+        fit_stacking_phase_totals(control, control_signal, np.ones(control_signal.size))
