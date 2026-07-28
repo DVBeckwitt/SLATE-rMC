@@ -1,4 +1,4 @@
-"""Detector-native geometric fitting interfaces."""
+"""Geometric and intensity-fitting interfaces."""
 
 from rasim_next.fitting.geometry import (
     ContinuousDetectorFunction,
@@ -73,13 +73,25 @@ from rasim_next.fitting.ordered_intensity import (
     probe_ordered_intensity_inverse_boundary_bins,
     source_averaged_detector_instrument_revision,
 )
+from rasim_next.fitting.stacking_intensity import (
+    STACKING_COMPONENT_IDS,
+    STACKING_PHASE_IDS,
+    CompiledStackingResponse,
+    StackingPopulationFitResult,
+    StackingPopulationIdentifiabilityError,
+    compile_pbi2_stacking_profile_response,
+    fit_stacking_phase_totals,
+)
 
 __all__ = [
     "SHARED_GEOMETRY_PARAMETER_NAMES",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR",
     "SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION",
+    "STACKING_COMPONENT_IDS",
+    "STACKING_PHASE_IDS",
     "STRUCTURE_FACTOR_PARAMETER_NAMES",
+    "CompiledStackingResponse",
     "ContinuousDetectorFunction",
     "ContinuousDetectorGeometryModel",
     "ExactTagGeometryModel",
@@ -119,11 +131,14 @@ __all__ = [
     "SharedGeometryCorrectionBounds",
     "SharedGeometryCorrections",
     "SourceAveragedOrderedIntensityDatasetResponse",
+    "StackingPopulationFitResult",
+    "StackingPopulationIdentifiabilityError",
     "apply_shared_geometry_corrections",
     "audit_exact_tag_geometry_roots",
     "audit_indexed_geometry_series_roots",
     "audit_integer_l_marker_selection",
     "compile_ordered_intensity_response",
+    "compile_pbi2_stacking_profile_response",
     "compile_source_averaged_ordered_intensity_response",
     "evaluate_continuous_mosaic_profiles",
     "evaluate_indexed_geometry_series_metrics",
@@ -134,6 +149,7 @@ __all__ = [
     "fit_mosaic_component_profiles",
     "fit_ordered_intensity_series",
     "fit_refined_mosaic_component_profiles",
+    "fit_stacking_phase_totals",
     "fit_tagged_detector_function_geometry",
     "ordered_intensity_profile_catalog_revision",
     "ordered_intensity_structure_model_revision",
