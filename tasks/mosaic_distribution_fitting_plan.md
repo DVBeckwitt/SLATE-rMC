@@ -2,13 +2,14 @@
 
 Status: PROPOSED. Planning only; no production implementation is authorized by this document.
 
-Implemented slice (2026-07-22): revised T12 provides only the user-authorized deterministic
-synthetic recovery for truth `(2 deg, 0.5 deg, eta=0.1)` at 5, 10, and 15 degrees, with the frozen
-10/8/8 indexed nonzero selection and six raw-supported collapsed `00L` profiles representable by
-the fixed forward model. It uses one independent nuisance amplitude per profile and a frozen
-43-bin inverse-support boundary mask. The full/half/quarter subsets,
-held-out tests, additional regimes, stochastic tier, uncertainty, CPU/GPU crossover, and real-OSC
-recovery below remain proposed and unchecked.
+Implemented slice (2026-07-23): revised T12 includes the deterministic synthetic recovery and a
+model-limited fit to the three real OSC files. The real-data path uses one shared 250-state source
+realization per incidence, reduces all incident-state intensities before profile comparison, and
+fits all retained 5/10/15-degree profiles jointly with one independent nuisance amplitude per
+profile. Weak and secondary-lobe profiles are removed only as whole measured profiles; admitted
+profiles retain all bins and equal profile-level leverage. The full/half/quarter subsets, held-out
+tests, additional regimes, independently converged source support, stochastic tier, uncertainty,
+and CPU/GPU crossover remain proposed and unchecked.
 
 This is the remaining proposed qualification plan around the accepted T12 slice. Its additional
 owned paths and execution task are intentionally not assigned yet. It begins only after all three phases of
@@ -353,9 +354,8 @@ For every regime:
 6. freeze all estimates, diagnostics, and held-out predictions; and
 7. only then compare with truth.
 
-The tracked Bi2Se3 example currently uses 12 degrees for its third configured incidence despite
-the measurement filename. Do not reuse or relabel it. Create a new explicit 5/10/15 synthetic
-truth configuration during implementation.
+The active Bi2Se3 proof uses explicit 5-, 10-, and user-authoritative 15-degree incidences. The old
+12-degree provenance is historical only and must never be reused or relabeled as the third view.
 
 Two recovery tiers are mandatory:
 

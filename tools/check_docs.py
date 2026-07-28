@@ -72,7 +72,9 @@ def main() -> int:
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
             errors.append(f"{path.relative_to(ROOT).as_posix()}: {error}")
     if [path.relative_to(ROOT).as_posix() for path in repository_files("*.yaml")] != [
+        "configs/bi2se3_osc_geometry_fit.yaml",
         "configs/bi2se3_simulation.yaml",
+        "configs/bi2te3_simulation.yaml",
         "tasks/index.yaml",
     ]:
         errors.append("tracked YAML set is incomplete or contains an unsupported file")

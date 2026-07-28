@@ -15,6 +15,8 @@ from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.angles import (
     AngleFrame,
     _raw_chi_to_phi,
+    _raw_chi_to_unwrapped_phi,
+    angles_to_detector_coordinates,
     detector_coordinates_to_angles,
 )
 from rasim_next.geometry.detector import _intersect_detector_plane
@@ -24,6 +26,7 @@ _FLOAT_EPS = np.finfo(np.float64).eps
 _GRID_TOL = 128.0 * _FLOAT_EPS
 _POLE_TOL_FACTOR = 128.0 * _FLOAT_EPS
 _CONSERVATION_TOL = 3.0e-11
+_PROFILE_CONSERVATION_TOL = 3.0e-9
 _CORNER_ROW_TILE_SIZE = 64
 _COVERAGE_ENTRY_TILE_SIZE = 262_144
 _LOSS_FIELD_NAMES = (
@@ -285,6 +288,206 @@ class SparseDetectorAngleProjector:
         )
         if self.cache_key != expected_cache_key:
             raise ValueError("cache_key does not match the frozen projector inputs and revisions")
+
+
+@dataclass(frozen=True, slots=True)
+class SparseDetectorProfileProjector:
+    """Sparse physical-pixel coverage for independent local ``(2theta, phi)`` profiles."""
+
+    instrument: CompiledInstrument
+    angle_frame: AngleFrame
+    two_theta_bounds_rad: NDArray[np.float64]
+    phi_bin_edges_rad: NDArray[np.float64]
+    detector_valid_mask: NDArray[np.bool_]
+    profile_bin_valid_mask: NDArray[np.bool_]
+    coverage_pixel_index: NDArray[np.int64]
+    coverage_profile_bin_index: NDArray[np.int64]
+    weight: NDArray[np.float64]
+    profile_pixel_bounds_cr: NDArray[np.int64]
+    instrument_fingerprint: str
+    cache_key: str
+
+    projector_revision: ClassVar[str] = "cropped-physical-pixel-profile-split.v2"
+    polygon_revision: ClassVar[str] = SparseDetectorAngleProjector.polygon_revision
+    unwrap_revision: ClassVar[str] = SparseDetectorAngleProjector.unwrap_revision
+    pole_revision: ClassVar[str] = SparseDetectorAngleProjector.pole_revision
+    clipping_policy: ClassVar[str] = "independent-profile-windows.no-renormalization.v1"
+    boundary_sampling_revision: ClassVar[str] = "inverse-boundary-65.expand-until-clear.v1"
+    topology_contract: ClassVar[str] = "fully-panel-contained-connected-local-window.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.instrument, CompiledInstrument):
+            raise TypeError("instrument must be a CompiledInstrument")
+        if not isinstance(self.angle_frame, AngleFrame):
+            raise TypeError("angle_frame must be an AngleFrame")
+        theta = np.asarray(self.two_theta_bounds_rad)
+        phi = np.asarray(self.phi_bin_edges_rad)
+        if theta.ndim != 2 or theta.shape[1] != 2 or theta.shape[0] == 0:
+            raise ValueError("two_theta_bounds_rad must have shape (profile, 2)")
+        profile_count = theta.shape[0]
+        if phi.ndim != 2 or phi.shape[0] != profile_count or phi.shape[1] < 4:
+            raise ValueError("phi_bin_edges_rad must have shape (profile, bin + 1)")
+        theta = _readonly_float(theta, (profile_count, 2), "two_theta_bounds_rad")
+        phi = _readonly_float(phi, phi.shape, "phi_bin_edges_rad")
+        if (
+            np.any(theta[:, 0] < 0.0)
+            or np.any(theta[:, 1] > np.pi)
+            or np.any(theta[:, 0] >= theta[:, 1])
+        ):
+            raise ValueError("two-theta profile bounds must be ordered inside [0, pi]")
+        if np.any(np.diff(phi, axis=1) <= 0.0):
+            raise ValueError("phi-bin edges must increase within each profile")
+        if np.any(phi[:, -1] - phi[:, 0] >= 2.0 * np.pi):
+            raise ValueError("each local phi profile must span less than one azimuth period")
+        rows, columns = self.instrument.detector_shape_rc
+        detector_mask = _readonly_bool(
+            self.detector_valid_mask,
+            (rows, columns),
+            "detector_valid_mask",
+        )
+        profile_mask = _readonly_bool(
+            self.profile_bin_valid_mask,
+            (profile_count, phi.shape[1] - 1),
+            "profile_bin_valid_mask",
+        )
+        if np.any(np.sum(profile_mask, axis=1) < 3):
+            raise ValueError("each local profile must retain at least three bins")
+        supplied_weight = np.asarray(self.weight)
+        if np.iscomplexobj(supplied_weight):
+            raise ValueError("weight must be real")
+        weight = np.array(supplied_weight, dtype=np.float64, copy=True, order="C")
+        if weight.ndim != 1 or not np.all(np.isfinite(weight)) or np.any(weight <= 0.0):
+            raise ValueError("weight must be a finite positive vector")
+        pixel_count = rows * columns
+        profile_bin_count = profile_count * profile_mask.shape[1]
+        pixel_index = _readonly_int(
+            self.coverage_pixel_index,
+            (weight.size,),
+            "coverage_pixel_index",
+        )
+        profile_bin_index = _readonly_int(
+            self.coverage_profile_bin_index,
+            (weight.size,),
+            "coverage_profile_bin_index",
+        )
+        if (
+            np.any(pixel_index < 0)
+            or np.any(pixel_index >= pixel_count)
+            or np.any(profile_bin_index < 0)
+            or np.any(profile_bin_index >= profile_bin_count)
+        ):
+            raise ValueError("profile coverage indices are outside their frozen arrays")
+        if weight.size:
+            if not np.all(detector_mask.ravel()[pixel_index]) or not np.all(
+                profile_mask.ravel()[profile_bin_index]
+            ):
+                raise ValueError("profile coverage records may reference only valid mask entries")
+            pair = profile_bin_index.astype(np.int64) * pixel_count + pixel_index
+            if np.unique(pair).size != pair.size:
+                raise ValueError("profile coverage records must be unique per bin and pixel")
+            profile_pixel = (profile_bin_index // profile_mask.shape[1]) * pixel_count + pixel_index
+            _, compact_profile_pixel = np.unique(profile_pixel, return_inverse=True)
+            covered_fraction = np.bincount(compact_profile_pixel, weights=weight)
+            if np.any(covered_fraction > 1.0 + _PROFILE_CONSERVATION_TOL):
+                maximum = float(np.max(covered_fraction))
+                raise ValueError(
+                    "one profile assigned more than one pixel mass "
+                    f"(maximum fraction {maximum:.17g})"
+                )
+        bounds = _readonly_int(
+            self.profile_pixel_bounds_cr,
+            (profile_count, 4),
+            "profile_pixel_bounds_cr",
+        )
+        if np.any(bounds[:, 0] < 0) or np.any(bounds[:, 1] >= columns):
+            raise ValueError("profile column bounds are outside the detector")
+        if np.any(bounds[:, 2] < 0) or np.any(bounds[:, 3] >= rows):
+            raise ValueError("profile row bounds are outside the detector")
+        if np.any(bounds[:, 0] > bounds[:, 1]) or np.any(bounds[:, 2] > bounds[:, 3]):
+            raise ValueError("profile pixel bounds must be ordered")
+        weight.setflags(write=False)
+        object.__setattr__(self, "two_theta_bounds_rad", theta)
+        object.__setattr__(self, "phi_bin_edges_rad", phi)
+        object.__setattr__(self, "detector_valid_mask", detector_mask)
+        object.__setattr__(self, "profile_bin_valid_mask", profile_mask)
+        object.__setattr__(self, "coverage_pixel_index", pixel_index)
+        object.__setattr__(self, "coverage_profile_bin_index", profile_bin_index)
+        object.__setattr__(self, "weight", weight)
+        object.__setattr__(self, "profile_pixel_bounds_cr", bounds)
+        object.__setattr__(
+            self,
+            "instrument_fingerprint",
+            _version(self.instrument_fingerprint, "instrument_fingerprint"),
+        )
+        object.__setattr__(self, "cache_key", _version(self.cache_key, "cache_key"))
+        expected_fingerprint = _instrument_fingerprint(self.instrument)
+        if self.instrument_fingerprint != expected_fingerprint:
+            raise ValueError("instrument_fingerprint does not match the frozen instrument")
+        expected_key = _profile_cache_key(
+            instrument_fingerprint=expected_fingerprint,
+            angle_frame=self.angle_frame,
+            two_theta_bounds_rad=theta,
+            phi_bin_edges_rad=phi,
+            detector_mask=detector_mask,
+            profile_mask=profile_mask,
+        )
+        if self.cache_key != expected_key:
+            raise ValueError("cache_key does not match the frozen local-profile projector")
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedAngleProfiles:
+    """Independent local profiles formed by reducing detector-pixel mass before division."""
+
+    S: NDArray[np.float64]
+    N: NDArray[np.float64]
+    I: NDArray[np.float64]  # noqa: E741 - scientific contract uses S, N, I
+    valid: NDArray[np.bool_]
+    profile_bin_valid_mask: NDArray[np.bool_]
+    projector_cache_key: str
+
+    observable_kind: ClassVar[str] = "normalized-local-angle-profiles.v1"
+    detector_signal_kind: ClassVar[str] = "nonnegative-detector-pixel-mass.v2"
+    detector_normalization_kind: ClassVar[str] = "nonnegative-detector-support-weight.v1"
+    input_correction_policy: ClassVar[str] = "no-corrections-declared.v1"
+    detector_solid_angle_applied: ClassVar[bool] = False
+
+    def __post_init__(self) -> None:
+        supplied = np.asarray(self.S)
+        if supplied.ndim != 2 or supplied.shape[0] == 0 or supplied.shape[1] < 3:
+            raise ValueError("local profile fields must have shape (profile, bin)")
+        shape = supplied.shape
+        signal = _readonly_float(self.S, shape, "S")
+        normalization = _readonly_float(self.N, shape, "N")
+        intensity = _readonly_float(self.I, shape, "I")
+        valid = _readonly_bool(self.valid, shape, "valid")
+        profile_mask = _readonly_bool(
+            self.profile_bin_valid_mask,
+            shape,
+            "profile_bin_valid_mask",
+        )
+        if np.any(signal < 0.0) or np.any(normalization < 0.0) or np.any(intensity < 0.0):
+            raise ValueError("S, N, and I must be nonnegative")
+        expected_valid = profile_mask & (normalization > 0.0)
+        expected_intensity = np.zeros(shape, dtype=np.float64)
+        np.divide(signal, normalization, out=expected_intensity, where=expected_valid)
+        if not np.array_equal(valid, expected_valid) or not np.allclose(
+            intensity,
+            expected_intensity,
+            rtol=3e-15,
+            atol=0.0,
+        ):
+            raise ValueError("local-profile validity and intensity must follow S/N")
+        object.__setattr__(self, "S", signal)
+        object.__setattr__(self, "N", normalization)
+        object.__setattr__(self, "I", intensity)
+        object.__setattr__(self, "valid", valid)
+        object.__setattr__(self, "profile_bin_valid_mask", profile_mask)
+        object.__setattr__(
+            self,
+            "projector_cache_key",
+            _version(self.projector_cache_key, "projector_cache_key"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -762,6 +965,382 @@ def _cache_key(
     return f"sha256-{digest.hexdigest()}.v1"
 
 
+def _profile_cache_key(
+    *,
+    instrument_fingerprint: str,
+    angle_frame: AngleFrame,
+    two_theta_bounds_rad: NDArray[np.float64],
+    phi_bin_edges_rad: NDArray[np.float64],
+    detector_mask: NDArray[np.bool_],
+    profile_mask: NDArray[np.bool_],
+) -> str:
+    digest = hashlib.sha256()
+    _hash_text(digest, "detector_local_profile_projector.v1")
+    _hash_text(digest, instrument_fingerprint)
+    for name, value in (
+        ("origin_lab_m", angle_frame.origin_lab_m),
+        ("row_down_lab", angle_frame.row_down_lab),
+        ("column_right_lab", angle_frame.column_right_lab),
+        ("direct_beam_lab", angle_frame.direct_beam_lab),
+        ("two_theta_bounds_rad", two_theta_bounds_rad),
+        ("phi_bin_edges_rad", phi_bin_edges_rad),
+        ("detector_mask", detector_mask),
+        ("profile_mask", profile_mask),
+    ):
+        dtype = "u1" if np.asarray(value).dtype.kind == "b" else "<f8"
+        _hash_array(digest, name, value, dtype)
+    for value in (
+        angle_frame.revision,
+        SparseDetectorProfileProjector.projector_revision,
+        SparseDetectorProfileProjector.polygon_revision,
+        SparseDetectorProfileProjector.unwrap_revision,
+        SparseDetectorProfileProjector.pole_revision,
+        SparseDetectorProfileProjector.clipping_policy,
+        SparseDetectorProfileProjector.boundary_sampling_revision,
+        SparseDetectorProfileProjector.topology_contract,
+    ):
+        _hash_text(digest, value)
+    return f"sha256-{digest.hexdigest()}.v1"
+
+
+def _profile_seed_pixel_bounds(
+    *,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+    two_theta_bounds_rad: NDArray[np.float64],
+    phi_bin_edges_rad: NDArray[np.float64],
+) -> tuple[int, int, int, int]:
+    edge_coordinate = np.linspace(0.0, 1.0, 65)
+    theta_lower, theta_upper = (float(value) for value in two_theta_bounds_rad)
+    phi_lower = float(phi_bin_edges_rad[0])
+    phi_upper = float(phi_bin_edges_rad[-1])
+    theta_span = theta_lower + edge_coordinate * (theta_upper - theta_lower)
+    phi_span = phi_lower + edge_coordinate * (phi_upper - phi_lower)
+    interior_theta, interior_phi = np.meshgrid(theta_span[::4], phi_span[::4])
+    theta = np.concatenate(
+        (
+            np.full(edge_coordinate.shape, theta_lower),
+            np.full(edge_coordinate.shape, theta_upper),
+            theta_span,
+            theta_span,
+            interior_theta.ravel(),
+        )
+    )
+    phi = np.concatenate(
+        (
+            phi_span,
+            phi_span,
+            np.full(edge_coordinate.shape, phi_lower),
+            np.full(edge_coordinate.shape, phi_upper),
+            interior_phi.ravel(),
+        )
+    )
+    coordinates = angles_to_detector_coordinates(
+        theta,
+        phi,
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    if not np.all(coordinates.valid):
+        raise ValueError(
+            "a local angular profile must be fully panel-contained at its topology samples"
+        )
+    columns = coordinates.column_px
+    rows = coordinates.row_px
+    detector_rows, detector_columns = instrument.detector_shape_rc
+    column_lower = max(0, math.floor(float(np.min(columns)) - 0.5) - 1)
+    column_upper = min(
+        detector_columns - 1,
+        math.ceil(float(np.max(columns)) + 0.5) + 1,
+    )
+    row_lower = max(0, math.floor(float(np.min(rows)) - 0.5) - 1)
+    row_upper = min(
+        detector_rows - 1,
+        math.ceil(float(np.max(rows)) + 0.5) + 1,
+    )
+    if column_lower > column_upper or row_lower > row_upper:
+        raise ValueError("a local angular profile misses the finite detector")
+    return column_lower, column_upper, row_lower, row_upper
+
+
+def _local_profile_coverage(
+    *,
+    profile_index: int,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+    two_theta_bounds_rad: NDArray[np.float64],
+    phi_bin_edges_rad: NDArray[np.float64],
+    detector_mask: NDArray[np.bool_],
+    profile_mask: NDArray[np.bool_],
+    pixel_bounds_cr: tuple[int, int, int, int],
+    pole: tuple[float, float, float] | None,
+    pole_tolerance_px: float,
+) -> tuple[list[int], list[int], list[float], tuple[bool, bool, bool, bool]]:
+    column_lower, column_upper, row_lower, row_upper = pixel_bounds_cr
+    corner_columns, corner_rows = np.meshgrid(
+        np.arange(column_lower, column_upper + 2, dtype=np.float64) - 0.5,
+        np.arange(row_lower, row_upper + 2, dtype=np.float64) - 0.5,
+    )
+    angles = detector_coordinates_to_angles(
+        corner_columns,
+        corner_rows,
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    if not np.all(angles.valid):
+        invalid = tuple(sorted(set(angles.status[~angles.valid].ravel())))
+        raise ValueError(f"local-profile detector corners are not projectable: {invalid}")
+    theta_lower, theta_upper = (float(value) for value in two_theta_bounds_rad)
+    bin_count = phi_bin_edges_rad.size - 1
+    detector_columns = instrument.detector_shape_rc[1]
+    pixel_indices: list[int] = []
+    profile_bin_indices: list[int] = []
+    weights: list[float] = []
+    touched = [False, False, False, False]
+    for row in range(row_lower, row_upper + 1):
+        local_row = row - row_lower
+        for column in range(column_lower, column_upper + 1):
+            local_column = column - column_lower
+            lattice_indices = (
+                (local_row, local_column),
+                (local_row, local_column + 1),
+                (local_row + 1, local_column + 1),
+                (local_row + 1, local_column),
+            )
+            corner_theta = np.asarray(
+                [angles.two_theta_rad[index] for index in lattice_indices],
+                dtype=np.float64,
+            )
+            corner_chi = np.asarray(
+                [angles.chi_raw_rad[index] for index in lattice_indices],
+                dtype=np.float64,
+            )
+            corner_azimuth_valid = np.asarray(
+                [angles.azimuth_valid[index] for index in lattice_indices],
+                dtype=np.bool_,
+            )
+            pieces = _pixel_angular_pieces(
+                column=column,
+                row=row,
+                corner_theta=corner_theta,
+                corner_chi=corner_chi,
+                corner_azimuth_valid=corner_azimuth_valid,
+                pole=pole,
+                pole_tolerance_px=pole_tolerance_px,
+            )
+            full_area = math.fsum(_polygon_area(piece) for piece in pieces)
+            overlap_by_bin: dict[int, float] = {}
+            for piece in pieces:
+                unwrapped_phi = _raw_chi_to_unwrapped_phi(piece[:, 1])
+                if (
+                    float(np.max(piece[:, 0])) <= theta_lower
+                    or float(np.min(piece[:, 0])) >= theta_upper
+                ):
+                    continue
+                minimum_period = math.floor(
+                    (float(phi_bin_edges_rad[0]) - float(np.max(unwrapped_phi))) / (2.0 * np.pi)
+                )
+                maximum_period = math.ceil(
+                    (float(phi_bin_edges_rad[-1]) - float(np.min(unwrapped_phi))) / (2.0 * np.pi)
+                )
+                for period_index in range(minimum_period, maximum_period + 1):
+                    mapped = np.empty(piece.shape, dtype=np.float64)
+                    mapped[:, 0] = piece[:, 0]
+                    mapped[:, 1] = unwrapped_phi + period_index * 2.0 * np.pi
+                    if float(np.max(mapped[:, 1])) <= float(phi_bin_edges_rad[0]) or float(
+                        np.min(mapped[:, 1])
+                    ) >= float(phi_bin_edges_rad[-1]):
+                        continue
+                    phi_start = max(
+                        0,
+                        int(
+                            np.searchsorted(
+                                phi_bin_edges_rad,
+                                np.min(mapped[:, 1]),
+                                side="right",
+                            )
+                            - 1
+                        ),
+                    )
+                    phi_stop = min(
+                        bin_count,
+                        int(
+                            np.searchsorted(
+                                phi_bin_edges_rad,
+                                np.max(mapped[:, 1]),
+                                side="left",
+                            )
+                        ),
+                    )
+                    for phi_bin in range(phi_start, phi_stop):
+                        if not profile_mask[phi_bin]:
+                            continue
+                        area = _rectangle_overlap_area(
+                            mapped,
+                            theta_lower,
+                            theta_upper,
+                            float(phi_bin_edges_rad[phi_bin]),
+                            float(phi_bin_edges_rad[phi_bin + 1]),
+                        )
+                        if area > 0.0:
+                            overlap_by_bin[phi_bin] = math.fsum(
+                                (overlap_by_bin.get(phi_bin, 0.0), area)
+                            )
+            if not overlap_by_bin:
+                continue
+            if column == column_lower:
+                touched[0] = True
+            if column == column_upper:
+                touched[1] = True
+            if row == row_lower:
+                touched[2] = True
+            if row == row_upper:
+                touched[3] = True
+            if not detector_mask[row, column]:
+                continue
+            pixel = row * detector_columns + column
+            for phi_bin in sorted(overlap_by_bin):
+                fraction = overlap_by_bin[phi_bin] / full_area
+                if fraction <= 0.0:
+                    continue
+                pixel_indices.append(pixel)
+                profile_bin_indices.append(profile_index * bin_count + phi_bin)
+                weights.append(fraction)
+    return pixel_indices, profile_bin_indices, weights, tuple(touched)
+
+
+def compile_detector_profile_projector(
+    *,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+    two_theta_bounds_rad: ArrayLike,
+    phi_bin_edges_rad: ArrayLike,
+    detector_valid_mask: ArrayLike | None = None,
+    profile_bin_valid_mask: ArrayLike | None = None,
+) -> SparseDetectorProfileProjector:
+    """Compile physical pixels for fully panel-contained, connected local angle windows."""
+
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be a CompiledInstrument")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    theta = np.asarray(two_theta_bounds_rad, dtype=np.float64)
+    phi = np.asarray(phi_bin_edges_rad, dtype=np.float64)
+    if theta.ndim != 2 or theta.shape[1] != 2 or theta.shape[0] == 0:
+        raise ValueError("two_theta_bounds_rad must have shape (profile, 2)")
+    if phi.ndim != 2 or phi.shape[0] != theta.shape[0] or phi.shape[1] < 4:
+        raise ValueError("phi_bin_edges_rad must have shape (profile, bin + 1)")
+    if np.any(phi[:, -1] - phi[:, 0] >= 2.0 * np.pi):
+        raise ValueError("each local phi profile must span less than one azimuth period")
+    rows, columns = instrument.detector_shape_rc
+    detector_mask = (
+        np.ones((rows, columns), dtype=np.bool_)
+        if detector_valid_mask is None
+        else _readonly_bool(detector_valid_mask, (rows, columns), "detector_valid_mask")
+    )
+    profile_mask = (
+        np.ones((theta.shape[0], phi.shape[1] - 1), dtype=np.bool_)
+        if profile_bin_valid_mask is None
+        else _readonly_bool(
+            profile_bin_valid_mask,
+            (theta.shape[0], phi.shape[1] - 1),
+            "profile_bin_valid_mask",
+        )
+    )
+    pole = _detector_axis_pole(instrument, angle_frame)
+    pole_scale = max(
+        1.0,
+        float(rows),
+        float(columns),
+        0.0 if pole is None else abs(pole[0]),
+        0.0 if pole is None else abs(pole[1]),
+    )
+    pole_tolerance = _POLE_TOL_FACTOR * pole_scale
+    coverage_pixel: list[int] = []
+    coverage_profile_bin: list[int] = []
+    coverage_weight: list[float] = []
+    bounds = np.empty((theta.shape[0], 4), dtype=np.int64)
+    for profile_index in range(theta.shape[0]):
+        pixel_bounds = _profile_seed_pixel_bounds(
+            instrument=instrument,
+            angle_frame=angle_frame,
+            two_theta_bounds_rad=theta[profile_index],
+            phi_bin_edges_rad=phi[profile_index],
+        )
+        expansion_px = 2
+        expansion_limit = math.ceil(math.log2(max(rows, columns))) + 2
+        for _ in range(expansion_limit):
+            local_pixel, local_bin, local_weight, touched = _local_profile_coverage(
+                profile_index=profile_index,
+                instrument=instrument,
+                angle_frame=angle_frame,
+                two_theta_bounds_rad=theta[profile_index],
+                phi_bin_edges_rad=phi[profile_index],
+                detector_mask=detector_mask,
+                profile_mask=profile_mask[profile_index],
+                pixel_bounds_cr=pixel_bounds,
+                pole=pole,
+                pole_tolerance_px=pole_tolerance,
+            )
+            column_lower, column_upper, row_lower, row_upper = pixel_bounds
+            expand = (
+                touched[0] and column_lower > 0,
+                touched[1] and column_upper < columns - 1,
+                touched[2] and row_lower > 0,
+                touched[3] and row_upper < rows - 1,
+            )
+            touches_panel_edge = (
+                touched[0] and column_lower == 0,
+                touched[1] and column_upper == columns - 1,
+                touched[2] and row_lower == 0,
+                touched[3] and row_upper == rows - 1,
+            )
+            if any(touches_panel_edge):
+                raise ValueError(
+                    "a fully panel-contained local angular profile may not touch "
+                    "the physical detector edge"
+                )
+            if not any(expand):
+                break
+            pixel_bounds = (
+                max(0, column_lower - (expansion_px if expand[0] else 0)),
+                min(columns - 1, column_upper + (expansion_px if expand[1] else 0)),
+                max(0, row_lower - (expansion_px if expand[2] else 0)),
+                min(rows - 1, row_upper + (expansion_px if expand[3] else 0)),
+            )
+            expansion_px *= 2
+        else:
+            raise RuntimeError("local-profile crop did not converge to a clear pixel boundary")
+        if not local_weight:
+            raise ValueError("a local angular profile has no valid detector-pixel support")
+        coverage_pixel.extend(local_pixel)
+        coverage_profile_bin.extend(local_bin)
+        coverage_weight.extend(local_weight)
+        bounds[profile_index] = pixel_bounds
+    instrument_key = _instrument_fingerprint(instrument)
+    return SparseDetectorProfileProjector(
+        instrument=instrument,
+        angle_frame=angle_frame,
+        two_theta_bounds_rad=theta,
+        phi_bin_edges_rad=phi,
+        detector_valid_mask=detector_mask,
+        profile_bin_valid_mask=profile_mask,
+        coverage_pixel_index=np.asarray(coverage_pixel, dtype=np.int64),
+        coverage_profile_bin_index=np.asarray(coverage_profile_bin, dtype=np.int64),
+        weight=np.asarray(coverage_weight, dtype=np.float64),
+        profile_pixel_bounds_cr=bounds,
+        instrument_fingerprint=instrument_key,
+        cache_key=_profile_cache_key(
+            instrument_fingerprint=instrument_key,
+            angle_frame=angle_frame,
+            two_theta_bounds_rad=theta,
+            phi_bin_edges_rad=phi,
+            detector_mask=detector_mask,
+            profile_mask=profile_mask,
+        ),
+    )
+
+
 def compile_detector_angle_projector(
     *,
     instrument: CompiledInstrument,
@@ -903,6 +1482,68 @@ def _apply_projector(
             minlength=output.size,
         )
     return output.reshape(projector.grid.shape)
+
+
+def project_detector_profiles(
+    projector: SparseDetectorProfileProjector,
+    detector_signal: ArrayLike,
+    detector_normalization: ArrayLike | None = None,
+) -> NormalizedAngleProfiles:
+    """Reduce nonnegative detector-pixel mass into local profiles, then form ``I=S/N``."""
+
+    if not isinstance(projector, SparseDetectorProfileProjector):
+        raise TypeError("projector must be a SparseDetectorProfileProjector")
+    detector_shape = projector.instrument.detector_shape_rc
+    signal = np.asarray(detector_signal)
+    if (
+        signal.shape != detector_shape
+        or not np.issubdtype(signal.dtype, np.number)
+        or np.iscomplexobj(signal)
+        or not np.all(np.isfinite(signal))
+        or np.any(signal < 0.0)
+    ):
+        raise ValueError(
+            f"detector_signal must be a finite nonnegative numeric array with shape {detector_shape}"
+        )
+    flat_signal = signal.ravel()
+    output_size = int(np.prod(projector.profile_bin_valid_mask.shape))
+    signal_bins = np.bincount(
+        projector.coverage_profile_bin_index,
+        weights=projector.weight * flat_signal[projector.coverage_pixel_index],
+        minlength=output_size,
+    ).reshape(projector.profile_bin_valid_mask.shape)
+    normalization_weight = projector.weight
+    if detector_normalization is not None:
+        normalization = np.asarray(detector_normalization)
+        if (
+            normalization.shape != detector_shape
+            or not np.issubdtype(normalization.dtype, np.number)
+            or np.iscomplexobj(normalization)
+            or not np.all(np.isfinite(normalization))
+            or np.any(normalization < 0.0)
+        ):
+            raise ValueError(
+                "detector_normalization must be a finite nonnegative numeric array "
+                f"with shape {detector_shape}"
+            )
+        flat_normalization = normalization.ravel()
+        normalization_weight = projector.weight * flat_normalization[projector.coverage_pixel_index]
+    normalization_bins = np.bincount(
+        projector.coverage_profile_bin_index,
+        weights=normalization_weight,
+        minlength=output_size,
+    ).reshape(projector.profile_bin_valid_mask.shape)
+    valid = projector.profile_bin_valid_mask & (normalization_bins > 0.0)
+    intensity = np.zeros(signal_bins.shape, dtype=np.float64)
+    np.divide(signal_bins, normalization_bins, out=intensity, where=valid)
+    return NormalizedAngleProfiles(
+        S=signal_bins,
+        N=normalization_bins,
+        I=intensity,
+        valid=valid,
+        profile_bin_valid_mask=projector.profile_bin_valid_mask,
+        projector_cache_key=projector.cache_key,
+    )
 
 
 def _nonnegative_fsum(values: NDArray[np.float64]) -> float:

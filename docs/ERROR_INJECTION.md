@@ -84,7 +84,8 @@ normalization, or reflectivity limit.
 - Multiply detector solid-angle metadata into the raw field again.
 - Swap detector row/column, reverse a tilt, evaluate outside the active panel, or assign intensity to
   an invalid/back-facing ray.
-- Replace the pixel box integral with a center sample, histogram, blur, or point deposit.
+- When pixel mass is requested, replace the box integral with a center sample, histogram, blur, or
+  point deposit. A separately declared display-only center-density sample is not this error.
 - Hide an unresolved adaptive pixel or a caustic behind display interpolation.
 
 Expected detection: detector ray/Q identity, forward/inverse round-trip, per-rod/source reduction,
@@ -205,8 +206,12 @@ rank/condition failure.
   of contracting the frozen six-column occupancy quadratic and cached `Qr/Qz` arrays.
 - Prune a weak or baseline-extinct root, omit an admitted `m=0` profile, or weight residuals by
   planted peak intensity.
+- Form a scale, normalization, comparison, or residual for each source row before reducing all rows
+  into one detector function per incidence.
 - Join observations by tuple order, reuse a stale observable-layout revision, or silently bind data
   generated on a different ROI/topology mask.
+- Accept the wrong source count or realization revision, mix point-density with ROI-mass records, or
+  bypass the interlaced `Uz` response certificate.
 - Treat a refined numerical response digest as the observable identity, or accept a coarse response
   without planted-mass and occupancy-basis quadrature convergence.
 - Fit all three occupancies together with free image scales, report an arbitrary absolute
@@ -215,6 +220,7 @@ rank/condition failure.
 Expected detection: cached-versus-direct structure oracle, asymmetric directional-displacement
 regression, zero-strength-versus-CIF marker-identity invariance, explicit all-profile and `m=0`
 counts, dataset/observable revision rejection, independent response-order convergence,
+explicit source-sum parity and source count/revision rejection, mixed-measure rejection,
 common-scale-gauge rejection, and rank/condition/bound diagnostics.
 
 ## Control record

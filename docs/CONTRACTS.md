@@ -111,6 +111,14 @@ integrator is deliberately branch-specific and rejects any model containing `m=0
 all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
 weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
+`evaluate_detector_density_all_roots(...)` completes this source reduction and returns one detector
+function. Downstream peak-center comparison, display sampling, and pixel integration consume that
+combined function; none may fit, rescale, normalize, recenter, or form a residual for an individual
+source row. `restrict_rods(...)` is a linear selected-group view of the same reduction, and
+`rebind_physics(...)` replaces mosaic or strength without changing the immutable source realization.
+The source count and realization revision are provenance. The tracked Bi2Se3 proof uses 250 rows,
+but the core contract permits any positive count.
+
 The source-averaged `integrate_native_pixels(...)` method is a detailed per-rod proof path, not a
 production renderer. It fails closed unless the caller explicitly passes
 `include_per_rod_evidence=True`. The detailed arbitrary-coordinate evaluator remains available
@@ -150,6 +158,25 @@ any predeclared bin exclusions are immutable and must agree throughout a compone
 `MosaicProfileSet.source_revision` is the detector result's actual source realization revision; a
 profile-layout hash cannot substitute for it.
 
+`compile_detector_profile_projector(...)` is the detector-native observation boundary for measured
+images. It clips each physical pixel polygon directly into independent local `(2theta, phi)` bins,
+accumulates detector signal `S` and pixel-area normalization `N` separately, and never renormalizes
+clipped support. Its accepted topology is a connected local angular window that is fully contained
+by the finite panel. Boundary samples must project to the panel, the expanded pixel crop must clear
+all retained support, and any retained support touching a physical panel edge fails closed. Detector
+and profile masks, angle frame, instrument fingerprint, polygon/unwrap policies, and topology
+contract all enter the immutable cache key. This projector pixelizes only the already pixelated OSC
+observation; simulated component responses remain continuous angular integrals.
+
+Measured profile sets carry an `observation_revision` instead of a physical `source_revision`.
+An optional `MosaicProfileNuisanceBasis` is bound to the exact profile revision as well as the
+identities and valid-bin mask. Its coefficients are unconstrained signed detrending terms, not a
+claim of a nonnegative physical background. A component response with numerically absent
+nuisance-projected energy is treated as zero; on a mixture face where a profile then has no model
+energy, its fitted scale is exactly zero and it contributes its full normalized observed residual.
+A width pair with one zero-energy component and one nonzero component in the same profile is
+rejected because its apparent boundary optimum can be an unattained limit with divergent scale.
+
 For every individual `(dataset, reflection, analytic branch, root side)` profile, the fitter
 analytically profiles an independent nonnegative amplitude and minimizes relative squared shape
 error. Absolute peak heights, structure-factor amplitudes, and cross-peak intensity ratios therefore
@@ -161,6 +188,16 @@ cached during deterministic refinement. A fit fails with a typed identifiability
 nuisance-projected local sensitivity is deficient or when the finite global audit finds distinct
 tied solutions. The 8,193-point stationary audit is deterministic numerical evidence, not a formal
 theorem excluding arbitrarily narrower sub-grid aliases.
+
+Data-quality screening, when requested, occurs before fitting and removes an entire profile under
+a frozen, provenance-bound policy. It may use selection-only sidebands to classify weak profiles
+and explicit full-profile identities to classify known secondary lobes. It may not trim selected
+phi bins according to measured intensity. Once admitted, every profile has the same profile-level
+leverage regardless of absolute intensity.
+
+A branchless measured `m=0` profile additionally requires positive finite signal from the complete
+source-averaged simulated profile. This support check precedes weak/secondary screening and is
+recorded in the selection audit; a nominal one-state landmark alone is not intensity evidence.
 
 `MosaicProfileDefinition.excluded_phi_bin_indices` is a frozen, provenance-bound numerical-support
 mask, never an intensity threshold. The Bi2Se3 proof excludes 43 independently audited inverse-
@@ -177,7 +214,7 @@ its observation index, physical rod, exact `L`, root sign, fixed mass coefficien
 three unique Bi2Se3 source sites. No detector raster, pixel deposition, detector reprojection, or
 full structure-factor calculation occurs in an optimizer iteration.
 
-Each profile response is the integrated contribution of the rods explicitly named by that frozen
+For the finite-ROI response, each profile is the integrated contribution of the rods named by that frozen
 reflection group. It is therefore a selected-group component mass, not the unseparated total counts
 inside the same raw detector ROI. A real-image consumer must provide a provenance-bound component
 extraction/deblending step or prove that omitted rods and background are below its declared error
@@ -209,19 +246,20 @@ be fixed as a positive ratio reference and only occupancy ratios may be interpre
 coordinates are nonnegative and may exceed one. The returned Bi2Se3 parameter object is merely the
 admissible representative obtained by dividing all ratios by their maximum; frozen occupancy names
 refer to the optimizer's ratio coordinates, not to the representative's numeric fields. Mixed
-nonzero-`m` radial families are required
-to distinguish `Ur` from a common intensity scale. All admitted `m=0` and nonzero profiles use the
-same kinematic ordered-mass observable; Parratt and composite specular outputs are not mixed into
-this fit.
+nonzero-`m` radial families are required to distinguish `Ur` from a common intensity scale. Within
+one call, every admitted `m=0` and nonzero observation must use the same declared kinematic measure:
+either finite-ROI mass or source-averaged selected-center angular signal density. Parratt, composite
+specular, and mixed-measure observations are rejected.
 
 Every response carries a derived digest of its immutable roots, coefficients, `Qr/Qz`, detector
 weights, wavelength, profile identities, and source/material/geometry revisions. Its structure and
 physical mosaic compatibility revisions are checked across the simultaneous series. Observations
-are immutable `(dataset_id, observable_revision, mass)` records and are joined by exact dataset ID;
-the observable revision hashes profile identities, angle-frame layout, finite ROI boundaries, bin
-count, and frozen topology exclusions but intentionally excludes quadrature order. Thus a refined
-truth/data evaluation and a cheaper converged prediction may share one declared observable while
-retaining different numerical response digests. Tuple position is never an authority. Profile
+are immutable dataset-ID-bound records with exactly one declared measure. ROI-mass observable
+revisions hash profile identities, angle-frame layout, finite ROI boundaries, bin count, and frozen
+topology exclusions but intentionally exclude quadrature order. Thus a refined truth/data evaluation
+and a cheaper converged prediction may share one declared observable while retaining different
+numerical response digests. Selected-center records instead hash their frozen center/group layout.
+Tuple position is never an authority. Profile
 rod-catalog revisions must equal the detector's
 configured catalog before response compilation. Different wavelength-specific response digests and
 reach-limited rod catalogs are allowed when the shared structure and mosaic remain compatible.
@@ -230,10 +268,66 @@ not statistical covariance or uncertainty: this phase declares no noise model. O
 flag is reported for every active coordinate and accepted deterministic recoveries require all of
 them to be false.
 
-The current response compiler applies a fixed geometry-only 17-by-17 inverse-root signature probe
+The finite-ROI response compiler applies a fixed geometry-only 17-by-17 inverse-root signature probe
 to every phi bin and freezes a conservative exclusion mask before quadrature. This finite probe is
 not a general topology certificate. Each new material/ROI set must additionally pass an independent
 response-order convergence check; topology-split cubature remains future work.
+
+`compile_source_averaged_ordered_intensity_response(...)` is the distributed-source companion for
+the synthetic fixed-position proof. For each incidence it evaluates one detector function
+
+```text
+D_a(c,r) = sum_s w_s D_a,s(c,r)
+```
+
+before selecting rods, applying a dataset scale, or constructing any residual. It exposes frozen
+selected-center angular signal density in `A^2/rad^2`, not finite-ROI mass. The response therefore
+uses `OrderedIntensityPeakCenterObservations` and measure ID
+`selected_group_angular_signal_density_A2_per_rad2.v1`; ROI-mass observations cannot be mixed into
+the same fit. Nonzero centers are frozen nominal integer-L markers, whereas admitted `m=0` centers
+are frozen observed coordinates, so the common term is selected center rather than nominal peak.
+
+At 13 canonical Chebyshev-Lobatto `Uz` nodes, six occupancy probes are evaluated through the full
+source-averaged, all-root detector. Their homogeneous occupancy quadratic is exact. `Qr^2` is exact
+and constant within each accepted symmetry group; the noncommuting source/root variation in `Qz`
+is retained by the full detector evaluations before interpolation. Every compiled response must
+pass 12 interlaced full-detector validation nodes at maximum occupancy-contracted signal error
+`2e-3` or fail. At each profile and validation node the exact and interpolated homogeneous
+occupancy quadratics are converted to symmetric three-site matrices `Q` and `Qhat`. A profile-local
+generalized-eigenvalue bound covers every real occupancy direction `o` (and therefore every allowed
+nonnegative direction): `|o.T@(Qhat-Q)@o| <= rho*(o.T@Q@o + 1e-12*S_p*||o||^2)`, where `S_p` is
+the largest direct spectral norm across that profile's validation nodes. No scale is pooled across
+profiles; the additive term explicitly governs exactly extinct or numerically rank-deficient modes.
+The response compiler contract revision is
+`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Recovery schema v3 stores
+that revision and the `1e-12` floor, and rendering rejects an older or missing contract before any
+detector evaluation.
+Its digest binds the source count/revision, instrument, material, mosaic, rods, selected centers,
+all-root policy, interpolation certificate, backend, and device. A joint caller may require an
+exact source count and realization; the tracked proof requires the same 250-state realization for
+all three views. This is an accelerator for synthetic selected-component recovery, not a raw-OSC
+intensity extractor.
+
+The unfiltered synthetic mode retains every weak or baseline-extinct nonzero geometry anchor and
+all six admitted branchless `m=0` anchors. When a measured-mosaic handoff is supplied, its exact
+fit-eligible identity set is authoritative, so its weak/secondary-lobe exclusions propagate into
+the synthetic selected-center structure-factor recovery. There is no per-source scale or residual:
+selected-group rod restriction is linear, and all retained source/root contributions are summed
+before the one dataset-scale projection and joint three-incidence residual.
+
+The measured-mosaic handoff uses schema `rasim-bi2se3-real-mosaic-fit-v2` and support-gate revision
+`positive-combined-detector-m0-profile-signal.v2`. Every candidate selection record carries its
+combined-source modeled signal and Boolean support decision. Ordered-intensity consumers reject
+the earlier schema or a missing/mismatched gate revision. They also reconstruct the support
+decision from an integral `family_m` and a finite, nonnegative signal, rejecting inconsistent
+records instead of trusting serialized Boolean state. The v2 gate includes raw-significant
+nominally unsupported `m=0` observations as provisional candidates, and consumers require every
+fit-eligible identity and dataset to be present in the compiled response.
+
+Before compiling an admitted `m=0` anchor, the tracked runner evaluates its baseline structure
+through the complete source-averaged selected-group detector and requires positive finite modeled
+support. Raw significance remains the upstream observation gate; this forward check prevents a
+nominal one-state landmark alone from establishing intensity support.
 
 ### Configured simulation
 
@@ -262,6 +356,10 @@ response-order convergence check; topology-split cubature remains future work.
   `integrate_detector_macrobins` generate optional display data without becoming model authority.
   Macrobin integration consumes only the completed total coordinate density; its result has no
   per-rod pixel axis.
+- `sample_detector_pixel_center_density(...)` samples the completed all-source, all-rod, all-root
+  detector function once at each native pixel center and returns
+  `raw_detector_coordinate_density_A2_per_px2.v1`. It is display-only point sampling, not
+  `raw_detector_pixel_mass_A2.v1`, a box/macrobin integral, count calibration, or raw OSC counts.
 
 ## Measured selection and indexing
 
@@ -289,7 +387,7 @@ intensity centroids.
 
 All tags use exactly one deterministic incident companion state with source-center origin, zero
 divergence, and mean wavelength (`nominal_source_center.zero_divergence.mean_wavelength.v1`). The
-Monte Carlo source index is not part of tag identity, so a 1,000-state detector field still has
+Monte Carlo source index is not part of tag identity, so an N-state detector field still has
 one tag per visible user-facing `(m,L,tag_branch)`. The companion state traverses the same
 incident transport, Ewald, exit-refraction, and detector-intersection code, but is not inserted as
 an artificial finite-mass delta into the empirical Gaussian source sum.

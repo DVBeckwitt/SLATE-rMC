@@ -789,9 +789,10 @@ and per-image corrections stay fixed. The pivot-pitch/pivot-yaw/plane-offset com
 weakest direction for the measured three-angle design, so a fourth incidence is recommended for an
 independent validation and parameter-level pivot uncertainties must be reported honestly.
 
-## Deterministic three-incidence mosaic recovery
+## Historical one-state deterministic mosaic recovery
 
-The T12 slice fixes accepted nine-coordinate geometry manifest
+This retained synthetic proof predates the required 250-state source reduction and is not the active
+real-OSC estimate or rendering source. It fixes accepted nine-coordinate geometry manifest
 `1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`, detector center
 `(column,row)=(1453.12,1596.422) px`, lattice, material, and one source-center ray at
 `1.540592925 A` with zero spatial spread, divergence, and bandwidth. Synthetic truth is Gaussian
@@ -805,12 +806,14 @@ independent analytically profiled nonnegative amplitude. Deterministic planted a
 relative-shape objective unchanged. Absolute peak heights, structure-factor amplitudes, and
 cross-reflection intensity ratios therefore do not weight the shared mosaic parameters.
 
-Raw OSC evidence also contains significant `003` at 10 and 15 degrees. The fixed top-exit forward
-model classifies both minimum-tilt landmarks as `BACKWARD`, and direct 6-by-6 truth-mosaic probes at
-their frozen native centroids have 41/41 normalization-valid bins but exactly zero `m=0` signal.
-They are reported as `RAW_SIGNIFICANT_UNSUPPORTED_FORWARD_CHANNEL` and are not silently called
-absent or fitted. Thus the six fitted `m=0` profiles are exhaustive for the current forward model,
-not for every feature in the raw OSC files.
+Raw OSC evidence also contains significant `003` at 10 and 15 degrees. Although the nominal
+minimum-tilt landmarks are `BACKWARD`, both raw centroids remain provisional candidates until the
+complete source-averaged all-root detector is evaluated. Direct 6-by-6 truth-mosaic probes have
+41/41 normalization-valid bins but exactly zero `m=0` signal across the combined source, so the
+combined-source gate records them as `SOURCE_AVERAGED_FORWARD_MODEL_UNSUPPORTED` and excludes them.
+Thus the six fitted `m=0` profiles are exhaustive for the current 250-state forward model, not for
+every feature in the raw OSC files. Candidate `L` enumeration uses the union of the source-state
+kinematic limits; the nominal minimum-tilt status is indexing provenance, not the eligibility gate.
 
 A kernel-certified geometry audit found an oblique alpha-support seam in 43 bins across all 26
 nonzero profiles; two 15-degree `m=1,L=5` bins also cross an exit fold. These are numerical-support
@@ -843,14 +846,12 @@ normalization differs by exactly zero.
 
 Distribution total variation is `0.0008826134` and Wasserstein-1 distance is
 `0.00360309 deg`. Absolute `q50/q90/q99` errors are
-`0.00116582/0.00670307/0.01888996 deg`. Setup, independent truth profiles, response-bank fitting,
-and post-fit component checks took `82.564`, `9.214`, `134.913`, and `1.505 s`;
-skip-image total wall time was `228.543 s` and traced Python/NumPy peak memory was
-`122,905,229` bytes. CUDA profile evaluation used an NVIDIA GeForce RTX 3060. The accepted
+`0.00116582/0.00670307/0.01888996 deg`. The final-byte proof run's setup, independent truth
+profiles, response-bank fitting, and post-fit component checks took `84.214`, `9.073`, `150.204`,
+and `1.381 s`; skip-image total wall time was `245.231 s` and traced Python/NumPy peak memory was
+`126,121,913` bytes. CUDA profile evaluation used an NVIDIA GeForce RTX 3060. The accepted
 numeric artifact is external under
 `C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\mosaic_recovery_provenance_final`.
-The only source-byte changes after that successful run were Ruff formatting; subsequent edits were
-to validation and manifest text. No numerical statement or case byte changed after proof import.
 
 The separately generated 3,000 by 3,000 truth images use all 85 rods, every retained inverse root,
 and include `m=0`. They do not use planted nuisance amplitudes and are neither fitted observations
@@ -860,11 +861,216 @@ This proof is `NO_ORACLE` for real-OSC mosaic recovery: it is synthetic self-rec
 denser independent angle-bin rule on the retained smooth support. The fit consumes presegmented,
 indexed continuous profiles; no detector raster enters the objective. Background, detector PSF,
 counting noise, covariance/uncertainty, held-out subsets, additional truth regimes, automatic
-arbitrary-material support-boundary planning, topology-split cubature, and real-OSC profile
-extraction/recovery remain unproven. The material-neutral profile and fitter contracts are reusable;
-the tracked end-to-end runner and its frozen boundary audit remain Bi2Se3-specific.
+arbitrary-material support-boundary planning, and topology-split cubature remain unproven. The
+material-neutral profile and fitter contracts are reusable; the tracked end-to-end runner and its
+frozen boundary audit remain Bi2Se3-specific. The measured-data slice below exercises real-OSC
+profile extraction, but remains a model-limited estimate rather than an independent truth oracle.
 
-## Fixed-position three-incidence ordered-intensity recovery
+## Model-limited three-OSC Bi2Se3 mosaic estimate
+
+The measured-data run fixes the same nine-coordinate geometry manifest
+`1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`, immutable case SHA-256
+`2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295`, detector center
+`(column,row)=(1453.12,1596.422) px`, lattice, and material. Each incidence uses the same
+deterministic 250-row source realization, revision
+`42e8108b3ba9c66cb7752bc7e9d2f9fdb8401987a8f9a0eb272d3f4edeaa39a7`, with spatial sigma
+`2.12330450072e-5 m`, divergence sigma `3.705865455998e-4 rad`, mean wavelength
+`1.540592925 A`, and wavelength sigma `0.010784150475 A`. All 250 state intensities are reduced to
+one detector function per incidence before any profile comparison. A separate one-row source-center,
+zero-divergence, mean-wavelength companion defines geometry landmarks only and contributes no
+detector intensity. No geometry coordinate, beam-center coordinate, lattice constant, or structural
+absolute-intensity parameter is optimized; one nonnegative nuisance amplitude is analytically
+profiled per retained profile. The three detector-native observations are decoded from
+`Bi2Se3_5m_5d.osc.gz`, `Bi2Se3_10d_5m.osc.gz`, and `Bi2Se3_15d_5m.osc.gz`, whose compressed
+SHA-256 values are respectively
+`cba9d38d9cae1e8e3be3c2ad58ad130e04ce1958f0d2d986a947ab3a90818e36`,
+`faaa8f77785ddcd51c741d3b53c3ab7694fb8dacb961cd414d20daa5c21ccd67`, and
+`6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1`.
+
+The frozen measured-profile policy has SHA-256
+`c85286056aab0858bc70fd5236504e193d05cbf0b30cad87ed69160a82b7c027`. It excludes an entire
+profile when its central excess energy divided by local sideband scatter is below `5.0`; it never
+trims individual bins. Both 10-degree `m=1,L=4` sides are also excluded as the user-authorized
+secondary-lobe pair. Every branchless `m=0` candidate must first have positive finite signal in its
+complete 250-state source-averaged simulated profile; the selection audit records that modeled
+support. Of 34 indexed candidates, the joint fit retains these 15 profiles:
+
+The regenerated handoff uses mosaic schema `rasim-bi2se3-real-mosaic-fit-v2` and modeled-support
+gate revision `positive-combined-detector-m0-profile-signal.v2`; the ordered-intensity runner
+rejects older artifacts before compiling a response.
+
+- 5 degrees: `m=0` orders `003` and `006`;
+- 10 degrees: `m=0` order `006`, plus both sides of `m=1,L=5` and `m=1,L=10`;
+- 15 degrees: `m=0` orders `006` and `009`, plus both sides of `m=1,L=5`, `m=1,L=10`, and
+  `m=1,L=11`.
+
+All 5-degree nonzero-`m` candidates, 10-degree `m=0,009`, both 10-degree `m=1,L=8` sides, and
+both 15-degree `m=1,L=8` sides are weak under that frozen rule and are excluded. Raw-significant
+`003` at 10 and 15 degrees remains provisional despite its backward nominal minimum-tilt landmark,
+then is excluded because its complete 250-state combined-source profile signal is zero. It is
+neither called absent nor fitted. Every retained profile owns
+an independent nonnegative profiled amplitude, and each normalized profile contributes equally.
+Consequently absolute intensity, structure-factor uncertainty, and cross-reflection intensity ratios
+do not weight the shared mosaic result.
+
+The recovered common effective radial distribution is
+
+```text
+Gaussian sigma            = 1.322875656 deg
+Gaussian FWHM             = 3.115134111 deg
+Lorentzian HWHM           = 0.489897949 deg
+Lorentzian FWHM           = 0.979795897 deg
+Lorentzian probability    = 0.448096163
+```
+
+This is an axisymmetric probability mixture, not a Voigt convolution. The objective is
+`1.680259188`; all 15 fitted amplitudes are positive. Relative-profile residual RMS is `0.334690`
+overall, `0.163634` for the five `m=0` profiles, and `0.393240` for the ten nonzero-`m` profiles.
+The nuisance-projected sensitivity has rank 3 and condition `10.7987`. Replacing the primary
+constant signed-detrending basis with an affine basis changes Gaussian sigma by `-0.0361416 deg`,
+Lorentzian HWHM by `-0.0686663 deg`, and Lorentzian probability by `-0.0766298`.
+
+The result is explicitly `MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE` and legacy
+classification `NO_ORACLE`. Both strong 15-degree `m=1,L=5` profiles remain poorly reproduced
+(relative residuals at least `0.65`), and signed detrending makes eight reconstructed bins negative,
+with a minimum of `-40.7514 counts/px`; that additive basis is not a physical background model.
+Without a calibrated source/detector point-spread function, this envelope is not uniquely intrinsic
+sample mosaic. The deterministic background sensitivity is not a statistical confidence interval.
+
+The current gate-v2 CUDA run took `344.952 s` total: `56.379 s` setup, `40.524 s` OSC projection
+and model layout, `178.265 s` component-bank construction and constant-background fit, and
+`68.937 s` for the affine-background robustness fit. Traced Python/NumPy peak memory was
+`206,667,033` bytes. Its JSON SHA-256 is
+`69c782f67216ea595b72abced82a9660833d1acbee7b38ffaedb2de7d81df829`; the diagnostic NPZ SHA-256
+is `e41245290268ab9c57fa891a3631ef401e6181282f8c2c672f3a2a6779857858`. The current external
+artifacts are
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_mosaic_gate_v2\bi2se3_real_mosaic_fit.json`
+and
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_mosaic_gate_v2\bi2se3_real_mosaic_fit.ra_diag.npz`.
+The retired gate-v1 JSON SHA-256
+`a5e80ca4842c068f5779d19481cf489b4871a45281c0650977376ea4d9b1f7d8` is historical numerical
+evidence only; current consumers reject its 32-candidate catalog. No independently denser
+source-support or higher-order response convergence audit was completed, so the estimate remains
+explicitly model-limited.
+
+## 250-state fixed-position full-catalog synthetic ordered-intensity recovery
+
+The full-catalog T13 proof freezes the accepted nine-coordinate geometry, detector center, lattice,
+52-layer 2H stacking law, both Bi2Se3 Wyckoff coordinates, and the model-limited 250-state mosaic
+estimate `(sigma_G, HWHM_L, eta)=(1.3228756555 deg, 0.4898979486 deg, 0.4480961630)`. Each of the
+5/10/15-degree views uses the same source revision and 250-state specification as the measured
+mosaic fit. The compiled observable is one source/root-reduced detector function per incidence;
+full detector evaluations occur only while compiling, generating independent truth, and certifying
+the compact response. Optimizer candidates use that combined response before any image scale,
+normalization, or residual. The three incidence blocks are then fitted together. No per-source fit
+coordinate exists.
+
+Only `oBi`, `oSe1`, `oSe2`, `Ur`, and `Uz` are active; atom positions, geometry, mosaic, lattice,
+optics, and stacking remain fixed. Synthetic observations are selected-group peak-center angular
+signal densities in `A^2/rad^2`, not finite-ROI masses or unresolved raw OSC intensities. The frozen
+unfiltered catalogs retain all `88/78/72 = 238` geometry-admitted centers: `86/76/70` nonzero-`m` centers plus
+`{003,006}`, `{006,009}`, and `{006,009}`. Weak nonzero centers are not pruned, and all six admitted
+`m=0` centers enter the same joint fit. Each admitted `m=0` center additionally has positive finite
+baseline support when evaluated through the complete 250-state selected-group detector; the nominal
+one-state geometry companion is not accepted as intensity evidence by itself.
+
+Six occupancy probes through each selected-group view of the full source/root detector at 13
+Chebyshev-Lobatto `Uz` nodes compile the occupancy quadratic after source averaging; exact group
+`Qr^2` damping is applied separately. Twelve
+interlaced full-detector nodes certify the noncommuting source/root `Qz` response over every
+occupancy direction through a profile-local generalized-eigenvalue bound with a declared `1e-12`
+extinct-mode floor; no scale is shared across profiles. The maximum occupancy-signal certificate is
+`2.084780066e-10`, and a fresh authoritative combined-detector truth
+prediction agreed with the compact response to `8.976202640e-15` maximum relative error.
+The ordered result uses schema `rasim-bi2se3-ordered-intensity-recovery-v3` and compiler contract
+`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`; the renderer rejects the
+older coefficient-norm certificate contract.
+
+For the final native-center images, an exact fitted 10-degree 250-state/85-rod/all-root 96-by-96
+block benchmark took `1.17849 s` on CPU and `0.499570 s` on the NVIDIA GeForce RTX 3060 (`2.36x`).
+CPU/CUDA scale-normalized disagreement was `1.235e-13`, and validity/caustic masks were identical.
+The fit response therefore remains CPU-compiled while rendering uses CUDA; both backends and devices
+are recorded independently in the image manifest.
+
+Both fits start away from the planted values. Absolute-calibration recovery was:
+
+```text
+parameter  truth        recovered    absolute error
+oBi        0.940000000  0.940000000  1.110223025e-16
+oSe1       0.780000000  0.780000000  0
+oSe2       0.860000000  0.860000000  1.110223025e-16
+Ur A^2     0.007000000  0.007000000  2.081668171e-17
+Uz A^2     0.034000000  0.034000000  5.551115123e-17
+```
+
+Absolute sensitivity has rank 5, condition `9.42209`, and no active bound; the maximum relative
+peak residual is `8.22e-15`. With one independent scale per image, the common occupancy multiplier
+is an exact gauge. Fixing `oBi=1` recovers `oSe1/oBi=0.8297872340`,
+`oSe2/oBi=0.9148936170`, `Ur=0.007 A^2`, and `Uz=0.034 A^2` to at most `1.11e-16` absolute error.
+Relative sensitivity has rank 4, condition `4.12232`, and no active bound. The truth densities span
+`8.851768476e-7` to `3.897497069 A^2/rad^2`, a dynamic range of `4.403071634e6`; every anchor is
+retained irrespective of intensity.
+
+The three compact responses contain `6864/6084/5616` coefficients. Compilation took `466.816 s`;
+a fresh equivalent full-detector truth prediction took `14.3893 s`, versus `0.0008786 s` for the
+cached response (`16377.5x`). The two joint solves took `0.0363 s` and `0.0382 s`; total proof wall
+time was `598.787 s`, and traced peak memory was `78,770,131` bytes. The historical full-catalog
+JSON SHA-256 is
+`a44bfabf7ff943b00a51155c71d2f4c1e7e918e0b1ba10794c7f5a68a554f67b`; it is external at
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_sf_final\ordered_intensity_result.json`.
+
+That archived ordered result predates exact measured-selection propagation and is not a current
+`--mosaic-result` handoff proof. With a gate-v2 measured mosaic, the runner instead compiles the
+exact `2/5/8 = 15` upstream fit-eligible identities, including five `m=0` profiles; unknown datasets,
+missing identities, and stale gate-v1 artifacts fail before response compilation.
+
+The current measured-selection handoff compiled `156/390/624` response coefficients in
+`171.912 s`. Its 13-node response passed the 12 interlaced-node certificate at
+`1.19096e-11` maximum relative error and agreed with a fresh direct combined-detector prediction
+to `8.09542e-16`. Fresh and cached truth predictions took `3.83954 s` and `0.0007503 s`
+(`5117.35x`). Absolute recovery had rank 5, condition `31.1434`, maximum peak residual
+`1.9984e-15`, and maximum parameter error `1.22e-15`; relative recovery had rank 4, condition
+`12.8583`, maximum peak residual `1.1102e-15`, and maximum parameter error `1.17e-16`. No
+parameter contacted a bound. Total wall time was `249.477 s`, with traced peak memory
+`62,674,047` bytes. The result binds upstream mosaic SHA-256
+`69c782f67216ea595b72abced82a9660833d1acbee7b38ffaedb2de7d81df829`; its own SHA-256 is
+`432a402bf675c0411c399fd7f0327175be36b54576a611dfc431cdaef5a048ea`, external at
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_sf_gate_v2\ordered_intensity_result.json`.
+
+The post-fit display-only render then sampled the three complete source-averaged detector functions
+at native pixel centers. It did not rasterize or integrate pixels during either fit. The 5/10/15
+degree images evaluated `4,577,845/4,377,290/4,170,019` top-exit coordinates, respectively, with
+all 250 valid source states, all 85 rods, all retained roots, and `m=0`. CUDA rendering on the RTX
+3060 took `3839.456 s`; the CPU-compiled fit-response backend and CUDA render backend are both
+recorded per incidence. The manifest binds mosaic JSON
+`a5e80ca4842c068f5779d19481cf489b4871a45281c0650977376ea4d9b1f7d8` and ordered JSON
+`a44bfabf7ff943b00a51155c71d2f4c1e7e918e0b1ba10794c7f5a68a554f67b`, and hashes every emitted
+PNG. The combined-panel SHA-256 is
+`d5d3639cd154576d0df3ea827f1bca510d02913488eca95a7017bf193baf254f`; the image manifest is
+external at
+`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_images_final\bi2se3_250ki_images.json`.
+
+Visual inspection confirms coherent, correctly oriented image files but also substantial model
+discrepancy: the source-averaged forward images contain broad ring/tail intensity not comparably
+visible in the raw OSC panels. Raw counts and simulation density use separate shared log transforms,
+so this is not a count-calibrated residual. It reinforces the declared `NO_ORACLE` status for raw-OSC
+structure recovery; the exact synthetic SF self-recovery must not be described as a raw-intensity fit.
+
+An earlier finite-ROI attempt was rejected before this point-density design: source-dependent
+root/fold topology changed across the 250 states, narrow finite-stack profiles made quadrature
+oscillatory, and central integer-`L` `Qz` damping did not commute with the source/root sum. Its first
+divergences included `0.6599` relative q12/q16 disagreement and `0.02726` central-`Q` error. Those
+results are not rendered or reported as accepted evidence.
+
+This is a synthetic fixed-position identifiability and acceleration proof. Raw OSC ordered-intensity
+recovery remains `NO_ORACLE`: background, component deblending, count calibration, detector PSF,
+model discrepancy, statistical uncertainty, atom motion, arbitrary per-site `Uij`, and a
+material-neutral structure basis remain unproven.
+
+### Superseded one-state finite-ROI proof
+
+The following is retained only as historical evidence for the older selected-group ROI-mass path;
+it is not the active 250-state result and must not be used for the current images or conclusions.
 
 The first T13 slice freezes the accepted unconstrained nine-coordinate geometry (including its
 detector-tilt corrections), detector center, lattice, one ideal source-center ray, the recovered

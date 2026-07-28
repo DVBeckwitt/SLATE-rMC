@@ -10,9 +10,10 @@ APIs have been removed and must not be recreated from historical task text.
 T08 is complete under the position-free measured-selection contract recorded in
 `tasks/08_selection_indexing.md`. T18 is the accepted detector-native, multi-incidence geometry fit;
 it implements the sample/goniometer part of the staged roadmap, fits the two identifiable detector
-tilts, and keeps detector center, distance, and pitch calibration-owned and fixed. T12 is revised
-and active only for the deterministic full-set response-folded mosaic slice described in its task
-file. T09--T11 and T13--T15 remain design notes rather than executable assignments. The broader
-mosaic qualification matrix also remains proposed. Each future stage requires a fresh plan against
-the current continuous contracts and must use physical rods, analytic Ewald roots, callable
-detector-coordinate density, and explicitly declared detector integration measures.
+tilts, and keeps detector center, distance, and pitch calibration-owned and fixed. T12 contains the
+250-state model-limited real-OSC mosaic slice. T13 contains the fixed-position 250-state synthetic
+selected-center occupancy and directional Debye-Waller recovery slice; raw-OSC ordered-intensity
+recovery remains unclaimed. T09--T11 and T14--T15 remain design notes rather than executable
+assignments. The broader mosaic qualification matrix also remains proposed. Each future stage
+requires a fresh plan against the current continuous contracts and must use physical rods, analytic
+Ewald roots, callable detector-coordinate density, and explicitly declared observation measures.

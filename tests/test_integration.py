@@ -16,6 +16,7 @@ from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import ContinuousDetectorGeometryModel, GeometryCorrections
 from rasim_next.geometry import (
     AngleFrame,
+    CompiledInstrument,
     InstrumentConfiguration,
     angles_to_detector_coordinate_area_measure,
     build_incident_states,
@@ -28,11 +29,15 @@ from rasim_next.measurement import (
     AngleBinGrid,
     ContinuousNormalizedAngleFunction,
     compile_detector_angle_projector,
+    compile_detector_profile_projector,
+    project_detector_profiles,
     project_normalized_angle_field,
     to_increasing_phi,
 )
 from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
+    build_nominal_ewald_context,
+    evaluate_nominal_integer_l_markers,
     load_simulation_config,
 )
 from rasim_next.pipeline.source_averaged_detector import (
@@ -54,6 +59,45 @@ def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> o
             instrument=replace(config.instrument, axis_rotations=rotations),
         )
     )
+
+
+def test_bi2te3_compiled_detector_uses_te_factors() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2te3_simulation.yaml")
+    inputs = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=1))
+    )
+    context = build_nominal_ewald_context(inputs)
+    markers = evaluate_nominal_integer_l_markers(context)
+    selected = int(
+        np.flatnonzero((markers.family_m == 1) & (markers.branch == 2) & (markers.root_sign != 0))[
+            0
+        ]
+    )
+    rods = tuple(rod for rod in inputs.rods if rod.family_m == 1)
+    column = np.asarray([markers.column_px[selected]])
+    row = np.asarray([markers.row_px[selected]])
+
+    direct = context.geometry.evaluate_detector_coordinates(
+        column,
+        row,
+        rods=rods,
+    )
+    compiled, count, caustic = context.geometry._evaluate_compiled_coordinates_for_proof(
+        column,
+        row,
+        rods=rods,
+        branch=2,
+    )
+
+    np.testing.assert_allclose(
+        compiled,
+        direct.per_rod_density_A2_per_px2,
+        rtol=3.0e-12,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(count, direct.per_rod_inverse_branch_count)
+    np.testing.assert_array_equal(caustic, direct.caustic)
 
 
 def _intrinsic_detector_tilt(
@@ -977,6 +1021,192 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
             rtol=0.0,
             atol=4.0e-15,
         )
+
+
+def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_parity() -> None:
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    reference = scalar_detectors[0]
+    mapped = reference.map_latent(
+        rod=averaged.rods[1],
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    column_px = np.asarray([float(mapped.geometry.column_px)])
+    row_px = np.asarray([float(mapped.geometry.row_px)])
+
+    changed_mosaic = replace(
+        reference.coating.bragg_space.config.mosaic,
+        gaussian_sigma_rad=math.radians(2.5),
+        lorentzian_half_width_rad=math.radians(0.4),
+        lorentzian_probability=0.27,
+    )
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(
+        reference.coating.bragg_space.strength_model.crystal
+    )
+    changed_strength = replace(
+        reference.coating.bragg_space.strength_model,
+        structure_parameters=replace(
+            baseline,
+            bi_occupancy=0.91,
+            se1_occupancy=0.79,
+            se2_occupancy=0.84,
+            u_radial_A2=0.008,
+            u_normal_A2=0.031,
+        ),
+    )
+    geometry_rebound = averaged.rebind_geometry(
+        incident=averaged.incident,
+        instrument=averaged.instrument,
+    )
+    original_states = averaged.incident.states
+    changed_states = object.__new__(type(original_states))
+    for name in original_states.__slots__:
+        object.__setattr__(changed_states, name, getattr(original_states, name))
+    object.__setattr__(changed_states, "incident_model_id", "different-incident-transport.v1")
+    changed_transport = replace(averaged.incident, states=changed_states)
+    with pytest.raises(ValueError, match="transport identity"):
+        averaged.rebind_geometry(
+            incident=changed_transport,
+            instrument=averaged.instrument,
+        )
+    rebound = geometry_rebound.rebind_physics(
+        mosaic=changed_mosaic,
+        strength_model=changed_strength,
+    )
+    fresh = SourceAveragedDetectorEwaldMeasure(
+        reciprocal_basis_Ainv=reference.coating.bragg_space.config.reciprocal_basis_Ainv,
+        crystal_to_sample=averaged.instrument.sample_from_crystal.rotation,
+        rods=averaged.rods,
+        rod_catalog_revision=averaged.rod_catalog_revision,
+        mosaic=changed_mosaic,
+        strength_model=changed_strength,
+        incident=averaged.incident,
+        material=averaged.material,
+        instrument=averaged.instrument,
+        worker_count=2,
+    )
+
+    rebound_value = rebound.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    fresh_value = fresh.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        rebound_value.per_rod_density_A2_per_px2,
+        fresh_value.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(rebound_value.caustic, fresh_value.caustic)
+    restricted = rebound.restrict_rods((rebound.rods[1],))
+    restricted_value = restricted.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        restricted_value.per_rod_density_A2_per_px2[:, 0],
+        rebound_value.per_rod_density_A2_per_px2[:, 1],
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(restricted_value.caustic[:, 0], rebound_value.caustic[:, 1])
+    assert restricted.incident is rebound.incident
+    assert restricted.instrument is rebound.instrument
+    assert rebound.incident is averaged.incident
+    assert rebound.instrument is averaged.instrument
+    assert rebound.material is averaged.material
+
+
+def test_pixel_center_sampling_conservatively_prunes_impossible_top_exit_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rasim_next.pipeline.configured_simulation as configured_simulation_module
+    from rasim_next.pipeline.configured_simulation import sample_detector_pixel_center_density
+    from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+
+    averaged, _ = _two_state_source_averaged_detector_fixture(detector_shape_rc=(3, 4))
+    tiny = averaged.restrict_rods((averaged.rods[0],))
+    monkeypatch.setattr(configured_simulation_module, "_MAXIMUM_MACROBIN_COORDINATES_PER_CALL", 4)
+
+    def with_instrument(instrument: CompiledInstrument) -> SourceAveragedDetectorEwaldMeasure:
+        return SourceAveragedDetectorEwaldMeasure(
+            reciprocal_basis_Ainv=tiny.strength_model.reciprocal_basis_Ainv,
+            crystal_to_sample=instrument.sample_from_crystal.rotation,
+            rods=tiny.rods,
+            rod_catalog_revision=tiny.rod_catalog_revision,
+            mosaic=tiny.mosaic,
+            strength_model=tiny.strength_model,
+            incident=tiny.incident,
+            material=tiny.material,
+            instrument=instrument,
+            worker_count=2,
+        )
+
+    base = replace(tiny.instrument, detector_row_pitch_m=1.0e-3)
+    normal_lab = base.sample_from_lab.rotation[2]
+    detector_rotation = base.lab_from_detector.rotation
+    column_step_lab = detector_rotation[:, 0] * base.detector_column_pitch_m
+    row_step_lab = detector_rotation[:, 1] * base.detector_row_pitch_m
+    reference_column, reference_row = base.detector_reference_coordinate_px
+    detector_zero_lab = (
+        base.lab_from_detector.translation_m
+        - reference_column * column_step_lab
+        - reference_row * row_step_lab
+    )
+    minimum_origin_normal = float(
+        np.min(
+            tiny.incident.states.sample_intersection_lab_m[tiny.incident.states.valid] @ normal_lab
+        )
+    )
+    row_step_normal = float(row_step_lab @ normal_lab)
+    reference_shift = (
+        float((detector_zero_lab + row_step_lab) @ normal_lab) - minimum_origin_normal
+    ) / row_step_normal
+    partial_instrument = replace(
+        base,
+        detector_reference_coordinate_px=(reference_column, reference_row + reference_shift),
+    )
+    partial = with_instrument(partial_instrument)
+    column_grid, row_grid = np.meshgrid(np.arange(4.0), np.arange(3.0))
+    direct = partial.evaluate_detector_density_all_roots(column_grid, row_grid)
+    sampled = sample_detector_pixel_center_density(partial, execution_backend="cpu")
+
+    assert sampled.coordinate_evaluation_count == 8
+    np.testing.assert_array_equal(sampled.image_A2_per_px2, direct.density_A2_per_px2)
+    np.testing.assert_array_equal(sampled.valid_source_count, direct.valid_source_count)
+    np.testing.assert_array_equal(sampled.valid_source_count[0], 2)
+    assert np.all(sampled.image_A2_per_px2[0] > 0.0)
+
+    partial_reference_column, partial_reference_row = (
+        partial_instrument.detector_reference_coordinate_px
+    )
+    partial_zero_lab = (
+        partial_instrument.lab_from_detector.translation_m
+        - partial_reference_column * column_step_lab
+        - partial_reference_row * row_step_lab
+    )
+    point_normal = (
+        partial_zero_lab @ normal_lab
+        + column_grid * (column_step_lab @ normal_lab)
+        + row_grid * row_step_normal
+    )
+    target_maximum = minimum_origin_normal - 1.0e-6
+    all_culled_shift = (float(np.max(point_normal)) - target_maximum) / row_step_normal
+    all_culled_instrument = replace(
+        partial_instrument,
+        detector_reference_coordinate_px=(
+            partial_reference_column,
+            partial_reference_row + all_culled_shift,
+        ),
+    )
+    all_culled = with_instrument(all_culled_instrument)
+    direct_zero = all_culled.evaluate_detector_density_all_roots(column_grid, row_grid)
+    sampled_zero = sample_detector_pixel_center_density(all_culled, execution_backend="cpu")
+
+    assert sampled_zero.coordinate_evaluation_count == 0
+    assert sampled_zero.execution_backend == "numba_cpu_source_averaged.v1"
+    assert sampled_zero.execution_device is None
+    np.testing.assert_array_equal(sampled_zero.image_A2_per_px2, direct_zero.density_A2_per_px2)
+    np.testing.assert_array_equal(sampled_zero.valid_source_count, direct_zero.valid_source_count)
+    np.testing.assert_array_equal(sampled_zero.image_A2_per_px2, 0.0)
 
 
 def test_total_detector_density_preserves_partial_valid_source_count() -> None:
@@ -3016,6 +3246,637 @@ def test_sparse_projector_matches_independent_polygon_oracle_across_seam() -> No
         )
         == 4
     )
+
+
+def test_cropped_profile_projector_matches_the_full_exact_polygon_reduction() -> None:
+    instrument = _instrument(shape_rc=(25, 25), reference_cr=(12.0, 12.0))
+    frame = _frame([1.1e-3, -0.7e-3, 0.0])
+    grid = _full_grid(instrument, frame, radial_bins=16)
+    full_projector = compile_detector_angle_projector(
+        instrument=instrument,
+        angle_frame=frame,
+        grid=grid,
+    )
+    signal = np.arange(1.0, 626.0).reshape(25, 25)
+    normalization = 1.0 + (np.arange(625.0).reshape(25, 25) % 4.0)
+    full = to_increasing_phi(
+        project_normalized_angle_field(
+            full_projector,
+            signal,
+            normalization,
+        )
+    )
+    phi_edges = grid.phi_edges_rad[6:10][None, :]
+    theta_bounds = np.asarray(((grid.two_theta_edges_rad[3], grid.two_theta_edges_rad[5]),))
+    profile_mask = np.asarray(((True, True, True),))
+    local_projector = compile_detector_profile_projector(
+        instrument=instrument,
+        angle_frame=frame,
+        two_theta_bounds_rad=theta_bounds,
+        phi_bin_edges_rad=phi_edges,
+        profile_bin_valid_mask=profile_mask,
+    )
+    local = project_detector_profiles(local_projector, signal, normalization)
+    expected_signal = np.sum(full.S[6:9, 3:5], axis=1)[None, :]
+    expected_normalization = np.sum(full.N[6:9, 3:5], axis=1)[None, :]
+    expected_signal[~profile_mask] = 0.0
+    expected_normalization[~profile_mask] = 0.0
+    np.testing.assert_allclose(local.S, expected_signal, rtol=3e-11, atol=3e-13)
+    np.testing.assert_allclose(local.N, expected_normalization, rtol=3e-11, atol=3e-13)
+    np.testing.assert_array_equal(local.valid, profile_mask)
+    np.testing.assert_allclose(
+        local.I[profile_mask],
+        (expected_signal / np.where(expected_normalization > 0.0, expected_normalization, 1.0))[
+            profile_mask
+        ],
+        rtol=3e-11,
+        atol=3e-13,
+    )
+    assert np.all(local_projector.profile_pixel_bounds_cr[:, (0, 2)] >= 0)
+    assert local.projector_cache_key == local_projector.cache_key
+
+    seam_phi_edges = np.asarray(
+        (
+            (
+                grid.phi_edges_rad[14],
+                grid.phi_edges_rad[15],
+                grid.phi_edges_rad[16],
+                grid.phi_edges_rad[1] + 2.0 * np.pi,
+                grid.phi_edges_rad[2] + 2.0 * np.pi,
+            ),
+        )
+    )
+    seam_theta_bounds = np.asarray(((grid.two_theta_edges_rad[1], grid.two_theta_edges_rad[2]),))
+    seam_mask = np.asarray(((True, False, True, True),))
+    seam_projector = compile_detector_profile_projector(
+        instrument=instrument,
+        angle_frame=frame,
+        two_theta_bounds_rad=seam_theta_bounds,
+        phi_bin_edges_rad=seam_phi_edges,
+        profile_bin_valid_mask=seam_mask,
+    )
+    seam = project_detector_profiles(seam_projector, signal, normalization)
+    full_phi_indices = np.asarray((14, 15, 0, 1))
+    seam_expected_signal = full.S[full_phi_indices, 1][None, :]
+    seam_expected_normalization = full.N[full_phi_indices, 1][None, :]
+    seam_expected_signal[~seam_mask] = 0.0
+    seam_expected_normalization[~seam_mask] = 0.0
+    np.testing.assert_allclose(seam.S, seam_expected_signal, rtol=3e-11, atol=3e-13)
+    np.testing.assert_allclose(
+        seam.N,
+        seam_expected_normalization,
+        rtol=3e-11,
+        atol=3e-13,
+    )
+    np.testing.assert_array_equal(seam.valid, seam_mask)
+
+    broad_grid = AngleBinGrid(
+        two_theta_edges_rad=grid.two_theta_edges_rad,
+        chi_raw_edges_rad=np.linspace(-np.pi, np.pi, 65),
+        revision="integration-broad-phi-grid.v1",
+    )
+    broad_full = to_increasing_phi(
+        project_normalized_angle_field(
+            compile_detector_angle_projector(
+                instrument=instrument,
+                angle_frame=frame,
+                grid=broad_grid,
+            ),
+            signal,
+            normalization,
+        )
+    )
+    broad_phi_edges = broad_grid.phi_edges_rad[1:][None, :]
+    broad_mask = np.ones((1, broad_phi_edges.shape[1] - 1), dtype=np.bool_)
+    broad_projector = compile_detector_profile_projector(
+        instrument=instrument,
+        angle_frame=frame,
+        two_theta_bounds_rad=theta_bounds,
+        phi_bin_edges_rad=broad_phi_edges,
+        profile_bin_valid_mask=broad_mask,
+    )
+    broad = project_detector_profiles(broad_projector, signal, normalization)
+    broad_expected_signal = np.sum(broad_full.S[1:, 3:5], axis=1)[None, :]
+    broad_expected_normalization = np.sum(broad_full.N[1:, 3:5], axis=1)[None, :]
+    np.testing.assert_allclose(broad.S, broad_expected_signal, rtol=3e-11, atol=3e-13)
+    np.testing.assert_allclose(
+        broad.N,
+        broad_expected_normalization,
+        rtol=3e-11,
+        atol=3e-13,
+    )
+
+    invalid_detector_mask = np.array(seam_projector.detector_valid_mask, copy=True)
+    invalid_detector_mask.ravel()[seam_projector.coverage_pixel_index[0]] = False
+    with pytest.raises(ValueError, match="valid mask entries"):
+        replace(seam_projector, detector_valid_mask=invalid_detector_mask)
+
+    with pytest.raises(ValueError, match="less than one azimuth period"):
+        compile_detector_profile_projector(
+            instrument=instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=seam_theta_bounds,
+            phi_bin_edges_rad=np.linspace(-np.pi, np.pi, 4)[None, :],
+        )
+
+    near_edge = detector_coordinates_to_angles(
+        np.asarray([23.0, 24.0]),
+        np.asarray([12.0, 12.0]),
+        instrument=instrument,
+        angle_frame=frame,
+    )
+    edge_phi = float(near_edge.phi_rad[0]) + np.linspace(-0.02, 0.02, 4)
+    with pytest.raises(ValueError, match="physical detector edge"):
+        compile_detector_profile_projector(
+            instrument=instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=np.asarray(
+                ((near_edge.two_theta_rad[0], near_edge.two_theta_rad[1]),)
+            ),
+            phi_bin_edges_rad=edge_phi[None, :],
+        )
+
+
+def test_measured_mosaic_policy_allows_no_secondary_lobes_and_branchless_exclusions(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    runner = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "recover_bi2se3_mosaic.py"
+    )
+    parse_policy = runner["_measured_profile_policy"]
+    case_hash = "a" * 64
+    branchless = SimpleNamespace(
+        identity=SimpleNamespace(
+            dataset_id="material-5deg",
+            analytic_branch_id=0,
+            branch_id=None,
+            group_key=SimpleNamespace(layered_family_m=0, layered_integer_L=6),
+        )
+    )
+    common = (
+        'schema_version = "rasim-measured-mosaic-profile-policy-v1"\n'
+        f'base_case_sha256 = "{case_hash}"\n'
+        "minimum_excess_energy_over_side_scatter = 5.0\n"
+        "sideband_two_theta_offsets_deg = [-0.5, 0.5]\n"
+    )
+    empty_path = tmp_path / "empty-policy.toml"
+    empty_path.write_text(common, encoding="utf-8")
+    empty = parse_policy(empty_path, case_sha256=case_hash, definitions=((branchless,),))
+    assert empty.excluded_profile_keys == frozenset()
+
+    branchless_path = tmp_path / "branchless-policy.toml"
+    branchless_path.write_text(
+        common
+        + "\n[[excluded_profiles]]\n"
+        + 'dataset_id = "material-5deg"\n'
+        + "family_m = 0\n"
+        + "integer_L = 6\n"
+        + "analytic_branch_id = 0\n"
+        + 'reason = "USER_AUTHORIZED_SECONDARY_LOBE"\n',
+        encoding="utf-8",
+    )
+    parsed = parse_policy(
+        branchless_path,
+        case_sha256=case_hash,
+        definitions=((branchless,),),
+    )
+    assert parsed.excluded_profile_keys == frozenset({("material-5deg", 0, 6, 0, None)})
+
+
+def test_mosaic_runner_separates_nominal_geometry_from_one_shared_source_ensemble() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_mosaic.py")
+    case_path = root / "examples" / "bi2se3" / "experiment" / "mosaic_fit_truth.toml"
+    case, _, _ = runner["_case"](case_path)
+
+    base, series, nominal_series = runner["_fixed_geometry_inputs"](
+        case_path,
+        case,
+        source_sample_count=4,
+    )
+
+    assert base.samples.incident_sample_id.size == 4
+    assert base.config.source.sample_count == 4
+    assert all(item.samples is base.samples for item in series)
+    assert all(
+        item.incident.states.source_revision == base.samples.source_revision for item in series
+    )
+    assert all(np.all(item.incident.states.valid) for item in series)
+    assert np.unique(base.samples.origin_lab_m, axis=0).shape[0] == 4
+    assert np.unique(base.samples.direction_lab, axis=0).shape[0] == 4
+    assert np.unique(base.samples.wavelength_A).size == 4
+    assert all(item.samples.incident_sample_id.size == 1 for item in nominal_series)
+    assert all(item.incident.states.valid.tolist() == [True] for item in nominal_series)
+    assert all(
+        float(item.samples.wavelength_A[0]) == base.config.source.mean_wavelength_A
+        for item in nominal_series
+    )
+
+
+def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -> None:
+    from rasim_next.core.contracts import IncidentSampleBatch
+    from rasim_next.fitting import (
+        MosaicProfileDefinition,
+        MosaicProfileIdentity,
+        MosaicReflectionGroupKey,
+    )
+    from rasim_next.selection import build_osc_angle_frame
+
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_mosaic.py")
+    case_path = root / "examples" / "bi2se3" / "experiment" / "mosaic_fit_truth.toml"
+    case, _, _ = runner["_case"](case_path)
+    base, series, nominal_series = runner["_fixed_geometry_inputs"](
+        case_path,
+        case,
+        source_sample_count=2,
+    )
+    physics, geometry = runner["_profile_forward_contexts"](base, (series[0],))
+    nominal_context = build_nominal_ewald_context(nominal_series[0])
+    markers = evaluate_nominal_integer_l_markers(nominal_context)
+    candidates = np.flatnonzero((markers.family_m == 1) & (markers.root_sign != 0))
+    marker_index = int(candidates[np.argmax(markers.family_strength_weight_A2[candidates])])
+    frame = build_osc_angle_frame(
+        mean_direction_lab=nominal_series[0].config.source.mean_direction_lab,
+        instrument=nominal_series[0].instrument,
+        sample_intersection_lab_m=(nominal_context.incident.states.sample_intersection_lab_m[0]),
+        revision="two-state-profile-source-aggregation-proof.v1",
+    )
+    angles = detector_coordinates_to_angles(
+        np.asarray([markers.column_px[marker_index]]),
+        np.asarray([markers.row_px[marker_index]]),
+        instrument=nominal_series[0].instrument,
+        angle_frame=frame,
+    )
+    root_sign = int(markers.root_sign[marker_index])
+    definition = MosaicProfileDefinition(
+        identity=MosaicProfileIdentity(
+            dataset_id="two-state-source-proof",
+            incidence_angle_rad=math.radians(float(case["incidence_angles_deg"][0])),
+            group_key=MosaicReflectionGroupKey(
+                group_id="two-state-source-proof:m=1",
+                rod_catalog_revision=runner["configured_rod_catalog_revision"](series[0]),
+                member_rod_hk=markers.contributing_rod_hk[marker_index],
+                branch_mode="EXPLICIT_NONZERO",
+                layered_family_m=1,
+                layered_integer_L=int(markers.integer_L[marker_index]),
+            ),
+            branch_id=1 if root_sign < 0 else 2,
+            analytic_branch_id=int(markers.branch[marker_index]),
+        ),
+        center_two_theta_rad=float(angles.two_theta_rad[0]),
+        center_phi_rad=float(angles.phi_rad[0]),
+        two_theta_half_width_rad=math.radians(0.02),
+        phi_half_width_rad=math.radians(0.15),
+        phi_bin_count=5,
+        two_theta_gauss_order=2,
+        phi_gauss_order=2,
+    )
+    mosaic = runner["_mosaic_parameters"](
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.1,
+        context=physics,
+    )
+    profile_revision = "two-state-profile-source-aggregation-proof.v1"
+    combined, _ = runner["_evaluate_profile_series"](
+        physics,
+        geometry,
+        (frame,),
+        ((definition,),),
+        mosaic,
+        profile_revision=profile_revision,
+        execution_backend="cpu",
+    )
+
+    explicit_signal = np.zeros_like(combined.signal)
+    for state_index, source_weight in enumerate(base.samples.source_weight):
+        singleton_samples = IncidentSampleBatch(
+            incident_sample_id=base.samples.incident_sample_id[state_index : state_index + 1],
+            origin_lab_m=base.samples.origin_lab_m[state_index : state_index + 1],
+            direction_lab=base.samples.direction_lab[state_index : state_index + 1],
+            wavelength_A=base.samples.wavelength_A[state_index : state_index + 1],
+            source_weight=np.asarray([1.0]),
+            polarization_state_id=(base.samples.polarization_state_id[state_index],),
+            source_sampling_model_id="explicit_external_source.v1",
+            source_rng_model_id="no_rng.v1",
+            source_seed=state_index,
+            source_parameter_provenance=f"profile source oracle row {state_index}",
+        )
+        singleton_incident = build_incident_states(
+            singleton_samples,
+            physics.material,
+            geometry[0].instrument,
+        )
+        singleton_geometry = (
+            runner["_ProfileGeometryContext"](
+                incident=singleton_incident,
+                instrument=geometry[0].instrument,
+            ),
+        )
+        singleton, _ = runner["_evaluate_profile_series"](
+            physics,
+            singleton_geometry,
+            (frame,),
+            ((definition,),),
+            mosaic,
+            profile_revision=profile_revision,
+            execution_backend="cpu",
+        )
+        explicit_signal += float(source_weight) * singleton.signal
+        np.testing.assert_allclose(singleton.normalization, combined.normalization, rtol=0, atol=0)
+        np.testing.assert_array_equal(singleton.valid, combined.valid)
+
+    np.testing.assert_allclose(combined.signal, explicit_signal, rtol=3.0e-11, atol=1.0e-22)
+    nominal_physics = replace(physics, material=nominal_series[0].material)
+    nominal_geometry = (
+        runner["_ProfileGeometryContext"](
+            incident=nominal_series[0].incident,
+            instrument=nominal_series[0].instrument,
+        ),
+    )
+    nominal, _ = runner["_evaluate_profile_series"](
+        nominal_physics,
+        nominal_geometry,
+        (frame,),
+        ((definition,),),
+        mosaic,
+        profile_revision=profile_revision,
+        execution_backend="cpu",
+    )
+    assert np.linalg.norm(combined.signal) > 0.0
+    assert (
+        np.linalg.norm(combined.signal - nominal.signal) / np.linalg.norm(combined.signal) > 1.0e-3
+    )
+
+
+def test_mosaic_runner_passes_nominally_unsupported_m0_to_combined_source_gate() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_mosaic.py")
+    case_path = root / "examples" / "bi2se3" / "experiment" / "mosaic_fit_truth.toml"
+    case, _, _ = runner["_case"](case_path)
+    base, series, nominal_series = runner["_fixed_geometry_inputs"](
+        case_path,
+        case,
+        source_sample_count=2,
+    )
+    shared = {
+        "source_inputs": series[1],
+        "case_path": case_path,
+        "incidence_deg": float(case["incidence_angles_deg"][1]),
+        "osc_observation": case["m0_observations"][1],
+        "nonzero_centroid_provenance": case["nonzero_centroid_provenance"],
+        "centroid_provenance": case["m0_centroid_provenance"],
+        "profile_config": case["profiles"],
+        "rod_catalog_revision": runner["configured_rod_catalog_revision"](base),
+    }
+    _, nominal_only, _, _ = runner["_profile_definitions"](
+        nominal_series[1],
+        include_nominally_unsupported_m0=False,
+        **shared,
+    )
+    _, combined_candidates, _, audit = runner["_profile_definitions"](
+        nominal_series[1],
+        include_nominally_unsupported_m0=True,
+        **shared,
+    )
+
+    def m0_orders(definitions) -> set[int]:
+        return {
+            definition.identity.group_key.layered_integer_L
+            for definition in definitions
+            if definition.identity.group_key.layered_family_m == 0
+        }
+
+    assert m0_orders(nominal_only) == {6, 9}
+    assert m0_orders(combined_candidates) == {3, 6, 9}
+    assert audit["combined_source_gate_candidate_integer_L"] == [6, 9, 3]
+    has_support = runner["source_averaged_profile_has_support"]
+    supported = has_support(family_m=0, profile_signal_A2=1.0)
+    assert type(supported) is bool
+    assert supported
+    assert not has_support(family_m=0, profile_signal_A2=0.0)
+    assert has_support(family_m=1, profile_signal_A2=0.0)
+
+    ordered_runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+    ordered_case, _, _ = ordered_runner["_load_case"](
+        root / "examples" / "bi2se3" / "experiment" / "ordered_intensity_fit_truth.toml"
+    )
+    provisional_key = frozenset({("Bi2Se3-10deg", 0, 3, 0, None)})
+    _, ordered_definitions = ordered_runner["_profile_definitions"](
+        series[1],
+        incidence_deg=float(case["incidence_angles_deg"][1]),
+        m0_observation=case["m0_observations"][1],
+        profile_config=ordered_case["profiles"],
+        two_theta_gauss_order=2,
+        phi_gauss_order=2,
+        eligible_profile_keys=provisional_key,
+    )
+    assert {
+        ordered_runner["_definition_identity_key"](definition) for definition in ordered_definitions
+    } == set(provisional_key)
+    with pytest.raises(ValueError, match="unknown dataset"):
+        ordered_runner["_validate_eligible_profile_dataset_ids"](
+            frozenset({("TYPO", 0, 3, 0, None)}),
+            frozenset({"Bi2Se3-5deg", "Bi2Se3-10deg", "Bi2Se3-15deg"}),
+        )
+
+
+def test_ordered_renderer_validates_gate_v2_measured_profile_catalog() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+    case_path = root / "examples" / "bi2se3" / "experiment" / "ordered_intensity_fit_truth.toml"
+    case, mosaic_case_path, mosaic_case = runner["_load_case"](case_path)
+    mosaic_parameters = {
+        "gaussian_sigma_deg": 1.322875655532295,
+        "lorentzian_hwhm_deg": 0.4898979485566357,
+        "lorentzian_probability": 0.4480961629924146,
+    }
+    series = runner["_fixed_inputs"](
+        mosaic_case_path,
+        mosaic_case,
+        source_sample_count=2,
+        mosaic_parameters=mosaic_parameters,
+    )
+    eligible = frozenset(
+        {
+            ("Bi2Se3-5deg", 0, 3, 0, None),
+            ("Bi2Se3-5deg", 0, 6, 0, None),
+            ("Bi2Se3-10deg", 0, 6, 0, None),
+            ("Bi2Se3-10deg", 1, 5, 2, 1),
+            ("Bi2Se3-10deg", 1, 5, 2, 2),
+            ("Bi2Se3-10deg", 1, 10, 2, 1),
+            ("Bi2Se3-10deg", 1, 10, 2, 2),
+            ("Bi2Se3-15deg", 0, 6, 0, None),
+            ("Bi2Se3-15deg", 0, 9, 0, None),
+            ("Bi2Se3-15deg", 1, 5, 2, 1),
+            ("Bi2Se3-15deg", 1, 5, 2, 2),
+            ("Bi2Se3-15deg", 1, 10, 2, 1),
+            ("Bi2Se3-15deg", 1, 10, 2, 2),
+            ("Bi2Se3-15deg", 1, 11, 2, 1),
+            ("Bi2Se3-15deg", 1, 11, 2, 2),
+        }
+    )
+    catalogs, records = runner["_validated_profile_catalogs"](
+        series,
+        incidence_angles_deg=mosaic_case["incidence_angles_deg"],
+        m0_observations=mosaic_case["m0_observations"],
+        profile_config=case["profiles"],
+        eligible_profile_keys=eligible,
+    )
+
+    assert [(record["total"], record["m0"]) for record in records] == [
+        (2, 2),
+        (5, 1),
+        (8, 2),
+    ]
+    assert [record["profile_catalog_revision"] for record in records] == [
+        "5b7b3fceee0621ce95cfcbac637a0a3e5ca78ea038f4d19bb4611ecd35863e04",
+        "31f8b35c28eb34cfc31ed6f3870a4611c342a122355b976532cd379c02caf6b6",
+        "e78a32d1bc1cb9e107ed9b352a7dbbbe99b8cf3c01c96a2d32aa268bf42cdb26",
+    ]
+    assert {
+        runner["_definition_identity_key"](definition)
+        for _, definitions in catalogs
+        for definition in definitions
+    } == set(eligible)
+    actual = [dict(record, invalid_or_caustic_anchors=0) for record in records]
+    runner["_validate_anchor_catalog_records"](actual, records)
+    actual[0]["total"] = 88
+    with pytest.raises(ValueError, match="frozen anchor catalogs"):
+        runner["_validate_anchor_catalog_records"](actual, records)
+
+
+def test_recovery_runners_reject_pre_combined_source_provenance() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+
+    with pytest.raises(ValueError, match="accepted real-OSC mosaic result"):
+        runner["_validated_mosaic_result"](
+            {
+                "schema_version": "rasim-bi2se3-real-mosaic-fit-v1",
+                "status": "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE",
+            },
+            mosaic_case_path=root / "obsolete.toml",
+            mosaic_case={},
+            source_sample_count=250,
+        )
+
+    validate_ordered = runner["_validate_ordered_result_header"]
+    with pytest.raises(ValueError, match="accepted source-averaged"):
+        validate_ordered(
+            {
+                "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v2",
+                "accepted": True,
+                "positions_frozen": True,
+            }
+        )
+    current = {
+        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v3",
+        "accepted": True,
+        "positions_frozen": True,
+        "response_contract": runner["_response_contract_record"](),
+    }
+    validate_ordered(current)
+    current["response_contract"] = {"revision": "stale"}
+    with pytest.raises(ValueError, match="stale response compiler contract"):
+        validate_ordered(current)
+
+
+def test_ordered_intensity_runner_rejects_malformed_combined_source_support() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+    validate_support = runner["_validate_combined_source_profile_support"]
+
+    def observations(
+        *,
+        family_m: object = 0,
+        modeled_signal: object = 1.0,
+        modeled_support: object = True,
+        fit_eligible: bool = True,
+        gate_revision: str = "positive-combined-detector-m0-profile-signal.v2",
+    ) -> dict[str, object]:
+        return {
+            "candidate_profile_count": 1,
+            "fitted_profile_count": int(fit_eligible),
+            "measured_profile_policy": {
+                "selection_sampler_revision": (
+                    "detector-native-bilinear-profile-centerline-sidebands.v1"
+                ),
+                "source_averaged_modeled_support_gate_revision": gate_revision,
+                "profile_selection": [
+                    {
+                        "dataset_id": "test-dataset",
+                        "family_m": family_m,
+                        "integer_L": 3,
+                        "analytic_branch_id": 0,
+                        "root_side_branch_id": None,
+                        "source_averaged_modeled_signal_A2": modeled_signal,
+                        "source_averaged_modeled_support": modeled_support,
+                        "fit_eligible": fit_eligible,
+                    }
+                ],
+            },
+        }
+
+    eligible_key = ("test-dataset", 0, 3, 0, None)
+    assert validate_support(observations()) == frozenset({eligible_key})
+    assert (
+        validate_support(
+            observations(modeled_signal=0.0, modeled_support=False, fit_eligible=False)
+        )
+        == frozenset()
+    )
+    assert validate_support(observations(family_m=1, modeled_signal=0.0)) == frozenset(
+        {("test-dataset", 1, 3, 0, None)}
+    )
+    with pytest.raises(ValueError, match="current combined-source profile-support gate"):
+        validate_support(
+            observations(gate_revision="positive-combined-detector-m0-profile-signal.v1")
+        )
+    for malformed in (
+        observations(modeled_signal=-1.0),
+        observations(modeled_signal=0.0),
+    ):
+        with pytest.raises(ValueError, match="invalid combined-source support audit"):
+            validate_support(malformed)
+    with pytest.raises(ValueError, match="invalid profile identity"):
+        validate_support(observations(family_m="0"))
+
+    group_type = runner["MosaicReflectionGroupKey"]
+    identity_type = runner["MosaicProfileIdentity"]
+    definition_type = runner["MosaicProfileDefinition"]
+
+    def definition(integer_l: int):
+        return definition_type(
+            identity=identity_type(
+                dataset_id="test-dataset",
+                incidence_angle_rad=math.radians(5.0),
+                group_key=group_type(
+                    group_id=f"test:m=0:L={integer_l}",
+                    rod_catalog_revision="test-rods.v1",
+                    member_rod_hk=((0, 0),),
+                    branch_mode="COLLAPSED_00L",
+                    layered_family_m=0,
+                    layered_integer_L=integer_l,
+                ),
+                branch_id=None,
+                analytic_branch_id=0,
+            ),
+            center_two_theta_rad=0.4,
+            center_phi_rad=0.1,
+            two_theta_half_width_rad=0.01,
+            phi_half_width_rad=0.02,
+            phi_bin_count=5,
+            two_theta_gauss_order=2,
+            phi_gauss_order=2,
+        )
+
+    candidates = (definition(3), definition(6))
+    selected = runner["_filter_profile_definitions"](candidates, frozenset({eligible_key}))
+    assert selected == (candidates[0],)
 
 
 @pytest.mark.parametrize("reference_cr", [(1.0, 1.0), (1.5, 1.0), (1.5, 1.5)])

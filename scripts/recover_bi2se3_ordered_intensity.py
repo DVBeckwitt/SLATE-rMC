@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import tomllib
 import tracemalloc
 from dataclasses import replace
+from numbers import Integral, Real
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -17,31 +19,202 @@ import numpy as np
 
 from painted_ewald import MosaicBraggSpace
 from rasim_next.fitting import (
+    SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
+    SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
+    SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
     MosaicProfileDefinition,
     MosaicProfileIdentity,
     MosaicReflectionGroupKey,
     OrderedIntensityIdentifiabilityError,
-    OrderedIntensityObservations,
+    OrderedIntensityPeakCenterObservations,
     SharedGeometryCorrections,
     apply_shared_geometry_corrections,
-    compile_ordered_intensity_response,
+    compile_source_averaged_ordered_intensity_response,
+    evaluate_source_averaged_ordered_intensity_point_signal,
     fit_ordered_intensity_series,
     ordered_intensity_profile_catalog_revision,
+    ordered_intensity_structure_model_revision,
+    source_averaged_detector_instrument_revision,
+    source_averaged_profile_has_support,
 )
 from rasim_next.geometry import build_incident_states, detector_coordinates_to_angles
+from rasim_next.io.osc import read_osc
 from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredSimulationInputs,
     build_configured_simulation_inputs,
     build_nominal_ewald_context,
+    build_source_averaged_detector,
     configured_rod_catalog_revision,
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
+    sample_detector_pixel_center_density,
 )
 from rasim_next.selection import build_osc_angle_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASE = ROOT / "examples" / "bi2se3" / "experiment" / "ordered_intensity_fit_truth.toml"
+_REQUIRED_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION = (
+    "detector-native-bilinear-profile-centerline-sidebands.v1"
+)
+_ProfileIdentityKey = tuple[str, int, int, int, int | None]
+
+
+def _profile_identity_key(record: dict[str, Any]) -> _ProfileIdentityKey:
+    dataset_id = record.get("dataset_id")
+    values = tuple(
+        record.get(name)
+        for name in ("family_m", "integer_L", "analytic_branch_id", "root_side_branch_id")
+    )
+    if (
+        not isinstance(dataset_id, str)
+        or not dataset_id
+        or any(isinstance(value, bool) for value in values)
+        or not all(isinstance(value, Integral) for value in values[:3])
+        or (values[3] is not None and not isinstance(values[3], Integral))
+    ):
+        raise ValueError("mosaic result contains an invalid profile identity")
+    return (
+        dataset_id,
+        int(values[0]),
+        int(values[1]),
+        int(values[2]),
+        None if values[3] is None else int(values[3]),
+    )
+
+
+def _definition_identity_key(definition: MosaicProfileDefinition) -> _ProfileIdentityKey:
+    identity = definition.identity
+    return (
+        identity.dataset_id,
+        int(identity.group_key.layered_family_m),
+        int(identity.group_key.layered_integer_L),
+        int(identity.analytic_branch_id),
+        None if identity.branch_id is None else int(identity.branch_id),
+    )
+
+
+def _profile_identity_records(keys: frozenset[_ProfileIdentityKey] | None) -> list[dict[str, Any]]:
+    if keys is None:
+        return []
+    ordered = sorted(keys, key=lambda key: (*key[:4], -1 if key[4] is None else key[4]))
+    return [
+        {
+            "dataset_id": key[0],
+            "family_m": key[1],
+            "integer_L": key[2],
+            "analytic_branch_id": key[3],
+            "root_side_branch_id": key[4],
+        }
+        for key in ordered
+    ]
+
+
+def _filter_profile_definitions(
+    definitions: tuple[MosaicProfileDefinition, ...],
+    eligible_keys: frozenset[_ProfileIdentityKey] | None,
+) -> tuple[MosaicProfileDefinition, ...]:
+    if eligible_keys is None:
+        return definitions
+    dataset_ids = {definition.identity.dataset_id for definition in definitions}
+    requested = {key for key in eligible_keys if key[0] in dataset_ids}
+    by_key = {_definition_identity_key(definition): definition for definition in definitions}
+    missing = requested - set(by_key)
+    if missing:
+        raise ValueError(
+            f"mosaic fit-eligible profile is absent from the ordered catalog: {missing}"
+        )
+    return tuple(
+        definition
+        for definition in definitions
+        if _definition_identity_key(definition) in requested
+    )
+
+
+def _validate_eligible_profile_dataset_ids(
+    eligible_keys: frozenset[_ProfileIdentityKey] | None,
+    dataset_ids: frozenset[str],
+) -> None:
+    if eligible_keys is None:
+        return
+    unknown = {key[0] for key in eligible_keys} - dataset_ids
+    if unknown:
+        raise ValueError(f"mosaic fit-eligible profile names an unknown dataset: {unknown}")
+
+
+def _validate_combined_source_profile_support(
+    observations: dict[str, Any],
+) -> frozenset[_ProfileIdentityKey]:
+    measured_policy = observations.get("measured_profile_policy")
+    selection = (
+        measured_policy.get("profile_selection") if isinstance(measured_policy, dict) else None
+    )
+    if (
+        not isinstance(measured_policy, dict)
+        or measured_policy.get("selection_sampler_revision")
+        != _REQUIRED_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION
+        or measured_policy.get("source_averaged_modeled_support_gate_revision")
+        != SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION
+        or not isinstance(selection, list)
+        or not selection
+        or not all(isinstance(record, dict) for record in selection)
+        or observations.get("candidate_profile_count") != len(selection)
+        or observations.get("fitted_profile_count")
+        != sum(record.get("fit_eligible") is True for record in selection)
+    ):
+        raise ValueError("mosaic result lacks the current combined-source profile-support gate")
+
+    seen: set[_ProfileIdentityKey] = set()
+    eligible: set[_ProfileIdentityKey] = set()
+    for record in selection:
+        identity_key = _profile_identity_key(record)
+        if identity_key in seen:
+            raise ValueError("mosaic result contains a duplicate profile identity")
+        seen.add(identity_key)
+        family_m = record.get("family_m")
+        modeled_signal = record.get("source_averaged_modeled_signal_A2")
+        modeled_support = record.get("source_averaged_modeled_support")
+        fit_eligible = record.get("fit_eligible")
+        if (
+            isinstance(family_m, bool)
+            or not isinstance(family_m, Integral)
+            or isinstance(modeled_signal, bool)
+            or not isinstance(modeled_signal, Real)
+            or not math.isfinite(float(modeled_signal))
+            or float(modeled_signal) < 0.0
+            or not isinstance(modeled_support, bool)
+            or not isinstance(fit_eligible, bool)
+            or modeled_support
+            != source_averaged_profile_has_support(
+                family_m=int(family_m),
+                profile_signal_A2=float(modeled_signal),
+            )
+            or (fit_eligible and not modeled_support)
+        ):
+            raise ValueError("mosaic result contains an invalid combined-source support audit")
+        if fit_eligible:
+            eligible.add(identity_key)
+    return frozenset(eligible)
+
+
+def _response_contract_record() -> dict[str, str | float]:
+    return {
+        "revision": SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
+        "signal_certificate_relative_floor": (
+            SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR
+        ),
+    }
+
+
+def _validate_ordered_result_header(document: dict[str, Any]) -> None:
+    if (
+        document.get("schema_version") != "rasim-bi2se3-ordered-intensity-recovery-v3"
+        or document.get("accepted") is not True
+        or document.get("positions_frozen") is not True
+    ):
+        raise ValueError("rendering requires an accepted source-averaged ordered-intensity result")
+    if document.get("response_contract") != _response_contract_record():
+        raise ValueError("ordered-intensity result uses a stale response compiler contract")
 
 
 def _load_case(path: Path) -> tuple[dict[str, Any], Path, dict[str, Any]]:
@@ -55,13 +228,100 @@ def _load_case(path: Path) -> tuple[dict[str, Any], Path, dict[str, Any]]:
     return case, mosaic_case_path, mosaic_case
 
 
+def _validated_mosaic_result(
+    document: dict[str, Any],
+    *,
+    mosaic_case_path: Path,
+    mosaic_case: dict[str, Any],
+    source_sample_count: int,
+) -> tuple[dict[str, float], str, str, frozenset[_ProfileIdentityKey]]:
+    if (
+        document.get("schema_version") != "rasim-bi2se3-real-mosaic-fit-v2"
+        or document.get("status") != "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+    ):
+        raise ValueError("ordered-intensity recovery requires the accepted real-OSC mosaic result")
+    fixed_geometry = document.get("fixed_geometry")
+    if not isinstance(fixed_geometry, dict) or fixed_geometry.get(
+        "nine_coordinate_manifest_sha256"
+    ) != mosaic_case.get("geometry_manifest_sha256"):
+        raise ValueError("mosaic result does not match the frozen nine-coordinate geometry")
+    provenance = document.get("provenance")
+    expected_case_sha256 = hashlib.sha256(mosaic_case_path.read_bytes()).hexdigest()
+    if not isinstance(provenance, dict) or provenance.get("case_sha256") != expected_case_sha256:
+        raise ValueError("mosaic result does not match the immutable mosaic case")
+    config_path = (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
+    base_config = load_simulation_config(config_path)
+    first_incidence_deg = float(mosaic_case["incidence_angles_deg"][0])
+    expected_mosaic_config = replace(
+        base_config,
+        source=replace(base_config.source, sample_count=source_sample_count),
+        instrument=replace(
+            base_config.instrument,
+            axis_rotations=tuple(
+                replace(axis, angle_deg=first_incidence_deg)
+                for axis in base_config.instrument.axis_rotations
+            ),
+        ),
+    )
+    if provenance.get("physics_revision") != expected_mosaic_config.physics_revision:
+        raise ValueError("mosaic result does not match the configured source/material physics")
+    source_model = document.get("source_model")
+    if not isinstance(source_model, dict) or (
+        source_model.get("sample_count") != source_sample_count
+        or source_model.get("reduction")
+        != "one_incoherent_weighted_detector_function_per_incidence.v1"
+    ):
+        raise ValueError("mosaic result does not match the requested combined source model")
+    source_revision = source_model.get("source_revision")
+    if not isinstance(source_revision, str) or not source_revision:
+        raise ValueError("mosaic result lacks a source realization revision")
+    observations = document.get("observations")
+    datasets = observations.get("datasets") if isinstance(observations, dict) else None
+    if not isinstance(observations, dict):
+        raise ValueError("mosaic result lacks the current combined-source profile-support gate")
+    eligible_profile_keys = _validate_combined_source_profile_support(observations)
+    observed_incidence = (
+        [float(item["incidence_angle_deg"]) for item in datasets]
+        if isinstance(datasets, list) and all(isinstance(item, dict) for item in datasets)
+        else None
+    )
+    expected_incidence = [float(value) for value in mosaic_case["incidence_angles_deg"]]
+    if observed_incidence != expected_incidence:
+        raise ValueError("mosaic result does not match the requested incidence series")
+    cif_sha256 = provenance.get("cif_sha256")
+    if not isinstance(cif_sha256, str) or not cif_sha256:
+        raise ValueError("mosaic result lacks CIF provenance")
+    recovered = document.get("recovered_effective_distribution")
+    if not isinstance(recovered, dict):
+        raise ValueError("mosaic result lacks recovered_effective_distribution")
+    try:
+        parameters = {
+            "gaussian_sigma_deg": float(recovered["gaussian_sigma_deg"]),
+            "lorentzian_hwhm_deg": float(recovered["lorentzian_hwhm_deg"]),
+            "lorentzian_probability": float(recovered["lorentzian_probability"]),
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("mosaic result has invalid recovered distribution parameters") from error
+    if not all(math.isfinite(value) for value in parameters.values()):
+        raise ValueError("mosaic result has nonfinite recovered distribution parameters")
+    return parameters, source_revision, cif_sha256, eligible_profile_keys
+
+
 def _fixed_inputs(
     mosaic_case_path: Path,
     mosaic_case: dict[str, Any],
+    *,
+    source_sample_count: int,
+    mosaic_parameters: dict[str, float],
 ) -> tuple[ConfiguredSimulationInputs, ...]:
+    if (
+        isinstance(source_sample_count, bool)
+        or not isinstance(source_sample_count, int)
+        or source_sample_count < 1
+    ):
+        raise ValueError("source_sample_count must be a positive integer")
     config_path = (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
     source_config = load_simulation_config(config_path)
-    truth_mosaic = mosaic_case["truth"]
     corrections = SharedGeometryCorrections.from_array(mosaic_case["shared_geometry_corrections"])
     series: list[ConfiguredSimulationInputs] = []
     for incidence_deg in mosaic_case["incidence_angles_deg"]:
@@ -69,16 +329,13 @@ def _fixed_inputs(
             source_config,
             source=replace(
                 source_config.source,
-                spatial_sigma_m=(0.0, 0.0),
-                divergence_sigma_rad=(0.0, 0.0),
-                wavelength_sigma_A=0.0,
-                sample_count=1,
+                sample_count=source_sample_count,
             ),
             mosaic=replace(
                 source_config.mosaic,
-                gaussian_sigma_deg=float(truth_mosaic["gaussian_sigma_deg"]),
-                lorentzian_hwhm_deg=float(truth_mosaic["lorentzian_hwhm_deg"]),
-                lorentzian_probability=float(truth_mosaic["lorentzian_probability"]),
+                gaussian_sigma_deg=float(mosaic_parameters["gaussian_sigma_deg"]),
+                lorentzian_hwhm_deg=float(mosaic_parameters["lorentzian_hwhm_deg"]),
+                lorentzian_probability=float(mosaic_parameters["lorentzian_probability"]),
             ),
             instrument=replace(
                 source_config.instrument,
@@ -95,8 +352,10 @@ def _fixed_inputs(
             corrections,
         )
         incident = build_incident_states(inputs.samples, inputs.material, instrument)
-        if incident.states.incident_state_id.size != 1 or not bool(incident.states.valid[0]):
-            raise RuntimeError("ordered-intensity proof requires one valid ideal incident state")
+        if incident.states.incident_state_id.size != source_sample_count or not bool(
+            np.all(incident.states.valid)
+        ):
+            raise RuntimeError("every ordered-intensity source state must be valid")
         bragg_config = replace(
             inputs.bragg_space.config,
             crystal_to_sample=instrument.sample_from_crystal.rotation,
@@ -109,7 +368,18 @@ def _fixed_inputs(
                 bragg_space=MosaicBraggSpace(bragg_config, inputs.strength),
             )
         )
-    return tuple(series)
+    result = tuple(series)
+    first_samples = result[0].samples
+    for inputs in result[1:]:
+        if (
+            inputs.samples.source_revision != first_samples.source_revision
+            or not np.array_equal(inputs.samples.origin_lab_m, first_samples.origin_lab_m)
+            or not np.array_equal(inputs.samples.direction_lab, first_samples.direction_lab)
+            or not np.array_equal(inputs.samples.wavelength_A, first_samples.wavelength_A)
+            or not np.array_equal(inputs.samples.source_weight, first_samples.source_weight)
+        ):
+            raise RuntimeError("incidence views do not share one deterministic source realization")
+    return result
 
 
 def _profile_definitions(
@@ -120,6 +390,7 @@ def _profile_definitions(
     profile_config: dict[str, Any],
     two_theta_gauss_order: int,
     phi_gauss_order: int,
+    eligible_profile_keys: frozenset[_ProfileIdentityKey] | None = None,
 ) -> tuple[object, tuple[MosaicProfileDefinition, ...]]:
     context = build_nominal_ewald_context(inputs)
     frame = build_osc_angle_frame(
@@ -138,13 +409,34 @@ def _profile_definitions(
     )
     if not np.all(marker_angles.valid & marker_angles.azimuth_valid):
         raise RuntimeError("a detector-visible integer-L marker has invalid angles")
-    supported_key = f"supported_m0_integer_L_{incidence_deg:g}deg"
-    supported_m0 = {int(value) for value in profile_config[supported_key]}
-    observed_m0 = tuple(
-        item for item in m0_observation["observed_peaks"] if int(item["integer_L"]) in supported_m0
-    )
-    if {int(item["integer_L"]) for item in observed_m0} != supported_m0:
-        raise RuntimeError("the admitted m=0 set does not match the frozen OSC evidence")
+    dataset_id = str(m0_observation["dataset_id"])
+    if eligible_profile_keys is None:
+        supported_key = f"supported_m0_integer_L_{incidence_deg:g}deg"
+        supported_m0 = {int(value) for value in profile_config[supported_key]}
+        observed_m0 = tuple(
+            item
+            for item in m0_observation["observed_peaks"]
+            if int(item["integer_L"]) in supported_m0
+        )
+        if {int(item["integer_L"]) for item in observed_m0} != supported_m0:
+            raise RuntimeError("the admitted m=0 set does not match the frozen OSC evidence")
+    else:
+        candidate_by_integer_l = {
+            int(item["integer_L"]): item
+            for item in (
+                *m0_observation["observed_peaks"],
+                *m0_observation["unsupported_observed_peaks"],
+            )
+        }
+        requested_m0 = {
+            key[2] for key in eligible_profile_keys if key[0] == dataset_id and key[1] == 0
+        }
+        missing_m0 = requested_m0 - set(candidate_by_integer_l)
+        if missing_m0:
+            raise ValueError(
+                f"mosaic fit-eligible m=0 profile is absent from OSC evidence: {missing_m0}"
+            )
+        observed_m0 = tuple(candidate_by_integer_l[value] for value in sorted(requested_m0))
     m0_angles = detector_coordinates_to_angles(
         np.asarray([float(item["column_px"]) for item in observed_m0]),
         np.asarray([float(item["row_px"]) for item in observed_m0]),
@@ -154,7 +446,6 @@ def _profile_definitions(
     if not np.all(m0_angles.valid & m0_angles.azimuth_valid):
         raise RuntimeError("a supported m=0 observation has invalid detector angles")
 
-    dataset_id = str(m0_observation["dataset_id"])
     revision = configured_rod_catalog_revision(inputs)
     common = {
         "two_theta_half_width_rad": math.radians(float(profile_config["two_theta_half_width_deg"])),
@@ -212,7 +503,108 @@ def _profile_definitions(
                 **common,
             )
         )
-    return frame, tuple(definitions)
+    return frame, _filter_profile_definitions(tuple(definitions), eligible_profile_keys)
+
+
+def _validated_profile_catalogs(
+    series: tuple[ConfiguredSimulationInputs, ...],
+    *,
+    incidence_angles_deg: list[float],
+    m0_observations: list[dict[str, Any]],
+    profile_config: dict[str, Any],
+    eligible_profile_keys: frozenset[_ProfileIdentityKey] | None,
+) -> tuple[
+    tuple[tuple[object, tuple[MosaicProfileDefinition, ...]], ...],
+    tuple[dict[str, int | str], ...],
+]:
+    """Build and validate the exact profile catalogs consumed by fitting and rendering."""
+
+    observations = {float(item["incidence_angle_deg"]): item for item in m0_observations}
+    dataset_ids = frozenset(str(item["dataset_id"]) for item in m0_observations)
+    _validate_eligible_profile_dataset_ids(eligible_profile_keys, dataset_ids)
+    expected_total = tuple(int(value) for value in profile_config["expected_total_count"])
+    expected_nonzero = tuple(int(value) for value in profile_config["expected_nonzero_count"])
+    expected_m0 = tuple(int(value) for value in profile_config["expected_m0_count"])
+    expected_revision = tuple(str(value) for value in profile_config["expected_catalog_revision"])
+    if not (
+        len(expected_total)
+        == len(expected_nonzero)
+        == len(expected_m0)
+        == len(expected_revision)
+        == len(series)
+        == len(incidence_angles_deg)
+    ):
+        raise ValueError("expected profile-count vectors must align with the incidence series")
+
+    catalogs: list[tuple[object, tuple[MosaicProfileDefinition, ...]]] = []
+    records: list[dict[str, int | str]] = []
+    compiled_keys: set[_ProfileIdentityKey] = set()
+    two_theta_order = int(profile_config["response_two_theta_gauss_order"])
+    phi_order = int(profile_config["response_phi_gauss_order"])
+    for index, (inputs, incidence_value) in enumerate(
+        zip(series, incidence_angles_deg, strict=True)
+    ):
+        incidence_deg = float(incidence_value)
+        observation = observations[incidence_deg]
+        frame, definitions = _profile_definitions(
+            inputs,
+            incidence_deg=incidence_deg,
+            m0_observation=observation,
+            profile_config=profile_config,
+            two_theta_gauss_order=two_theta_order,
+            phi_gauss_order=phi_order,
+            eligible_profile_keys=eligible_profile_keys,
+        )
+        definition_keys = {_definition_identity_key(item) for item in definitions}
+        compiled_keys.update(definition_keys)
+        m0_count = sum(
+            definition.identity.group_key.layered_family_m == 0 for definition in definitions
+        )
+        counts = (len(definitions), len(definitions) - m0_count, m0_count)
+        catalog_revision = ordered_intensity_profile_catalog_revision(definitions)
+        if eligible_profile_keys is None:
+            expected_counts = (expected_total[index], expected_nonzero[index], expected_m0[index])
+            if catalog_revision != expected_revision[index]:
+                raise RuntimeError(
+                    f"incidence {incidence_deg:g} profile identity catalog changed: "
+                    f"expected {expected_revision[index]}, received {catalog_revision}"
+                )
+        else:
+            dataset_id = str(observation["dataset_id"])
+            selected = {key for key in eligible_profile_keys if key[0] == dataset_id}
+            selected_m0 = sum(key[1] == 0 for key in selected)
+            expected_counts = (len(selected), len(selected) - selected_m0, selected_m0)
+        if counts != expected_counts:
+            raise RuntimeError(
+                f"incidence {incidence_deg:g} profile coverage changed: "
+                f"expected {expected_counts}, received {counts}"
+            )
+        catalogs.append((frame, definitions))
+        records.append(
+            {
+                "total": counts[0],
+                "nonzero": counts[1],
+                "m0": counts[2],
+                "profile_catalog_revision": catalog_revision,
+            }
+        )
+    if eligible_profile_keys is not None and compiled_keys != set(eligible_profile_keys):
+        raise RuntimeError("ordered response did not consume the complete mosaic profile selection")
+    return tuple(catalogs), tuple(records)
+
+
+def _validate_anchor_catalog_records(
+    actual: object,
+    expected: tuple[dict[str, int | str], ...],
+) -> None:
+    fields = ("total", "nonzero", "m0", "profile_catalog_revision")
+    if (
+        not isinstance(actual, list)
+        or len(actual) != len(expected)
+        or not all(isinstance(item, dict) for item in actual)
+        or [{name: item.get(name) for name in fields} for item in actual] != list(expected)
+    ):
+        raise ValueError("ordered-intensity result does not match the frozen anchor catalogs")
 
 
 def _parameter_record(parameters: Bi2Se3QuintupleLayerParameters) -> dict[str, float]:
@@ -227,36 +619,52 @@ def _parameter_record(parameters: Bi2Se3QuintupleLayerParameters) -> dict[str, f
     }
 
 
-def _integrated_occupancy_basis(
-    response: Any,
+def run_recovery(
+    case_path: Path,
     *,
-    u_radial_A2: float,
-    u_normal_A2: float,
-) -> np.ndarray:
-    """Integrate the six cached occupancy-quadratic columns at one directional U pair."""
-
-    damping = np.exp(
-        -u_radial_A2 * response.term_q_radial_squared_Ainv2
-        - u_normal_A2 * response.term_q_normal_squared_Ainv2
-    )
-    fixed_weight = response.term_fixed_mass_per_strength * damping
-    return np.column_stack(
-        tuple(
-            np.bincount(
-                response.term_observation_index,
-                weights=fixed_weight * response.term_occupancy_quadratic_strength_A2[:, column],
-                minlength=len(response.identities),
-            )
-            for column in range(6)
-        )
-    )
-
-
-def run_recovery(case_path: Path) -> dict[str, Any]:
+    source_sample_count: int = 250,
+    mosaic_parameters: dict[str, float] | None = None,
+    required_source_revision: str | None = None,
+    required_cif_sha256: str | None = None,
+    upstream_mosaic_result_sha256: str | None = None,
+    eligible_profile_keys: frozenset[_ProfileIdentityKey] | None = None,
+    execution_backend: str = "cpu",
+) -> dict[str, Any]:
     case, mosaic_case_path, mosaic_case = _load_case(case_path)
+    if execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("execution_backend must be cpu or cuda")
+    active_mosaic = (
+        {
+            "gaussian_sigma_deg": float(mosaic_case["truth"]["gaussian_sigma_deg"]),
+            "lorentzian_hwhm_deg": float(mosaic_case["truth"]["lorentzian_hwhm_deg"]),
+            "lorentzian_probability": float(mosaic_case["truth"]["lorentzian_probability"]),
+        }
+        if mosaic_parameters is None
+        else {name: float(value) for name, value in mosaic_parameters.items()}
+    )
+    if set(active_mosaic) != {
+        "gaussian_sigma_deg",
+        "lorentzian_hwhm_deg",
+        "lorentzian_probability",
+    }:
+        raise ValueError("mosaic_parameters must contain Gaussian, Lorentzian, and eta values")
     start = perf_counter()
     tracemalloc.start()
-    series = _fixed_inputs(mosaic_case_path, mosaic_case)
+    series = _fixed_inputs(
+        mosaic_case_path,
+        mosaic_case,
+        source_sample_count=source_sample_count,
+        mosaic_parameters=active_mosaic,
+    )
+    if required_source_revision is not None and (
+        not isinstance(required_source_revision, str)
+        or not required_source_revision
+        or series[0].samples.source_revision != required_source_revision
+    ):
+        raise ValueError("mosaic result source revision does not match the rebuilt source")
+    current_cif_sha256 = hashlib.sha256(series[0].config.material.cif_path.read_bytes()).hexdigest()
+    if required_cif_sha256 is not None and current_cif_sha256 != required_cif_sha256:
+        raise ValueError("mosaic result CIF revision does not match the rebuilt structure")
     baseline = Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal)
     truth_config = case["truth"]
     truth = replace(
@@ -268,221 +676,111 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
         u_normal_A2=float(truth_config["u_normal_A2"]),
     )
     truth_strength = replace(series[0].strength, structure_parameters=truth)
-    displacement_probe_A2 = (
-        (0.0, 0.0),
-        (truth.u_radial_A2, truth.u_normal_A2),
-        (0.1, 0.0),
-        (0.0, 0.1),
-        (0.1, 0.1),
-    )
     profiles = case["profiles"]
-    observation_by_incidence = {
-        float(item["incidence_angle_deg"]): item for item in mosaic_case["m0_observations"]
-    }
+    profile_catalogs, validated_profile_counts = _validated_profile_catalogs(
+        series,
+        incidence_angles_deg=mosaic_case["incidence_angles_deg"],
+        m0_observations=mosaic_case["m0_observations"],
+        profile_config=profiles,
+        eligible_profile_keys=eligible_profile_keys,
+    )
     response_rows = []
-    truth_mass_rows = []
-    truth_response_revisions = []
-    truth_response_term_counts = []
-    response_quadrature_rows = []
-    basis_quadrature_rows = []
-    profile_counts: list[dict[str, int | str]] = []
+    truth_signal_rows = []
+    profile_counts: list[dict[str, float | int | str]] = []
     response_compile_seconds = 0.0
-    truth_compile_seconds = 0.0
     truth_generation_seconds = 0.0
-    direct_seconds = 0.0
-    accelerated_seconds = 0.0
+    accelerated_prediction_seconds = 0.0
     kernel_oracle_relative_error = 0.0
-    response_two_theta_gauss_order = int(profiles["response_two_theta_gauss_order"])
-    truth_two_theta_gauss_order = int(profiles["truth_two_theta_gauss_order"])
-    response_phi_gauss_order = int(profiles["response_phi_gauss_order"])
-    truth_phi_gauss_order = int(profiles["truth_phi_gauss_order"])
-    if (
-        truth_two_theta_gauss_order <= response_two_theta_gauss_order
-        or truth_phi_gauss_order <= response_phi_gauss_order
-    ):
-        raise ValueError("truth quadrature orders must exceed response quadrature orders")
-    expected_total_count = tuple(int(value) for value in profiles["expected_total_count"])
-    expected_nonzero_count = tuple(int(value) for value in profiles["expected_nonzero_count"])
-    expected_m0_count = tuple(int(value) for value in profiles["expected_m0_count"])
-    expected_catalog_revision = tuple(str(value) for value in profiles["expected_catalog_revision"])
-    if not (
-        len(expected_total_count)
-        == len(expected_nonzero_count)
-        == len(expected_m0_count)
-        == len(expected_catalog_revision)
-        == len(series)
-    ):
-        raise ValueError("expected profile-count vectors must align with the incidence series")
-    for series_index, (inputs, incidence_value) in enumerate(
-        zip(series, mosaic_case["incidence_angles_deg"], strict=True)
+    for inputs, incidence_value, catalog, count_record in zip(
+        series,
+        mosaic_case["incidence_angles_deg"],
+        profile_catalogs,
+        validated_profile_counts,
+        strict=True,
     ):
         incidence_deg = float(incidence_value)
-        frame, definitions = _profile_definitions(
-            inputs,
-            incidence_deg=incidence_deg,
-            m0_observation=observation_by_incidence[incidence_deg],
-            profile_config=profiles,
-            two_theta_gauss_order=response_two_theta_gauss_order,
-            phi_gauss_order=response_phi_gauss_order,
+        frame, definitions = catalog
+        detector = build_source_averaged_detector(inputs)
+        m0_definitions = tuple(
+            definition
+            for definition in definitions
+            if definition.identity.group_key.layered_family_m == 0
         )
-        actual_m0_count = sum(
-            definition.identity.group_key.layered_family_m == 0 for definition in definitions
-        )
-        actual_nonzero_count = len(definitions) - actual_m0_count
-        actual_counts = (len(definitions), actual_nonzero_count, actual_m0_count)
-        expected_counts = (
-            expected_total_count[series_index],
-            expected_nonzero_count[series_index],
-            expected_m0_count[series_index],
-        )
-        if actual_counts != expected_counts:
-            raise RuntimeError(
-                f"incidence {incidence_deg:g} profile coverage changed: "
-                f"expected {expected_counts}, received {actual_counts}"
+        if m0_definitions:
+            m0_forward_support = evaluate_source_averaged_ordered_intensity_point_signal(
+                detector,
+                angle_frame=frame,
+                definitions=m0_definitions,
+                structure_parameters=baseline,
+                execution_backend=execution_backend,
             )
-        catalog_revision = ordered_intensity_profile_catalog_revision(definitions)
-        if catalog_revision != expected_catalog_revision[series_index]:
-            raise RuntimeError(
-                f"incidence {incidence_deg:g} profile identity catalog changed: "
-                f"expected {expected_catalog_revision[series_index]}, received {catalog_revision}"
+            if np.any(~np.isfinite(m0_forward_support)) or np.any(
+                m0_forward_support <= np.finfo(np.float64).tiny
+            ):
+                raise RuntimeError(
+                    f"incidence {incidence_deg:g} admits an m=0 anchor without positive "
+                    "source-averaged baseline support"
+                )
+            m0_support_range = (
+                float(np.min(m0_forward_support)),
+                float(np.max(m0_forward_support)),
             )
-        context = build_nominal_ewald_context(inputs)
+        else:
+            m0_support_range = (0.0, 0.0)
         compile_start = perf_counter()
-        response = compile_ordered_intensity_response(
-            context.geometry,
+        response = compile_source_averaged_ordered_intensity_response(
+            detector,
             angle_frame=frame,
             definitions=definitions,
+            execution_backend=execution_backend,
         )
         response_compile_seconds += perf_counter() - compile_start
         response_rows.append(response)
-        refined_definitions = tuple(
-            replace(
-                definition,
-                two_theta_gauss_order=truth_two_theta_gauss_order,
-                phi_gauss_order=truth_phi_gauss_order,
-                excluded_phi_bin_indices=excluded,
-            )
-            for definition, excluded in zip(
-                definitions,
-                response.excluded_phi_bin_indices,
-                strict=True,
-            )
-        )
-        truth_compile_start = perf_counter()
-        truth_response = compile_ordered_intensity_response(
-            context.geometry,
-            angle_frame=frame,
-            definitions=refined_definitions,
-        )
-        truth_compile_seconds += perf_counter() - truth_compile_start
-        if (
-            truth_response.identities != response.identities
-            or truth_response.excluded_phi_bin_indices != response.excluded_phi_bin_indices
-            or truth_response.topology_probe_revision != response.topology_probe_revision
-            or truth_response.observable_revision != response.observable_revision
-        ):
-            raise RuntimeError("fit and truth responses do not share one frozen topology mask")
         truth_start = perf_counter()
-        refined_mass = truth_response.predict_mass_direct_A2(truth_strength)
+        truth_signal = evaluate_source_averaged_ordered_intensity_point_signal(
+            detector,
+            angle_frame=frame,
+            definitions=definitions,
+            structure_parameters=truth,
+            execution_backend=execution_backend,
+        )
         truth_generation_seconds += perf_counter() - truth_start
-        truth_mass_rows.append(refined_mass)
-        truth_accelerated_mass = truth_response.predict_mass_A2(truth)
-        direct_start = perf_counter()
-        response_direct_mass = response.predict_mass_direct_A2(truth_strength)
-        direct_seconds += perf_counter() - direct_start
+        truth_signal_rows.append(truth_signal)
         accelerated_start = perf_counter()
-        response_accelerated_mass = response.predict_mass_A2(truth)
-        accelerated_seconds += perf_counter() - accelerated_start
+        accelerated_signal = response.predict_signal_density_A2_per_rad2(truth)
+        accelerated_prediction_seconds += perf_counter() - accelerated_start
+        truth_scale = max(float(np.max(truth_signal)), np.finfo(np.float64).tiny)
+        truth_relative_error = np.abs(accelerated_signal - truth_signal) / np.maximum(
+            truth_signal,
+            1.0e-12 * truth_scale,
+        )
         kernel_oracle_relative_error = max(
             kernel_oracle_relative_error,
-            float(np.max(np.abs(truth_accelerated_mass / refined_mass - 1.0))),
-            float(np.max(np.abs(response_accelerated_mass / response_direct_mass - 1.0))),
+            float(np.max(truth_relative_error)),
         )
-        response_relative_error = np.abs(response_direct_mass / refined_mass - 1.0)
-        worst_index = int(np.argmax(response_relative_error))
-        identity = response.identities[worst_index]
-        response_quadrature_rows.append(
-            {
-                "dataset_id": response.dataset_id,
-                "maximum_relative_error": float(response_relative_error[worst_index]),
-                "worst_profile": {
-                    "group_id": identity.group_key.group_id,
-                    "family_m": identity.group_key.layered_family_m,
-                    "integer_L": identity.group_key.layered_integer_L,
-                    "branch_id": identity.branch_id,
-                    "analytic_branch_id": identity.analytic_branch_id,
-                },
-            }
-        )
-        for u_radial_A2, u_normal_A2 in displacement_probe_A2:
-            response_basis = _integrated_occupancy_basis(
-                response,
-                u_radial_A2=u_radial_A2,
-                u_normal_A2=u_normal_A2,
-            )
-            truth_basis = _integrated_occupancy_basis(
-                truth_response,
-                u_radial_A2=u_radial_A2,
-                u_normal_A2=u_normal_A2,
-            )
-            truth_norm = np.linalg.norm(truth_basis, axis=1)
-            scale = max(float(np.max(truth_norm)), np.finfo(np.float64).tiny)
-            basis_relative_error = np.linalg.norm(
-                response_basis - truth_basis,
-                axis=1,
-            ) / np.maximum(truth_norm, 1.0e-14 * scale)
-            worst_index = int(np.argmax(basis_relative_error))
-            identity = response.identities[worst_index]
-            basis_quadrature_rows.append(
-                {
-                    "dataset_id": response.dataset_id,
-                    "u_radial_A2": u_radial_A2,
-                    "u_normal_A2": u_normal_A2,
-                    "maximum_relative_error": float(basis_relative_error[worst_index]),
-                    "worst_profile_group_id": identity.group_key.group_id,
-                }
-            )
-        truth_response_revisions.append(truth_response.response_revision)
-        truth_response_term_counts.append(int(truth_response.term_L.size))
         profile_counts.append(
             {
-                "total": len(definitions),
-                "m0": actual_m0_count,
-                "nonzero": actual_nonzero_count,
-                "profile_catalog_revision": catalog_revision,
-                "excluded_phi_bins": sum(
-                    len(indices) for indices in response.excluded_phi_bin_indices
-                ),
-                "profiles_with_exclusions": sum(
-                    bool(indices) for indices in response.excluded_phi_bin_indices
-                ),
+                **count_record,
+                "invalid_or_caustic_anchors": 0,
+                "m0_baseline_support_minimum_A2_per_rad2": m0_support_range[0],
+                "m0_baseline_support_maximum_A2_per_rad2": m0_support_range[1],
             }
         )
-        del (
-            truth_response,
-            truth_accelerated_mass,
-            response_direct_mass,
-            response_accelerated_mass,
-            response_basis,
-            truth_basis,
-        )
+        del accelerated_signal
         gc.collect()
     responses = tuple(response_rows)
-    truth_mass = tuple(truth_mass_rows)
-    compile_seconds = response_compile_seconds + truth_compile_seconds
-    maximum_response_quadrature_relative_error = max(
-        row["maximum_relative_error"] for row in response_quadrature_rows
-    )
-    maximum_basis_quadrature_relative_error = max(
-        row["maximum_relative_error"] for row in basis_quadrature_rows
+    truth_signal = tuple(truth_signal_rows)
+    compile_seconds = response_compile_seconds
+    maximum_interpolation_relative_error = max(
+        response.interpolation_validation_maximum_relative_error for response in responses
     )
     truth_observations = tuple(
-        OrderedIntensityObservations(
+        OrderedIntensityPeakCenterObservations(
             dataset_id=response.dataset_id,
             observable_revision=response.observable_revision,
-            mass_A2=mass,
+            signal_density_A2_per_rad2=signal,
         )
-        for response, mass in zip(responses, truth_mass, strict=True)
+        for response, signal in zip(responses, truth_signal, strict=True)
     )
     active_absolute = (
         "bi_occupancy",
@@ -499,6 +797,8 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
         active_parameter_names=active_absolute,
         initial_parameters=baseline,
         relative_scale_mode=False,
+        required_source_state_count=source_sample_count,
+        required_source_revision=series[0].samples.source_revision,
     )
     absolute_seconds = perf_counter() - absolute_start
 
@@ -506,16 +806,16 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
     if relative_config["fixed_occupancy"] != "bi_occupancy":
         raise ValueError("the first relative proof fixes Bi occupancy as its declared gauge")
     synthetic_scales = np.asarray(relative_config["synthetic_image_scales"], dtype=np.float64)
-    relative_mass = tuple(
-        scale * mass for scale, mass in zip(synthetic_scales, truth_mass, strict=True)
+    relative_signal = tuple(
+        scale * signal for scale, signal in zip(synthetic_scales, truth_signal, strict=True)
     )
     relative_observations = tuple(
-        OrderedIntensityObservations(
+        OrderedIntensityPeakCenterObservations(
             dataset_id=response.dataset_id,
             observable_revision=response.observable_revision,
-            mass_A2=mass,
+            signal_density_A2_per_rad2=signal,
         )
-        for response, mass in zip(responses, relative_mass, strict=True)
+        for response, signal in zip(responses, relative_signal, strict=True)
     )
     relative_start = perf_counter()
     relative = fit_ordered_intensity_series(
@@ -530,6 +830,8 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
         ),
         initial_parameters=baseline,
         relative_scale_mode=True,
+        required_source_state_count=source_sample_count,
+        required_source_revision=series[0].samples.source_revision,
     )
     relative_seconds = perf_counter() - relative_start
 
@@ -545,20 +847,29 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
     ):
         raise ValueError("held-out h, k, and L must be aligned nonempty vectors")
     for response in responses:
-        rod_index_by_hk = {(rod.h, rod.k): index for index, rod in enumerate(response.rods)}
+        fitted_hkl = {
+            (h, k, int(identity.group_key.layered_integer_L))
+            for identity in response.identities
+            for h, k in identity.group_key.member_rod_hk
+            if identity.group_key.layered_integer_L is not None
+        }
         for h_value, k_value, ell_value in zip(
             held_out_h,
             held_out_k,
             held_out_l,
             strict=True,
         ):
-            rod_index = rod_index_by_hk.get((int(h_value), int(k_value)))
-            if rod_index is not None and np.any(
-                (response.term_rod_index == rod_index)
-                & np.isclose(response.term_L, ell_value, rtol=0.0, atol=1.0e-12)
+            if (
+                float(ell_value).is_integer()
+                and (
+                    int(h_value),
+                    int(k_value),
+                    int(ell_value),
+                )
+                in fitted_hkl
             ):
                 raise ValueError("a declared held-out h,k,L point occurs in a fitted response")
-    k_norm = responses[0].k_norm_Ainv
+    k_norm = 2.0 * math.pi / series[0].config.source.mean_wavelength_A
     held_out_truth = truth_strength.evaluate_hkl(
         h=held_out_h,
         k=held_out_k,
@@ -625,6 +936,8 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
             initial_parameters=baseline,
             relative_scale_mode=True,
             maximum_function_evaluations=1,
+            required_source_state_count=source_sample_count,
+            required_source_revision=series[0].samples.source_revision,
         )
     except OrderedIntensityIdentifiabilityError:
         gauge_rejected = True
@@ -693,19 +1006,29 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
         and maximum_displacement_error <= float(acceptance["maximum_displacement_error_A2"])
         and maximum_relative_peak_residual <= float(acceptance["maximum_relative_peak_residual"])
         and maximum_held_out_relative_error <= float(acceptance["maximum_held_out_relative_error"])
-        and maximum_response_quadrature_relative_error
+        and maximum_interpolation_relative_error
         <= float(acceptance["maximum_response_quadrature_relative_error"])
-        and maximum_basis_quadrature_relative_error
+        and kernel_oracle_relative_error
         <= float(acceptance["maximum_response_quadrature_relative_error"])
-        and kernel_oracle_relative_error <= 1.0e-11
         and absolute.sensitivity_condition <= float(acceptance["maximum_sensitivity_condition"])
         and relative.sensitivity_condition <= float(acceptance["maximum_sensitivity_condition"])
         and not np.any(absolute.active_bounds)
         and not np.any(relative.active_bounds)
     )
     return {
+        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v3",
         "accepted": accepted,
         "positions_frozen": True,
+        "provenance": {
+            "ordered_case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+            "mosaic_case_sha256": hashlib.sha256(mosaic_case_path.read_bytes()).hexdigest(),
+            "upstream_mosaic_result_sha256": upstream_mosaic_result_sha256,
+            "cif_sha256": current_cif_sha256,
+            "rod_catalog_revision": configured_rod_catalog_revision(series[0]),
+            "structure_model_revision": ordered_intensity_structure_model_revision(
+                series[0].strength
+            ),
+        },
         "truth": _parameter_record(truth),
         "absolute": {
             "fit": _parameter_record(absolute.structure_representative),
@@ -745,27 +1068,56 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
             "seconds": relative_seconds,
         },
         "common_occupancy_scale_gauge_rejected": gauge_rejected,
-        "truth_generation": "full_structure_strength_on_refined_frozen_detector_response.v2",
-        "kernel_oracle_maximum_relative_error": kernel_oracle_relative_error,
-        "response_quadrature_convergence": {
-            "response_two_theta_gauss_order": response_two_theta_gauss_order,
-            "truth_two_theta_gauss_order": truth_two_theta_gauss_order,
-            "response_phi_gauss_order": response_phi_gauss_order,
-            "truth_phi_gauss_order": truth_phi_gauss_order,
-            "maximum_relative_error": maximum_response_quadrature_relative_error,
-            "per_dataset": response_quadrature_rows,
-            "occupancy_quadratic_basis_maximum_relative_error": (
-                maximum_basis_quadrature_relative_error
-            ),
-            "occupancy_quadratic_basis_probes": basis_quadrature_rows,
+        "source_model": {
+            "reduction": "one_incoherent_weighted_detector_function_per_incidence.v1",
+            "sample_count": source_sample_count,
+            "source_revision": series[0].samples.source_revision,
+            "source_sampling_model_id": series[0].samples.source_sampling_model_id,
+            "source_rng_model_id": series[0].samples.source_rng_model_id,
+            "source_seed": series[0].samples.source_seed,
+            "spatial_sigma_m": list(series[0].config.source.spatial_sigma_m),
+            "divergence_sigma_rad": list(series[0].config.source.divergence_sigma_rad),
+            "wavelength_sigma_A": series[0].config.source.wavelength_sigma_A,
+        },
+        "fixed_mosaic": active_mosaic,
+        "upstream_fit_eligible_profiles": _profile_identity_records(eligible_profile_keys),
+        "truth_generation": ("fresh_source_averaged_selected_group_peak_center_signal_density.v1"),
+        "observable_interpretation": (
+            "synthetic selected-component peak-center recovery; not a fit to unresolved raw OSC "
+            "intensity and not an integrated peak mass"
+        ),
+        "compact_response_oracle_maximum_relative_error": kernel_oracle_relative_error,
+        "response_contract": _response_contract_record(),
+        "u_normal_chebyshev_validation": {
+            "node_count": 13,
+            "domain_A2": [0.0, 0.1],
+            "interlaced_validation_count_per_dataset": 12,
+            "maximum_relative_error": maximum_interpolation_relative_error,
+            "per_dataset": [
+                {
+                    "dataset_id": response.dataset_id,
+                    "maximum_relative_error": (
+                        response.interpolation_validation_maximum_relative_error
+                    ),
+                    "validation_node_count": response.interpolation_validation_node_count,
+                }
+                for response in responses
+            ],
         },
         "equivalent_work_seconds": {
-            "direct_full_structure": direct_seconds,
-            "cached_quadratic_q": accelerated_seconds,
-            "speedup": direct_seconds / accelerated_seconds,
+            "fresh_truth_prediction": truth_generation_seconds,
+            "cached_truth_prediction": accelerated_prediction_seconds,
+            "truth_prediction_speedup": (truth_generation_seconds / accelerated_prediction_seconds),
         },
         "response_revisions": [response.response_revision for response in responses],
-        "truth_response_revisions": truth_response_revisions,
+        "response_execution": [
+            {
+                "backend": response.execution_backend,
+                "device": response.execution_device,
+                "instrument_revision": response.instrument_revision,
+            }
+            for response in responses
+        ],
         "observable_revisions": [response.observable_revision for response in responses],
         "held_out_exact_model_interpolation": {
             "h": held_out_h.tolist(),
@@ -780,33 +1132,474 @@ def run_recovery(case_path: Path) -> dict[str, Any]:
             "maximum_relative_error": maximum_held_out_relative_error,
         },
         "incidence_angles_deg": [float(value) for value in mosaic_case["incidence_angles_deg"]],
-        "profile_counts": profile_counts,
-        "truth_mass_A2": {
-            "minimum": min(float(np.min(mass)) for mass in truth_mass),
-            "maximum": max(float(np.max(mass)) for mass in truth_mass),
-            "dynamic_range": max(float(np.max(mass)) for mass in truth_mass)
-            / min(float(np.min(mass)) for mass in truth_mass),
-            "all_profiles_retained": sum(mass.size for mass in truth_mass),
+        "anchor_counts": profile_counts,
+        "truth_signal_density_A2_per_rad2": {
+            "minimum": min(float(np.min(signal)) for signal in truth_signal),
+            "maximum": max(float(np.max(signal)) for signal in truth_signal),
+            "dynamic_range": max(float(np.max(signal)) for signal in truth_signal)
+            / min(float(np.min(signal)) for signal in truth_signal),
+            "all_anchors_retained": sum(signal.size for signal in truth_signal),
         },
-        "response_term_counts": [int(response.term_L.size) for response in responses],
-        "truth_response_term_counts": truth_response_term_counts,
+        "response_coefficient_counts": [
+            int(response.occupancy_quadratic_chebyshev_signal_density_A2_per_rad2.size)
+            for response in responses
+        ],
         "compile_seconds": compile_seconds,
         "response_compile_seconds": response_compile_seconds,
-        "truth_compile_seconds": truth_compile_seconds,
         "truth_generation_seconds": truth_generation_seconds,
         "total_seconds": perf_counter() - start,
         "peak_memory_bytes": peak_memory_bytes,
     }
 
 
+def render_recovered_images(
+    case_path: Path,
+    *,
+    mosaic_result: dict[str, Any],
+    ordered_result: dict[str, Any],
+    output_directory: Path,
+    source_sample_count: int = 250,
+    execution_backend: str = "cpu",
+    mosaic_result_sha256: str | None = None,
+    ordered_result_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Render raw OSCs and fitted center-sampled detector functions on one native grid."""
+
+    resolved_output = output_directory.resolve()
+    if resolved_output == ROOT or resolved_output.is_relative_to(ROOT):
+        raise ValueError("render output must be outside the repository")
+    if resolved_output.exists() and any(resolved_output.iterdir()):
+        raise ValueError("render output directory must be empty")
+    resolved_output.mkdir(parents=True, exist_ok=True)
+    case, mosaic_case_path, mosaic_case = _load_case(case_path)
+    mosaic_parameters, _, mosaic_cif_sha256, eligible_profile_keys = _validated_mosaic_result(
+        mosaic_result,
+        mosaic_case_path=mosaic_case_path,
+        mosaic_case=mosaic_case,
+        source_sample_count=source_sample_count,
+    )
+    _validate_ordered_result_header(ordered_result)
+    if ordered_result.get("fixed_mosaic") != mosaic_parameters:
+        raise ValueError("ordered-intensity result does not use the recovered mosaic parameters")
+    if ordered_result.get("upstream_fit_eligible_profiles") != _profile_identity_records(
+        eligible_profile_keys
+    ):
+        raise ValueError("ordered-intensity result does not preserve the mosaic profile selection")
+    expected_incidence = [float(value) for value in mosaic_case["incidence_angles_deg"]]
+    if ordered_result.get("incidence_angles_deg") != expected_incidence:
+        raise ValueError("ordered-intensity result does not match the requested incidence series")
+    absolute = ordered_result.get("absolute")
+    fitted_record = absolute.get("fit") if isinstance(absolute, dict) else None
+    if not isinstance(fitted_record, dict):
+        raise ValueError("ordered-intensity result lacks absolute.fit")
+    series = _fixed_inputs(
+        mosaic_case_path,
+        mosaic_case,
+        source_sample_count=source_sample_count,
+        mosaic_parameters=mosaic_parameters,
+    )
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal)
+    ordered_provenance = ordered_result.get("provenance")
+    expected_ordered_provenance = {
+        "ordered_case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
+        "mosaic_case_sha256": hashlib.sha256(mosaic_case_path.read_bytes()).hexdigest(),
+        "cif_sha256": hashlib.sha256(series[0].config.material.cif_path.read_bytes()).hexdigest(),
+        "rod_catalog_revision": configured_rod_catalog_revision(series[0]),
+        "structure_model_revision": ordered_intensity_structure_model_revision(series[0].strength),
+    }
+    if not isinstance(ordered_provenance, dict) or any(
+        ordered_provenance.get(name) != value for name, value in expected_ordered_provenance.items()
+    ):
+        raise ValueError("ordered-intensity result does not match the current fixed structure")
+    if expected_ordered_provenance["cif_sha256"] != mosaic_cif_sha256:
+        raise ValueError("mosaic and ordered-intensity results do not share the current CIF")
+    if (
+        mosaic_result_sha256 is not None
+        and ordered_provenance.get("upstream_mosaic_result_sha256") != mosaic_result_sha256
+    ):
+        raise ValueError("ordered-intensity result does not bind the supplied mosaic artifact")
+    if (
+        float(fitted_record["bi_fractional_z"]) != baseline.bi_fractional_z
+        or float(fitted_record["se2_fractional_z"]) != baseline.se2_fractional_z
+    ):
+        raise ValueError("ordered-intensity result changed a frozen Wyckoff coordinate")
+    _, expected_anchor_records = _validated_profile_catalogs(
+        series,
+        incidence_angles_deg=mosaic_case["incidence_angles_deg"],
+        m0_observations=mosaic_case["m0_observations"],
+        profile_config=case["profiles"],
+        eligible_profile_keys=eligible_profile_keys,
+    )
+    _validate_anchor_catalog_records(ordered_result.get("anchor_counts"), expected_anchor_records)
+    expected_source = {
+        "sample_count": source_sample_count,
+        "source_revision": series[0].samples.source_revision,
+        "reduction": "one_incoherent_weighted_detector_function_per_incidence.v1",
+    }
+    for label, document in (("mosaic", mosaic_result), ("ordered-intensity", ordered_result)):
+        source_model = document.get("source_model")
+        if not isinstance(source_model, dict) or any(
+            source_model.get(name) != expected for name, expected in expected_source.items()
+        ):
+            raise ValueError(f"{label} result does not match the requested source realization")
+    fitted_parameters = replace(
+        Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal),
+        bi_fractional_z=float(fitted_record["bi_fractional_z"]),
+        se2_fractional_z=float(fitted_record["se2_fractional_z"]),
+        bi_occupancy=float(fitted_record["bi_occupancy"]),
+        se1_occupancy=float(fitted_record["se1_occupancy"]),
+        se2_occupancy=float(fitted_record["se2_occupancy"]),
+        u_radial_A2=float(fitted_record["u_radial_A2"]),
+        u_normal_A2=float(fitted_record["u_normal_A2"]),
+    )
+    start = perf_counter()
+    simulated_images: list[np.ndarray] = []
+    execution: list[dict[str, object]] = []
+    response_execution = ordered_result.get("response_execution")
+    if not isinstance(response_execution, list) or len(response_execution) != len(series):
+        raise ValueError("ordered-intensity result lacks per-incidence execution provenance")
+    response_revisions = ordered_result.get("response_revisions")
+    if (
+        not isinstance(response_revisions, list)
+        or len(response_revisions) != len(series)
+        or any(not isinstance(revision, str) or not revision for revision in response_revisions)
+    ):
+        raise ValueError("ordered-intensity result lacks response coefficient revisions")
+    for response_record, incidence_deg, inputs in zip(
+        response_execution,
+        mosaic_case["incidence_angles_deg"],
+        series,
+        strict=True,
+    ):
+        strength = replace(inputs.strength, structure_parameters=fitted_parameters)
+        detector = build_source_averaged_detector(replace(inputs, strength=strength))
+        if (
+            detector.source_state_count != source_sample_count
+            or detector.valid_source_state_count != source_sample_count
+            or detector.incident.states.source_revision != expected_source["source_revision"]
+            or np.unique(detector.incident.states.incident_state_id).size != source_sample_count
+            or tuple(detector.rods) != tuple(inputs.rods)
+            or not any(rod.family_m == 0 for rod in detector.rods)
+        ):
+            raise RuntimeError("render detector does not preserve the full combined source/rod set")
+        if not isinstance(response_record, dict) or response_record.get(
+            "instrument_revision"
+        ) != source_averaged_detector_instrument_revision(detector):
+            raise ValueError("ordered-intensity result does not match the render instrument")
+        fit_response_backend = response_record.get("backend")
+        fit_response_device = response_record.get("device")
+        if fit_response_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        } or (fit_response_backend == "numba_cuda_source_averaged.v1") != (
+            isinstance(fit_response_device, str) and bool(fit_response_device)
+        ):
+            raise ValueError("ordered-intensity result has invalid response execution provenance")
+        sampled = sample_detector_pixel_center_density(
+            detector,
+            execution_backend=execution_backend,
+        )
+        if sampled.image_A2_per_px2.shape != (3000, 3000):
+            raise RuntimeError("fitted detector image is not 3000 by 3000")
+        simulated_image = np.asarray(sampled.image_A2_per_px2, dtype=np.float32)
+        simulated_images.append(simulated_image)
+        execution.append(
+            {
+                "incidence_deg": float(incidence_deg),
+                "backend": sampled.execution_backend,
+                "device": sampled.execution_device,
+                "fit_response_backend": fit_response_backend,
+                "fit_response_device": fit_response_device,
+                "coordinate_evaluation_count": sampled.coordinate_evaluation_count,
+                "source_state_count": detector.source_state_count,
+                "valid_source_state_count": detector.valid_source_state_count,
+                "rod_catalog_revision": detector.rod_catalog_revision,
+                "rod_hk": [[rod.h, rod.k] for rod in detector.rods],
+                "family_m_counts": {
+                    str(family_m): sum(rod.family_m == family_m for rod in detector.rods)
+                    for family_m in sorted({rod.family_m for rod in detector.rods})
+                },
+                "numeric_float32_sha256": hashlib.sha256(
+                    simulated_image.tobytes(order="C")
+                ).hexdigest(),
+            }
+        )
+
+    raw_images: list[np.ndarray] = []
+    raw_provenance: list[dict[str, object]] = []
+    observation_by_incidence = {
+        float(observation["incidence_angle_deg"]): observation
+        for observation in mosaic_case["m0_observations"]
+    }
+    if set(observation_by_incidence) != set(expected_incidence):
+        raise ValueError("OSC observations do not match the requested incidence series")
+    for incidence_deg in expected_incidence:
+        observation = observation_by_incidence[incidence_deg]
+        osc_path = (mosaic_case_path.parent / str(observation["osc_file"])).resolve()
+        compressed_sha256 = hashlib.sha256(osc_path.read_bytes()).hexdigest()
+        if compressed_sha256 != observation["osc_file_sha256"]:
+            raise ValueError(f"OSC file hash changed for {incidence_deg:g} degrees")
+        native_counts = read_osc(osc_path).detector_native_counts
+        native_sha256 = hashlib.sha256(native_counts.tobytes(order="C")).hexdigest()
+        if (
+            native_sha256 != observation["detector_native_bytes_sha256"]
+            or native_counts.dtype != np.dtype(str(observation["detector_native_dtype"]))
+            or list(native_counts.shape) != observation["detector_native_shape_rc"]
+        ):
+            raise ValueError(f"decoded OSC data changed for {incidence_deg:g} degrees")
+        raw = np.asarray(native_counts, dtype=np.float32)
+        if raw.shape != (3000, 3000):
+            raise RuntimeError("OSC detector-native image is not 3000 by 3000")
+        raw_images.append(raw)
+        raw_provenance.append(
+            {
+                "incidence_deg": incidence_deg,
+                "osc_path": str(osc_path),
+                "osc_file_sha256": compressed_sha256,
+                "detector_native_bytes_sha256": native_sha256,
+            }
+        )
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+
+    simulation_high = max(float(np.max(image)) for image in simulated_images)
+    if not math.isfinite(simulation_high) or simulation_high <= 0.0:
+        raise RuntimeError("fitted detector images contain no positive finite density")
+    simulation_low = simulation_high * 1.0e-10
+    raw_high = max(float(np.max(np.log1p(image))) for image in raw_images)
+    if not math.isfinite(raw_high) or raw_high <= 0.0:
+        raise RuntimeError("OSC images contain no positive finite counts")
+
+    def simulated_display(image: np.ndarray) -> np.ndarray:
+        positive = image > 0.0
+        display = np.full(image.shape, math.log(simulation_low), dtype=np.float32)
+        np.log(image, out=display, where=positive)
+        display -= math.log(simulation_low)
+        display /= math.log(simulation_high / simulation_low)
+        np.clip(display, 0.0, 1.0, out=display)
+        return display
+
+    def raw_display(image: np.ndarray) -> np.ndarray:
+        display = np.log1p(image, dtype=np.float64) / raw_high
+        return np.asarray(np.clip(display, 0.0, 1.0), dtype=np.float32)
+
+    simulated_display_images = [simulated_display(image) for image in simulated_images]
+    raw_display_images = [raw_display(image) for image in raw_images]
+    full_paths: list[str] = []
+    preview_paths: list[str] = []
+    for incidence_deg, display in zip(
+        mosaic_case["incidence_angles_deg"],
+        simulated_display_images,
+        strict=True,
+    ):
+        full_path = resolved_output / f"simulated_{float(incidence_deg):g}deg_3000x3000.png"
+        preview_path = resolved_output / f"simulated_{float(incidence_deg):g}deg_preview.png"
+        plt.imsave(full_path, display, cmap="magma", vmin=0.0, vmax=1.0, origin="upper")
+        plt.imsave(
+            preview_path,
+            display[::2, ::2],
+            cmap="magma",
+            vmin=0.0,
+            vmax=1.0,
+            origin="upper",
+        )
+        full_paths.append(str(full_path))
+        preview_paths.append(str(preview_path))
+    raw_paths: list[str] = []
+    raw_preview_paths: list[str] = []
+    for incidence_deg, display in zip(
+        mosaic_case["incidence_angles_deg"],
+        raw_display_images,
+        strict=True,
+    ):
+        full_path = resolved_output / f"raw_osc_{float(incidence_deg):g}deg_3000x3000.png"
+        preview_path = resolved_output / f"raw_osc_{float(incidence_deg):g}deg_preview.png"
+        plt.imsave(full_path, display, cmap="gray", vmin=0.0, vmax=1.0, origin="upper")
+        plt.imsave(
+            preview_path,
+            display[::2, ::2],
+            cmap="gray",
+            vmin=0.0,
+            vmax=1.0,
+            origin="upper",
+        )
+        raw_paths.append(str(full_path))
+        raw_preview_paths.append(str(preview_path))
+
+    figure, axes = plt.subplots(2, 3, figsize=(12.0, 8.0), constrained_layout=True)
+    for column, incidence_deg in enumerate(mosaic_case["incidence_angles_deg"]):
+        axes[0, column].imshow(raw_display_images[column], cmap="gray", vmin=0.0, vmax=1.0)
+        axes[0, column].set_title(f"Raw OSC {float(incidence_deg):g}°")
+        axes[1, column].imshow(
+            simulated_display_images[column],
+            cmap="magma",
+            vmin=0.0,
+            vmax=1.0,
+        )
+        axes[1, column].set_title(
+            f"{source_sample_count}-state forward model {float(incidence_deg):g}°\n"
+            "pixel-center density"
+        )
+        axes[0, column].set_axis_off()
+        axes[1, column].set_axis_off()
+    figure.suptitle(
+        "Raw counts and simulated density use separate shared log scales; display only, not "
+        "count-calibrated",
+        fontsize=10,
+    )
+    comparison_path = resolved_output / f"raw_and_{source_sample_count}ki_forward_model.png"
+    figure.savefig(comparison_path, dpi=200)
+    plt.close(figure)
+    png_paths = [
+        *(Path(path) for path in full_paths),
+        *(Path(path) for path in preview_paths),
+        *(Path(path) for path in raw_paths),
+        *(Path(path) for path in raw_preview_paths),
+        comparison_path,
+    ]
+    png_sha256 = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in png_paths}
+
+    manifest = {
+        "schema_version": "rasim-bi2se3-source-averaged-forward-images-v1",
+        "shape_rc": [3000, 3000],
+        "coordinate_convention": "detector-native [row,column], origin upper",
+        "simulation_measure_id": "raw_detector_coordinate_density_A2_per_px2.v1",
+        "execution_backend_policy": (
+            "fit-response and render backends may differ after permanent CPU/CUDA detector "
+            "parity proof; both are recorded per incidence"
+        ),
+        "simulation_sampling_grid_id": "native_pixel_centers.v1",
+        "source_state_count": source_sample_count,
+        "source_revision": series[0].samples.source_revision,
+        "source_reduction": "one_incoherent_weighted_detector_function_per_incidence.v1",
+        "rod_count": len(series[0].rods),
+        "rod_catalog_revision": configured_rod_catalog_revision(series[0]),
+        "root_policy": "all_retained_roots.v1",
+        "includes_m0": any(rod.family_m == 0 for rod in series[0].rods),
+        "mosaic_parameters": mosaic_parameters,
+        "ordered_parameters": _parameter_record(fitted_parameters),
+        "mosaic_parameter_source": "model_limited_real_osc_shape_fit",
+        "ordered_parameter_source": "synthetic_selected_group_peak_center_recovery",
+        "raw_osc_intensity_legacy_classification": "NO_ORACLE",
+        "input_result_sha256": {
+            "mosaic": mosaic_result_sha256,
+            "ordered_intensity": ordered_result_sha256,
+        },
+        "raw_simulation_comparison": (
+            "display_only; independently transformed rows; not count calibrated or a raw-OSC "
+            "ordered-intensity fit"
+        ),
+        "display": {
+            "simulation": "shared natural-log range [global_max*1e-10, global_max]",
+            "raw_osc": "shared log1p(counts) range [0, global_max]",
+            "png_measure": "dimensionless display value after the declared row transform",
+        },
+        "execution": execution,
+        "raw_osc_provenance": raw_provenance,
+        "simulated_full_paths": full_paths,
+        "simulated_preview_paths": preview_paths,
+        "raw_full_paths": raw_paths,
+        "raw_preview_paths": raw_preview_paths,
+        "comparison_path": str(comparison_path),
+        "png_sha256": png_sha256,
+        "seconds": perf_counter() - start,
+    }
+    manifest_path = resolved_output / f"bi2se3_{source_sample_count}ki_images.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return {**manifest, "manifest_path": str(manifest_path)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", type=Path, default=DEFAULT_CASE)
+    parser.add_argument("--source-sample-count", type=int, default=250)
+    parser.add_argument("--mosaic-result", type=Path)
+    parser.add_argument("--ordered-result", type=Path)
+    parser.add_argument("--execution-backend", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--render-directory", type=Path)
+    parser.add_argument("--render-only", action="store_true")
     parser.add_argument("--json", action="store_true")
     arguments = parser.parse_args()
-    result = run_recovery(arguments.case.resolve())
+    mosaic_parameters = None
+    mosaic_result_document = None
+    required_source_revision = None
+    required_cif_sha256 = None
+    eligible_profile_keys = None
+    mosaic_result_sha256 = None
+    if arguments.mosaic_result is not None:
+        mosaic_result_bytes = arguments.mosaic_result.resolve().read_bytes()
+        mosaic_result_sha256 = hashlib.sha256(mosaic_result_bytes).hexdigest()
+        mosaic_result_document = json.loads(mosaic_result_bytes)
+        _, mosaic_case_path, mosaic_case = _load_case(arguments.case.resolve())
+        (
+            mosaic_parameters,
+            required_source_revision,
+            required_cif_sha256,
+            eligible_profile_keys,
+        ) = _validated_mosaic_result(
+            mosaic_result_document,
+            mosaic_case_path=mosaic_case_path,
+            mosaic_case=mosaic_case,
+            source_sample_count=arguments.source_sample_count,
+        )
+    if arguments.render_only:
+        if (
+            mosaic_result_document is None
+            or arguments.ordered_result is None
+            or arguments.render_directory is None
+        ):
+            raise ValueError(
+                "--render-only requires --mosaic-result, --ordered-result, and --render-directory"
+            )
+        ordered_result_bytes = arguments.ordered_result.resolve().read_bytes()
+        ordered_result = json.loads(ordered_result_bytes)
+        rendered = render_recovered_images(
+            arguments.case.resolve(),
+            mosaic_result=mosaic_result_document,
+            ordered_result=ordered_result,
+            output_directory=arguments.render_directory,
+            source_sample_count=arguments.source_sample_count,
+            execution_backend=arguments.execution_backend,
+            mosaic_result_sha256=mosaic_result_sha256,
+            ordered_result_sha256=hashlib.sha256(ordered_result_bytes).hexdigest(),
+        )
+        print(json.dumps(rendered, indent=None if arguments.json else 2, sort_keys=True))
+        return 0
+    result = run_recovery(
+        arguments.case.resolve(),
+        source_sample_count=arguments.source_sample_count,
+        mosaic_parameters=mosaic_parameters,
+        required_source_revision=required_source_revision,
+        required_cif_sha256=required_cif_sha256,
+        upstream_mosaic_result_sha256=mosaic_result_sha256,
+        eligible_profile_keys=eligible_profile_keys,
+        execution_backend=arguments.execution_backend,
+    )
+    if arguments.render_directory is not None:
+        if mosaic_result_document is None:
+            raise ValueError("rendering a recovery requires --mosaic-result")
+        result["render"] = render_recovered_images(
+            arguments.case.resolve(),
+            mosaic_result=mosaic_result_document,
+            ordered_result=result,
+            output_directory=arguments.render_directory,
+            source_sample_count=arguments.source_sample_count,
+            execution_backend=arguments.execution_backend,
+            mosaic_result_sha256=mosaic_result_sha256,
+        )
+    encoded = json.dumps(result, sort_keys=True)
+    if arguments.output is not None:
+        output_path = arguments.output.resolve()
+        if output_path == ROOT or output_path.is_relative_to(ROOT):
+            raise ValueError("output must be outside the repository")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(encoded + "\n", encoding="utf-8")
     if arguments.json:
-        print(json.dumps(result, sort_keys=True))
+        print(encoded)
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["accepted"] else 1

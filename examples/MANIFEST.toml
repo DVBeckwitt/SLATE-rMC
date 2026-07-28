@@ -51,6 +51,11 @@ size_bytes = 15491
 sha256 = "2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295"
 
 [[file]]
+path = "examples/bi2se3/experiment/mosaic_fit_measured_policy.toml"
+size_bytes = 776
+sha256 = "c85286056aab0858bc70fd5236504e193d05cbf0b30cad87ed69160a82b7c027"
+
+[[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
 size_bytes = 15895
 sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"
@@ -109,3 +114,8 @@ sha256 = "85c7727d74aca6eb30e1abc7bdcc6e9c5738c9f24f6350f4fa322940f05d45ca"
 path = "examples/pbi2/experiment/stacking_truth.toml"
 size_bytes = 509
 sha256 = "3198cfacaba81eece48ed5b049f17fc5deab03e4dbb7204d4f2c6c4846bfefc8"
+
+[[file]]
+path = "examples/bi2te3/structures/Bi2Te3_cod_9011962.cif"
+size_bytes = 730
+sha256 = "1df987b2bae84805ec5f8378b238f29ca544e01b09a1c40543e39fdb4c925efc"

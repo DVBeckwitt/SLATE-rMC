@@ -24,3 +24,11 @@ support boundary bins identically from truth and every component, while retainin
 Its 3,000 x 3,000 images are external configured-truth forward visualizations without the planted
 nuisance amplitudes, not fitted observations or recovered-model renders. Raw-significant `003` at
 10 and 15 degrees is reported but not fitted because this forward model predicts zero signal there.
+
+For the measured images, add `--observation-mode osc --skip-images`. The case-bound
+`experiment/mosaic_fit_measured_policy.toml` removes entire weak profiles using frozen local
+sidebands and removes both 10-degree `m=1,L=4` secondary-lobe profiles; it never trims individual
+central-profile bins by intensity. The three OSC files are still fitted simultaneously. The fitted
+`m=0` profiles are `003/006` at 5 degrees, `006` at 10 degrees, and `006/009` at 15 degrees. This
+real-data result is reported as a model-limited effective radial envelope, not a unique intrinsic
+mosaic distribution.

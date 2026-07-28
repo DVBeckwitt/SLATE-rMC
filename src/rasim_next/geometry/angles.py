@@ -60,8 +60,12 @@ def _wrap_pi(angle_rad: ArrayLike) -> NDArray[np.float64]:
     return np.asarray((angle + np.pi) % (2.0 * np.pi) - np.pi, dtype=np.float64)
 
 
+def _raw_chi_to_unwrapped_phi(raw_chi_rad: ArrayLike) -> NDArray[np.float64]:
+    return np.asarray(-np.pi / 2.0 - np.asarray(raw_chi_rad, dtype=np.float64), dtype=np.float64)
+
+
 def _raw_chi_to_phi(raw_chi_rad: ArrayLike) -> NDArray[np.float64]:
-    return _wrap_pi(-np.pi / 2.0 - np.asarray(raw_chi_rad, dtype=np.float64))
+    return _wrap_pi(_raw_chi_to_unwrapped_phi(raw_chi_rad))
 
 
 def _status_array(shape: tuple[int, ...], status: ValidityCode) -> NDArray[np.str_]:

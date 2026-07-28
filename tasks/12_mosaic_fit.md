@@ -1,8 +1,9 @@
 # T12: response-folded mosaic fit
 
-Status: `READY_DETERMINISTIC_FULL_SET_SLICE`.
+Status: `READY_250_STATE_MODEL_LIMITED_REAL_OSC_SLICE`.
 
-Branch: `codex/mosaic-response-fit`
+Branches: historical synthetic slice `codex/mosaic-response-fit`; historical measured extension
+`codex/bi2se3-real-mosaic`; current 250-state rerun `codex/bi2se3-250ki-refit`.
 
 Dependencies: T17 continuous angle measurement and T18 accepted fixed multi-OSC geometry.
 
@@ -14,8 +15,11 @@ and lattice stay fixed. The objective integrates `S` and `N` before division and
 nonnegative nuisance amplitude per individual profile. Absolute peak heights and cross-reflection
 intensity ratios therefore do not weight the shared mosaic parameters.
 
-The tracked proof uses one source-center, zero-divergence, mean-wavelength state at 5, 10, and 15
-degrees. It jointly includes the frozen 10/8/8 indexed nonzero profiles and six raw-supported
+The historical proof used one source-center, zero-divergence, mean-wavelength state. The superseding
+measured run uses one exact nominal companion only to freeze geometry centers; it contributes no
+detector intensity. At each of 5, 10, and 15 degrees, the same 250 sampled source rows are instead
+summed into one detector function before profile comparison. The full-set synthetic policy jointly
+includes the frozen 10/8/8 indexed nonzero profiles and six raw-supported
 collapsed `|00L|` profiles representable by the fixed top-exit model. The 43 independently audited
 inverse-support boundary bins are excluded identically from truth and every component; every
 profile remains in the objective. It fits no detector raster; the three 3,000 x 3,000 images are
@@ -27,8 +31,13 @@ reported as outside the current forward channel.
 ```text
 src/rasim_next/fitting/mosaic.py
 src/rasim_next/measurement/continuous_angle.py
+src/rasim_next/measurement/angle_space.py
+src/rasim_next/measurement/__init__.py
+src/rasim_next/geometry/angles.py
+src/rasim_next/fitting/__init__.py
 scripts/recover_bi2se3_mosaic.py
 examples/bi2se3/experiment/mosaic_fit_truth.toml
+examples/bi2se3/experiment/mosaic_fit_measured_policy.toml
 tests/test_fitting.py
 tests/test_integration.py
 this task and the live contract/validation documentation
@@ -41,13 +50,21 @@ this task and the live contract/validation documentation
 - deterministic width refinement with repeated-pair caching;
 - exact eta faces plus a finite 8,193-point centered-logit stationary audit;
 - nuisance-projected rank/condition and typed local/global identifiability failures;
-- CUDA forward-profile and image evaluation with CPU-side profile search.
+- CUDA forward-profile and image evaluation with CPU-side profile search;
+- exact cropped physical-pixel projection of measured OSC profiles;
+- frozen whole-profile rejection for weak or explicitly secondary-lobe observations;
+- source-averaged modeled-support rejection for branchless `m=0` observations;
+- versioned `rasim-bi2se3-real-mosaic-fit-v2` support-gate provenance rejected when stale;
+- simultaneous constant-background real-OSC fitting with affine-detrending sensitivity.
 
 ## Proof command
 
 ```powershell
 uv run python scripts/recover_bi2se3_mosaic.py `
-  --output-directory C:\path\outside\the\repository\mosaic-recovery
+  --observation-mode osc `
+  --source-sample-count 250 `
+  --skip-images `
+  --output-directory C:\path\outside\the\repository\bi2se3-real-mosaic
 ```
 
 ## Remaining proposed work
@@ -55,9 +72,11 @@ uv run python scripts/recover_bi2se3_mosaic.py `
 `tasks/mosaic_distribution_fitting_plan.md` remains `PROPOSED` for topology-split cubature that
 retains the excluded boundary bins, automatic arbitrary-material boundary planning, half/quarter subsets,
 leave-group-out prediction, additional truth regimes, stochastic noise/background/covariance,
-uncertainty intervals, CPU/GPU crossover studies, and real-OSC profile extraction/recovery. The
-masked independent-order calculation is an angle-bin convergence check on smooth retained bins,
-not the broader plan's independent source/orientation Tier-B qualification.
+uncertainty intervals, CPU/GPU crossover studies, automatic secondary-domain modeling, calibrated
+instrument resolution, and intrinsic-mosaic separation. Real-OSC extraction and a model-limited
+effective radial fit are implemented; they are not a calibrated intrinsic-distribution recovery.
+The masked independent-order calculation is an angle-bin convergence check on smooth retained
+bins, not the broader plan's independent source/orientation Tier-B qualification.
 
 ## Handoff
 

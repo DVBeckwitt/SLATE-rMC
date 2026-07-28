@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import least_squares
 
-from painted_ewald import Rod
+from painted_ewald import MosaicParameters, Rod
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.fitting.mosaic import (
     MosaicProfileDefinition,
@@ -17,9 +17,11 @@ from rasim_next.fitting.mosaic import (
     _mosaic_profile_quadrature,
 )
 from rasim_next.geometry.angles import AngleFrame, angles_to_detector_coordinate_area_measure
+from rasim_next.measurement.continuous_angle import evaluate_continuous_per_rod_angle_signal
 from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
 from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -46,6 +48,14 @@ _POSITION_PARAMETER_NAMES = (
 _INVERSE_TOPOLOGY_PROBE_REVISION = "inverse_root_signature_grid_17x17.v1"
 _RESPONSE_COORDINATE_BLOCK_SIZE = 32_768
 _STRUCTURE_KERNEL_TERM_BLOCK_SIZE = 131_072
+_POINT_RESPONSE_U_NORMAL_MAX_A2 = 0.1
+_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT = 13
+_POINT_RESPONSE_VALIDATION_NODE_COUNT = 12
+_POINT_RESPONSE_MAXIMUM_INTERPOLATION_RELATIVE_ERROR = 2.0e-3
+SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION = (
+    "source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2"
+)
+SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR = 1.0e-12
 
 
 def _profile_identity_revision(identity: MosaicProfileIdentity) -> str:
@@ -127,6 +137,32 @@ def _ordered_intensity_observable_revision(
     )
 
 
+def _ordered_intensity_point_observable_revision(
+    definitions: tuple[MosaicProfileDefinition, ...],
+    *,
+    angle_frame_revision: str,
+) -> str:
+    """Hash selected-group signal density at frozen angular peak anchors."""
+
+    return canonical_revision_sha256(
+        ("definition_id", "selected_group_angle_anchor_signal.v1"),
+        ("measure", "selected_group_angular_signal_density_A2_per_rad2.v1"),
+        ("angle_frame_revision", angle_frame_revision),
+        (
+            "profile_identity_revision",
+            ordered_intensity_profile_catalog_revision(definitions),
+        ),
+        (
+            "center_two_theta_rad",
+            np.asarray([item.center_two_theta_rad for item in definitions], dtype=np.float64),
+        ),
+        (
+            "center_phi_rad",
+            np.asarray([item.center_phi_rad for item in definitions], dtype=np.float64),
+        ),
+    )
+
+
 def ordered_intensity_structure_model_revision(strength: Bi2Se3TwoHStrength) -> str:
     """Hash coefficient-generating structure physics, excluding fitted occupancies/U and wavelength."""
 
@@ -163,14 +199,48 @@ def ordered_intensity_structure_model_revision(strength: Bi2Se3TwoHStrength) -> 
     )
 
 
-def _mosaic_model_revision(detector: DetectorEwaldMeasure) -> str:
-    mosaic = detector.coating.bragg_space.config.mosaic
+def _mosaic_parameters_revision(mosaic: MosaicParameters) -> str:
     return canonical_revision_sha256(
         ("definition_id", "folded_alpha_full_azimuth_wrapped_mosaic.v1"),
         ("gaussian_sigma_rad", mosaic.gaussian_sigma_rad),
         ("lorentzian_half_width_rad", mosaic.lorentzian_half_width_rad),
         ("lorentzian_probability", mosaic.lorentzian_probability),
         ("measure", "dalpha_dbeta.folded_alpha_probability.v1"),
+    )
+
+
+def _mosaic_model_revision(detector: DetectorEwaldMeasure) -> str:
+    return _mosaic_parameters_revision(detector.coating.bragg_space.config.mosaic)
+
+
+def source_averaged_detector_instrument_revision(
+    detector: SourceAveragedDetectorEwaldMeasure,
+) -> str:
+    instrument = detector.instrument
+    return canonical_revision_sha256(
+        ("definition_id", "source_averaged_detector_instrument.v1"),
+        ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
+        ("lab_from_sample_translation_m", instrument.lab_from_sample.translation_m),
+        ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
+        ("sample_from_crystal_translation_m", instrument.sample_from_crystal.translation_m),
+        ("lab_from_detector_rotation", instrument.lab_from_detector.rotation),
+        ("lab_from_detector_translation_m", instrument.lab_from_detector.translation_m),
+        ("detector_shape_rc", np.asarray(instrument.detector_shape_rc, dtype=np.int64)),
+        ("detector_row_pitch_m", instrument.detector_row_pitch_m),
+        ("detector_column_pitch_m", instrument.detector_column_pitch_m),
+        (
+            "detector_reference_coordinate_px",
+            np.asarray(instrument.detector_reference_coordinate_px, dtype=np.float64),
+        ),
+        ("sample_support_model_id", instrument.sample_support_model_id),
+        ("sample_width_is_unbounded", int(instrument.sample_width_m is None)),
+        ("sample_width_m", 0.0 if instrument.sample_width_m is None else instrument.sample_width_m),
+        ("sample_length_is_unbounded", int(instrument.sample_length_m is None)),
+        (
+            "sample_length_m",
+            0.0 if instrument.sample_length_m is None else instrument.sample_length_m,
+        ),
+        ("film_thickness_A", instrument.film_thickness_A),
     )
 
 
@@ -625,6 +695,342 @@ class OrderedIntensityDatasetResponse:
         return predicted
 
 
+@dataclass(frozen=True, slots=True)
+class SourceAveragedOrderedIntensityDatasetResponse:
+    """Peak-center angular signal after one incoherent source-state sum."""
+
+    dataset_id: str
+    incidence_angle_rad: float
+    identities: tuple[MosaicProfileIdentity, ...]
+    occupancy_quadratic_chebyshev_signal_density_A2_per_rad2: FloatArray
+    q_radial_squared_Ainv2: FloatArray
+    u_normal_nodes_A2: FloatArray
+    center_two_theta_rad: FloatArray
+    center_phi_rad: FloatArray
+    normalization_density_px2_per_rad2: FloatArray
+    reciprocal_basis_Ainv: FloatArray
+    fixed_structure_parameters: Bi2Se3QuintupleLayerParameters
+    rod_catalog_revision: str
+    structure_model_revision: str
+    mosaic_model_revision: str
+    angle_frame_revision: str
+    source_revision: str
+    source_state_count: int
+    sample_geometry_revision: str
+    material_revision: str
+    interpolation_validation_maximum_relative_error: float
+    interpolation_validation_node_count: int
+    instrument_revision: str
+    execution_backend: str
+    execution_device: str | None
+    observable_revision: str
+    measure_id: str = "selected_group_angular_signal_density_A2_per_rad2.v1"
+    root_policy: str = "all_retained_roots.v1"
+    response_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dataset_id, str) or not self.dataset_id:
+            raise ValueError("dataset_id must be nonempty")
+        incidence = float(self.incidence_angle_rad)
+        if not math.isfinite(incidence):
+            raise ValueError("incidence_angle_rad must be finite")
+        for name in (
+            "rod_catalog_revision",
+            "structure_model_revision",
+            "mosaic_model_revision",
+            "angle_frame_revision",
+            "source_revision",
+            "sample_geometry_revision",
+            "material_revision",
+            "instrument_revision",
+            "observable_revision",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be nonempty")
+        state_count = self.source_state_count
+        if (
+            isinstance(state_count, bool)
+            or not isinstance(state_count, (int, np.integer))
+            or int(state_count) < 1
+        ):
+            raise ValueError("source_state_count must be a positive integer")
+        validation_error = float(self.interpolation_validation_maximum_relative_error)
+        validation_count = self.interpolation_validation_node_count
+        if (
+            not math.isfinite(validation_error)
+            or validation_error < 0.0
+            or validation_error > _POINT_RESPONSE_MAXIMUM_INTERPOLATION_RELATIVE_ERROR
+            or isinstance(validation_count, bool)
+            or not isinstance(validation_count, (int, np.integer))
+            or int(validation_count) != _POINT_RESPONSE_VALIDATION_NODE_COUNT
+        ):
+            raise ValueError(
+                "peak-center interpolation certificate is missing or outside tolerance"
+            )
+        identities = tuple(self.identities)
+        if (
+            not identities
+            or any(not isinstance(identity, MosaicProfileIdentity) for identity in identities)
+            or len(set(identities)) != len(identities)
+            or any(identity.dataset_id != self.dataset_id for identity in identities)
+            or any(identity.incidence_angle_rad != incidence for identity in identities)
+            or any(
+                identity.group_key.rod_catalog_revision != self.rod_catalog_revision
+                for identity in identities
+            )
+        ):
+            raise ValueError("identities must be unique and match this dataset and rod catalog")
+        coefficients = np.array(
+            self.occupancy_quadratic_chebyshev_signal_density_A2_per_rad2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        q_radial_squared = np.array(
+            self.q_radial_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        nodes = np.array(
+            self.u_normal_nodes_A2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        center_two_theta = np.array(
+            self.center_two_theta_rad,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        center_phi = np.array(
+            self.center_phi_rad,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        normalization = np.array(
+            self.normalization_density_px2_per_rad2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        profile_count = len(identities)
+        if (
+            coefficients.shape != (profile_count, 6, _POINT_RESPONSE_CHEBYSHEV_NODE_COUNT)
+            or q_radial_squared.shape != (profile_count,)
+            or nodes.shape != (_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT,)
+            or center_two_theta.shape != (profile_count,)
+            or center_phi.shape != (profile_count,)
+            or normalization.shape != (profile_count,)
+            or not np.all(np.isfinite(coefficients))
+            or not np.all(np.isfinite(q_radial_squared))
+            or np.any(q_radial_squared < 0.0)
+            or not np.all(np.isfinite(nodes))
+            or not np.all(np.isfinite(center_two_theta))
+            or np.any((center_two_theta < 0.0) | (center_two_theta > math.pi))
+            or not np.all(np.isfinite(center_phi))
+            or not np.all(np.isfinite(normalization))
+            or np.any(normalization <= 0.0)
+        ):
+            raise ValueError("peak-center response arrays are invalid or misaligned")
+        expected_scaled_nodes = np.sort(
+            np.cos(
+                np.pi
+                * np.arange(_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, dtype=np.float64)
+                / (_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT - 1)
+            )
+        )
+        expected_nodes = 0.5 * _POINT_RESPONSE_U_NORMAL_MAX_A2 * (expected_scaled_nodes + 1.0)
+        expected_nodes[0] = 0.0
+        expected_nodes[-1] = _POINT_RESPONSE_U_NORMAL_MAX_A2
+        if not np.array_equal(nodes, expected_nodes):
+            raise ValueError("u_normal_nodes_A2 must equal the canonical Chebyshev-Lobatto grid")
+        if self.measure_id != "selected_group_angular_signal_density_A2_per_rad2.v1":
+            raise ValueError("unsupported source-averaged ordered-intensity measure")
+        if self.root_policy != "all_retained_roots.v1":
+            raise ValueError("source-averaged point responses require all retained roots")
+        if self.execution_backend not in {
+            "numba_cpu_source_averaged.v1",
+            "numba_cuda_source_averaged.v1",
+        }:
+            raise ValueError("unsupported source-averaged response execution backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be None or a nonempty string")
+        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
+        basis = np.array(self.reciprocal_basis_Ainv, dtype=np.float64, copy=True, order="C")
+        if basis.shape != (3, 3) or not np.all(np.isfinite(basis)):
+            raise ValueError("reciprocal_basis_Ainv must be finite with shape (3, 3)")
+        if not isinstance(self.fixed_structure_parameters, Bi2Se3QuintupleLayerParameters):
+            raise TypeError("fixed_structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        for value in (
+            coefficients,
+            q_radial_squared,
+            nodes,
+            center_two_theta,
+            center_phi,
+            normalization,
+            basis,
+        ):
+            value.setflags(write=False)
+        object.__setattr__(self, "incidence_angle_rad", incidence)
+        object.__setattr__(self, "identities", identities)
+        object.__setattr__(
+            self,
+            "occupancy_quadratic_chebyshev_signal_density_A2_per_rad2",
+            coefficients,
+        )
+        object.__setattr__(self, "q_radial_squared_Ainv2", q_radial_squared)
+        object.__setattr__(self, "u_normal_nodes_A2", nodes)
+        object.__setattr__(self, "center_two_theta_rad", center_two_theta)
+        object.__setattr__(self, "center_phi_rad", center_phi)
+        object.__setattr__(self, "normalization_density_px2_per_rad2", normalization)
+        object.__setattr__(self, "reciprocal_basis_Ainv", basis)
+        object.__setattr__(self, "source_state_count", int(state_count))
+        object.__setattr__(
+            self,
+            "interpolation_validation_maximum_relative_error",
+            validation_error,
+        )
+        object.__setattr__(self, "interpolation_validation_node_count", int(validation_count))
+        object.__setattr__(
+            self,
+            "response_revision",
+            canonical_revision_sha256(
+                (
+                    "definition_id",
+                    SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
+                ),
+                ("dataset_id", self.dataset_id),
+                ("incidence_angle_rad", incidence),
+                (
+                    "profile_identity_revision",
+                    tuple(_profile_identity_revision(identity) for identity in identities),
+                ),
+                (
+                    "occupancy_quadratic_chebyshev_signal_density_A2_per_rad2",
+                    coefficients,
+                ),
+                ("q_radial_squared_Ainv2", q_radial_squared),
+                ("u_normal_nodes_A2", nodes),
+                ("center_two_theta_rad", center_two_theta),
+                ("center_phi_rad", center_phi),
+                ("normalization_density_px2_per_rad2", normalization),
+                ("reciprocal_basis_Ainv", basis),
+                ("rod_catalog_revision", self.rod_catalog_revision),
+                ("structure_model_revision", self.structure_model_revision),
+                ("mosaic_model_revision", self.mosaic_model_revision),
+                ("angle_frame_revision", self.angle_frame_revision),
+                ("source_revision", self.source_revision),
+                ("source_state_count", int(state_count)),
+                ("sample_geometry_revision", self.sample_geometry_revision),
+                ("material_revision", self.material_revision),
+                (
+                    "interpolation_validation_maximum_relative_error",
+                    validation_error,
+                ),
+                ("interpolation_validation_node_count", int(validation_count)),
+                ("instrument_revision", self.instrument_revision),
+                ("execution_backend", self.execution_backend),
+                ("execution_device_present", int(self.execution_device is not None)),
+                (
+                    "execution_device",
+                    "" if self.execution_device is None else self.execution_device,
+                ),
+                ("observable_revision", self.observable_revision),
+                ("measure_id", self.measure_id),
+                ("root_policy", self.root_policy),
+                ("directional_damping", "exact_qr_chebyshev_qz.v2"),
+                (
+                    "signal_certificate_relative_floor",
+                    SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
+                ),
+            ),
+        )
+
+    def predict_signal_density_A2_per_rad2(
+        self,
+        structure_parameters: Bi2Se3QuintupleLayerParameters,
+    ) -> FloatArray:
+        if not isinstance(structure_parameters, Bi2Se3QuintupleLayerParameters):
+            raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        fixed = self.fixed_structure_parameters
+        if (
+            structure_parameters.bi_fractional_z != fixed.bi_fractional_z
+            or structure_parameters.se2_fractional_z != fixed.se2_fractional_z
+        ):
+            raise ValueError("atomic positions differ from the compiled fixed response")
+        return self.predict_signal_density_coordinates_A2_per_rad2(
+            occupancy_coefficients=(
+                structure_parameters.bi_occupancy,
+                structure_parameters.se1_occupancy,
+                structure_parameters.se2_occupancy,
+            ),
+            u_radial_A2=structure_parameters.u_radial_A2,
+            u_normal_A2=structure_parameters.u_normal_A2,
+        )
+
+    def predict_signal_density_coordinates_A2_per_rad2(
+        self,
+        *,
+        occupancy_coefficients: ArrayLike,
+        u_radial_A2: float,
+        u_normal_A2: float,
+    ) -> FloatArray:
+        occupancy = np.asarray(occupancy_coefficients, dtype=np.float64)
+        if occupancy.shape != (3,) or not np.all(np.isfinite(occupancy)) or np.any(occupancy < 0.0):
+            raise ValueError("occupancy_coefficients must be three finite nonnegative values")
+        u_radial = float(u_radial_A2)
+        u_normal = float(u_normal_A2)
+        if (
+            not math.isfinite(u_radial)
+            or not math.isfinite(u_normal)
+            or u_radial < 0.0
+            or u_normal < 0.0
+            or u_normal > _POINT_RESPONSE_U_NORMAL_MAX_A2
+        ):
+            raise ValueError("directional displacement coordinates lie outside the response domain")
+        bi, se1, se2 = occupancy
+        occupancy_products = np.asarray(
+            (bi * bi, se1 * se1, se2 * se2, bi * se1, bi * se2, se1 * se2),
+            dtype=np.float64,
+        )
+        scaled_u_normal = 2.0 * u_normal / _POINT_RESPONSE_U_NORMAL_MAX_A2 - 1.0
+        coefficient_axis_first = np.moveaxis(
+            self.occupancy_quadratic_chebyshev_signal_density_A2_per_rad2,
+            -1,
+            0,
+        )
+        occupancy_basis = np.polynomial.chebyshev.chebval(
+            scaled_u_normal,
+            coefficient_axis_first,
+        )
+        undamped_signal = occupancy_basis @ occupancy_products
+        negative = undamped_signal < 0.0
+        if np.any(negative):
+            scale = np.sum(
+                np.abs(occupancy_basis[negative]) * np.abs(occupancy_products)[None, :],
+                axis=1,
+            )
+            tolerance = 2048.0 * np.finfo(np.float64).eps * scale
+            if np.any(undamped_signal[negative] < -tolerance):
+                raise FloatingPointError("occupancy quadratic produced negative peak-center signal")
+            undamped_signal = undamped_signal.copy()
+            undamped_signal[negative] = 0.0
+        predicted = undamped_signal * np.exp(-u_radial * self.q_radial_squared_Ainv2)
+        if not np.all(np.isfinite(predicted)) or np.any(predicted < 0.0):
+            raise FloatingPointError("candidate structure produced invalid peak-center signal")
+        predicted.setflags(write=False)
+        return predicted
+
+
 def _compile_fixed_position_structure_kernel(
     strength: Bi2Se3TwoHStrength,
     *,
@@ -847,6 +1253,404 @@ def compile_ordered_intensity_response(
     )
 
 
+def _profile_q_radial_squared(
+    strength: Bi2Se3TwoHStrength,
+    definitions: tuple[MosaicProfileDefinition, ...],
+) -> FloatArray:
+    layer_normal = np.cross(
+        strength.crystal.direct_basis_A[:, 0],
+        strength.crystal.direct_basis_A[:, 1],
+    )
+    layer_normal /= np.linalg.norm(layer_normal)
+    if np.dot(layer_normal, strength.crystal.direct_basis_A[:, 2]) < 0.0:
+        layer_normal = -layer_normal
+    q_radial_squared = np.empty(len(definitions), dtype=np.float64)
+    for profile_index, definition in enumerate(definitions):
+        member_hk = definition.identity.group_key.member_rod_hk
+        hkl = np.asarray(
+            [(h, k, 0.0) for h, k in member_hk],
+            dtype=np.float64,
+        )
+        q_crystal = hkl @ strength.reciprocal_basis_Ainv.T
+        q_normal = q_crystal @ layer_normal
+        q_radial = q_crystal - q_normal[:, None] * layer_normal[None, :]
+        member_q_radial_squared = np.einsum("ij,ij->i", q_radial, q_radial, optimize=True)
+        scale = max(float(np.max(member_q_radial_squared)), 1.0)
+        tolerance = 1024.0 * np.finfo(np.float64).eps * scale
+        if np.ptp(member_q_radial_squared) > tolerance:
+            raise ValueError("profile rod members do not share one radial damping coordinate")
+        q_radial_squared[profile_index] = float(member_q_radial_squared[0])
+    q_radial_squared[np.abs(q_radial_squared) <= 1024.0 * np.finfo(np.float64).eps] = 0.0
+    q_radial_squared.setflags(write=False)
+    return q_radial_squared
+
+
+def _occupancy_quadratic_matrices(basis: FloatArray) -> FloatArray:
+    """Return symmetric matrices for ``basis @ (b², s1², s2², b*s1, ...)``."""
+
+    matrices = np.zeros((*basis.shape[:-1], 3, 3), dtype=np.float64)
+    matrices[..., 0, 0] = basis[..., 0]
+    matrices[..., 1, 1] = basis[..., 1]
+    matrices[..., 2, 2] = basis[..., 2]
+    matrices[..., 0, 1] = matrices[..., 1, 0] = 0.5 * basis[..., 3]
+    matrices[..., 0, 2] = matrices[..., 2, 0] = 0.5 * basis[..., 4]
+    matrices[..., 1, 2] = matrices[..., 2, 1] = 0.5 * basis[..., 5]
+    return matrices
+
+
+def compile_source_averaged_ordered_intensity_response(
+    detector: SourceAveragedDetectorEwaldMeasure,
+    *,
+    angle_frame: AngleFrame,
+    definitions: tuple[MosaicProfileDefinition, ...],
+    execution_backend: str = "cpu",
+) -> SourceAveragedOrderedIntensityDatasetResponse:
+    """Compile a Chebyshev peak-center response from one combined source detector function."""
+
+    if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+        raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    if execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("execution_backend must be cpu or cuda")
+    frozen = tuple(definitions)
+    if not frozen or any(not isinstance(item, MosaicProfileDefinition) for item in frozen):
+        raise ValueError("definitions must contain MosaicProfileDefinition values")
+    if len({item.identity for item in frozen}) != len(frozen):
+        raise ValueError("definitions must have unique identities")
+    dataset_ids = {item.identity.dataset_id for item in frozen}
+    incidences = {item.identity.incidence_angle_rad for item in frozen}
+    if len(dataset_ids) != 1 or len(incidences) != 1:
+        raise ValueError("one response must contain exactly one dataset and incidence")
+    if {item.identity.group_key.rod_catalog_revision for item in frozen} != {
+        detector.rod_catalog_revision
+    }:
+        raise ValueError("profile definitions do not match the detector rod catalog revision")
+    configured_rods = {(rod.h, rod.k): rod for rod in detector.rods}
+    strength = detector.strength_model
+    if not isinstance(strength, Bi2Se3TwoHStrength):
+        raise TypeError("ordered-intensity fitting currently requires Bi2Se3TwoHStrength")
+    fixed = strength.structure_parameters
+    if not isinstance(fixed, Bi2Se3QuintupleLayerParameters):
+        raise TypeError("Bi2Se3 strength requires resolved structure parameters")
+    q_radial_squared = _profile_q_radial_squared(strength, frozen)
+    occupancy_probe = (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (1.0, 1.0, 0.0),
+        (1.0, 0.0, 1.0),
+        (0.0, 1.0, 1.0),
+    )
+    scaled_u_nodes = np.sort(
+        np.cos(
+            np.pi
+            * np.arange(_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, dtype=np.float64)
+            / (_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT - 1)
+        )
+    )
+    u_normal_nodes = 0.5 * _POINT_RESPONSE_U_NORMAL_MAX_A2 * (scaled_u_nodes + 1.0)
+    u_normal_nodes[0] = 0.0
+    u_normal_nodes[-1] = _POINT_RESPONSE_U_NORMAL_MAX_A2
+    validation_u_normal_nodes = np.sort(
+        0.5
+        * _POINT_RESPONSE_U_NORMAL_MAX_A2
+        * (
+            1.0
+            + np.cos(
+                np.pi
+                * (np.arange(_POINT_RESPONSE_VALIDATION_NODE_COUNT, dtype=np.float64) + 0.5)
+                / _POINT_RESPONSE_VALIDATION_NODE_COUNT
+            )
+        )
+    )
+    evaluated_u_normal_nodes = np.concatenate((u_normal_nodes, validation_u_normal_nodes))
+    probe_signal = np.empty(
+        (evaluated_u_normal_nodes.size, 6, len(frozen)),
+        dtype=np.float64,
+    )
+    normalization = np.empty(len(frozen), dtype=np.float64)
+    normalization.fill(np.nan)
+    result_backend: str | None = None
+    result_device: str | None = None
+    profiles_by_rod_group: dict[tuple[tuple[int, int], ...], list[int]] = {}
+    for profile_index, definition in enumerate(frozen):
+        profiles_by_rod_group.setdefault(
+            definition.identity.group_key.member_rod_hk,
+            [],
+        ).append(profile_index)
+    observable_revision = _ordered_intensity_point_observable_revision(
+        frozen,
+        angle_frame_revision=angle_frame.revision,
+    )
+    for group_hk, profile_indices in profiles_by_rod_group.items():
+        try:
+            group_rods = tuple(configured_rods[rod_hk] for rod_hk in group_hk)
+        except KeyError as error:
+            raise ValueError(f"profile references unconfigured rod {error.args[0]}") from error
+        group_detector = detector.restrict_rods(group_rods)
+        group_normalization: FloatArray | None = None
+        group_two_theta = np.asarray(
+            [frozen[index].center_two_theta_rad for index in profile_indices],
+            dtype=np.float64,
+        )
+        group_phi = np.asarray(
+            [frozen[index].center_phi_rad for index in profile_indices],
+            dtype=np.float64,
+        )
+        for node_index, u_normal_A2 in enumerate(evaluated_u_normal_nodes):
+            for probe_index, occupancies in enumerate(occupancy_probe):
+                parameters = replace(
+                    fixed,
+                    bi_occupancy=occupancies[0],
+                    se1_occupancy=occupancies[1],
+                    se2_occupancy=occupancies[2],
+                    u_radial_A2=0.0,
+                    u_normal_A2=float(u_normal_A2),
+                )
+                evaluated = evaluate_continuous_per_rod_angle_signal(
+                    group_detector.rebind_physics(
+                        strength_model=replace(strength, structure_parameters=parameters)
+                    ),
+                    angle_frame=angle_frame,
+                    two_theta_rad=group_two_theta,
+                    phi_rad=group_phi,
+                    execution_backend=execution_backend,
+                )
+                if evaluated.source_revision != detector.incident.states.source_revision:
+                    raise RuntimeError("source-averaged response changed the source realization")
+                if result_backend is None:
+                    result_backend = evaluated.execution_backend
+                    result_device = evaluated.execution_device
+                elif (
+                    evaluated.execution_backend != result_backend
+                    or evaluated.execution_device != result_device
+                ):
+                    raise RuntimeError("source-averaged response changed execution backend")
+                if not np.all(evaluated.valid) or np.any(evaluated.caustic):
+                    raise FloatingPointError("a frozen peak center is invalid or caustic")
+                current_normalization = evaluated.normalization_density_px2_per_rad2
+                if group_normalization is None:
+                    group_normalization = current_normalization
+                elif not np.array_equal(current_normalization, group_normalization):
+                    raise RuntimeError("structure probes changed detector-area normalization")
+                probe_signal[node_index, probe_index, profile_indices] = np.sum(
+                    evaluated.per_rod_signal_density_A2_per_rad2,
+                    axis=1,
+                    dtype=np.float64,
+                )
+        if group_normalization is None:
+            raise RuntimeError("source-averaged structure probes produced no peak centers")
+        normalization[profile_indices] = group_normalization
+    if not np.all(np.isfinite(probe_signal)) or np.any(probe_signal < 0.0):
+        raise FloatingPointError("source-averaged occupancy probes produced invalid signal")
+    quadratic_at_nodes = np.stack(
+        (
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 0],
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 1],
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 2],
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 3]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 0]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 1],
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 4]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 0]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 2],
+            probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 5]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 1]
+            - probe_signal[:_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, 2],
+        ),
+        axis=2,
+    )
+    fitted_coefficients = np.polynomial.chebyshev.chebfit(
+        scaled_u_nodes,
+        quadratic_at_nodes.reshape(_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT, -1),
+        deg=_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT - 1,
+    )
+    coefficients = fitted_coefficients.T.reshape(
+        len(frozen),
+        6,
+        _POINT_RESPONSE_CHEBYSHEV_NODE_COUNT,
+    )
+    validation_probe = probe_signal[_POINT_RESPONSE_CHEBYSHEV_NODE_COUNT:]
+    validation_basis = np.stack(
+        (
+            validation_probe[:, 0],
+            validation_probe[:, 1],
+            validation_probe[:, 2],
+            validation_probe[:, 3] - validation_probe[:, 0] - validation_probe[:, 1],
+            validation_probe[:, 4] - validation_probe[:, 0] - validation_probe[:, 2],
+            validation_probe[:, 5] - validation_probe[:, 1] - validation_probe[:, 2],
+        ),
+        axis=2,
+    )
+    coefficient_axis_first = np.moveaxis(coefficients, -1, 0)
+    interpolated_validation_basis = np.stack(
+        tuple(
+            np.polynomial.chebyshev.chebval(
+                2.0 * u_normal_A2 / _POINT_RESPONSE_U_NORMAL_MAX_A2 - 1.0,
+                coefficient_axis_first,
+            )
+            for u_normal_A2 in validation_u_normal_nodes
+        )
+    )
+    exact_quadratic = _occupancy_quadratic_matrices(validation_basis)
+    interpolation_error_quadratic = _occupancy_quadratic_matrices(
+        interpolated_validation_basis - validation_basis
+    )
+    exact_eigenvalue, exact_eigenvector = np.linalg.eigh(exact_quadratic)
+    profile_scale = np.maximum(
+        np.max(np.abs(exact_eigenvalue), axis=(0, 2)),
+        np.finfo(np.float64).tiny,
+    )
+    positivity_tolerance = 4096.0 * np.finfo(np.float64).eps * profile_scale[None, :]
+    if np.any(exact_eigenvalue[..., 0] < -positivity_tolerance):
+        raise FloatingPointError("full-detector occupancy quadratic is not positive semidefinite")
+    certified_eigenvalue = exact_eigenvalue + (
+        SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR
+        * profile_scale[None, :, None]
+    )
+    if np.any(certified_eigenvalue <= 0.0):
+        raise FloatingPointError("occupancy-signal certificate floor did not regularize extinction")
+    inverse_square_root = np.einsum(
+        "...ik,...k,...jk->...ij",
+        exact_eigenvector,
+        1.0 / np.sqrt(certified_eigenvalue),
+        exact_eigenvector,
+        optimize=True,
+    )
+    relative_error_quadratic = np.einsum(
+        "...ik,...kl,...lj->...ij",
+        inverse_square_root,
+        interpolation_error_quadratic,
+        inverse_square_root,
+        optimize=True,
+    )
+    relative_error_quadratic = 0.5 * (
+        relative_error_quadratic + np.swapaxes(relative_error_quadratic, -1, -2)
+    )
+    maximum_interpolation_relative_error = float(
+        np.max(np.abs(np.linalg.eigvalsh(relative_error_quadratic)))
+    )
+    if maximum_interpolation_relative_error > (
+        _POINT_RESPONSE_MAXIMUM_INTERPOLATION_RELATIVE_ERROR
+    ):
+        raise FloatingPointError(
+            "peak-center Chebyshev interpolation did not meet its certified tolerance"
+        )
+    if result_backend is None:
+        raise RuntimeError("source-averaged response produced no detector evaluations")
+    return SourceAveragedOrderedIntensityDatasetResponse(
+        dataset_id=next(iter(dataset_ids)),
+        incidence_angle_rad=next(iter(incidences)),
+        identities=tuple(item.identity for item in frozen),
+        occupancy_quadratic_chebyshev_signal_density_A2_per_rad2=coefficients,
+        q_radial_squared_Ainv2=q_radial_squared,
+        u_normal_nodes_A2=u_normal_nodes,
+        center_two_theta_rad=np.asarray(
+            [item.center_two_theta_rad for item in frozen],
+            dtype=np.float64,
+        ),
+        center_phi_rad=np.asarray([item.center_phi_rad for item in frozen], dtype=np.float64),
+        normalization_density_px2_per_rad2=normalization,
+        reciprocal_basis_Ainv=strength.reciprocal_basis_Ainv,
+        fixed_structure_parameters=fixed,
+        rod_catalog_revision=detector.rod_catalog_revision,
+        structure_model_revision=ordered_intensity_structure_model_revision(strength),
+        mosaic_model_revision=_mosaic_parameters_revision(detector.mosaic),
+        angle_frame_revision=angle_frame.revision,
+        source_revision=detector.incident.states.source_revision,
+        source_state_count=int(detector.incident.states.incident_state_id.size),
+        sample_geometry_revision=detector.incident.states.sample_geometry_revision,
+        material_revision=detector.incident.states.material_revision,
+        interpolation_validation_maximum_relative_error=(maximum_interpolation_relative_error),
+        interpolation_validation_node_count=_POINT_RESPONSE_VALIDATION_NODE_COUNT,
+        instrument_revision=source_averaged_detector_instrument_revision(detector),
+        execution_backend=result_backend,
+        execution_device=result_device,
+        observable_revision=observable_revision,
+    )
+
+
+def evaluate_source_averaged_ordered_intensity_point_signal(
+    detector: SourceAveragedDetectorEwaldMeasure,
+    *,
+    angle_frame: AngleFrame,
+    definitions: tuple[MosaicProfileDefinition, ...],
+    structure_parameters: Bi2Se3QuintupleLayerParameters,
+    execution_backend: str = "cpu",
+) -> FloatArray:
+    """Evaluate selected-group peak-center signals from a fresh combined detector oracle."""
+
+    if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+        raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    if not isinstance(structure_parameters, Bi2Se3QuintupleLayerParameters):
+        raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+    if execution_backend not in {"cpu", "cuda"}:
+        raise ValueError("execution_backend must be cpu or cuda")
+    frozen = tuple(definitions)
+    if not frozen or any(not isinstance(item, MosaicProfileDefinition) for item in frozen):
+        raise ValueError("definitions must contain MosaicProfileDefinition values")
+    if len({item.identity for item in frozen}) != len(frozen):
+        raise ValueError("definitions must have unique identities")
+    dataset_ids = {item.identity.dataset_id for item in frozen}
+    incidences = {item.identity.incidence_angle_rad for item in frozen}
+    if len(dataset_ids) != 1 or len(incidences) != 1:
+        raise ValueError("one oracle call must contain exactly one dataset and incidence")
+    if {item.identity.group_key.rod_catalog_revision for item in frozen} != {
+        detector.rod_catalog_revision
+    }:
+        raise ValueError("definitions do not match the detector rod catalog revision")
+    configured_rods = {(rod.h, rod.k): rod for rod in detector.rods}
+    strength = detector.strength_model
+    if not isinstance(strength, Bi2Se3TwoHStrength):
+        raise TypeError("ordered-intensity fitting currently requires Bi2Se3TwoHStrength")
+    fixed = strength.structure_parameters
+    if (
+        structure_parameters.bi_fractional_z != fixed.bi_fractional_z
+        or structure_parameters.se2_fractional_z != fixed.se2_fractional_z
+    ):
+        raise ValueError("atomic positions differ from the fixed point response")
+    candidate_strength = replace(strength, structure_parameters=structure_parameters)
+    signal = np.empty(len(frozen), dtype=np.float64)
+    profiles_by_rod_group: dict[tuple[tuple[int, int], ...], list[int]] = {}
+    for profile_index, definition in enumerate(frozen):
+        profiles_by_rod_group.setdefault(
+            definition.identity.group_key.member_rod_hk,
+            [],
+        ).append(profile_index)
+    for group_hk, profile_indices in profiles_by_rod_group.items():
+        try:
+            group_rods = tuple(configured_rods[rod_hk] for rod_hk in group_hk)
+        except KeyError as error:
+            raise ValueError(f"profile references unconfigured rod {error.args[0]}") from error
+        evaluated = evaluate_continuous_per_rod_angle_signal(
+            detector.restrict_rods(group_rods).rebind_physics(strength_model=candidate_strength),
+            angle_frame=angle_frame,
+            two_theta_rad=np.asarray(
+                [frozen[index].center_two_theta_rad for index in profile_indices],
+                dtype=np.float64,
+            ),
+            phi_rad=np.asarray(
+                [frozen[index].center_phi_rad for index in profile_indices],
+                dtype=np.float64,
+            ),
+            execution_backend=execution_backend,
+        )
+        if not np.all(evaluated.valid) or np.any(evaluated.caustic):
+            raise FloatingPointError("a frozen peak center is invalid or caustic")
+        signal[profile_indices] = np.sum(
+            evaluated.per_rod_signal_density_A2_per_rad2,
+            axis=1,
+            dtype=np.float64,
+        )
+    if not np.all(np.isfinite(signal)) or np.any(signal < 0.0):
+        raise FloatingPointError("source-averaged ordered-intensity signal is invalid")
+    signal.setflags(write=False)
+    return signal
+
+
 @dataclass(frozen=True, slots=True)
 class OrderedIntensityObservations:
     """Positive selected-component ROI masses bound to one frozen observable layout."""
@@ -865,6 +1669,34 @@ class OrderedIntensityObservations:
             raise ValueError("mass_A2 must be a positive finite vector")
         mass.setflags(write=False)
         object.__setattr__(self, "mass_A2", mass)
+
+
+@dataclass(frozen=True, slots=True)
+class OrderedIntensityPeakCenterObservations:
+    """Positive selected-group angular signal densities at frozen peak centers."""
+
+    dataset_id: str
+    observable_revision: str
+    signal_density_A2_per_rad2: FloatArray
+    measure_id: str = "selected_group_angular_signal_density_A2_per_rad2.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dataset_id, str) or not self.dataset_id:
+            raise ValueError("dataset_id must be nonempty")
+        if not isinstance(self.observable_revision, str) or not self.observable_revision:
+            raise ValueError("observable_revision must be nonempty")
+        signal = np.array(
+            self.signal_density_A2_per_rad2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        if signal.ndim != 1 or not np.all(np.isfinite(signal)) or np.any(signal <= 0.0):
+            raise ValueError("signal_density_A2_per_rad2 must be a positive finite vector")
+        if self.measure_id != "selected_group_angular_signal_density_A2_per_rad2.v1":
+            raise ValueError("unsupported peak-center ordered-intensity measure")
+        signal.setflags(write=False)
+        object.__setattr__(self, "signal_density_A2_per_rad2", signal)
 
 
 @dataclass(frozen=True, slots=True)
@@ -894,6 +1726,26 @@ class OrderedIntensityFitResult:
     parameter_correlation: FloatArray
     active_bounds: BoolArray
     function_evaluations: int
+    predicted_signal_density_A2_per_rad2: tuple[FloatArray, ...] = ()
+    observable_measure_id: str = "selected_group_angle_roi_mass_A2.v1"
+
+    def __post_init__(self) -> None:
+        if self.observable_measure_id == "selected_group_angle_roi_mass_A2.v1":
+            predictions = self.predicted_mass_A2
+            if self.predicted_signal_density_A2_per_rad2:
+                raise ValueError("ROI-mass fits cannot contain peak-center predictions")
+        elif self.observable_measure_id == "selected_group_angular_signal_density_A2_per_rad2.v1":
+            predictions = self.predicted_signal_density_A2_per_rad2
+            if self.predicted_mass_A2:
+                raise ValueError("peak-center fits cannot contain ROI-mass predictions")
+        else:
+            raise ValueError("unsupported ordered-intensity fit observable measure")
+        if (
+            len(self.dataset_ids) != len(predictions)
+            or self.dataset_scales.shape != (len(self.dataset_ids),)
+            or any(value.ndim != 1 or not np.all(np.isfinite(value)) for value in predictions)
+        ):
+            raise ValueError("fit predictions and dataset scales are misaligned")
 
 
 def _parameter_vector(
@@ -944,7 +1796,7 @@ def _profile_scales_and_residual(
             ratio = predicted / observed
             denominator = float(ratio @ ratio)
             if denominator <= np.finfo(np.float64).tiny:
-                raise FloatingPointError("candidate structure has zero predicted image mass")
+                raise FloatingPointError("candidate structure has zero predicted observable")
             scales[dataset_index] = max(0.0, float(np.sum(ratio)) / denominator)
             residuals.append(scales[dataset_index] * ratio - 1.0)
         else:
@@ -953,21 +1805,35 @@ def _profile_scales_and_residual(
 
 
 def fit_ordered_intensity_series(
-    responses: tuple[OrderedIntensityDatasetResponse, ...],
-    observations: tuple[OrderedIntensityObservations, ...],
+    responses: tuple[
+        OrderedIntensityDatasetResponse | SourceAveragedOrderedIntensityDatasetResponse,
+        ...,
+    ],
+    observations: tuple[
+        OrderedIntensityObservations | OrderedIntensityPeakCenterObservations,
+        ...,
+    ],
     *,
     base_strength: Bi2Se3TwoHStrength,
     active_parameter_names: tuple[str, ...],
     initial_parameters: Bi2Se3QuintupleLayerParameters | None = None,
     relative_scale_mode: bool = True,
     maximum_function_evaluations: int = 400,
+    required_source_state_count: int | None = None,
+    required_source_revision: str | None = None,
 ) -> OrderedIntensityFitResult:
     """Fit a declared occupancy/U subset with atomic positions held fixed."""
 
     datasets = tuple(responses)
     if (
         not datasets
-        or any(not isinstance(item, OrderedIntensityDatasetResponse) for item in datasets)
+        or any(
+            not isinstance(
+                item,
+                (OrderedIntensityDatasetResponse, SourceAveragedOrderedIntensityDatasetResponse),
+            )
+            for item in datasets
+        )
         or len({item.dataset_id for item in datasets}) != len(datasets)
     ):
         raise ValueError("responses must contain unique ordered-intensity datasets")
@@ -980,6 +1846,46 @@ def fit_ordered_intensity_series(
         raise ValueError("responses and base_strength do not share one fixed structure model")
     if len({response.mosaic_model_revision for response in datasets}) != 1:
         raise ValueError("simultaneous responses must share one frozen physical mosaic model")
+    response_measure_ids = {
+        (
+            response.measure_id
+            if isinstance(response, SourceAveragedOrderedIntensityDatasetResponse)
+            else "selected_group_angle_roi_mass_A2.v1"
+        )
+        for response in datasets
+    }
+    if len(response_measure_ids) != 1:
+        raise ValueError("simultaneous responses must share one observable measure")
+    observable_measure_id = next(iter(response_measure_ids))
+    source_averaged = tuple(
+        response
+        for response in datasets
+        if isinstance(response, SourceAveragedOrderedIntensityDatasetResponse)
+    )
+    if source_averaged and (
+        len({response.execution_backend for response in source_averaged}) != 1
+        or len({response.execution_device for response in source_averaged}) != 1
+    ):
+        raise ValueError("simultaneous source-averaged responses changed execution backend")
+    if required_source_state_count is not None:
+        if (
+            isinstance(required_source_state_count, bool)
+            or not isinstance(required_source_state_count, (int, np.integer))
+            or int(required_source_state_count) < 1
+        ):
+            raise ValueError("required_source_state_count must be a positive integer")
+        if len(source_averaged) != len(datasets) or any(
+            response.source_state_count != int(required_source_state_count)
+            for response in source_averaged
+        ):
+            raise ValueError("a response does not match the required source-state count")
+    if required_source_revision is not None:
+        if not isinstance(required_source_revision, str) or not required_source_revision:
+            raise ValueError("required_source_revision must be a nonempty string")
+        if len(source_averaged) != len(datasets) or any(
+            response.source_revision != required_source_revision for response in source_averaged
+        ):
+            raise ValueError("a response does not match the required source revision")
     reciprocal_scale = max(float(np.linalg.norm(base_strength.reciprocal_basis_Ainv)), 1.0)
     if any(
         not np.allclose(
@@ -1012,8 +1918,14 @@ def fit_ordered_intensity_series(
     ):
         raise ValueError("maximum_function_evaluations must be a positive integer")
     records = tuple(observations)
-    if any(not isinstance(item, OrderedIntensityObservations) for item in records):
-        raise TypeError("observations must contain OrderedIntensityObservations")
+    if any(
+        not isinstance(
+            item,
+            (OrderedIntensityObservations, OrderedIntensityPeakCenterObservations),
+        )
+        for item in records
+    ):
+        raise TypeError("observations contain an unsupported ordered-intensity measure")
     observation_by_dataset = {item.dataset_id: item for item in records}
     dataset_ids = {response.dataset_id for response in datasets}
     if len(observation_by_dataset) != len(records) or set(observation_by_dataset) != dataset_ids:
@@ -1025,9 +1937,19 @@ def fit_ordered_intensity_series(
             raise ValueError(
                 f"observation {record.dataset_id!r} does not match its frozen observable revision"
             )
-        if record.mass_A2.shape != (len(response.identities),):
-            raise ValueError("observation mass shape does not match its compiled response")
-        frozen_observations_list.append(record.mass_A2)
+        if observable_measure_id == "selected_group_angle_roi_mass_A2.v1":
+            if not isinstance(record, OrderedIntensityObservations):
+                raise ValueError("ROI-mass responses require ROI-mass observations")
+            values = record.mass_A2
+        else:
+            if not isinstance(record, OrderedIntensityPeakCenterObservations):
+                raise ValueError("peak-center responses require peak-center observations")
+            if record.measure_id != observable_measure_id:
+                raise ValueError("peak-center observation measure does not match its response")
+            values = record.signal_density_A2_per_rad2
+        if values.shape != (len(response.identities),):
+            raise ValueError("observation shape does not match its compiled response")
+        frozen_observations_list.append(values)
     frozen_observations = tuple(frozen_observations_list)
 
     baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base_strength.crystal)
@@ -1092,16 +2014,31 @@ def fit_ordered_intensity_series(
         full[active_index] = active_value
         if relative_scale_mode:
             predictions = tuple(
-                response.predict_mass_coordinates_A2(
-                    occupancy_coefficients=full[2:5],
-                    u_radial_A2=float(full[5]),
-                    u_normal_A2=float(full[6]),
+                (
+                    response.predict_signal_density_coordinates_A2_per_rad2(
+                        occupancy_coefficients=full[2:5],
+                        u_radial_A2=float(full[5]),
+                        u_normal_A2=float(full[6]),
+                    )
+                    if isinstance(response, SourceAveragedOrderedIntensityDatasetResponse)
+                    else response.predict_mass_coordinates_A2(
+                        occupancy_coefficients=full[2:5],
+                        u_radial_A2=float(full[5]),
+                        u_normal_A2=float(full[6]),
+                    )
                 )
                 for response in datasets
             )
         else:
             structure = _structure_from_vector(full, baseline)
-            predictions = tuple(response.predict_mass_A2(structure) for response in datasets)
+            predictions = tuple(
+                (
+                    response.predict_signal_density_A2_per_rad2(structure)
+                    if isinstance(response, SourceAveragedOrderedIntensityDatasetResponse)
+                    else response.predict_mass_A2(structure)
+                )
+                for response in datasets
+            )
         scales, residual = _profile_scales_and_residual(
             predictions,
             frozen_observations,
@@ -1166,9 +2103,9 @@ def fit_ordered_intensity_series(
         representative_vector = terminal_vector.copy()
         representative_vector[2:5] = occupancy_ratios / representative_scale
         structure = _structure_from_vector(representative_vector, baseline)
-        mass_scale = representative_scale * representative_scale
-        predictions = tuple(predicted / mass_scale for predicted in predictions)
-        scales = scales * mass_scale
+        intensity_scale = representative_scale * representative_scale
+        predictions = tuple(predicted / intensity_scale for predicted in predictions)
+        scales = scales * intensity_scale
     else:
         structure = _structure_from_vector(terminal_vector, baseline)
         occupancy_ratios = np.empty(0, dtype=np.float64)
@@ -1193,7 +2130,9 @@ def fit_ordered_intensity_series(
         occupancy_ratios=occupancy_ratios,
         dataset_ids=tuple(response.dataset_id for response in datasets),
         dataset_scales=scales,
-        predicted_mass_A2=predictions,
+        predicted_mass_A2=(
+            predictions if observable_measure_id == "selected_group_angle_roi_mass_A2.v1" else ()
+        ),
         relative_residual=residual,
         objective=float(residual @ residual),
         sensitivity_singular_values=singular,
@@ -1202,6 +2141,12 @@ def fit_ordered_intensity_series(
         parameter_correlation=correlation,
         active_bounds=active_bounds,
         function_evaluations=function_evaluations,
+        predicted_signal_density_A2_per_rad2=(
+            predictions
+            if observable_measure_id == "selected_group_angular_signal_density_A2_per_rad2.v1"
+            else ()
+        ),
+        observable_measure_id=observable_measure_id,
     )
 
 
@@ -1211,8 +2156,14 @@ __all__ = [
     "OrderedIntensityFitResult",
     "OrderedIntensityIdentifiabilityError",
     "OrderedIntensityObservations",
+    "OrderedIntensityPeakCenterObservations",
+    "SourceAveragedOrderedIntensityDatasetResponse",
     "compile_ordered_intensity_response",
+    "compile_source_averaged_ordered_intensity_response",
+    "evaluate_source_averaged_ordered_intensity_point_signal",
     "fit_ordered_intensity_series",
+    "ordered_intensity_profile_catalog_revision",
     "ordered_intensity_structure_model_revision",
     "probe_ordered_intensity_inverse_boundary_bins",
+    "source_averaged_detector_instrument_revision",
 ]

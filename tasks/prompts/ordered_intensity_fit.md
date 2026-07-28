@@ -1,7 +1,8 @@
 # T13 Codex prompt
 
-> Historical draft; do not execute. T13 is `NEEDS_REPLAN`; deleted event/hit APIs must not be
-> restored.
+> Historical draft; do not execute. Its `NEEDS_REPLAN` status described the pre-contract-v10 task;
+> the current T13 record is in `tasks/13_ordered_intensity_fit.md`. Deleted event/hit APIs must not
+> be restored.
 
 ## Goal
 

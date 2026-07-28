@@ -300,6 +300,11 @@ Proof:
 
 Goal: fit relative ordered Bragg intensities after source, geometry, and mosaicity are fixed.
 
+The current 250-state Bi2Se3 selected-center slice is a synthetic accelerator and identifiability
+proof for this stage. It sums every incident-state intensity before comparison, but it does not
+satisfy the raw-OSC ROI, background, count-calibration, PSF, or component-deblending requirements
+below.
+
 Selection:
 
 - detector-native ROIs are tied to immutable rod-family, reflection-group, and branch identities

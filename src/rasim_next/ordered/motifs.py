@@ -36,7 +36,12 @@ class PbI2Motif:
 
 @dataclass(frozen=True, slots=True)
 class Bi2Se3QuintupleLayerParameters:
-    """Symmetry-preserving Bi2Se3 quintuple-layer structure parameters."""
+    """Symmetry-preserving Bi2-chalcogen3 quintuple-layer parameters.
+
+    The historical ``se1`` and ``se2`` field names denote the central and outer
+    chalcogen orbits respectively.  Their chemical element and CIF labels are
+    resolved from the expanded crystal rather than assumed to be selenium.
+    """
 
     bi_fractional_z: float
     se2_fractional_z: float
@@ -78,40 +83,47 @@ class Bi2Se3QuintupleLayerParameters:
         """Derive the accepted seven-parameter baseline from one expanded R-3m CIF."""
 
         atoms = _bi2se3_quintuple_layers(crystal)[0]
+        bi_label, center_label, outer_label = quintuple_layer_site_labels(crystal)
         by_label = {
             label: tuple(atom for atom in atoms if atom.source_label == label)
-            for label in ("Bi", "Se1", "Se2")
+            for label in (bi_label, center_label, outer_label)
         }
-        if tuple(len(by_label[label]) for label in ("Bi", "Se1", "Se2")) != (2, 1, 2):
-            raise ValueError("Bi2Se3 quintuple layer must contain Bi2-Se1-Se2 sites")
+        if tuple(len(by_label[label]) for label in (bi_label, center_label, outer_label)) != (
+            2,
+            1,
+            2,
+        ):
+            raise ValueError("quintuple layer must contain Bi2-X1-X2 sites")
 
         def shared_property(label: str, name: str) -> float:
             values = {getattr(atom, name) for atom in by_label[label]}
             if len(values) != 1:
-                raise ValueError(f"Bi2Se3 {label} atoms must share {name}")
+                raise ValueError(f"quintuple-layer {label} atoms must share {name}")
             value = values.pop()
             if value is None:
-                raise ValueError(f"Bi2Se3 {label} requires a declared isotropic displacement")
+                raise ValueError(
+                    f"quintuple-layer {label} requires a declared isotropic displacement"
+                )
             return float(value)
 
         def symmetric_offset(label: str) -> float:
             offsets = np.abs([atom.fractional_offset[2] for atom in by_label[label]])
             if not np.allclose(offsets, offsets[0], rtol=0.0, atol=2.0e-15):
-                raise ValueError("Bi2Se3 symmetry mates must have equal normal offsets")
+                raise ValueError("quintuple-layer symmetry mates must have equal normal offsets")
             return float(np.mean(offsets))
 
-        bi_offset = symmetric_offset("Bi")
-        se2_offset = symmetric_offset("Se2")
+        bi_offset = symmetric_offset(bi_label)
+        se2_offset = symmetric_offset(outer_label)
         u_values = {atom.u_iso_A2 for atom in atoms}
         if len(u_values) != 1 or None in u_values:
-            raise ValueError("Bi2Se3 baseline requires one shared isotropic displacement")
+            raise ValueError("quintuple-layer baseline requires one shared isotropic displacement")
         u_iso = float(u_values.pop())
         return cls(
             bi_fractional_z=1.0 / 3.0 + bi_offset,
             se2_fractional_z=1.0 / 3.0 - se2_offset,
-            bi_occupancy=shared_property("Bi", "occupancy"),
-            se1_occupancy=shared_property("Se1", "occupancy"),
-            se2_occupancy=shared_property("Se2", "occupancy"),
+            bi_occupancy=shared_property(bi_label, "occupancy"),
+            se1_occupancy=shared_property(center_label, "occupancy"),
+            se2_occupancy=shared_property(outer_label, "occupancy"),
             u_radial_A2=u_iso,
             u_normal_A2=u_iso,
         )
@@ -387,18 +399,50 @@ def pbi2_layer_amplitudes(
     )
 
 
+def quintuple_layer_site_labels(crystal: CrystalStructure) -> tuple[str, str, str]:
+    """Resolve Bi, central-X, and outer-X source labels from R-3m multiplicities."""
+
+    sites_by_label: dict[str, list[CrystalSite]] = {}
+    for site in crystal.sites:
+        sites_by_label.setdefault(site.source_label, []).append(site)
+    bi = tuple(
+        label
+        for label, sites in sites_by_label.items()
+        if {site.element for site in sites} == {"Bi"} and len(sites) == 6
+    )
+    other_elements = {site.element for site in crystal.sites if site.element != "Bi"}
+    if len(bi) != 1 or len(other_elements) != 1:
+        raise ValueError("quintuple-layer crystal must contain one Bi orbit and one chalcogen")
+    chalcogen = next(iter(other_elements))
+    center = tuple(
+        label
+        for label, sites in sites_by_label.items()
+        if {site.element for site in sites} == {chalcogen} and len(sites) == 3
+    )
+    outer = tuple(
+        label
+        for label, sites in sites_by_label.items()
+        if {site.element for site in sites} == {chalcogen} and len(sites) == 6
+    )
+    if len(center) != 1 or len(outer) != 1 or len(sites_by_label) != 3:
+        raise ValueError(
+            "quintuple-layer crystal must contain Bi6, central-X3, and outer-X6 orbits"
+        )
+    return bi[0], center[0], outer[0]
+
+
 def _bi2se3_quintuple_layers(
     crystal: CrystalStructure,
 ) -> tuple[tuple[MotifAtom, ...], ...]:
-    if any(site.element not in {"Bi", "Se"} for site in crystal.sites):
-        raise ValueError("Bi2Se3 motif extraction accepts only Bi and Se sites")
+    bi_label, center_label, outer_label = quintuple_layer_site_labels(crystal)
+    chalcogen = next(site.element for site in crystal.sites if site.source_label == center_label)
     centers = tuple(
         (site_index, site)
         for site_index, site in enumerate(crystal.sites)
-        if site.source_label == "Se1" and site.element == "Se"
+        if site.source_label == center_label and site.element == chalcogen
     )
     if len(centers) != 3 or len(crystal.sites) != 15:
-        raise ValueError("expanded Bi2Se3 must contain three Se1-centered quintuple layers")
+        raise ValueError("expanded Bi2-chalcogen3 must contain three X1-centered layers")
 
     motifs: list[tuple[MotifAtom, ...]] = []
     covered: list[int] = []
@@ -414,10 +458,21 @@ def _bi2se3_quintuple_layers(
         lower = sorted((row for row in neighbors if row[0] < 0.0), reverse=True)[:2]
         upper = sorted(row for row in neighbors if row[0] > 0.0)[:2]
         block = (*sorted(lower), (0.0, center_index, center), *upper)
-        if tuple(site.element for _, _, site in block) != ("Se", "Bi", "Se", "Bi", "Se"):
-            raise ValueError("Bi2Se3 quintuple layer must have Se-Bi-Se-Bi-Se order")
-        if block[0][2].source_label != "Se2" or block[-1][2].source_label != "Se2":
-            raise ValueError("Bi2Se3 quintuple-layer outer sites must be Se2")
+        if tuple(site.element for _, _, site in block) != (
+            chalcogen,
+            "Bi",
+            chalcogen,
+            "Bi",
+            chalcogen,
+        ):
+            raise ValueError("quintuple layer must have X-Bi-X-Bi-X order")
+        if (
+            block[0][2].source_label != outer_label
+            or block[-1][2].source_label != outer_label
+            or block[1][2].source_label != bi_label
+            or block[3][2].source_label != bi_label
+        ):
+            raise ValueError("quintuple-layer sites do not match the resolved Bi/X orbits")
 
         center_xy = np.asarray(center.fractional[:2], dtype=np.float64)
         motif: list[MotifAtom] = []
@@ -436,7 +491,7 @@ def _bi2se3_quintuple_layers(
         center_coordinates.append(np.asarray(center.fractional, dtype=np.float64))
 
     if sorted(covered) != list(range(len(crystal.sites))):
-        raise ValueError("Bi2Se3 quintuple layers must cover every expanded site exactly once")
+        raise ValueError("quintuple layers must cover every expanded site exactly once")
     reference = motifs[0]
     reference_signature = tuple(_atom_signature(atom) for atom in reference)
     reference_labels = tuple(atom.source_label for atom in reference)
@@ -452,7 +507,7 @@ def _bi2se3_quintuple_layers(
                 atol=2.0e-15,
             )
         ):
-            raise ValueError("Bi2Se3 quintuple layers must be property-identical translations")
+            raise ValueError("quintuple layers must be property-identical translations")
 
     ordered_centers = sorted(center_coordinates, key=lambda coordinate: coordinate[2])
     translations = tuple(
@@ -468,7 +523,7 @@ def _bi2se3_quintuple_layers(
         np.allclose(translation, expected_translation, rtol=0.0, atol=2.0e-15)
         for translation in translations
     ):
-        raise ValueError("Bi2Se3 quintuple centers must follow the CIF R-centering translation")
+        raise ValueError("quintuple centers must follow the CIF R-centering translation")
     return tuple(motifs)
 
 
@@ -481,15 +536,16 @@ def _parameterized_bi2se3_quintuple_layer(
     if not isinstance(parameters, Bi2Se3QuintupleLayerParameters):
         raise TypeError("parameters must be Bi2Se3QuintupleLayerParameters")
     baseline = _bi2se3_quintuple_layers(crystal)[0]
+    bi_label, center_label, outer_label = quintuple_layer_site_labels(crystal)
     occupancy_by_label = {
-        "Bi": parameters.bi_occupancy,
-        "Se1": parameters.se1_occupancy,
-        "Se2": parameters.se2_occupancy,
+        bi_label: parameters.bi_occupancy,
+        center_label: parameters.se1_occupancy,
+        outer_label: parameters.se2_occupancy,
     }
     normal_distance_by_label = {
-        "Bi": parameters.bi_fractional_z - 1.0 / 3.0,
-        "Se1": 0.0,
-        "Se2": 1.0 / 3.0 - parameters.se2_fractional_z,
+        bi_label: parameters.bi_fractional_z - 1.0 / 3.0,
+        center_label: 0.0,
+        outer_label: 1.0 / 3.0 - parameters.se2_fractional_z,
     }
     atoms: list[MotifAtom] = []
     for atom in baseline:
@@ -497,7 +553,7 @@ def _parameterized_bi2se3_quintuple_layer(
             occupancy = occupancy_by_label[atom.source_label]
             normal_distance = normal_distance_by_label[atom.source_label]
         except KeyError as error:
-            raise ValueError("Bi2Se3 motif contains an unsupported source site") from error
+            raise ValueError("quintuple-layer motif contains an unsupported source site") from error
         baseline_z = atom.fractional_offset[2]
         fractional_z = 0.0 if normal_distance == 0.0 else np.copysign(normal_distance, baseline_z)
         atoms.append(
@@ -520,14 +576,14 @@ def bi2se3_ql_amplitudes(
     *,
     structure_parameters: Bi2Se3QuintupleLayerParameters | None = None,
 ) -> LayerAmplitudeResult:
-    """Return Se1-centered Bi2Se3 quintuple-layer F+ and F- in electron units.
+    """Return central-chalcogen-centered quintuple-layer F+ and F- in electron units.
 
     The source CIF establishes the five-atom motif. The returned gauge is one
     registry-free layer; selecting a stacking parent remains a separate step.
     """
 
     if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
-        raise ValueError("query phase does not match the Bi2Se3 crystal")
+        raise ValueError("query phase does not match the quintuple-layer crystal")
     baseline_parameters = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
     parameters = baseline_parameters if structure_parameters is None else structure_parameters
     baseline_unchanged = parameters == baseline_parameters

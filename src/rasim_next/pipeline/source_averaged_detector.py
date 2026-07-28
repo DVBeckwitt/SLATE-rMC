@@ -355,10 +355,13 @@ class SourceAveragedDetectorEwaldMeasure:
         "_evaluator_blocks",
         "_incident",
         "_instrument",
+        "_material",
+        "_mosaic",
         "_phase_polarization_weight",
         "_reachable_rod_count_per_source_state",
         "_rod_catalog_revision",
         "_rods",
+        "_strength_model",
         "_valid_state_count",
         "_worker_count",
     )
@@ -547,10 +550,13 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_material", material)
+        object.__setattr__(self, "_mosaic", mosaic)
         object.__setattr__(self, "_phase_polarization_weight", phase_weight * polarization)
         object.__setattr__(self, "_reachable_rod_count_per_source_state", reachable_count)
         object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
         object.__setattr__(self, "_rods", selected)
+        object.__setattr__(self, "_strength_model", strength_model)
         object.__setattr__(self, "_valid_state_count", len(evaluators))
         object.__setattr__(self, "_worker_count", workers)
 
@@ -567,6 +573,18 @@ class SourceAveragedDetectorEwaldMeasure:
     @property
     def instrument(self) -> CompiledInstrument:
         return self._instrument
+
+    @property
+    def material(self) -> MaterialOptics:
+        return self._material
+
+    @property
+    def mosaic(self) -> MosaicParameters:
+        return self._mosaic
+
+    @property
+    def strength_model(self) -> Bi2Se3TwoHStrength:
+        return self._strength_model
 
     @property
     def rods(self) -> tuple[Rod, ...]:
@@ -595,6 +613,117 @@ class SourceAveragedDetectorEwaldMeasure:
         """Physical lower bound on ``|Q|`` for included top-exit m=0 rays."""
 
         return self._detector_visible_m0_q_gap_Ainv
+
+    def restrict_rods(
+        self,
+        rods: tuple[Rod, ...],
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Compile an exact source-averaged view over a physical rod subset."""
+
+        requested = tuple(rods)
+        if not requested or any(not isinstance(rod, Rod) for rod in requested):
+            raise ValueError("rods must contain at least one Rod")
+        configured_by_hk = {(rod.h, rod.k): rod for rod in self._rods}
+        requested_hk = tuple((rod.h, rod.k) for rod in requested)
+        if len(set(requested_hk)) != len(requested_hk):
+            raise ValueError("rods must not repeat a physical rod")
+        try:
+            selected = tuple(configured_by_hk[rod_hk] for rod_hk in requested_hk)
+        except KeyError as error:
+            raise ValueError(f"rod subset contains unconfigured rod {error.args[0]}") from error
+        if selected == self._rods:
+            return self
+        return type(self)(
+            reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
+            crystal_to_sample=self._instrument.sample_from_crystal.rotation,
+            rods=selected,
+            rod_catalog_revision=self._rod_catalog_revision,
+            mosaic=self._mosaic,
+            strength_model=self._strength_model,
+            incident=self._incident,
+            material=self._material,
+            instrument=self._instrument,
+            phase_population_weight=self._phase_polarization_weight,
+            polarization_weight=1.0,
+            worker_count=self._worker_count,
+        )
+
+    def rebind_physics(
+        self,
+        *,
+        mosaic: MosaicParameters | None = None,
+        strength_model: Bi2Se3TwoHStrength | None = None,
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Replace mosaic/structure arrays while retaining the combined source geometry."""
+
+        rebound_mosaic = self._mosaic if mosaic is None else mosaic
+        rebound_strength = self._strength_model if strength_model is None else strength_model
+        if not isinstance(rebound_mosaic, MosaicParameters):
+            raise TypeError("mosaic must be MosaicParameters")
+        if not isinstance(rebound_strength, Bi2Se3TwoHStrength):
+            raise TypeError("strength_model must be Bi2Se3TwoHStrength")
+        reference = self._strength_model
+        if (
+            rebound_strength.crystal is not reference.crystal
+            or rebound_strength.layers != reference.layers
+            or rebound_strength.normalization != reference.normalization
+            or rebound_strength.shared_disorder_epsilon != reference.shared_disorder_epsilon
+        ):
+            raise ValueError(
+                "physics rebinding requires unchanged crystal, stacking, and normalization"
+            )
+        valid_state_index = np.flatnonzero(self._incident.states.valid)
+        (
+            atom_offsets,
+            atom_properties,
+            f0_parameters,
+            anomalous_factors,
+            layers,
+            normalization_divisor,
+            u_radial_A2,
+            u_normal_A2,
+        ) = pack_bi2se3_two_h_structures(
+            rebound_strength,
+            wavelength_A=self._incident.states.wavelength_A[valid_state_index],
+        )
+        valid_position_by_state = {
+            int(state_index): position for position, state_index in enumerate(valid_state_index)
+        }
+        rebound_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
+        for block in self._evaluator_blocks:
+            rebound_block: list[_IndexedCompiledEvaluator] = []
+            for indexed in block:
+                state = indexed.evaluator.state.rebind_physics(
+                    mosaic=rebound_mosaic,
+                    atom_fractional_offset=atom_offsets,
+                    atom_occupancy_element=atom_properties,
+                    f0_parameters=f0_parameters,
+                    anomalous_factor_e=anomalous_factors[
+                        valid_position_by_state[indexed.incident_state_index]
+                    ],
+                    layers=layers,
+                    normalization_divisor=normalization_divisor,
+                    u_radial_A2=u_radial_A2,
+                    u_normal_A2=u_normal_A2,
+                    shared_disorder_epsilon=rebound_strength.shared_disorder_epsilon,
+                )
+                rebound_block.append(
+                    indexed.with_evaluator(
+                        CompiledDetectorEvaluator(
+                            state,
+                            self._instrument.detector_shape_rc,
+                        )
+                    )
+                )
+            rebound_blocks.append(tuple(rebound_block))
+
+        rebound = object.__new__(type(self))
+        for slot in self.__slots__:
+            object.__setattr__(rebound, slot, getattr(self, slot))
+        object.__setattr__(rebound, "_evaluator_blocks", tuple(rebound_blocks))
+        object.__setattr__(rebound, "_mosaic", rebound_mosaic)
+        object.__setattr__(rebound, "_strength_model", rebound_strength)
+        return rebound
 
     def rebind_geometry(
         self,
@@ -633,8 +762,11 @@ class SourceAveragedDetectorEwaldMeasure:
             old_states.source_revision != new_states.source_revision
             or old_states.material_revision != new_states.material_revision
             or old_states.polarization_state_id != new_states.polarization_state_id
+            or old_states.incident_model_id != new_states.incident_model_id
         ):
-            raise ValueError("geometry rebind requires unchanged source and material identity")
+            raise ValueError(
+                "geometry rebind requires unchanged source, material, and transport identity"
+            )
         old_instrument = self._instrument
         invariant_instrument = (
             instrument.detector_shape_rc == old_instrument.detector_shape_rc
@@ -724,24 +856,12 @@ class SourceAveragedDetectorEwaldMeasure:
                 raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
             m0_gap = float(np.min(-incident_normal))
         rebound = object.__new__(type(self))
+        for slot in self.__slots__:
+            object.__setattr__(rebound, slot, getattr(self, slot))
         object.__setattr__(rebound, "_evaluator_blocks", tuple(rebound_blocks))
         object.__setattr__(rebound, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(rebound, "_incident", incident)
         object.__setattr__(rebound, "_instrument", instrument)
-        object.__setattr__(
-            rebound,
-            "_phase_polarization_weight",
-            self._phase_polarization_weight,
-        )
-        object.__setattr__(
-            rebound,
-            "_reachable_rod_count_per_source_state",
-            self._reachable_rod_count_per_source_state,
-        )
-        object.__setattr__(rebound, "_rod_catalog_revision", self._rod_catalog_revision)
-        object.__setattr__(rebound, "_rods", self._rods)
-        object.__setattr__(rebound, "_valid_state_count", self._valid_state_count)
-        object.__setattr__(rebound, "_worker_count", self._worker_count)
         return rebound
 
     def _thread_pool(self) -> ThreadPoolExecutor | None:

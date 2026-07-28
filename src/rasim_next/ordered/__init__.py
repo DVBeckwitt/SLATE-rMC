@@ -16,6 +16,7 @@ from rasim_next.ordered.motifs import (
     bi2se3_ql_amplitudes,
     extract_pbi2_motifs,
     pbi2_layer_amplitudes,
+    quintuple_layer_site_labels,
 )
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "extract_pbi2_motifs",
     "ordered_event_result",
     "pbi2_layer_amplitudes",
+    "quintuple_layer_site_labels",
     "uniform_finite_stack",
     "unit_cell_amplitude",
 ]

@@ -13,6 +13,7 @@ import numpy as np
 import xraydb
 from numpy.typing import ArrayLike, NDArray
 
+from painted_ewald import MosaicParameters
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
@@ -220,6 +221,75 @@ class CompiledDetectorState:
         object.__setattr__(rebound, "entrance_amplitude", entrance)
         return rebound
 
+    def rebind_physics(
+        self,
+        *,
+        mosaic: MosaicParameters,
+        atom_fractional_offset: ArrayLike,
+        atom_occupancy_element: ArrayLike,
+        f0_parameters: ArrayLike,
+        anomalous_factor_e: ArrayLike,
+        layers: int,
+        normalization_divisor: float,
+        u_radial_A2: float,
+        u_normal_A2: float,
+        shared_disorder_epsilon: float,
+    ) -> CompiledDetectorState:
+        """Replace mosaic and fixed-geometry structure state without rebuilding geometry."""
+
+        if not isinstance(mosaic, MosaicParameters):
+            raise TypeError("mosaic must be MosaicParameters")
+        if mosaic.zero_tilt_probability_mass != 0.0:
+            raise ValueError("compiled integration does not support zero-tilt atoms")
+        offsets = np.array(atom_fractional_offset, dtype=np.float64, copy=True, order="C")
+        properties = np.array(atom_occupancy_element, dtype=np.float64, copy=True, order="C")
+        parameters = np.array(f0_parameters, dtype=np.float64, copy=True, order="C")
+        anomalous = np.array(anomalous_factor_e, dtype=np.complex128, copy=True, order="C")
+        if offsets.shape != self.atom_fractional_offset.shape or not np.all(np.isfinite(offsets)):
+            raise ValueError("atom_fractional_offset changed shape or contains nonfinite values")
+        if not np.array_equal(offsets[:, :2], self.atom_fractional_offset[:, :2]):
+            raise ValueError("structure rebinding cannot change in-plane atomic coordinates")
+        if properties.shape != self.atom_occupancy_element.shape or not np.all(
+            np.isfinite(properties)
+        ):
+            raise ValueError("atom_occupancy_element changed shape or contains nonfinite values")
+        if parameters.shape != self.f0_parameters.shape or not np.all(np.isfinite(parameters)):
+            raise ValueError("f0_parameters changed shape or contains nonfinite values")
+        if anomalous.shape != self.anomalous_factor_e.shape or not np.all(np.isfinite(anomalous)):
+            raise ValueError("anomalous_factor_e changed shape or contains nonfinite values")
+        scalar_values = {
+            "normalization_divisor": float(normalization_divisor),
+            "u_radial_A2": float(u_radial_A2),
+            "u_normal_A2": float(u_normal_A2),
+            "shared_disorder_epsilon": float(shared_disorder_epsilon),
+        }
+        if not all(math.isfinite(value) and value >= 0.0 for value in scalar_values.values()):
+            raise ValueError("rebound structure scalars must be finite and nonnegative")
+        if scalar_values["normalization_divisor"] == 0.0:
+            raise ValueError("normalization_divisor must be positive")
+        if not 0.0 <= scalar_values["shared_disorder_epsilon"] <= 1.0:
+            raise ValueError("shared_disorder_epsilon must lie in [0, 1]")
+        rebound_layers = int(layers)
+        if isinstance(layers, bool) or rebound_layers < 1 or rebound_layers != layers:
+            raise ValueError("layers must be a positive integer")
+        for value in (offsets, properties, parameters, anomalous):
+            value.setflags(write=False)
+
+        rebound = object.__new__(type(self))
+        for descriptor in fields(self):
+            object.__setattr__(rebound, descriptor.name, getattr(self, descriptor.name))
+        object.__setattr__(rebound, "gaussian_sigma_rad", mosaic.gaussian_sigma_rad)
+        object.__setattr__(rebound, "lorentzian_hwhm_rad", mosaic.lorentzian_half_width_rad)
+        object.__setattr__(rebound, "lorentzian_probability", mosaic.lorentzian_probability)
+        object.__setattr__(rebound, "atom_fractional_offset", offsets)
+        object.__setattr__(rebound, "atom_occupancy_element", properties)
+        object.__setattr__(rebound, "f0_parameters", parameters)
+        object.__setattr__(rebound, "anomalous_factor_e", anomalous)
+        object.__setattr__(rebound, "layers", rebound_layers)
+        for name, value in scalar_values.items():
+            object.__setattr__(rebound, name, value)
+        return rebound
+
 
 def pack_bi2se3_two_h_structure(
     strength: Bi2Se3TwoHStrength,
@@ -261,9 +331,13 @@ def pack_bi2se3_two_h_structures(
         raise ValueError("wavelength_A must be positive")
     structure = strength.structure_parameters
     if structure is None:
-        raise ValueError("compiled Bi2Se3 integration requires structure parameters")
+        raise ValueError("compiled quintuple-layer integration requires structure parameters")
     atoms = _parameterized_bi2se3_quintuple_layer(strength.crystal, structure)
-    elements = ("Bi", "Se")
+    elements = tuple(
+        sorted({atom.element for atom in atoms}, key=lambda value: (value != "Bi", value))
+    )
+    if len(elements) != 2 or elements[0] != "Bi":
+        raise ValueError("compiled quintuple-layer integration requires Bi and one chalcogen")
     element_index = {element: position for position, element in enumerate(elements)}
     offsets = np.asarray([atom.fractional_offset for atom in atoms], dtype=np.float64)
     properties = np.asarray(
@@ -278,7 +352,9 @@ def pack_bi2se3_two_h_structures(
     for position, element in enumerate(elements):
         charges = {atom.charge for atom in atoms if atom.element == element}
         if len(charges) != 1:
-            raise ValueError(f"compiled Bi2Se3 integration requires one charge for {element}")
+            raise ValueError(
+                f"compiled quintuple-layer integration requires one charge for {element}"
+            )
         species = _f0_species(element, charges.pop())
         row = next((candidate for candidate in waasmaier if candidate.ion == species), None)
         if row is None:
