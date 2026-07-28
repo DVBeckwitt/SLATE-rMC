@@ -2,11 +2,12 @@
 
 Run from the repository root with::
 
-    uv run --extra visualization python examples/ewald_sphere_viewer.py
+    python examples/ewald_sphere_viewer.py
 
-The figure uses one Cu K-alpha1 beam. Drag any panel to rotate it, then release
-to synchronize all six panels. Use the radio buttons or I/C keys to switch
-between the continuous intensity field and the zero-mosaic cylinder sections.
+The figure uses one Cu K-alpha1 beam. Dragging temporarily focuses a lightweight
+preview of the selected panel; release to restore and synchronize all six
+high-resolution panels. Use the radio buttons or I/C keys to switch between the
+continuous intensity field and the zero-mosaic cylinder sections.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ WAVE_NUMBER_AINV = 2.0 * math.pi / WAVELENGTH_A
 GLOBAL_LOG_MIN = -10.500151371945972
 GLOBAL_LOG_MAX = -1.5001513719459711
 TEXTURE_SHAPE = (96, 192)
+DRAG_PREVIEW_STRIDE = 6
 
 _TEXTURE_DATA_B85 = """c-
 ri}XLln<mL~iYdwL|bO0G&}XyLv0009t|1VDlyyeGW(9s~%wBCA+l)souH%+Ai)ojvnmzivh*JQ9YbnwfXzym9)dO32LCb0cm<+_
@@ -686,6 +688,10 @@ def _sphere_mesh(
     return x, y, z, texture
 
 
+def _drag_preview_stride(render_stride: int) -> int:
+    return max(render_stride, DRAG_PREVIEW_STRIDE)
+
+
 def _split_finite_segments(points: NDArray[np.float64]) -> list[NDArray[np.float64]]:
     finite = np.all(np.isfinite(points), axis=1)
     boundaries = np.flatnonzero(np.diff(np.r_[False, finite, False]))
@@ -754,9 +760,14 @@ def _draw_graticule(axis: object, ki_sample_Ainv: NDArray[np.float64], *, alpha:
         axis.plot(curve[:, 0], curve[:, 1], curve[:, 2], color="0.25", alpha=alpha, linewidth=0.55)
 
 
-def _draw_intensity(axis: object, case: EwaldCase, stride: int, color_map: object) -> None:
+def _draw_intensity(
+    axis: object,
+    case: EwaldCase,
+    stride: int,
+    color_map: object,
+) -> tuple[object, object | None]:
     x, y, z, normalized = _sphere_mesh(case.texture_index, stride)
-    axis.plot_surface(
+    full_surface = axis.plot_surface(
         x,
         y,
         z,
@@ -767,9 +778,26 @@ def _draw_intensity(axis: object, case: EwaldCase, stride: int, color_map: objec
         rcount=x.shape[0],
         ccount=x.shape[1],
     )
+    preview_surface = None
+    preview_stride = _drag_preview_stride(stride)
+    if preview_stride > stride:
+        x, y, z, normalized = _sphere_mesh(case.texture_index, preview_stride)
+        preview_surface = axis.plot_surface(
+            x,
+            y,
+            z,
+            facecolors=color_map(normalized),
+            linewidth=0.0,
+            antialiased=False,
+            shade=False,
+            rcount=x.shape[0],
+            ccount=x.shape[1],
+            visible=False,
+        )
     ki = incident_wavevector_Ainv(case.incidence_deg)
     _draw_graticule(axis, ki, alpha=0.38)
     _draw_frame(axis, ki)
+    return full_surface, preview_surface
 
 
 def _draw_cylinder_sections(axis: object, case: EwaldCase) -> None:
@@ -824,14 +852,28 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
     help_text = figure.text(
         0.875,
         0.12,
-        "drag: rotate\nrelease: sync panels\nI: intensity\nC: cylinders\nR: reset\nQ: close",
+        "drag: focused preview\nrelease: sync all panels\nI: intensity\nC: cylinders\nR: reset\nQ: close",
         va="bottom",
     )
     help_text.set_in_layout(False)
     state = {"mode": initial_mode, "elev": 18.0, "azim": 122.0}
+    intensity_surfaces: list[tuple[object, object | None]] = []
+
+    def show_drag_preview(active_axis: object | None) -> None:
+        dragging = active_axis is not None
+        for axis in axes:
+            axis.set_visible(not dragging or axis is active_axis)
+        for axis, (full_surface, preview_surface) in zip(axes, intensity_surfaces, strict=False):
+            if preview_surface is not None:
+                is_active = dragging and axis is active_axis
+                full_surface.set_visible(not dragging)
+                preview_surface.set_visible(is_active)
 
     def redraw() -> None:
+        state.pop("active_axis", None)
+        intensity_surfaces.clear()
         for axis, case in zip(axes, CASES, strict=True):
+            axis.set_visible(True)
             axis.clear()
             _configure_axis(
                 axis,
@@ -840,7 +882,7 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
                 state["azim"],
             )
             if state["mode"] == "intensity":
-                _draw_intensity(axis, case, stride, color_map)
+                intensity_surfaces.append(_draw_intensity(axis, case, stride, color_map))
             else:
                 _draw_cylinder_sections(axis, case)
         color_axis.set_visible(state["mode"] == "intensity")
@@ -856,13 +898,23 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
         state["mode"] = label
         redraw()
 
-    def synchronize(event: object) -> None:
+    def begin_interaction(event: object) -> None:
         if event.inaxes not in axes:
             return
-        state["elev"] = float(event.inaxes.elev)
-        state["azim"] = float(event.inaxes.azim)
+        state["active_axis"] = event.inaxes
+        show_drag_preview(event.inaxes)
+        figure.canvas.draw_idle()
+
+    def synchronize(event: object) -> None:
+        active_axis = event.inaxes if event.inaxes in axes else state.pop("active_axis", None)
+        if active_axis is None:
+            return
+        state.pop("active_axis", None)
+        state["elev"] = float(active_axis.elev)
+        state["azim"] = float(active_axis.azim)
         for axis in axes:
             axis.view_init(elev=state["elev"], azim=state["azim"])
+        show_drag_preview(None)
         figure.canvas.draw_idle()
 
     def key_press(event: object) -> None:
@@ -878,6 +930,7 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
             plt.close(figure)
 
     radio.on_clicked(select_mode)
+    figure.canvas.mpl_connect("button_press_event", begin_interaction)
     figure.canvas.mpl_connect("button_release_event", synchronize)
     figure.canvas.mpl_connect("key_press_event", key_press)
     legend_handles = (
