@@ -52,3 +52,21 @@ def test_central_rod_has_direct_and_regular_ewald_intersections() -> None:
         VIEWER.WAVE_NUMBER_AINV,
         atol=2.0e-14,
     )
+
+
+def test_positive_z_segments_exclude_nonpositive_points() -> None:
+    points = np.array(
+        (
+            (0.0, 0.0, -1.0),
+            (1.0, 0.0, 1.0),
+            (2.0, 0.0, 2.0),
+            (3.0, 0.0, 0.0),
+            (4.0, 0.0, 3.0),
+            (5.0, 0.0, 4.0),
+        )
+    )
+
+    segments = VIEWER.positive_z_segments(points)
+
+    assert len(segments) == 2
+    assert all(np.all(segment[:, 2] > 0.0) for segment in segments)

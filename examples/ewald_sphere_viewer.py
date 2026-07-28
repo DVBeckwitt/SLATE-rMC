@@ -7,7 +7,8 @@ Run from the repository root with::
 The figure uses one Cu K-alpha1 beam. Dragging temporarily focuses a lightweight
 preview of the selected panel; release to restore and synchronize all six
 high-resolution panels. Use the radio buttons or I/C keys to switch between the
-continuous intensity field and the zero-mosaic cylinder sections.
+continuous intensity field and the zero-mosaic cylinder sections. Only the
+positive-z half of the displayed Ewald surface is included.
 """
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ GLOBAL_LOG_MIN = -10.500151371945972
 GLOBAL_LOG_MAX = -1.5001513719459711
 TEXTURE_SHAPE = (96, 192)
 DRAG_PREVIEW_STRIDE = 6
+DEFAULT_VIEW_ANGLES = (18.0, 122.0)
+AXIS_VIEW_ANGLES = (
+    ("X", 0.0, 0.0),
+    ("Y", 0.0, 90.0),
+    ("Z", 90.0, -90.0),
+)
 
 _TEXTURE_DATA_B85 = """c-
 ri}XLln<mL~iYdwL|bO0G&}XyLv0009t|1VDlyyeGW(9s~%wBCA+l)souH%+Ai)ojvnmzivh*JQ9YbnwfXzym9)dO32LCb0cm<+_
@@ -676,14 +683,20 @@ def _sphere_mesh(
     texture_index: int,
     stride: int,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-    latitude = np.linspace(-0.5 * math.pi, 0.5 * math.pi, TEXTURE_SHAPE[0])[::stride]
+    all_latitudes = np.linspace(-0.5 * math.pi, 0.5 * math.pi, TEXTURE_SHAPE[0])
+    first_positive_row = int(np.searchsorted(all_latitudes, 0.0, side="right"))
+    latitude = np.r_[0.0, all_latitudes[first_positive_row:]][::stride]
     longitude = np.linspace(-math.pi, math.pi, TEXTURE_SHAPE[1], endpoint=False)[::stride]
     longitude = np.append(longitude, math.pi)
     lon_grid, lat_grid = np.meshgrid(longitude, latitude)
     x = WAVE_NUMBER_AINV * np.cos(lat_grid) * np.cos(lon_grid)
     y = WAVE_NUMBER_AINV * np.cos(lat_grid) * np.sin(lon_grid)
     z = WAVE_NUMBER_AINV * np.sin(lat_grid)
-    texture = _intensity_textures()[texture_index][::stride, ::stride]
+    full_texture = _intensity_textures()[texture_index].astype(np.float64)
+    equator_texture = 0.5 * (
+        full_texture[first_positive_row - 1] + full_texture[first_positive_row]
+    )
+    texture = np.vstack((equator_texture, full_texture[first_positive_row:]))[::stride, ::stride]
     texture = np.column_stack((texture, texture[:, 0])).astype(np.float64) / 255.0
     return x, y, z, texture
 
@@ -692,10 +705,17 @@ def _drag_preview_stride(render_stride: int) -> int:
     return max(render_stride, DRAG_PREVIEW_STRIDE)
 
 
-def _split_finite_segments(points: NDArray[np.float64]) -> list[NDArray[np.float64]]:
-    finite = np.all(np.isfinite(points), axis=1)
-    boundaries = np.flatnonzero(np.diff(np.r_[False, finite, False]))
-    return [points[start:stop] for start, stop in boundaries.reshape(-1, 2) if stop - start > 1]
+def positive_z_segments(points: NDArray[np.float64]) -> list[NDArray[np.float64]]:
+    """Split a sampled curve into finite, strictly positive-z segments."""
+
+    sampled_points = np.asarray(points, dtype=np.float64)
+    if sampled_points.ndim != 2 or sampled_points.shape[1] != 3:
+        raise ValueError("points must have shape (sample_count, 3)")
+    visible = np.all(np.isfinite(sampled_points), axis=1) & (sampled_points[:, 2] > 0.0)
+    boundaries = np.flatnonzero(np.diff(np.r_[False, visible, False]))
+    return [
+        sampled_points[start:stop] for start, stop in boundaries.reshape(-1, 2) if stop - start > 1
+    ]
 
 
 def _ki_graticule(ki_sample_Ainv: NDArray[np.float64]) -> list[NDArray[np.float64]]:
@@ -757,7 +777,15 @@ def _draw_frame(axis: object, ki_sample_Ainv: NDArray[np.float64]) -> None:
 
 def _draw_graticule(axis: object, ki_sample_Ainv: NDArray[np.float64], *, alpha: float) -> None:
     for curve in _ki_graticule(ki_sample_Ainv):
-        axis.plot(curve[:, 0], curve[:, 1], curve[:, 2], color="0.25", alpha=alpha, linewidth=0.55)
+        for segment in positive_z_segments(curve):
+            axis.plot(
+                segment[:, 0],
+                segment[:, 1],
+                segment[:, 2],
+                color="0.25",
+                alpha=alpha,
+                linewidth=0.55,
+            )
 
 
 def _draw_intensity(
@@ -805,8 +833,7 @@ def _draw_cylinder_sections(axis: object, case: EwaldCase) -> None:
     _draw_graticule(axis, ki, alpha=0.48)
     for shell_index, radius in enumerate(cylinder_shell_radii_Ainv(case.lattice_a_A)):
         for branch in cylinder_ewald_intersections_Ainv(float(radius), ki):
-            for segment in _split_finite_segments(branch):
-                relative = segment + ki
+            for relative in positive_z_segments(branch + ki):
                 axis.plot(
                     relative[:, 0],
                     relative[:, 1],
@@ -814,10 +841,11 @@ def _draw_cylinder_sections(axis: object, case: EwaldCase) -> None:
                     color="tab:blue",
                     linewidth=2.2 if shell_index == 0 else 1.25,
                 )
-    z_absolute = np.array((-WAVE_NUMBER_AINV - ki[2], WAVE_NUMBER_AINV - ki[2]))
-    central_line = np.column_stack((np.zeros(2), np.zeros(2), z_absolute)) + ki
+    positive_zero = np.nextafter(0.0, 1.0)
+    central_line = np.array(((0.0, 0.0, positive_zero), (0.0, 0.0, WAVE_NUMBER_AINV)))
     axis.plot(*central_line.T, color="tab:orange", linewidth=2.2)
     central_points = central_rod_intersections_Ainv(ki) + ki
+    central_points = central_points[central_points[:, 2] > 0.0]
     axis.scatter(*central_points.T, color="tab:orange", edgecolor="0.15", s=34, depthshade=False)
     _draw_frame(axis, ki)
 
@@ -829,7 +857,7 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
     from matplotlib.cm import ScalarMappable
     from matplotlib.colors import LogNorm
     from matplotlib.lines import Line2D
-    from matplotlib.widgets import RadioButtons
+    from matplotlib.widgets import Button, RadioButtons
 
     if initial_mode not in {"intensity", "cylinders"}:
         raise ValueError("initial_mode must be 'intensity' or 'cylinders'")
@@ -842,21 +870,25 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
     color_map = plt.get_cmap("magma")
     normalization = LogNorm(vmin=10.0**GLOBAL_LOG_MIN, vmax=10.0**GLOBAL_LOG_MAX)
     scalar_map = ScalarMappable(norm=normalization, cmap=color_map)
-    color_axis = figure.add_axes((0.9, 0.22, 0.018, 0.52))
+    color_axis = figure.add_axes((0.9, 0.2, 0.018, 0.33))
     color_bar = figure.colorbar(scalar_map, cax=color_axis)
     color_bar.set_label("Σ |F|² ⊗ mosaic intensity  [Å² rad⁻²]")
-    radio_axis = figure.add_axes((0.875, 0.79, 0.115, 0.1))
+    radio_axis = figure.add_axes((0.875, 0.82, 0.115, 0.1))
     radio = RadioButtons(
         radio_axis, ("intensity", "cylinders"), active=0 if initial_mode == "intensity" else 1
     )
     help_text = figure.text(
         0.875,
-        0.12,
-        "drag: focused preview\nrelease: sync all panels\nI: intensity\nC: cylinders\nR: reset\nQ: close",
+        0.075,
+        "drag: focused preview\nrelease: sync all panels\nX/Y/Z: axis views\nR: reset\nI/C: mode\nQ: close",
         va="bottom",
     )
     help_text.set_in_layout(False)
-    state = {"mode": initial_mode, "elev": 18.0, "azim": 122.0}
+    state = {
+        "mode": initial_mode,
+        "elev": DEFAULT_VIEW_ANGLES[0],
+        "azim": DEFAULT_VIEW_ANGLES[1],
+    }
     intensity_surfaces: list[tuple[object, object | None]] = []
 
     def show_drag_preview(active_axis: object | None) -> None:
@@ -887,16 +919,27 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
                 _draw_cylinder_sections(axis, case)
         color_axis.set_visible(state["mode"] == "intensity")
         if state["mode"] == "intensity":
-            figure.suptitle("Continuous SF ⊗ mosaic intensity · kᵢ-aligned sphere coordinates")
+            figure.suptitle(
+                "Continuous SF ⊗ mosaic intensity · positive z · kᵢ-aligned sphere coordinates"
+            )
         else:
             figure.suptitle(
-                "Zero-mosaic reciprocal-cylinder intersections · kᵢ-aligned sphere coordinates"
+                "Zero-mosaic reciprocal-cylinder intersections · positive z · "
+                "kᵢ-aligned sphere coordinates"
             )
         figure.canvas.draw_idle()
 
     def select_mode(label: str) -> None:
         state["mode"] = label
         redraw()
+
+    def set_view(elev: float, azim: float) -> None:
+        state.pop("active_axis", None)
+        state["elev"], state["azim"] = elev, azim
+        show_drag_preview(None)
+        for axis in axes:
+            axis.view_init(elev=elev, azim=azim)
+        figure.canvas.draw_idle()
 
     def begin_interaction(event: object) -> None:
         if event.inaxes not in axes:
@@ -924,17 +967,37 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
         elif key == "c":
             radio.set_active(1)
         elif key == "r":
-            state["elev"], state["azim"] = 18.0, 122.0
-            redraw()
+            set_view(*DEFAULT_VIEW_ANGLES)
+        elif key in {"x", "y", "z"}:
+            _, elev, azim = next(view for view in AXIS_VIEW_ANGLES if view[0].lower() == key)
+            set_view(elev, azim)
         elif key == "q":
             plt.close(figure)
+
+    button_specs = (("Reset", *DEFAULT_VIEW_ANGLES), *AXIS_VIEW_ANGLES)
+    view_buttons = []
+    for index, (label, elev, azim) in enumerate(button_specs):
+        button_axis = figure.add_axes((0.875, 0.75 - 0.047 * index, 0.115, 0.035))
+        button = Button(button_axis, label)
+        button.on_clicked(
+            lambda _event, selected_elev=elev, selected_azim=azim: set_view(
+                selected_elev, selected_azim
+            )
+        )
+        view_buttons.append(button)
 
     radio.on_clicked(select_mode)
     figure.canvas.mpl_connect("button_press_event", begin_interaction)
     figure.canvas.mpl_connect("button_release_event", synchronize)
     figure.canvas.mpl_connect("key_press_event", key_press)
     legend_handles = (
-        Line2D((0,), (0,), color="tab:blue", linewidth=2.0, label="sphere-cylinder intersection"),
+        Line2D(
+            (0,),
+            (0,),
+            color="tab:blue",
+            linewidth=2.0,
+            label="positive-z sphere-cylinder intersection",
+        ),
         Line2D((0,), (0,), color="tab:orange", linewidth=2.0, label="central rod Qr=0"),
         Line2D((0,), (0,), color="tab:green", linewidth=2.0, label="single incident beam / z'"),
     )
