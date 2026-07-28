@@ -1147,6 +1147,67 @@ PSF, component deblending, model discrepancy, calibrated uncertainty, general pe
 motion, and arbitrary-material structure bases. The four interpolation points and local
 correlations are not substitutes for independent data validation or statistical uncertainty.
 
+## Portable Bi2Se3/Bi2Te3 staged-fit replay
+
+The two tracked `rasim-staged-fit-replay-v1` cases make the accepted 5/10/15-degree results
+repeatable from a clean clone. Exact checks cover every input hash and decoded OSC array, source
+realization, fitted/fixed coordinate list, active-bound mask, profile and `m=0` identity, stage
+revision, execution-runtime lineage, and classification. Numerical fits use the tolerances declared
+in each case. The runner validates the complete transitive numerical dependency closure from one
+hash-checked `uv.lock` read immediately before execution; resume rejects a stage from a different
+runtime even though runtime provenance is deliberately excluded from its scientific revision.
+
+Bi2Se3 replays the qualified detector-coordinate geometry fit (nine coordinates, one pivot bound,
+so parameter precision remains unqualified), the gate-v2 measured mosaic fit, and the synthetic
+selected-component ordered-intensity proof. The mosaic target is
+`(sigma_G,HWHM_L,eta)=(1.3228756555 deg,0.4898979486 deg,0.4480961630)` with objective
+`1.6802591883` over 15 profiles including five `m=0`. Its profile RMS/max residuals
+`0.33469/0.75333` and eight negative reconstructed bins demonstrate model limitation. The ordered
+target `(oBi,oSe1,oSe2,Ur,Uz)=(0.94,0.78,0.86,0.007,0.034)` is machine-precision synthetic
+recovery, not unresolved raw-OSC intensity or integrated peak mass.
+
+Bi2Te3 recomputes position-free geometry from the tracked gzip OSCs while retaining the historical
+catalog for audit. Under the case-bound runtime, the tracked-container selection revision is
+`sha256-97ba51fce133a27404d4b571e40fc21413fb13e8ccc70d725486b5f12fefff51`;
+historical revision `sha256-79f5028d...`, catalog row-manifest `sha256-4f3755ac...`, and tracked
+catalog-file SHA-256 `84cca62c...` are distinct provenance objects. The locked and historical
+selections both contain 11/14/10 sites; their full hashes include floating-point localization and
+covariance tokens. With detector tilts frozen, the seven-coordinate fit
+has RMS/max `7.1750902/15.077870 px`, rank seven, and three active bounds; it is unqualified and
+model-limited. The 33-profile/three-`m=0` mosaic target is
+`(1.0340984212 deg,0.6600483356 deg,0.3446838236)` with objective `15.460968046`; median/max
+profile residuals `0.69385/1.0` reject a claim of adequate intrinsic-mosaic recovery. The
+31-profile/three-`m=0` ordered target is
+`(Te1/Bi,Te2/Bi,Ur,Uz)=(1.0,0.8448714451,0.1,0.0)` with objective `24.118831163`; three parameters
+contact bounds. It is a transferred-nuisance-amplitude estimate with `NO_ORACLE`, not direct
+count-calibrated structure recovery.
+
+An independent current-worktree CUDA replay recovered mosaic
+`(1.0340984212 deg,0.6600483356 deg,0.3446812734)` with objective `15.460996255` and ordered
+`(1.0,0.8448725522,0.1,0.0)` with objective `24.118711199`. The case tolerances
+`(5e-6,5e-5,1e-5,2e-4)` for mosaic parameters/objective and ordered parameters/objective cover
+these observed optimizer-repeat deltas while remaining much smaller than the stated model
+residuals. Exact identities, profile membership, bounds, ranks, and source realizations are not
+tolerance-relaxed.
+
+The accepted Bi2Te3 mosaic and ordered stages are CUDA-qualified under the current lock; equivalent
+CPU tolerance has not been established, so a CPU request through mosaic or later fails before
+geometry executes or an output directory is created. The optional 250-state 3,000 x 3,000 render has the
+separate historical CUDA qualification described below. Render verification hashes decoded
+grayscale pixels, not PNG container bytes. Paths, timings, peak memory, and device labels are
+excluded from scientific identity. Bi2Se3 rendering is disabled in this replay because available
+images bind a retired mosaic result.
+
+The locked fit-stage qualification replay used Python `3.13.13`, uv `0.11.7`, NumPy `2.4.6`,
+SciPy `1.18.0`, Numba `0.66.0`, and an NVIDIA GeForce RTX 3060 with driver `572.47`. Commands use
+`uv run --frozen`; the case hashes `uv.lock`, but neither the case nor uv binds the Python patch,
+Windows build, CUDA driver, or GPU model. Therefore fit floats are certified through the declared
+tolerances, not bitwise across arbitrary platforms. The six decoded Bi2Te3 render hashes are a
+historical RTX-3060 CUDA oracle whose Python/package environment was not recorded; they await
+requalification under the current lock and are not presumed to survive a different CUDA device.
+Running `--through render` verifies them exactly or fails. That optional stage additionally
+requires the tracked `visualization` extra for Pillow.
+
 ## Tolerance freeze and proof sensitivity
 
 The original T02--T05 comparison proofs loaded `proof/stage_tolerances_v1.json` through the strict

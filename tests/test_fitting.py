@@ -2787,6 +2787,49 @@ def test_ordered_intensity_fit_enforces_freeze_gauge_revision_and_rank_contracts
         rtol=2.0e-10,
     )
 
+    bounded_relative = fit_ordered_intensity_series(
+        (response,),
+        (observation,),
+        base_strength=strength,
+        active_parameter_names=(
+            "se1_occupancy",
+            "se2_occupancy",
+            "u_radial_A2",
+            "u_normal_A2",
+        ),
+        initial_parameters=replace(
+            relative_initial,
+            se1_occupancy=0.7,
+            se2_occupancy=0.7,
+        ),
+        relative_scale_mode=True,
+        active_parameter_bounds={
+            "se1_occupancy": (0.0, 1.0),
+            "se2_occupancy": (0.0, 1.0),
+        },
+    )
+    assert bounded_relative.occupancy_ratios[1] <= 1.0
+    assert bounded_relative.active_bounds[0]
+
+    with pytest.raises(ValueError, match="active parameter"):
+        fit_ordered_intensity_series(
+            (response,),
+            (observation,),
+            base_strength=strength,
+            active_parameter_names=("se1_occupancy",),
+            active_parameter_bounds={"se2_occupancy": (0.0, 1.0)},
+        )
+
+    with pytest.raises(ValueError, match="narrow the canonical"):
+        fit_ordered_intensity_series(
+            (response,),
+            (observation,),
+            base_strength=strength,
+            active_parameter_names=("u_radial_A2",),
+            relative_scale_mode=False,
+            active_parameter_bounds={"u_radial_A2": (-0.01, 0.1)},
+        )
+
     inactive_outside_optimizer_bounds = replace(fixed, u_radial_A2=0.2)
     fully_frozen = fit_ordered_intensity_series(
         (response,),

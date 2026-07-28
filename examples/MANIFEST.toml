@@ -56,6 +56,16 @@ size_bytes = 776
 sha256 = "c85286056aab0858bc70fd5236504e193d05cbf0b30cad87ed69160a82b7c027"
 
 [[file]]
+path = "examples/bi2se3/experiment/ordered_intensity_fit_truth.toml"
+size_bytes = 1363
+sha256 = "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c"
+
+[[file]]
+path = "examples/bi2se3/experiment/staged_fit_replay.toml"
+size_bytes = 7095
+sha256 = "27ba4ddbddacde70fca99a7aa1354516c6e570aaa7c0cd8a766ad223d38a8fdc"
+
+[[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
 size_bytes = 15895
 sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"
@@ -117,5 +127,30 @@ sha256 = "3198cfacaba81eece48ed5b049f17fc5deab03e4dbb7204d4f2c6c4846bfefc8"
 
 [[file]]
 path = "examples/bi2te3/structures/Bi2Te3_cod_9011962.cif"
-size_bytes = 730
-sha256 = "1df987b2bae84805ec5f8378b238f29ca544e01b09a1c40543e39fdb4c925efc"
+size_bytes = 731
+sha256 = "e1e5f42082bf0699b1a674b19fbf74cf1163b5c18dcb7d00142dd0b2dc4b1fe3"
+
+[[file]]
+path = "examples/bi2te3/osc/Bi2Te3_5m_5d.osc.gz"
+size_bytes = 4072655
+sha256 = "fa449a18b3fd4f2be99fffb7916e7808659000b24e07784316f5fd0446e08234"
+
+[[file]]
+path = "examples/bi2te3/osc/Bi2Te3_10d_5m.osc.gz"
+size_bytes = 3877091
+sha256 = "33664d156ba1626208edc90d1a7b05cbe428a16fe4eed9d4d16a14cafb369c9d"
+
+[[file]]
+path = "examples/bi2te3/osc/Bi2Te3_15d_5m.osc.gz"
+size_bytes = 3862925
+sha256 = "b683b32b185c1c0d9c373a7de242728edc2caf31afdb34da5646f4adaab6a154"
+
+[[file]]
+path = "examples/bi2te3/observations/indexed_catalog.json"
+size_bytes = 17149
+sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
+
+[[file]]
+path = "examples/bi2te3/experiment/staged_fit_replay.toml"
+size_bytes = 11037
+sha256 = "53442a946b6ec79be363dfe38680e88b07d1b6c322ed8626f935fd8d358076db"

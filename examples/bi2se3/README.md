@@ -14,7 +14,7 @@ through `gzip.open`; it must not create uncompressed copies under the repository
 
 The tracked mosaic-recovery case is
 `experiment/mosaic_fit_truth.toml`. Run
-`uv run python scripts/recover_bi2se3_mosaic.py --output-directory <external-directory>` to recover
+`uv run --frozen python scripts/recover_bi2se3_mosaic.py --output-directory <external-directory>` to recover
 the prescribed `(2 deg Gaussian sigma, 0.5 deg Lorentzian HWHM, eta=0.1)` distribution jointly from
 the 5, 10, and 15 degree continuous profiles. The fit jointly uses the frozen 10/8/8 indexed
 nonzero profiles and six raw-supported branchless `00L` profiles representable by the fixed
@@ -32,3 +32,16 @@ central-profile bins by intensity. The three OSC files are still fitted simultan
 `m=0` profiles are `003/006` at 5 degrees, `006` at 10 degrees, and `006/009` at 15 degrees. This
 real-data result is reported as a model-limited effective radial envelope, not a unique intrinsic
 mosaic distribution.
+
+`experiment/staged_fit_replay.toml` binds the full geometry, measured-mosaic, and synthetic
+selected-component ordered-intensity sequence. Run it with an external output directory so the
+tracked dependency lock is part of the replay:
+
+```powershell
+uv run --frozen python scripts/replay_staged_fit.py `
+  examples/bi2se3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2se3-replay --backend cuda
+```
+
+The ordered stage is an identifiability proof at fixed geometry and mosaic; it is not raw-OSC
+structure-factor recovery.

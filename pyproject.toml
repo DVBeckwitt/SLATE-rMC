@@ -12,6 +12,7 @@ dependencies = [
   "gemmi>=0.7,<0.8",
   "numba>=0.66,<0.67",
   "numpy>=2.0,<3",
+  "packaging>=24,<27",
   "PyYAML>=6.0.3,<7",
   "scipy>=1.14,<2",
   "xraydb>=4.5,<5",
@@ -20,10 +21,12 @@ dependencies = [
 [project.optional-dependencies]
 visualization = [
   "matplotlib>=3.9,<4",
+  "Pillow>=12,<13",
 ]
 
 [dependency-groups]
 dev = [
+  "Pillow>=12,<13",
   "pytest>=8,<10",
   "ruff>=0.12,<1",
 ]

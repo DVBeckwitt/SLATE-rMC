@@ -2161,6 +2161,7 @@ def sample_detector_pixel_center_density(
     detector: SourceAveragedDetectorEwaldMeasure,
     *,
     execution_backend: str = "cpu",
+    cuda_coordinate_chunk_size: int | None = None,
 ) -> DetectorCoordinateDensityImage:
     """Sample the final all-source, all-rod, all-root detector function once per pixel."""
 
@@ -2168,6 +2169,15 @@ def sample_detector_pixel_center_density(
         raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
     if execution_backend not in {"cpu", "cuda"}:
         raise ValueError("execution_backend must be cpu or cuda")
+    if cuda_coordinate_chunk_size is not None:
+        if (
+            isinstance(cuda_coordinate_chunk_size, bool)
+            or not isinstance(cuda_coordinate_chunk_size, (int, np.integer))
+            or int(cuda_coordinate_chunk_size) < 1
+        ):
+            raise ValueError("cuda_coordinate_chunk_size must be a positive integer")
+        if execution_backend != "cuda":
+            raise ValueError("cuda_coordinate_chunk_size requires the CUDA execution backend")
     rows, columns = detector.instrument.detector_shape_rc
     column_center = np.arange(columns, dtype=np.float64)
     row_center = np.arange(rows, dtype=np.float64)
@@ -2222,6 +2232,7 @@ def sample_detector_pixel_center_density(
             column_grid.ravel()[selected],
             row_grid.ravel()[selected],
             execution_backend=execution_backend,
+            cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
         )
         if np.any(evaluated.caustic):
             raise FloatingPointError("a native pixel center lies exactly on a detector caustic")

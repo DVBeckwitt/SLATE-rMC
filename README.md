@@ -37,6 +37,28 @@ For a one-incident-state, native-pixel convergence diagnostic, use
 `scripts/generate_bi2se3_continuous_detector.py`. Its omitted physical options inherit the same YAML
 fixture, so there is only one default authority.
 
+The accepted Bi2Se3 and Bi2Te3 5/10/15-degree staged fits are portable, hash-bound examples. Check
+their inputs without fitting, or replay through ordered intensity into an external directory:
+
+```powershell
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml --inputs-only
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml --inputs-only
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
+  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
+  --output-directory C:\path\outside\the\repository\bi2te3-replay --backend cuda
+```
+
+Geometry uses one ideal source state. Mosaic and ordered intensity reduce all 250 source states
+into one detector function per incidence before comparison. See `docs/EXAMPLES.md` for result and
+render qualifications.
+
+Use `--frozen` for these replays: each case hashes `uv.lock`, and the frozen invocation installs
+and executes its complete locked numerical dependency closure. Every stage records that execution
+runtime and resume requires an exact runtime match; fit values remain tolerance-based across fresh
+interpreter, operating-system, and CUDA executions. The optional historical render oracle has a
+separate qualification boundary described in `docs/VALIDATION.md`.
+
 ## Scientific contracts
 
 - Internal angles are radians; distances are metres; wavelengths and crystal lengths are

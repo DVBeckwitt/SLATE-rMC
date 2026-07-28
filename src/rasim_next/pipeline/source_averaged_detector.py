@@ -34,6 +34,18 @@ FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
 
+def _validated_cuda_coordinate_chunk_size(
+    execution_backend: str,
+    cuda_coordinate_chunk_size: int | None,
+) -> int | None:
+    if cuda_coordinate_chunk_size is None:
+        return None
+    chunk_size = positive_integer(cuda_coordinate_chunk_size, "cuda_coordinate_chunk_size")
+    if execution_backend != "cuda":
+        raise ValueError("cuda_coordinate_chunk_size requires the CUDA execution backend")
+    return chunk_size
+
+
 @dataclass(frozen=True, slots=True)
 class SourceAveragedDetectorCoordinateIntensity:
     """Detector-coordinate density summed over independent source states.
@@ -725,6 +737,28 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_strength_model", rebound_strength)
         return rebound
 
+    def with_maximum_state_block_count(
+        self,
+        maximum_state_block_count: int,
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Return an immutable execution view with at most the requested state blocks."""
+
+        maximum_blocks = positive_integer(
+            maximum_state_block_count,
+            "maximum_state_block_count",
+        )
+        evaluators = tuple(item for block in self._evaluator_blocks for item in block)
+        block_size = max(1, (len(evaluators) + maximum_blocks - 1) // maximum_blocks)
+        blocks = tuple(
+            tuple(evaluators[start : start + block_size])
+            for start in range(0, len(evaluators), block_size)
+        )
+        rebound = object.__new__(type(self))
+        for slot in self.__slots__:
+            object.__setattr__(rebound, slot, getattr(self, slot))
+        object.__setattr__(rebound, "_evaluator_blocks", blocks)
+        return rebound
+
     def rebind_geometry(
         self,
         *,
@@ -970,6 +1004,7 @@ class SourceAveragedDetectorEwaldMeasure:
         *,
         branch: int | None,
         execution_backend: str,
+        cuda_coordinate_chunk_size: int | None = None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
         supplied_column = np.asarray(column_px)
         supplied_row = np.asarray(row_px)
@@ -988,6 +1023,10 @@ class SourceAveragedDetectorEwaldMeasure:
         flat_row = np.ascontiguousarray(row.reshape(-1))
         if execution_backend not in {"cpu", "cuda"}:
             raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        cuda_chunk_size = _validated_cuda_coordinate_chunk_size(
+            execution_backend,
+            cuda_coordinate_chunk_size,
+        )
         if execution_backend == "cuda":
             if branch is not None:
                 raise ValueError("the CUDA backend currently supports all retained roots only")
@@ -1002,6 +1041,11 @@ class SourceAveragedDetectorEwaldMeasure:
                     flat_row,
                     detector_shape_rc=self._instrument.detector_shape_rc,
                     master_rod_count=len(self._rods),
+                    **(
+                        {}
+                        if cuda_chunk_size is None
+                        else {"coordinate_chunk_size": cuda_chunk_size}
+                    ),
                 )
             )
             backend_id = "numba_cuda_source_averaged.v1"
@@ -1079,6 +1123,7 @@ class SourceAveragedDetectorEwaldMeasure:
         row_px: ArrayLike,
         *,
         execution_backend: str = "cpu",
+        cuda_coordinate_chunk_size: int | None = None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Evaluate every retained physical root, including supported kinematic m=0."""
 
@@ -1087,6 +1132,7 @@ class SourceAveragedDetectorEwaldMeasure:
             row_px,
             branch=None,
             execution_backend=execution_backend,
+            cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
         )
 
     def evaluate_detector_density_all_roots(
@@ -1095,6 +1141,7 @@ class SourceAveragedDetectorEwaldMeasure:
         row_px: ArrayLike,
         *,
         execution_backend: str = "cpu",
+        cuda_coordinate_chunk_size: int | None = None,
     ) -> SourceAveragedDetectorCoordinateDensity:
         """Reduce every source, physical rod, and retained root at each coordinate."""
 
@@ -1112,6 +1159,10 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError("detector coordinates must be finite")
         if execution_backend not in {"cpu", "cuda"}:
             raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        cuda_chunk_size = _validated_cuda_coordinate_chunk_size(
+            execution_backend,
+            cuda_coordinate_chunk_size,
+        )
         shape = column.shape
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
@@ -1127,6 +1178,11 @@ class SourceAveragedDetectorEwaldMeasure:
                     flat_row,
                     detector_shape_rc=self._instrument.detector_shape_rc,
                     master_rod_count=len(self._rods),
+                    **(
+                        {}
+                        if cuda_chunk_size is None
+                        else {"coordinate_chunk_size": cuda_chunk_size}
+                    ),
                 )
             )
             backend_id = "numba_cuda_source_averaged.v1"

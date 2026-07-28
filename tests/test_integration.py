@@ -1635,9 +1635,7 @@ def test_cuda_detector_backend_fails_closed_without_a_device(
         )
 
 
-def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
     from numba import cuda
 
     if not cuda.is_available():
@@ -1645,7 +1643,6 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
 
     from painted_ewald import MosaicBraggSpace
     from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
-    from rasim_next.pipeline import _continuous_detector_cuda as cuda_backend
     from rasim_next.pipeline.configured_simulation import (
         build_configured_simulation_inputs,
         build_source_averaged_detector,
@@ -1718,16 +1715,44 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
         row_px,
         execution_backend="cuda",
     )
-    monkeypatch.setattr(cuda_backend, "_MAX_COORDINATES_PER_CHUNK", 2)
-    chunked = detector.evaluate_detector_coordinates_all_roots(
+    reblocked_detector = detector.with_maximum_state_block_count(16)
+    reblocked = reblocked_detector.evaluate_detector_coordinates_all_roots(
         column_px,
         row_px,
         execution_backend="cuda",
     )
+    chunked = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+        cuda_coordinate_chunk_size=2,
+    )
+
+    assert reblocked_detector is not detector
+    assert reblocked_detector.rods == detector.rods
+    assert reblocked_detector.rod_catalog_revision == detector.rod_catalog_revision
+    assert reblocked_detector.source_state_count == detector.source_state_count
+    with pytest.raises(ValueError, match="positive integer"):
+        detector.with_maximum_state_block_count(0)
+    with pytest.raises(ValueError, match="requires the CUDA"):
+        detector.evaluate_detector_density_all_roots(
+            column_px,
+            row_px,
+            execution_backend="cpu",
+            cuda_coordinate_chunk_size=2,
+        )
+    with pytest.raises(ValueError, match="positive integer"):
+        detector.evaluate_detector_density_all_roots(
+            column_px[:0],
+            row_px[:0],
+            execution_backend="cuda",
+            cuda_coordinate_chunk_size=0,
+        )
     chunked_total = detector.evaluate_detector_density_all_roots(
         column_px,
         row_px,
         execution_backend="cuda",
+        cuda_coordinate_chunk_size=2,
     )
 
     assert np.any(cpu.per_rod_density_A2_per_px2[0, 1:] > 0.0)
@@ -1771,6 +1796,14 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder(
     )
     np.testing.assert_array_equal(repeated.caustic, gpu.caustic)
     np.testing.assert_array_equal(repeated.valid_source_count, gpu.valid_source_count)
+    np.testing.assert_allclose(
+        reblocked.per_rod_density_A2_per_px2,
+        cpu.per_rod_density_A2_per_px2,
+        rtol=cuda_compound_relative_tolerance,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(reblocked.caustic, gpu.caustic)
+    np.testing.assert_array_equal(reblocked.valid_source_count, gpu.valid_source_count)
     np.testing.assert_array_equal(
         chunked.per_rod_density_A2_per_px2, gpu.per_rod_density_A2_per_px2
     )

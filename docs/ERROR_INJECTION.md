@@ -110,11 +110,12 @@ oracle.
 
 - Accept an unknown, duplicate, aliased, or missing YAML key.
 - Change the YAML while reusing stale compiled state.
+- Run a staged replay with a numerical package version that differs from the case-bound `uv.lock`.
 - Permute packed source/rod indices, change dtype, or omit a factor in the compiled CPU/CUDA kernel.
 - Claim CUDA while executing a CPU evaluator or silently fall back when CUDA is unavailable.
 
-Expected detection: strict loader, revision/key ownership, scalar-versus-compiled parity, backend
-identity, or explicit availability failure.
+Expected detection: strict loader, pre-fit runtime-lock validation, revision/key ownership,
+scalar-versus-compiled parity, backend identity, or explicit availability failure.
 
 ### Exact-marker geometry fitting
 
@@ -222,6 +223,24 @@ regression, zero-strength-versus-CIF marker-identity invariance, explicit all-pr
 counts, dataset/observable revision rejection, independent response-order convergence,
 explicit source-sum parity and source count/revision rejection, mixed-measure rejection,
 common-scale-gauge rejection, and rank/condition/bound diagnostics.
+
+### Portable staged-fit replay
+
+- Change an input byte, decoded OSC value, native dtype/shape, or environment lock; use an absolute
+  or repository-escaping case path; add an unknown case/stage key; redirect a nested consumed path
+  to a different hash-complete role; mutate a loaded role mapping before execution.
+- Drop or relabel one fitted profile or an admitted `m=0` identity; change the source count, seed,
+  realization revision, fitted/fixed coordinate lists, active-bound mask, or historical/current
+  selection provenance.
+- Reorder stages, substitute a non-immediate upstream revision, edit compact state after writing,
+  change backend during resume, modify or remove a required stage artifact reference, or return a
+  malformed fresh-stage envelope.
+- Perturb a fit parameter within and beyond its declared tolerance; change decoded render pixels
+  while preserving PNG metadata or container bytes; set a render CUDA chunk/block size nonpositive.
+
+Expected detection: strict case loading, container/native-array hashes, exact identity comparison,
+stage-aware tolerance verification, recomputed scientific revisions, envelope/backend/source
+validation, and external-artifact content hashes.
 
 ## Control record
 

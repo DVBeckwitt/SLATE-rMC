@@ -454,6 +454,7 @@ dependencies = [
     { name = "gemmi" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "packaging" },
     { name = "pyyaml" },
     { name = "scipy" },
     { name = "xraydb" },
@@ -462,10 +463,12 @@ dependencies = [
 [package.optional-dependencies]
 visualization = [
     { name = "matplotlib" },
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "pillow" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -476,6 +479,8 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.9,<4" },
     { name = "numba", specifier = ">=0.66,<0.67" },
     { name = "numpy", specifier = ">=2.0,<3" },
+    { name = "packaging", specifier = ">=24,<27" },
+    { name = "pillow", marker = "extra == 'visualization'", specifier = ">=12,<13" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "scipy", specifier = ">=1.14,<2" },
     { name = "xraydb", specifier = ">=4.5,<5" },
@@ -484,6 +489,7 @@ provides-extras = ["visualization"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pillow", specifier = ">=12,<13" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "ruff", specifier = ">=0.12,<1" },
 ]

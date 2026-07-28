@@ -119,6 +119,11 @@ source row. `restrict_rods(...)` is a linear selected-group view of the same red
 The source count and realization revision are provenance. The tracked Bi2Se3 proof uses 250 rows,
 but the core contract permits any positive count.
 
+`with_maximum_state_block_count(...)` returns an immutable execution view; it does not mutate the
+detector or its source/rod identity. CUDA coordinate chunk size is an explicit positive argument and
+is rejected for CPU execution. Both controls may change work partitioning but never the declared
+measure, source order, or accepted observable beyond its frozen backend tolerance.
+
 The source-averaged `integrate_native_pixels(...)` method is a detailed per-rod proof path, not a
 production renderer. It fails closed unless the caller explicitly passes
 `include_per_rod_evidence=True`. The detailed arbitrary-coordinate evaluator remains available
@@ -538,6 +543,58 @@ native-coordinate refinement.
 A complete corrected-geometry `index_osc_geometry_series(...)` pass is a separate operational
 diagnostic because its cake grid and same-key candidate ownership change with geometry. Newly
 visible or differently selected unfitted lobes are reported but never censor or replace frozen data.
+
+### Portable staged-fit replay
+
+`rasim-staged-fit-replay-v1` is a strict, material-case manifest for geometry, mosaic,
+ordered-intensity, and optional render stages. Every path is case-relative and must remain inside
+the repository. Every file has an exact SHA-256; OSC records additionally bind decoded native
+shape, dtype, and `[row,column]` byte content. Paths nested inside geometry-series, simulation,
+mosaic, ordered-intensity, and policy files must resolve to their corresponding declared roles;
+hash-complete decoy roles are rejected. Bi2Se3 and Bi2Te3 cases require the declared
+5/10/15-degree triplet, source seed 1729, one ideal source state for geometry, and the identical
+250-state realization for mosaic and ordered intensity.
+
+Each stage emits `rasim-staged-fit-replay-stage-v1` with case/material identity, case hash, backend,
+its actual execution runtime, source identity, compact scientific state, and the immediately
+preceding scientific revision.
+`rasim-staged-fit-replay-certificate-v1` records the ordered revision chain and the verified
+summary. Before creating output, the runner reloads and exact-compares the case, all role mappings,
+all file hashes, decoded OSC identities, and nested consumed paths. It reads and hashes one
+case-bound `uv.lock` byte snapshot, then
+requires the complete transitive numerical dependency closure to equal that lock; a render replay
+also requires the locked Pillow version and a successful `PIL.Image` import. The certificate's
+`verification_runtime` records the verifier's lock hash, interpreter, platform, and installed
+versions. Runtime is operational provenance excluded from scientific revisions, but resume requires
+the stored stage runtime to match the current stage runtime exactly. Fresh and resumed stage results
+receive the same exact envelope, recomputed-revision, artifact-contract, and upstream checks. A
+verified stage must pass its partial scientific summary before its JSON is written or it can become
+an upstream input. Resume rejects a changed case, backend, source, compact state, or externally
+referenced artifact hash.
+
+This is a nominal scientific-replay contract. It assumes trusted stage implementations and that the
+declared repository inputs are not edited during an active stage; it is not an adversarial
+tamper-proof execution boundary.
+
+The geometry-stage envelope binds the canonical one-state configured source batch, including its
+seed and source revision. Mosaic, ordered-intensity, and render envelopes bind the case-wide
+250-state batch. Each nested scientific summary separately retains that case-wide batch identity so
+the combined fit certificate has one explicit downstream realization.
+
+Input identities, profile identities including every admitted `m=0`, source revisions,
+fitted/fixed coordinates, active-bound masks, rank, classification, and stage order compare
+exactly. Declared floating fit outputs compare by case-specific absolute tolerance. Absolute paths,
+artifact destinations, wall time, peak memory, device labels, and PNG encoding are excluded from
+scientific revisions. Decoded display pixels may be certified separately; they are not fit inputs.
+Path-dependent JSON artifact container hashes are operational resume checks and are excluded from
+the scientific revision; the consumed compact state remains revision-bound. Render artifact mode,
+size, and decoded-pixel hashes are revision-bound and rechecked from every PNG during resume.
+
+The Bi2Se3 ordered replay remains synthetic selected-component peak-center recovery. The Bi2Te3
+ordered replay transfers measured-mosaic nuisance amplitudes onto baseline 250-source peak-center
+signals and is model-limited `NO_ORACLE`; it is not direct count-calibrated raw-OSC structure
+recovery. Optional named active-parameter bounds narrow the canonical ordered-intensity optimizer
+bounds without activating frozen coordinates.
 
 ## Once-only factor ownership
 

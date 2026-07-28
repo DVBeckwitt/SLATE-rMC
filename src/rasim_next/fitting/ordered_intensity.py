@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -1818,11 +1819,16 @@ def fit_ordered_intensity_series(
     active_parameter_names: tuple[str, ...],
     initial_parameters: Bi2Se3QuintupleLayerParameters | None = None,
     relative_scale_mode: bool = True,
+    active_parameter_bounds: Mapping[str, tuple[float, float]] | None = None,
     maximum_function_evaluations: int = 400,
     required_source_state_count: int | None = None,
     required_source_revision: str | None = None,
 ) -> OrderedIntensityFitResult:
-    """Fit a declared occupancy/U subset with atomic positions held fixed."""
+    """Fit a declared occupancy/U subset with atomic positions held fixed.
+
+    ``active_parameter_bounds`` optionally narrows the canonical physical bounds for named active
+    coordinates. Omitted coordinates retain their default bounds.
+    """
 
     datasets = tuple(responses)
     if (
@@ -1997,6 +2003,34 @@ def fit_ordered_intensity_series(
         if not np.all(np.isfinite(initial_vector[2:5])):
             raise ValueError("initial occupancy ratios are not finite")
         upper[2:5] = np.inf
+    if active_parameter_bounds is not None:
+        if not isinstance(active_parameter_bounds, Mapping):
+            raise TypeError("active_parameter_bounds must be a mapping")
+        inactive_bound_names = set(active_parameter_bounds) - set(active)
+        if inactive_bound_names:
+            raise ValueError(
+                "bounds may only be declared for an active parameter: "
+                f"{sorted(inactive_bound_names)[0]!r}"
+            )
+        for name, raw_bounds in active_parameter_bounds.items():
+            if not isinstance(raw_bounds, (tuple, list)) or len(raw_bounds) != 2:
+                raise ValueError(f"active parameter bounds for {name!r} must contain two values")
+            lower_value, upper_value = (float(value) for value in raw_bounds)
+            if (
+                not math.isfinite(lower_value)
+                or not math.isfinite(upper_value)
+                or lower_value >= upper_value
+            ):
+                raise ValueError(
+                    f"active parameter bounds for {name!r} must be finite and increasing"
+                )
+            parameter_index = STRUCTURE_FACTOR_PARAMETER_NAMES.index(name)
+            if lower_value < lower[parameter_index] or upper_value > upper[parameter_index]:
+                raise ValueError(
+                    f"active parameter bounds for {name!r} must narrow the canonical bounds"
+                )
+            lower[parameter_index] = lower_value
+            upper[parameter_index] = upper_value
     if np.any(initial_vector[active_index] < lower[active_index]) or np.any(
         initial_vector[active_index] > upper[active_index]
     ):

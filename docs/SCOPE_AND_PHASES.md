@@ -61,7 +61,7 @@ these functions. They are not stored model state.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
 - General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and raw-image
-  profile extraction beyond the accepted layered-hexagonal Bi2Se3 real-OSC mosaic slice.
+  profile extraction beyond the accepted layered-hexagonal Bi2Se3/Bi2Te3 real-OSC slices.
 - General continuous-`S/N` angular-bin products and reciprocal remapping beyond the prepared
   finite-profile fitting boundary.
 - Physical/nonnegative mosaic-fit backgrounds and general masks, detector PSF, counting noise,

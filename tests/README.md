@@ -11,7 +11,11 @@ The compact suite is organized by scientific boundary:
 - `test_ordered_reflectivity.py`: CIF amplitudes, finite ordered stacks, and named specular models.
 - `test_stacking_transition.py`: finite stacking correlations, parent limits, and normalization.
 - `test_fitting.py`: exact tagged-site geometry, detector-function objectives, rank checks, and
-  blind bounded recovery.
+  blind bounded recovery, including independently switchable coordinates and named ordered bounds.
+- `test_staged_fit_replay_cli.py`: strict portable Bi2Se3/Bi2Te3 cases, exact input identities,
+  complete locked numerical runtime closure, pre-execution backend/dependency rejection, stage
+  order/revision chaining, nested-path/loaded-case immutability, pre-persistence tolerance checks,
+  and runtime-aware artifact-complete resume.
 - `test_integration.py`: continuous detector inverse mapping, caustics, native-pixel integration,
   source averaging, YAML construction, compiled kernels, CUDA parity, and end-to-end factor
   ownership.

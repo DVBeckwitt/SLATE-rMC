@@ -1,0 +1,229 @@
+schema_version = "rasim-staged-fit-replay-v1"
+case_id = "bi2se3-osc-5-10-15-250ki-v1"
+material_id = "Bi2Se3"
+classification = "MEASURED_GEOMETRY_AND_MOSAIC_WITH_SYNTHETIC_ORDERED_INTENSITY_PROOF"
+source_state_count = 250
+source_seed = 1729
+incidence_angles_deg = [5.0, 10.0, 15.0]
+
+[[files]]
+role = "simulation_config"
+path = "../../../configs/bi2se3_simulation.yaml"
+sha256 = "917d27852d07f07af7291c689d762ae359d7c2c7edb0fe5e0f094168f6aa2a03"
+
+[[files]]
+role = "geometry_series"
+path = "../../../configs/bi2se3_osc_geometry_fit.yaml"
+sha256 = "cab32982caf1b3f95c3da5cdf57b88094007592d626e65119f5d13c0759acda0"
+
+[[files]]
+role = "mosaic_case"
+path = "mosaic_fit_truth.toml"
+sha256 = "2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295"
+
+[[files]]
+role = "measured_profile_policy"
+path = "mosaic_fit_measured_policy.toml"
+sha256 = "c85286056aab0858bc70fd5236504e193d05cbf0b30cad87ed69160a82b7c027"
+
+[[files]]
+role = "ordered_intensity_case"
+path = "ordered_intensity_fit_truth.toml"
+sha256 = "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c"
+
+[[files]]
+role = "cif"
+path = "../structures/Bi2Se3_vesta.cif"
+sha256 = "2a02dfceb6b302810229076479c54515382b3adcd558e3d9f874192dcd6b539f"
+
+[[files]]
+role = "legacy_peak_observations"
+path = "../observations/legacy_peak_selections.csv"
+sha256 = "eb478d00fc1e41965fbc0b16cfb40f7bfd6088998255d6f558ed985e8b1b6ab9"
+
+[[files]]
+role = "osc_5deg"
+kind = "osc"
+path = "../osc/Bi2Se3_5m_5d.osc.gz"
+sha256 = "cba9d38d9cae1e8e3be3c2ad58ad130e04ce1958f0d2d986a947ab3a90818e36"
+detector_native_bytes_sha256 = "81a5bbf7b772879a3b8ee4b1db55493e78e9f455aa72c00ac9dbae12257fa29d"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "osc_10deg"
+kind = "osc"
+path = "../osc/Bi2Se3_10d_5m.osc.gz"
+sha256 = "faaa8f77785ddcd51c741d3b53c3ab7694fb8dacb961cd414d20daa5c21ccd67"
+detector_native_bytes_sha256 = "2c4e512740e123a9e3f44068c1545cc757ddceec334d8460cebb0f592e4401ff"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "osc_15deg"
+kind = "osc"
+path = "../osc/Bi2Se3_15d_5m.osc.gz"
+sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
+detector_native_bytes_sha256 = "edb09afbe7125ad09d983901a0813133492dbc0b5d971e13b8d25da8d6db234e"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "environment_lock"
+path = "../../../uv.lock"
+sha256 = "8831fcef5b86924caf8d39404b4bec31ef9f26641ab741cf47bad4d3465b438a"
+
+[geometry]
+selection_mode = "position_free_discovery"
+series_role = "geometry_series"
+source_state_count = 1
+fitted_parameter_names = [
+  "detector_column_tilt_rad",
+  "detector_row_tilt_rad",
+  "sample_normal_x_tilt_rad",
+  "sample_normal_y_tilt_rad",
+  "goniometer_axis_pitch_rad",
+  "goniometer_axis_yaw_rad",
+  "sample_plane_normal_offset_m",
+  "goniometer_pivot_pitch_offset_m",
+  "goniometer_pivot_yaw_offset_m",
+]
+fixed_parameter_names = []
+heldout_integer_l = [4, 11]
+benchmark = true
+
+[mosaic]
+implementation = "bi2se3_measured_profiles_v2"
+case_role = "mosaic_case"
+measured_profile_policy_role = "measured_profile_policy"
+observation_mode = "osc"
+execution_source_state_count = 250
+render_images = false
+
+[ordered_intensity]
+implementation = "bi2se3_synthetic_selected_component_v3"
+case_role = "ordered_intensity_case"
+execution_source_state_count = 250
+fit_atomic_positions = false
+active_parameters = [
+  "bi_occupancy",
+  "se1_occupancy",
+  "se2_occupancy",
+  "u_radial_A2",
+  "u_normal_A2",
+]
+claim_boundary = "synthetic selected-component peak-center recovery on the measured mosaic selection; not unresolved raw OSC intensity, not integrated peak mass, and not raw OSC structure-factor fitting"
+
+[render]
+enabled = false
+reason = "No current gate-v2 Bi2Se3 render was produced; older images bind a retired mosaic result."
+
+[expected]
+source_revision = "42e8108b3ba9c66cb7752bc7e9d2f9fdb8401987a8f9a0eb272d3f4edeaa39a7"
+
+[expected.geometry]
+classification = "QUALIFIED_DETECTOR_COORDINATE_FIT_PARAMETER_PRECISION_UNQUALIFIED"
+selection_revision = "sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132"
+fitted_parameter_names = [
+  "detector_column_tilt_rad",
+  "detector_row_tilt_rad",
+  "sample_normal_x_tilt_rad",
+  "sample_normal_y_tilt_rad",
+  "goniometer_axis_pitch_rad",
+  "goniometer_axis_yaw_rad",
+  "sample_plane_normal_offset_m",
+  "goniometer_pivot_pitch_offset_m",
+  "goniometer_pivot_yaw_offset_m",
+]
+fixed_parameter_names = []
+corrections = [
+  -0.00449943391543809,
+  -0.023011840834110096,
+  0.007325549165585003,
+  0.01565915036224212,
+  -0.015187627126648262,
+  -0.015250740996104902,
+  4.954992196687335e-05,
+  9.999999689372352e-05,
+  -2.7732760149498375e-05,
+]
+rank = 9
+active_bounds = [false, false, false, false, false, false, false, true, false]
+site_rms_px = 1.5589418
+site_max_px = 5.6507942
+per_incidence_profile_count = [10, 8, 8]
+
+[expected.mosaic]
+classification = "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+parameters = [1.322875655532295, 0.4898979485566357, 0.4480961629924146]
+objective = 1.6802591883253426
+rank = 3
+profile_count = 15
+m0_profile_count = 5
+per_incidence_profile_count = [2, 5, 8]
+profile_identities = [
+  "Bi2Se3-10deg|0|6|0|none",
+  "Bi2Se3-10deg|1|10|2|1",
+  "Bi2Se3-10deg|1|10|2|2",
+  "Bi2Se3-10deg|1|5|2|1",
+  "Bi2Se3-10deg|1|5|2|2",
+  "Bi2Se3-15deg|0|6|0|none",
+  "Bi2Se3-15deg|0|9|0|none",
+  "Bi2Se3-15deg|1|10|2|1",
+  "Bi2Se3-15deg|1|10|2|2",
+  "Bi2Se3-15deg|1|11|2|1",
+  "Bi2Se3-15deg|1|11|2|2",
+  "Bi2Se3-15deg|1|5|2|1",
+  "Bi2Se3-15deg|1|5|2|2",
+  "Bi2Se3-5deg|0|3|0|none",
+  "Bi2Se3-5deg|0|6|0|none",
+]
+m0_profile_identities = [
+  "Bi2Se3-10deg|0|6|0|none",
+  "Bi2Se3-15deg|0|6|0|none",
+  "Bi2Se3-15deg|0|9|0|none",
+  "Bi2Se3-5deg|0|3|0|none",
+  "Bi2Se3-5deg|0|6|0|none",
+]
+
+[expected.ordered_intensity]
+classification = "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY"
+claim_boundary = "synthetic selected-component peak-center recovery on the measured mosaic selection; not unresolved raw OSC intensity, not integrated peak mass, and not raw OSC structure-factor fitting"
+parameters = [0.94, 0.78, 0.86, 0.007, 0.034]
+objective = 5.509700384903004e-30
+rank = 5
+profile_count = 15
+m0_profile_count = 5
+active_bounds = [false, false, false, false, false]
+profile_identities = [
+  "Bi2Se3-10deg|0|6|0|none",
+  "Bi2Se3-10deg|1|10|2|1",
+  "Bi2Se3-10deg|1|10|2|2",
+  "Bi2Se3-10deg|1|5|2|1",
+  "Bi2Se3-10deg|1|5|2|2",
+  "Bi2Se3-15deg|0|6|0|none",
+  "Bi2Se3-15deg|0|9|0|none",
+  "Bi2Se3-15deg|1|10|2|1",
+  "Bi2Se3-15deg|1|10|2|2",
+  "Bi2Se3-15deg|1|11|2|1",
+  "Bi2Se3-15deg|1|11|2|2",
+  "Bi2Se3-15deg|1|5|2|1",
+  "Bi2Se3-15deg|1|5|2|2",
+  "Bi2Se3-5deg|0|3|0|none",
+  "Bi2Se3-5deg|0|6|0|none",
+]
+m0_profile_identities = [
+  "Bi2Se3-10deg|0|6|0|none",
+  "Bi2Se3-15deg|0|6|0|none",
+  "Bi2Se3-15deg|0|9|0|none",
+  "Bi2Se3-5deg|0|3|0|none",
+  "Bi2Se3-5deg|0|6|0|none",
+]
+
+[tolerances]
+geometry_correction_absolute = 1.0e-7
+geometry_metric_absolute = 1.0e-4
+mosaic_parameter_absolute = 1.0e-6
+mosaic_objective_absolute = 1.0e-6
+ordered_parameter_absolute = 1.0e-10
+ordered_objective_absolute = 1.0e-20

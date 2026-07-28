@@ -1512,7 +1512,7 @@ def render_recovered_images(
     return {**manifest, "manifest_path": str(manifest_path)}
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", type=Path, default=DEFAULT_CASE)
     parser.add_argument("--source-sample-count", type=int, default=250)
@@ -1523,7 +1523,7 @@ def main() -> int:
     parser.add_argument("--render-directory", type=Path)
     parser.add_argument("--render-only", action="store_true")
     parser.add_argument("--json", action="store_true")
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     mosaic_parameters = None
     mosaic_result_document = None
     required_source_revision = None

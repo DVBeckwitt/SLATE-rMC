@@ -1,0 +1,13 @@
+schema_version: rasim-osc-geometry-fit-v1
+simulation_config: bi2te3_simulation.yaml
+incidence_axis_index: 0
+images:
+  - image_id: Bi2Te3_5m_5d
+    osc_path: ../examples/bi2te3/osc/Bi2Te3_5m_5d.osc.gz
+    axis_rotation_angles_deg: [5.0]
+  - image_id: Bi2Te3_10d_5m
+    osc_path: ../examples/bi2te3/osc/Bi2Te3_10d_5m.osc.gz
+    axis_rotation_angles_deg: [10.0]
+  - image_id: Bi2Te3_15d_5m
+    osc_path: ../examples/bi2te3/osc/Bi2Te3_15d_5m.osc.gz
+    axis_rotation_angles_deg: [15.0]

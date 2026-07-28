@@ -51,7 +51,7 @@ atomic/layer contributions sum as amplitudes only inside their owning strength m
 
 ## Deferred consumers
 
-General raw-image profile extraction beyond the tracked Bi2Se3 series, physical forward-model
+General raw-image profile extraction beyond the tracked Bi2Se3 and Bi2Te3 series, physical forward-model
 masks/background, detector PSF/efficiency, saturation, general finite-bin angle products, and
 reciprocal remapping consume the accepted detector result later. The accepted real-OSC mosaic slice
 projects exact cropped physical-pixel overlap into frozen finite-bin profiles and applies signed

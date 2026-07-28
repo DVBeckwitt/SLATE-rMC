@@ -14,3 +14,23 @@ conversion at the I/O boundary, `legacy_raw_x` is the accepted native detector c
 supplied-state legacy `x`/`y` variables. `observed_column_px = columns - 1 - legacy_raw_x`
 contains an additional legacy horizontal reflection and is not a numerical oracle;
 `observed_row_px` duplicates `legacy_raw_y`.
+
+The tracked Bi2Te3 replay inputs were supplied by the project owner and are preserved without user
+paths. `structures/Bi2Te3_cod_9011962.cif` is the exact 731-byte fit input with SHA-256
+`e1e5f42082bf0699b1a674b19fbf74cf1163b5c18dcb7d00142dd0b2dc4b1fe3`.
+The deterministic gzip OSC containers decode to the original detector arrays; the original
+uncompressed file SHA-256 values were:
+
+- 5 degrees: `6f00b27802e6419ad79d9ec38441f3cd051b0becaba399f351caeb9a0e451c26`
+- 10 degrees: `519c4fbf05bed80abcce287423bc271a06b4e349d2fbc778dcb62b5c5d779212`
+- 15 degrees: `70f12525554b5223341f3987545665bcd4b2ea35e24fe565548aff4557329355`
+
+`bi2te3/observations/indexed_catalog.json` is an earlier frozen position-free audit catalog, not the
+exact observation handoff used by the accepted final geometry fit and not a substitute fit input.
+The replay records its catalog manifest, the accepted historical selection revision, the selection
+revision recomputed under the case-bound numerical runtime, and the tracked catalog-file SHA-256
+separately. The catalog row-manifest is `sha256-4f3755ac...`; the file SHA-256 is `84cca62c...`.
+The decoded detector arrays are exact, while the selection manifest also hashes floating-point
+context tokens that vary with the numerical runtime. The Bi2Se3/HBN
+`calibration/hbn/darkImg.osc.gz` is reused as the exact dark input; it is not duplicated under
+Bi2Te3.

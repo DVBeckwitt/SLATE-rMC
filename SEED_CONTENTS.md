@@ -7,7 +7,7 @@
 - Launch prompts for every task: `tasks/prompts/`
 - Machine-readable proof and selection schemas: `schemas/`
 - Immutable compact comparison evidence: `reference/`
-- Self-contained Bi2Se3, OSC, HBN, and PbI2 data: `examples/`
+- Self-contained Bi2Se3, Bi2Te3, OSC, HBN, and PbI2 data: `examples/`
 - Minimal importable package shell: `src/rasim_next/`
 - Permanent-test budget: `tests/README.md`
 - Archive/hash verification: `scripts/verify_seed.py`

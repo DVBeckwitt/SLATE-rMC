@@ -1,0 +1,2707 @@
+"""Replay the accepted Bi2Se3 and Bi2Te3 staged fits from hash-bound cases."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import hashlib
+import importlib
+import importlib.metadata as importlib_metadata
+import importlib.util
+import io
+import json
+import math
+import platform
+import sys
+import tomllib
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
+
+import yaml
+from packaging.markers import InvalidMarker, Marker
+
+ROOT = Path(__file__).resolve().parents[1]
+_SCHEMA_VERSION = "rasim-staged-fit-replay-v1"
+_STAGES = ("geometry", "mosaic", "ordered_intensity", "render")
+_SHA256_PREFIX = "sha256-"
+_STAGE_RESULT_KEYS = {
+    "case_id",
+    "case_sha256",
+    "execution_backend",
+    "material_id",
+    "runtime",
+    "schema_version",
+    "scientific_revision",
+    "scientific_summary",
+    "source_revision",
+    "source_seed",
+    "source_state_count",
+    "stage",
+    "state",
+    "upstream_scientific_revision",
+}
+_TOP_LEVEL_KEYS = {
+    "schema_version",
+    "case_id",
+    "material_id",
+    "classification",
+    "source_state_count",
+    "source_seed",
+    "incidence_angles_deg",
+    "files",
+    "geometry",
+    "mosaic",
+    "ordered_intensity",
+    "render",
+    "expected",
+    "tolerances",
+}
+_TOLERANCE_KEYS = {
+    "geometry_correction_absolute",
+    "geometry_metric_absolute",
+    "mosaic_parameter_absolute",
+    "mosaic_objective_absolute",
+    "ordered_parameter_absolute",
+    "ordered_objective_absolute",
+}
+_PROJECT_PACKAGE = "rasim-next"
+_RENDER_RUNTIME_PACKAGES = ("pillow",)
+_VOLATILE_SCIENTIFIC_FIELDS = {
+    "artifact",
+    "artifact_sha256",
+    "diagnostic",
+    "elapsed_seconds",
+    "execution_device",
+    "manifest_path",
+    "output_directory",
+    "path",
+    "peak_memory_bytes",
+    "runtime",
+    "timing_seconds",
+    "wall_time_seconds",
+}
+
+
+class ReplayMismatchError(RuntimeError):
+    """Raised when a replay changes a frozen scientific result."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayCase:
+    path: Path
+    repository_root: Path
+    case_id: str
+    material_id: str
+    classification: str
+    source_state_count: int
+    source_seed: int
+    incidence_angles_deg: tuple[float, ...]
+    input_paths: dict[str, Path]
+    file_records: tuple[dict[str, Any], ...]
+    stage_config: dict[str, dict[str, Any]]
+    expected_scientific_summary: dict[str, Any]
+    tolerances: dict[str, float]
+    runtime_identity: dict[str, Any]
+
+
+def _is_sha256(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _python_minor_bounds(requirement: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    tokens = tuple(item.strip() for item in requirement.split(","))
+    if len(tokens) != 2 or not tokens[0].startswith(">=") or not tokens[1].startswith("<"):
+        raise ValueError("environment lock has an unsupported requires-python expression")
+    try:
+        lower = tuple(int(item) for item in tokens[0][2:].split("."))
+        upper = tuple(int(item) for item in tokens[1][1:].split("."))
+    except ValueError as error:
+        raise ValueError("environment lock has an invalid requires-python expression") from error
+    if len(lower) != 2 or len(upper) != 2 or lower >= upper:
+        raise ValueError("environment lock must bound Python by ordered major.minor versions")
+    return lower, upper
+
+
+def _validated_runtime_identity(
+    environment_lock: Path,
+    *,
+    expected_sha256: str,
+    include_render: bool = False,
+) -> dict[str, Any]:
+    """Require the executing dependency closure to match one hash-bound lock snapshot."""
+
+    payload = environment_lock.read_bytes()
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(f"environment lock content hash changed: {environment_lock}")
+    document = tomllib.loads(payload.decode("utf-8"))
+    requirement = document.get("requires-python")
+    records = document.get("package")
+    if not isinstance(requirement, str) or not isinstance(records, list):
+        raise ValueError("environment lock lacks Python or package metadata")
+    lower, upper = _python_minor_bounds(requirement)
+    python_minor = tuple(sys.version_info[:2])
+    if not lower <= python_minor < upper:
+        raise RuntimeError(
+            f"Python {platform.python_version()} is outside locked requirement {requirement}; "
+            "run the replay with `uv run --frozen`"
+        )
+
+    package_records: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("environment lock package records must be tables")
+        name = record.get("name")
+        if not isinstance(name, str) or name in package_records:
+            raise ValueError("environment lock package names must be unique strings")
+        package_records[name] = record
+    try:
+        project_record = package_records[_PROJECT_PACKAGE]
+    except KeyError as error:
+        raise ValueError(f"environment lock lacks {_PROJECT_PACKAGE}") from error
+
+    def applicable_dependencies(record: dict[str, Any]) -> list[str]:
+        names = []
+        for dependency in record.get("dependencies", ()):
+            if not isinstance(dependency, dict) or not isinstance(dependency.get("name"), str):
+                raise ValueError("environment lock dependencies must have package names")
+            marker = dependency.get("marker")
+            if marker is not None:
+                if not isinstance(marker, str):
+                    raise ValueError("environment lock dependency marker must be a string")
+                try:
+                    applies = Marker(marker).evaluate()
+                except InvalidMarker as error:
+                    raise ValueError("environment lock dependency marker is invalid") from error
+                if not applies:
+                    continue
+            names.append(dependency["name"])
+        return names
+
+    pending = applicable_dependencies(project_record)
+    if include_render:
+        pending.extend(_RENDER_RUNTIME_PACKAGES)
+    locked_versions: dict[str, str] = {}
+    while pending:
+        name = pending.pop()
+        if not isinstance(name, str) or name in locked_versions:
+            continue
+        try:
+            record = package_records[name]
+        except KeyError as error:
+            raise ValueError(f"environment lock lacks runtime package {name}") from error
+        version = record.get("version")
+        if not isinstance(version, str):
+            raise ValueError(f"environment lock does not version runtime package {name}")
+        locked_versions[name] = version
+        pending.extend(applicable_dependencies(record))
+
+    installed_versions: dict[str, str] = {}
+    remedy = "uv run --frozen --extra visualization" if include_render else "uv run --frozen"
+    for name in sorted(locked_versions):
+        try:
+            installed = importlib_metadata.version(name)
+        except importlib_metadata.PackageNotFoundError as error:
+            raise RuntimeError(
+                f"runtime package {name} is absent; run the replay with `{remedy}`"
+            ) from error
+        locked = locked_versions[name]
+        if installed != locked:
+            raise RuntimeError(
+                f"runtime package {name} is {installed}, but uv.lock requires {locked}; "
+                f"run the replay with `{remedy}`"
+            )
+        installed_versions[name] = installed
+    if include_render:
+        try:
+            importlib.import_module("PIL.Image")
+        except ImportError as error:
+            raise RuntimeError(
+                "PIL.Image cannot be imported; run the replay with "
+                "`uv run --frozen --extra visualization`"
+            ) from error
+    return {
+        "environment_lock_sha256": actual_sha256,
+        "environment_lock_requires_python": requirement,
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "platform_system": platform.system(),
+        "platform_machine": platform.machine(),
+        "packages": installed_versions,
+    }
+
+
+def _strict_keys(record: dict[str, Any], expected: set[str], label: str) -> None:
+    unknown = set(record) - expected
+    missing = expected - set(record)
+    if unknown:
+        raise ValueError(f"{label} contains unknown key {sorted(unknown)[0]!r}")
+    if missing:
+        raise ValueError(f"{label} is missing key {sorted(missing)[0]!r}")
+
+
+def _validate_file_records(
+    records: object,
+    *,
+    case_directory: Path,
+    repository_root: Path,
+) -> tuple[tuple[dict[str, Any], ...], dict[str, Path], dict[str, Any]]:
+    if not isinstance(records, list) or not records:
+        raise ValueError("files must be a nonempty array of tables")
+    parsed: list[dict[str, Any]] = []
+    input_paths: dict[str, Path] = {}
+    for index, value in enumerate(records):
+        if not isinstance(value, dict):
+            raise ValueError(f"files[{index}] must be a table")
+        kind = value.get("kind", "file")
+        expected_keys = {"role", "path", "sha256"}
+        if kind == "osc":
+            expected_keys |= {
+                "kind",
+                "detector_native_bytes_sha256",
+                "detector_native_shape_rc",
+                "detector_native_dtype",
+            }
+        elif kind != "file":
+            raise ValueError(f"files[{index}].kind is unsupported")
+        _strict_keys(value, expected_keys, f"files[{index}]")
+        role = value["role"]
+        path_text = value["path"]
+        if not isinstance(role, str) or not role or role in input_paths:
+            raise ValueError(f"files[{index}].role must be unique and nonempty")
+        if not isinstance(path_text, str) or not path_text:
+            raise ValueError(f"files[{index}].path must be nonempty")
+        relative_path = Path(path_text)
+        if relative_path.is_absolute():
+            raise ValueError(f"files[{index}].path must be relative to the case")
+        resolved = (case_directory / relative_path).resolve()
+        if not resolved.is_relative_to(repository_root):
+            raise ValueError(f"files[{index}].path resolves outside the repository")
+        if not _is_sha256(value["sha256"]):
+            raise ValueError(f"files[{index}].sha256 must be SHA-256")
+        input_paths[role] = resolved
+        parsed.append({**value, "kind": kind})
+
+    try:
+        environment_record = next(
+            record for record in parsed if record["role"] == "environment_lock"
+        )
+    except StopIteration as error:
+        raise ValueError("files must declare an environment_lock role") from error
+    environment_lock = input_paths["environment_lock"]
+    if not environment_lock.is_file():
+        raise FileNotFoundError(environment_lock)
+    runtime_identity = _validated_runtime_identity(
+        environment_lock,
+        expected_sha256=str(environment_record["sha256"]),
+    )
+
+    for index, record in enumerate(parsed):
+        path = input_paths[str(record["role"])]
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        actual_sha256 = (
+            runtime_identity["environment_lock_sha256"]
+            if record["role"] == "environment_lock"
+            else _sha256(path)
+        )
+        if actual_sha256 != record["sha256"]:
+            raise ValueError(f"files[{index}] content hash changed: {path}")
+        if record["kind"] != "osc":
+            continue
+        from rasim_next.io.osc import read_osc
+
+        counts = read_osc(path).detector_native_counts
+        expected_shape = tuple(int(item) for item in record["detector_native_shape_rc"])
+        if counts.shape != expected_shape or str(counts.dtype) != record["detector_native_dtype"]:
+            raise ValueError(f"files[{index}] decoded OSC layout changed: {path}")
+        native_sha256 = hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+        if native_sha256 != record["detector_native_bytes_sha256"]:
+            raise ValueError(f"files[{index}] decoded OSC values changed: {path}")
+    return tuple(parsed), input_paths, runtime_identity
+
+
+def _nested_input_path(
+    container: Path,
+    value: object,
+    *,
+    label: str,
+    repository_root: Path,
+) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a nonempty relative path")
+    relative = Path(value)
+    if relative.is_absolute():
+        raise ValueError(f"{label} must be relative")
+    resolved = (container.parent / relative).resolve()
+    if not resolved.is_relative_to(repository_root):
+        raise ValueError(f"{label} resolves outside the repository")
+    return resolved
+
+
+def _require_nested_input(
+    container: Path,
+    value: object,
+    *,
+    expected: Path,
+    label: str,
+    repository_root: Path,
+) -> None:
+    actual = _nested_input_path(
+        container,
+        value,
+        label=label,
+        repository_root=repository_root,
+    )
+    if actual != expected:
+        raise ValueError(f"{label} does not resolve to its declared replay role")
+
+
+def _yaml_mapping(path: Path, label: str) -> dict[str, Any]:
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"{label} must be a YAML mapping")
+    return document
+
+
+def _validate_consumed_input_paths(
+    material_id: str,
+    *,
+    input_paths: dict[str, Path],
+    stages: dict[str, dict[str, Any]],
+    repository_root: Path,
+) -> None:
+    """Bind every nested path consumed by a replay to its declared hashed role."""
+
+    geometry = stages["geometry"]
+    if geometry["series_role"] != "geometry_series":
+        raise ValueError("geometry.series_role must be geometry_series")
+    series_path = input_paths["geometry_series"]
+    series = _yaml_mapping(series_path, "geometry series")
+    _require_nested_input(
+        series_path,
+        series.get("simulation_config"),
+        expected=input_paths["simulation_config"],
+        label="geometry series simulation_config",
+        repository_root=repository_root,
+    )
+    expected_osc_roles = {5.0: "osc_5deg", 10.0: "osc_10deg", 15.0: "osc_15deg"}
+    images = series.get("images")
+    if not isinstance(images, list):
+        raise ValueError("geometry series images must be a list")
+    seen_roles = set()
+    for index, image in enumerate(images):
+        if not isinstance(image, dict):
+            raise ValueError(f"geometry series images[{index}] must be a mapping")
+        angles = image.get("axis_rotation_angles_deg")
+        if not isinstance(angles, list) or len(angles) != 1:
+            raise ValueError(f"geometry series images[{index}] must have one incidence angle")
+        try:
+            role = expected_osc_roles[float(angles[0])]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"geometry series images[{index}] has an unexpected angle") from error
+        if role in seen_roles:
+            raise ValueError(f"geometry series repeats {role}")
+        _require_nested_input(
+            series_path,
+            image.get("osc_path"),
+            expected=input_paths[role],
+            label=f"geometry series images[{index}].osc_path",
+            repository_root=repository_root,
+        )
+        seen_roles.add(role)
+    if seen_roles != set(expected_osc_roles.values()):
+        raise ValueError("geometry series must consume all three declared OSC roles")
+
+    simulation_path = input_paths["simulation_config"]
+    simulation = _yaml_mapping(simulation_path, "simulation config")
+    material = simulation.get("material")
+    if not isinstance(material, dict):
+        raise ValueError("simulation config material must be a mapping")
+    _require_nested_input(
+        simulation_path,
+        material.get("cif_path"),
+        expected=input_paths["cif"],
+        label="simulation config material.cif_path",
+        repository_root=repository_root,
+    )
+
+    if material_id == "Bi2Te3":
+        if geometry["catalog_role"] != "indexed_catalog":
+            raise ValueError("geometry.catalog_role must be indexed_catalog")
+        mosaic = stages["mosaic"]
+        if (
+            mosaic["catalog_role"] != "indexed_catalog"
+            or mosaic["dark_role"] != "dark"
+            or tuple(mosaic["osc_roles"]) != ("osc_5deg", "osc_10deg", "osc_15deg")
+        ):
+            raise ValueError("Bi2Te3 mosaic roles changed their declared replay inputs")
+        return
+
+    mosaic = stages["mosaic"]
+    ordered = stages["ordered_intensity"]
+    if (
+        mosaic["case_role"] != "mosaic_case"
+        or mosaic["measured_profile_policy_role"] != "measured_profile_policy"
+        or ordered["case_role"] != "ordered_intensity_case"
+    ):
+        raise ValueError("Bi2Se3 stage roles changed their declared replay inputs")
+    mosaic_path = input_paths["mosaic_case"]
+    mosaic_document = tomllib.loads(mosaic_path.read_text(encoding="utf-8"))
+    _require_nested_input(
+        mosaic_path,
+        mosaic_document.get("simulation_config"),
+        expected=simulation_path,
+        label="mosaic case simulation_config",
+        repository_root=repository_root,
+    )
+    nonzero_provenance = mosaic_document.get("nonzero_centroid_provenance")
+    m0_provenance = mosaic_document.get("m0_centroid_provenance")
+    if not isinstance(nonzero_provenance, dict) or not isinstance(m0_provenance, dict):
+        raise ValueError("mosaic case centroid provenance must be mappings")
+    _require_nested_input(
+        mosaic_path,
+        nonzero_provenance.get("series_config"),
+        expected=series_path,
+        label="mosaic case nonzero series_config",
+        repository_root=repository_root,
+    )
+    _require_nested_input(
+        mosaic_path,
+        m0_provenance.get("source_file"),
+        expected=input_paths["legacy_peak_observations"],
+        label="mosaic case m0 source_file",
+        repository_root=repository_root,
+    )
+    observations = mosaic_document.get("m0_observations")
+    if not isinstance(observations, list):
+        raise ValueError("mosaic case m0_observations must be a list")
+    seen_roles = set()
+    for index, observation in enumerate(observations):
+        if not isinstance(observation, dict):
+            raise ValueError(f"mosaic case m0_observations[{index}] must be a mapping")
+        try:
+            role = expected_osc_roles[float(observation["incidence_angle_deg"])]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"mosaic case m0_observations[{index}] has an unexpected angle"
+            ) from error
+        if role in seen_roles:
+            raise ValueError(f"mosaic case repeats {role}")
+        _require_nested_input(
+            mosaic_path,
+            observation.get("osc_file"),
+            expected=input_paths[role],
+            label=f"mosaic case m0_observations[{index}].osc_file",
+            repository_root=repository_root,
+        )
+        seen_roles.add(role)
+    if seen_roles != set(expected_osc_roles.values()):
+        raise ValueError("mosaic case must consume all three declared OSC roles")
+
+    ordered_path = input_paths["ordered_intensity_case"]
+    ordered_document = tomllib.loads(ordered_path.read_text(encoding="utf-8"))
+    _require_nested_input(
+        ordered_path,
+        ordered_document.get("mosaic_case"),
+        expected=mosaic_path,
+        label="ordered-intensity case mosaic_case",
+        repository_root=repository_root,
+    )
+    policy_path = input_paths["measured_profile_policy"]
+    policy = tomllib.loads(policy_path.read_text(encoding="utf-8"))
+    if policy.get("base_case_sha256") != _sha256(mosaic_path):
+        raise ValueError("measured profile policy does not bind the declared mosaic case")
+
+
+def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    stages: dict[str, dict[str, Any]] = {}
+    for stage in _STAGES:
+        value = document[stage]
+        if not isinstance(value, dict) or not value:
+            raise ValueError(f"{stage} must be a nonempty table")
+        stages[stage] = value
+    schemas = {
+        "Bi2Se3": {
+            "geometry": {
+                "benchmark",
+                "fitted_parameter_names",
+                "fixed_parameter_names",
+                "heldout_integer_l",
+                "selection_mode",
+                "series_role",
+                "source_state_count",
+            },
+            "mosaic": {
+                "case_role",
+                "execution_source_state_count",
+                "implementation",
+                "measured_profile_policy_role",
+                "observation_mode",
+                "render_images",
+            },
+            "ordered_intensity": {
+                "active_parameters",
+                "case_role",
+                "claim_boundary",
+                "execution_source_state_count",
+                "fit_atomic_positions",
+                "implementation",
+            },
+            "render": {"enabled", "reason"},
+        },
+        "Bi2Te3": {
+            "geometry": {
+                "benchmark",
+                "bounds_model",
+                "catalog_manifest_revision",
+                "catalog_role",
+                "fitted_parameter_names",
+                "fixed_parameter_names",
+                "heldout_integer_l",
+                "historical_selection_revision",
+                "multistart_fraction",
+                "multistart_pattern",
+                "selection_mode",
+                "series_role",
+                "source_state_count",
+            },
+            "mosaic": {
+                "catalog_role",
+                "coarse_width_count",
+                "dark_role",
+                "dark_subtraction_model",
+                "dataset_ids",
+                "execution_source_state_count",
+                "extra_nonzero_profiles",
+                "gaussian_sigma_bounds_deg",
+                "implementation",
+                "lorentzian_hwhm_bounds_deg",
+                "m0_landmark_maximum_distance_px",
+                "m0_phi_gauss_order",
+                "m0_phi_half_width_deg",
+                "m0_starts_10deg",
+                "m0_starts_15deg",
+                "m0_starts_5deg",
+                "m0_two_theta_gauss_order",
+                "m1_integer_l_10deg",
+                "m1_integer_l_15deg",
+                "m1_integer_l_5deg",
+                "maximum_sensitivity_condition",
+                "minimum_excess_energy_over_side_scatter",
+                "near_optimal_objective_delta",
+                "nonzero_phi_gauss_order",
+                "nonzero_phi_half_width_deg",
+                "nonzero_two_theta_gauss_order",
+                "nuisance_background_model",
+                "osc_roles",
+                "phi_bin_count",
+                "refinement_levels",
+                "refinement_width_count",
+                "sideband_two_theta_offsets_deg",
+                "two_theta_half_width_deg",
+            },
+            "ordered_intensity": {
+                "active_parameters",
+                "claim_boundary",
+                "execution_source_state_count",
+                "fit_atomic_positions",
+                "implementation",
+                "lower_bounds",
+                "maximum_function_evaluations",
+                "multistarts",
+                "occupancy_ratio_reference",
+                "parameter_scales",
+                "upper_bounds",
+            },
+            "render": {
+                "cuda_coordinate_chunk",
+                "cuda_state_block_count",
+                "enabled",
+                "image_size",
+                "raw_display_model",
+                "simulation_display_model",
+                "source_state_count",
+            },
+        },
+    }
+    for stage, keys in schemas[str(document["material_id"])].items():
+        _strict_keys(stages[stage], keys, stage)
+    geometry = stages["geometry"]
+    fitted = tuple(geometry.get("fitted_parameter_names", ()))
+    fixed = tuple(geometry.get("fixed_parameter_names", ()))
+    if not fitted or len(set((*fitted, *fixed))) != len((*fitted, *fixed)):
+        raise ValueError("geometry fitted/fixed parameter names must be disjoint and unique")
+    if int(geometry.get("source_state_count", 0)) != 1:
+        raise ValueError("geometry replay must use one ideal source state")
+    for stage in ("mosaic", "ordered_intensity"):
+        source_count = stages[stage].get("execution_source_state_count")
+        if source_count != document["source_state_count"]:
+            raise ValueError(f"{stage} source count must match the case")
+    if bool(stages["ordered_intensity"]["fit_atomic_positions"]):
+        raise ValueError("accepted ordered-intensity replay keeps atomic positions frozen")
+    if document["material_id"] == "Bi2Se3":
+        if (
+            geometry["selection_mode"] != "position_free_discovery"
+            or stages["mosaic"]["implementation"] != "bi2se3_measured_profiles_v2"
+            or stages["mosaic"]["observation_mode"] != "osc"
+            or bool(stages["mosaic"]["render_images"])
+            or stages["ordered_intensity"]["implementation"]
+            != "bi2se3_synthetic_selected_component_v3"
+            or bool(stages["render"]["enabled"])
+        ):
+            raise ValueError("Bi2Se3 replay changed an accepted stage implementation")
+    else:
+        if (
+            geometry["selection_mode"] != "position_free_discovery_with_frozen_catalog_audit"
+            or geometry["bounds_model"] != "rasim_multi_angle_pose.v1"
+            or float(geometry["multistart_fraction"]) != 0.08
+            or tuple(float(value) for value in geometry["multistart_pattern"])
+            != (0.0, 0.0, 0.6, -0.4, 0.7, -0.5, 0.3, 0.9, -0.7)
+            or stages["mosaic"]["implementation"] != "measured_angle_profiles_v1"
+            or stages["mosaic"]["nuisance_background_model"] != "local_phi_constant.v1"
+            or stages["mosaic"]["dark_subtraction_model"]
+            != "project_raw_and_dark_separately_then_subtract_signal.v1"
+            or stages["ordered_intensity"]["implementation"]
+            != "measured_transferred_mosaic_amplitudes_v1"
+            or stages["ordered_intensity"]["occupancy_ratio_reference"] != "bi_occupancy"
+            or tuple(stages["ordered_intensity"]["active_parameters"])
+            != ("te1_over_bi", "te2_over_bi", "u_radial_A2", "u_normal_A2")
+            or tuple(float(value) for value in stages["ordered_intensity"]["parameter_scales"])
+            != (1.0, 1.0, 0.1, 0.1)
+            or not bool(stages["render"]["enabled"])
+            or int(stages["render"]["source_state_count"]) != document["source_state_count"]
+            or int(stages["render"]["image_size"]) != 3000
+        ):
+            raise ValueError("Bi2Te3 replay changed an accepted stage implementation")
+        for name in ("cuda_coordinate_chunk", "cuda_state_block_count"):
+            value = stages["render"][name]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"render.{name} must be a positive integer")
+    return stages
+
+
+def _expected_summary(document: dict[str, Any]) -> dict[str, Any]:
+    expected = document["expected"]
+    if not isinstance(expected, dict):
+        raise ValueError("expected must be a table")
+    geometry_keys = {
+        "active_bounds",
+        "classification",
+        "corrections",
+        "fitted_parameter_names",
+        "fixed_parameter_names",
+        "per_incidence_profile_count",
+        "rank",
+        "selection_revision",
+        "site_max_px",
+        "site_rms_px",
+    }
+    profile_keys = {
+        "classification",
+        "m0_profile_count",
+        "m0_profile_identities",
+        "objective",
+        "parameters",
+        "profile_count",
+        "profile_identities",
+        "rank",
+    }
+    ordered_keys = profile_keys | {"active_bounds", "claim_boundary"}
+    schemas = {
+        "Bi2Se3": {
+            "geometry": geometry_keys,
+            "mosaic": profile_keys | {"per_incidence_profile_count"},
+            "ordered_intensity": ordered_keys,
+        },
+        "Bi2Te3": {
+            "geometry": geometry_keys | {"frozen_catalog_sha256"},
+            "mosaic": profile_keys | {"per_incidence_profile_count"},
+            "ordered_intensity": ordered_keys,
+            "render": {
+                "classification",
+                "m0_rod_count",
+                "raw_decoded_pixel_sha256",
+                "rod_count",
+                "simulated_decoded_pixel_sha256",
+                "source_state_count",
+            },
+        },
+    }
+    stage_schemas = schemas[str(document["material_id"])]
+    _strict_keys(expected, {"source_revision", *stage_schemas}, "expected")
+    for stage, keys in stage_schemas.items():
+        stage_expected = expected[stage]
+        if not isinstance(stage_expected, dict):
+            raise ValueError(f"expected.{stage} must be a table")
+        _strict_keys(stage_expected, keys, f"expected.{stage}")
+    pending = [("expected", expected)]
+    while pending:
+        path, value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend((f"{path}.{key}", item) for key, item in value.items())
+        elif isinstance(value, list):
+            pending.extend((f"{path}[{index}]", item) for index, item in enumerate(value))
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{path} must be finite")
+    if not _is_sha256(expected["source_revision"]):
+        raise ValueError("expected.source_revision must be SHA-256 without a prefix")
+    result = {
+        "case_id": document["case_id"],
+        "material_id": document["material_id"],
+        "source_state_count": document["source_state_count"],
+        "source_revision": expected["source_revision"],
+        "geometry": expected["geometry"],
+        "mosaic": expected["mosaic"],
+        "ordered_intensity": expected["ordered_intensity"],
+    }
+    if "render" in stage_schemas:
+        result["render"] = expected["render"]
+    return result
+
+
+def load_replay_case(
+    path: Path,
+    *,
+    repository_root: Path | None = None,
+) -> ReplayCase:
+    """Load a strict, repository-relative, hash-complete replay case."""
+
+    resolved_path = path.resolve()
+    root = ROOT if repository_root is None else repository_root.resolve()
+    document = tomllib.loads(resolved_path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("replay case must be a TOML table")
+    _strict_keys(document, _TOP_LEVEL_KEYS, "replay case")
+    if document["schema_version"] != _SCHEMA_VERSION:
+        raise ValueError("unsupported staged-fit replay schema")
+    for name in ("case_id", "classification"):
+        if not isinstance(document[name], str) or not document[name]:
+            raise ValueError(f"{name} must be nonempty")
+    if document["material_id"] not in {"Bi2Se3", "Bi2Te3"}:
+        raise ValueError("material_id must be Bi2Se3 or Bi2Te3")
+    if document["source_state_count"] != 250 or document["source_seed"] != 1729:
+        raise ValueError("accepted replay requires exactly 250 source states with seed 1729")
+    incidences = tuple(float(value) for value in document["incidence_angles_deg"])
+    if incidences != (5.0, 10.0, 15.0):
+        raise ValueError("accepted replay requires incidences 5, 10, and 15 degrees")
+    stages = _validate_stage_config(document)
+    expected_summary = _expected_summary(document)
+    file_records, input_paths, runtime_identity = _validate_file_records(
+        document["files"],
+        case_directory=resolved_path.parent,
+        repository_root=root,
+    )
+    expected_roles = {
+        "Bi2Se3": {
+            "cif",
+            "environment_lock",
+            "geometry_series",
+            "legacy_peak_observations",
+            "measured_profile_policy",
+            "mosaic_case",
+            "ordered_intensity_case",
+            "osc_10deg",
+            "osc_15deg",
+            "osc_5deg",
+            "simulation_config",
+        },
+        "Bi2Te3": {
+            "cif",
+            "dark",
+            "environment_lock",
+            "geometry_series",
+            "indexed_catalog",
+            "osc_10deg",
+            "osc_15deg",
+            "osc_5deg",
+            "simulation_config",
+        },
+    }
+    if set(input_paths) != expected_roles[str(document["material_id"])]:
+        raise ValueError("replay file roles do not match the accepted material case")
+    _validate_consumed_input_paths(
+        str(document["material_id"]),
+        input_paths=input_paths,
+        stages=stages,
+        repository_root=root,
+    )
+    if document["material_id"] == "Bi2Te3":
+        catalog = json.loads(input_paths["indexed_catalog"].read_text(encoding="utf-8"))
+        if catalog.get("manifest_hash") != stages["geometry"]["catalog_manifest_revision"]:
+            raise ValueError("frozen Bi2Te3 catalog manifest revision changed")
+    tolerances = document["tolerances"]
+    if not isinstance(tolerances, dict):
+        raise ValueError("tolerances must be a table")
+    _strict_keys(tolerances, _TOLERANCE_KEYS, "tolerances")
+    parsed_tolerances = {name: float(value) for name, value in tolerances.items()}
+    if any(not math.isfinite(value) or value < 0.0 for value in parsed_tolerances.values()):
+        raise ValueError("replay tolerances must be finite and nonnegative")
+    return ReplayCase(
+        path=resolved_path,
+        repository_root=root,
+        case_id=str(document["case_id"]),
+        material_id=str(document["material_id"]),
+        classification=str(document["classification"]),
+        source_state_count=int(document["source_state_count"]),
+        source_seed=int(document["source_seed"]),
+        incidence_angles_deg=incidences,
+        input_paths=input_paths,
+        file_records=file_records,
+        stage_config=stages,
+        expected_scientific_summary=expected_summary,
+        tolerances=parsed_tolerances,
+        runtime_identity=runtime_identity,
+    )
+
+
+def _stable_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_value(item)
+            for key, item in sorted(value.items())
+            if key not in _VOLATILE_SCIENTIFIC_FIELDS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_value(item) for item in value]
+    if isinstance(value, Path):
+        raise TypeError("scientific revisions cannot contain paths")
+    return value
+
+
+def scientific_revision(stage: str, payload: dict[str, Any]) -> str:
+    """Hash a path-, device-, and timing-free scientific stage payload."""
+
+    if stage not in _STAGES:
+        raise ValueError(f"unsupported replay stage {stage!r}")
+    encoded = json.dumps(
+        {
+            "schema": "rasim-staged-fit-scientific-revision-v1",
+            "stage": stage,
+            "payload": _stable_value(payload),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return _SHA256_PREFIX + hashlib.sha256(encoded).hexdigest()
+
+
+def _mismatch(path: str, expected: object, actual: object) -> None:
+    raise ReplayMismatchError(f"{path} changed: expected {expected!r}, observed {actual!r}")
+
+
+def _exact(
+    actual: dict[str, Any], expected: dict[str, Any], path: str, names: tuple[str, ...]
+) -> None:
+    for name in names:
+        if name not in actual or actual[name] != expected[name]:
+            _mismatch(f"{path}.{name}", expected.get(name), actual.get(name))
+
+
+def _close_scalar(actual: object, expected: object, tolerance: float, path: str) -> None:
+    observed = float(actual)
+    target = float(expected)
+    if (
+        not math.isfinite(observed)
+        or not math.isfinite(target)
+        or abs(observed - target) > tolerance
+    ):
+        _mismatch(path, target, observed)
+
+
+def _close_vector(actual: object, expected: object, tolerance: float, path: str) -> None:
+    observed = tuple(float(value) for value in actual)  # type: ignore[arg-type]
+    target = tuple(float(value) for value in expected)  # type: ignore[arg-type]
+    if len(observed) != len(target):
+        _mismatch(path, target, observed)
+    for index, (left, right) in enumerate(zip(observed, target, strict=True)):
+        _close_scalar(left, right, tolerance, f"{path}[{index}]")
+
+
+def verify_scientific_summary(
+    case: ReplayCase,
+    actual: dict[str, Any],
+    *,
+    through: str | None = None,
+) -> None:
+    """Verify exact identities and tolerance-bound numerical fit results."""
+
+    terminal = (
+        _STAGES.index(through)
+        if through is not None
+        else max(_STAGES.index(name) for name in _STAGES if name in actual)
+    )
+    expected = case.expected_scientific_summary
+    _exact(
+        actual,
+        expected,
+        "summary",
+        ("case_id", "material_id", "source_state_count", "source_revision"),
+    )
+    geometry = actual.get("geometry", {})
+    expected_geometry = expected["geometry"]
+    _exact(
+        geometry,
+        expected_geometry,
+        "geometry",
+        (
+            "classification",
+            "selection_revision",
+            "fitted_parameter_names",
+            "fixed_parameter_names",
+            "rank",
+            "active_bounds",
+            "per_incidence_profile_count",
+        ),
+    )
+    if "frozen_catalog_sha256" in expected_geometry:
+        _exact(
+            geometry,
+            expected_geometry,
+            "geometry",
+            ("frozen_catalog_sha256",),
+        )
+    _close_vector(
+        geometry.get("corrections", ()),
+        expected_geometry["corrections"],
+        case.tolerances["geometry_correction_absolute"],
+        "geometry.corrections",
+    )
+    for name in ("site_rms_px", "site_max_px"):
+        _close_scalar(
+            geometry.get(name),
+            expected_geometry[name],
+            case.tolerances["geometry_metric_absolute"],
+            f"geometry.{name}",
+        )
+
+    if terminal == 0:
+        return
+    mosaic = actual.get("mosaic", {})
+    expected_mosaic = expected["mosaic"]
+    _exact(
+        mosaic,
+        expected_mosaic,
+        "mosaic",
+        (
+            "classification",
+            "rank",
+            "profile_count",
+            "m0_profile_count",
+            "per_incidence_profile_count",
+            "profile_identities",
+            "m0_profile_identities",
+        ),
+    )
+    _close_vector(
+        mosaic.get("parameters", ()),
+        expected_mosaic["parameters"],
+        case.tolerances["mosaic_parameter_absolute"],
+        "mosaic.parameters",
+    )
+    _close_scalar(
+        mosaic.get("objective"),
+        expected_mosaic["objective"],
+        case.tolerances["mosaic_objective_absolute"],
+        "mosaic.objective",
+    )
+
+    if terminal == 1:
+        return
+    ordered = actual.get("ordered_intensity", {})
+    expected_ordered = expected["ordered_intensity"]
+    _exact(
+        ordered,
+        expected_ordered,
+        "ordered_intensity",
+        (
+            "classification",
+            "claim_boundary",
+            "rank",
+            "profile_count",
+            "m0_profile_count",
+            "active_bounds",
+            "profile_identities",
+            "m0_profile_identities",
+        ),
+    )
+    _close_vector(
+        ordered.get("parameters", ()),
+        expected_ordered["parameters"],
+        case.tolerances["ordered_parameter_absolute"],
+        "ordered_intensity.parameters",
+    )
+    _close_scalar(
+        ordered.get("objective"),
+        expected_ordered["objective"],
+        case.tolerances["ordered_objective_absolute"],
+        "ordered_intensity.objective",
+    )
+    if terminal >= 3 and "render" in expected:
+        _exact(
+            actual.get("render", {}),
+            expected["render"],
+            "render",
+            (
+                "classification",
+                "source_state_count",
+                "rod_count",
+                "m0_rod_count",
+                "raw_decoded_pixel_sha256",
+                "simulated_decoded_pixel_sha256",
+            ),
+        )
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _load_script_module(name: str, filename: str) -> Any:
+    path = ROOT / "scripts" / filename
+    specification = importlib.util.spec_from_file_location(name, path)
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load replay implementation {path}")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+def _source_revision(
+    case: ReplayCase,
+    *,
+    source_state_count: int | None = None,
+) -> str:
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        load_simulation_config,
+    )
+
+    config = load_simulation_config(case.input_paths["simulation_config"])
+    sample_count = case.source_state_count if source_state_count is None else source_state_count
+    configured = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=sample_count))
+    )
+    if configured.samples.source_seed != case.source_seed:
+        raise ValueError("configured source seed does not match the replay case")
+    if configured.samples.incident_sample_id.size != sample_count:
+        raise RuntimeError("configured source did not produce the requested state count")
+    return configured.samples.source_revision
+
+
+def _stage_source_identity(
+    case: ReplayCase,
+    stage: str,
+    *,
+    case_source_revision: str,
+) -> tuple[int, int, str]:
+    if stage != "geometry":
+        return case.source_state_count, case.source_seed, case_source_revision
+    source_state_count = int(case.stage_config["geometry"]["source_state_count"])
+    return (
+        source_state_count,
+        case.source_seed,
+        _source_revision(case, source_state_count=source_state_count),
+    )
+
+
+def _stage_result(
+    stage: str,
+    *,
+    case: ReplayCase,
+    upstream: dict[str, Any] | None,
+    backend: str,
+    summary: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    upstream_revision = None if upstream is None else upstream["scientific_revision"]
+    case_source_revision = _source_revision(case)
+    source_state_count, source_seed, source_revision = _stage_source_identity(
+        case,
+        stage,
+        case_source_revision=case_source_revision,
+    )
+    result = {
+        "schema_version": "rasim-staged-fit-replay-stage-v1",
+        "stage": stage,
+        "case_id": case.case_id,
+        "material_id": case.material_id,
+        "case_sha256": _sha256(case.path),
+        "execution_backend": backend,
+        "runtime": case.runtime_identity,
+        "source_state_count": source_state_count,
+        "source_seed": source_seed,
+        "source_revision": source_revision,
+        "upstream_scientific_revision": upstream_revision,
+        "scientific_summary": {
+            "case_id": case.case_id,
+            "material_id": case.material_id,
+            "source_state_count": case.source_state_count,
+            "source_revision": case_source_revision,
+            stage: summary,
+        },
+        "state": state,
+    }
+    result["scientific_revision"] = scientific_revision(stage, result)
+    return result
+
+
+def _identity_text(record: dict[str, Any]) -> str:
+    dataset_id = str(record["dataset_id"])
+    family_m = int(record.get("family_m", record.get("m")))
+    integer_l = int(record.get("integer_L", record.get("L")))
+    analytic_branch = int(record.get("analytic_branch_id", 0 if family_m == 0 else 2))
+    branch = record.get("root_side_branch_id", record.get("side"))
+    return f"{dataset_id}|{family_m}|{integer_l}|{analytic_branch}|{'none' if branch is None else int(branch)}"
+
+
+def _profile_summary(
+    records: list[dict[str, Any]],
+) -> tuple[list[str], list[str], list[int]]:
+    identities = sorted(_identity_text(record) for record in records)
+    m0 = sorted(
+        _identity_text(record)
+        for record in records
+        if int(record.get("family_m", record.get("m"))) == 0
+    )
+    counts = [
+        sum(str(record["dataset_id"]).endswith(f"-{angle:g}deg") for record in records)
+        for angle in (5.0, 10.0, 15.0)
+    ]
+    return identities, m0, counts
+
+
+def _bi2se3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
+    runner = _load_script_module("staged_fit_bi2se3_geometry", "fit_osc_geometry.py")
+    config = case.stage_config["geometry"]
+    result = runner.fit_osc_geometry_series(
+        case.input_paths[str(config["series_role"])],
+        heldout_integer_l=tuple(int(value) for value in config["heldout_integer_l"]),
+        benchmark=bool(config["benchmark"]),
+        fitted_parameter_names=tuple(config["fitted_parameter_names"]),
+    )
+    corrections = result["fit"]["corrections"]
+    values = [float(corrections[name]) for name in runner.SHARED_GEOMETRY_PARAMETER_NAMES]
+    counts = [
+        int(result["image_site_counts"][image_id]) for image_id in result["image_site_counts"]
+    ]
+    summary = {
+        "classification": case.expected_scientific_summary["geometry"]["classification"],
+        "selection_revision": result["indexed_manifest_hash"],
+        "fitted_parameter_names": list(result["fit"]["fitted_parameter_names"]),
+        "fixed_parameter_names": list(result["fit"]["fixed_parameter_names"]),
+        "corrections": values,
+        "rank": int(result["fit"]["jacobian_rank"]),
+        "active_bounds": list(result["fit"]["active_bounds"]),
+        "site_rms_px": float(result["post_fit"]["site_rms_px"]),
+        "site_max_px": float(result["post_fit"]["site_max_px"]),
+        "per_incidence_profile_count": counts,
+    }
+    return summary, {"corrections": values}
+
+
+def _bi2te3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
+    runner = _load_script_module("staged_fit_bi2te3_geometry", "fit_osc_geometry.py")
+    stage = case.stage_config["geometry"]
+    result = runner.fit_osc_geometry_series(
+        case.input_paths[str(stage["series_role"])],
+        heldout_integer_l=tuple(int(value) for value in stage["heldout_integer_l"]),
+        benchmark=bool(stage["benchmark"]),
+        fitted_parameter_names=tuple(stage["fitted_parameter_names"]),
+    )
+    corrections = result["fit"]["corrections"]
+    values = [float(corrections[name]) for name in runner.SHARED_GEOMETRY_PARAMETER_NAMES]
+    summary = {
+        "classification": case.expected_scientific_summary["geometry"]["classification"],
+        "selection_revision": result["indexed_manifest_hash"],
+        "frozen_catalog_sha256": _sha256(case.input_paths[str(stage["catalog_role"])]),
+        "fitted_parameter_names": list(result["fit"]["fitted_parameter_names"]),
+        "fixed_parameter_names": list(result["fit"]["fixed_parameter_names"]),
+        "corrections": values,
+        "rank": int(result["fit"]["jacobian_rank"]),
+        "active_bounds": list(result["fit"]["active_bounds"]),
+        "site_rms_px": float(result["post_fit"]["site_rms_px"]),
+        "site_max_px": float(result["post_fit"]["site_max_px"]),
+        "per_incidence_profile_count": [
+            int(result["image_site_counts"][image_id]) for image_id in result["image_site_counts"]
+        ],
+    }
+    return summary, {"corrections": values}
+
+
+def _run_geometry_stage(
+    *,
+    case: ReplayCase,
+    upstream: dict[str, Any] | None,
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    del output_directory
+    if upstream is not None:
+        raise ValueError("geometry stage cannot have an upstream result")
+    summary, state = (
+        _bi2se3_geometry(case) if case.material_id == "Bi2Se3" else _bi2te3_geometry(case)
+    )
+    return _stage_result(
+        "geometry",
+        case=case,
+        upstream=None,
+        backend=backend,
+        summary=summary,
+        state=state,
+    )
+
+
+def _bi2se3_mosaic(
+    case: ReplayCase,
+    upstream: dict[str, Any],
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    stage = case.stage_config["mosaic"]
+    expected_corrections = case.expected_scientific_summary["geometry"]["corrections"]
+    _close_vector(
+        upstream["state"]["corrections"],
+        expected_corrections,
+        case.tolerances["geometry_correction_absolute"],
+        "geometry.corrections",
+    )
+    runner = _load_script_module("staged_fit_bi2se3_mosaic", "recover_bi2se3_mosaic.py")
+    artifact_directory = output_directory / "mosaic_artifacts"
+    arguments = [
+        "--case",
+        str(case.input_paths[str(stage["case_role"])]),
+        "--measured-profile-policy",
+        str(case.input_paths[str(stage["measured_profile_policy_role"])]),
+        "--output-directory",
+        str(artifact_directory),
+        "--observation-mode",
+        str(stage["observation_mode"]),
+        "--source-sample-count",
+        str(case.source_state_count),
+        "--execution-backend",
+        backend,
+        "--skip-images",
+    ]
+    with contextlib.redirect_stdout(io.StringIO()):
+        runner.main(arguments)
+    artifact = artifact_directory / "bi2se3_real_mosaic_fit.json"
+    document = json.loads(artifact.read_text(encoding="utf-8"))
+    source_model = document.get("source_model", {})
+    if (
+        source_model.get("sample_count") != case.source_state_count
+        or source_model.get("source_seed") != case.source_seed
+        or source_model.get("source_revision") != _source_revision(case)
+    ):
+        raise RuntimeError("Bi2Se3 mosaic artifact changed its source realization")
+    records = list(document["fit"]["profiles"])
+    identities, m0_identities, counts = _profile_summary(records)
+    recovered = document["recovered_effective_distribution"]
+    summary = {
+        "classification": document["status"],
+        "parameters": [
+            float(recovered["gaussian_sigma_deg"]),
+            float(recovered["lorentzian_hwhm_deg"]),
+            float(recovered["lorentzian_probability"]),
+        ],
+        "objective": float(document["fit"]["objective"]),
+        "rank": int(document["fit"]["sensitivity_rank"]),
+        "profile_count": len(identities),
+        "m0_profile_count": len(m0_identities),
+        "per_incidence_profile_count": counts,
+        "profile_identities": identities,
+        "m0_profile_identities": m0_identities,
+    }
+    state = {
+        "artifact": str(artifact),
+        "artifact_sha256": _sha256(artifact),
+        "parameters": summary["parameters"],
+        "profile_identities": identities,
+    }
+    return _stage_result(
+        "mosaic",
+        case=case,
+        upstream=upstream,
+        backend=backend,
+        summary=summary,
+        state=state,
+    )
+
+
+def _bi2te3_fixed_inputs(
+    case: ReplayCase,
+    corrections: list[float],
+    mosaic_runner: Any,
+) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
+    runtime_case = {
+        "simulation_config": str(case.input_paths["simulation_config"]),
+        "incidence_angles_deg": list(case.incidence_angles_deg),
+        "shared_geometry_corrections": corrections,
+    }
+    return mosaic_runner._fixed_geometry_inputs(
+        case.path,
+        runtime_case,
+        source_sample_count=case.source_state_count,
+    )
+
+
+def _local_peak_centroid(
+    counts: Any,
+    dark: Any,
+    column_px: float,
+    row_px: float,
+    *,
+    radius_px: float = 12.0,
+) -> tuple[float, float]:
+    import numpy as np
+
+    row0 = max(0, math.floor(row_px - radius_px))
+    row1 = min(counts.shape[0], math.ceil(row_px + radius_px + 1.0))
+    column0 = max(0, math.floor(column_px - radius_px))
+    column1 = min(counts.shape[1], math.ceil(column_px + radius_px + 1.0))
+    rows, columns = np.mgrid[row0:row1, column0:column1]
+    radial_px = np.hypot(columns - column_px, rows - row_px)
+    corrected = counts[row0:row1, column0:column1].astype(np.float64) - dark[
+        row0:row1, column0:column1
+    ].astype(np.float64)
+    background = float(np.median(corrected[(radial_px >= 9.0) & (radial_px <= radius_px)]))
+    weight = np.maximum(corrected - background, 0.0)
+    weight[radial_px > 8.0] = 0.0
+    total = float(np.sum(weight))
+    if total <= 0.0:
+        raise RuntimeError("m=0 centroid has no positive local excess")
+    return float(np.sum(columns * weight) / total), float(np.sum(rows * weight) / total)
+
+
+def _bi2te3_profile_definitions(
+    case: ReplayCase,
+    nominal_series: tuple[Any, ...],
+    evaluation_series: tuple[Any, ...],
+    dark_counts: Any,
+    mosaic_runner: Any,
+) -> tuple[tuple[Any, ...], tuple[tuple[Any, ...], ...], list[dict[str, Any]]]:
+    import numpy as np
+
+    from rasim_next.fitting import (
+        ExactTagGeometryModel,
+        MosaicProfileDefinition,
+        MosaicProfileIdentity,
+        MosaicReflectionGroupKey,
+        probe_ordered_intensity_inverse_boundary_bins,
+    )
+    from rasim_next.geometry import detector_coordinates_to_angles
+    from rasim_next.io.osc import read_osc
+    from rasim_next.pipeline.configured_simulation import (
+        ConfiguredGeometryInputs,
+        build_nominal_ewald_context,
+        evaluate_nominal_integer_l_markers,
+    )
+    from rasim_next.selection import build_osc_angle_frame, load_osc_geometry_series
+
+    stage = case.stage_config["mosaic"]
+    geometry_series = load_osc_geometry_series(case.input_paths["geometry_series"])
+    image_id_by_angle = {
+        float(image.axis_rotation_angles_deg[geometry_series.incidence_axis_index]): image.image_id
+        for image in geometry_series.images
+    }
+    catalog = json.loads(case.input_paths[str(stage["catalog_role"])].read_text(encoding="utf-8"))
+    rows = catalog["rows"]
+    selected: dict[float, list[dict[str, Any]]] = {angle: [] for angle in case.incidence_angles_deg}
+    for angle in case.incidence_angles_deg:
+        allowed_l = set(int(value) for value in stage[f"m1_integer_l_{angle:g}deg"])
+        selected[angle].extend(
+            row
+            for row in rows
+            if row["image_id"] == image_id_by_angle[angle]
+            and int(row["family_m"]) == 1
+            and int(row["integer_L"]) in allowed_l
+        )
+    for record in stage.get("extra_nonzero_profiles", []):
+        angle = float(record["incidence_angle_deg"])
+        selected[angle].append(
+            {
+                "family_m": int(record["family_m"]),
+                "integer_L": int(record["integer_L"]),
+                "branch": 2,
+                "root_sign": int(record["root_sign"]),
+                "column_px": float(record["column_px"]),
+                "row_px": float(record["row_px"]),
+            }
+        )
+
+    frames = []
+    datasets = []
+    m0_audit: list[dict[str, Any]] = []
+    for angle, inputs, evaluation_inputs, osc_role, dataset_id in zip(
+        case.incidence_angles_deg,
+        nominal_series,
+        evaluation_series,
+        stage["osc_roles"],
+        stage["dataset_ids"],
+        strict=True,
+    ):
+        context = build_nominal_ewald_context(inputs)
+        frame = build_osc_angle_frame(
+            mean_direction_lab=inputs.config.source.mean_direction_lab,
+            instrument=inputs.instrument,
+            sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
+            revision=f"bi2te3-fixed-geometry-{angle:g}deg.v1",
+        )
+        frames.append(frame)
+        markers = evaluate_nominal_integer_l_markers(context)
+        marker_map: dict[tuple[int, int, int], int] = {}
+        for index in range(markers.family_m.size):
+            family_m = int(markers.family_m[index])
+            root_sign = int(markers.root_sign[index])
+            if family_m == 0 or root_sign == 0 or int(markers.branch[index]) != 2:
+                continue
+            key = (family_m, int(markers.integer_L[index]), root_sign)
+            if key in marker_map:
+                raise RuntimeError(f"nonunique nominal marker {key}")
+            marker_map[key] = index
+        definitions = []
+        counts = read_osc(case.input_paths[str(osc_role)]).detector_native_counts
+        for row in selected[angle]:
+            key = (int(row["family_m"]), int(row["integer_L"]), int(row["root_sign"]))
+            if key not in marker_map:
+                raise RuntimeError(f"measured nonzero peak lacks a nominal marker: {angle}, {key}")
+            marker_index = marker_map[key]
+            coordinates = detector_coordinates_to_angles(
+                np.asarray([row["column_px"]]),
+                np.asarray([row["row_px"]]),
+                instrument=inputs.instrument,
+                angle_frame=frame,
+            )
+            if not bool(coordinates.valid[0] & coordinates.azimuth_valid[0]):
+                raise RuntimeError(f"invalid observed angle coordinate: {angle}, {key}")
+            group = MosaicReflectionGroupKey(
+                group_id=f"bi2te3:m={key[0]}:L={key[1]}",
+                rod_catalog_revision=mosaic_runner.configured_rod_catalog_revision(
+                    evaluation_inputs
+                ),
+                member_rod_hk=markers.contributing_rod_hk[marker_index],
+                branch_mode="EXPLICIT_NONZERO",
+                layered_family_m=key[0],
+                layered_integer_L=key[1],
+            )
+            definitions.append(
+                MosaicProfileDefinition(
+                    identity=MosaicProfileIdentity(
+                        dataset_id=str(dataset_id),
+                        incidence_angle_rad=math.radians(angle),
+                        group_key=group,
+                        branch_id=1 if key[2] < 0 else 2,
+                        analytic_branch_id=2,
+                    ),
+                    center_two_theta_rad=float(coordinates.two_theta_rad[0]),
+                    center_phi_rad=float(coordinates.phi_rad[0]),
+                    two_theta_half_width_rad=math.radians(float(stage["two_theta_half_width_deg"])),
+                    phi_half_width_rad=math.radians(float(stage["nonzero_phi_half_width_deg"])),
+                    phi_bin_count=int(stage["phi_bin_count"]),
+                    two_theta_gauss_order=int(stage["nonzero_two_theta_gauss_order"]),
+                    phi_gauss_order=int(stage["nonzero_phi_gauss_order"]),
+                )
+            )
+        geometry_model = ExactTagGeometryModel(
+            ConfiguredGeometryInputs(
+                config=inputs.config,
+                samples=inputs.samples,
+                instrument=inputs.instrument,
+                crystal=inputs.crystal,
+                material=inputs.material,
+                reciprocal=inputs.reciprocal,
+                rods=inputs.rods,
+            )
+        )
+        m0_rods = tuple(rod for rod in inputs.rods if rod.family_m == 0)
+        if len(m0_rods) != 1:
+            raise RuntimeError("expected exactly one physical m=0 rod")
+        for raw_start in stage[f"m0_starts_{angle:g}deg"]:
+            integer_l, start_column, start_row = (
+                int(raw_start[0]),
+                float(raw_start[1]),
+                float(raw_start[2]),
+            )
+            column_px, row_px = _local_peak_centroid(
+                counts,
+                dark_counts,
+                start_column,
+                start_row,
+            )
+            observed = detector_coordinates_to_angles(
+                np.asarray([column_px]),
+                np.asarray([row_px]),
+                instrument=inputs.instrument,
+                angle_frame=frame,
+            )
+            prediction = geometry_model.predict_m0_minimum_tilt_exact_l_landmarks((integer_l,))
+            distance_px = float(np.linalg.norm(prediction.coordinates_px[0] - (column_px, row_px)))
+            accepted = distance_px <= float(stage["m0_landmark_maximum_distance_px"])
+            m0_audit.append(
+                {
+                    "dataset_id": str(dataset_id),
+                    "family_m": 0,
+                    "integer_L": integer_l,
+                    "fixed_geometry_distance_px": distance_px,
+                    "accepted": accepted,
+                }
+            )
+            if not accepted:
+                continue
+            group = MosaicReflectionGroupKey(
+                group_id=f"bi2te3:m=0:L={integer_l}",
+                rod_catalog_revision=mosaic_runner.configured_rod_catalog_revision(
+                    evaluation_inputs
+                ),
+                member_rod_hk=((m0_rods[0].h, m0_rods[0].k),),
+                branch_mode="COLLAPSED_00L",
+                layered_family_m=0,
+                layered_integer_L=integer_l,
+            )
+            definitions.append(
+                MosaicProfileDefinition(
+                    identity=MosaicProfileIdentity(
+                        dataset_id=str(dataset_id),
+                        incidence_angle_rad=math.radians(angle),
+                        group_key=group,
+                        branch_id=None,
+                        analytic_branch_id=0,
+                    ),
+                    center_two_theta_rad=float(observed.two_theta_rad[0]),
+                    center_phi_rad=float(observed.phi_rad[0]),
+                    two_theta_half_width_rad=math.radians(float(stage["two_theta_half_width_deg"])),
+                    phi_half_width_rad=math.radians(float(stage["m0_phi_half_width_deg"])),
+                    phi_bin_count=int(stage["phi_bin_count"]),
+                    two_theta_gauss_order=int(stage["m0_two_theta_gauss_order"]),
+                    phi_gauss_order=int(stage["m0_phi_gauss_order"]),
+                )
+            )
+        datasets.append(
+            probe_ordered_intensity_inverse_boundary_bins(
+                context.geometry,
+                angle_frame=frame,
+                definitions=tuple(definitions),
+            )
+        )
+    return tuple(frames), tuple(datasets), m0_audit
+
+
+def _bi2te3_observations(
+    case: ReplayCase,
+    series: tuple[Any, ...],
+    frames: tuple[Any, ...],
+    definitions: tuple[tuple[Any, ...], ...],
+    model: Any,
+    dark_counts: Any,
+    profile_revision: str,
+    mosaic_runner: Any,
+) -> tuple[Any, tuple[tuple[Any, ...], ...], list[dict[str, Any]]]:
+    import numpy as np
+
+    from rasim_next.fitting import MosaicProfileSet
+    from rasim_next.io.osc import read_osc
+    from rasim_next.measurement import compile_detector_profile_projector, project_detector_profiles
+    from rasim_next.selection import detector_valid_mask_from_counts
+
+    stage = case.stage_config["mosaic"]
+    selected_definitions = []
+    signals = []
+    normalizations = []
+    valid_masks = []
+    phi_edges = []
+    two_theta_bounds = []
+    frame_revisions = []
+    selection_records: list[dict[str, Any]] = []
+    start = 0
+    sideband_offsets = tuple(
+        math.radians(float(value)) for value in stage["sideband_two_theta_offsets_deg"]
+    )
+    for inputs, frame, dataset_definitions, osc_role in zip(
+        series,
+        frames,
+        definitions,
+        stage["osc_roles"],
+        strict=True,
+    ):
+        stop = start + len(dataset_definitions)
+        model_valid = model.valid[start:stop]
+        model_signal = model.signal[start:stop]
+        counts = read_osc(case.input_paths[str(osc_role)]).detector_native_counts
+        detector_mask = detector_valid_mask_from_counts(counts)
+        projector = compile_detector_profile_projector(
+            instrument=inputs.instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=model.two_theta_bounds_rad[start:stop],
+            phi_bin_edges_rad=model.phi_bin_edges_rad[start:stop],
+            detector_valid_mask=detector_mask,
+            profile_bin_valid_mask=model_valid,
+        )
+        raw = project_detector_profiles(projector, counts)
+        dark = project_detector_profiles(projector, dark_counts)
+        raw_side = mosaic_runner._sample_profile_centerline_sidebands(
+            detector_counts=counts,
+            detector_valid_mask=detector_mask,
+            instrument=inputs.instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=model.two_theta_bounds_rad[start:stop],
+            phi_bin_edges_rad=model.phi_bin_edges_rad[start:stop],
+            offsets_rad=sideband_offsets,
+        )
+        dark_side = mosaic_runner._sample_profile_centerline_sidebands(
+            detector_counts=dark_counts,
+            detector_valid_mask=detector_mask,
+            instrument=inputs.instrument,
+            angle_frame=frame,
+            two_theta_bounds_rad=model.two_theta_bounds_rad[start:stop],
+            phi_bin_edges_rad=model.phi_bin_edges_rad[start:stop],
+            offsets_rad=sideband_offsets,
+        )
+        side = raw_side - dark_side
+        background = np.median(side, axis=0)
+        scatter = 1.4826 * np.median(np.abs(side - background[None, ...]), axis=0)
+        corrected_signal = raw.S - dark.S
+        corrected_intensity = np.zeros_like(corrected_signal)
+        np.divide(corrected_signal, raw.N, out=corrected_intensity, where=model_valid)
+        keep = []
+        for local_index, definition in enumerate(dataset_definitions):
+            active = model_valid[local_index]
+            excess = np.maximum(
+                corrected_intensity[local_index, active] - background[local_index, active],
+                0.0,
+            )
+            noise = np.maximum(scatter[local_index, active], 1.0)
+            significance = float(np.linalg.norm(excess) / np.linalg.norm(noise))
+            support = float(np.sum(model_signal[local_index, active]))
+            accepted = bool(
+                significance >= float(stage["minimum_excess_energy_over_side_scatter"])
+                and support > np.finfo(np.float64).tiny
+            )
+            identity = definition.identity
+            selection_records.append(
+                {
+                    "dataset_id": identity.dataset_id,
+                    "family_m": identity.group_key.layered_family_m,
+                    "integer_L": identity.group_key.layered_integer_L,
+                    "root_side_branch_id": identity.branch_id,
+                    "dark_subtracted_excess_significance": significance,
+                    "source_averaged_modeled_signal_A2": support,
+                    "accepted": accepted,
+                }
+            )
+            if not accepted:
+                continue
+            keep.append(local_index)
+            minimum = float(np.min(corrected_intensity[local_index, active]))
+            nonnegative_offset = max(0.0, -minimum) + 1.0e-9
+            restored = corrected_signal[local_index] + nonnegative_offset * raw.N[local_index]
+            restored[~active] = 0.0
+            signals.append(restored)
+            normalizations.append(raw.N[local_index])
+            valid_masks.append(active)
+            phi_edges.append(model.phi_bin_edges_rad[start + local_index])
+            two_theta_bounds.append(model.two_theta_bounds_rad[start + local_index])
+            frame_revisions.append(frame.revision)
+        selected_definitions.append(tuple(dataset_definitions[index] for index in keep))
+        start = stop
+    observation_revision = (
+        "sha256-"
+        + hashlib.sha256(
+            json.dumps(selection_records, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    observations = MosaicProfileSet(
+        identities=tuple(
+            definition.identity for dataset in selected_definitions for definition in dataset
+        ),
+        signal=np.asarray(signals),
+        normalization=np.asarray(normalizations),
+        valid=np.asarray(valid_masks),
+        profile_revision=profile_revision,
+        phi_bin_edges_rad=np.asarray(phi_edges),
+        two_theta_bounds_rad=np.asarray(two_theta_bounds),
+        angle_frame_revisions=tuple(frame_revisions),
+        source_revision=None,
+        observation_revision=observation_revision,
+    )
+    return observations, tuple(selected_definitions), selection_records
+
+
+def _bi2te3_mosaic(
+    case: ReplayCase,
+    upstream: dict[str, Any],
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    del output_directory
+    if backend != "cuda":
+        raise ValueError("the accepted Bi2Te3 mosaic replay is CUDA-qualified only")
+    from rasim_next.io.osc import read_osc
+
+    mosaic_runner = _load_script_module(
+        "staged_fit_bi2te3_mosaic_physics", "recover_bi2se3_mosaic.py"
+    )
+    corrections = [float(value) for value in upstream["state"]["corrections"]]
+    base, series, nominal_series = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    if base.samples.source_revision != _source_revision(case):
+        raise RuntimeError("Bi2Te3 mosaic replay changed its source realization")
+    stage = case.stage_config["mosaic"]
+    dark_counts = read_osc(case.input_paths[str(stage["dark_role"])]).detector_native_counts
+    frames, definitions, _m0_audit = _bi2te3_profile_definitions(
+        case,
+        nominal_series,
+        series,
+        dark_counts,
+        mosaic_runner,
+    )
+    definition_payload = [
+        {
+            "dataset_id": definition.identity.dataset_id,
+            "family_m": definition.identity.group_key.layered_family_m,
+            "integer_L": definition.identity.group_key.layered_integer_L,
+            "root_side_branch_id": definition.identity.branch_id,
+            "analytic_branch_id": definition.identity.analytic_branch_id,
+            "center_two_theta_rad": definition.center_two_theta_rad,
+            "center_phi_rad": definition.center_phi_rad,
+        }
+        for dataset in definitions
+        for definition in dataset
+    ]
+    profile_revision = (
+        "sha256-"
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    "geometry_revision": upstream["scientific_revision"],
+                    "source_revision": base.samples.source_revision,
+                    "catalog_sha256": _sha256(case.input_paths[str(stage["catalog_role"])]),
+                    "definitions": definition_payload,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
+    physics, profile_geometry = mosaic_runner._profile_forward_contexts(base, series)
+    layout, _ = mosaic_runner._evaluate_profile_series(
+        physics,
+        profile_geometry,
+        frames,
+        definitions,
+        mosaic_runner._mosaic_parameters(
+            gaussian_sigma_rad=math.radians(1.0),
+            lorentzian_half_width_rad=1.0,
+            lorentzian_probability=0.0,
+            context=physics,
+        ),
+        profile_revision=profile_revision,
+        execution_backend=backend,
+    )
+    observations, fitted_definitions, _selection = _bi2te3_observations(
+        case,
+        series,
+        frames,
+        definitions,
+        layout,
+        dark_counts,
+        profile_revision,
+        mosaic_runner,
+    )
+    gaussian, lorentzian = mosaic_runner._component_profile_evaluators(
+        physics=physics,
+        geometry=profile_geometry,
+        frames=frames,
+        definitions=fitted_definitions,
+        profile_revision=profile_revision,
+        execution_backend=backend,
+    )
+    search, _ = mosaic_runner._fit_profiles(
+        observations=observations,
+        evaluate_gaussian_profile=gaussian,
+        evaluate_lorentzian_profile=lorentzian,
+        search_config={
+            name: stage[name]
+            for name in (
+                "gaussian_sigma_bounds_deg",
+                "lorentzian_hwhm_bounds_deg",
+                "coarse_width_count",
+                "refinement_width_count",
+                "refinement_levels",
+                "near_optimal_objective_delta",
+                "maximum_sensitivity_condition",
+            )
+        },
+        nuisance_basis=mosaic_runner._constant_profile_background_basis(observations),
+    )
+    result = search.fit
+    records = [
+        {
+            "dataset_id": identity.dataset_id,
+            "family_m": identity.group_key.layered_family_m,
+            "integer_L": identity.group_key.layered_integer_L,
+            "root_side_branch_id": identity.branch_id,
+            "analytic_branch_id": identity.analytic_branch_id,
+            "nuisance_peak_scale": float(result.profile_scales[index]),
+        }
+        for index, identity in enumerate(result.profile_identities)
+    ]
+    identities, m0_identities, counts = _profile_summary(records)
+    parameters = mosaic_runner._parameter_summary(result)
+    parameter_values = [
+        float(parameters["gaussian_sigma_deg"]),
+        float(parameters["lorentzian_hwhm_deg"]),
+        float(parameters["lorentzian_probability"]),
+    ]
+    summary = {
+        "classification": "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE",
+        "parameters": parameter_values,
+        "objective": float(result.objective),
+        "rank": int(result.sensitivity_rank),
+        "profile_count": len(identities),
+        "m0_profile_count": len(m0_identities),
+        "per_incidence_profile_count": counts,
+        "profile_identities": identities,
+        "m0_profile_identities": m0_identities,
+    }
+    state = {
+        "parameters": parameter_values,
+        "profile_records": records,
+        "profile_scales": result.profile_scales.tolist(),
+        "profile_revision": profile_revision,
+        "geometry_corrections": corrections,
+    }
+    return _stage_result(
+        "mosaic",
+        case=case,
+        upstream=upstream,
+        backend=backend,
+        summary=summary,
+        state=state,
+    )
+
+
+def _run_mosaic_stage(
+    *,
+    case: ReplayCase,
+    upstream: dict[str, Any] | None,
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    if upstream is None or upstream.get("stage") != "geometry":
+        raise ValueError("mosaic stage requires the geometry result")
+    if case.material_id == "Bi2Se3":
+        return _bi2se3_mosaic(case, upstream, backend, output_directory)
+    return _bi2te3_mosaic(case, upstream, backend, output_directory)
+
+
+def _bi2se3_ordered_intensity(
+    case: ReplayCase,
+    upstream: dict[str, Any],
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    stage = case.stage_config["ordered_intensity"]
+    runner = _load_script_module("staged_fit_bi2se3_ordered", "recover_bi2se3_ordered_intensity.py")
+    mosaic_artifact = Path(upstream["state"]["artifact"])
+    if _sha256(mosaic_artifact) != upstream["state"]["artifact_sha256"]:
+        raise RuntimeError("Bi2Se3 mosaic artifact changed before ordered fitting")
+    artifact = output_directory / "ordered_intensity_artifacts" / "bi2se3_ordered.json"
+    arguments = [
+        "--case",
+        str(case.input_paths[str(stage["case_role"])]),
+        "--source-sample-count",
+        str(case.source_state_count),
+        "--mosaic-result",
+        str(mosaic_artifact),
+        "--execution-backend",
+        backend,
+        "--output",
+        str(artifact),
+        "--json",
+    ]
+    with contextlib.redirect_stdout(io.StringIO()):
+        exit_code = runner.main(arguments)
+    if exit_code != 0:
+        raise RuntimeError("Bi2Se3 ordered-intensity replay failed its proof gate")
+    document = json.loads(artifact.read_text(encoding="utf-8"))
+    source_model = document.get("source_model", {})
+    if (
+        source_model.get("sample_count") != case.source_state_count
+        or source_model.get("source_seed") != case.source_seed
+        or source_model.get("source_revision") != _source_revision(case)
+    ):
+        raise RuntimeError("Bi2Se3 ordered artifact changed its source realization")
+    absolute = document["absolute"]
+    fitted = absolute["fit"]
+    parameter_names = tuple(stage["active_parameters"])
+    parameters = [float(fitted[name]) for name in parameter_names]
+    mosaic_summary = upstream["scientific_summary"]["mosaic"]
+    summary = {
+        "classification": "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY",
+        "claim_boundary": str(stage["claim_boundary"]),
+        "parameters": parameters,
+        "objective": float(absolute["objective"]),
+        "rank": int(absolute["sensitivity_rank"]),
+        "profile_count": int(mosaic_summary["profile_count"]),
+        "m0_profile_count": int(mosaic_summary["m0_profile_count"]),
+        "active_bounds": [bool(absolute["active_bounds"][name]) for name in parameter_names],
+        "profile_identities": list(mosaic_summary["profile_identities"]),
+        "m0_profile_identities": list(mosaic_summary["m0_profile_identities"]),
+    }
+    state = {
+        "artifact": str(artifact),
+        "artifact_sha256": _sha256(artifact),
+        "parameters": parameters,
+        "structure_representative": fitted,
+    }
+    return _stage_result(
+        "ordered_intensity",
+        case=case,
+        upstream=upstream,
+        backend=backend,
+        summary=summary,
+        state=state,
+    )
+
+
+def _bi2te3_ordered_intensity(
+    case: ReplayCase,
+    upstream: dict[str, Any],
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    del output_directory
+    if backend != "cuda":
+        raise ValueError("the accepted Bi2Te3 ordered-intensity replay is CUDA-qualified only")
+    import numpy as np
+
+    from rasim_next.fitting import (
+        OrderedIntensityPeakCenterObservations,
+        compile_source_averaged_ordered_intensity_response,
+        evaluate_source_averaged_ordered_intensity_point_signal,
+        fit_ordered_intensity_series,
+    )
+    from rasim_next.io.osc import read_osc
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+
+    mosaic_runner = _load_script_module(
+        "staged_fit_bi2te3_ordered_physics", "recover_bi2se3_mosaic.py"
+    )
+    mosaic_state = upstream["state"]
+    corrections = [float(value) for value in mosaic_state["geometry_corrections"]]
+    base, series, nominal_series = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    if base.samples.source_revision != _source_revision(case):
+        raise RuntimeError("Bi2Te3 ordered-intensity replay changed its source realization")
+    mosaic_stage = case.stage_config["mosaic"]
+    dark_counts = read_osc(case.input_paths[str(mosaic_stage["dark_role"])]).detector_native_counts
+    frames, all_definitions, _ = _bi2te3_profile_definitions(
+        case,
+        nominal_series,
+        series,
+        dark_counts,
+        mosaic_runner,
+    )
+
+    def definition_key(value: Any) -> tuple[str, int, int, int | None]:
+        if isinstance(value, dict):
+            return (
+                str(value["dataset_id"]),
+                int(value["family_m"]),
+                int(value["integer_L"]),
+                value.get("root_side_branch_id"),
+            )
+        identity = value.identity
+        return (
+            identity.dataset_id,
+            identity.group_key.layered_family_m,
+            identity.group_key.layered_integer_L,
+            identity.branch_id,
+        )
+
+    definition_by_key = {
+        definition_key(definition): definition
+        for dataset in all_definitions
+        for definition in dataset
+    }
+    profile_records = list(mosaic_state["profile_records"])
+    profile_scales = np.asarray(mosaic_state["profile_scales"], dtype=np.float64)
+    if profile_scales.shape != (len(profile_records),):
+        raise RuntimeError("mosaic profile scales do not align with their identities")
+    fitted_definitions = tuple(
+        definition_by_key[definition_key(record)]
+        for record, scale in zip(profile_records, profile_scales, strict=True)
+        if scale > 0.0
+    )
+    if not fitted_definitions:
+        raise RuntimeError("no positive mosaic profile amplitudes remain")
+    definitions_by_dataset = []
+    scales_by_dataset = []
+    for dataset_id in mosaic_stage["dataset_ids"]:
+        mask = np.asarray(
+            [record["dataset_id"] == dataset_id for record in profile_records],
+            dtype=np.bool_,
+        ) & (profile_scales > 0.0)
+        definitions_by_dataset.append(
+            tuple(
+                definition_by_key[definition_key(record)]
+                for record, keep in zip(profile_records, mask, strict=True)
+                if keep
+            )
+        )
+        scales_by_dataset.append(profile_scales[mask])
+    if any(not values for values in definitions_by_dataset):
+        raise RuntimeError("ordered-intensity profiles do not cover every incidence")
+
+    physics, profile_geometry = mosaic_runner._profile_forward_contexts(base, series)
+    mosaic_parameters = mosaic_runner._mosaic_parameters(
+        gaussian_sigma_rad=math.radians(float(mosaic_state["parameters"][0])),
+        lorentzian_half_width_rad=math.radians(float(mosaic_state["parameters"][1])),
+        lorentzian_probability=float(mosaic_state["parameters"][2]),
+        context=physics,
+    )
+    detectors = mosaic_runner._detector_series(physics, profile_geometry, mosaic_parameters)
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base.crystal)
+    if tuple(base.strength.site_labels) != ("Bi", "Te1", "Te2"):
+        raise RuntimeError(f"unexpected Bi2Te3 site roles: {base.strength.site_labels}")
+    responses = []
+    observations = []
+    for detector, frame, definitions, scales in zip(
+        detectors,
+        frames,
+        definitions_by_dataset,
+        scales_by_dataset,
+        strict=True,
+    ):
+        response = compile_source_averaged_ordered_intensity_response(
+            detector,
+            angle_frame=frame,
+            definitions=definitions,
+            execution_backend=backend,
+        )
+        baseline_signal = response.predict_signal_density_A2_per_rad2(baseline)
+        transferred_signal = scales * baseline_signal
+        if np.any(transferred_signal <= 0.0) or not np.all(np.isfinite(transferred_signal)):
+            raise FloatingPointError("transferred real-OSC peak signal is not positive and finite")
+        responses.append(response)
+        observations.append(
+            OrderedIntensityPeakCenterObservations(
+                dataset_id=response.dataset_id,
+                observable_revision=response.observable_revision,
+                signal_density_A2_per_rad2=transferred_signal,
+            )
+        )
+    stage = case.stage_config["ordered_intensity"]
+    canonical_active = (
+        "se1_occupancy",
+        "se2_occupancy",
+        "u_radial_A2",
+        "u_normal_A2",
+    )
+    lower = tuple(float(value) for value in stage["lower_bounds"])
+    upper = tuple(float(value) for value in stage["upper_bounds"])
+    bounds = {
+        name: (minimum, maximum)
+        for name, minimum, maximum in zip(canonical_active, lower, upper, strict=True)
+    }
+    fits = []
+    failures = []
+    for start_index, initial in enumerate(stage["multistarts"]):
+        try:
+            fit = fit_ordered_intensity_series(
+                tuple(responses),
+                tuple(observations),
+                base_strength=base.strength,
+                active_parameter_names=canonical_active,
+                initial_parameters=replace(
+                    baseline,
+                    bi_occupancy=1.0,
+                    se1_occupancy=float(initial[0]),
+                    se2_occupancy=float(initial[1]),
+                    u_radial_A2=float(initial[2]),
+                    u_normal_A2=float(initial[3]),
+                ),
+                relative_scale_mode=True,
+                active_parameter_bounds=bounds,
+                maximum_function_evaluations=int(stage["maximum_function_evaluations"]),
+                required_source_state_count=case.source_state_count,
+                required_source_revision=base.samples.source_revision,
+            )
+        except (FloatingPointError, RuntimeError, ValueError) as error:
+            failures.append({"start_index": start_index, "message": str(error)})
+        else:
+            fits.append(fit)
+    if not fits:
+        raise RuntimeError(f"all Bi2Te3 structure multistarts failed: {failures}")
+    result = min(fits, key=lambda fit: fit.objective)
+    if result.occupancy_ratio_reference != "bi_occupancy":
+        raise RuntimeError("relative fit changed the frozen Bi occupancy gauge")
+    if result.occupancy_ratios is None:
+        raise RuntimeError("relative fit did not report occupancy ratios")
+    oracle_error = 0.0
+    for detector, frame, definitions, cached in zip(
+        detectors,
+        frames,
+        definitions_by_dataset,
+        result.predicted_signal_density_A2_per_rad2,
+        strict=True,
+    ):
+        fresh = evaluate_source_averaged_ordered_intensity_point_signal(
+            detector,
+            angle_frame=frame,
+            definitions=definitions,
+            structure_parameters=result.structure_representative,
+            execution_backend=backend,
+        )
+        scale = max(float(np.max(fresh)), np.finfo(np.float64).tiny)
+        oracle_error = max(
+            oracle_error,
+            float(np.max(np.abs(cached - fresh) / np.maximum(fresh, 1.0e-12 * scale))),
+        )
+    records = [
+        {
+            "dataset_id": definition.identity.dataset_id,
+            "family_m": definition.identity.group_key.layered_family_m,
+            "integer_L": definition.identity.group_key.layered_integer_L,
+            "root_side_branch_id": definition.identity.branch_id,
+            "analytic_branch_id": definition.identity.analytic_branch_id,
+        }
+        for definitions in definitions_by_dataset
+        for definition in definitions
+    ]
+    identities, m0_identities, _ = _profile_summary(records)
+    representative = result.structure_representative
+    parameter_values = [
+        float(result.occupancy_ratios[1]),
+        float(result.occupancy_ratios[2]),
+        float(representative.u_radial_A2),
+        float(representative.u_normal_A2),
+    ]
+    summary = {
+        "classification": "MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE",
+        "claim_boundary": str(stage["claim_boundary"]),
+        "parameters": parameter_values,
+        "objective": float(result.objective),
+        "rank": int(result.sensitivity_rank),
+        "profile_count": len(identities),
+        "m0_profile_count": len(m0_identities),
+        "active_bounds": result.active_bounds.tolist(),
+        "profile_identities": identities,
+        "m0_profile_identities": m0_identities,
+    }
+    structure_record = {
+        "bi_fractional_z": representative.bi_fractional_z,
+        "te2_fractional_z": representative.se2_fractional_z,
+        "bi_occupancy": representative.bi_occupancy,
+        "te1_occupancy": representative.se1_occupancy,
+        "te2_occupancy": representative.se2_occupancy,
+        "u_radial_A2": representative.u_radial_A2,
+        "u_normal_A2": representative.u_normal_A2,
+    }
+    state = {
+        "parameters": parameter_values,
+        "structure_representative": structure_record,
+        "geometry_corrections": corrections,
+        "mosaic_parameters": list(mosaic_state["parameters"]),
+        "profile_records": records,
+        "cached_vs_fresh_maximum_relative_error": oracle_error,
+    }
+    return _stage_result(
+        "ordered_intensity",
+        case=case,
+        upstream=upstream,
+        backend=backend,
+        summary=summary,
+        state=state,
+    )
+
+
+def _run_ordered_intensity_stage(
+    *,
+    case: ReplayCase,
+    upstream: dict[str, Any] | None,
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    if upstream is None or upstream.get("stage") != "mosaic":
+        raise ValueError("ordered-intensity stage requires the mosaic result")
+    if case.material_id == "Bi2Se3":
+        return _bi2se3_ordered_intensity(case, upstream, backend, output_directory)
+    return _bi2te3_ordered_intensity(case, upstream, backend, output_directory)
+
+
+def _bi2te3_render(
+    case: ReplayCase,
+    upstream: dict[str, Any],
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    if backend != "cuda":
+        raise ValueError("the accepted Bi2Te3 render replay is CUDA-qualified only")
+    import numpy as np
+    from PIL import Image
+
+    from rasim_next.io.osc import read_osc
+    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.pipeline.configured_simulation import sample_detector_pixel_center_density
+
+    render = case.stage_config["render"]
+    if not bool(render["enabled"]):
+        raise ValueError("the replay case does not enable a current render")
+    mosaic_runner = _load_script_module(
+        "staged_fit_bi2te3_render_physics", "recover_bi2se3_mosaic.py"
+    )
+    state = upstream["state"]
+    corrections = [float(value) for value in state["geometry_corrections"]]
+    base, series, _ = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    physics, profile_geometry = mosaic_runner._profile_forward_contexts(base, series)
+    mosaic_parameters = mosaic_runner._mosaic_parameters(
+        gaussian_sigma_rad=math.radians(float(state["mosaic_parameters"][0])),
+        lorentzian_half_width_rad=math.radians(float(state["mosaic_parameters"][1])),
+        lorentzian_probability=float(state["mosaic_parameters"][2]),
+        context=physics,
+    )
+    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base.crystal)
+    structure = state["structure_representative"]
+    fitted = replace(
+        baseline,
+        bi_fractional_z=float(structure["bi_fractional_z"]),
+        se2_fractional_z=float(structure["te2_fractional_z"]),
+        bi_occupancy=float(structure["bi_occupancy"]),
+        se1_occupancy=float(structure["te1_occupancy"]),
+        se2_occupancy=float(structure["te2_occupancy"]),
+        u_radial_A2=float(structure["u_radial_A2"]),
+        u_normal_A2=float(structure["u_normal_A2"]),
+    )
+    if (
+        fitted.bi_fractional_z != baseline.bi_fractional_z
+        or fitted.se2_fractional_z != baseline.se2_fractional_z
+    ):
+        raise RuntimeError("Bi2Te3 render moved a frozen atomic coordinate")
+    strength = replace(base.strength, structure_parameters=fitted)
+    detectors = tuple(
+        detector.with_maximum_state_block_count(
+            int(render["cuda_state_block_count"])
+        ).rebind_physics(strength_model=strength)
+        for detector in mosaic_runner._detector_series(
+            physics,
+            profile_geometry,
+            mosaic_parameters,
+        )
+    )
+    simulated = [
+        sample_detector_pixel_center_density(
+            detector,
+            execution_backend=backend,
+            cuda_coordinate_chunk_size=int(render["cuda_coordinate_chunk"]),
+        ).image_A2_per_px2
+        for detector in detectors
+    ]
+    mosaic_stage = case.stage_config["mosaic"]
+    raw = [
+        read_osc(case.input_paths[str(role)]).detector_native_counts
+        for role in mosaic_stage["osc_roles"]
+    ]
+    raw_high = max(float(np.percentile(image, 99.995)) for image in raw)
+    raw_high = max(raw_high, 1.0)
+    raw_display = [np.log1p(np.maximum(image, 0.0)) / math.log1p(raw_high) for image in raw]
+    positive = [image[image > 0.0] for image in simulated]
+    if any(values.size == 0 for values in positive):
+        raise FloatingPointError("a simulated replay image contains no positive density")
+    sim_low = min(float(np.percentile(values, 1.0)) for values in positive)
+    sim_high = max(float(np.percentile(values, 99.995)) for values in positive)
+    sim_low = max(sim_low, sim_high * 1.0e-10, np.finfo(np.float64).tiny)
+    logarithmic_range = math.log(sim_high / sim_low)
+    simulated_display = [
+        np.log(np.maximum(image, sim_low) / sim_low) / logarithmic_range for image in simulated
+    ]
+    artifact_directory = output_directory / "render_artifacts"
+    artifact_directory.mkdir(parents=True, exist_ok=True)
+    raw_hashes = []
+    simulated_hashes = []
+    paths = []
+    artifact_identities = []
+    for angle, raw_values, simulated_values in zip(
+        case.incidence_angles_deg,
+        raw_display,
+        simulated_display,
+        strict=True,
+    ):
+        raw_pixels = np.asarray(
+            np.rint(255.0 * np.clip(raw_values, 0.0, 1.0)),
+            dtype=np.uint8,
+        )
+        simulated_pixels = np.asarray(
+            np.rint(255.0 * np.clip(simulated_values, 0.0, 1.0)),
+            dtype=np.uint8,
+        )
+        raw_path = artifact_directory / f"raw_osc_{angle:g}deg_3000x3000.png"
+        simulated_path = artifact_directory / f"simulated_250ki_{angle:g}deg_3000x3000.png"
+        Image.fromarray(raw_pixels, mode="L").save(raw_path, optimize=True)
+        Image.fromarray(simulated_pixels, mode="L").save(simulated_path, optimize=True)
+        raw_hashes.append(hashlib.sha256(raw_pixels.tobytes(order="C")).hexdigest())
+        simulated_hashes.append(hashlib.sha256(simulated_pixels.tobytes(order="C")).hexdigest())
+        paths.extend((str(raw_path), str(simulated_path)))
+        artifact_identities.extend(
+            (
+                {
+                    "decoded_mode": "L",
+                    "decoded_size": [int(raw_pixels.shape[1]), int(raw_pixels.shape[0])],
+                    "decoded_pixel_sha256": raw_hashes[-1],
+                },
+                {
+                    "decoded_mode": "L",
+                    "decoded_size": [
+                        int(simulated_pixels.shape[1]),
+                        int(simulated_pixels.shape[0]),
+                    ],
+                    "decoded_pixel_sha256": simulated_hashes[-1],
+                },
+            )
+        )
+    summary = {
+        "classification": "MODEL_LIMITED_FORWARD_IMAGES_NO_COUNT_CALIBRATION",
+        "source_state_count": case.source_state_count,
+        "rod_count": len(detectors[0].rods),
+        "m0_rod_count": sum(rod.family_m == 0 for rod in detectors[0].rods),
+        "raw_decoded_pixel_sha256": raw_hashes,
+        "simulated_decoded_pixel_sha256": simulated_hashes,
+    }
+    return _stage_result(
+        "render",
+        case=case,
+        upstream=upstream,
+        backend=backend,
+        summary=summary,
+        state={"artifact": paths, "artifact_identity": artifact_identities},
+    )
+
+
+def _run_render_stage(
+    *,
+    case: ReplayCase,
+    upstream: dict[str, Any] | None,
+    backend: str,
+    output_directory: Path,
+) -> dict[str, Any]:
+    if upstream is None or upstream.get("stage") != "ordered_intensity":
+        raise ValueError("render stage requires the ordered-intensity result")
+    if case.material_id != "Bi2Te3":
+        raise ValueError(str(case.stage_config["render"].get("reason", "render is disabled")))
+    return _bi2te3_render(case, upstream, backend, output_directory)
+
+
+def _validate_stage_envelope(
+    case: ReplayCase,
+    *,
+    stage: str,
+    result: dict[str, Any],
+    backend: str,
+    runtime_identity: dict[str, Any],
+) -> None:
+    case_source_revision = _source_revision(case)
+    source_state_count, source_seed, source_revision = _stage_source_identity(
+        case,
+        stage,
+        case_source_revision=case_source_revision,
+    )
+    expected_envelope = {
+        "schema_version": "rasim-staged-fit-replay-stage-v1",
+        "stage": stage,
+        "case_id": case.case_id,
+        "material_id": case.material_id,
+        "case_sha256": _sha256(case.path),
+        "execution_backend": backend,
+        "runtime": runtime_identity,
+        "source_state_count": source_state_count,
+        "source_seed": source_seed,
+        "source_revision": source_revision,
+    }
+    for name, expected in expected_envelope.items():
+        if result.get(name) != expected:
+            raise ValueError(f"{stage} stage result changed {name}")
+    state = result.get("state")
+    if not isinstance(state, dict):
+        raise ValueError(f"{stage} stage result lacks scientific state")
+    artifact = state.get("artifact")
+    artifact_sha256 = state.get("artifact_sha256")
+    artifact_contract = {
+        ("Bi2Se3", "mosaic"): "json",
+        ("Bi2Se3", "ordered_intensity"): "json",
+        ("Bi2Te3", "render"): "images",
+    }.get((case.material_id, stage))
+    if artifact_contract is None:
+        if any(name in state for name in ("artifact", "artifact_sha256", "artifact_identity")):
+            raise ValueError(f"{stage} stage result has an unexpected external result")
+        return
+    if artifact_contract == "json":
+        if not isinstance(artifact, str):
+            raise ValueError(f"{stage} stage result lacks its external JSON result")
+        if not isinstance(artifact_sha256, str):
+            raise ValueError(f"{stage} stage result lacks its external result hash")
+        artifact_path = Path(artifact)
+        if not artifact_path.is_file() or _sha256(artifact_path) != artifact_sha256:
+            raise ValueError(f"{stage} stage result changed its external result")
+        return
+    if artifact_contract == "images":
+        identities = state.get("artifact_identity")
+        if (
+            not isinstance(artifact, list)
+            or not artifact
+            or not isinstance(identities, list)
+            or len(artifact) != len(identities)
+        ):
+            raise ValueError(f"{stage} stage result identities are incomplete")
+        from PIL import Image
+
+        for index, (path_text, identity) in enumerate(zip(artifact, identities, strict=True)):
+            if not isinstance(path_text, str) or not isinstance(identity, dict):
+                raise ValueError(f"{stage} stage result identity {index} is invalid")
+            _strict_keys(
+                identity,
+                {"decoded_mode", "decoded_size", "decoded_pixel_sha256"},
+                f"{stage} stage result identity {index}",
+            )
+            artifact_path = Path(path_text)
+            if not artifact_path.is_file():
+                raise ValueError(f"{stage} stage result artifact {index} is missing")
+            with Image.open(artifact_path) as image:
+                image.load()
+                decoded_mode = image.mode
+                decoded_size = list(image.size)
+                decoded_sha256 = hashlib.sha256(image.tobytes()).hexdigest()
+            if (
+                decoded_mode != identity["decoded_mode"]
+                or decoded_size != identity["decoded_size"]
+                or decoded_sha256 != identity["decoded_pixel_sha256"]
+            ):
+                raise ValueError(
+                    f"{stage} stage result artifact {index} changed its decoded pixels"
+                )
+        return
+    raise AssertionError(f"unsupported resume artifact contract {artifact_contract!r}")
+
+
+def _validate_stage_result(
+    case: ReplayCase,
+    *,
+    stage: str,
+    result: dict[str, Any],
+    upstream: dict[str, Any] | None,
+    backend: str,
+    runtime_identity: dict[str, Any],
+) -> None:
+    _strict_keys(result, _STAGE_RESULT_KEYS, f"{stage} stage result")
+    revision = result.get("scientific_revision")
+    if not isinstance(revision, str) or not revision.startswith(_SHA256_PREFIX):
+        raise ValueError(f"{stage} stage lacks a scientific revision")
+    revision_payload = {
+        name: value for name, value in result.items() if name != "scientific_revision"
+    }
+    if revision != scientific_revision(stage, revision_payload):
+        raise ValueError(f"{stage} stage result changed its scientific revision")
+    _validate_stage_envelope(
+        case,
+        stage=stage,
+        result=result,
+        backend=backend,
+        runtime_identity=runtime_identity,
+    )
+    expected_upstream = None if upstream is None else upstream["scientific_revision"]
+    if result.get("upstream_scientific_revision") != expected_upstream:
+        raise ValueError(f"{stage} stage changed its upstream scientific revision")
+
+
+def _combined_scientific_summary(
+    case: ReplayCase,
+    stages: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    summaries = []
+    for stage, result in stages.items():
+        summary = result.get("scientific_summary")
+        if not isinstance(summary, dict) or stage not in summary:
+            raise ValueError(f"{stage} stage lacks its scientific summary")
+        summaries.append(summary)
+    if not summaries:
+        raise ValueError("a replay certificate requires at least one stage")
+    combined = {
+        "case_id": case.case_id,
+        "material_id": case.material_id,
+        "source_state_count": case.source_state_count,
+        "source_revision": summaries[-1].get("source_revision"),
+    }
+    for stage, summary in zip(stages, summaries, strict=True):
+        combined[stage] = summary[stage]
+    return combined
+
+
+def run_replay(
+    case: ReplayCase,
+    *,
+    output_directory: Path,
+    backend: str,
+    through: str = "ordered_intensity",
+    verify: bool = True,
+    resume: bool = False,
+) -> dict[str, Any]:
+    """Run ordered stages and bind each one to the previous scientific revision."""
+
+    if backend not in {"cpu", "cuda"}:
+        raise ValueError("backend must be cpu or cuda")
+    if through not in _STAGES:
+        raise ValueError(f"through must be one of {', '.join(_STAGES)}")
+    reloaded_case = load_replay_case(case.path, repository_root=case.repository_root)
+    if reloaded_case != case:
+        raise ValueError("replay case or loaded input mappings changed after loading")
+    case = reloaded_case
+    terminal = _STAGES.index(through)
+    if case.material_id == "Bi2Te3" and backend == "cpu" and terminal >= _STAGES.index("mosaic"):
+        raise ValueError(
+            "the accepted Bi2Te3 mosaic, ordered-intensity, and render replay is CUDA-qualified only"
+        )
+    if through == "render" and not bool(case.stage_config["render"].get("enabled")):
+        raise ValueError(str(case.stage_config["render"].get("reason", "render is disabled")))
+    environment_record = next(
+        record for record in case.file_records if record["role"] == "environment_lock"
+    )
+    runtime_identity = _validated_runtime_identity(
+        case.input_paths["environment_lock"],
+        expected_sha256=str(environment_record["sha256"]),
+        include_render=through == "render",
+    )
+    base_runtime_identity = {
+        **runtime_identity,
+        "packages": {
+            name: version
+            for name, version in runtime_identity["packages"].items()
+            if name not in _RENDER_RUNTIME_PACKAGES
+        },
+    }
+    output = output_directory.resolve()
+    if output == case.repository_root or output.is_relative_to(case.repository_root):
+        raise ValueError("replay output directory must be outside the repository")
+    if output.exists() and any(output.iterdir()) and not resume:
+        raise ValueError("replay output directory must be empty unless --resume is used")
+    output.mkdir(parents=True, exist_ok=True)
+    runners = (
+        _run_geometry_stage,
+        _run_mosaic_stage,
+        _run_ordered_intensity_stage,
+        _run_render_stage,
+    )
+    stages: dict[str, dict[str, Any]] = {}
+    upstream: dict[str, Any] | None = None
+    for stage_name, runner in zip(_STAGES[: terminal + 1], runners[: terminal + 1], strict=True):
+        stage_runtime_identity = (
+            runtime_identity if stage_name == "render" else base_runtime_identity
+        )
+        stage_case = replace(case, runtime_identity=stage_runtime_identity)
+        stage_path = output / f"{stage_name}.json"
+        resumed = resume and stage_path.is_file()
+        if resumed:
+            stage_result = json.loads(stage_path.read_text(encoding="utf-8"))
+        else:
+            stage_result = runner(
+                case=stage_case,
+                upstream=upstream,
+                backend=backend,
+                output_directory=output,
+            )
+            if not isinstance(stage_result, dict):
+                raise TypeError(f"{stage_name} stage did not return a mapping")
+        _validate_stage_result(
+            case,
+            stage=stage_name,
+            result=stage_result,
+            upstream=upstream,
+            backend=backend,
+            runtime_identity=stage_runtime_identity,
+        )
+        candidate_stages = {**stages, stage_name: stage_result}
+        if verify:
+            partial_summary = _combined_scientific_summary(case, candidate_stages)
+            verify_scientific_summary(case, partial_summary, through=stage_name)
+        if not resumed:
+            _write_json(stage_path, stage_result)
+        stages[stage_name] = stage_result
+        upstream = stage_result
+    certificate = {
+        "schema_version": "rasim-staged-fit-replay-certificate-v1",
+        "case_id": case.case_id,
+        "material_id": case.material_id,
+        "case_sha256": _sha256(case.path),
+        "backend": backend,
+        "verification_runtime": runtime_identity,
+        "through": through,
+        "stage_scientific_revisions": {
+            name: result["scientific_revision"] for name, result in stages.items()
+        },
+        "stages": stages,
+    }
+    if verify:
+        combined = _combined_scientific_summary(case, stages)
+        verify_scientific_summary(case, combined, through=through)
+        certificate["scientific_summary"] = combined
+        certificate["verified"] = True
+    else:
+        certificate["verified"] = False
+    _write_json(output / "replay_certificate.json", certificate)
+    return certificate
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("case", type=Path)
+    parser.add_argument("--output-directory", type=Path)
+    parser.add_argument("--backend", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument("--through", choices=_STAGES, default="ordered_intensity")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--inputs-only", action="store_true")
+    parser.add_argument("--no-verify", action="store_true")
+    arguments = parser.parse_args(argv)
+    case = load_replay_case(arguments.case)
+    if arguments.inputs_only:
+        print(
+            json.dumps(
+                {
+                    "case_id": case.case_id,
+                    "material_id": case.material_id,
+                    "source_state_count": case.source_state_count,
+                    "runtime": case.runtime_identity,
+                    "input_sha256": {
+                        role: _sha256(path) for role, path in sorted(case.input_paths.items())
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if arguments.output_directory is None:
+        parser.error("--output-directory is required unless --inputs-only is used")
+    result = run_replay(
+        case,
+        output_directory=arguments.output_directory,
+        backend=arguments.backend,
+        through=arguments.through,
+        verify=not arguments.no_verify,
+        resume=arguments.resume,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

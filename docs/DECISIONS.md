@@ -186,3 +186,23 @@ the corrected geometry and requires coherent unchanged keys. A fresh global cake
 only as an operational diagnostic because chart sampling and same-key lobe ownership are
 geometry-dependent. Newly visible keys or alternate lobes cannot delete original observations or
 trigger an automatic censor-and-refit cycle.
+
+## D034: Hash-bound portable staged-fit cases
+
+Accepted multi-OSC results are replayed from repository-relative cases that hash both containers
+and decoded OSC arrays. Geometry deliberately uses one ideal state; mosaic and ordered intensity
+rebuild the same 250-state source realization and reduce it before comparison. Each stage hashes
+only compact scientific state and the upstream scientific revision; generated diagnostics and
+images remain external. Exact identities and masks are separated from tolerance-bound fit floats,
+and the historical Bi2Te3 selection revision remains distinct from the revision recomputed under
+the case-bound numerical runtime. The separately frozen catalog row-manifest and catalog-file hash
+are two more audit identities, neither a substitute selection revision. Bi2Te3's accepted
+250-state mosaic and ordered fits remain current-lock CUDA-qualified and model-limited; its optional
+render retains only a historical RTX-3060 pixel oracle pending current-lock requalification. The
+runner checks the executing
+transitive numerical package versions against the case-bound `uv.lock` before creating an output or
+evaluating geometry. The lightweight `packaging` dependency evaluates the lock's PEP 508 markers so
+a platform-conditional package is required only where uv installs it. Every stage records the
+interpreter, platform, and package identity as non-scientific operational provenance, and resume
+requires an exact match. Platform portability is still established by the declared output checks,
+not presumed from a matching package lock.

@@ -1,0 +1,355 @@
+schema_version = "rasim-staged-fit-replay-v1"
+case_id = "bi2te3-osc-5-10-15-250ki-v1"
+material_id = "Bi2Te3"
+classification = "MODEL_LIMITED_MEASURED_STAGED_FIT_NO_STRUCTURE_ORACLE"
+source_state_count = 250
+source_seed = 1729
+incidence_angles_deg = [5.0, 10.0, 15.0]
+
+[[files]]
+role = "simulation_config"
+path = "../../../configs/bi2te3_simulation.yaml"
+sha256 = "3f301b2ef4aa4432d9cba14e9bac6143414ed9841989699059f0dedf6618790b"
+
+[[files]]
+role = "geometry_series"
+path = "../../../configs/bi2te3_osc_geometry_fit.yaml"
+sha256 = "5ea2ac1c948bc1202ec84248c8cadc72b7b99bf1ceb75a7f36ddafd28de0c655"
+
+[[files]]
+role = "indexed_catalog"
+path = "../observations/indexed_catalog.json"
+sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
+
+[[files]]
+role = "cif"
+path = "../structures/Bi2Te3_cod_9011962.cif"
+sha256 = "e1e5f42082bf0699b1a674b19fbf74cf1163b5c18dcb7d00142dd0b2dc4b1fe3"
+
+[[files]]
+role = "osc_5deg"
+kind = "osc"
+path = "../osc/Bi2Te3_5m_5d.osc.gz"
+sha256 = "fa449a18b3fd4f2be99fffb7916e7808659000b24e07784316f5fd0446e08234"
+detector_native_bytes_sha256 = "117eccd00a47bb7b92ab6e99bd73fe99bd847f2fae562c3f9ab7ae31980bb565"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "osc_10deg"
+kind = "osc"
+path = "../osc/Bi2Te3_10d_5m.osc.gz"
+sha256 = "33664d156ba1626208edc90d1a7b05cbe428a16fe4eed9d4d16a14cafb369c9d"
+detector_native_bytes_sha256 = "9500f08b4aa2e0436ff7e499fa6a1218b49832b1bf5d2f9e5f6ced92175b5557"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "osc_15deg"
+kind = "osc"
+path = "../osc/Bi2Te3_15d_5m.osc.gz"
+sha256 = "b683b32b185c1c0d9c373a7de242728edc2caf31afdb34da5646f4adaab6a154"
+detector_native_bytes_sha256 = "ed6f76734a06e9071507f11392571a4dadeb7fedfff86f5ac7111f557bbd0c7e"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "dark"
+kind = "osc"
+path = "../../calibration/hbn/darkImg.osc.gz"
+sha256 = "7aebcef1dd1acf5bc9c7bfef4bdab88179952a9ebfc58360f7d7128b4b418e70"
+detector_native_bytes_sha256 = "ea9e4b377131a150252eebeeeb0d7d526ca7c083255aff1948e68a8552b38210"
+detector_native_shape_rc = [3000, 3000]
+detector_native_dtype = "int32"
+
+[[files]]
+role = "environment_lock"
+path = "../../../uv.lock"
+sha256 = "8831fcef5b86924caf8d39404b4bec31ef9f26641ab741cf47bad4d3465b438a"
+
+[geometry]
+selection_mode = "position_free_discovery_with_frozen_catalog_audit"
+series_role = "geometry_series"
+catalog_role = "indexed_catalog"
+catalog_manifest_revision = "sha256-4f3755acdc0c3416e05cb58778d3f07ddf12d56cb49ef3b7abbdeb057d706abc"
+historical_selection_revision = "sha256-79f5028d1ee7d2b3bb67bcdd15d92822d2d4b6bd43ee7fe1cb0377e43941146a"
+source_state_count = 1
+bounds_model = "rasim_multi_angle_pose.v1"
+multistart_fraction = 0.08
+multistart_pattern = [0.0, 0.0, 0.6, -0.4, 0.7, -0.5, 0.3, 0.9, -0.7]
+fitted_parameter_names = [
+  "sample_normal_x_tilt_rad",
+  "sample_normal_y_tilt_rad",
+  "goniometer_axis_pitch_rad",
+  "goniometer_axis_yaw_rad",
+  "sample_plane_normal_offset_m",
+  "goniometer_pivot_pitch_offset_m",
+  "goniometer_pivot_yaw_offset_m",
+]
+fixed_parameter_names = ["detector_column_tilt_rad", "detector_row_tilt_rad"]
+heldout_integer_l = []
+benchmark = false
+
+[mosaic]
+implementation = "measured_angle_profiles_v1"
+execution_source_state_count = 250
+catalog_role = "indexed_catalog"
+dark_role = "dark"
+osc_roles = ["osc_5deg", "osc_10deg", "osc_15deg"]
+dataset_ids = ["Bi2Te3-5deg", "Bi2Te3-10deg", "Bi2Te3-15deg"]
+m1_integer_l_5deg = [4, 5, 8, 10, 11]
+m1_integer_l_10deg = [5, 8, 10, 11, 13, 16]
+m1_integer_l_15deg = [8, 10, 11, 13, 16]
+m0_landmark_maximum_distance_px = 2.0
+m0_starts_5deg = [[3.0, 1453.12, 1481.41], [6.0, 1453.12, 1360.74]]
+m0_starts_10deg = [[6.0, 1453.12, 1360.77]]
+m0_starts_15deg = [[9.0, 1457.0, 1203.0]]
+two_theta_half_width_deg = 0.04
+nonzero_phi_half_width_deg = 5.0
+m0_phi_half_width_deg = 8.0
+phi_bin_count = 41
+nonzero_two_theta_gauss_order = 6
+nonzero_phi_gauss_order = 6
+m0_two_theta_gauss_order = 4
+m0_phi_gauss_order = 4
+minimum_excess_energy_over_side_scatter = 5.0
+sideband_two_theta_offsets_deg = [-1.0, -0.75, -0.5, -0.3, 0.3, 0.5, 0.75, 1.0]
+nuisance_background_model = "local_phi_constant.v1"
+dark_subtraction_model = "project_raw_and_dark_separately_then_subtract_signal.v1"
+gaussian_sigma_bounds_deg = [0.2, 5.0]
+lorentzian_hwhm_bounds_deg = [0.05, 3.0]
+coarse_width_count = 7
+refinement_width_count = 5
+refinement_levels = 4
+near_optimal_objective_delta = 0.01
+maximum_sensitivity_condition = 1.0e8
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 10.0
+family_m = 3
+integer_L = 6
+root_sign = -1
+column_px = 2173.095
+row_px = 1323.338
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 10.0
+family_m = 3
+integer_L = 6
+root_sign = 1
+column_px = 768.969
+row_px = 1324.126
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 10.0
+family_m = 4
+integer_L = 5
+root_sign = -1
+column_px = 2355.984
+row_px = 1370.056
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 10.0
+family_m = 4
+integer_L = 5
+root_sign = 1
+column_px = 601.844
+row_px = 1368.096
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 15.0
+family_m = 3
+integer_L = 6
+root_sign = -1
+column_px = 2179.563
+row_px = 1347.620
+
+[[mosaic.extra_nonzero_profiles]]
+incidence_angle_deg = 15.0
+family_m = 3
+integer_L = 6
+root_sign = 1
+column_px = 762.920
+row_px = 1344.719
+
+[ordered_intensity]
+implementation = "measured_transferred_mosaic_amplitudes_v1"
+execution_source_state_count = 250
+fit_atomic_positions = false
+active_parameters = ["te1_over_bi", "te2_over_bi", "u_radial_A2", "u_normal_A2"]
+occupancy_ratio_reference = "bi_occupancy"
+lower_bounds = [0.0, 0.0, 0.0, 0.0]
+upper_bounds = [1.0, 1.0, 0.1, 0.1]
+parameter_scales = [1.0, 1.0, 0.1, 0.1]
+multistarts = [
+  [1.0, 1.0, 0.0, 0.0],
+  [0.8, 0.9, 0.01, 0.02],
+  [0.95, 0.75, 0.04, 0.01],
+  [0.65, 0.98, 0.02, 0.05],
+]
+maximum_function_evaluations = 5000
+claim_boundary = "mosaic nuisance amplitudes multiplied by baseline 250-source peak-center signals; not a direct count-calibrated raw-OSC structure-factor recovery"
+
+[render]
+enabled = true
+image_size = 3000
+source_state_count = 250
+cuda_coordinate_chunk = 200000
+cuda_state_block_count = 8
+raw_display_model = "shared_log1p_99p995_percentile.v1"
+simulation_display_model = "shared_log_1st_to_99p995_positive_percentiles.v1"
+
+[expected]
+source_revision = "01201acafa8851df0f210a37a3f3e24e33e488eac9003805579e4d5c45791f93"
+
+[expected.geometry]
+classification = "MODEL_LIMITED_UNQUALIFIED_FIXED_DETECTOR_TILTS"
+selection_revision = "sha256-97ba51fce133a27404d4b571e40fc21413fb13e8ccc70d725486b5f12fefff51"
+frozen_catalog_sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
+fitted_parameter_names = [
+  "sample_normal_x_tilt_rad",
+  "sample_normal_y_tilt_rad",
+  "goniometer_axis_pitch_rad",
+  "goniometer_axis_yaw_rad",
+  "sample_plane_normal_offset_m",
+  "goniometer_pivot_pitch_offset_m",
+  "goniometer_pivot_yaw_offset_m",
+]
+fixed_parameter_names = ["detector_column_tilt_rad", "detector_row_tilt_rad"]
+corrections = [
+  0.0,
+  0.0,
+  0.0005857789608680492,
+  0.004678465827919986,
+  0.08726646259878003,
+  0.0018843632064716941,
+  4.744344339928082e-05,
+  9.999999999999999e-05,
+  -9.999999999999999e-05,
+]
+rank = 7
+active_bounds = [false, false, true, false, false, true, true]
+site_rms_px = 7.175090155549409
+site_max_px = 15.077869219014078
+per_incidence_profile_count = [11, 14, 10]
+
+[expected.mosaic]
+classification = "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+parameters = [1.0340984212409956, 0.6600483355881804, 0.34468382364752914]
+objective = 15.46096804564828
+rank = 3
+profile_count = 33
+m0_profile_count = 3
+per_incidence_profile_count = [4, 17, 12]
+profile_identities = [
+  "Bi2Te3-10deg|0|6|0|none",
+  "Bi2Te3-10deg|1|10|2|1",
+  "Bi2Te3-10deg|1|10|2|2",
+  "Bi2Te3-10deg|1|11|2|1",
+  "Bi2Te3-10deg|1|11|2|2",
+  "Bi2Te3-10deg|1|13|2|1",
+  "Bi2Te3-10deg|1|13|2|2",
+  "Bi2Te3-10deg|1|16|2|1",
+  "Bi2Te3-10deg|1|16|2|2",
+  "Bi2Te3-10deg|1|5|2|1",
+  "Bi2Te3-10deg|1|5|2|2",
+  "Bi2Te3-10deg|1|8|2|1",
+  "Bi2Te3-10deg|1|8|2|2",
+  "Bi2Te3-10deg|3|6|2|1",
+  "Bi2Te3-10deg|3|6|2|2",
+  "Bi2Te3-10deg|4|5|2|1",
+  "Bi2Te3-10deg|4|5|2|2",
+  "Bi2Te3-15deg|1|10|2|1",
+  "Bi2Te3-15deg|1|10|2|2",
+  "Bi2Te3-15deg|1|11|2|1",
+  "Bi2Te3-15deg|1|11|2|2",
+  "Bi2Te3-15deg|1|13|2|1",
+  "Bi2Te3-15deg|1|13|2|2",
+  "Bi2Te3-15deg|1|16|2|1",
+  "Bi2Te3-15deg|1|16|2|2",
+  "Bi2Te3-15deg|1|8|2|1",
+  "Bi2Te3-15deg|1|8|2|2",
+  "Bi2Te3-15deg|3|6|2|1",
+  "Bi2Te3-15deg|3|6|2|2",
+  "Bi2Te3-5deg|0|3|0|none",
+  "Bi2Te3-5deg|0|6|0|none",
+  "Bi2Te3-5deg|1|5|2|1",
+  "Bi2Te3-5deg|1|5|2|2",
+]
+m0_profile_identities = [
+  "Bi2Te3-10deg|0|6|0|none",
+  "Bi2Te3-5deg|0|3|0|none",
+  "Bi2Te3-5deg|0|6|0|none",
+]
+
+[expected.ordered_intensity]
+classification = "MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE"
+claim_boundary = "mosaic nuisance amplitudes multiplied by baseline 250-source peak-center signals; not a direct count-calibrated raw-OSC structure-factor recovery"
+parameters = [0.9999999999999999, 0.8448714451359578, 0.09999999999999999, 6.743534358834876e-23]
+objective = 24.11883116257932
+rank = 4
+profile_count = 31
+m0_profile_count = 3
+active_bounds = [true, false, true, true]
+profile_identities = [
+  "Bi2Te3-10deg|0|6|0|none",
+  "Bi2Te3-10deg|1|10|2|1",
+  "Bi2Te3-10deg|1|10|2|2",
+  "Bi2Te3-10deg|1|11|2|1",
+  "Bi2Te3-10deg|1|11|2|2",
+  "Bi2Te3-10deg|1|13|2|1",
+  "Bi2Te3-10deg|1|13|2|2",
+  "Bi2Te3-10deg|1|16|2|1",
+  "Bi2Te3-10deg|1|16|2|2",
+  "Bi2Te3-10deg|1|5|2|1",
+  "Bi2Te3-10deg|1|5|2|2",
+  "Bi2Te3-10deg|1|8|2|1",
+  "Bi2Te3-10deg|1|8|2|2",
+  "Bi2Te3-10deg|3|6|2|1",
+  "Bi2Te3-10deg|3|6|2|2",
+  "Bi2Te3-15deg|1|10|2|1",
+  "Bi2Te3-15deg|1|10|2|2",
+  "Bi2Te3-15deg|1|11|2|1",
+  "Bi2Te3-15deg|1|11|2|2",
+  "Bi2Te3-15deg|1|13|2|1",
+  "Bi2Te3-15deg|1|13|2|2",
+  "Bi2Te3-15deg|1|16|2|1",
+  "Bi2Te3-15deg|1|16|2|2",
+  "Bi2Te3-15deg|1|8|2|1",
+  "Bi2Te3-15deg|1|8|2|2",
+  "Bi2Te3-15deg|3|6|2|1",
+  "Bi2Te3-15deg|3|6|2|2",
+  "Bi2Te3-5deg|0|3|0|none",
+  "Bi2Te3-5deg|0|6|0|none",
+  "Bi2Te3-5deg|1|5|2|1",
+  "Bi2Te3-5deg|1|5|2|2",
+]
+m0_profile_identities = [
+  "Bi2Te3-10deg|0|6|0|none",
+  "Bi2Te3-5deg|0|3|0|none",
+  "Bi2Te3-5deg|0|6|0|none",
+]
+
+[expected.render]
+classification = "MODEL_LIMITED_FORWARD_IMAGES_NO_COUNT_CALIBRATION"
+source_state_count = 250
+rod_count = 91
+m0_rod_count = 1
+raw_decoded_pixel_sha256 = [
+  "602927eb01fd558cffc8940028bbfd726db7000106418431dc34f377d2e9a903",
+  "f4decf9b1652e0d45ac6627a33b2ece6e06ec413da8cd98571e8ede6a2850a9c",
+  "ee52ef5072cea50cb6c722c88527c7a49a18ceb0b8750f77d0a294f6fa287889",
+]
+simulated_decoded_pixel_sha256 = [
+  "3d577ae1c76496000812a7a45406fe3bf57650f194c412382bc033fff47be38b",
+  "d21dae4ee1b540034e219ed25552873d4997a5127d8d2a1f8cc0b76cb10d6f41",
+  "241a6bbd93e2d86143ff626097034bfd1cee271f9302fb387360def7dd3fbb6a",
+]
+
+[tolerances]
+geometry_correction_absolute = 1.0e-7
+geometry_metric_absolute = 1.0e-4
+mosaic_parameter_absolute = 5.0e-6
+mosaic_objective_absolute = 5.0e-5
+ordered_parameter_absolute = 1.0e-5
+ordered_objective_absolute = 2.0e-4

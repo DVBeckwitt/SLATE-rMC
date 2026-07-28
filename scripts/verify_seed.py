@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -30,6 +31,18 @@ if len(set(manifest_paths)) != len(manifest_paths):
     errors.append("file manifest duplicate paths")
 if manifest_paths != sorted(manifest_paths):
     errors.append("file manifest path order")
+tracked_paths = sorted(
+    path
+    for path in subprocess.check_output(
+        ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+        cwd=ROOT,
+    )
+    .decode("utf-8")
+    .split("\0")
+    if path and path != "FILE_MANIFEST.json"
+)
+if manifest_paths != tracked_paths:
+    errors.append("file manifest tracked-path coverage")
 
 for item in manifest_files:
     path = ROOT / item["path"]
@@ -55,6 +68,8 @@ with np.load(ref, allow_pickle=False) as data:
 examples = tomllib.loads((ROOT / "examples/MANIFEST.toml").read_text())
 for item in examples["file"]:
     path = ROOT / item["path"]
+    if path.stat().st_size != item["size_bytes"]:
+        errors.append(f"example size: {item['path']}")
     if sha256(path) != item["sha256"]:
         errors.append(f"example hash: {item['path']}")
 

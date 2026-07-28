@@ -21,7 +21,7 @@ IntArray = NDArray[np.int64]
 _FLOAT_EPS = float(np.finfo(np.float64).eps)
 _ANGULAR_TOLERANCE = 2048.0 * _FLOAT_EPS
 _THREADS_PER_BLOCK = 128
-_MAX_COORDINATES_PER_CHUNK = 50_000
+_DEFAULT_COORDINATE_CHUNK_SIZE = 50_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -832,9 +832,17 @@ def _evaluate_source_averaged_all_roots_cuda(
     detector_shape_rc: tuple[int, int],
     master_rod_count: int,
     return_per_rod: bool,
+    coordinate_chunk_size: int,
 ) -> tuple[FloatArray, BoolArray, IntArray, str]:
     """Evaluate one packed source average and stream only the requested coordinate result."""
 
+    if (
+        isinstance(coordinate_chunk_size, bool)
+        or not isinstance(coordinate_chunk_size, (int, np.integer))
+        or int(coordinate_chunk_size) < 1
+    ):
+        raise ValueError("coordinate_chunk_size must be a positive integer")
+    chunk_size = int(coordinate_chunk_size)
     device_name = require_cuda_available()
     column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
     row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
@@ -848,9 +856,6 @@ def _evaluate_source_averaged_all_roots_cuda(
             np.zeros(0, dtype=np.int64),
             device_name,
         )
-    if _MAX_COORDINATES_PER_CHUNK < 1:
-        raise ValueError("_MAX_COORDINATES_PER_CHUNK must be positive")
-
     packed = _pack_source_average(
         evaluator_blocks,
         detector_shape_rc=detector_shape_rc,
@@ -897,8 +902,8 @@ def _evaluate_source_averaged_all_roots_cuda(
         caustic = np.empty(column.size, dtype=np.bool_)
     valid_source_count = np.empty(column.size, dtype=np.int64)
 
-    for start in range(0, column.size, _MAX_COORDINATES_PER_CHUNK):
-        stop = min(start + _MAX_COORDINATES_PER_CHUNK, column.size)
+    for start in range(0, column.size, chunk_size):
+        stop = min(start + chunk_size, column.size)
         chunk_column = column[start:stop]
         chunk_row = row[start:stop]
         point_count = chunk_column.size
@@ -1017,6 +1022,7 @@ def evaluate_source_averaged_all_roots_cuda(
     *,
     detector_shape_rc: tuple[int, int],
     master_rod_count: int,
+    coordinate_chunk_size: int = _DEFAULT_COORDINATE_CHUNK_SIZE,
 ) -> tuple[FloatArray, BoolArray, IntArray, str]:
     """Return the detailed physical-rod field for proof and diagnostics."""
 
@@ -1027,6 +1033,7 @@ def evaluate_source_averaged_all_roots_cuda(
         detector_shape_rc=detector_shape_rc,
         master_rod_count=master_rod_count,
         return_per_rod=True,
+        coordinate_chunk_size=coordinate_chunk_size,
     )
 
 
@@ -1037,6 +1044,7 @@ def evaluate_source_averaged_density_all_roots_cuda(
     *,
     detector_shape_rc: tuple[int, int],
     master_rod_count: int,
+    coordinate_chunk_size: int = _DEFAULT_COORDINATE_CHUNK_SIZE,
 ) -> tuple[FloatArray, BoolArray, IntArray, str]:
     """Return the rod-reduced continuous density before any pixel integration."""
 
@@ -1047,6 +1055,7 @@ def evaluate_source_averaged_density_all_roots_cuda(
         detector_shape_rc=detector_shape_rc,
         master_rod_count=master_rod_count,
         return_per_rod=False,
+        coordinate_chunk_size=coordinate_chunk_size,
     )
 
 

@@ -109,11 +109,71 @@ Bi2Te3 CIF rather than a Bi2Se3-specific constant. The historical Python paramet
 its `se1` and `se2` field names for compatibility; those fields mean central and outer chalcogen
 for this material-generic path.
 
-The configuration is a reusable forward-model input, not an accepted fit result. Its detector
-tilts and beam center are fixed calibration values; its 250 source states are reduced
-incoherently into one detector function before any mosaic profile, ordered-intensity comparison,
-or image display. Experimental Bi2Te3 OSC files remain external and are not part of the tracked
-example pack.
+The configuration is a reusable forward-model input. Its detector tilts and beam center are fixed
+calibration values; its 250 source states are reduced incoherently into one detector function
+before any mosaic profile, ordered-intensity comparison, or image display. The exact compressed
+Bi2Te3 OSC inputs and frozen catalog used by the accepted model-limited fit are tracked.
+
+## Portable Bi2Se3 and Bi2Te3 staged-fit replay
+
+The two `staged_fit_replay.toml` cases bind every input by repository-relative path, file SHA-256,
+and decoded detector-native OSC-array SHA-256. Validate a clean clone without running a fit:
+
+```powershell
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml --inputs-only
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml --inputs-only
+```
+
+Replay every fit stage into a new directory outside the repository:
+
+```powershell
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2se3-replay --backend cuda
+uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2te3-replay --backend cuda
+```
+
+`--through geometry`, `--through mosaic`, and `--resume` retain strict stage order and scientific
+revision chaining. Resume also requires the exact per-stage execution runtime recorded in the
+stage artifact. Geometry uses the ideal source center, zero divergence, and mean wavelength.
+Mosaic and ordered intensity each use the case's identical 250-state realization and compare the
+single fully reduced detector function per incidence; neither fit constructs 3,000 x 3,000 images.
+Bi2Te3 can additionally render the six native images with `--through render`. Bi2Se3 render is
+disabled because the available images bind a retired mosaic gate.
+
+The frozen replay targets are:
+
+- Bi2Se3 geometry: nine active coordinates, RMS/max `1.55894/5.65079 px`; measured mosaic:
+  `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809616)` from 15 profiles including
+  five `m=0`; ordered stage: exact synthetic selected-component recovery
+  `(0.94, 0.78, 0.86, 0.007, 0.034)`.
+- Bi2Te3 geometry: detector tilts fixed, seven active coordinates, RMS/max
+  `7.17509/15.07787 px`; measured mosaic `(1.0340984 deg, 0.66004834 deg, 0.34468382)` from 33
+  profiles including three `m=0`; relative SF parameters
+  `(Te1/Bi, Te2/Bi, Ur, Uz)=(1.0, 0.84487145, 0.1, 0.0)` from 31 profiles.
+
+Exact verification covers input bytes, decoded OSC values, identity lists (including `m=0`),
+source revision, masks, classifications, stage lineage, and decoded display pixels. Fit floats use
+the declared absolute tolerances; PNG container bytes, paths, timings, memory, and device strings
+are not scientific identity. The Bi2Te3 mosaic and ordered stages are current-lock CUDA-qualified;
+the render has the separate historical qualification below. Both measured mosaic fits are
+model-limited effective envelopes, and the Bi2Te3 bound-seeking SF fit is `NO_ORACLE`, not a direct
+count-calibrated raw-intensity recovery.
+
+`--frozen` makes the complete numerical dependency closure in `uv.lock` part of the operational
+replay. The lock bytes are re-hashed immediately before execution, before an output directory or
+fit stage is created. The case does
+not claim bitwise portability across Python patch releases, operating systems, CUDA drivers, or
+GPU models: fit values are tolerance-checked. Bi2Te3 mosaic, ordered-intensity, and render stages
+reject CPU before geometry or output creation. The stored decoded-pixel hashes are a historical RTX-3060 oracle that has not yet been
+requalified under the current lock; `--through render` either verifies them exactly or fails. To
+perform that separate check, install the image dependency and request the stage explicitly:
+
+```powershell
+uv run --frozen --extra visualization python scripts/replay_staged_fit.py `
+  examples/bi2te3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2te3-render --backend cuda --through render
+```
 
 ## Quantitative one-state pixel diagnostic
 
@@ -240,7 +300,7 @@ Bi2Se3 observations, cross-validate integer `L={4,11}`, rerun the measured outer
 separate timing/memory evidence:
 
 ```powershell
-uv run python scripts/fit_osc_geometry.py `
+uv run --frozen python scripts/fit_osc_geometry.py `
   configs/bi2se3_osc_geometry_fit.yaml `
   --heldout-integer-l 4 11 `
   --benchmark `
@@ -261,7 +321,7 @@ coordinate at its configured base value; at least one coordinate must remain act
 to use calibrated detector tilts without refitting them:
 
 ```powershell
-uv run python scripts/fit_osc_geometry.py `
+uv run --frozen python scripts/fit_osc_geometry.py `
   configs/bi2se3_osc_geometry_fit.yaml `
   --freeze-parameter detector_column_tilt_rad `
   --freeze-parameter detector_row_tilt_rad `
@@ -283,7 +343,7 @@ Run the tracked deterministic 5, 10, and 15 degree synthetic recovery into a dir
 repository:
 
 ```powershell
-uv run python scripts/recover_bi2se3_mosaic.py `
+uv run --frozen python scripts/recover_bi2se3_mosaic.py `
   --output-directory C:\path\outside\the\repository\mosaic-recovery
 ```
 
@@ -312,7 +372,7 @@ Use `--skip-images` for the faster numerical recovery check.
 To fit the same fixed geometry to the three detector-native Bi2Se3 OSC images, run:
 
 ```powershell
-uv run python scripts/recover_bi2se3_mosaic.py `
+uv run --frozen python scripts/recover_bi2se3_mosaic.py `
   --observation-mode osc `
   --source-sample-count 250 `
   --skip-images `
