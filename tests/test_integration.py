@@ -61,26 +61,24 @@ def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> o
     )
 
 
-def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
-    from painted_ewald import wrapped_mosaic_line_density_rad_inv
-    from rasim_next.optics.attenuation import (
-        mode_decay_constant,
-        scalar_optical_weight,
-        uniform_depth_attenuation,
-    )
-    from rasim_next.optics.refraction import solve_exit_mode
+def _forward_monte_carlo_fixture(
+    *,
+    source_count: int = 1,
+    worker_count: int = 1,
+    sample_angle_deg: float = 5.0,
+) -> tuple[object, tuple[Rod, ...], object]:
     from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
 
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     rotations = (
-        replace(config.instrument.axis_rotations[0], angle_deg=5.0),
+        replace(config.instrument.axis_rotations[0], angle_deg=sample_angle_deg),
         *config.instrument.axis_rotations[1:],
     )
     inputs = build_configured_simulation_inputs(
         replace(
             config,
-            source=replace(config.source, sample_count=1),
+            source=replace(config.source, sample_count=source_count),
             instrument=replace(
                 config.instrument,
                 axis_rotations=rotations,
@@ -91,6 +89,7 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
             ),
             bragg=replace(config.bragg, rod_population=0.37),
             weights=replace(config.weights, phase_population=0.41, polarization=0.73),
+            numerics=replace(config.numerics, worker_count=worker_count),
         )
     )
     rods = (
@@ -98,17 +97,46 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
         next(rod for rod in inputs.rods if (rod.h, rod.k) == (-1, 1)),
     )
     detector = build_source_averaged_detector(inputs).restrict_rods(rods)
-    seed = 5247
+    return inputs, rods, detector
+
+
+def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
+    from painted_ewald import wrapped_mosaic_line_density_rad_inv
+    from rasim_next.optics.attenuation import (
+        mode_decay_constant,
+        scalar_optical_weight,
+        uniform_depth_attenuation,
+    )
+    from rasim_next.optics.refraction import solve_exit_mode
+
+    inputs, rods, detector = _forward_monte_carlo_fixture()
+    seed = 3565
     draw_count = 3
     sampled = detector.sample_native_pixel_mass(
         draws_per_source_state=draw_count,
         seed=seed,
     )
 
-    rng = np.random.Generator(np.random.PCG64(np.random.SeedSequence(seed, spawn_key=(0,))))
-    signed_tilt = rng.normal(0.0, inputs.mosaic.gaussian_sigma_rad, draw_count)
+    philox_key = np.random.SeedSequence(seed).generate_state(2, dtype=np.uint64)
+    latent_uniform = np.vstack(
+        [
+            np.random.Generator(
+                np.random.Philox(
+                    key=philox_key,
+                    counter=draw_index << 64,
+                )
+            ).random((1, 8))[0, :5]
+            for draw_index in range(draw_count)
+        ]
+    )
+    gaussian_radius = np.sqrt(-2.0 * np.log(np.maximum(latent_uniform[:, 1], np.finfo(float).tiny)))
+    signed_tilt = (
+        inputs.mosaic.gaussian_sigma_rad
+        * gaussian_radius
+        * np.cos(2.0 * np.pi * latent_uniform[:, 2])
+    )
     alpha = np.abs((signed_tilt + np.pi) % (2.0 * np.pi) - np.pi)
-    beta = rng.uniform(0.0, 2.0 * np.pi, draw_count)
+    beta = 2.0 * np.pi * latent_uniform[:, 4]
 
     oracle = build_nominal_ewald_context(inputs).geometry
     source_phase_weight = float(
@@ -181,6 +209,9 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
                 expected_replicate_total[draw] += weight
 
     assert sampled.measure_id == "raw_detector_pixel_mass_monte_carlo_estimate_A2.v1"
+    assert sampled.rng_model_id == "numpy.philox.fixed_width_source_draw.v1"
+    assert sampled.execution_backend == "numba_cpu_forward_monte_carlo.v2"
+    assert sampled.execution_device is None
     assert sampled.detector_visible_m0_q_gap_Ainv == detector.detector_visible_m0_q_gap_Ainv
     assert {(0, 0, 0), (-1, 1, 1), (-1, 1, 2)} <= expected_roots
     assert sampled.attempted_root_count == 3 * draw_count
@@ -204,6 +235,151 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
         abs=5.0e-19,
     )
     assert sampled.visible_hit_count == expected_hit_count
+
+
+def test_forward_monte_carlo_is_prefix_stable_and_worker_order_invariant() -> None:
+    from rasim_next.pipeline.source_averaged_detector import _sample_mosaic_orientation_matrix
+
+    _, _, serial_detector = _forward_monte_carlo_fixture(source_count=5, worker_count=1)
+    _, _, parallel_detector = _forward_monte_carlo_fixture(source_count=5, worker_count=12)
+    seed = 9182
+
+    small_alpha, small_beta = _sample_mosaic_orientation_matrix(
+        serial_detector.mosaic,
+        5,
+        seed=seed,
+        source_state_count=3,
+    )
+    large_alpha, large_beta = _sample_mosaic_orientation_matrix(
+        serial_detector.mosaic,
+        5,
+        seed=seed,
+        source_state_count=5,
+    )
+    np.testing.assert_array_equal(small_alpha, large_alpha[:3])
+    np.testing.assert_array_equal(small_beta, large_beta[:3])
+    suffix_alpha, suffix_beta = _sample_mosaic_orientation_matrix(
+        serial_detector.mosaic,
+        5,
+        seed=seed,
+        source_state_count=5,
+        draw_start=3,
+    )
+    np.testing.assert_array_equal(suffix_alpha, large_alpha[:, 3:])
+    np.testing.assert_array_equal(suffix_beta, large_beta[:, 3:])
+
+    first_three = serial_detector.sample_native_pixel_mass(
+        draws_per_source_state=3,
+        seed=seed,
+    )
+    first_five = serial_detector.sample_native_pixel_mass(
+        draws_per_source_state=5,
+        seed=seed,
+    )
+    np.testing.assert_array_equal(
+        first_five.replicate_total_mass_A2[:3],
+        first_three.replicate_total_mass_A2,
+    )
+    added_raw_mass = 5.0 * first_five.image_A2 - 3.0 * first_three.image_A2
+    assert float(np.min(added_raw_mass)) >= -2.0e-15 * max(
+        float(np.max(5.0 * first_five.image_A2)),
+        1.0,
+    )
+
+    parallel = parallel_detector.sample_native_pixel_mass(
+        draws_per_source_state=5,
+        seed=seed,
+    )
+    np.testing.assert_array_equal(parallel.image_A2, first_five.image_A2)
+    np.testing.assert_array_equal(
+        parallel.replicate_total_mass_A2,
+        first_five.replicate_total_mass_A2,
+    )
+    assert parallel.total_detector_mass_A2 == first_five.total_detector_mass_A2
+    assert parallel.attempted_root_count == first_five.attempted_root_count
+    assert parallel.visible_hit_count == first_five.visible_hit_count
+    assert parallel.maximum_root_deposit_A2 == first_five.maximum_root_deposit_A2
+    assert first_five.execution_worker_count == 1
+    assert 1 < parallel.execution_worker_count <= 4
+
+    progressive = parallel_detector.compile_monte_carlo_sampler(
+        execution_backend="cpu",
+        seed=seed,
+    )
+    preview_one = progressive.advance_preview_to(1)
+    stage_one = progressive.advance_to(1)
+    assert preview_one.image_A2.dtype == np.float32
+    assert preview_one.image_A2.shape == stage_one.image_A2.shape
+    np.testing.assert_array_equal(preview_one.image_A2, stage_one.image_A2.astype(np.float32))
+    stage_four = progressive.advance_to(4)
+    settled = progressive.advance_to(5)
+    np.testing.assert_array_equal(
+        stage_four.replicate_total_mass_A2[:1],
+        stage_one.replicate_total_mass_A2,
+    )
+    np.testing.assert_allclose(
+        settled.image_A2,
+        parallel.image_A2,
+        rtol=32.0 * np.finfo(np.float64).eps,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(
+        settled.replicate_total_mass_A2,
+        parallel.replicate_total_mass_A2,
+    )
+    assert settled.image_A2.base is None
+    assert not settled.image_A2.flags.writeable
+    with pytest.raises(ValueError, match="read-only"):
+        settled.image_A2[0, 0] = 0.0
+
+    changed_topology = parallel_detector.restrict_rods((serial_detector.rods[0],))
+    with pytest.raises(ValueError, match="unchanged source, rods, physics"):
+        progressive.rebind_geometry(changed_topology)
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    rebound_instrument = viewer["apply_geometry_deltas"](
+        parallel_detector.instrument,
+        viewer["GeometryDeltas"](
+            detector_pitch_offset_deg=0.2,
+            detector_row_translation_mm=0.3,
+        ),
+    )
+    rebound = parallel_detector.rebind_geometry(
+        incident=parallel_detector.incident,
+        instrument=rebound_instrument,
+    )
+    progressive.rebind_detector_pose(rebound_instrument)
+    fast_pose = progressive.advance_to(5)
+    fresh_pose = rebound.sample_native_pixel_mass(
+        draws_per_source_state=5,
+        seed=seed,
+        execution_backend="cpu",
+    )
+    np.testing.assert_array_equal(fast_pose.image_A2, fresh_pose.image_A2)
+    np.testing.assert_array_equal(
+        fast_pose.replicate_total_mass_A2,
+        fresh_pose.replicate_total_mass_A2,
+    )
+    changed_sample_instrument = viewer["apply_geometry_deltas"](
+        parallel_detector.instrument,
+        viewer["GeometryDeltas"](effective_incidence_angle_offset_deg=0.1),
+    )
+    with pytest.raises(ValueError, match="unchanged detector calibration and sample pose"):
+        progressive.rebind_detector_pose(changed_sample_instrument)
+
+
+def test_forward_monte_carlo_honors_a_cancelled_request() -> None:
+    from rasim_next.pipeline.source_averaged_detector import MonteCarloSamplingCancelled
+
+    _, _, detector = _forward_monte_carlo_fixture()
+    with pytest.raises(MonteCarloSamplingCancelled, match="cancelled"):
+        detector.sample_native_pixel_mass(
+            draws_per_source_state=3,
+            seed=7,
+            cancel_requested=lambda: True,
+        )
 
 
 def test_bi2te3_compiled_detector_uses_te_factors() -> None:
@@ -1778,6 +1954,253 @@ def test_cuda_detector_backend_fails_closed_without_a_device(
             np.asarray([0.0]),
             execution_backend="cuda",
         )
+    with pytest.raises(RuntimeError, match="no CUDA device is available"):
+        detector.sample_native_pixel_mass(
+            draws_per_source_state=1,
+            seed=7,
+            execution_backend="cuda",
+        )
+
+
+def test_cuda_forward_monte_carlo_matches_cpu_and_progressive_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from numba import cuda
+
+    if not cuda.is_available():
+        pytest.skip("requires a CUDA device")
+
+    _, _, detector = _forward_monte_carlo_fixture(source_count=3, worker_count=4)
+    seed = 3565
+    draws = 5
+    cpu = detector.sample_native_pixel_mass(
+        draws_per_source_state=draws,
+        seed=seed,
+        execution_backend="cpu",
+    )
+    gpu = detector.sample_native_pixel_mass(
+        draws_per_source_state=draws,
+        seed=seed,
+        execution_backend="cuda",
+    )
+
+    assert gpu.execution_backend == "numba_cuda_forward_monte_carlo.v1"
+    assert gpu.execution_device
+    assert gpu.execution_worker_count is None
+    assert gpu.rng_model_id == cpu.rng_model_id
+    assert gpu.source_revision == cpu.source_revision
+    assert gpu.rod_catalog_revision == cpu.rod_catalog_revision
+    assert gpu.rods == cpu.rods
+    assert gpu.attempted_root_count == cpu.attempted_root_count
+    assert gpu.visible_hit_count == cpu.visible_hit_count
+    np.testing.assert_array_equal(np.flatnonzero(gpu.image_A2), np.flatnonzero(cpu.image_A2))
+    np.testing.assert_allclose(gpu.image_A2, cpu.image_A2, rtol=8.0e-11, atol=3.0e-24)
+    np.testing.assert_allclose(
+        gpu.replicate_total_mass_A2,
+        cpu.replicate_total_mass_A2,
+        rtol=8.0e-11,
+        atol=3.0e-24,
+    )
+    assert gpu.total_detector_mass_A2 == pytest.approx(
+        cpu.total_detector_mass_A2,
+        rel=8.0e-11,
+        abs=3.0e-24,
+    )
+    assert gpu.maximum_root_deposit_A2 == pytest.approx(
+        cpu.maximum_root_deposit_A2,
+        rel=8.0e-11,
+        abs=3.0e-24,
+    )
+
+    progressive = detector.compile_monte_carlo_sampler(
+        execution_backend="cuda",
+        seed=seed,
+    )
+    preview = progressive.advance_preview_to(1)
+    first = progressive.advance_to(1)
+    assert preview.image_A2.dtype == np.float32
+    np.testing.assert_allclose(
+        preview.image_A2,
+        first.image_A2.astype(np.float32),
+        rtol=2.0 * np.finfo(np.float32).eps,
+        atol=0.0,
+    )
+    settled = progressive.advance_to(draws)
+    np.testing.assert_array_equal(
+        settled.replicate_total_mass_A2[:1],
+        first.replicate_total_mass_A2,
+    )
+    np.testing.assert_allclose(
+        settled.image_A2,
+        gpu.image_A2,
+        rtol=8.0e-11,
+        atol=3.0e-24,
+    )
+
+    from rasim_next.pipeline.source_averaged_detector import MonteCarloSamplingCancelled
+
+    progressive.reset()
+    progressive.advance_to(1)
+    cancellation_polls = 0
+
+    def cancel_after_launch() -> bool:
+        nonlocal cancellation_polls
+        cancellation_polls += 1
+        return cancellation_polls >= 4
+
+    with pytest.raises(MonteCarloSamplingCancelled, match="cancelled"):
+        progressive.advance_preview_to(draws, cancel_requested=cancel_after_launch)
+    assert progressive.draws_completed == 0
+    recovered = progressive.advance_to(draws)
+    np.testing.assert_allclose(recovered.image_A2, gpu.image_A2, rtol=8.0e-11, atol=3.0e-24)
+
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    rebound_instrument = viewer["apply_geometry_deltas"](
+        detector.instrument,
+        viewer["GeometryDeltas"](
+            detector_pitch_offset_deg=0.15,
+            detector_column_translation_mm=0.25,
+        ),
+    )
+    rebound = detector.rebind_geometry(
+        incident=detector.incident,
+        instrument=rebound_instrument,
+    )
+    fast_pose_sampler = detector.compile_monte_carlo_sampler(
+        execution_backend="cuda",
+        seed=seed,
+    )
+    fast_workspace = fast_pose_sampler._cuda_workspace
+    projection_names = (
+        "_device_detector_covectors",
+        "_device_detector_normal",
+        "_device_ray_origin_column_row",
+        "_device_ray_origin_normal",
+    )
+    transport_names = (
+        "_device_sample_from_local",
+        "_device_ki_film",
+        "_device_state_real",
+        "_device_state_complex",
+    )
+    original_projection = tuple(id(getattr(fast_workspace, name)) for name in projection_names)
+    original_transport = tuple(id(getattr(fast_workspace, name)) for name in transport_names)
+    fast_pose_sampler.rebind_detector_pose(rebound_instrument)
+    assert tuple(id(getattr(fast_workspace, name)) for name in projection_names) != (
+        original_projection
+    )
+    assert (
+        tuple(id(getattr(fast_workspace, name)) for name in transport_names) == original_transport
+    )
+    fast_pose = fast_pose_sampler.advance_to(draws)
+    progressive.rebind_geometry(rebound)
+    reused = progressive.advance_to(draws)
+    fresh = rebound.sample_native_pixel_mass(
+        draws_per_source_state=draws,
+        seed=seed,
+        execution_backend="cuda",
+    )
+    np.testing.assert_array_equal(
+        np.flatnonzero(reused.image_A2),
+        np.flatnonzero(fresh.image_A2),
+    )
+    np.testing.assert_allclose(reused.image_A2, fresh.image_A2, rtol=8.0e-11, atol=3.0e-24)
+    np.testing.assert_allclose(
+        reused.replicate_total_mass_A2,
+        fresh.replicate_total_mass_A2,
+        rtol=8.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(
+        np.flatnonzero(fast_pose.image_A2),
+        np.flatnonzero(fresh.image_A2),
+    )
+    np.testing.assert_allclose(
+        fast_pose.image_A2,
+        fresh.image_A2,
+        rtol=8.0e-11,
+        atol=3.0e-24,
+    )
+    progressive.rebind_detector_pose(detector.instrument)
+    mixed_rebind = progressive.advance_to(draws)
+    np.testing.assert_allclose(
+        mixed_rebind.image_A2,
+        gpu.image_A2,
+        rtol=8.0e-11,
+        atol=3.0e-24,
+    )
+
+    poisoned = detector.compile_monte_carlo_sampler(
+        execution_backend="cuda",
+        seed=seed,
+    )
+    poisoned.advance_to(1)
+    reset_poisoned = detector.compile_monte_carlo_sampler(
+        execution_backend="cuda",
+        seed=seed,
+    )
+    reset_poisoned.advance_to(1)
+    projection_poisoned = detector.compile_monte_carlo_sampler(
+        execution_backend="cuda",
+        seed=seed,
+    )
+    projection_poisoned.advance_to(1)
+    projection_workspace = projection_poisoned._cuda_workspace
+    active_projection = tuple(id(getattr(projection_workspace, name)) for name in projection_names)
+    workspace = poisoned._cuda_workspace
+    active_geometry = tuple(
+        id(getattr(workspace, name))
+        for name in (
+            "_device_detector_covectors",
+            "_device_detector_normal",
+            "_device_ray_origin_column_row",
+            "_device_ray_origin_normal",
+            "_device_sample_from_local",
+            "_device_ki_film",
+            "_device_state_real",
+            "_device_state_complex",
+        )
+    )
+    import rasim_next.pipeline._forward_detector_cuda as forward_cuda
+
+    def fail_staged_transfer() -> None:
+        raise RuntimeError("injected geometry transfer failure")
+
+    monkeypatch.setattr(forward_cuda.cuda, "synchronize", fail_staged_transfer)
+    with pytest.raises(RuntimeError, match="injected geometry transfer failure"):
+        poisoned.rebind_geometry(rebound)
+    assert (
+        tuple(
+            id(getattr(workspace, name))
+            for name in (
+                "_device_detector_covectors",
+                "_device_detector_normal",
+                "_device_ray_origin_column_row",
+                "_device_ray_origin_normal",
+                "_device_sample_from_local",
+                "_device_ki_film",
+                "_device_state_real",
+                "_device_state_complex",
+            )
+        )
+        == active_geometry
+    )
+    with pytest.raises(RuntimeError, match="must be discarded"):
+        poisoned.advance_to(draws)
+    with pytest.raises(RuntimeError, match="injected geometry transfer failure"):
+        reset_poisoned.reset()
+    with pytest.raises(RuntimeError, match="must be discarded"):
+        reset_poisoned.advance_to(draws)
+    with pytest.raises(RuntimeError, match="injected geometry transfer failure"):
+        projection_poisoned.rebind_detector_pose(rebound_instrument)
+    assert (
+        tuple(id(getattr(projection_workspace, name)) for name in projection_names)
+        == active_projection
+    )
+    with pytest.raises(RuntimeError, match="must be discarded"):
+        projection_poisoned.advance_to(draws)
 
 
 def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
@@ -4314,6 +4737,237 @@ def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> Non
         np.asarray(((0.0, 1.0, 0.0), (2.0, 0.0, 3.0))),
     )
     assert raster.wall_time_s >= 0.0
+
+    source = np.asarray(((1.0, 2.0, 3.0), (4.0, 5.0, 6.0)), dtype=np.float64)
+    source_bytes = source.tobytes()
+    texture = viewer["_prepare_full_native_texture"](source)
+    assert texture.image_A2.dtype == np.float32
+    assert texture.image_A2.flags.c_contiguous
+    assert texture.image_A2.shape == source.shape
+    assert texture.image_A2.size == source.size
+    assert texture.image_A2[0, 0] == 1.0
+    assert texture.image_A2[0, -1] == 3.0
+    assert texture.image_A2[-1, 0] == 4.0
+    assert texture.image_A2[-1, -1] == 6.0
+    assert texture.high_A2 == 6.0
+    assert texture.low_A2 == pytest.approx(6.0e-8)
+    assert source.tobytes() == source_bytes
+    quad = viewer["_FULL_SCREEN_TEXTURE_XY_UV"]
+    assert quad[0, 1] == -1.0 and quad[0, 3] == 1.0
+    assert quad[2, 1] == 3.0 and quad[2, 3] == -1.0
+    shader = viewer["_full_screen_vertex_shader"]()
+    assert "vec2(-1.0, -1.0)" in shader
+    assert "vec2(0.0, -1.0)" in shader
+
+
+def test_interactive_render_scheduler_is_latest_only_and_progressive() -> None:
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    RenderRequest = viewer["_RenderRequest"]
+    RenderScheduler = viewer["_ProgressiveRenderScheduler"]
+    GeometryDeltas = viewer["GeometryDeltas"]
+
+    def request(revision: int) -> object:
+        return RenderRequest(
+            revision=revision,
+            source_sample_count=7,
+            draws_per_source_state=49,
+            deltas=GeometryDeltas(detector_pitch_offset_deg=float(revision)),
+        )
+
+    scheduler = RenderScheduler()
+    request_a, request_b, request_c = request(1), request(2), request(3)
+    scheduler.submit(request_a, settled=True)
+    stage_a = scheduler.start_next()
+    assert stage_a is not None
+    assert stage_a.draws_per_source_state == 1
+
+    scheduler.submit(request_b, settled=True)
+    scheduler.submit(request_c, settled=True)
+    assert stage_a.cancellation.cancelled
+    assert not scheduler.complete(stage_a)
+
+    observed_draws = []
+    while (stage := scheduler.start_next()) is not None:
+        assert stage.request is request_c
+        observed_draws.append(stage.draws_per_source_state)
+        assert scheduler.complete(stage)
+    assert observed_draws == [1, 4, 8, 49]
+
+    scheduler.submit(request_c, settled=True)
+    assert scheduler.start_next() is None
+
+    request_d = request(4)
+    scheduler.submit(request_d, settled=False)
+    first_d = scheduler.start_next()
+    assert first_d is not None
+    assert first_d.request is request_d
+    assert first_d.draws_per_source_state == 1
+    scheduler.submit(request_d, settled=True)
+    assert not first_d.cancellation.cancelled
+    assert scheduler.complete(first_d)
+    refinement = []
+    while (stage := scheduler.start_next()) is not None:
+        refinement.append((stage.draws_per_source_state, stage.materialize_result))
+        assert scheduler.complete(stage)
+    assert refinement == [(4, False), (8, False), (49, True)]
+
+    request_e = request(5)
+    scheduler.submit(request_e, settled=True)
+    failed = scheduler.start_next()
+    assert failed is not None
+    assert scheduler.fail(failed)
+    scheduler.submit(request_e, settled=True)
+    retry = scheduler.start_next()
+    assert retry is not None
+    assert retry.draws_per_source_state == 1
+
+    request_f = request(6)
+    scheduler = RenderScheduler()
+    scheduler.submit(request_f, settled=True)
+    for expected_draw_count in (1, 4, 8):
+        stage = scheduler.start_next()
+        assert stage is not None
+        assert stage.draws_per_source_state == expected_draw_count
+        assert scheduler.complete(stage)
+    cancelled_final = scheduler.start_next()
+    assert cancelled_final is not None
+    assert cancelled_final.draws_per_source_state == 49
+    scheduler.cancel()
+    scheduler.reset_latest()
+    scheduler.submit(request_f, settled=True)
+    assert cancelled_final.cancellation.cancelled
+    assert not scheduler.complete(cancelled_final)
+    restarted = scheduler.start_next()
+    assert restarted is not None
+    assert restarted.draws_per_source_state == 1
+
+
+def test_interactive_detector_only_change_reuses_incident_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    bundle = viewer["_build_bundle"](config, 1)
+    evaluate_bundle = viewer["_evaluate_bundle"]
+
+    def fail_incident_rebuild(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("detector-only controls must reuse incident transport")
+
+    original_incident_builder = evaluate_bundle.__globals__["build_incident_states"]
+    evaluate_bundle.__globals__["build_incident_states"] = fail_incident_rebuild
+    evaluate_bundle.__globals__["sample_detector_raster"] = lambda detector, **_kwargs: detector
+    detector = evaluate_bundle(
+        bundle,
+        viewer["GeometryDeltas"](
+            detector_pitch_offset_deg=0.25,
+            detector_column_translation_mm=0.5,
+        ),
+        draws_per_source_state=1,
+        seed=7,
+    )
+
+    assert detector.incident is bundle.inputs.incident
+    assert not np.array_equal(
+        detector.instrument.lab_from_detector.rotation,
+        bundle.inputs.instrument.lab_from_detector.rotation,
+    )
+    scopes_by_field = {
+        spec.field_name: spec.invalidation_scope for spec in viewer["_CONTROL_SPECS"]
+    }
+    expected_detector_only = {
+        "detector_pitch_offset_deg",
+        "detector_yaw_offset_deg",
+        "detector_in_plane_rotation_offset_deg",
+        "detector_column_translation_mm",
+        "detector_row_translation_mm",
+        "detector_distance_offset_mm",
+    }
+    assert {
+        name for name, scope in scopes_by_field.items() if scope == "detector"
+    } == expected_detector_only
+    assert {name for name, scope in scopes_by_field.items() if scope == "incident"} == set(
+        scopes_by_field
+    ) - expected_detector_only
+    previous = viewer["GeometryDeltas"](
+        effective_incidence_angle_offset_deg=0.2,
+        sample_in_plane_x_translation_mm=0.4,
+    )
+    detector_revision = replace(previous, detector_pitch_offset_deg=0.3)
+    assert viewer["_changed_delta_fields"](previous, detector_revision) == {
+        "detector_pitch_offset_deg"
+    }
+    assert (
+        viewer["_changed_delta_fields"](
+            previous,
+            detector_revision,
+        )
+        <= viewer["_DETECTOR_ONLY_DELTA_FIELDS"]
+    )
+
+    evaluate_bundle.__globals__["build_incident_states"] = original_incident_builder
+    session = viewer["_DetectorRenderSession"](
+        config,
+        detector_seed=7,
+        execution_backend="cpu",
+        prepare_texture=False,
+    )
+    session._bundle = bundle
+
+    def stage(revision: int, deltas: object) -> object:
+        request = viewer["_RenderRequest"](
+            revision=revision,
+            source_sample_count=1,
+            draws_per_source_state=1,
+            deltas=deltas,
+        )
+        return viewer["_ScheduledRender"](
+            request=request,
+            draws_per_source_state=1,
+            materialize_result=True,
+            cancellation=viewer["_RenderCancellation"](),
+        )
+
+    sample_corrected = viewer["GeometryDeltas"](
+        sample_in_plane_x_translation_mm=0.1,
+    )
+    session.render(stage(1, sample_corrected), stop_requested=viewer["threading"].Event())
+    evaluate_bundle.__globals__["build_incident_states"] = fail_incident_rebuild
+    mixed_revision = replace(sample_corrected, detector_pitch_offset_deg=0.2)
+    cancelled_revision = stage(2, mixed_revision)
+    sampler_type = type(session._sampler)
+    original_pose_rebind = sampler_type.rebind_detector_pose
+
+    def rebind_then_cancel(sampler: object, instrument: object) -> None:
+        original_pose_rebind(sampler, instrument)
+        cancelled_revision.cancellation.cancel()
+
+    monkeypatch.setattr(sampler_type, "rebind_detector_pose", rebind_then_cancel)
+    with pytest.raises(viewer["MonteCarloSamplingCancelled"], match="cancelled"):
+        session.render(
+            cancelled_revision,
+            stop_requested=viewer["threading"].Event(),
+        )
+    assert session._bound_deltas == mixed_revision
+    session.reset_after_cancellation()
+
+    pose_rebind_count = 0
+
+    def count_pose_rebind(sampler: object, instrument: object) -> None:
+        nonlocal pose_rebind_count
+        pose_rebind_count += 1
+        original_pose_rebind(sampler, instrument)
+
+    monkeypatch.setattr(sampler_type, "rebind_detector_pose", count_pose_rebind)
+    session.render(stage(3, sample_corrected), stop_requested=viewer["threading"].Event())
+    assert pose_rebind_count == 1
 
 
 def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:

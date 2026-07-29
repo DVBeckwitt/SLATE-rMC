@@ -307,7 +307,10 @@ def _verify_examples(root: Path) -> list[dict[str, Any]]:
     actual = {
         path.relative_to(root).as_posix()
         for path in (root / "examples").rglob("*")
-        if path.is_file() and path.name != "MANIFEST.toml" and path.suffix.lower() != ".md"
+        if path.is_file()
+        and path.name != "MANIFEST.toml"
+        and "__pycache__" not in path.parts
+        and path.suffix.lower() not in {".md", ".py", ".pyc"}
     }
     _require(actual == declared, "example input file set mismatch")
     return entries
@@ -315,12 +318,20 @@ def _verify_examples(root: Path) -> list[dict[str, Any]]:
 
 def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, Any]) -> int:
     osc_entries = [item for item in entries if str(item["path"]).endswith(".osc.gz")]
-    _require(len(osc_entries) == 5, "expected five compressed OSC inputs")
+    expected = {item["name"]: item for item in pack["embedded"]["osc_files"]}
+    observed_names = [Path(str(item["path"])).stem for item in osc_entries]
+    _require(
+        len(observed_names) == len(set(observed_names)),
+        "duplicate compressed OSC input name",
+    )
+    _require(
+        expected.keys() <= set(observed_names),
+        "required reference OSC inputs are missing",
+    )
     arrays = pack["arrays"]
     positions = arrays["osc_selected_positions_row_col"]
     reference_position_count = positions.shape[0]
     orientation_probe_detector_rc = np.asarray(((1473, 1455), (1473, 1544)), dtype=np.int32)
-    expected = {item["name"]: item for item in pack["embedded"]["osc_files"]}
     observed: dict[str, dict[str, Any]] = {}
     for item in osc_entries:
         path = _path(root, item["path"])

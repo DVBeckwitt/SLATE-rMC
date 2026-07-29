@@ -155,8 +155,9 @@ integral over a larger declared rectangle and is labelled
 `raw_detector_macrobin_fixed_quadrature_estimate_A2.v1`.
 
 The optional stochastic terminal estimates the same finite pixel mass by drawing
-`omega_sm=(alpha,beta)` from the declared mosaic probability for every active source stratum `s`.
-Valid states with no reachable selected rod are known-zero strata and need no draw:
+`omega_sm=(alpha,beta)` from the declared mosaic probability for every canonical source stratum
+`s`. Counter lanes are reserved for known-zero strata to preserve source-index identity, but those
+states execute no root or physics work:
 
 ```text
 Ihat_P = sum_s (1/M) sum_m sum_(r,j)
@@ -179,6 +180,12 @@ Ewald fold, the coarea weight can scale as the inverse square root of distance t
 is integrable while its second moment may diverge. The result therefore makes no ordinary
 central-limit or standard-error claim. Refined deterministic latent integration is the acceptance
 oracle.
+
+`MonteCarloDetectorPresentation` is not a second scientific measure. It is a transient full-native
+float32 rendering lease obtained from the same unnormalized accumulator, divided by the completed
+draw count. It performs no spatial resampling, detector Jacobian, solid-angle correction,
+normalization, or change of pixel ownership. The authoritative retained/exported result remains the
+validated float64 `MonteCarloDetectorPixelMass` above.
 
 `DetectorCoordinateDensityImage` is different: `sample_detector_pixel_center_density(...)` samples
 the completed all-source, all-rod, all-root function once at each native center and retains

@@ -32,7 +32,10 @@ from rasim_next.pipeline.configured_simulation import (
     load_simulation_config,
 )
 from rasim_next.pipeline.source_averaged_detector import (
+    CompiledMonteCarloDetectorSampler,
     MonteCarloDetectorPixelMass,
+    MonteCarloDetectorPresentation,
+    MonteCarloSamplingCancelled,
     SourceAveragedDetectorEwaldMeasure,
 )
 
@@ -212,12 +215,72 @@ def apply_geometry_deltas(
 class DetectorRaster:
     """Display wrapper around one native-pixel Monte Carlo estimate."""
 
-    estimate: MonteCarloDetectorPixelMass
+    estimate: MonteCarloDetectorPixelMass | MonteCarloDetectorPresentation
     wall_time_s: float
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.wall_time_s) or self.wall_time_s < 0.0:
             raise ValueError("wall_time_s must be finite and nonnegative")
+
+
+@dataclass(frozen=True, slots=True)
+class _FullNativeTextureFrame:
+    """Presentation-only single-channel texture upload and logarithmic bounds."""
+
+    image_A2: NDArray[np.float32]
+    low_A2: float
+    high_A2: float
+
+    def __post_init__(self) -> None:
+        image = np.asarray(self.image_A2)
+        if image.dtype != np.float32 or image.ndim != 2 or not image.flags.c_contiguous:
+            raise ValueError("texture image must be a contiguous two-dimensional float32 array")
+        low = float(self.low_A2)
+        high = float(self.high_A2)
+        if not math.isfinite(low) or not math.isfinite(high) or low <= 0.0 or high < low:
+            raise ValueError("texture logarithmic bounds must be finite, positive, and ordered")
+        object.__setattr__(self, "low_A2", low)
+        object.__setattr__(self, "high_A2", high)
+
+
+_FULL_SCREEN_TEXTURE_XY_UV = np.asarray(
+    (
+        (-1.0, -1.0, 0.0, 1.0),
+        (3.0, -1.0, 2.0, 1.0),
+        (-1.0, 3.0, 0.0, -1.0),
+    ),
+    dtype=np.float32,
+)
+_FULL_SCREEN_TEXTURE_XY_UV.setflags(write=False)
+
+
+def _full_screen_vertex_shader() -> str:
+    positions = ", ".join(f"vec2({x:.1f}, {y:.1f})" for x, y in _FULL_SCREEN_TEXTURE_XY_UV[:, :2])
+    coordinates = ", ".join(f"vec2({u:.1f}, {v:.1f})" for u, v in _FULL_SCREEN_TEXTURE_XY_UV[:, 2:])
+    return (
+        "#version 330 core\n"
+        "out vec2 texture_coordinate;\n"
+        f"const vec2 positions[3] = vec2[3]({positions});\n"
+        f"const vec2 coordinates[3] = vec2[3]({coordinates});\n"
+        "void main() {\n"
+        "    gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);\n"
+        "    texture_coordinate = coordinates[gl_VertexID];\n"
+        "}\n"
+    )
+
+
+def _prepare_full_native_texture(image_A2: NDArray[np.generic]) -> _FullNativeTextureFrame:
+    """Preserve native row/column ownership while preparing one R32F upload."""
+
+    supplied = np.asarray(image_A2)
+    if supplied.ndim != 2:
+        raise ValueError("detector presentation image must be two-dimensional")
+    image = np.ascontiguousarray(supplied, dtype=np.float32)
+    high = float(np.max(image, initial=np.float32(0.0)))
+    if high <= 0.0:
+        return _FullNativeTextureFrame(image, 1.0e-8, 1.0)
+    low = max(float(np.finfo(np.float32).tiny), high * 1.0e-8)
+    return _FullNativeTextureFrame(image, low, high)
 
 
 def sample_detector_raster(
@@ -261,32 +324,43 @@ def _build_bundle(
     return _DetectorBundle(inputs, build_source_averaged_detector(inputs))
 
 
-def _evaluate_bundle(
+def _instrument_for_deltas(
     bundle: _DetectorBundle,
     deltas: GeometryDeltas,
-    *,
-    draws_per_source_state: int,
-    seed: int,
-) -> DetectorRaster:
+) -> CompiledInstrument:
+    configured_axis_rotations = bundle.inputs.config.instrument.axis_rotations
+    return apply_geometry_deltas(
+        bundle.inputs.instrument,
+        deltas,
+        configured_axis_rotations=configured_axis_rotations,
+    )
+
+
+def _detector_for_deltas(
+    bundle: _DetectorBundle,
+    deltas: GeometryDeltas,
+) -> SourceAveragedDetectorEwaldMeasure:
     if deltas == GeometryDeltas.zero():
         detector = bundle.detector
     else:
         configured_axis_rotations = bundle.inputs.config.instrument.axis_rotations
-        corrected_axis_rotations = _corrected_goniometer_axis_rotations(
-            configured_axis_rotations,
-            deltas,
-        )
-        instrument = apply_geometry_deltas(
-            bundle.inputs.instrument,
-            deltas,
-            configured_axis_rotations=configured_axis_rotations,
-        )
-        incident = build_incident_states(bundle.inputs.samples, bundle.inputs.material, instrument)
+        instrument = _instrument_for_deltas(bundle, deltas)
+        incident = bundle.inputs.incident
+        if _requires_incident_rebuild(deltas):
+            incident = build_incident_states(
+                bundle.inputs.samples,
+                bundle.inputs.material,
+                instrument,
+            )
         if not np.any(incident.states.valid):
             raise ValueError("geometry produced no valid incident state")
         if np.array_equal(incident.states.valid, bundle.inputs.incident.states.valid):
             detector = bundle.detector.rebind_geometry(incident=incident, instrument=instrument)
         else:
+            corrected_axis_rotations = _corrected_goniometer_axis_rotations(
+                configured_axis_rotations,
+                deltas,
+            )
             valid_index = np.flatnonzero(incident.states.valid)
             maximum_air_k_Ainv = (
                 2.0 * np.pi / float(np.min(incident.states.wavelength_A[valid_index]))
@@ -310,8 +384,18 @@ def _evaluate_bundle(
                 rods=rods,
             )
             detector = build_source_averaged_detector(changed_inputs)
+    return detector
+
+
+def _evaluate_bundle(
+    bundle: _DetectorBundle,
+    deltas: GeometryDeltas,
+    *,
+    draws_per_source_state: int,
+    seed: int,
+) -> DetectorRaster:
     return sample_detector_raster(
-        detector,
+        _detector_for_deltas(bundle, deltas),
         draws_per_source_state=draws_per_source_state,
         seed=seed,
     )
@@ -325,12 +409,346 @@ class _RenderRequest:
     deltas: GeometryDeltas
 
 
+class _RenderCancellation:
+    """Thread-safe cancellation state for one render stage."""
+
+    __slots__ = ("_event",)
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def cancel(self) -> None:
+        self._event.set()
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduledRender:
+    request: _RenderRequest
+    draws_per_source_state: int
+    materialize_result: bool
+    cancellation: _RenderCancellation
+
+
+def _progressive_draw_counts(requested_draw_count: int, *, settled: bool) -> tuple[int, ...]:
+    requested = int(requested_draw_count)
+    if requested < 1:
+        raise ValueError("requested_draw_count must be positive")
+    candidates = (1, 4, 8, requested) if settled else (1, 4, 8)
+    return tuple(dict.fromkeys(min(candidate, requested) for candidate in candidates))
+
+
+class _ProgressiveRenderScheduler:
+    """Latest-only state machine for cancellable progressive full-native renders."""
+
+    __slots__ = (
+        "_active",
+        "_completed_draw_count",
+        "_completed_materialized",
+        "_latest_request",
+        "_pending_stages",
+    )
+
+    def __init__(self) -> None:
+        self._active: _ScheduledRender | None = None
+        self._completed_draw_count = 0
+        self._completed_materialized = False
+        self._latest_request: _RenderRequest | None = None
+        self._pending_stages: list[tuple[int, bool]] = []
+
+    def submit(self, request: _RenderRequest, *, settled: bool) -> None:
+        if not isinstance(request, _RenderRequest):
+            raise TypeError("request must be a _RenderRequest")
+        same_request = self._latest_request == request
+        if self._active is not None and self._active.request != request:
+            self._active.cancellation.cancel()
+        if not same_request:
+            self._completed_draw_count = 0
+            self._completed_materialized = False
+        self._latest_request = request
+        active_is_reusable = (
+            self._active is not None
+            and self._active.request == request
+            and not self._active.cancellation.cancelled
+        )
+        active_draw_count = self._active.draws_per_source_state if active_is_reusable else 0
+        represented_draw_count = max(self._completed_draw_count, active_draw_count)
+        stages = [
+            (
+                draw_count,
+                settled and draw_count == request.draws_per_source_state,
+            )
+            for draw_count in _progressive_draw_counts(
+                request.draws_per_source_state,
+                settled=settled,
+            )
+        ]
+        self._pending_stages = [
+            (draw_count, materialize)
+            for draw_count, materialize in stages
+            if draw_count > represented_draw_count
+            or (
+                materialize
+                and not self._completed_materialized
+                and not (active_is_reusable and self._active.materialize_result)
+            )
+        ]
+
+    def start_next(self) -> _ScheduledRender | None:
+        if self._active is not None or not self._pending_stages:
+            return None
+        if self._latest_request is None:
+            raise RuntimeError("pending render stages require a latest request")
+        draw_count, materialize = self._pending_stages.pop(0)
+        stage = _ScheduledRender(
+            request=self._latest_request,
+            draws_per_source_state=draw_count,
+            materialize_result=materialize,
+            cancellation=_RenderCancellation(),
+        )
+        self._active = stage
+        return stage
+
+    def complete(
+        self,
+        stage: _ScheduledRender,
+        *,
+        completed_draw_count: int | None = None,
+    ) -> bool:
+        if stage is not self._active:
+            raise ValueError("only the active render stage can complete")
+        self._active = None
+        accepted = not stage.cancellation.cancelled and stage.request == self._latest_request
+        if accepted:
+            completed = (
+                stage.draws_per_source_state
+                if completed_draw_count is None
+                else int(completed_draw_count)
+            )
+            if completed < stage.draws_per_source_state:
+                raise ValueError("completed draw count cannot precede the scheduled stage")
+            self._completed_draw_count = max(self._completed_draw_count, completed)
+            self._completed_materialized = self._completed_materialized or stage.materialize_result
+            self._pending_stages = [
+                (draw_count, materialize)
+                for draw_count, materialize in self._pending_stages
+                if draw_count > self._completed_draw_count
+                or (materialize and not self._completed_materialized)
+            ]
+        return accepted
+
+    def discard_pending(self) -> None:
+        self._pending_stages.clear()
+
+    def fail(self, stage: _ScheduledRender) -> bool:
+        if stage is not self._active:
+            raise ValueError("only the active render stage can fail")
+        self._active = None
+        accepted = not stage.cancellation.cancelled and stage.request == self._latest_request
+        if accepted:
+            self.reset_latest()
+        return accepted
+
+    def reset_latest(self) -> None:
+        self._completed_draw_count = 0
+        self._completed_materialized = False
+        self._pending_stages.clear()
+
+    def cancel(self) -> None:
+        if self._active is not None:
+            self._active.cancellation.cancel()
+        self._pending_stages.clear()
+
+
 @dataclass(frozen=True, slots=True)
 class _RenderOutcome:
-    request: _RenderRequest
+    stage: _ScheduledRender
     raster: DetectorRaster | None
-    bundle: _DetectorBundle | None
+    texture: _FullNativeTextureFrame | None
     error: str | None
+    cancelled: bool = False
+
+
+class _DetectorRenderSession:
+    """Thread-confined bundle and progressive sampler state."""
+
+    def __init__(
+        self,
+        config: SimulationConfiguration,
+        *,
+        detector_seed: int,
+        execution_backend: str,
+        prepare_texture: bool,
+    ) -> None:
+        self._config = config
+        self._detector_seed = detector_seed
+        self._execution_backend = execution_backend
+        self._prepare_texture = prepare_texture
+        self._bundle: _DetectorBundle | None = None
+        self._bound_deltas: GeometryDeltas | None = None
+        self._sampler: CompiledMonteCarloDetectorSampler | None = None
+
+    def render(
+        self,
+        stage: _ScheduledRender,
+        *,
+        stop_requested: threading.Event,
+    ) -> tuple[DetectorRaster, _FullNativeTextureFrame | None]:
+        def cancel_requested() -> bool:
+            return stop_requested.is_set() or stage.cancellation.cancelled
+
+        if cancel_requested():
+            raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        request = stage.request
+        if (
+            self._bundle is None
+            or self._bundle.inputs.config.source.sample_count != request.source_sample_count
+        ):
+            self._bundle = _build_bundle(self._config, request.source_sample_count)
+            self._bound_deltas = None
+            self._sampler = None
+        if cancel_requested():
+            raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        if self._bound_deltas != request.deltas or self._sampler is None:
+            changed_fields = _changed_delta_fields(self._bound_deltas, request.deltas)
+            detector_pose_only = (
+                self._sampler is not None
+                and self._bound_deltas is not None
+                and bool(changed_fields)
+                and changed_fields <= _DETECTOR_ONLY_DELTA_FIELDS
+            )
+            if detector_pose_only:
+                instrument = _instrument_for_deltas(self._bundle, request.deltas)
+                if cancel_requested():
+                    raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+                self._sampler.rebind_detector_pose(instrument)
+            else:
+                detector = _detector_for_deltas(self._bundle, request.deltas)
+                if cancel_requested():
+                    raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+                if self._sampler is None:
+                    self._sampler = detector.compile_monte_carlo_sampler(
+                        execution_backend=self._execution_backend,
+                        seed=self._detector_seed,
+                    )
+                else:
+                    try:
+                        self._sampler.rebind_geometry(detector)
+                    except ValueError:
+                        self._sampler = detector.compile_monte_carlo_sampler(
+                            execution_backend=self._execution_backend,
+                            seed=self._detector_seed,
+                        )
+            self._bound_deltas = request.deltas
+            if cancel_requested():
+                raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        if request.draws_per_source_state < self._sampler.draws_completed:
+            self._sampler.reset()
+        target_draw_count = max(
+            stage.draws_per_source_state,
+            self._sampler.draws_completed,
+        )
+        start = perf_counter()
+        if stage.materialize_result or not self._prepare_texture:
+            estimate: MonteCarloDetectorPixelMass | MonteCarloDetectorPresentation = (
+                self._sampler.advance_to(
+                    target_draw_count,
+                    cancel_requested=cancel_requested,
+                )
+            )
+        else:
+            estimate = self._sampler.advance_preview_to(
+                target_draw_count,
+                cancel_requested=cancel_requested,
+            )
+        raster = DetectorRaster(estimate=estimate, wall_time_s=perf_counter() - start)
+        if cancel_requested():
+            self._sampler.reset()
+            raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        texture = _prepare_full_native_texture(estimate.image_A2) if self._prepare_texture else None
+        return raster, texture
+
+    def reset_after_cancellation(self) -> None:
+        if self._sampler is not None and self._sampler.draws_completed > 0:
+            self._sampler.reset()
+
+
+class _DetectorRenderWorker:
+    """One long-lived worker that owns the CUDA context and compiled sampler."""
+
+    def __init__(
+        self,
+        config: SimulationConfiguration,
+        *,
+        detector_seed: int,
+        execution_backend: str,
+        prepare_texture: bool,
+        outcomes: queue.SimpleQueue[_RenderOutcome],
+    ) -> None:
+        self._commands: queue.SimpleQueue[_ScheduledRender | None] = queue.SimpleQueue()
+        self._outcomes = outcomes
+        self._stop_event = threading.Event()
+        self._session_arguments = (
+            config,
+            detector_seed,
+            execution_backend,
+            prepare_texture,
+        )
+        self._thread = threading.Thread(
+            target=self._run,
+            name="detector-render",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, stage: _ScheduledRender) -> None:
+        self._commands.put(stage)
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._commands.put(None)
+        if threading.current_thread() is not self._thread:
+            self._thread.join()
+
+    def _run(self) -> None:
+        config, detector_seed, execution_backend, prepare_texture = self._session_arguments
+        session: _DetectorRenderSession | None = None
+        while True:
+            stage = self._commands.get()
+            if stage is None:
+                return
+            try:
+                if session is None:
+                    session = _DetectorRenderSession(
+                        config,
+                        detector_seed=detector_seed,
+                        execution_backend=execution_backend,
+                        prepare_texture=prepare_texture,
+                    )
+                raster, texture = session.render(stage, stop_requested=self._stop_event)
+                outcome = _RenderOutcome(stage, raster, texture, None)
+            except MonteCarloSamplingCancelled:
+                try:
+                    if session is None:
+                        raise RuntimeError("render session was not initialized")
+                    session.reset_after_cancellation()
+                except Exception as error:
+                    session = None
+                    outcome = _RenderOutcome(
+                        stage,
+                        None,
+                        None,
+                        f"could not reset cancelled sampler: {error}",
+                    )
+                else:
+                    outcome = _RenderOutcome(stage, None, None, None, cancelled=True)
+            except Exception as error:
+                session = None
+                outcome = _RenderOutcome(stage, None, None, str(error))
+            self._outcomes.put(outcome)
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +757,44 @@ class _ControlSpec:
     label: str
     minimum: float
     maximum: float
+    invalidation_scope: str
+
+    def __post_init__(self) -> None:
+        if self.invalidation_scope not in {"detector", "incident"}:
+            raise ValueError("invalidation_scope must be detector or incident")
+
+
+_DETECTOR_ONLY_DELTA_FIELDS = frozenset(
+    {
+        "detector_pitch_offset_deg",
+        "detector_yaw_offset_deg",
+        "detector_in_plane_rotation_offset_deg",
+        "detector_column_translation_mm",
+        "detector_row_translation_mm",
+        "detector_distance_offset_mm",
+    }
+)
+
+
+def _changed_delta_fields(
+    previous: GeometryDeltas | None,
+    current: GeometryDeltas,
+) -> frozenset[str]:
+    if previous is None:
+        return frozenset(item.name for item in fields(current))
+    return frozenset(
+        item.name
+        for item in fields(current)
+        if getattr(previous, item.name) != getattr(current, item.name)
+    )
+
+
+def _requires_incident_rebuild(deltas: GeometryDeltas) -> bool:
+    return any(
+        getattr(deltas, item.name) != 0.0
+        for item in fields(deltas)
+        if item.name not in _DETECTOR_ONLY_DELTA_FIELDS
+    )
 
 
 _CONTROL_SPECS = (
@@ -347,90 +803,367 @@ _CONTROL_SPECS = (
         r"detector pitch $-\Delta\gamma_{\rm RA}$ (deg)",
         -10.0,
         10.0,
+        "detector",
     ),
     _ControlSpec(
         "detector_yaw_offset_deg",
         r"detector yaw $\Delta\Gamma_{\rm RA}$ (deg)",
         -10.0,
         10.0,
+        "detector",
     ),
     _ControlSpec(
         "detector_in_plane_rotation_offset_deg",
         r"detector in-plane $\Delta\chi_D$ (deg)",
         -10.0,
         10.0,
+        "detector",
     ),
     _ControlSpec(
         "detector_column_translation_mm",
         r"detector column $\Delta x_D$ [$x_0$-coupled] (mm)",
         -20.0,
         20.0,
+        "detector",
     ),
     _ControlSpec(
         "detector_row_translation_mm",
         r"detector row $\Delta y_D$ [$y_0$-coupled] (mm)",
         -20.0,
         20.0,
+        "detector",
     ),
     _ControlSpec(
         "detector_distance_offset_mm",
         r"detector-normal distance $\Delta D_n$ (mm)",
         -50.0,
         50.0,
+        "detector",
     ),
     _ControlSpec(
         "goniometer_axis_pitch_offset_deg",
         r"goniometer-axis pitch $\Delta\alpha$ [RA-SIM cor_angle] (deg)",
         -5.0,
         5.0,
+        "incident",
     ),
     _ControlSpec(
         "goniometer_axis_yaw_offset_deg",
         r"goniometer-axis yaw $\Delta\psi_g$ [RA-SIM psi_z] (deg)",
         -5.0,
         5.0,
+        "incident",
     ),
     _ControlSpec(
         "effective_incidence_angle_offset_deg",
         r"effective incidence $\Delta\theta_i$ (deg)",
         -5.0,
         5.0,
+        "incident",
     ),
     _ControlSpec(
         "effective_sample_tilt_offset_deg",
         r"effective sample tilt $\Delta\delta$ [RA-SIM $\chi$] (deg)",
         -5.0,
         5.0,
+        "incident",
     ),
     _ControlSpec(
         "sample_in_plane_rotation_offset_deg",
         r"sample in-plane $\Delta\chi_S$ [RA-SIM $-\Delta\psi$] (deg)",
         -10.0,
         10.0,
+        "incident",
     ),
     _ControlSpec(
         "sample_in_plane_x_translation_mm",
         r"sample in-plane $\Delta x_S$ (mm)",
         -2.0,
         2.0,
+        "incident",
     ),
     _ControlSpec(
         "sample_in_plane_y_translation_mm",
         r"sample in-plane $\Delta y_S$ (mm)",
         -2.0,
         2.0,
+        "incident",
     ),
     _ControlSpec(
         "sample_normal_translation_mm",
         r"sample normal $\Delta n_S=-\Delta z_S$ (mm)",
         -2.0,
         2.0,
+        "incident",
     ),
 )
 
 
+class _OpenGLDetectorPresenter:
+    """Persistent R32F texture overlay for the Matplotlib Qt canvas."""
+
+    backend_id = "qt_opengl_r32f.v1"
+
+    def __init__(
+        self,
+        canvas: object,
+        *,
+        detector_shape_rc: tuple[int, int],
+        magma_rgba_u8: NDArray[np.uint8],
+    ) -> None:
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtOpenGL import (
+                QOpenGLShader,
+                QOpenGLShaderProgram,
+                QOpenGLTexture,
+                QOpenGLVertexArrayObject,
+            )
+            from PySide6.QtOpenGLWidgets import QOpenGLWidget
+            from PySide6.QtWidgets import QWidget
+            from shiboken6 import VoidPtr
+        except ImportError as error:
+            raise RuntimeError(
+                "OpenGL presentation requires the visualization extra; install it or pass "
+                "--presentation-backend matplotlib"
+            ) from error
+        if not isinstance(canvas, QWidget):
+            raise RuntimeError(
+                "OpenGL presentation requires Matplotlib's QtAgg canvas; pass "
+                "--presentation-backend matplotlib for the software fallback"
+            )
+        rows, columns = detector_shape_rc
+        lut = np.ascontiguousarray(magma_rgba_u8, dtype=np.uint8)
+        if lut.shape != (256, 4):
+            raise ValueError("magma_rgba_u8 must have shape (256, 4)")
+
+        class DetectorTextureWidget(QOpenGLWidget):
+            def __init__(self, parent: QWidget) -> None:
+                super().__init__(parent)
+                self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                self.setAutoFillBackground(False)
+                self._detector_texture: QOpenGLTexture | None = None
+                self._lut_texture: QOpenGLTexture | None = None
+                self._program: QOpenGLShaderProgram | None = None
+                self._vertex_array: QOpenGLVertexArrayObject | None = None
+                self._pending_frame: _FullNativeTextureFrame | None = None
+                self._low_A2 = 1.0e-8
+                self._high_A2 = 1.0
+                self._initialization_error: str | None = None
+                self._resources_released = False
+                self._context_generation = 0
+
+            def initializeGL(self) -> None:
+                try:
+                    self._resources_released = False
+                    self._initialization_error = None
+                    program = QOpenGLShaderProgram(self)
+                    vertex_source = _full_screen_vertex_shader()
+                    fragment_source = """
+                        #version 330 core
+                        in vec2 texture_coordinate;
+                        out vec4 fragment_color;
+                        uniform sampler2D detector_texture;
+                        uniform sampler1D magma_texture;
+                        uniform float log_low_A2;
+                        uniform float log_high_A2;
+                        void main() {
+                            float value_A2 = texture(detector_texture, texture_coordinate).r;
+                            if (value_A2 <= 0.0) {
+                                fragment_color = vec4(0.0667, 0.0706, 0.0902, 1.0);
+                                return;
+                            }
+                            float denominator = max(log_high_A2 - log_low_A2, 1.0e-12);
+                            float coordinate = clamp(
+                                (log(value_A2) - log_low_A2) / denominator,
+                                0.0,
+                                1.0
+                            );
+                            fragment_color = texture(magma_texture, coordinate);
+                        }
+                    """
+                    if not program.addShaderFromSourceCode(
+                        QOpenGLShader.ShaderTypeBit.Vertex,
+                        vertex_source,
+                    ) or not program.addShaderFromSourceCode(
+                        QOpenGLShader.ShaderTypeBit.Fragment,
+                        fragment_source,
+                    ):
+                        raise RuntimeError(program.log())
+                    if not program.link():
+                        raise RuntimeError(program.log())
+                    vertex_array = QOpenGLVertexArrayObject(self)
+                    if not vertex_array.create():
+                        raise RuntimeError("could not create the OpenGL vertex array")
+                    detector_texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+                    detector_texture.setFormat(QOpenGLTexture.TextureFormat.R32F)
+                    detector_texture.setSize(columns, rows)
+                    detector_texture.allocateStorage(
+                        QOpenGLTexture.PixelFormat.Red,
+                        QOpenGLTexture.PixelType.Float32,
+                    )
+                    detector_texture.setMinMagFilters(
+                        QOpenGLTexture.Filter.Nearest,
+                        QOpenGLTexture.Filter.Nearest,
+                    )
+                    detector_texture.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+                    lut_texture = QOpenGLTexture(QOpenGLTexture.Target.Target1D)
+                    lut_texture.setFormat(QOpenGLTexture.TextureFormat.RGBA8_UNorm)
+                    lut_texture.setSize(256)
+                    lut_texture.allocateStorage(
+                        QOpenGLTexture.PixelFormat.RGBA,
+                        QOpenGLTexture.PixelType.UInt8,
+                    )
+                    lut_texture.setMinMagFilters(
+                        QOpenGLTexture.Filter.Linear,
+                        QOpenGLTexture.Filter.Linear,
+                    )
+                    lut_texture.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+                    lut_texture.setData(
+                        QOpenGLTexture.PixelFormat.RGBA,
+                        QOpenGLTexture.PixelType.UInt8,
+                        VoidPtr(lut.ctypes.data, lut.nbytes, False),
+                    )
+                    self._program = program
+                    self._vertex_array = vertex_array
+                    self._detector_texture = detector_texture
+                    self._lut_texture = lut_texture
+                    self._context_generation += 1
+                    self.context().aboutToBeDestroyed.connect(self.release_resources)
+                    if self._pending_frame is not None:
+                        self._upload(self._pending_frame)
+                        self._pending_frame = None
+                except Exception as error:
+                    self._initialization_error = str(error)
+
+            def _upload(self, frame: _FullNativeTextureFrame) -> None:
+                if self._detector_texture is None:
+                    raise RuntimeError("the OpenGL detector texture is not initialized")
+                self._detector_texture.setData(
+                    QOpenGLTexture.PixelFormat.Red,
+                    QOpenGLTexture.PixelType.Float32,
+                    VoidPtr(
+                        frame.image_A2.ctypes.data,
+                        frame.image_A2.nbytes,
+                        False,
+                    ),
+                )
+                self._low_A2 = frame.low_A2
+                self._high_A2 = frame.high_A2
+
+            def present(self, frame: _FullNativeTextureFrame) -> None:
+                if frame.image_A2.shape != (rows, columns):
+                    raise ValueError("texture frame does not match the native detector shape")
+                if self._initialization_error is not None:
+                    raise RuntimeError(
+                        f"OpenGL detector initialization failed: {self._initialization_error}"
+                    )
+                if self._detector_texture is None:
+                    self._pending_frame = _FullNativeTextureFrame(
+                        np.array(frame.image_A2, copy=True, order="C"),
+                        frame.low_A2,
+                        frame.high_A2,
+                    )
+                    self.update()
+                    return
+                self.makeCurrent()
+                try:
+                    self._upload(frame)
+                finally:
+                    self.doneCurrent()
+                self.update()
+
+            def paintGL(self) -> None:
+                functions = self.context().functions()
+                functions.glClearColor(0.0667, 0.0706, 0.0902, 1.0)
+                functions.glClear(0x00004000)
+                if (
+                    self._program is None
+                    or self._vertex_array is None
+                    or self._detector_texture is None
+                    or self._lut_texture is None
+                ):
+                    return
+                self._program.bind()
+                self._vertex_array.bind()
+                self._detector_texture.bind(0)
+                self._lut_texture.bind(1)
+                functions.glUniform1i(self._program.uniformLocation("detector_texture"), 0)
+                functions.glUniform1i(self._program.uniformLocation("magma_texture"), 1)
+                functions.glUniform1f(
+                    self._program.uniformLocation("log_low_A2"),
+                    math.log(self._low_A2),
+                )
+                functions.glUniform1f(
+                    self._program.uniformLocation("log_high_A2"),
+                    math.log(self._high_A2),
+                )
+                functions.glDrawArrays(0x0004, 0, 3)
+                self._lut_texture.release()
+                self._detector_texture.release()
+                self._vertex_array.release()
+                self._program.release()
+
+            def release_resources(self) -> None:
+                if self._resources_released:
+                    return
+                self._resources_released = True
+                if not self.isValid():
+                    self._detector_texture = None
+                    self._lut_texture = None
+                    self._vertex_array = None
+                    self._program = None
+                    return
+                self.makeCurrent()
+                try:
+                    for texture in (self._detector_texture, self._lut_texture):
+                        if texture is not None:
+                            texture.destroy()
+                    if self._vertex_array is not None:
+                        self._vertex_array.destroy()
+                finally:
+                    self._detector_texture = None
+                    self._lut_texture = None
+                    self._vertex_array = None
+                    self._program = None
+                    self.doneCurrent()
+
+        self._canvas = canvas
+        self._widget = DetectorTextureWidget(canvas)
+        self._widget.show()
+        self._widget.raise_()
+
+    def sync_to_axes(self, axes: object) -> None:
+        ratio = float(getattr(self._canvas, "device_pixel_ratio", 1.0))
+        bbox = axes.bbox
+        figure_height = float(self._canvas.figure.bbox.height)
+        self._widget.setGeometry(
+            round(float(bbox.x0) / ratio),
+            round((figure_height - float(bbox.y1)) / ratio),
+            max(1, round(float(bbox.width) / ratio)),
+            max(1, round(float(bbox.height) / ratio)),
+        )
+        self._widget.raise_()
+
+    def present(self, frame: _FullNativeTextureFrame) -> None:
+        self._widget.present(frame)
+
+    @property
+    def initialization_error(self) -> str | None:
+        return self._widget._initialization_error
+
+    @property
+    def context_generation(self) -> int:
+        return self._widget._context_generation
+
+    def close(self) -> None:
+        self._widget.release_resources()
+        self._widget.close()
+        self._widget.deleteLater()
+
+
 class InteractiveDetectorViewer:
-    """Matplotlib controller for settled Monte Carlo native-pixel mass."""
+    """Continuously scheduled full-native Monte Carlo detector viewer."""
 
     def __init__(
         self,
@@ -439,6 +1172,8 @@ class InteractiveDetectorViewer:
         draws_per_source_state: int,
         initial_source_sample_count: int,
         detector_seed: int,
+        execution_backend: str,
+        presentation_backend: str,
     ) -> None:
         from matplotlib import pyplot as plt
         from matplotlib.colors import LogNorm
@@ -448,15 +1183,20 @@ class InteractiveDetectorViewer:
         self._initial_draws_per_source_state = draws_per_source_state
         self._initial_source_sample_count = initial_source_sample_count
         self._detector_seed = detector_seed
+        if execution_backend not in {"cpu", "cuda"}:
+            raise ValueError("execution_backend must be cpu or cuda")
+        if presentation_backend not in {"opengl", "matplotlib"}:
+            raise ValueError("presentation_backend must be opengl or matplotlib")
+        self._execution_backend = execution_backend
+        self._presentation_backend = presentation_backend
         self._revision = 0
         self._closed = False
-        self._active_thread: threading.Thread | None = None
-        self._pending_request: _RenderRequest | None = None
         self._outcomes: queue.SimpleQueue[_RenderOutcome] = queue.SimpleQueue()
-        self._stop_event = threading.Event()
-        self._cached_bundle: _DetectorBundle | None = None
+        self._scheduler = _ProgressiveRenderScheduler()
+        self._source_sample_count_committed = initial_source_sample_count
         self._suspend_updates = False
         self._slider_dirty = False
+        self._preview_pending = False
         self._image_background: object | None = None
         self._status_background: object | None = None
         self._slider_artists: dict[int, tuple[object, tuple[object, ...]]] = {}
@@ -488,6 +1228,24 @@ class InteractiveDetectorViewer:
             pad=0.02,
             label=r"weighted raw detector-pixel mass estimate ($\AA^2$; display log scale)",
         )
+        if presentation_backend == "opengl":
+            self._colorbar.set_label(
+                "relative weighted detector-pixel mass (8-decade GPU log scale)"
+            )
+            magma_rgba_u8 = np.rint(
+                self._cmap(np.linspace(0.0, 1.0, 256, dtype=np.float64)) * 255.0
+            ).astype(np.uint8)
+            self._open_gl_presenter: _OpenGLDetectorPresenter | None = _OpenGLDetectorPresenter(
+                self.figure.canvas,
+                detector_shape_rc=(rows, columns),
+                magma_rgba_u8=magma_rgba_u8,
+            )
+        else:
+            self._open_gl_presenter = None
+        self._open_gl_context_generation = (
+            self._open_gl_presenter.context_generation if self._open_gl_presenter is not None else 0
+        )
+        self._open_gl_failed = False
 
         self._sliders: dict[str, Slider] = {}
         control_top = 0.91
@@ -589,7 +1347,8 @@ class InteractiveDetectorViewer:
             0.70,
             0.012,
             "Weighted roots sum directly into native pixels; no detector-coordinate quadrature.\n"
-            "Drag keeps the settled image. Release renders the latest requested pose.\n"
+            "Geometry and draw controls stream latest-only progressive previews while dragging.\n"
+            "Source count commits on release; every frame keeps the full native grid.\n"
             "All deltas are relative to the configured pose.\n"
             "Keys: R render, 0 reset, Q close.",
             ha="left",
@@ -602,7 +1361,14 @@ class InteractiveDetectorViewer:
         self.figure.canvas.mpl_connect("close_event", self._on_close)
         self.figure.canvas.mpl_connect("resize_event", self._on_resize)
         self.figure.canvas.mpl_connect("draw_event", self._on_draw)
-        self._poll_timer = self.figure.canvas.new_timer(interval=100)
+        self._worker = _DetectorRenderWorker(
+            config,
+            detector_seed=detector_seed,
+            execution_backend=execution_backend,
+            prepare_texture=presentation_backend == "opengl",
+            outcomes=self._outcomes,
+        )
+        self._poll_timer = self.figure.canvas.new_timer(interval=25)
         self._poll_timer.add_callback(self._poll_render)
         self._poll_timer.start()
         self._set_status("ready; rendering the configured Monte Carlo pixel image")
@@ -615,7 +1381,7 @@ class InteractiveDetectorViewer:
     def _current_request(self) -> _RenderRequest:
         return _RenderRequest(
             revision=self._revision,
-            source_sample_count=round(self._source_sample_slider.val),
+            source_sample_count=self._source_sample_count_committed,
             draws_per_source_state=round(self._detector_draw_slider.val),
             deltas=self._deltas(),
         )
@@ -689,7 +1455,11 @@ class InteractiveDetectorViewer:
         self.figure.canvas.draw()
 
     def _on_draw(self, _event: object) -> None:
-        if self._closed or not self.figure.canvas.supports_blit:
+        if self._closed:
+            return
+        if self._open_gl_presenter is not None:
+            self._open_gl_presenter.sync_to_axes(self._image_axis)
+        if not self.figure.canvas.supports_blit:
             return
         self._cache_backgrounds()
         self._blit_axis(
@@ -717,21 +1487,44 @@ class InteractiveDetectorViewer:
             axis.draw_artist(artist)
         self.figure.canvas.blit(axis.bbox if blit_bbox is None else blit_bbox)
 
-    def _show_raster(self, raster: DetectorRaster) -> None:
+    def _show_raster(
+        self,
+        raster: DetectorRaster,
+        texture: _FullNativeTextureFrame | None,
+    ) -> None:
         from matplotlib.colors import LogNorm
 
-        display, low, high = self._display_values(raster)
-        self._image.set_data(display)
-        self._image.set_norm(LogNorm(vmin=low, vmax=high, clip=True))
-        self._colorbar.update_normal(self._image)
         estimate = raster.estimate
+        if self._open_gl_presenter is None:
+            display, low, high = self._display_values(raster)
+            self._image.set_data(display)
+            self._image.set_norm(LogNorm(vmin=low, vmax=high, clip=True))
+            self._colorbar.update_normal(self._image)
+        else:
+            if texture is None:
+                raise RuntimeError("OpenGL presentation requires a prepared full-native texture")
+            self._open_gl_presenter.present(texture)
+        rod_count = (
+            estimate.rod_count
+            if isinstance(estimate, MonteCarloDetectorPresentation)
+            else len(estimate.rods)
+        )
+        device = f" on {estimate.execution_device}" if estimate.execution_device else ""
         self._image_axis.set_title(
             f"MONTE CARLO NATIVE PIXEL MASS: {estimate.source_state_count} $k_i$ states x "
-            f"{estimate.draws_per_source_state} draws, {len(estimate.rods)} physical rods\n"
+            f"{estimate.draws_per_source_state} draws, {rod_count} physical rods\n"
             f"{estimate.visible_hit_count:,} visible root deposits; seed {estimate.seed}; "
-            f"{raster.wall_time_s:.3f} s; total {estimate.total_detector_mass_A2:.6g} $\\AA^2$"
+            f"{raster.wall_time_s:.3f} s; {estimate.execution_backend}{device}; "
+            f"total {estimate.total_detector_mass_A2:.6g} $\\AA^2$"
         )
-        self._redraw_and_cache()
+        if self._open_gl_presenter is None:
+            self._redraw_and_cache()
+        else:
+            self._blit_axis(
+                self._image_axis,
+                self._image_background,
+                self._image_axis.title,
+            )
 
     def _set_status(self, text: str) -> None:
         self._status.set_text(text)
@@ -748,103 +1541,121 @@ class InteractiveDetectorViewer:
             self._draw_slider(slider)
         self._revision += 1
         self._slider_dirty = True
+        if slider is self._source_sample_slider:
+            self._scheduler.cancel()
+            self._preview_pending = False
+            requested_source_count = round(self._source_sample_slider.val)
+            self._set_status(
+                f"release to rebuild {requested_source_count} $k_i$ states; "
+                "the full-native image remains visible"
+            )
+            return
+        self._preview_pending = True
         request = self._current_request()
         self._set_status(
-            f"release to render {request.source_sample_count} $k_i$ states x "
-            f"{request.draws_per_source_state} mosaic draws; settled image unchanged"
+            f"tracking revision {request.revision}: latest-only full-native preview pending; "
+            f"settled target {request.draws_per_source_state} draws"
         )
 
     def _on_button_release(self, _event: object) -> None:
         if not self._suspend_updates and self._slider_dirty:
+            self._source_sample_count_committed = round(self._source_sample_slider.val)
             self._request_render()
 
     def _request_render(self, _event: object | None = None) -> None:
         if self._closed:
             return
+        self._source_sample_count_committed = round(self._source_sample_slider.val)
         self._slider_dirty = False
-        request = self._current_request()
-        if self._active_thread is not None:
-            self._pending_request = request
-            self._set_status(
-                f"render running; queued latest {request.source_sample_count} $k_i$ states x "
-                f"{request.draws_per_source_state} draws"
-            )
+        self._preview_pending = False
+        self._scheduler.submit(self._current_request(), settled=True)
+        self._dispatch_next()
+
+    def _dispatch_next(self) -> None:
+        stage = self._scheduler.start_next()
+        if stage is None:
             return
-        self._start_render(request)
-
-    def _start_render(self, request: _RenderRequest) -> None:
-        cached = self._cached_bundle
-        config = self._config
-        seed = self._detector_seed
-        stop_event = self._stop_event
-        outcomes = self._outcomes
-
-        def run() -> None:
-            bundle: _DetectorBundle | None = cached
-            try:
-                if stop_event.is_set():
-                    return
-                if (
-                    bundle is None
-                    or bundle.inputs.config.source.sample_count != request.source_sample_count
-                ):
-                    bundle = _build_bundle(config, request.source_sample_count)
-                if stop_event.is_set():
-                    return
-                raster = _evaluate_bundle(
-                    bundle,
-                    request.deltas,
-                    draws_per_source_state=request.draws_per_source_state,
-                    seed=seed,
-                )
-                outcome = _RenderOutcome(request, raster, bundle, None)
-            except Exception as error:
-                outcome = _RenderOutcome(request, None, bundle, str(error))
-            if not stop_event.is_set():
-                outcomes.put(outcome)
-
+        result_kind = "settled result" if stage.materialize_result else "preview"
         self._set_status(
-            f"rendering {request.source_sample_count} $k_i$ states x "
-            f"{request.draws_per_source_state} mosaic draws with seed {seed}; "
-            "the latest released pose will be queued"
+            f"rendering {result_kind} for revision {stage.request.revision}: "
+            f"{stage.request.source_sample_count} $k_i$ states x "
+            f"{stage.draws_per_source_state} prefix draws; newer revisions cancel this stage"
         )
-        self._active_thread = threading.Thread(
-            target=run,
-            name="detector-render",
-            daemon=True,
-        )
-        self._active_thread.start()
+        self._worker.submit(stage)
 
     def _poll_render(self) -> None:
         if self._closed:
             return
+        presentation_error = (
+            self._open_gl_presenter.initialization_error
+            if self._open_gl_presenter is not None
+            else None
+        )
+        if self._open_gl_presenter is not None:
+            context_generation = self._open_gl_presenter.context_generation
+            if context_generation != self._open_gl_context_generation:
+                rerender = self._open_gl_context_generation > 0 or self._open_gl_failed
+                self._open_gl_context_generation = context_generation
+                self._open_gl_failed = False
+                if rerender:
+                    self._scheduler.cancel()
+                    self._scheduler.reset_latest()
+                    self._scheduler.submit(self._current_request(), settled=True)
+        if presentation_error is not None:
+            self._open_gl_failed = True
+            self._preview_pending = False
+            self._scheduler.cancel()
+        if self._preview_pending:
+            self._preview_pending = False
+            self._scheduler.submit(self._current_request(), settled=False)
         try:
             outcome = self._outcomes.get_nowait()
         except queue.Empty:
+            if presentation_error is None:
+                self._dispatch_next()
+            else:
+                self._set_status(
+                    "OpenGL presentation failed: "
+                    f"{presentation_error}; restart with --presentation-backend matplotlib"
+                )
             return
-        self._active_thread = None
-        if outcome.bundle is not None:
-            self._cached_bundle = outcome.bundle
-        current = self._current_request()
-        if outcome.error is not None and outcome.request == current:
-            self._set_status(f"requested render failed: {outcome.error}")
-        elif outcome.raster is not None and outcome.request == current:
-            self._show_raster(outcome.raster)
-            self._set_status(
-                f"settled {current.source_sample_count} $k_i$ x "
-                f"{current.draws_per_source_state} draws; pixel sampling "
-                f"{outcome.raster.wall_time_s:.3f} s"
-            )
+        completed_draw_count = (
+            outcome.raster.estimate.draws_per_source_state if outcome.raster is not None else None
+        )
+        if outcome.error is not None or outcome.cancelled:
+            accepted = self._scheduler.fail(outcome.stage)
         else:
-            self._set_status("discarded stale render; current settled image remains visible")
-        pending = self._pending_request
-        self._pending_request = None
-        if (
-            pending is not None
-            and pending != outcome.request
-            and pending == self._current_request()
-        ):
-            self._start_render(pending)
+            accepted = self._scheduler.complete(
+                outcome.stage,
+                completed_draw_count=completed_draw_count,
+            )
+        current = self._current_request()
+        if presentation_error is not None:
+            self._set_status(
+                "OpenGL presentation failed: "
+                f"{presentation_error}; restart with --presentation-backend matplotlib"
+            )
+        elif accepted and outcome.error is not None and outcome.stage.request == current:
+            self._scheduler.discard_pending()
+            self._set_status(f"requested render failed: {outcome.error}")
+        elif accepted and outcome.raster is not None and outcome.stage.request == current:
+            try:
+                self._show_raster(outcome.raster, outcome.texture)
+            except Exception as error:
+                self._scheduler.reset_latest()
+                self._set_status(f"presentation failed: {error}")
+            else:
+                estimate = outcome.raster.estimate
+                state = "settled" if outcome.stage.materialize_result else "preview"
+                self._set_status(
+                    f"{state} revision {current.revision}: {current.source_sample_count} $k_i$ x "
+                    f"{estimate.draws_per_source_state} draws in "
+                    f"{outcome.raster.wall_time_s:.3f} s"
+                )
+        elif outcome.cancelled or not accepted:
+            self._set_status("discarded superseded work; rendering the latest revision")
+        if presentation_error is None:
+            self._dispatch_next()
 
     def _reset(self, _event: object | None = None) -> None:
         self._suspend_updates = True
@@ -872,12 +1683,16 @@ class InteractiveDetectorViewer:
 
     def _on_close(self, _event: object) -> None:
         self._closed = True
-        self._pending_request = None
-        self._stop_event.set()
+        self._scheduler.cancel()
+        self._worker.close()
         self._poll_timer.stop()
+        if self._open_gl_presenter is not None:
+            self._open_gl_presenter.close()
 
     def _on_resize(self, _event: object) -> None:
         self._redraw_and_cache()
+        if self._open_gl_presenter is not None:
+            self._open_gl_presenter.sync_to_axes(self._image_axis)
 
     def show(self) -> None:
         from matplotlib import pyplot as plt
@@ -934,7 +1749,33 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=DEFAULT_DETECTOR_SEED,
         help="detector Monte Carlo seed, separate from the configured source seed",
     )
+    parser.add_argument(
+        "--execution-backend",
+        choices=("cuda", "cpu"),
+        default="cuda",
+        help="explicit forward Monte Carlo backend (default: cuda; no automatic fallback)",
+    )
+    parser.add_argument(
+        "--presentation-backend",
+        choices=("opengl", "matplotlib"),
+        default="opengl",
+        help="full-native raster presenter (default: opengl; matplotlib is the explicit fallback)",
+    )
     args = parser.parse_args(argv)
+    if args.presentation_backend == "opengl":
+        try:
+            import matplotlib
+            from PySide6.QtGui import QSurfaceFormat
+        except ImportError as error:
+            raise RuntimeError(
+                "OpenGL presentation requires the visualization extra; install it or pass "
+                "--presentation-backend matplotlib"
+            ) from error
+        surface_format = QSurfaceFormat()
+        surface_format.setVersion(3, 3)
+        surface_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        QSurfaceFormat.setDefaultFormat(surface_format)
+        matplotlib.use("qtagg", force=True)
     config = load_simulation_config(args.config.resolve(), repository_root=ROOT)
     source_sample_count = (
         config.source.sample_count if args.source_sample_count is None else args.source_sample_count
@@ -944,6 +1785,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         draws_per_source_state=args.draws_per_source_state,
         initial_source_sample_count=source_sample_count,
         detector_seed=args.seed,
+        execution_backend=args.execution_backend,
+        presentation_backend=args.presentation_backend,
     )
     viewer.show()
 

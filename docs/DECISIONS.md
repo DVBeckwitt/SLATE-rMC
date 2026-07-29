@@ -224,3 +224,32 @@ pool, event table, hit table, or point-deposition subsystem. Its distinct measur
 importance weights can have an infinite second moment, so replicate spread is diagnostic rather
 than a guaranteed Gaussian error bar. Independent refined latent integration remains the proof
 authority.
+
+## D036: Progressive execution is explicit and presentation is not a measure
+
+Contract API v12 keeps D035's estimator and physics unchanged while making reusable execution
+state explicit. `CompiledMonteCarloDetectorSampler` is mutable, thread-confined, and owned by one
+long-lived render worker; the detector model remains immutable. NumPy Philox reserves a fixed-width
+source/draw latent layout so the 1/4/8/requested-draw sequence is a true prefix. CPU execution uses
+at most four private full-native blocks with stable reduction. CUDA owns persistent packed state,
+deposits roots directly into one raw float64 accumulator, and fails closed when unavailable.
+
+Only unchanged source rows, active evaluator topology, rods, physics, detector calibration, sample
+support, film, and crystal mount may use geometry rebinding. A narrower detector-pose rebind also
+requires an unchanged sample pose and swaps only the compiled detector covectors, normal, and
+per-state ray-origin projection arrays; transport arrays remain resident and unchanged. A
+cancellation or execution failure returns no partial scientific result and discards contaminated
+mutable execution state before reuse. The interactive scheduler accepts output only from its latest
+revision.
+
+`MonteCarloDetectorPresentation` is a leased full-native float32 rendering frame,
+valid only until the sampler's next operation. The OpenGL path uploads it to one R32F texture and
+performs logarithmic color mapping in a shader. It is neither retained evidence nor a new measure;
+the authoritative snapshot remains the validated float64
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`. Matplotlib remains an explicit software
+choice, and neither execution nor presentation silently falls back.
+
+`PySide6-Essentials` is confined to the optional `visualization` extra. It is the smallest Qt
+distribution that supplies `QOpenGLWidget`, OpenGL functions/textures/shaders, and the Shiboken
+buffer pointer needed by the persistent R32F presenter. It is imported only when OpenGL
+presentation is selected and adds nothing to the core dependency or import path.

@@ -22,6 +22,7 @@ dependencies = [
 visualization = [
   "matplotlib>=3.9,<4",
   "Pillow>=12,<13",
+  "PySide6-Essentials>=6.8,<7",
 ]
 
 [dependency-groups]

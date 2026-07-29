@@ -242,17 +242,22 @@ runtime of the full incoherent ensemble is intended.
 Open the native-pixel detector view with sample/detector pose controls:
 
 ```powershell
-uv run --extra visualization python scripts/interactive_detector_viewer.py
+uv run --extra visualization python scripts/interactive_detector_viewer.py `
+  --execution-backend cuda `
+  --presentation-backend opengl
 ```
 
 The default Bi2Se3 view uses the configured 1,000 incident-wavevector states, 49 Monte Carlo mosaic
 draws per state, detector seed `20260728`, and the full 3,000 x 3,000 native detector. The two
 numerical controls are **incident-ray samples** (`N_ray`) and **mosaic draws per ki state** (`M`). A
 source row contains origin, direction, wavelength, and empirical weight; `M` controls only the
-stochastic detector estimator. While a control moves, the last settled image remains visible.
-Releasing a changed control starts the latest requested native-pixel render in a background thread.
-The fixed detector seed uses common source-index substreams across pose changes, reducing visual
-flicker while preserving the declared estimator. Press `R` to render, `0` to reset, or `Q` to close.
+stochastic detector estimator. Geometry and draw controls coalesce at 25 ms cadence into latest-only
+full-native previews with draw prefixes 1, 4, and 8; release appends the exact requested settled draw
+count without restarting an accepted prefix. A newer revision cancels unfinished work, and a stale
+frame cannot publish. Source-count changes still commit on release because they rebuild the source
+bundle. The fixed Philox seed preserves source/draw prefixes across pose and draw-count changes,
+reducing visual flicker while preserving the declared estimator. Press `R` to render, `0` to reset,
+or `Q` to close.
 
 Every geometry slider is a zero-based correction to the configured geometry. The labels use the
 original RA-SIM and manuscript vocabulary while distinguishing mechanical goniometer controls from
@@ -292,15 +297,35 @@ detector-coordinate quadrature, a PSF, or a calibrated detector response. Empty 
 sampled deposit at the chosen draw count. Configurations that disable detector-visible `m=0` are
 rejected because this viewer's contract is the all-`m` physical-rod catalogue.
 
-The streaming Monte Carlo estimator is currently CPU-only. Override its sample count, draw count,
-or detector seed explicitly when desired:
+CUDA execution and OpenGL presentation are separate explicit choices. CUDA keeps compiled physics
+and full-native image buffers resident between compatible geometry revisions; the OpenGL path
+uploads every native pixel as R32F and applies only the log color transform in its shader. Neither
+path silently falls back. Use the complete full-native CPU/Matplotlib proof path explicitly when
+needed:
+
+```powershell
+uv run --extra visualization python scripts/interactive_detector_viewer.py `
+  --execution-backend cpu `
+  --presentation-backend matplotlib
+```
+
+Override source count, settled draw count, or detector seed explicitly when desired:
 
 ```powershell
 uv run --extra visualization python scripts/interactive_detector_viewer.py `
   --ki-samples 1000 `
   --draws-per-ki 49 `
-  --seed 20260728
+  --seed 20260728 `
+  --execution-backend cuda `
+  --presentation-backend opengl
 ```
+
+Programmatic progressive callers use
+`detector.compile_monte_carlo_sampler(execution_backend="cuda", seed=...)`, then
+`advance_preview_to(1)`, `advance_preview_to(4)`, and `advance_to(requested)`. Preview arrays are
+leased presentation buffers and must be consumed before the sampler's next operation; only
+`advance_to` returns the immutable authoritative float64 result. Select `"cpu"` instead for the
+bounded software execution path.
 
 ## Position-free measured peak indexing
 

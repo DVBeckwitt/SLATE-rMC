@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: ordered_intensity_fit
+current_phase: fluid_detector_viewer
 
 tasks:
   - id: T00
@@ -92,3 +92,8 @@ tasks:
     branch: feat/caking-qspace
     status: DEFERRED_REPLAN
     depends_on: [T14]
+  - id: T19
+    file: tasks/19_fluid_detector_viewer.md
+    branch: codex/fluid-detector-viewer
+    status: READY
+    depends_on: [T07]

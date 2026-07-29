@@ -51,7 +51,7 @@ all contributing rod/orientation branches. Only the active detector panel is eva
   integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
   fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and the optional
-  streaming CPU Monte Carlo pixel-mass estimator.
+  progressive CPU/CUDA Monte Carlo pixel-mass estimator.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   quantitative pixel integration or display-only native-center density sampling. Its geometry-only
   input/context builders stop before structure strength or mosaic construction.
@@ -92,6 +92,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
    selected-center comparison, display sample, or requested detector integration. Its optional
    stochastic terminal samples the same latent/source physics and streams weighted roots directly
    into half-open native-pixel boxes.
+   `CompiledMonteCarloDetectorSampler` is an explicit mutable execution resource, never hidden state
+   on that immutable model. It retains a prefix-stable accumulator and either four-or-fewer stable
+   CPU blocks or one thread-confined persistent CUDA workspace.
 5. `configured_simulation` assembles those objects from one validated YAML document.
 6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
    structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
@@ -130,6 +133,14 @@ all contributing rod/orientation branches. Only the active detector panel is eva
     intensity recovery.
 13. Native-center rendering samples the final combined detector density once per native pixel. It
     is display-only `A^2/px^2`, not pixel-integrated mass, OSC counts, or a count-calibrated fit.
+14. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
+    worker. Detector-only controls compile one batched projection and swap only four projection
+    buffers; even after a nonzero sample correction they retain the already-bound incident
+    transport. Sample/goniometer controls rebuild incident transport and re-enumerate rods only
+    when validity topology changes. CUDA previews normalize the raw float64 accumulator into one
+    full-native float32 staging frame, and a persistent OpenGL R32F texture applies only
+    masking/log/colormap presentation. Matplotlib is an explicitly selected full-native software
+    fallback, never an automatic backend substitution.
 
 The scalar NumPy path is the readable oracle. Compiled CPU and CUDA kernels reuse immutable packed
 state and must reproduce it within the frozen tolerance. Device initialization and caches are never
@@ -141,8 +152,10 @@ module-global or import-time side effects.
 - Sample entrance geometry or material optics changes rebuild incident transport.
 - CIF, finite-stack, mosaic, wavelength, or sample/crystal orientation changes rebuild Bragg and
   detector evaluator state.
-- Detector pose, distance, pitch, shape, or either detector tilt rebuilds detector geometry and its
-  compiled evaluator, but not detector-independent structure amplitudes.
+- Detector rigid pose, distance, or either detector tilt uses the sampler's projection-only rebind
+  without rebuilding incident transport or detector-independent structure amplitudes. Detector
+  pixel pitch, shape, or reference-coordinate calibration changes invalidate the compiled sampler
+  and rebuild detector state.
 - The tagged-function fitters never rasterize a detector field. The OSC-series
   `ExactTagGeometryModel` constructs neither mosaic probability nor structure strength. The older
   `ContinuousDetectorGeometryModel` may receive already prepared intensity state, but its exact-tag
@@ -167,6 +180,6 @@ module-global or import-time side effects.
 There is no retained mosaic-orientation batch, sampled scattering-candidate pool, scattering-event
 table, outgoing-event table, hit table, general point depositor, bilinear rasterizer, discrete
 sphere texture, compatibility adapter, or parallel legacy simulator. The optional Monte Carlo
-terminal holds only one source state's small orientation vector while streaming weighted roots into
-the final image. Historical equations remain only in the immutable reference pack and proof
-comparisons.
+terminal generates one fixed-width source/draw latent matrix and streams roots directly into the
+final image; it retains no orientation/root/event Cartesian product. Historical equations remain
+only in the immutable reference pack and proof comparisons.
