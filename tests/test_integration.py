@@ -4263,7 +4263,7 @@ def test_normalized_field_freezes_masks_losses_divide_order_and_phi_permutation(
     )
 
 
-def test_interactive_detector_raster_samples_total_density_without_pixel_integration() -> None:
+def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> None:
     from types import SimpleNamespace
 
     viewer = runpy.run_path(
@@ -4271,32 +4271,26 @@ def test_interactive_detector_raster_samples_total_density_without_pixel_integra
     )
     sample_detector_raster = viewer["sample_detector_raster"]
 
-    class ContinuousDetectorSpy:
-        rods = (object(), object(), object())
-        source_state_count = 7
-
+    class MonteCarloDetectorSpy:
         def __init__(self) -> None:
-            self.call: tuple[np.ndarray, np.ndarray, str] | None = None
+            self.call: tuple[int, int] | None = None
+            self.estimate = SimpleNamespace(image_A2=np.asarray(((0.0, 1.0, 0.0), (2.0, 0.0, 3.0))))
+
+        def sample_native_pixel_mass(
+            self,
+            *,
+            draws_per_source_state: int,
+            seed: int,
+        ) -> object:
+            self.call = (draws_per_source_state, seed)
+            return self.estimate
 
         def evaluate_detector_density_all_roots(
             self,
-            column_px: np.ndarray,
-            row_px: np.ndarray,
-            *,
-            execution_backend: str,
+            *_args: object,
+            **_kwargs: object,
         ) -> object:
-            self.call = (column_px.copy(), row_px.copy(), execution_backend)
-            density = column_px + 10.0 * row_px
-            caustic = np.zeros(density.shape, dtype=np.bool_)
-            caustic[1, 0] = True
-            return SimpleNamespace(
-                density_A2_per_px2=density,
-                valid_source_count=np.asarray(((7, 0), (1, 0)), dtype=np.int64),
-                caustic=caustic,
-                root_policy="all_retained_roots.v1",
-                execution_backend="numba_cpu_source_averaged.v1",
-                execution_device=None,
-            )
+            raise AssertionError("the display must not sample continuous detector density")
 
         def evaluate_detector_coordinates_all_roots(
             self, *_args: object, **_kwargs: object
@@ -4306,30 +4300,20 @@ def test_interactive_detector_raster_samples_total_density_without_pixel_integra
         def integrate_native_pixels(self, **_kwargs: object) -> object:
             raise AssertionError("the display must not integrate detector pixels")
 
-    detector = ContinuousDetectorSpy()
+    detector = MonteCarloDetectorSpy()
     raster = sample_detector_raster(
         detector,
-        detector_shape_rc=(6, 10),
-        display_samples_per_axis=2,
-        execution_backend="cpu",
+        draws_per_source_state=49,
+        seed=20260728,
     )
 
-    assert detector.call is not None
-    column_px, row_px, backend = detector.call
-    np.testing.assert_array_equal(column_px, np.array([[2.0, 7.0], [2.0, 7.0]]))
-    np.testing.assert_array_equal(row_px, np.array([[1.0, 1.0], [4.0, 4.0]]))
-    np.testing.assert_array_equal(raster.density_A2_per_px2, column_px + 10.0 * row_px)
+    assert detector.call == (49, 20260728)
+    assert raster.estimate is detector.estimate
     np.testing.assert_array_equal(
-        raster.valid,
-        np.asarray(((True, False), (True, False)), dtype=np.bool_),
+        raster.estimate.image_A2,
+        np.asarray(((0.0, 1.0, 0.0), (2.0, 0.0, 3.0))),
     )
-    np.testing.assert_array_equal(raster.caustic, np.array([[False, False], [True, False]]))
-    assert backend == "cpu"
-    assert raster.source_state_count == 7
-    assert raster.physical_rod_count == 3
-    assert raster.root_policy == "all_retained_roots.v1"
-    assert raster.measure_id == "raw_detector_coordinate_density_A2_per_px2.v1"
-    assert not hasattr(raster, "per_rod_density_A2_per_px2")
+    assert raster.wall_time_s >= 0.0
 
 
 def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:
@@ -4416,8 +4400,8 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
     changed_rod_count = evaluate_bundle(
         bundle,
         deltas,
-        display_samples_per_axis=2,
-        execution_backend="cpu",
+        draws_per_source_state=2,
+        seed=7,
     )
     assert changed_rod_count == len(changed_rods)
 

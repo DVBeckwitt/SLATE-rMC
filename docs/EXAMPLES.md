@@ -237,23 +237,22 @@ Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on b
 landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
 runtime of the full incoherent ensemble is intended.
 
-## Interactive continuous detector viewer
+## Interactive Monte Carlo detector viewer
 
-Open a medium-resolution detector view with live sample/detector pose controls:
+Open the native-pixel detector view with sample/detector pose controls:
 
 ```powershell
 uv run --extra visualization python scripts/interactive_detector_viewer.py
 ```
 
-The viewer starts with 25 requested incident-ray phase-space samples and 128 continuous
-detector-coordinate display samples per axis for the settled field. The two numerical controls are
-named **incident-ray samples** (`N_ray`) and **display samples per axis** (`N_disp`): a source sample
-contains origin, direction, and wavelength, while the display count is only an ephemeral view of
-the continuous function. While a pose control moves, one incident-ray state samples the unbinned
-total rod/root density on a fixed 32 x 32 grid for responsive feedback. Releasing a changed control
-starts the requested incoherent source-average render in a background thread; the title always
-distinguishes the one-state preview from the completed settled total density. Press `R` to render,
-`0` to reset, or `Q` to close.
+The default Bi2Se3 view uses the configured 1,000 incident-wavevector states, 49 Monte Carlo mosaic
+draws per state, detector seed `20260728`, and the full 3,000 x 3,000 native detector. The two
+numerical controls are **incident-ray samples** (`N_ray`) and **mosaic draws per ki state** (`M`). A
+source row contains origin, direction, wavelength, and empirical weight; `M` controls only the
+stochastic detector estimator. While a control moves, the last settled image remains visible.
+Releasing a changed control starts the latest requested native-pixel render in a background thread.
+The fixed detector seed uses common source-index substreams across pose changes, reducing visual
+flicker while preserving the declared estimator. Press `R` to render, `0` to reset, or `Q` to close.
 
 Every geometry slider is a zero-based correction to the configured geometry. The labels use the
 original RA-SIM and manuscript vocabulary while distinguishing mechanical goniometer controls from
@@ -284,28 +283,24 @@ parameters or add the independent beam offset `z_B`. These manual forward contro
 `(alpha, psi_g)` separately identifiable from one measured image; that requires multiple commanded
 goniometer angles and remains outside the current fitting contract.
 
-Every view evaluates all selected incident-ray states, elastically reachable physical `(h,k)` rods,
-and retained Ewald roots, including only the certified detector-visible nonzero `m=0` support. They
-are reduced into one continuous detector density before any display-shaped result crosses the
-rendering boundary; no per-rod detector raster is returned. The inverse pullback starts at the
-active panel, so no off-detector Ewald mesh is built. Values are center samples of
-`raw_detector_coordinate_density_A2_per_px2.v1`; the smoothly interpolated raster is display-only
-and is not detector-pixel integration, a PSF, or a normalized physical result.
-Configurations that disable detector-visible `m=0` are rejected because this viewer's contract is
-the all-`m` physical-rod catalogue.
+Every view samples the declared mosaic distribution for all selected incident-wavevector states,
+enumerates every elastically reachable physical `(h,k)` rod and retained Ewald root, and sums the
+weighted raw mass directly into the exact native `[row, column]` pixel owner. The displayed array is
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`; nearest-pixel rendering and the logarithmic
+color scale do not change or normalize it. Values are raw `A2` mass estimates, not photon counts,
+detector-coordinate quadrature, a PSF, or a calibrated detector response. Empty pixels received no
+sampled deposit at the chosen draw count. Configurations that disable detector-visible `m=0` are
+rejected because this viewer's contract is the all-`m` physical-rod catalogue.
 
-The requested-render backend inherits the explicit YAML setting. Override it without fallback when
-desired:
+The streaming Monte Carlo estimator is currently CPU-only. Override its sample count, draw count,
+or detector seed explicitly when desired:
 
 ```powershell
 uv run --extra visualization python scripts/interactive_detector_viewer.py `
-  --source-samples 25 `
-  --display-samples-per-axis 128 `
-  --backend cuda
+  --ki-samples 1000 `
+  --draws-per-ki 49 `
+  --seed 20260728
 ```
-
-The earlier `--ki-samples` and `--raster-size` spellings remain command-line aliases; the canonical
-names state what is actually sampled.
 
 ## Position-free measured peak indexing
 

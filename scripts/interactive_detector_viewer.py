@@ -1,4 +1,4 @@
-"""Interactively view the continuous detector-coordinate density."""
+"""Interactively view Monte Carlo detector-native pixel mass."""
 
 from __future__ import annotations
 
@@ -31,15 +31,17 @@ from rasim_next.pipeline.configured_simulation import (
     build_source_averaged_detector,
     load_simulation_config,
 )
-from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_detector import (
+    MonteCarloDetectorPixelMass,
+    SourceAveragedDetectorEwaldMeasure,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "bi2se3_simulation.yaml"
-DEFAULT_SOURCE_SAMPLE_COUNT = 25
-LIVE_DISPLAY_SAMPLES_PER_AXIS = 32
+DEFAULT_DRAWS_PER_SOURCE_STATE = 49
+DEFAULT_DETECTOR_SEED = 20260728
 
 FloatArray = NDArray[np.float64]
-BoolArray = NDArray[np.bool_]
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,134 +210,32 @@ def apply_geometry_deltas(
 
 @dataclass(frozen=True, slots=True)
 class DetectorRaster:
-    """Display-only center samples of the continuous detector density."""
+    """Display wrapper around one native-pixel Monte Carlo estimate."""
 
-    density_A2_per_px2: FloatArray
-    valid: BoolArray
-    caustic: BoolArray
-    column_centers_px: FloatArray
-    row_centers_px: FloatArray
-    source_state_count: int
-    physical_rod_count: int
-    root_policy: str
-    execution_backend: str
-    execution_device: str | None
+    estimate: MonteCarloDetectorPixelMass
     wall_time_s: float
-    measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
 
     def __post_init__(self) -> None:
-        density = np.array(self.density_A2_per_px2, dtype=np.float64, copy=True, order="C")
-        valid = np.array(self.valid, dtype=np.bool_, copy=True, order="C")
-        caustic = np.array(self.caustic, dtype=np.bool_, copy=True, order="C")
-        column = np.array(self.column_centers_px, dtype=np.float64, copy=True, order="C")
-        row = np.array(self.row_centers_px, dtype=np.float64, copy=True, order="C")
-        expected_shape = (row.size, column.size)
-        if density.shape != expected_shape or valid.shape != expected_shape:
-            raise ValueError("detector raster arrays must use [row, column] ordering")
-        if caustic.shape != expected_shape or np.any(np.isnan(density)):
-            raise ValueError("detector raster must have aligned caustic flags and no NaN")
-        if np.any(density < 0.0) or not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-            raise ValueError(
-                "detector raster coordinates and density must be nonnegative and finite"
-            )
-        if self.source_state_count < 1 or self.physical_rod_count < 1:
-            raise ValueError("detector raster requires source states and physical rods")
-        if self.root_policy != "all_retained_roots.v1":
-            raise ValueError("detector raster must include every retained root")
-        if self.measure_id != "raw_detector_coordinate_density_A2_per_px2.v1":
-            raise ValueError("unsupported detector raster measure")
         if not math.isfinite(self.wall_time_s) or self.wall_time_s < 0.0:
             raise ValueError("wall_time_s must be finite and nonnegative")
-        for value in (density, valid, caustic, column, row):
-            value.setflags(write=False)
-        object.__setattr__(self, "density_A2_per_px2", density)
-        object.__setattr__(self, "valid", valid)
-        object.__setattr__(self, "caustic", caustic)
-        object.__setattr__(self, "column_centers_px", column)
-        object.__setattr__(self, "row_centers_px", row)
 
 
 def sample_detector_raster(
     detector: SourceAveragedDetectorEwaldMeasure,
     *,
-    detector_shape_rc: tuple[int, int],
-    display_samples_per_axis: int,
-    execution_backend: str,
+    draws_per_source_state: int,
+    seed: int,
 ) -> DetectorRaster:
-    """Sample active-panel coordinates after the complete source/rod/root reduction."""
+    """Sample the mosaic law and sum weighted roots into native pixels."""
 
-    column_centers, row_centers, column_grid, row_grid = _detector_sample_grid(
-        detector_shape_rc,
-        display_samples_per_axis,
-    )
-    if execution_backend not in {"cpu", "cuda"}:
-        raise ValueError("execution_backend must be 'cpu' or 'cuda'")
     start = perf_counter()
-    evaluated = detector.evaluate_detector_density_all_roots(
-        column_grid,
-        row_grid,
-        execution_backend=execution_backend,
+    estimate = detector.sample_native_pixel_mass(
+        draws_per_source_state=draws_per_source_state,
+        seed=seed,
     )
-    wall_time_s = perf_counter() - start
     return DetectorRaster(
-        density_A2_per_px2=evaluated.density_A2_per_px2,
-        valid=evaluated.valid_source_count > 0,
-        caustic=evaluated.caustic,
-        column_centers_px=column_centers,
-        row_centers_px=row_centers,
-        source_state_count=detector.source_state_count,
-        physical_rod_count=len(detector.rods),
-        root_policy=evaluated.root_policy,
-        execution_backend=evaluated.execution_backend,
-        execution_device=evaluated.execution_device,
-        wall_time_s=wall_time_s,
-    )
-
-
-def _detector_sample_grid(
-    detector_shape_rc: tuple[int, int],
-    display_samples_per_axis: int,
-) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-    if type(display_samples_per_axis) is not int or display_samples_per_axis < 2:
-        raise ValueError("display_samples_per_axis must be an integer of at least two")
-    rows, columns = detector_shape_rc
-    if type(rows) is not int or type(columns) is not int or rows < 1 or columns < 1:
-        raise ValueError("detector_shape_rc must contain positive integers")
-    column_edges = np.linspace(-0.5, columns - 0.5, display_samples_per_axis + 1)
-    row_edges = np.linspace(-0.5, rows - 0.5, display_samples_per_axis + 1)
-    column_centers = 0.5 * (column_edges[:-1] + column_edges[1:])
-    row_centers = 0.5 * (row_edges[:-1] + row_edges[1:])
-    column_grid, row_grid = np.meshgrid(column_centers, row_centers)
-    return column_centers, row_centers, column_grid, row_grid
-
-
-def _zero_detector_raster(
-    *,
-    detector_shape_rc: tuple[int, int],
-    display_samples_per_axis: int,
-    source_state_count: int,
-    physical_rod_count: int,
-    execution_backend: str,
-) -> DetectorRaster:
-    column_centers, row_centers, column_grid, _ = _detector_sample_grid(
-        detector_shape_rc,
-        display_samples_per_axis,
-    )
-    if execution_backend not in {"cpu", "cuda"}:
-        raise ValueError("execution_backend must be 'cpu' or 'cuda'")
-    shape = column_grid.shape
-    return DetectorRaster(
-        density_A2_per_px2=np.zeros(shape, dtype=np.float64),
-        valid=np.zeros(shape, dtype=np.bool_),
-        caustic=np.zeros(shape, dtype=np.bool_),
-        column_centers_px=column_centers,
-        row_centers_px=row_centers,
-        source_state_count=source_state_count,
-        physical_rod_count=physical_rod_count,
-        root_policy="all_retained_roots.v1",
-        execution_backend=execution_backend,
-        execution_device=None,
-        wall_time_s=0.0,
+        estimate=estimate,
+        wall_time_s=perf_counter() - start,
     )
 
 
@@ -365,12 +265,11 @@ def _evaluate_bundle(
     bundle: _DetectorBundle,
     deltas: GeometryDeltas,
     *,
-    display_samples_per_axis: int,
-    execution_backend: str,
+    draws_per_source_state: int,
+    seed: int,
 ) -> DetectorRaster:
     if deltas == GeometryDeltas.zero():
         detector = bundle.detector
-        instrument = bundle.inputs.instrument
     else:
         configured_axis_rotations = bundle.inputs.config.instrument.axis_rotations
         corrected_axis_rotations = _corrected_goniometer_axis_rotations(
@@ -384,13 +283,7 @@ def _evaluate_bundle(
         )
         incident = build_incident_states(bundle.inputs.samples, bundle.inputs.material, instrument)
         if not np.any(incident.states.valid):
-            return _zero_detector_raster(
-                detector_shape_rc=instrument.detector_shape_rc,
-                display_samples_per_axis=display_samples_per_axis,
-                source_state_count=incident.states.incident_state_id.size,
-                physical_rod_count=len(bundle.detector.rods),
-                execution_backend=execution_backend,
-            )
+            raise ValueError("geometry produced no valid incident state")
         if np.array_equal(incident.states.valid, bundle.inputs.incident.states.valid):
             detector = bundle.detector.rebind_geometry(incident=incident, instrument=instrument)
         else:
@@ -419,9 +312,8 @@ def _evaluate_bundle(
             detector = build_source_averaged_detector(changed_inputs)
     return sample_detector_raster(
         detector,
-        detector_shape_rc=instrument.detector_shape_rc,
-        display_samples_per_axis=display_samples_per_axis,
-        execution_backend=execution_backend,
+        draws_per_source_state=draws_per_source_state,
+        seed=seed,
     )
 
 
@@ -429,7 +321,7 @@ def _evaluate_bundle(
 class _RenderRequest:
     revision: int
     source_sample_count: int
-    display_samples_per_axis: int
+    draws_per_source_state: int
     deltas: GeometryDeltas
 
 
@@ -538,24 +430,24 @@ _CONTROL_SPECS = (
 
 
 class InteractiveDetectorViewer:
-    """Matplotlib controller with a fast one-state preview and settled total density."""
+    """Matplotlib controller for settled Monte Carlo native-pixel mass."""
 
     def __init__(
         self,
         config: SimulationConfiguration,
         *,
-        display_samples_per_axis: int,
+        draws_per_source_state: int,
         initial_source_sample_count: int,
-        render_backend: str,
+        detector_seed: int,
     ) -> None:
         from matplotlib import pyplot as plt
         from matplotlib.colors import LogNorm
         from matplotlib.widgets import Button, Slider
 
         self._config = config
-        self._initial_display_samples_per_axis = display_samples_per_axis
+        self._initial_draws_per_source_state = draws_per_source_state
         self._initial_source_sample_count = initial_source_sample_count
-        self._render_backend = render_backend
+        self._detector_seed = detector_seed
         self._revision = 0
         self._closed = False
         self._active_thread: threading.Thread | None = None
@@ -570,41 +462,31 @@ class InteractiveDetectorViewer:
         self._slider_artists: dict[int, tuple[object, tuple[object, ...]]] = {}
         self._slider_backgrounds: dict[int, tuple[object, object]] = {}
 
-        build_start = perf_counter()
-        self._preview_bundle = _build_bundle(config, 1)
-        initial_raster = _evaluate_bundle(
-            self._preview_bundle,
-            GeometryDeltas.zero(),
-            display_samples_per_axis=LIVE_DISPLAY_SAMPLES_PER_AXIS,
-            execution_backend="cpu",
-        )
-        build_time = perf_counter() - build_start
-
         self.figure = plt.figure(figsize=(15.5, 9.0), constrained_layout=False)
         self._image_axis = self.figure.add_axes((0.055, 0.08, 0.59, 0.84))
-        rows, columns = self._preview_bundle.inputs.instrument.detector_shape_rc
+        rows, columns = config.instrument.detector_shape_rc
         self._cmap = plt.get_cmap("magma").copy()
         self._cmap.set_bad("#111217")
-        initial_display, low, high = self._display_values(initial_raster)
         self._image = self._image_axis.imshow(
-            initial_display,
+            np.ma.masked_all((1, 1), dtype=np.float64),
             origin="upper",
             extent=(-0.5, columns - 0.5, rows - 0.5, -0.5),
-            interpolation="bilinear",
+            interpolation="nearest",
             rasterized=True,
             cmap=self._cmap,
-            norm=LogNorm(vmin=low, vmax=high),
+            norm=LogNorm(vmin=1.0e-8, vmax=1.0, clip=True),
             aspect="equal",
         )
         self._image.set_animated(self.figure.canvas.supports_blit)
         self._image_axis.title.set_animated(self.figure.canvas.supports_blit)
-        self._image_axis.set_xlabel("detector column (continuous native coordinate, px)")
-        self._image_axis.set_ylabel("detector row (continuous native coordinate, px)")
+        self._image_axis.set_title("MONTE CARLO NATIVE PIXEL MASS: rendering requested pose")
+        self._image_axis.set_xlabel("detector column (native pixel)")
+        self._image_axis.set_ylabel("detector row (native pixel)")
         self._colorbar = self.figure.colorbar(
             self._image,
             ax=self._image_axis,
             pad=0.02,
-            label=r"total raw detector density ($\AA^2$/px$^2$; display log scale)",
+            label=r"weighted raw detector-pixel mass estimate ($\AA^2$; display log scale)",
         )
 
         self._sliders: dict[str, Slider] = {}
@@ -631,7 +513,9 @@ class InteractiveDetectorViewer:
                 valinit=0.0,
             )
             self._register_slider(slider)
-            slider.on_changed(lambda value, active=slider: self._on_geometry_change(value, active))
+            slider.on_changed(
+                lambda value, active=slider: self._on_render_setting_change(value, active)
+            )
             self._sliders[spec.field_name] = slider
         source_samples_y = 0.235
         self.figure.text(
@@ -657,27 +541,27 @@ class InteractiveDetectorViewer:
                 value, active
             )
         )
-        display_samples_y = 0.285
+        detector_draws_y = 0.285
         self.figure.text(
             0.70,
-            display_samples_y + slider_label_offset,
-            r"display samples $N_{\rm disp}$ / axis",
+            detector_draws_y + slider_label_offset,
+            r"mosaic draws per $k_i$ state $M$",
             ha="left",
             va="bottom",
             fontsize=9,
         )
-        display_samples_axis = self.figure.add_axes((0.70, display_samples_y, 0.265, slider_height))
-        self._display_sample_slider = Slider(
-            display_samples_axis,
+        detector_draws_axis = self.figure.add_axes((0.70, detector_draws_y, 0.265, slider_height))
+        self._detector_draw_slider = Slider(
+            detector_draws_axis,
             "",
-            32,
-            256,
-            valinit=display_samples_per_axis,
-            valstep=16,
+            1,
+            max(256, draws_per_source_state * 4),
+            valinit=draws_per_source_state,
+            valstep=1,
         )
-        self._register_slider(self._display_sample_slider)
-        self._display_sample_slider.on_changed(
-            lambda value, active=self._display_sample_slider: self._on_render_setting_change(
+        self._register_slider(self._detector_draw_slider)
+        self._detector_draw_slider.on_changed(
+            lambda value, active=self._detector_draw_slider: self._on_render_setting_change(
                 value, active
             )
         )
@@ -704,9 +588,8 @@ class InteractiveDetectorViewer:
         self.figure.text(
             0.70,
             0.012,
-            "Total source/rod/root density at each coordinate; no pixels integrated.\n"
-            f"Drag: {LIVE_DISPLAY_SAMPLES_PER_AXIS}x"
-            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} one-state preview. Release: requested render.\n"
+            "Weighted roots sum directly into native pixels; no detector-coordinate quadrature.\n"
+            "Drag keeps the settled image. Release renders the latest requested pose.\n"
             "All deltas are relative to the configured pose.\n"
             "Keys: R render, 0 reset, Q close.",
             ha="left",
@@ -722,11 +605,7 @@ class InteractiveDetectorViewer:
         self._poll_timer = self.figure.canvas.new_timer(interval=100)
         self._poll_timer.add_callback(self._poll_render)
         self._poll_timer.start()
-        self._show_raster(initial_raster, requested_render=False)
-        self._set_status(
-            f"ready; initial build + warm preview {build_time:.2f} s; "
-            f"requested-render backend={render_backend}"
-        )
+        self._set_status("ready; rendering the configured Monte Carlo pixel image")
         self._redraw_and_cache()
         self._request_render()
 
@@ -737,27 +616,21 @@ class InteractiveDetectorViewer:
         return _RenderRequest(
             revision=self._revision,
             source_sample_count=round(self._source_sample_slider.val),
-            display_samples_per_axis=round(self._display_sample_slider.val),
+            draws_per_source_state=round(self._detector_draw_slider.val),
             deltas=self._deltas(),
         )
 
     @staticmethod
     def _display_values(raster: DetectorRaster) -> tuple[np.ma.MaskedArray, float, float]:
-        density = raster.density_A2_per_px2
-        finite_positive = density[np.isfinite(density) & (density > 0.0) & raster.valid]
-        high = float(np.max(finite_positive)) if finite_positive.size else 1.0
-        low = max(
-            float(np.quantile(finite_positive, 0.001)) if finite_positive.size else high * 1.0e-8,
-            high * 1.0e-8,
-        )
-        display = np.where(np.isposinf(density), high, density)
-        masked = np.ma.array(display, mask=~raster.valid | (display < low))
-        return masked, low, high
-
-    def _display_values_on_current_scale(self, raster: DetectorRaster) -> np.ma.MaskedArray:
-        high = float(self._image.norm.vmax)
-        display = np.where(np.isposinf(raster.density_A2_per_px2), high, raster.density_A2_per_px2)
-        return np.ma.array(display, mask=~raster.valid | (display <= 0.0))
+        image_A2 = raster.estimate.image_A2
+        positive = image_A2[image_A2 > 0.0]
+        if not positive.size:
+            return np.ma.masked_all(image_A2.shape), 1.0e-8, 1.0
+        high = float(np.max(positive))
+        low = max(float(np.min(positive)), high * 1.0e-8)
+        if low >= high:
+            low = max(np.finfo(np.float64).tiny, 0.1 * high)
+        return np.ma.array(image_A2, mask=image_A2 <= 0.0), low, high
 
     def _cache_backgrounds(self) -> None:
         from matplotlib.transforms import Bbox
@@ -844,68 +717,25 @@ class InteractiveDetectorViewer:
             axis.draw_artist(artist)
         self.figure.canvas.blit(axis.bbox if blit_bbox is None else blit_bbox)
 
-    def _show_raster(self, raster: DetectorRaster, *, requested_render: bool) -> None:
+    def _show_raster(self, raster: DetectorRaster) -> None:
         from matplotlib.colors import LogNorm
 
-        if requested_render:
-            display, low, high = self._display_values(raster)
-        else:
-            display = self._display_values_on_current_scale(raster)
-            low = high = 0.0
+        display, low, high = self._display_values(raster)
         self._image.set_data(display)
-        if requested_render:
-            self._image.set_norm(LogNorm(vmin=low, vmax=high))
-            self._colorbar.update_normal(self._image)
-        state = "SETTLED TOTAL DENSITY" if requested_render else "LIVE 1-STATE TOTAL DENSITY"
-        device = f" on {raster.execution_device}" if raster.execution_device else ""
+        self._image.set_norm(LogNorm(vmin=low, vmax=high, clip=True))
+        self._colorbar.update_normal(self._image)
+        estimate = raster.estimate
         self._image_axis.set_title(
-            f"{state}: {raster.source_state_count} incident-ray states, "
-            f"{raster.physical_rod_count} physical rods (all m), all retained roots\n"
-            f"{raster.column_centers_px.size}x{raster.row_centers_px.size} continuous samples; "
-            f"{raster.execution_backend}{device}; density eval {raster.wall_time_s:.3f} s"
+            f"MONTE CARLO NATIVE PIXEL MASS: {estimate.source_state_count} $k_i$ states x "
+            f"{estimate.draws_per_source_state} draws, {len(estimate.rods)} physical rods\n"
+            f"{estimate.visible_hit_count:,} visible root deposits; seed {estimate.seed}; "
+            f"{raster.wall_time_s:.3f} s; total {estimate.total_detector_mass_A2:.6g} $\\AA^2$"
         )
-        if requested_render:
-            self._redraw_and_cache()
-        else:
-            self._blit_axis(
-                self._image_axis,
-                self._image_background,
-                self._image,
-                self._image_axis.title,
-            )
+        self._redraw_and_cache()
 
     def _set_status(self, text: str) -> None:
         self._status.set_text(text)
         self._blit_axis(self._status_axis, self._status_background, self._status)
-
-    def _on_geometry_change(self, _value: float, slider: object | None = None) -> None:
-        if self._suspend_updates or self._closed:
-            return
-        if slider is not None:
-            self._draw_slider(slider)
-        self._revision += 1
-        self._slider_dirty = True
-        request = self._current_request()
-        self._set_status(
-            f"updating {LIVE_DISPLAY_SAMPLES_PER_AXIS}x"
-            f"{LIVE_DISPLAY_SAMPLES_PER_AXIS} live one-state preview; "
-            f"requested render={request.source_sample_count} incident rays"
-        )
-        try:
-            raster = _evaluate_bundle(
-                self._preview_bundle,
-                request.deltas,
-                display_samples_per_axis=LIVE_DISPLAY_SAMPLES_PER_AXIS,
-                execution_backend="cpu",
-            )
-        except (TypeError, ValueError, RuntimeError) as error:
-            self._set_status(f"preview rejected: {error}")
-            return
-        self._show_raster(raster, requested_render=False)
-        self._set_status(
-            f"live preview density evaluation {raster.wall_time_s:.3f} s; "
-            f"release to render {request.source_sample_count} incident rays"
-        )
 
     def _on_render_setting_change(
         self,
@@ -920,9 +750,8 @@ class InteractiveDetectorViewer:
         self._slider_dirty = True
         request = self._current_request()
         self._set_status(
-            f"release to render {request.source_sample_count} incident rays at "
-            f"{request.display_samples_per_axis}x{request.display_samples_per_axis}; "
-            "live field unchanged"
+            f"release to render {request.source_sample_count} $k_i$ states x "
+            f"{request.draws_per_source_state} mosaic draws; settled image unchanged"
         )
 
     def _on_button_release(self, _event: object) -> None:
@@ -937,9 +766,8 @@ class InteractiveDetectorViewer:
         if self._active_thread is not None:
             self._pending_request = request
             self._set_status(
-                "render running; queued latest "
-                f"{request.display_samples_per_axis}x{request.display_samples_per_axis} "
-                f"pose with {request.source_sample_count} incident rays"
+                f"render running; queued latest {request.source_sample_count} $k_i$ states x "
+                f"{request.draws_per_source_state} draws"
             )
             return
         self._start_render(request)
@@ -947,7 +775,7 @@ class InteractiveDetectorViewer:
     def _start_render(self, request: _RenderRequest) -> None:
         cached = self._cached_bundle
         config = self._config
-        backend = self._render_backend
+        seed = self._detector_seed
         stop_event = self._stop_event
         outcomes = self._outcomes
 
@@ -966,8 +794,8 @@ class InteractiveDetectorViewer:
                 raster = _evaluate_bundle(
                     bundle,
                     request.deltas,
-                    display_samples_per_axis=request.display_samples_per_axis,
-                    execution_backend=backend,
+                    draws_per_source_state=request.draws_per_source_state,
+                    seed=seed,
                 )
                 outcome = _RenderOutcome(request, raster, bundle, None)
             except Exception as error:
@@ -976,9 +804,9 @@ class InteractiveDetectorViewer:
                 outcomes.put(outcome)
 
         self._set_status(
-            f"rendering {request.source_sample_count} incident rays at "
-            f"{request.display_samples_per_axis}x{request.display_samples_per_axis} "
-            f"on {backend}; the latest released pose will be queued"
+            f"rendering {request.source_sample_count} $k_i$ states x "
+            f"{request.draws_per_source_state} mosaic draws with seed {seed}; "
+            "the latest released pose will be queued"
         )
         self._active_thread = threading.Thread(
             target=run,
@@ -1001,13 +829,14 @@ class InteractiveDetectorViewer:
         if outcome.error is not None and outcome.request == current:
             self._set_status(f"requested render failed: {outcome.error}")
         elif outcome.raster is not None and outcome.request == current:
-            self._show_raster(outcome.raster, requested_render=True)
+            self._show_raster(outcome.raster)
             self._set_status(
-                f"settled {current.source_sample_count}-state total density; "
-                f"density evaluation {outcome.raster.wall_time_s:.3f} s"
+                f"settled {current.source_sample_count} $k_i$ x "
+                f"{current.draws_per_source_state} draws; pixel sampling "
+                f"{outcome.raster.wall_time_s:.3f} s"
             )
         else:
-            self._set_status("discarded stale render; current pose remains in live preview")
+            self._set_status("discarded stale render; current settled image remains visible")
         pending = self._pending_request
         self._pending_request = None
         if (
@@ -1023,11 +852,11 @@ class InteractiveDetectorViewer:
             for slider in self._sliders.values():
                 slider.set_val(0.0)
             self._source_sample_slider.set_val(self._initial_source_sample_count)
-            self._display_sample_slider.set_val(self._initial_display_samples_per_axis)
+            self._detector_draw_slider.set_val(self._initial_draws_per_source_state)
         finally:
             self._suspend_updates = False
         self._redraw_and_cache()
-        self._on_geometry_change(0.0)
+        self._on_render_setting_change(0.0)
         self._request_render()
 
     def _on_key_press(self, event: object) -> None:
@@ -1066,11 +895,21 @@ def _positive_integer(value: str) -> int:
     return result
 
 
+def _detector_seed(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("seed must be an integer") from error
+    if not 0 <= result < 2**64:
+        raise argparse.ArgumentTypeError("seed must lie in [0, 2**64)")
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Interactively sample the all-root continuous detector function without pixel "
-            "integration."
+            "Interactively sample the mosaic distribution and sum weighted roots into native "
+            "detector pixels."
         )
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -1079,32 +918,32 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--ki-samples",
         dest="source_sample_count",
         type=_positive_integer,
-        default=DEFAULT_SOURCE_SAMPLE_COUNT,
-        help="incident-ray phase-space samples (default: 25)",
+        help="incident-wavevector states (default: configured source count)",
     )
     parser.add_argument(
-        "--display-samples-per-axis",
-        "--raster-size",
-        dest="display_samples_per_axis",
+        "--draws-per-ki",
+        "--draws-per-source-state",
+        dest="draws_per_source_state",
         type=_positive_integer,
-        default=128,
-        help="settled continuous display samples per detector axis (default: 128)",
+        default=DEFAULT_DRAWS_PER_SOURCE_STATE,
+        help="Monte Carlo mosaic draws for each fixed ki state (default: 49)",
     )
-    parser.add_argument("--backend", choices=("cpu", "cuda"))
+    parser.add_argument(
+        "--seed",
+        type=_detector_seed,
+        default=DEFAULT_DETECTOR_SEED,
+        help="detector Monte Carlo seed, separate from the configured source seed",
+    )
     args = parser.parse_args(argv)
-    if not 32 <= args.display_samples_per_axis <= 256 or args.display_samples_per_axis % 16:
-        parser.error("--display-samples-per-axis must be a multiple of 16 from 32 through 256")
     config = load_simulation_config(args.config.resolve(), repository_root=ROOT)
-    backend = config.numerics.detector_execution_backend if args.backend is None else args.backend
-    if backend == "cuda":
-        from rasim_next.pipeline._continuous_detector_cuda import require_cuda_available
-
-        require_cuda_available()
+    source_sample_count = (
+        config.source.sample_count if args.source_sample_count is None else args.source_sample_count
+    )
     viewer = InteractiveDetectorViewer(
         config,
-        display_samples_per_axis=args.display_samples_per_axis,
-        initial_source_sample_count=args.source_sample_count,
-        render_backend=backend,
+        draws_per_source_state=args.draws_per_source_state,
+        initial_source_sample_count=source_sample_count,
+        detector_seed=args.seed,
     )
     viewer.show()
 
