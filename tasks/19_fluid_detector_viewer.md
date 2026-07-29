@@ -42,6 +42,8 @@ catalog, roots, or physics factors. The final settled stage uses the exact reque
   fallback also keeps the full native grid.
 - The six detector-pose controls invalidate detector projection only. The eight goniometer/sample
   controls rebuild incident transport and re-enumerate rods only if valid-state topology changes.
+  The incidence control displays absolute `theta_i` from 0 to 20 degrees and converts it once to the
+  configured-pose delta consumed by the existing geometry path.
   Draw count invalidates sampling only; source-state count invalidates the source bundle and is
   committed on release rather than rebuilt at drag cadence.
 

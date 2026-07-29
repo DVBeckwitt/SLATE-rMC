@@ -108,8 +108,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "5e4e85220fe112cdd3ccd814b79671508fc4f3e6b39000ea810e99fffeaad592",
-      "size_bytes": 26794
+      "sha256": "0ae318f0f88cddce4eb5d75371d9f3848d44f1551ec882946bc49d1d29e9b5ad",
+      "size_bytes": 26887
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -618,8 +618,8 @@
     },
     {
       "path": "scripts/interactive_detector_viewer.py",
-      "sha256": "a943d2c7a89393949b2ae1d43787f80775b22411d298b009ae6f0c0704ad7b00",
-      "size_bytes": 68557
+      "sha256": "d1aa1426617b33e53f9017838f85cf6263d8c716668146b88f815005306a5898",
+      "size_bytes": 70257
     },
     {
       "path": "scripts/recover_bi2se3_mosaic.py",
@@ -1178,8 +1178,8 @@
     },
     {
       "path": "tasks/19_fluid_detector_viewer.md",
-      "sha256": "bc11f1ba76d1e395ae9457b7bd39a7967d92dac43e21ceb5d1cc1565ee8a333c",
-      "size_bytes": 12155
+      "sha256": "c9b3444702aa5275abf8ab8838fb337edb2e969ec8a5a59696a9ca8484693600",
+      "size_bytes": 12320
     },
     {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
@@ -1353,8 +1353,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "9375c881cf44a20eb8cc7dd23577fc755892e4912ce7657f8f64de62a3f5e755",
-      "size_bytes": 207498
+      "sha256": "fb90772290e7f01d52142186d727f7f8e6ce66216966159492930d06c9befa8c",
+      "size_bytes": 208449
     },
     {
       "path": "tests/test_mosaic_ewald.py",

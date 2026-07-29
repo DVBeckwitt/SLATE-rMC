@@ -4760,6 +4760,30 @@ def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> Non
     assert "vec2(0.0, -1.0)" in shader
 
 
+def test_interactive_incidence_control_is_absolute_zero_to_twenty_degrees() -> None:
+    viewer = runpy.run_path(
+        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
+    )
+    incidence_field = "effective_incidence_angle_offset_deg"
+    incidence_spec = next(
+        spec for spec in viewer["_CONTROL_SPECS"] if spec.field_name == incidence_field
+    )
+
+    assert incidence_spec.label == r"effective incidence $\theta_i$ (deg)"
+    assert (incidence_spec.minimum, incidence_spec.maximum) == (0.0, 20.0)
+    to_deltas = viewer["_control_values_to_geometry_deltas"]
+    for incidence_angle_deg, expected_offset_deg in (
+        (0.0, -5.0),
+        (5.0, 0.0),
+        (20.0, 15.0),
+    ):
+        deltas = to_deltas(
+            {incidence_field: incidence_angle_deg},
+            configured_incidence_angle_deg=5.0,
+        )
+        assert deltas.effective_incidence_angle_offset_deg == expected_offset_deg
+
+
 def test_interactive_render_scheduler_is_latest_only_and_progressive() -> None:
     viewer = runpy.run_path(
         Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"

@@ -272,7 +272,8 @@ effective end-pose controls:
 - goniometer-axis pitch `delta alpha` is RA-SIM `delta cor_angle`, and goniometer-axis yaw
   `delta psi_g` is RA-SIM `delta psi_z`. These reorient the sole configured commanded axis while
   preserving its motor angle and LAB pivot; they are not direct sample rotations;
-- effective incidence and sample tilt are `delta theta_i` and `delta delta` (the latter was RA-SIM
+- effective incidence is displayed as absolute `theta_i` from 0 to 20 degrees and converted to a
+  configured-pose delta only at the viewer boundary; sample tilt remains `delta delta` (RA-SIM
   `chi`, labelled **Sample Pitch**);
 - sample tangent translations remain `delta x_S/delta y_S`; sample-normal translation is
   `delta n_S = -delta z_S` in the original RA-SIM sign convention.

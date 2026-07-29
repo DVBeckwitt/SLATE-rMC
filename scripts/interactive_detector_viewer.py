@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "bi2se3_simulation.yaml"
 DEFAULT_DRAWS_PER_SOURCE_STATE = 49
 DEFAULT_DETECTOR_SEED = 20260728
+_INCIDENCE_CONTROL_FIELD = "effective_incidence_angle_offset_deg"
+_INCIDENCE_CONTROL_MINIMUM_DEG = 0.0
+_INCIDENCE_CONTROL_MAXIMUM_DEG = 20.0
 
 FloatArray = NDArray[np.float64]
 
@@ -76,6 +79,19 @@ class GeometryDeltas:
     @classmethod
     def zero(cls) -> GeometryDeltas:
         return cls()
+
+
+def _control_values_to_geometry_deltas(
+    control_values: dict[str, float],
+    *,
+    configured_incidence_angle_deg: float,
+) -> GeometryDeltas:
+    delta_values = {name: float(value) for name, value in control_values.items()}
+    incidence_angle_deg = delta_values[_INCIDENCE_CONTROL_FIELD]
+    delta_values[_INCIDENCE_CONTROL_FIELD] = incidence_angle_deg - float(
+        configured_incidence_angle_deg
+    )
+    return GeometryDeltas(**delta_values)
 
 
 def _intrinsic_xyz_rotation(
@@ -855,10 +871,10 @@ _CONTROL_SPECS = (
         "incident",
     ),
     _ControlSpec(
-        "effective_incidence_angle_offset_deg",
-        r"effective incidence $\Delta\theta_i$ (deg)",
-        -5.0,
-        5.0,
+        _INCIDENCE_CONTROL_FIELD,
+        r"effective incidence $\theta_i$ (deg)",
+        _INCIDENCE_CONTROL_MINIMUM_DEG,
+        _INCIDENCE_CONTROL_MAXIMUM_DEG,
         "incident",
     ),
     _ControlSpec(
@@ -1180,6 +1196,16 @@ class InteractiveDetectorViewer:
         from matplotlib.widgets import Button, Slider
 
         self._config = config
+        configured_axis_rotations = config.instrument.axis_rotations
+        if len(configured_axis_rotations) != 1:
+            raise ValueError("absolute theta_i control requires one configured incidence axis")
+        self._configured_incidence_angle_deg = float(configured_axis_rotations[0].angle_deg)
+        if not (
+            _INCIDENCE_CONTROL_MINIMUM_DEG
+            <= self._configured_incidence_angle_deg
+            <= _INCIDENCE_CONTROL_MAXIMUM_DEG
+        ):
+            raise ValueError("configured incidence angle must be between 0 and 20 degrees")
         self._initial_draws_per_source_state = draws_per_source_state
         self._initial_source_sample_count = initial_source_sample_count
         self._detector_seed = detector_seed
@@ -1268,7 +1294,11 @@ class InteractiveDetectorViewer:
                 "",
                 spec.minimum,
                 spec.maximum,
-                valinit=0.0,
+                valinit=(
+                    self._configured_incidence_angle_deg
+                    if spec.field_name == _INCIDENCE_CONTROL_FIELD
+                    else 0.0
+                ),
             )
             self._register_slider(slider)
             slider.on_changed(
@@ -1349,7 +1379,8 @@ class InteractiveDetectorViewer:
             "Weighted roots sum directly into native pixels; no detector-coordinate quadrature.\n"
             "Geometry and draw controls stream latest-only progressive previews while dragging.\n"
             "Source count commits on release; every frame keeps the full native grid.\n"
-            "All deltas are relative to the configured pose.\n"
+            r"$\theta_i$ is absolute; all other geometry controls are configured-pose deltas."
+            "\n"
             "Keys: R render, 0 reset, Q close.",
             ha="left",
             va="bottom",
@@ -1376,7 +1407,10 @@ class InteractiveDetectorViewer:
         self._request_render()
 
     def _deltas(self) -> GeometryDeltas:
-        return GeometryDeltas(**{name: float(slider.val) for name, slider in self._sliders.items()})
+        return _control_values_to_geometry_deltas(
+            {name: float(slider.val) for name, slider in self._sliders.items()},
+            configured_incidence_angle_deg=self._configured_incidence_angle_deg,
+        )
 
     def _current_request(self) -> _RenderRequest:
         return _RenderRequest(
@@ -1660,8 +1694,12 @@ class InteractiveDetectorViewer:
     def _reset(self, _event: object | None = None) -> None:
         self._suspend_updates = True
         try:
-            for slider in self._sliders.values():
-                slider.set_val(0.0)
+            for name, slider in self._sliders.items():
+                slider.set_val(
+                    self._configured_incidence_angle_deg
+                    if name == _INCIDENCE_CONTROL_FIELD
+                    else 0.0
+                )
             self._source_sample_slider.set_val(self._initial_source_sample_count)
             self._detector_draw_slider.set_val(self._initial_draws_per_source_state)
         finally:
