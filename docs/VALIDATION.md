@@ -109,7 +109,7 @@ and translation revisions measured `28.074 ms` and `28.342 ms` median through fu
 preparation; every revision stayed below `31 ms`. The four transport device arrays retained exact
 object identity. Device normalization and pinned full-native transfer are included in preview
 stages. Persistent full-native OpenGL upload plus shader draw separately measured `11.691 ms`
-median with a GPU completion fence. The `25 ms` scheduler cadence coalesces input continuously while
+median with a GPU completion fence. The `5 ms` scheduler cadence coalesces input continuously while
 latest-only cancellation prevents a stale backlog. Long-refinement cancellation returned
 `11.594 ms` median and `28.935 ms`
 maximum after the user-event signal. The workspace owned `105.464 MiB` of device buffers plus one

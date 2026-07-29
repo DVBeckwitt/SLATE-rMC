@@ -108,8 +108,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "61686faab3fb4cc22e7cf7846e7a3ef47f4670869662467800262ba7dd185f01",
-      "size_bytes": 26795
+      "sha256": "5e4e85220fe112cdd3ccd814b79671508fc4f3e6b39000ea810e99fffeaad592",
+      "size_bytes": 26794
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -153,8 +153,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "b946fce5e601088186e04a63aa7f009a7c9afab13d063af6d456c772175e153b",
-      "size_bytes": 92019
+      "sha256": "f07b7254c7b243b80bd3cc5115ff792ec2c1a782943adfde422f0048c2ed1af9",
+      "size_bytes": 92018
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -618,8 +618,8 @@
     },
     {
       "path": "scripts/interactive_detector_viewer.py",
-      "sha256": "5e91150fce2e0d9f8508f9e8d72c1934a4926897e3803a6e81332b248ec8454a",
-      "size_bytes": 68558
+      "sha256": "a943d2c7a89393949b2ae1d43787f80775b22411d298b009ae6f0c0704ad7b00",
+      "size_bytes": 68557
     },
     {
       "path": "scripts/recover_bi2se3_mosaic.py",
@@ -1178,8 +1178,8 @@
     },
     {
       "path": "tasks/19_fluid_detector_viewer.md",
-      "sha256": "f0acbc6dcf0d37aa87ea747cdbaef2022aa0ae86bda0c3b018c89b1544b88f32",
-      "size_bytes": 12162
+      "sha256": "bc11f1ba76d1e395ae9457b7bd39a7967d92dac43e21ceb5d1cc1565ee8a333c",
+      "size_bytes": 12155
     },
     {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",

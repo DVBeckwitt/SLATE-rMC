@@ -1368,7 +1368,7 @@ class InteractiveDetectorViewer:
             prepare_texture=presentation_backend == "opengl",
             outcomes=self._outcomes,
         )
-        self._poll_timer = self.figure.canvas.new_timer(interval=25)
+        self._poll_timer = self.figure.canvas.new_timer(interval=5)
         self._poll_timer.add_callback(self._poll_render)
         self._poll_timer.start()
         self._set_status("ready; rendering the configured Monte Carlo pixel image")

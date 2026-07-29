@@ -251,7 +251,7 @@ The default Bi2Se3 view uses the configured 1,000 incident-wavevector states, 49
 draws per state, detector seed `20260728`, and the full 3,000 x 3,000 native detector. The two
 numerical controls are **incident-ray samples** (`N_ray`) and **mosaic draws per ki state** (`M`). A
 source row contains origin, direction, wavelength, and empirical weight; `M` controls only the
-stochastic detector estimator. Geometry and draw controls coalesce at 25 ms cadence into latest-only
+stochastic detector estimator. Geometry and draw controls coalesce at 5 ms cadence into latest-only
 full-native previews with draw prefixes 1, 4, and 8; release appends the exact requested settled draw
 count without restarting an accepted prefix. A newer revision cancels unfinished work, and a stale
 frame cannot publish. Source-count changes still commit on release because they rebuild the source

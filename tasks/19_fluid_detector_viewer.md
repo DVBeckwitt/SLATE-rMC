@@ -119,7 +119,7 @@ and CUDA work; record scheduler-to-display latency for 1/4/8/49 draws, stale-can
 texture upload/draw time, total wall time, device identity, and peak host/device memory. No benchmark
 may downsample the detector or prune source states, rods, or roots.
 
-Done requires latest-only continuous geometry updates at a 16–33 ms scheduling cadence, visible
+Done requires latest-only continuous geometry updates at a 5 ms scheduling cadence, visible
 progressive full-native frames, a full requested-draw settled frame, a materially faster measured
 warm path than the baseline, explicit fallback status, CPU/oracle and CPU/CUDA parity, clean imports,
 Ruff/format, the compact permanent suite, all registered proofs, documentation links, seed/manifest
@@ -131,7 +131,7 @@ device, stop `BLOCKED` rather than silently weakening the requested scope.
 
 State: `READY`
 
-Evidence: The latest-only scheduler coalesces at 25 ms, rejects stale completions, retries failed
+Evidence: The latest-only scheduler coalesces at 5 ms, rejects stale completions, retries failed
 settled work, and restarts a canceled same-request final stage. Progressive stages are exact Philox
 prefixes at 1/4/8/requested draws. CPU one/four-worker output is stable, CUDA occupied bins and work
 ledgers match CPU exactly, and the full 1,000-state/85-rod parity probe differed by at most
