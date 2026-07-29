@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from math import fsum, isfinite
+from dataclasses import dataclass, field
+from math import fsum, isfinite, pi, tanh
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald import BraggSpaceConfig, MosaicParameters, Rod
 from painted_ewald.rotations import mosaic_axes
-from painted_ewald.validation import positive_integer
+from painted_ewald.validation import integer, positive_integer
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
@@ -261,6 +261,130 @@ class SourceAveragedDetectorCoordinateDensity:
         object.__setattr__(self, "valid_source_count", valid_count)
         object.__setattr__(self, "source_state_count", state_count)
         object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
+
+
+@dataclass(frozen=True, slots=True)
+class MonteCarloDetectorPixelMass:
+    """Weighted forward-sampling estimate of native detector-pixel mass."""
+
+    image_A2: FloatArray
+    replicate_total_mass_A2: FloatArray
+    total_detector_mass_A2: float
+    draws_per_source_state: int
+    source_state_count: int
+    active_source_state_count: int
+    attempted_root_count: int
+    visible_hit_count: int
+    maximum_root_deposit_A2: float
+    seed: int
+    rods: tuple[Rod, ...]
+    source_revision: str
+    rod_catalog_revision: str
+    detector_visible_m0_q_gap_Ainv: float | None
+    measure_id: str = field(
+        init=False,
+        default="raw_detector_pixel_mass_monte_carlo_estimate_A2.v1",
+    )
+    proposal_id: str = field(init=False, default="folded_wrapped_mosaic_full_beta.v1")
+    rng_model_id: str = field(init=False, default="numpy.pcg64.source_index_substream.v1")
+    execution_backend: str = field(init=False, default="numba_cpu_forward_monte_carlo.v1")
+
+    def __post_init__(self) -> None:
+        image = np.array(self.image_A2, dtype=np.float64, copy=True, order="C")
+        if image.ndim != 2 or not np.all(np.isfinite(image)) or np.any(image < 0.0):
+            raise ValueError("image_A2 must be a finite nonnegative detector array")
+        draws = positive_integer(self.draws_per_source_state, "draws_per_source_state")
+        replicate = _float_array(
+            self.replicate_total_mass_A2,
+            (draws,),
+            "replicate_total_mass_A2",
+        )
+        if np.any(replicate < 0.0):
+            raise ValueError("replicate_total_mass_A2 must be nonnegative")
+        total = float(self.total_detector_mass_A2)
+        maximum = float(self.maximum_root_deposit_A2)
+        if not isfinite(total) or total < 0.0 or not isfinite(maximum) or maximum < 0.0:
+            raise ValueError("Monte Carlo detector masses must be finite and nonnegative")
+        attempted = positive_integer(self.attempted_root_count, "attempted_root_count")
+        expected_total = fsum(replicate) / draws
+        rounding_ratio = max(attempted, image.size, draws) * np.finfo(np.float64).eps
+        if rounding_ratio >= 0.01:
+            raise ValueError("Monte Carlo work count exceeds the conservation roundoff budget")
+        tolerance = (
+            rounding_ratio / (1.0 - rounding_ratio) + 64.0 * np.finfo(np.float64).eps
+        ) * max(expected_total, np.finfo(np.float64).tiny)
+        if abs(total - expected_total) > tolerance or abs(float(np.sum(image)) - total) > tolerance:
+            raise ValueError("image, replicate, and total Monte Carlo masses disagree")
+        source_count = positive_integer(self.source_state_count, "source_state_count")
+        active_count = positive_integer(self.active_source_state_count, "active_source_state_count")
+        if active_count > source_count:
+            raise ValueError("active_source_state_count exceeds source_state_count")
+        visible = integer(self.visible_hit_count, "visible_hit_count")
+        if visible < 0 or visible > attempted:
+            raise ValueError("visible_hit_count exceeds the attempted-root ledger")
+        seed = integer(self.seed, "seed")
+        if seed < 0 or seed >= 2**64:
+            raise ValueError("seed must be an integer in [0, 2**64)")
+        rods = tuple(self.rods)
+        if not rods or not all(isinstance(rod, Rod) for rod in rods):
+            raise ValueError("rods must contain at least one Rod")
+        if len({(rod.h, rod.k) for rod in rods}) != len(rods):
+            raise ValueError("rods must not repeat a physical rod")
+        m0_gap = self.detector_visible_m0_q_gap_Ainv
+        if any(rod.family_m == 0 for rod in rods):
+            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) <= 0.0:
+                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            m0_gap = float(m0_gap)
+        elif m0_gap is not None:
+            raise ValueError("an m=0 support gap requires an m=0 rod")
+        for name in ("source_revision", "rod_catalog_revision"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be nonempty")
+        image.setflags(write=False)
+        object.__setattr__(self, "image_A2", image)
+        object.__setattr__(self, "replicate_total_mass_A2", replicate)
+        object.__setattr__(self, "total_detector_mass_A2", total)
+        object.__setattr__(self, "draws_per_source_state", draws)
+        object.__setattr__(self, "source_state_count", source_count)
+        object.__setattr__(self, "active_source_state_count", active_count)
+        object.__setattr__(self, "attempted_root_count", attempted)
+        object.__setattr__(self, "visible_hit_count", visible)
+        object.__setattr__(self, "maximum_root_deposit_A2", maximum)
+        object.__setattr__(self, "seed", seed)
+        object.__setattr__(self, "rods", rods)
+        object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
+
+
+def _sample_mosaic_orientations(
+    mosaic: MosaicParameters,
+    draw_count: int,
+    rng: np.random.Generator,
+) -> tuple[FloatArray, FloatArray]:
+    """Draw the declared folded-alpha/full-beta density exactly."""
+
+    eta = mosaic.lorentzian_probability
+    signed_tilt = np.empty(draw_count, dtype=np.float64)
+    if eta == 0.0:
+        signed_tilt[:] = rng.normal(0.0, mosaic.gaussian_sigma_rad, draw_count)
+    elif eta == 1.0:
+        scale = tanh(0.5 * mosaic.lorentzian_half_width_rad)
+        signed_tilt[:] = 2.0 * np.arctan(scale * np.tan(pi * (rng.random(draw_count) - 0.5)))
+    else:
+        lorentzian = rng.random(draw_count) < eta
+        gaussian_count = int(np.count_nonzero(~lorentzian))
+        signed_tilt[~lorentzian] = rng.normal(
+            0.0,
+            mosaic.gaussian_sigma_rad,
+            gaussian_count,
+        )
+        scale = tanh(0.5 * mosaic.lorentzian_half_width_rad)
+        signed_tilt[lorentzian] = 2.0 * np.arctan(
+            scale * np.tan(pi * (rng.random(draw_count - gaussian_count) - 0.5))
+        )
+    wrapped = np.remainder(signed_tilt + pi, 2.0 * pi) - pi
+    alpha = np.ascontiguousarray(np.abs(wrapped))
+    beta = np.ascontiguousarray(rng.uniform(0.0, 2.0 * pi, draw_count))
+    return alpha, beta
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,6 +749,72 @@ class SourceAveragedDetectorEwaldMeasure:
         """Physical lower bound on ``|Q|`` for included top-exit m=0 rays."""
 
         return self._detector_visible_m0_q_gap_Ainv
+
+    def sample_native_pixel_mass(
+        self,
+        *,
+        draws_per_source_state: int,
+        seed: int,
+    ) -> MonteCarloDetectorPixelMass:
+        """Estimate native pixel mass by forward-sampling mosaic orientation.
+
+        Each valid canonical incident state is a source stratum. States with no
+        reachable selected rod have identically zero weight and need no random
+        draw; every active state enumerates all reachable physical rods and
+        retained roots. The root ledger is numerical work evidence, not a
+        calibrated detector count.
+        """
+
+        draws = positive_integer(draws_per_source_state, "draws_per_source_state")
+        detector_seed = integer(seed, "seed")
+        if not 0 <= detector_seed < 2**64:
+            raise ValueError("seed must be an integer in [0, 2**64)")
+        rows, columns = self._instrument.detector_shape_rc
+        image = np.zeros(rows * columns, dtype=np.float64)
+        replicate_total = np.zeros(draws, dtype=np.float64)
+        attempted_root_count = 0
+        visible_hit_count = 0
+        maximum_deposit = 0.0
+        for block in self._evaluator_blocks:
+            for indexed in block:
+                rng = np.random.Generator(
+                    np.random.PCG64(
+                        np.random.SeedSequence(
+                            detector_seed,
+                            spawn_key=(indexed.incident_state_index,),
+                        )
+                    )
+                )
+                alpha, beta = _sample_mosaic_orientations(self._mosaic, draws, rng)
+                state_visible, state_maximum = indexed.evaluator.accumulate_latent_pixel_mass(
+                    alpha,
+                    beta,
+                    image,
+                    replicate_total,
+                )
+                state_rods = indexed.evaluator.state.rod_hk_population
+                m0_count = int(
+                    np.count_nonzero((state_rods[:, 0] == 0.0) & (state_rods[:, 1] == 0.0))
+                )
+                attempted_root_count += draws * (2 * state_rods.shape[0] - m0_count)
+                visible_hit_count += state_visible
+                maximum_deposit = max(maximum_deposit, state_maximum)
+        return MonteCarloDetectorPixelMass(
+            image_A2=image.reshape(rows, columns),
+            replicate_total_mass_A2=replicate_total,
+            total_detector_mass_A2=fsum(replicate_total) / draws,
+            draws_per_source_state=draws,
+            source_state_count=self.source_state_count,
+            active_source_state_count=self.valid_source_state_count,
+            attempted_root_count=attempted_root_count,
+            visible_hit_count=visible_hit_count,
+            maximum_root_deposit_A2=maximum_deposit,
+            seed=detector_seed,
+            rods=self._rods,
+            source_revision=self._incident.states.source_revision,
+            rod_catalog_revision=self._rod_catalog_revision,
+            detector_visible_m0_q_gap_Ainv=self._detector_visible_m0_q_gap_Ainv,
+        )
 
     def restrict_rods(
         self,
@@ -1309,6 +1499,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
 
 __all__ = [
+    "MonteCarloDetectorPixelMass",
     "SourceAveragedDetectorCoordinateDensity",
     "SourceAveragedDetectorCoordinateIntensity",
     "SourceAveragedDetectorEwaldMeasure",

@@ -191,6 +191,35 @@ Omitted mosaic, layer-count, and shared-disorder arguments inherit the canonical
 overrides are available for controlled convergence studies. This diagnostic intentionally uses one
 incident state, the six physical `m=1` rods, and the upper root; it is not a second default model.
 
+## Optional weighted Monte Carlo pixel mass
+
+Use the same configured 1,000-state Bi2Se3 detector and stream weighted forward roots directly into
+native pixels:
+
+```python
+from pathlib import Path
+
+from rasim_next.pipeline.configured_simulation import (
+    build_configured_simulation_inputs,
+    build_source_averaged_detector,
+    load_simulation_config,
+)
+
+root = Path.cwd()
+config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+inputs = build_configured_simulation_inputs(config)
+detector = build_source_averaged_detector(inputs)
+estimate = detector.sample_native_pixel_mass(
+    draws_per_source_state=40,
+    seed=20260728,
+)
+```
+
+This uses 40 independent mosaic draws for each fixed `ki` row, hence 40,000 source-stratified
+draws. `estimate.image_A2` is weighted raw pixel mass in `A2`; `visible_hit_count` is a root-work
+ledger, not a photon-count image. Increase the draw count and compare independent seeds or a refined
+latent oracle when quantitative stochastic accuracy matters.
+
 ## Matched continuous detector and angle views
 
 Render the same continuous detector density on native detector coordinates and canonical

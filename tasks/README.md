@@ -2,7 +2,7 @@
 
 `tasks/index.yaml` is the authoritative status registry.
 
-T00--T06 and the original four-worktree run are historical proof phases. The contract-v10
+T00--T06 and the original four-worktree run are historical proof phases. The contract-v11
 continuous reciprocal and detector runtime on current `main` is the accepted successor to the
 sampled T07 design. The old candidate, selector, event, hit, depositor, raster, and sphere-painter
 APIs have been removed and must not be recreated from historical task text.

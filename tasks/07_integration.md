@@ -14,3 +14,9 @@ depositors, raster grids, or Ewald-sphere objects.
 Accepted boundaries are the continuous `MosaicBraggSpace`, `ContinuousEwaldCoating`,
 `DetectorEwaldMeasure`, and `SourceAveragedDetectorEwaldMeasure` APIs with detector-coordinate
 density and explicitly named pixel or preview-macrobin measures.
+
+Contract API v11 also admits the distinct optional
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1` terminal defined by D035. It samples only the
+declared latent mosaic law, enumerates analytic roots, and streams weighted mass into exact native
+pixel owners. It does not authorize any retired candidate, event, hit-table, selector, bilinear
+depositor, or count-calibration contract.

@@ -84,13 +84,22 @@ normalization, or reflectivity limit.
 - Multiply detector solid-angle metadata into the raw field again.
 - Swap detector row/column, reverse a tilt, evaluate outside the active panel, or assign intensity to
   an invalid/back-facing ray.
-- When pixel mass is requested, replace the box integral with a center sample, histogram, blur, or
-  point deposit. A separately declared display-only center-density sample is not this error.
+- When deterministic pixel mass is requested, replace the box integral with a center sample,
+  undeclared histogram, blur, or point deposit. A separately declared display-only center-density
+  sample or API-v11 stochastic estimate is not this error.
+- In the stochastic estimator, omit a source/rod/root, divide by accepted rather than attempted
+  draws, multiply the natural-proposal mosaic density back in, apply the detector Jacobian or solid
+  angle, renormalize after off-panel rejection, swap row/column ownership, or drop regular nonzero
+  `m=0`.
+- Reuse colliding RNG streams across source indices, make the result depend on worker/chunk order,
+  accept a noninteger seed, silently discard nonfinite weights, expose root hits as calibrated
+  detector counts, or report ordinary Gaussian standard errors at an unexcluded Ewald fold.
 - Hide an unresolved adaptive pixel or a caustic behind display interpolation.
 
 Expected detection: detector ray/Q identity, forward/inverse round-trip, per-rod/source reduction,
-constant-field pixel identity, caustic finite-box oracle, quadrature refinement, mass/centroid error,
-or invalid-support contract.
+constant-field pixel identity, caustic finite-box oracle, quadrature refinement, exact seeded
+forward-oracle ownership, refined latent mass/shape comparison, mass conservation, seed-ledger
+identity, or invalid-support contract.
 
 ### Continuous angle-coordinate measure
 

@@ -61,6 +61,151 @@ def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> o
     )
 
 
+def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
+    from painted_ewald import wrapped_mosaic_line_density_rad_inv
+    from rasim_next.optics.attenuation import (
+        mode_decay_constant,
+        scalar_optical_weight,
+        uniform_depth_attenuation,
+    )
+    from rasim_next.optics.refraction import solve_exit_mode
+    from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    rotations = (
+        replace(config.instrument.axis_rotations[0], angle_deg=5.0),
+        *config.instrument.axis_rotations[1:],
+    )
+    inputs = build_configured_simulation_inputs(
+        replace(
+            config,
+            source=replace(config.source, sample_count=1),
+            instrument=replace(
+                config.instrument,
+                axis_rotations=rotations,
+                detector_shape_rc=(64, 64),
+                detector_row_pitch_m=2.0e-3,
+                detector_column_pitch_m=2.0e-3,
+                detector_reference_coordinate_px=(31.5, 31.5),
+            ),
+            bragg=replace(config.bragg, rod_population=0.37),
+            weights=replace(config.weights, phase_population=0.41, polarization=0.73),
+        )
+    )
+    rods = (
+        next(rod for rod in inputs.rods if (rod.h, rod.k) == (0, 0)),
+        next(rod for rod in inputs.rods if (rod.h, rod.k) == (-1, 1)),
+    )
+    detector = build_source_averaged_detector(inputs).restrict_rods(rods)
+    seed = 5247
+    draw_count = 3
+    sampled = detector.sample_native_pixel_mass(
+        draws_per_source_state=draw_count,
+        seed=seed,
+    )
+
+    rng = np.random.Generator(np.random.PCG64(np.random.SeedSequence(seed, spawn_key=(0,))))
+    signed_tilt = rng.normal(0.0, inputs.mosaic.gaussian_sigma_rad, draw_count)
+    alpha = np.abs((signed_tilt + np.pi) % (2.0 * np.pi) - np.pi)
+    beta = rng.uniform(0.0, 2.0 * np.pi, draw_count)
+
+    oracle = build_nominal_ewald_context(inputs).geometry
+    source_phase_weight = float(
+        inputs.incident.states.source_weight[0]
+        * inputs.incident.states.footprint_acceptance[0]
+        * inputs.config.weights.phase_population
+        * inputs.config.weights.polarization
+    )
+    expected_mass: dict[int, float] = {}
+    expected_roots: set[tuple[int, int, int]] = set()
+    expected_hit_count = 0
+    expected_replicate_total = np.zeros(draw_count, dtype=np.float64)
+    _, columns = inputs.instrument.detector_shape_rc
+    for draw in range(draw_count):
+        proposal_density = float(
+            2.0 * wrapped_mosaic_line_density_rad_inv(alpha[draw], inputs.mosaic) / (2.0 * np.pi)
+        )
+        for rod in rods:
+            for branch in (0,) if rod.family_m == 0 else (1, 2):
+                if rod.family_m == 0:
+                    coating = oracle.map_detector_visible_coating(
+                        rod=rod,
+                        branch=branch,
+                        alpha_rad=alpha[draw],
+                        beta_rad=beta[draw],
+                    )
+                    geometry = coating.geometry
+                    if not bool(geometry.valid):
+                        continue
+                    exit_mode = solve_exit_mode(
+                        geometry.ewald_geometry.kf_sample_Ainv,
+                        inputs.samples.wavelength_A[0],
+                        inputs.material,
+                    )
+                    attenuation = uniform_depth_attenuation(
+                        mode_decay_constant(inputs.incident.states.kz_film_Ainv[0], -1),
+                        mode_decay_constant(exit_mode.kz_film_Ainv, 1),
+                        inputs.instrument.film_thickness_A,
+                    )
+                    optical = scalar_optical_weight(
+                        inputs.incident.states.entrance_amplitude[0],
+                        exit_mode.exit_amplitude,
+                        attenuation,
+                    )
+                    weight = (
+                        float(coating.coating_intensity_density_A2_rad2_inv)
+                        * optical
+                        * source_phase_weight
+                        / proposal_density
+                    )
+                else:
+                    mapped = oracle.map_latent(
+                        rod=rod,
+                        branch=branch,
+                        alpha_rad=alpha[draw],
+                        beta_rad=beta[draw],
+                    )
+                    geometry = mapped.geometry
+                    if not bool(geometry.valid):
+                        continue
+                    weight = float(mapped.postoptical_density_A2_rad2_inv) / proposal_density
+                if weight == 0.0:
+                    continue
+                expected_roots.add((rod.h, rod.k, branch))
+                column = math.floor(float(geometry.column_px) + 0.5)
+                row = math.floor(float(geometry.row_px) + 0.5)
+                flat_index = row * columns + column
+                expected_mass[flat_index] = expected_mass.get(flat_index, 0.0) + weight / draw_count
+                expected_hit_count += 1
+                expected_replicate_total[draw] += weight
+
+    assert sampled.measure_id == "raw_detector_pixel_mass_monte_carlo_estimate_A2.v1"
+    assert sampled.detector_visible_m0_q_gap_Ainv == detector.detector_visible_m0_q_gap_Ainv
+    assert {(0, 0, 0), (-1, 1, 1), (-1, 1, 2)} <= expected_roots
+    assert sampled.attempted_root_count == 3 * draw_count
+    expected_index = np.asarray(sorted(expected_mass), dtype=np.int64)
+    np.testing.assert_array_equal(np.flatnonzero(sampled.image_A2), expected_index)
+    np.testing.assert_allclose(
+        sampled.image_A2.ravel()[expected_index],
+        [expected_mass[index] for index in expected_index],
+        rtol=1.0e-8,
+        atol=5.0e-19,
+    )
+    np.testing.assert_allclose(
+        sampled.replicate_total_mass_A2,
+        expected_replicate_total,
+        rtol=1.0e-8,
+        atol=5.0e-19,
+    )
+    assert sampled.total_detector_mass_A2 == pytest.approx(
+        math.fsum(expected_mass.values()),
+        rel=1.0e-8,
+        abs=5.0e-19,
+    )
+    assert sampled.visible_hit_count == expected_hit_count
+
+
 def test_bi2te3_compiled_detector_uses_te_factors() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2te3_simulation.yaml")

@@ -2,7 +2,7 @@
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
-API v10 does not renumber historical evidence.
+API v11 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
@@ -10,7 +10,9 @@ detector-coordinate, and total-detector-mass identifiers for reference compariso
 claim that every continuous result emits a trace row. Candidate, selection, sampled-event,
 deposition-index, deposition-weight, and clipped-point identifiers below are frozen historical
 names only; the live runtime never emits them. New continuous proofs prefer typed result measure
-IDs over inventing replacement trace aliases.
+IDs over inventing replacement trace aliases. The API-v11 stochastic result likewise records its
+measure, proposal, RNG, source, rod, and work ledgers in the typed result; it does not revive event
+or deposition trace rows.
 
 ## Stage IDs
 

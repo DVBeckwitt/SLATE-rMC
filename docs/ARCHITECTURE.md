@@ -3,8 +3,9 @@
 ## Design rule
 
 The repository has one production path from a configured incident beam to a detector-native
-observable. Scientific state is immutable, transformations are explicit, and the public model is a
-callable function rather than a sampled cloud or image cache.
+observable. Scientific state is immutable, transformations are explicit, and the primary public
+model is a callable function rather than a sampled cloud or image cache. Deterministic integration
+and weighted Monte Carlo are explicit terminal estimators of that shared physics.
 
 ```text
 strict YAML + CIF
@@ -15,6 +16,7 @@ strict YAML + CIF
   -> per-source, per-physical-rod continuous detector-coordinate density
   -> all-source, all-rod, all-root intensity sum on the detector function
   -> selected-center comparison, display-only center sampling, or detector-pixel box integration
+  -> optional terminal alternative: weighted forward samples -> exact native-pixel owners
 ```
 
 No physical Ewald-sphere object is created. A detector coordinate determines an outgoing air ray;
@@ -48,7 +50,8 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `pipeline/continuous_detector.py`: one-incident-state detector pullback and native-pixel
   integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
-  fields, linear rod restriction/physics rebinding, and compiled CPU/CUDA evaluation.
+  fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and the optional
+  streaming CPU Monte Carlo pixel-mass estimator.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   quantitative pixel integration or display-only native-center density sampling. Its geometry-only
   input/context builders stop before structure strength or mosaic construction.
@@ -86,7 +89,9 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 3. `DetectorEwaldMeasure` pulls all inverse branches onto arbitrary detector coordinates and
    integrates one incident state's pixels.
 4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before any
-   selected-center comparison, display sample, or requested detector integration.
+   selected-center comparison, display sample, or requested detector integration. Its optional
+   stochastic terminal samples the same latent/source physics and streams weighted roots directly
+   into half-open native-pixel boxes.
 5. `configured_simulation` assembles those objects from one validated YAML document.
 6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
    structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
@@ -159,7 +164,9 @@ module-global or import-time side effects.
 
 ## Deliberately absent runtime structures
 
-There is no sampled mosaic-orientation batch, sampled scattering-candidate pool, scattering-event
-table, outgoing-event table, point depositor, bilinear rasterizer, discrete sphere texture,
-compatibility adapter, or parallel legacy simulator. Historical equations remain only in the
-immutable reference pack and proof comparisons.
+There is no retained mosaic-orientation batch, sampled scattering-candidate pool, scattering-event
+table, outgoing-event table, hit table, general point depositor, bilinear rasterizer, discrete
+sphere texture, compatibility adapter, or parallel legacy simulator. The optional Monte Carlo
+terminal holds only one source state's small orientation vector while streaming weighted roots into
+the final image. Historical equations remain only in the immutable reference pack and proof
+comparisons.

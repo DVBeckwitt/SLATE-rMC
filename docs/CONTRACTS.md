@@ -111,6 +111,27 @@ integrator is deliberately branch-specific and rejects any model containing `m=0
 all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
 weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
+`sample_native_pixel_mass(*, draws_per_source_state, seed)` is the optional all-root stochastic
+terminal. Every valid canonical source state is a mathematical stratum; states with no reachable
+selected rod are identically zero and allocate no random work. For each active state, a PCG64
+substream keyed by the unsigned 64-bit seed and immutable source-state index samples the exact
+folded wrapped-Gaussian/wrapped-Cauchy mixture and uniform full beta. Every reachable physical rod
+and retained root is then mapped through the canonical exit optics and detector geometry. The
+natural mosaic proposal cancels its probability density, so each visible root deposits
+`source * rod population * structure * Ewald coarea * optics / draws` directly into its native
+pixel. Internal pixel boundaries use the half-open owner `floor(coordinate + 0.5)`; an exact closed
+outer-panel edge belongs to the final pixel. Invalid sources, no roots, nonpropagating exits, and
+off-panel roots contribute zero without resampling or renormalization. Nonfinite numerical state
+fails closed.
+
+The immutable `MonteCarloDetectorPixelMass` returns `image_A2`, per-draw complete-source total-mass
+replicates, total mass, total/active-source/root work ledgers, the maximum individual root deposit, seed,
+physical rods, source and rod-catalog revisions, and fixed proposal/RNG/backend identities. Its
+detector-visible m=0 support gap is retained whenever the rod set contains m=0. Its measure is
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`. It returns no event or hit table;
+`visible_hit_count` counts deposited roots and is not a detector count. Replicate totals expose seed
+stability but do not assert finite variance or a Gaussian confidence interval near Ewald folds.
+
 `evaluate_detector_density_all_roots(...)` completes this source reduction and returns one detector
 function. Downstream peak-center comparison, display sampling, and pixel integration consume that
 combined function; none may fit, rescale, normalize, recenter, or form a residual for an individual
@@ -346,6 +367,8 @@ nominal one-state landmark alone from establishing intensity support.
 - `sample_configured_source(source, sample_count=...)` is the one mapping from validated configured
   source parameters to the canonical source sampler, including the exact one-row nominal state.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
+- `SourceAveragedDetectorEwaldMeasure.sample_native_pixel_mass(...)` returns the optional weighted
+  native-pixel Monte Carlo estimate without creating an event table or count calibration.
 - `evaluate_detector_density_all_roots(column_px, row_px, ...)` returns one continuous-coordinate
   density after every source state, physical rod, and retained inverse root has been reduced. Its
   coordinate-shaped caustic flag is the logical OR of the detailed rod flags. The existing
@@ -609,13 +632,15 @@ bounds without activating frozen coordinates.
 | exit amplitude and uniform-depth attenuation | detector optical mapping |
 | phase and polarization weights | detector measure construction |
 | source-state sum | source-averaged detector measure |
-| detector box integration | pixel integrator |
+| detector box integration or weighted hard-bin estimator | selected terminal pixel estimator |
 
 The two Ewald routes are equivalent proof views and are never multiplied together.
 
 ## Removed API
 
-Contract version 9 intentionally has no compatibility shims for sampled mosaic orientation batches,
-candidate selection, scattering-event batches, outgoing-wave batches, detector-hit batches, event
-transport, point deposition, discrete Ewald painters, sphere textures, or raster grids. Callers must
-use the continuous reciprocal and detector contracts above.
+Contract version 11 retains no compatibility shims for mosaic-orientation batch APIs, candidate
+selection, scattering-event batches, outgoing-wave batches, detector-hit batches, event transport,
+general point deposition, discrete Ewald painters, sphere textures, or raster grids. The optional
+terminal stochastic estimator is not one of those retired runtimes: it exposes no intermediate
+sample/event object and streams weighted roots into its declared final pixel-mass estimate. Callers
+must use the continuous reciprocal and detector contracts above.

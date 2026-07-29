@@ -26,6 +26,8 @@ detector geometry.
   integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
 - Incoherent source/wavelength/phase summation before selected-center comparison, display-only
   center sampling, or deterministic detector box integration.
+- Optional streaming Monte Carlo estimation of all-source, all-rod, all-root native-pixel mass by
+  weighted forward sampling of the declared mosaic law and exact hard pixel ownership.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
   detector-tilt and effective sample-normal correction pack.
@@ -46,6 +48,10 @@ The authoritative output is either:
 
 - `raw_detector_coordinate_density_A2_per_px2.v1` at arbitrary floating coordinates; or
 - its finite native-pixel integral `raw_detector_pixel_mass_A2.v1`.
+
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1` is an optional stochastic estimate of the same
+finite native-pixel mass. It is neither a calibrated count image nor a replacement authority for
+the continuous field or deterministic integral.
 
 An optional downstream measurement view evaluates
 `raw_detector_area_normalized_intensity_A2_per_px2.v1` continuously in `(phi, 2theta)`. It is a

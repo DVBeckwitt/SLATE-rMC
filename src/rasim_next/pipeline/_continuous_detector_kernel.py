@@ -39,6 +39,38 @@ class CompiledPixelIntegral(NamedTuple):
     center_valid: BoolArray
 
 
+class _ForwardDetectorState(NamedTuple):
+    detector_shape_rc: tuple[int, int]
+    detector_column_row_covectors_sample_per_m: FloatArray
+    detector_normal_sample: FloatArray
+    ray_origin_detector_column_row_px: FloatArray
+    ray_origin_detector_normal_m: float
+    ki_film_sample_Ainv: FloatArray
+    internal_k_Ainv: float
+    air_k0_Ainv: float
+    refractive_index: complex
+    entrance_power: float
+    incident_decay_Ainv: float
+    film_thickness_A: float
+    source_phase_weight: float
+    sample_from_local: FloatArray
+    rod_hk_population: FloatArray
+    rod_parallel_local_Ainv: FloatArray
+    rod_u_bounds_Ainv: FloatArray
+    rod_inverse_constants: FloatArray
+    b3_norm_Ainv: float
+    atom_fractional_offset: FloatArray
+    atom_occupancy_element: FloatArray
+    rod_atom_inplane_factor: NDArray[np.complex128]
+    u_radial_A2: float
+    u_normal_A2: float
+    f0_parameters: FloatArray
+    anomalous_factor_e: NDArray[np.complex128]
+    layers: int
+    shared_disorder_epsilon: float
+    normalization_divisor: float
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledDetectorState:
     """Immutable numeric state consumed by the no-GIL point kernel."""
@@ -411,6 +443,62 @@ def _positive_normal_root(radicand: complex) -> complex:
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
+def _exit_optical_weight(
+    film_normal_radicand_Ainv2: complex,
+    kf_air_z_Ainv: float,
+    entrance_power: float,
+    incident_decay_Ainv: float,
+    film_thickness_A: float,
+) -> float:
+    kz_film = _positive_normal_root(film_normal_radicand_Ainv2)
+    denominator = kz_film + complex(kf_air_z_Ainv, 0.0)
+    if denominator == 0.0:
+        return 0.0
+    exit_amplitude = 2.0 * kz_film / denominator
+    exponent = 2.0 * (incident_decay_Ainv + max(kz_film.imag, 0.0)) * film_thickness_A
+    attenuation = 1.0 if exponent == 0.0 else -math.expm1(-exponent) / exponent
+    return entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
+def _element_factors(
+    q_norm_squared_Ainv2: float,
+    f0_parameters: FloatArray,
+    anomalous_factor_e: NDArray[np.complex128],
+) -> tuple[complex, complex]:
+    q_xraydb_squared = q_norm_squared_Ainv2 / (16.0 * math.pi * math.pi)
+    f0_0 = f0_parameters[0, 0]
+    f0_1 = f0_parameters[1, 0]
+    for coefficient in range(5):
+        f0_0 += f0_parameters[0, 1 + coefficient] * math.exp(
+            -f0_parameters[0, 6 + coefficient] * q_xraydb_squared
+        )
+        f0_1 += f0_parameters[1, 1 + coefficient] * math.exp(
+            -f0_parameters[1, 6 + coefficient] * q_xraydb_squared
+        )
+    return f0_0 + anomalous_factor_e[0], f0_1 + anomalous_factor_e[1]
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
+def _common_damping(
+    q_norm_squared_Ainv2: float,
+    parallel_norm_Ainv: float,
+    w_value_Ainv: float,
+    u_radial_A2: float,
+    u_normal_A2: float,
+) -> float:
+    if u_radial_A2 == u_normal_A2:
+        return math.exp(-0.5 * q_norm_squared_Ainv2 * u_radial_A2)
+    return math.exp(
+        -0.5
+        * (
+            u_radial_A2 * parallel_norm_Ainv * parallel_norm_Ainv
+            + u_normal_A2 * w_value_Ainv * w_value_Ainv
+        )
+    )
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
 def _wrapped_mosaic_density(
     alpha: float,
     gaussian_sigma: float,
@@ -710,16 +798,12 @@ def _evaluate_point_into(
     pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
     area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
 
-    kz_film = _positive_normal_root(refractive_air_k_squared_Ainv2 - parallel_squared)
-    kz_air = complex(kf_air_z, 0.0)
-    denominator = kz_film + kz_air
-    if denominator == 0.0:
-        return False
-    exit_amplitude = 2.0 * kz_film / denominator
-    exponent = 2.0 * (incident_decay_Ainv + max(kz_film.imag, 0.0)) * film_thickness_A
-    attenuation = 1.0 if exponent == 0.0 else -math.expm1(-exponent) / exponent
-    optical_weight = (
-        entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
+    optical_weight = _exit_optical_weight(
+        refractive_air_k_squared_Ainv2 - parallel_squared,
+        kf_air_z,
+        entrance_power,
+        incident_decay_Ainv,
+        film_thickness_A,
     )
 
     q_local_x = (
@@ -739,18 +823,11 @@ def _evaluate_point_into(
     )
     q_norm_squared = q_local_x * q_local_x + q_local_y * q_local_y + q_local_z * q_local_z
     q_norm = math.sqrt(q_norm_squared)
-    q_xraydb_squared = q_norm_squared / (16.0 * math.pi * math.pi)
-    f0_0 = f0_parameters[0, 0]
-    f0_1 = f0_parameters[1, 0]
-    for coefficient in range(5):
-        f0_0 += f0_parameters[0, 1 + coefficient] * math.exp(
-            -f0_parameters[0, 6 + coefficient] * q_xraydb_squared
-        )
-        f0_1 += f0_parameters[1, 1 + coefficient] * math.exp(
-            -f0_parameters[1, 6 + coefficient] * q_xraydb_squared
-        )
-    element_factor_0 = f0_0 + anomalous_factor_e[0]
-    element_factor_1 = f0_1 + anomalous_factor_e[1]
+    element_factor_0, element_factor_1 = _element_factors(
+        q_norm_squared,
+        f0_parameters,
+        anomalous_factor_e,
+    )
     transverse_norm = math.hypot(q_local_x, q_local_y)
     azimuth_q = math.atan2(q_local_y, q_local_x)
     for rod_index in range(rod_count):
@@ -814,16 +891,13 @@ def _evaluate_point_into(
                 if (branch == 2 and root_sign <= 0.0) or (branch == 1 and root_sign >= 0.0):
                     continue
                 ell = u_value / b3_norm_Ainv
-                if u_radial_A2 == u_normal_A2:
-                    common_damping = math.exp(-0.5 * q_norm_squared * u_radial_A2)
-                else:
-                    common_damping = math.exp(
-                        -0.5
-                        * (
-                            u_radial_A2 * parallel_norm * parallel_norm
-                            + u_normal_A2 * w_value * w_value
-                        )
-                    )
+                common_damping = _common_damping(
+                    q_norm_squared,
+                    parallel_norm,
+                    w_value,
+                    u_radial_A2,
+                    u_normal_A2,
+                )
                 strength = _two_h_strength_A2(
                     rod_index,
                     ell,
@@ -1009,6 +1083,300 @@ def _evaluate_points_kernel(
             caustic[point],
         )
     return density, inverse_count, caustic, valid
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _forward_root_pixel(
+    rod_index: int,
+    u_Ainv: float,
+    kf_film_x: float,
+    kf_film_y: float,
+    kf_film_z: float,
+    coarea_jacobian: float,
+    state: _ForwardDetectorState,
+) -> tuple[int, float, bool]:
+    """Map one regular latent root and return its exact native-pixel owner and mass."""
+
+    if kf_film_z <= 0.0 or coarea_jacobian <= 0.0:
+        return -1, 0.0, False
+    kf_norm = math.sqrt(kf_film_x * kf_film_x + kf_film_y * kf_film_y + kf_film_z * kf_film_z)
+    residual_limit = 512.0 * np.finfo(np.float64).eps * max(state.internal_k_Ainv, 1.0)
+    if abs(kf_norm - state.internal_k_Ainv) > residual_limit:
+        return -1, 0.0, True
+    parallel_squared = kf_film_x * kf_film_x + kf_film_y * kf_film_y
+    air_normal_squared = state.air_k0_Ainv * state.air_k0_Ainv - parallel_squared
+    critical_tolerance = (
+        16.0
+        * np.finfo(np.float64).eps
+        * max(
+            state.air_k0_Ainv * state.air_k0_Ainv,
+            parallel_squared,
+            1.0,
+        )
+    )
+    if air_normal_squared < -critical_tolerance:
+        return -1, 0.0, False
+    kf_air_z = math.sqrt(max(air_normal_squared, 0.0))
+    optical_weight = _exit_optical_weight(
+        (state.refractive_index * state.air_k0_Ainv) ** 2 - parallel_squared,
+        kf_air_z,
+        state.entrance_power,
+        state.incident_decay_Ainv,
+        state.film_thickness_A,
+    )
+    if optical_weight <= 0.0 or state.source_phase_weight <= 0.0:
+        return -1, 0.0, False
+
+    direction_sample_x = kf_film_x / state.air_k0_Ainv
+    direction_sample_y = kf_film_y / state.air_k0_Ainv
+    direction_sample_z = kf_air_z / state.air_k0_Ainv
+    direction_column_per_m = (
+        state.detector_column_row_covectors_sample_per_m[0, 0] * direction_sample_x
+        + state.detector_column_row_covectors_sample_per_m[0, 1] * direction_sample_y
+        + state.detector_column_row_covectors_sample_per_m[0, 2] * direction_sample_z
+    )
+    direction_row_per_m = (
+        state.detector_column_row_covectors_sample_per_m[1, 0] * direction_sample_x
+        + state.detector_column_row_covectors_sample_per_m[1, 1] * direction_sample_y
+        + state.detector_column_row_covectors_sample_per_m[1, 2] * direction_sample_z
+    )
+    direction_normal = (
+        state.detector_normal_sample[0] * direction_sample_x
+        + state.detector_normal_sample[1] * direction_sample_y
+        + state.detector_normal_sample[2] * direction_sample_z
+    )
+    if direction_normal <= _DETECTOR_INCIDENCE_COSINE_TOL:
+        return -1, 0.0, False
+    ray_distance = -state.ray_origin_detector_normal_m / direction_normal
+    if ray_distance <= 0.0:
+        return -1, 0.0, False
+    column = state.ray_origin_detector_column_row_px[0] + ray_distance * direction_column_per_m
+    row = state.ray_origin_detector_column_row_px[1] + ray_distance * direction_row_per_m
+    rows, columns = state.detector_shape_rc
+    if column < -0.5 or column > columns - 0.5 or row < -0.5 or row > rows - 0.5:
+        return -1, 0.0, False
+
+    q_x = kf_film_x - state.ki_film_sample_Ainv[0]
+    q_y = kf_film_y - state.ki_film_sample_Ainv[1]
+    q_z = kf_film_z - state.ki_film_sample_Ainv[2]
+    q_norm_squared = q_x * q_x + q_y * q_y + q_z * q_z
+    element_factor_0, element_factor_1 = _element_factors(
+        q_norm_squared,
+        state.f0_parameters,
+        state.anomalous_factor_e,
+    )
+    parallel_norm = state.rod_inverse_constants[rod_index, 1]
+    w_value = u_Ainv + state.rod_parallel_local_Ainv[rod_index, 2]
+    common_damping = _common_damping(
+        q_norm_squared,
+        parallel_norm,
+        w_value,
+        state.u_radial_A2,
+        state.u_normal_A2,
+    )
+    strength = _two_h_strength_A2(
+        rod_index,
+        u_Ainv / state.b3_norm_Ainv,
+        common_damping,
+        element_factor_0,
+        element_factor_1,
+        state.rod_atom_inplane_factor,
+        state.atom_fractional_offset,
+        state.atom_occupancy_element,
+        state.layers,
+        state.shared_disorder_epsilon,
+        state.rod_hk_population,
+        state.normalization_divisor,
+    )
+    importance_weight = (
+        state.source_phase_weight
+        * state.rod_hk_population[rod_index, 2]
+        * strength
+        * coarea_jacobian
+        * optical_weight
+    )
+    if not math.isfinite(importance_weight):
+        return -1, 0.0, True
+    if importance_weight <= 0.0:
+        return -1, 0.0, False
+    pixel_column = min(math.floor(column + 0.5), columns - 1)
+    pixel_row = min(math.floor(row + 0.5), rows - 1)
+    return pixel_row * columns + pixel_column, importance_weight, False
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _accumulate_latent_pixel_mass_kernel(
+    alpha_rad: FloatArray,
+    beta_rad: FloatArray,
+    image_A2: FloatArray,
+    replicate_total_mass_A2: FloatArray,
+    inverse_draw_count: float,
+    state: _ForwardDetectorState,
+) -> tuple[int, float]:
+    draw_count = alpha_rad.size
+    rod_count = state.rod_hk_population.shape[0]
+    visible_hit_count = 0
+    maximum_root_deposit_A2 = 0.0
+    for draw in range(draw_count):
+        alpha = alpha_rad[draw]
+        beta = beta_rad[draw]
+        sin_alpha = math.sin(alpha)
+        cos_alpha = math.cos(alpha)
+        sin_beta = math.sin(beta)
+        cos_beta = math.cos(beta)
+        direction_local_x = sin_alpha * cos_beta
+        direction_local_y = sin_alpha * sin_beta
+        direction_local_z = cos_alpha
+        direction_sample_x = (
+            state.sample_from_local[0, 0] * direction_local_x
+            + state.sample_from_local[0, 1] * direction_local_y
+            + state.sample_from_local[0, 2] * direction_local_z
+        )
+        direction_sample_y = (
+            state.sample_from_local[1, 0] * direction_local_x
+            + state.sample_from_local[1, 1] * direction_local_y
+            + state.sample_from_local[1, 2] * direction_local_z
+        )
+        direction_sample_z = (
+            state.sample_from_local[2, 0] * direction_local_x
+            + state.sample_from_local[2, 1] * direction_local_y
+            + state.sample_from_local[2, 2] * direction_local_z
+        )
+        direction_norm_squared = (
+            direction_sample_x * direction_sample_x
+            + direction_sample_y * direction_sample_y
+            + direction_sample_z * direction_sample_z
+        )
+        direction_norm = math.sqrt(direction_norm_squared)
+        incident_dot_direction = (
+            state.ki_film_sample_Ainv[0] * direction_sample_x
+            + state.ki_film_sample_Ainv[1] * direction_sample_y
+            + state.ki_film_sample_Ainv[2] * direction_sample_z
+        )
+        incident_parallel = incident_dot_direction / direction_norm_squared
+        for rod_index in range(rod_count):
+            a = state.rod_parallel_local_Ainv[rod_index, 0]
+            b = state.rod_parallel_local_Ainv[rod_index, 1]
+            c0 = state.rod_parallel_local_Ainv[rod_index, 2]
+            x0 = a * cos_alpha + c0 * sin_alpha
+            q0_local_x = x0 * cos_beta - b * sin_beta
+            q0_local_y = x0 * sin_beta + b * cos_beta
+            q0_local_z = -a * sin_alpha + c0 * cos_alpha
+            q0_sample_x = (
+                state.sample_from_local[0, 0] * q0_local_x
+                + state.sample_from_local[0, 1] * q0_local_y
+                + state.sample_from_local[0, 2] * q0_local_z
+            )
+            q0_sample_y = (
+                state.sample_from_local[1, 0] * q0_local_x
+                + state.sample_from_local[1, 1] * q0_local_y
+                + state.sample_from_local[1, 2] * q0_local_z
+            )
+            q0_sample_z = (
+                state.sample_from_local[2, 0] * q0_local_x
+                + state.sample_from_local[2, 1] * q0_local_y
+                + state.sample_from_local[2, 2] * q0_local_z
+            )
+            q0_dot_direction = (
+                q0_sample_x * direction_sample_x
+                + q0_sample_y * direction_sample_y
+                + q0_sample_z * direction_sample_z
+            )
+            q0_parallel = q0_dot_direction / direction_norm_squared
+            is_m0 = (
+                int(state.rod_hk_population[rod_index, 0]) == 0
+                and int(state.rod_hk_population[rod_index, 1]) == 0
+            )
+            lower_u = state.rod_u_bounds_Ainv[rod_index, 0]
+            upper_u = state.rod_u_bounds_Ainv[rod_index, 1]
+            u_tolerance = state.rod_inverse_constants[rod_index, 3]
+            if is_m0:
+                if incident_dot_direction == 0.0:
+                    continue
+                u_value = -2.0 * incident_parallel - q0_parallel
+                if u_value < lower_u - u_tolerance or u_value > upper_u + u_tolerance:
+                    continue
+                kf_film_x = state.ki_film_sample_Ainv[0] + u_value * direction_sample_x
+                kf_film_y = state.ki_film_sample_Ainv[1] + u_value * direction_sample_y
+                kf_film_z = state.ki_film_sample_Ainv[2] + u_value * direction_sample_z
+                coarea = state.internal_k_Ainv / abs(incident_dot_direction)
+                pixel, weight, numeric_failure = _forward_root_pixel(
+                    rod_index,
+                    u_value,
+                    kf_film_x,
+                    kf_film_y,
+                    kf_film_z,
+                    coarea,
+                    state,
+                )
+                if numeric_failure:
+                    raise FloatingPointError("invalid Monte Carlo root numerics")
+                if pixel >= 0:
+                    deposit = weight * inverse_draw_count
+                    image_A2[pixel] += deposit
+                    replicate_total_mass_A2[draw] += weight
+                    visible_hit_count += 1
+                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposit)
+                continue
+
+            q0_perpendicular_x = q0_sample_x - q0_parallel * direction_sample_x
+            q0_perpendicular_y = q0_sample_y - q0_parallel * direction_sample_y
+            q0_perpendicular_z = q0_sample_z - q0_parallel * direction_sample_z
+            sphere_perpendicular_x = (
+                state.ki_film_sample_Ainv[0]
+                - incident_parallel * direction_sample_x
+                + q0_perpendicular_x
+            )
+            sphere_perpendicular_y = (
+                state.ki_film_sample_Ainv[1]
+                - incident_parallel * direction_sample_y
+                + q0_perpendicular_y
+            )
+            sphere_perpendicular_z = (
+                state.ki_film_sample_Ainv[2]
+                - incident_parallel * direction_sample_z
+                + q0_perpendicular_z
+            )
+            perpendicular_squared = (
+                sphere_perpendicular_x * sphere_perpendicular_x
+                + sphere_perpendicular_y * sphere_perpendicular_y
+                + sphere_perpendicular_z * sphere_perpendicular_z
+            )
+            discriminant = state.internal_k_Ainv * state.internal_k_Ainv - perpendicular_squared
+            if discriminant <= 0.0:
+                continue
+            sqrt_discriminant = math.sqrt(discriminant)
+            root_coordinate_magnitude = sqrt_discriminant / direction_norm
+            parallel_offset = incident_parallel + q0_parallel
+            coarea = state.internal_k_Ainv / (sqrt_discriminant * direction_norm)
+            for root_slot in range(2):
+                signed_root = (
+                    -root_coordinate_magnitude if root_slot == 0 else root_coordinate_magnitude
+                )
+                u_value = -parallel_offset + signed_root
+                if u_value < lower_u - u_tolerance or u_value > upper_u + u_tolerance:
+                    continue
+                kf_film_x = sphere_perpendicular_x + signed_root * direction_sample_x
+                kf_film_y = sphere_perpendicular_y + signed_root * direction_sample_y
+                kf_film_z = sphere_perpendicular_z + signed_root * direction_sample_z
+                pixel, weight, numeric_failure = _forward_root_pixel(
+                    rod_index,
+                    u_value,
+                    kf_film_x,
+                    kf_film_y,
+                    kf_film_z,
+                    coarea,
+                    state,
+                )
+                if numeric_failure:
+                    raise FloatingPointError("invalid Monte Carlo root numerics")
+                if pixel >= 0:
+                    deposit = weight * inverse_draw_count
+                    image_A2[pixel] += deposit
+                    replicate_total_mass_A2[draw] += weight
+                    visible_hit_count += 1
+                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposit)
+    return visible_hit_count, maximum_root_deposit_A2
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
@@ -1240,11 +1608,44 @@ def _integrate_pixel_boxes_kernel(
 class CompiledDetectorEvaluator:
     """Python owner for one packed, reusable compiled detector kernel."""
 
-    __slots__ = ("_detector_shape_rc", "_state")
+    __slots__ = (
+        "_detector_column_row_covectors_sample_per_m",
+        "_detector_normal_sample",
+        "_detector_shape_rc",
+        "_ray_origin_detector_column_row_px",
+        "_ray_origin_detector_normal_m",
+        "_state",
+    )
 
     def __init__(self, state: CompiledDetectorState, detector_shape_rc: tuple[int, int]) -> None:
+        detector_steps_lab_m = np.stack(
+            (state.detector_column_step_lab_m, state.detector_row_step_lab_m)
+        )
+        detector_covectors_lab_per_m = detector_steps_lab_m / np.sum(
+            detector_steps_lab_m * detector_steps_lab_m,
+            axis=1,
+            keepdims=True,
+        )
+        detector_normal_lab = state.detector_pixel_area_vector_lab_m2 / np.linalg.norm(
+            state.detector_pixel_area_vector_lab_m2
+        )
+        relative_origin_lab_m = state.ray_origin_lab_m - state.detector_zero_lab_m
+        detector_covectors_sample = np.ascontiguousarray(
+            detector_covectors_lab_per_m @ state.sample_from_lab.T
+        )
+        detector_normal_sample = np.ascontiguousarray(detector_normal_lab @ state.sample_from_lab.T)
+        origin_column_row = np.ascontiguousarray(
+            detector_covectors_lab_per_m @ relative_origin_lab_m
+        )
+        detector_covectors_sample.setflags(write=False)
+        detector_normal_sample.setflags(write=False)
+        origin_column_row.setflags(write=False)
         self._state = state
         self._detector_shape_rc = detector_shape_rc
+        self._detector_column_row_covectors_sample_per_m = detector_covectors_sample
+        self._detector_normal_sample = detector_normal_sample
+        self._ray_origin_detector_column_row_px = origin_column_row
+        self._ray_origin_detector_normal_m = float(detector_normal_lab @ relative_origin_lab_m)
 
     @property
     def state(self) -> CompiledDetectorState:
@@ -1332,6 +1733,83 @@ class CompiledDetectorEvaluator:
             column_px,
             row_px,
             root_selector=0,
+        )
+
+    def accumulate_latent_pixel_mass(
+        self,
+        alpha_rad: NDArray[np.float64],
+        beta_rad: NDArray[np.float64],
+        image_A2: NDArray[np.float64],
+        replicate_total_mass_A2: NDArray[np.float64],
+    ) -> tuple[int, float]:
+        """Accumulate sampled root weights into exact native-pixel owners."""
+
+        alpha = np.ascontiguousarray(alpha_rad, dtype=np.float64).reshape(-1)
+        beta = np.ascontiguousarray(beta_rad, dtype=np.float64).reshape(-1)
+        if alpha.shape != beta.shape or not alpha.size:
+            raise ValueError("sampled alpha and beta must have the same nonzero shape")
+        if (
+            not np.all(np.isfinite(alpha))
+            or not np.all(np.isfinite(beta))
+            or np.any((alpha < 0.0) | (alpha > np.pi))
+            or np.any((beta < 0.0) | (beta >= 2.0 * np.pi))
+        ):
+            raise ValueError("sampled mosaic coordinates lie outside their canonical domains")
+        image = np.asarray(image_A2)
+        replicate = np.asarray(replicate_total_mass_A2)
+        if (
+            image.dtype != np.float64
+            or image.shape != (self._detector_shape_rc[0] * self._detector_shape_rc[1],)
+            or not image.flags.c_contiguous
+            or not image.flags.writeable
+        ):
+            raise ValueError("image_A2 must be a writable contiguous flat detector array")
+        if (
+            replicate.dtype != np.float64
+            or replicate.shape != alpha.shape
+            or not replicate.flags.c_contiguous
+            or not replicate.flags.writeable
+        ):
+            raise ValueError("replicate_total_mass_A2 must be writable and match the draws")
+        state = self._state
+        forward_state = _ForwardDetectorState(
+            self._detector_shape_rc,
+            self._detector_column_row_covectors_sample_per_m,
+            self._detector_normal_sample,
+            self._ray_origin_detector_column_row_px,
+            self._ray_origin_detector_normal_m,
+            state.ki_film_sample_Ainv,
+            state.internal_k_Ainv,
+            state.air_k0_Ainv,
+            state.refractive_index,
+            state.entrance_amplitude.real**2 + state.entrance_amplitude.imag**2,
+            state.incident_decay_Ainv,
+            state.film_thickness_A,
+            state.source_phase_weight,
+            state.sample_from_local,
+            state.rod_hk_population,
+            state.rod_parallel_local_Ainv,
+            state.rod_u_bounds_Ainv,
+            state.rod_inverse_constants,
+            state.b3_norm_Ainv,
+            state.atom_fractional_offset,
+            state.atom_occupancy_element,
+            state.rod_atom_inplane_factor,
+            state.u_radial_A2,
+            state.u_normal_A2,
+            state.f0_parameters,
+            state.anomalous_factor_e,
+            state.layers,
+            state.shared_disorder_epsilon,
+            state.normalization_divisor,
+        )
+        return _accumulate_latent_pixel_mass_kernel(
+            alpha,
+            beta,
+            image,
+            replicate,
+            1.0 / alpha.size,
+            forward_state,
         )
 
     def integrate_pixel_boxes(

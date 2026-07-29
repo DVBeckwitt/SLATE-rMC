@@ -154,11 +154,37 @@ quadrature evaluates the continuous function inside the box. A display macrobin 
 integral over a larger declared rectangle and is labelled
 `raw_detector_macrobin_fixed_quadrature_estimate_A2.v1`.
 
+The optional stochastic terminal estimates the same finite pixel mass by drawing
+`omega_sm=(alpha,beta)` from the declared mosaic probability for every active source stratum `s`.
+Valid states with no reachable selected rod are known-zero strata and need no draw:
+
+```text
+Ihat_P = sum_s (1/M) sum_m sum_(r,j)
+         W_srj(omega_sm) 1[T_srj(omega_sm) in P].
+```
+
+`r` is a physical signed rod, `j` is every retained analytic root, `T` is the canonical forward
+exit/refraction and detector map, and `W` contains source/footprint/phase/polarization mass, rod
+population, finite-stack strength, the Ewald coarea factor once, and entrance/exit optical and
+attenuation factors. Because the proposal is exactly the mosaic law, its density cancels and is not
+multiplied into `W`. No detector-coordinate Jacobian or detector solid-angle factor belongs to a
+forward deposit. Invalid, no-root, and off-panel draws have zero weight and remain in the divisor.
+
+`MonteCarloDetectorPixelMass.measure_id` is
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`. `image_A2` contains weighted raw pixel-mass
+estimates, not integer photon counts. `attempted_root_count` and `visible_hit_count` are work
+ledgers, the detector-visible m=0 support gap remains explicit provenance, and the retained
+per-draw total masses are seed-stability diagnostics. Near a regular
+Ewald fold, the coarea weight can scale as the inverse square root of distance to tangency; its mean
+is integrable while its second moment may diverge. The result therefore makes no ordinary
+central-limit or standard-error claim. Refined deterministic latent integration is the acceptance
+oracle.
+
 `DetectorCoordinateDensityImage` is different: `sample_detector_pixel_center_density(...)` samples
 the completed all-source, all-rod, all-root function once at each native center and retains
 `raw_detector_coordinate_density_A2_per_px2.v1`. It is a display-only coordinate-density sample,
 not a pixel-box mass, macrobin mass, calibrated count expectation, or raw OSC count image.
 
-No point deposition, histogram, pixel supersampling claim, per-reflection normalization, or image
-maximum normalization belongs to the physical result. Masks, background, saturation, detector
-efficiency, and detector PSF remain separate future operators.
+No undeclared or unweighted histogram, general point-deposition API, pixel supersampling claim,
+per-reflection normalization, or image maximum normalization belongs to the physical result. Masks,
+background, saturation, detector efficiency, and detector PSF remain separate future operators.

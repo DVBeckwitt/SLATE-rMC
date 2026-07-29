@@ -206,3 +206,21 @@ a platform-conditional package is required only where uv installs it. Every stag
 interpreter, platform, and package identity as non-scientific operational provenance, and resume
 requires an exact match. Platform portability is still established by the declared output checks,
 not presumed from a matching package lock.
+
+## D035: Optional weighted Monte Carlo detector-pixel estimator
+
+Contract API v11 adds a terminal stochastic estimator without changing D029's continuous detector
+measure or deterministic pixel integral. For every fixed source state, it samples the declared
+folded-alpha/full-beta mosaic law, enumerates every physical rod and retained analytic Ewald root,
+applies the same structure, coarea, optical, source, phase, and polarization factors once, and
+hard-bins the resulting forward detector coordinate. Deposits are importance-weighted raw mass in
+`A2`; root-hit totals are work diagnostics, not photon counts. Invalid, no-root, and off-panel draws
+remain zero and are never resampled or renormalized.
+
+The estimator streams directly into the native image and retains no orientation batch, candidate
+pool, event table, hit table, or point-deposition subsystem. Its distinct measure is
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`; deterministic
+`raw_detector_pixel_mass_A2.v1` remains the quantitative reference. Near visible Ewald folds the
+importance weights can have an infinite second moment, so replicate spread is diagnostic rather
+than a guaranteed Gaussian error bar. Independent refined latent integration remains the proof
+authority.

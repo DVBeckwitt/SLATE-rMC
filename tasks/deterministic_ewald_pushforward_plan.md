@@ -5,6 +5,11 @@ Status: **HISTORICAL IMPLEMENTATION PLAN.** The continuous contract-v9 runtime i
 `docs/CONTRACTS.md` are the live authorities. Unfinished checklist items are not authorization to
 restore sampled events, point deposition, or obsolete compatibility APIs.
 
+Contract API v11 decision D035 supersedes only this historical plan's rejection of every permanent
+Monte Carlo terminal. The admitted replacement is a streaming weighted estimate of the already
+declared detector-pixel mass; it does not restore this plan's deleted candidate, event, selector,
+hit-batch, or bilinear-deposition runtime.
+
 This is the authoritative replacement proposal for the Monte Carlo coating and detector-integration
 framework. It supersedes the production direction in:
 

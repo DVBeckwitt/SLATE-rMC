@@ -10,15 +10,60 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## Current contract-v10 runtime
+## Current contract-v11 runtime
 
 The production runtime is the continuous detector pushforward described in
 `CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
-selection/deposition implementation is retired. Current proof authority is the latent Bragg density,
-analytic line/sphere oracle,
-detector-coordinate inverse map, finite pixel-box integral, and scalar-versus-compiled backend
+selection/deposition implementation remains retired. Contract v11 adds only the streaming weighted
+Monte Carlo pixel-mass terminal in D035; it exposes no sampled-event runtime. Current proof authority
+is the latent Bragg density, analytic line/sphere oracle, detector-coordinate inverse map, finite
+pixel-box integral, refined forward-latent integration, and scalar-versus-compiled backend
 agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
 and scientific subsystem cutovers; they do not reinstate retired APIs.
+
+### Weighted Monte Carlo detector-pixel estimate
+
+The compact permanent test fixes one canonical source state, nonunit source and rod weights,
+regular detector-visible `m=0`, one nonzero physical rod, three PCG64 draws, both nonzero roots,
+three retained zero/miss root slots, exit optics, draw normalization, and exact native-pixel
+ownership. It reconstructs the same RNG substream and compares every nonzero weighted pixel plus
+every complete-source replicate total against the public scalar
+`map_latent`/detector-visible-`m=0` route at mixed tolerance `rtol=1e-8`, `atol=5e-19 A2`. The
+existing inverse/forward detector Jacobian and optical parity test remains unchanged and passes.
+
+An external independent integral used one default source state, the first physical `m=1` rod
+`(-1,0)`, both roots, Gauss-Hermite order 96 in the underlying Gaussian tilt, and 32,768 periodic
+beta midpoints. The refined scalar `map_latent` oracle was `2.78498e-4 A2`, with a conservative
+`1e-8 A2` quadrature envelope from the checked Hermite-order sequence. One million
+current-RNG draws gave `2.7996971437331547e-4 A2` in `2.514 s`, 433,868 visible root deposits, a
+left-half-panel fraction `0.4993680` versus oracle `0.5000136`, and normalized 50-by-50 total
+variation `0.0299513`. The existing 50-by-50/order-2 preview gave
+`6.071882071553833e-5 A2`, left-half fraction `0.7272608`, and total variation `0.35926`; this
+classifies the first divergence as preview quadrature under-resolution rather than stochastic
+normalization. The draw-based spread statistic was consistent with the oracle, but is not promoted
+to a Gaussian error bound because a visible Ewald fold may make the importance-weight second moment
+diverge.
+
+The final warm all-default benchmark used all 1,000 valid configured `ki` states, 85 rods, every
+retained root, the 3,000-by-3,000 detector, seed `20260728`, and one process. The existing
+60-pixel/order-2 preview evaluated 10,000 detector coordinates in `8.5131 s` and returned
+`0.00262385385236163 A2`; it is explicitly a display preview, not a precise native-pixel oracle.
+The streaming estimator measured:
+
+| draws per `ki` | total mosaic draws | warm wall time | speed versus preview | mass (`A2`) |
+|---:|---:|---:|---:|---:|
+| 1 | 1,000 | `0.08687 s` | `98.0x` | `0.003523800840700506` |
+| 40 | 40,000 | `0.41221 s` | `20.65x` | `0.003927799623402615` |
+| 256 | 256,000 | `2.1507 s` | `3.96x` | `0.00384218539103489` |
+| 1,024 | 1,024,000 | `8.3025 s` | `1.03x` | `0.003775901673536583` |
+
+Cold configured-model construction in the final benchmark process took `3.1086 s` and is excluded
+from both terminal timings. At 40 draws per state the estimator retained only the final 69-MiB
+float64 image and small ledgers; `tracemalloc` peak Python/NumPy allocation was 153,006,120 bytes.
+The timing comparison is intentionally honest: low draw counts are much faster and noisy, while
+1,024 draws reached the preview's wall-time scale and a stable default mass near the independent-seed
+`0.00375--0.00380 A2` range. No claim equates the coarse preview's work or accuracy with precise
+3,000-by-3,000 deterministic integration.
 
 ### Complete detector-density reduction cutover
 
