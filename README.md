@@ -38,13 +38,14 @@ For a one-incident-state, native-pixel convergence diagnostic, use
 fixture, so there is only one default authority.
 
 The accepted Bi2Se3 and Bi2Te3 5/10/15-degree staged fits are portable, hash-bound examples. Check
-their inputs without fitting, or replay through ordered intensity into an external directory:
+their inputs without fitting, or replay through each currently qualified checkpoint into an
+external directory:
 
 ```powershell
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml --inputs-only
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml --inputs-only
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda
+  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda --through mosaic
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
   --output-directory C:\path\outside\the\repository\bi2te3-replay --backend cuda
 ```

@@ -166,9 +166,7 @@ def _mosaic_artifact_document(case, fixed_position: dict) -> dict:
         "fixed_geometry": fixed_position,
         "observations": {
             "measured_profile_policy": {
-                "profile_selection": [
-                    {**record, "fit_eligible": True} for record in profiles
-                ]
+                "profile_selection": [{**record, "fit_eligible": True} for record in profiles]
             }
         },
         "source_model": {
@@ -278,11 +276,7 @@ def test_measured_mosaic_ingests_one_verified_position_artifact(tmp_path: Path) 
     independent_angle["state"]["incidence_angles"][2]["effective_angle_rad"] += 1.0e-4
     independent_angle["scientific_revision"] = module.scientific_revision(
         "geometry",
-        {
-            name: value
-            for name, value in independent_angle.items()
-            if name != "scientific_revision"
-        },
+        {name: value for name, value in independent_angle.items() if name != "scientific_revision"},
     )
     artifact.write_text(json.dumps(independent_angle) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="one common incidence-angle delta"):
@@ -617,9 +611,7 @@ def test_scientific_revision_excludes_artifact_location_and_container_hash() -> 
     relocated["state"]["artifact"] = "/other/machine/result.json"
     relocated["state"]["artifact_sha256"] = "f" * 64
     relocated["state"]["fit_evidence"]["benchmark"]["warm_residual_median_seconds"] = 9.0
-    relocated["state"]["fit_evidence"]["outer_audit"][
-        "frozen_reindex_wall_time_seconds"
-    ] = 10.0
+    relocated["state"]["fit_evidence"]["outer_audit"]["frozen_reindex_wall_time_seconds"] = 10.0
     relocated["runtime"]["python_version"] = "0.0.0"
 
     assert module.scientific_revision("mosaic", first) == module.scientific_revision(
@@ -716,6 +708,78 @@ def test_replay_runs_stages_in_order_and_chains_scientific_revisions(
     assert result["stages"]["render"]["runtime"]["packages"]["pillow"] == (
         module.importlib_metadata.version("pillow")
     )
+
+
+def test_verified_replay_can_stop_after_mosaic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_replay_cli()
+    case = module.load_replay_case(
+        ROOT / "examples" / "bi2se3" / "experiment" / "staged_fit_replay.toml"
+    )
+    output = tmp_path / "through_mosaic"
+    artifact = tmp_path / "mosaic_result.json"
+    calls: list[str] = []
+
+    def geometry(*, case, upstream, backend, output_directory):
+        del backend, output_directory
+        calls.append("geometry")
+        return _stage_envelope(
+            module,
+            case,
+            "geometry",
+            upstream,
+            summary=copy.deepcopy(case.expected_scientific_summary["geometry"]),
+            state=_bi2se3_geometry_state(case),
+        )
+
+    def mosaic(*, case, upstream, backend, output_directory):
+        del backend, output_directory
+        calls.append("mosaic")
+        fixed_position = _bi2se3_fixed_position(case, upstream)
+        summary = copy.deepcopy(case.expected_scientific_summary["mosaic"])
+        artifact.write_text(
+            json.dumps(_mosaic_artifact_document(case, fixed_position)) + "\n",
+            encoding="utf-8",
+        )
+        return _stage_envelope(
+            module,
+            case,
+            "mosaic",
+            upstream,
+            summary=summary,
+            state={
+                "artifact": str(artifact),
+                "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                "fixed_position": fixed_position,
+                "parameters": list(summary["parameters"]),
+                "profile_identities": list(summary["profile_identities"]),
+            },
+        )
+
+    def forbidden(**_kwargs):
+        raise AssertionError("a stage after mosaic must not execute")
+
+    monkeypatch.setattr(module, "_run_geometry_stage", geometry)
+    monkeypatch.setattr(module, "_run_mosaic_stage", mosaic)
+    monkeypatch.setattr(module, "_run_ordered_intensity_stage", forbidden)
+    monkeypatch.setattr(module, "_run_render_stage", forbidden)
+
+    result = module.run_replay(
+        case,
+        output_directory=output,
+        backend="cuda",
+        through="mosaic",
+    )
+
+    assert calls == ["geometry", "mosaic"]
+    assert tuple(result["stages"]) == ("geometry", "mosaic")
+    assert (output / "geometry.json").is_file()
+    assert (output / "mosaic.json").is_file()
+    assert (output / "replay_certificate.json").is_file()
+    assert not (output / "ordered_intensity.json").exists()
+    assert not (output / "render.json").exists()
 
 
 def test_fresh_stage_recomputes_revision_before_persisting(

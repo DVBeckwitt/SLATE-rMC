@@ -33,8 +33,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "61f179bc8471278e3e8bcb074ea81f2652a36141f69661f2faefd190d8505ed9",
-      "size_bytes": 4736
+      "sha256": "b71ed4fbbd5b9f0fa556f4aa0203c88ea7fabad7660a49e9e353a7dbc79e2ae5",
+      "size_bytes": 4771
     },
     {
       "path": "SEED_CONTENTS.md",
@@ -108,8 +108,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "09858a4260f3766b4eb37706a7f5a9660920acf59c121e38575c8ad3f1d5e4b1",
-      "size_bytes": 35539
+      "sha256": "bcdf4ad51119091eb78af42bb96842cf2634822a02f15b148f3777301ea62839",
+      "size_bytes": 35567
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -153,8 +153,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "56e5305c8f3c9e8ddb9148370d8e3f65043a9efcc41a0a71ff9a50bc90176005",
-      "size_bytes": 97765
+      "sha256": "5e26052396f3d00dad89e470f29d15e4a18bafa0225c8f6b4fc9d7fe46962a1d",
+      "size_bytes": 98938
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -178,8 +178,8 @@
     },
     {
       "path": "examples/bi2se3/README.md",
-      "sha256": "ccfcd72e0b8cd004f4b7d06e8c152ca966d2d0784c73280e4c67d896cc114b80",
-      "size_bytes": 2946
+      "sha256": "dfc37daebc671b18a6c68c81b79ef3095936235b774309508cf31333b6956346",
+      "size_bytes": 3716
     },
     {
       "path": "examples/bi2se3/experiment/forward_case.toml",
@@ -1408,8 +1408,8 @@
     },
     {
       "path": "tests/test_staged_fit_replay_cli.py",
-      "sha256": "aefc7227605c8efd21073f0d86dcbc5fbd578b09100bbfe5343ef7733b4fa0ad",
-      "size_bytes": 46534
+      "sha256": "b5fae396bf1bff711cdb259b9f241dda98ef257eb5f03ce873f950d058ff37a6",
+      "size_bytes": 49003
     },
     {
       "path": "tools/check_docs.py",

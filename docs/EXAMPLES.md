@@ -257,12 +257,12 @@ disabled because the available images bind a retired mosaic gate.
 
 The frozen replay targets are:
 
-- Bi2Se3 current verified terminal, geometry: eight shared corrections plus one common incidence delta, RMS/max
-  `1.55894/5.65079 px`; `delta_theta_i=0.4197204 deg` gives effective angles
-  `5.4197204/10.4197204/15.4197204 deg`. The following prior-stage targets await rerun against this
-  position artifact: measured mosaic
-  `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809616)` from 15 profiles including
-  five `m=0`; ordered stage: exact synthetic selected-component recovery
+- Bi2Se3 current verified terminal, mosaic. Geometry has eight shared corrections plus one common
+  incidence delta, RMS/max `1.55894/5.65079 px`; `delta_theta_i=0.4197204 deg` gives effective angles
+  `5.4197204/10.4197204/15.4197204 deg`. The measured mosaic fit recovered
+  `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809620)` with objective
+  `1.68025891` from 15 profiles including five `m=0`. The ordered stage remains the next unrun
+  checkpoint; its prior exact synthetic selected-component target is
   `(0.94, 0.78, 0.86, 0.007, 0.034)`.
 - Bi2Te3 geometry: detector tilts fixed, seven active coordinates, RMS/max
   `7.17509/15.07787 px`; measured mosaic `(1.0340984 deg, 0.66004834 deg, 0.34468382)` from 33

@@ -1042,11 +1042,14 @@ profile extraction, but remains a model-limited estimate rather than an independ
 
 ## Model-limited three-OSC Bi2Se3 mosaic estimate
 
-The measured-data run fixes the same nine-coordinate geometry manifest
-`1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`, immutable case SHA-256
-`2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295`, detector center
-`(column,row)=(1453.12,1596.422) px`, lattice, and material. Each incidence uses the same
-deterministic 250-row source realization, revision
+The measured-data run fixes the verified upstream position state at scientific revision
+`sha256-a5de9f498f8ee16f8a7d6966c958acab0250d0e416ac0bcfd305435b5c91bc72`: eight shared
+corrections, a fixed sample-x gauge, and one common incidence delta. The frozen centroid
+selection/indexing revision is
+`sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`; the immutable mosaic
+case SHA-256 is `2c8d647738fb50721e2e08bd23eb405c770301e95477c8d37b9f02fa729ba295`. The detector center
+`(column,row)=(1453.12,1596.422) px`, lattice, and material are also fixed. Each incidence uses the
+same deterministic 250-row source realization, revision
 `42e8108b3ba9c66cb7752bc7e9d2f9fdb8401987a8f9a0eb272d3f4edeaa39a7`, with spatial sigma
 `2.12330450072e-5 m`, divergence sigma `3.705865455998e-4 rad`, mean wavelength
 `1.540592925 A`, and wavelength sigma `0.010784150475 A`. All 250 state intensities are reduced to
@@ -1073,8 +1076,10 @@ The current handoff uses mosaic schema `rasim-bi2se3-real-mosaic-fit-v3` and mod
 revision `positive-combined-detector-m0-profile-signal.v2`. Version 3 additionally carries the
 upstream position revision, corrections, common incidence delta, and commanded/effective angles;
 the ordered-intensity runner rejects older artifacts before compiling a response. The numerical
-mosaic result below predates this v3 position handoff and awaits requalification after the verified
-position checkpoint.
+mosaic result below is the 2026-07-30 v3 requalification from verified position revision
+`sha256-a5de9f498f8ee16f8a7d6966c958acab0250d0e416ac0bcfd305435b5c91bc72`. It retains one common
+incidence delta `0.007325503018138858 rad` and evaluates the three detector functions at
+`5.4197204057`, `10.4197204057`, and `15.4197204057 deg`.
 
 - 5 degrees: `m=0` orders `003` and `006`;
 - 10 degrees: `m=0` order `006`, plus both sides of `m=1,L=5` and `m=1,L=10`;
@@ -1097,15 +1102,19 @@ Gaussian sigma            = 1.322875656 deg
 Gaussian FWHM             = 3.115134111 deg
 Lorentzian HWHM           = 0.489897949 deg
 Lorentzian FWHM           = 0.979795897 deg
-Lorentzian probability    = 0.448096163
+Lorentzian probability    = 0.448096199
 ```
 
 This is an axisymmetric probability mixture, not a Voigt convolution. The objective is
-`1.680259188`; all 15 fitted amplitudes are positive. Relative-profile residual RMS is `0.334690`
+`1.680258910`; all 15 fitted amplitudes are positive. Relative-profile residual RMS is `0.334690`
 overall, `0.163634` for the five `m=0` profiles, and `0.393240` for the ten nonzero-`m` profiles.
-The nuisance-projected sensitivity has rank 3 and condition `10.7987`. Replacing the primary
-constant signed-detrending basis with an affine basis changes Gaussian sigma by `-0.0361416 deg`,
-Lorentzian HWHM by `-0.0686663 deg`, and Lorentzian probability by `-0.0766298`.
+Per-incidence RMS/max residuals are `0.132717/0.181481`, `0.147551/0.223475`, and
+`0.438203/0.753333` for the 5-, 10-, and 15-degree datasets. The nuisance-projected sensitivity has
+rank 3, condition `10.7987469`, and singular values `(1.19836003, 0.38509629, 0.11097214)`.
+All five deterministic width-refinement levels retain one basin and the same interior parameter
+triple. Replacing the primary constant signed-detrending basis with an affine basis changes
+Gaussian sigma by `-0.0361416 deg`, Lorentzian HWHM by `-0.0686663 deg`, and Lorentzian probability
+by `-0.0766298`.
 
 The result is explicitly `MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE` and legacy
 classification `NO_ORACLE`. Both strong 15-degree `m=1,L=5` profiles remain poorly reproduced
@@ -1113,17 +1122,20 @@ classification `NO_ORACLE`. Both strong 15-degree `m=1,L=5` profiles remain poor
 with a minimum of `-40.7514 counts/px`; that additive basis is not a physical background model.
 Without a calibrated source/detector point-spread function, this envelope is not uniquely intrinsic
 sample mosaic. The deterministic background sensitivity is not a statistical confidence interval.
+The configured 52-layer nearly perfect 2H stack with shared disorder epsilon `0.001` is fixed;
+no ordered/SF or stacking-fault coordinate is fitted. This measured stage also has no held-out
+profile prediction, so its per-dataset residuals are in-sample diagnostics.
 
-The current gate-v2 CUDA run took `344.952 s` total: `56.379 s` setup, `40.524 s` OSC projection
-and model layout, `178.265 s` component-bank construction and constant-background fit, and
-`68.937 s` for the affine-background robustness fit. Traced Python/NumPy peak memory was
-`206,667,033` bytes. Its JSON SHA-256 is
-`69c782f67216ea595b72abced82a9660833d1acbee7b38ffaedb2de7d81df829`; the diagnostic NPZ SHA-256
-is `e41245290268ab9c57fa891a3631ef401e6181282f8c2c672f3a2a6779857858`. The current external
-artifacts are
-`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_mosaic_gate_v2\bi2se3_real_mosaic_fit.json`
-and
-`C:\Users\Kenpo\.codex\visualizations\2026\07\22\019f8a1c-5dba-7ce2-afae-11e6953c18f4\bi2se3_250ki_mosaic_gate_v2\bi2se3_real_mosaic_fit.ra_diag.npz`.
+The requalification CUDA run took `574.581 s` total: `99.362 s` setup, `87.685 s` OSC projection
+and model layout, `289.755 s` component-bank construction and constant-background fit, and
+`96.328 s` for the affine-background robustness fit. Traced Python/NumPy peak memory was
+`205,659,618` bytes. Its JSON SHA-256 is
+`9ba0a9472dac0cd8acb58c41c167933772e87aab811069c03d357d15a2225aba`; the diagnostic NPZ SHA-256
+is `e01e18f88e8f3661e8d1152db0aa761ce5833b957a76e7713d3b69f3039b2fed`. The replay mosaic stage
+has scientific revision `sha256-7f89791d7f33373b5dcbcb6ecd3cf721325c1d79de3a1fcd5c7f141f645bf4ce`.
+An unchanged resume verified in `8 s` without recomputation and preserved every geometry, mosaic,
+diagnostic, and certificate hash. The external artifacts are under
+`C:\Users\Kenpo\.codex\visualizations\2026\07\30\019fb3d1-1741-7813-9f7c-c06c43cb0f6a\bi2se3_positions_theta_delta_v2_final`.
 The retired gate-v1 JSON SHA-256
 `a5e80ca4842c068f5779d19481cf489b4871a45281c0650977376ea4d9b1f7d8` is historical numerical
 evidence only; current consumers reject its 32-candidate catalog. No independently denser
@@ -1163,7 +1175,7 @@ The current ordered result contract is `rasim-bi2se3-ordered-intensity-recovery-
 contract `source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Version 4 binds
 and reconstructs the upstream v3 position state; the renderer rejects the older position handoff or
 coefficient-norm certificate contract. The numerical ordered result below is the prior v3 proof and
-awaits requalification after mosaic is resumed.
+awaits requalification against the newly verified mosaic artifact.
 
 For the final native-center images, an exact fitted 10-degree 250-state/85-rod/all-root 96-by-96
 block benchmark took `1.17849 s` on CPU and `0.499570 s` on the NVIDIA GeForce RTX 3060 (`2.36x`).
@@ -1336,19 +1348,19 @@ in each case. The runner validates the complete transitive numerical dependency 
 hash-checked `uv.lock` read immediately before execution; resume rejects a stage from a different
 runtime even though runtime provenance is deliberately excluded from its scientific revision.
 
-Bi2Se3 now has a verified geometry-only replay checkpoint: eight shared corrections plus one common
-incidence delta, one pivot bound, so parameter precision remains unqualified. The artifact is
-certified only through geometry as requested. Its stage-case SHA-256 is
+Bi2Se3 now has a verified geometry-then-mosaic replay checkpoint. Geometry contains eight shared
+corrections plus one common incidence delta and one pivot bound, so geometry-parameter precision
+remains unqualified. Its stage-case SHA-256 is
 `c87e86f00372e7a3eaf84e71f1315eda9d55381d2513c04d5e494639cd29d6df` and its scientific revision
 is `sha256-a5de9f498f8ee16f8a7d6966c958acab0250d0e416ac0bcfd305435b5c91bc72`.
-Mosaic and ordered/SF code consume that exact position
-state, but their numerical references below predate it and must be requalified when those stages are
-resumed. The prior mosaic target was
-`(sigma_G,HWHM_L,eta)=(1.3228756555 deg,0.4898979486 deg,0.4480961630)` with objective
-`1.6802591883` over 15 profiles including five `m=0`. Its profile RMS/max residuals
+The mosaic stage consumes that exact position state and is verified at scientific revision
+`sha256-7f89791d7f33373b5dcbcb6ecd3cf721325c1d79de3a1fcd5c7f141f645bf4ce`. It recovered
+`(sigma_G,HWHM_L,eta)=(1.3228756555 deg,0.4898979486 deg,0.4480961989)` with objective
+`1.6802589099` over 15 profiles including five `m=0`. Its profile RMS/max residuals
 `0.33469/0.75333` and eight negative reconstructed bins demonstrate model limitation. The ordered
-target `(oBi,oSe1,oSe2,Ur,Uz)=(0.94,0.78,0.86,0.007,0.034)` is machine-precision synthetic
-recovery, not unresolved raw-OSC intensity or integrated peak mass.
+target `(oBi,oSe1,oSe2,Ur,Uz)=(0.94,0.78,0.86,0.007,0.034)` still awaits requalification against
+this mosaic artifact; it is machine-precision synthetic recovery, not unresolved raw-OSC intensity
+or integrated peak mass.
 
 Bi2Te3 recomputes position-free geometry from the tracked gzip OSCs while retaining the historical
 catalog for audit. Under the case-bound runtime, the tracked-container selection revision is

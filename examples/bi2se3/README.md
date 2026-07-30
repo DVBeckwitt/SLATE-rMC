@@ -25,7 +25,18 @@ Its 3,000 x 3,000 images are external configured-truth forward visualizations wi
 nuisance amplitudes, not fitted observations or recovered-model renders. Raw-significant `003` at
 10 and 15 degrees is reported but not fitted because this forward model predicts zero signal there.
 
-For the measured images, add `--observation-mode osc --skip-images`. The case-bound
+For the measured images, supply the completed verified position stage atomically; raw geometry
+corrections or a loose revision are not accepted:
+
+```powershell
+uv run --frozen python scripts/recover_bi2se3_mosaic.py `
+  --observation-mode osc `
+  --position-artifact C:\external\bi2se3-replay\geometry.json `
+  --source-sample-count 250 --skip-images `
+  --output-directory C:\external\bi2se3-mosaic
+```
+
+The case-bound
 `experiment/mosaic_fit_measured_policy.toml` removes entire weak profiles using frozen local
 sidebands and removes both 10-degree `m=1,L=4` secondary-lobe profiles; it never trims individual
 central-profile bins by intensity. The three OSC files are still fitted simultaneously. The fitted
@@ -40,8 +51,16 @@ tracked dependency lock is part of the replay:
 ```powershell
 uv run --frozen python scripts/replay_staged_fit.py `
   examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\external\bi2se3-replay --backend cuda
+  --output-directory C:\external\bi2se3-replay --backend cuda --through geometry
+
+uv run --frozen python scripts/replay_staged_fit.py `
+  examples/bi2se3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2se3-replay --backend cuda --through mosaic --resume
 ```
+
+The second command validates and reuses `geometry.json`, fits only mosaic, and stops without
+ordered-intensity or detector rendering. A later stage requires this verified predecessor and must
+be requested explicitly.
 
 The ordered stage is an identifiability proof at fixed geometry and mosaic; it is not raw-OSC
 structure-factor recovery.
