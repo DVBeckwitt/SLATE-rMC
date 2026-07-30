@@ -2,7 +2,7 @@
 
 Run from the repository root with::
 
-    python scripts/figures/ewald_sphere_viewer.py
+    python interactive/ewald_sphere_viewer.py
 
 The figure uses one Cu K-alpha1 beam. Dragging temporarily focuses a lightweight
 preview of the selected panel; release to restore and synchronize all six

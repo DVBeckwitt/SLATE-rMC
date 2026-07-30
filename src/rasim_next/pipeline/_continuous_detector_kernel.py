@@ -71,6 +71,15 @@ class _ForwardDetectorState(NamedTuple):
     normalization_divisor: float
 
 
+class _DetectorProjection(NamedTuple):
+    """Batched ray-to-detector projection compiled in the sample frame."""
+
+    detector_column_row_covectors_sample_per_m: FloatArray
+    detector_normal_sample: FloatArray
+    ray_origin_detector_column_row_px: FloatArray
+    ray_origin_detector_normal_m: FloatArray
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledDetectorState:
     """Immutable numeric state consumed by the no-GIL point kernel."""
@@ -251,6 +260,43 @@ class CompiledDetectorState:
         for name, value in scalar_values.items():
             object.__setattr__(rebound, name, value)
         object.__setattr__(rebound, "entrance_amplitude", entrance)
+        return rebound
+
+    def _rebind_validated_geometry(
+        self,
+        *,
+        detector_zero_lab_m: FloatArray,
+        detector_column_step_lab_m: FloatArray,
+        detector_row_step_lab_m: FloatArray,
+        detector_pixel_area_vector_lab_m2: FloatArray,
+        ray_origin_lab_m: FloatArray,
+        sample_from_lab: FloatArray,
+        ki_film_sample_Ainv: FloatArray,
+        internal_k_Ainv: float,
+        entrance_amplitude: complex,
+        incident_decay_Ainv: float,
+        source_phase_weight: float,
+    ) -> CompiledDetectorState:
+        """Reuse geometry arrays validated by the owning source-average model."""
+
+        rebound = object.__new__(type(self))
+        for descriptor in fields(self):
+            object.__setattr__(rebound, descriptor.name, getattr(self, descriptor.name))
+        replacements = {
+            "detector_zero_lab_m": detector_zero_lab_m,
+            "detector_column_step_lab_m": detector_column_step_lab_m,
+            "detector_row_step_lab_m": detector_row_step_lab_m,
+            "detector_pixel_area_vector_lab_m2": detector_pixel_area_vector_lab_m2,
+            "ray_origin_lab_m": ray_origin_lab_m,
+            "sample_from_lab": sample_from_lab,
+            "ki_film_sample_Ainv": ki_film_sample_Ainv,
+            "internal_k_Ainv": internal_k_Ainv,
+            "entrance_amplitude": entrance_amplitude,
+            "incident_decay_Ainv": incident_decay_Ainv,
+            "source_phase_weight": source_phase_weight,
+        }
+        for name, value in replacements.items():
+            object.__setattr__(rebound, name, value)
         return rebound
 
     def rebind_physics(
@@ -1605,6 +1651,41 @@ def _integrate_pixel_boxes_kernel(
     )
 
 
+def _compile_detector_projection(
+    *,
+    detector_zero_lab_m: FloatArray,
+    detector_column_step_lab_m: FloatArray,
+    detector_row_step_lab_m: FloatArray,
+    detector_pixel_area_vector_lab_m2: FloatArray,
+    sample_from_lab: FloatArray,
+    ray_origin_lab_m: FloatArray,
+) -> _DetectorProjection:
+    """Compile the one authoritative batched ray-to-native-pixel projection."""
+
+    ray_origins = np.asarray(ray_origin_lab_m, dtype=np.float64)
+    if ray_origins.ndim != 2 or ray_origins.shape[1] != 3:
+        raise ValueError("ray_origin_lab_m must have shape (state_count, 3)")
+    detector_steps_lab_m = np.stack((detector_column_step_lab_m, detector_row_step_lab_m))
+    detector_covectors_lab_per_m = detector_steps_lab_m / np.sum(
+        detector_steps_lab_m * detector_steps_lab_m,
+        axis=1,
+        keepdims=True,
+    )
+    detector_normal_lab = detector_pixel_area_vector_lab_m2 / np.linalg.norm(
+        detector_pixel_area_vector_lab_m2
+    )
+    relative_origin_lab_m = ray_origins - detector_zero_lab_m
+    projection = _DetectorProjection(
+        np.ascontiguousarray(detector_covectors_lab_per_m @ sample_from_lab.T),
+        np.ascontiguousarray(detector_normal_lab @ sample_from_lab.T),
+        np.ascontiguousarray(relative_origin_lab_m @ detector_covectors_lab_per_m.T),
+        np.ascontiguousarray(relative_origin_lab_m @ detector_normal_lab),
+    )
+    for value in projection:
+        value.setflags(write=False)
+    return projection
+
+
 class CompiledDetectorEvaluator:
     """Python owner for one packed, reusable compiled detector kernel."""
 
@@ -1618,40 +1699,52 @@ class CompiledDetectorEvaluator:
     )
 
     def __init__(self, state: CompiledDetectorState, detector_shape_rc: tuple[int, int]) -> None:
-        detector_steps_lab_m = np.stack(
-            (state.detector_column_step_lab_m, state.detector_row_step_lab_m)
+        projection = _compile_detector_projection(
+            detector_zero_lab_m=state.detector_zero_lab_m,
+            detector_column_step_lab_m=state.detector_column_step_lab_m,
+            detector_row_step_lab_m=state.detector_row_step_lab_m,
+            detector_pixel_area_vector_lab_m2=state.detector_pixel_area_vector_lab_m2,
+            sample_from_lab=state.sample_from_lab,
+            ray_origin_lab_m=state.ray_origin_lab_m.reshape(1, 3),
         )
-        detector_covectors_lab_per_m = detector_steps_lab_m / np.sum(
-            detector_steps_lab_m * detector_steps_lab_m,
-            axis=1,
-            keepdims=True,
-        )
-        detector_normal_lab = state.detector_pixel_area_vector_lab_m2 / np.linalg.norm(
-            state.detector_pixel_area_vector_lab_m2
-        )
-        relative_origin_lab_m = state.ray_origin_lab_m - state.detector_zero_lab_m
-        detector_covectors_sample = np.ascontiguousarray(
-            detector_covectors_lab_per_m @ state.sample_from_lab.T
-        )
-        detector_normal_sample = np.ascontiguousarray(detector_normal_lab @ state.sample_from_lab.T)
-        origin_column_row = np.ascontiguousarray(
-            detector_covectors_lab_per_m @ relative_origin_lab_m
-        )
-        detector_covectors_sample.setflags(write=False)
-        detector_normal_sample.setflags(write=False)
-        origin_column_row.setflags(write=False)
         self._state = state
         self._detector_shape_rc = detector_shape_rc
-        self._detector_column_row_covectors_sample_per_m = detector_covectors_sample
-        self._detector_normal_sample = detector_normal_sample
-        self._ray_origin_detector_column_row_px = origin_column_row
-        self._ray_origin_detector_normal_m = float(detector_normal_lab @ relative_origin_lab_m)
+        self._detector_column_row_covectors_sample_per_m = (
+            projection.detector_column_row_covectors_sample_per_m
+        )
+        self._detector_normal_sample = projection.detector_normal_sample
+        self._ray_origin_detector_column_row_px = projection.ray_origin_detector_column_row_px[0]
+        self._ray_origin_detector_normal_m = float(projection.ray_origin_detector_normal_m[0])
 
     @property
     def state(self) -> CompiledDetectorState:
         """Return the immutable numeric state for geometry-only rebinding."""
 
         return self._state
+
+    def _rebind_validated_projection(
+        self,
+        state: CompiledDetectorState,
+        projection: _DetectorProjection,
+        *,
+        state_index: int,
+    ) -> CompiledDetectorEvaluator:
+        """Bind one state to an already compiled batched detector projection."""
+
+        rebound = object.__new__(type(self))
+        rebound._state = state
+        rebound._detector_shape_rc = self._detector_shape_rc
+        rebound._detector_column_row_covectors_sample_per_m = (
+            projection.detector_column_row_covectors_sample_per_m
+        )
+        rebound._detector_normal_sample = projection.detector_normal_sample
+        rebound._ray_origin_detector_column_row_px = projection.ray_origin_detector_column_row_px[
+            state_index
+        ]
+        rebound._ray_origin_detector_normal_m = float(
+            projection.ray_origin_detector_normal_m[state_index]
+        )
+        return rebound
 
     def _evaluate_with_root_selector(
         self,
@@ -1741,6 +1834,8 @@ class CompiledDetectorEvaluator:
         beta_rad: NDArray[np.float64],
         image_A2: NDArray[np.float64],
         replicate_total_mass_A2: NDArray[np.float64],
+        *,
+        image_weight_scale: float | None = None,
     ) -> tuple[int, float]:
         """Accumulate sampled root weights into exact native-pixel owners."""
 
@@ -1771,6 +1866,12 @@ class CompiledDetectorEvaluator:
             or not replicate.flags.writeable
         ):
             raise ValueError("replicate_total_mass_A2 must be writable and match the draws")
+        if image_weight_scale is None:
+            weight_scale = 1.0 / alpha.size
+        else:
+            weight_scale = float(image_weight_scale)
+            if not math.isfinite(weight_scale) or weight_scale <= 0.0:
+                raise ValueError("image_weight_scale must be finite and positive")
         state = self._state
         forward_state = _ForwardDetectorState(
             self._detector_shape_rc,
@@ -1808,7 +1909,7 @@ class CompiledDetectorEvaluator:
             beta,
             image,
             replicate,
-            1.0 / alpha.size,
+            weight_scale,
             forward_state,
         )
 

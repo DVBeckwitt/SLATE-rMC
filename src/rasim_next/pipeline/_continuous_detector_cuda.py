@@ -97,10 +97,10 @@ def _pack_source_average(
     rod_u_tolerance = np.zeros((state_count, master_rod_count), dtype=np.float64)
 
     atom_count = first.atom_fractional_offset.shape[0]
-    rod_hk_population = np.empty((master_rod_count, 3), dtype=np.float64)
-    rod_parallel = np.empty((master_rod_count, 3), dtype=np.float64)
-    rod_inverse = np.empty((master_rod_count, 3), dtype=np.float64)
-    rod_inplane = np.empty((master_rod_count, atom_count), dtype=np.complex128)
+    rod_hk_population = np.zeros((master_rod_count, 3), dtype=np.float64)
+    rod_parallel = np.zeros((master_rod_count, 3), dtype=np.float64)
+    rod_inverse = np.zeros((master_rod_count, 3), dtype=np.float64)
+    rod_inplane = np.zeros((master_rod_count, atom_count), dtype=np.complex128)
     master_filled = np.zeros(master_rod_count, dtype=np.bool_)
 
     shared_arrays = (
@@ -207,9 +207,6 @@ def _pack_source_average(
             state.anomalous_factor_e[0],
             state.anomalous_factor_e[1],
         )
-
-    if not np.all(master_filled):
-        raise ValueError("the CUDA source states do not cover the full master rod catalog")
 
     return _PackedSourceAverage(
         detector_zero_lab_m=np.ascontiguousarray(first.detector_zero_lab_m),

@@ -59,6 +59,20 @@ runtime and resume requires an exact runtime match; fit values remain tolerance-
 interpreter, operating-system, and CUDA executions. The optional historical render oracle has a
 separate qualification boundary described in `docs/VALIDATION.md`.
 
+## Interactive tools
+
+All supported live viewers are collected in [`interactive/`](interactive/README.md):
+
+```powershell
+uv run --extra visualization python interactive/detector_viewer.py
+uv run --extra visualization python interactive/ewald_sphere_viewer.py
+```
+
+The detector viewer provides continuous full-native Monte Carlo updates while parameters change.
+The Ewald viewer synchronizes Bi2Se3 and Bi2Te3 Ewald spheres and detector planes at 5, 10, and 15
+degrees. Their controls, backend choices, and scientific qualifications are documented beside the
+entry points and in `docs/EXAMPLES.md`.
+
 ## Scientific contracts
 
 - Internal angles are radians; distances are metres; wavelengths and crystal lengths are

@@ -150,7 +150,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-MEA-003A | reciprocal event Jacobian versus separate Lorentz factor | implicit old `I_Q` and powder paths | SI event measure | mosaic/integration | CORRECTED, no duplicate factor |
 | PHY-MEA-004 | deterministic detector pixel-box integration | point/bilinear events | detector measurement | integration | CORRECTED with convergence proof |
 | PHY-MEA-005 | point/bilinear event deposition | diffraction accumulation helpers | numerical | none | RETIRED by pixel-box integration |
-| PHY-MEA-005A | weighted forward Monte Carlo detector-pixel mass estimate | no accepted equivalent | latent pushforward and detector measurement | integration | NEW optional API-v11 estimator; exact hard bins, no retained events or calibrated counts; deterministic latent oracle required |
+| PHY-MEA-005A | weighted forward Monte Carlo detector-pixel mass estimate | no accepted equivalent | latent pushforward and detector measurement | integration | NEW optional API-v11 estimator, execution-extended in API v12; exact hard bins, no retained events or calibrated counts; deterministic latent oracle required |
 | PHY-MEA-006 | detector PSF/resolution | bilinear was not a PSF | ordered-results resolution discussion | none | DEFERRED normalized operator |
 | PHY-MEA-007 | detector efficiency | not explicit | absolute-count requirement | none | DEFERRED unless calibrated |
 | PHY-MEA-008 | masks, beamstop, saturation, bad pixels | GUI/data paths | experimental handling | none | DEFERRED from forward core |

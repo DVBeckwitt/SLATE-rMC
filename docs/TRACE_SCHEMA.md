@@ -10,9 +10,10 @@ detector-coordinate, and total-detector-mass identifiers for reference compariso
 claim that every continuous result emits a trace row. Candidate, selection, sampled-event,
 deposition-index, deposition-weight, and clipped-point identifiers below are frozen historical
 names only; the live runtime never emits them. New continuous proofs prefer typed result measure
-IDs over inventing replacement trace aliases. The API-v11 stochastic result likewise records its
-measure, proposal, RNG, source, rod, and work ledgers in the typed result; it does not revive event
-or deposition trace rows.
+IDs over inventing replacement trace aliases. The stochastic result introduced in API v11 and
+execution-extended in API v12 records its measure, proposal, RNG, source, rod, backend/device, and
+work ledgers in typed results; it does not revive event or deposition trace rows. Progressive
+execution and the leased presentation frame are execution state, not new trace stages.
 
 ## Stage IDs
 

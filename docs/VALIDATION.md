@@ -14,14 +14,16 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 
 The production runtime is the continuous detector pushforward described in
 `CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
-selection/deposition implementation remains retired. Contract v11 added the streaming weighted
+selection/deposition implementation remains retired. Contract v11 introduced the streaming weighted
 Monte Carlo pixel-mass terminal in D035; it exposes no sampled-event runtime. Contract v12 adds the
-deterministic, pointwise intrinsic Ewald outgoing-direction density in D036. Current proof authority
-is the latent Bragg density, analytic line/sphere oracle, detector-coordinate inverse map, intrinsic
-solid-angle inverse map, finite pixel-box integral, refined forward-latent integration, and
-scalar-versus-compiled backend agreement. Earlier sections in this file are retained historical
-evidence for the source-to-`ki` and scientific subsystem cutovers; they do not reinstate retired
-APIs.
+deterministic, pointwise intrinsic Ewald outgoing-direction density in D036 and explicit progressive
+CPU/CUDA execution, cancellation, causal geometry rebinding, provenance, and full-native
+presentation in D037. These execution and presentation changes do not change the estimator's
+measure or expose a sampled-event runtime. Current proof authority is the latent Bragg density,
+analytic line/sphere oracle, detector-coordinate inverse map, intrinsic solid-angle inverse map,
+finite pixel-box integral, refined forward-latent integration, and scalar-versus-compiled backend
+agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
+and scientific subsystem cutovers; they do not reinstate retired APIs.
 
 ### Intrinsic Ewald outgoing-direction density
 
@@ -77,22 +79,21 @@ From process start to atomic manifest installation the single-process run took a
 no sphere rebinning: the publication surface consumes the direct pointwise raster at its declared
 resolution, while the small sphere glyph in the projection schematic alone uses a display-only
 coarsening.
-
 ### Weighted Monte Carlo detector-pixel estimate
 
 The compact permanent test fixes one canonical source state, nonunit source and rod weights,
-regular detector-visible `m=0`, one nonzero physical rod, three PCG64 draws, both nonzero roots,
+regular detector-visible `m=0`, one nonzero physical rod, three Philox draws, both nonzero roots,
 three retained zero/miss root slots, exit optics, draw normalization, and exact native-pixel
-ownership. It reconstructs the same RNG substream and compares every nonzero weighted pixel plus
-every complete-source replicate total against the public scalar
+ownership. It independently reconstructs the fixed-width Philox counter blocks and compares every
+nonzero weighted pixel plus every complete-source replicate total against the public scalar
 `map_latent`/detector-visible-`m=0` route at mixed tolerance `rtol=1e-8`, `atol=5e-19 A2`. The
 existing inverse/forward detector Jacobian and optical parity test remains unchanged and passes.
 
 An external independent integral used one default source state, the first physical `m=1` rod
 `(-1,0)`, both roots, Gauss-Hermite order 96 in the underlying Gaussian tilt, and 32,768 periodic
 beta midpoints. The refined scalar `map_latent` oracle was `2.78498e-4 A2`, with a conservative
-`1e-8 A2` quadrature envelope from the checked Hermite-order sequence. One million
-current-RNG draws gave `2.7996971437331547e-4 A2` in `2.514 s`, 433,868 visible root deposits, a
+`1e-8 A2` quadrature envelope from the checked Hermite-order sequence. One million contract-v11
+PCG64 draws gave `2.7996971437331547e-4 A2` in `2.514 s`, 433,868 visible root deposits, a
 left-half-panel fraction `0.4993680` versus oracle `0.5000136`, and normalized 50-by-50 total
 variation `0.0299513`. The existing 50-by-50/order-2 preview gave
 `6.071882071553833e-5 A2`, left-half fraction `0.7272608`, and total variation `0.35926`; this
@@ -101,7 +102,8 @@ normalization. The draw-based spread statistic was consistent with the oracle, b
 to a Gaussian error bound because a visible Ewald fold may make the importance-weight second moment
 diverge.
 
-The final warm all-default benchmark used all 1,000 valid configured `ki` states, 85 rods, every
+The historical contract-v11 warm all-default benchmark used all 1,000 valid configured `ki` states,
+85 rods, every
 retained root, the 3,000-by-3,000 detector, seed `20260728`, and one process. The existing
 60-pixel/order-2 preview evaluated 10,000 detector coordinates in `8.5131 s` and returned
 `0.00262385385236163 A2`; it is explicitly a display preview, not a precise native-pixel oracle.
@@ -121,6 +123,66 @@ The timing comparison is intentionally honest: low draw counts are much faster a
 1,024 draws reached the preview's wall-time scale and a stable default mass near the independent-seed
 `0.00375--0.00380 A2` range. No claim equates the coarse preview's work or accuracy with precise
 3,000-by-3,000 deterministic integration.
+
+### Fluid full-native execution and presentation qualification (T19)
+
+Task [T19](../tasks/19_fluid_detector_viewer.md) replaces the execution realization with
+`numpy.philox.fixed_width_source_draw.v1`. The independent scalar test reconstructs the Philox key
+and counter blocks without calling the production sampler and covers regular `m=0`, both nonzero
+roots, structure, Ewald coarea, entrance/exit optics, source/rod/phase/polarization factors, hard
+native-pixel ownership, replicate totals, and mass conservation. Separate tests establish exact
+draw-prefix and source-prefix identity, exact one-versus-four-worker CPU reduction, named
+cancellation with no partial result, and rejection of a geometry rebind whose rods or topology
+change.
+
+On the available NVIDIA GeForce RTX 3060, the forward CUDA fixture matches CPU occupied pixels and
+integer ledgers exactly; the 1,000-state/85-rod parity probe had maximum image difference
+`1.11e-16 A2`. Progressive and one-shot output on the permanent CUDA fixture agree within
+`rtol=8e-11`, `atol=3e-24 A2`. The cancellation proof first establishes a one-draw prefix, cancels
+after a device launch, verifies the sampler resets to zero draws, and then reproduces the clean
+settled result. A geometry-only CUDA rebind matches a freshly compiled sampler. Patched device
+absence fails at backend selection; there is no CPU fallback under a CUDA identity.
+
+The latest-only scheduler proof submits revisions A/B/C, proves B never starts, rejects A's stale
+completion, and publishes only C's deduplicated 1/4/8/requested sequence. A failed settled stage is
+retryable. Detector-only controls retain the incident transport object, including when a prior
+sample correction is nonzero; validity-changing sample geometry rebuilds incident transport and
+re-enumerates rods. CPU and CUDA projection-only rebound images match a fresh complete geometry
+rebind, a full-rebind/pose-rebind sequence returns to the original image, and device identity checks
+prove all four transport arrays remain resident. A non-square sentinel proves the
+presentation boundary preserves complete `[row,column]` shape, corners, element count, source
+float64 bytes, and exactly one texture-coordinate row flip. A live Qt/OpenGL smoke initialized the
+R32F texture and uploaded a frame successfully.
+
+For the full 1,000-state, 85-rod, 3,000-by-3,000 workload, cold configured construction took
+`4.398 s`, CUDA sampler allocation `1.057 s`, and the first preview including JIT `2.434 s`. Median
+warm incremental stages were `16.494 ms` (draw 1), `16.823 ms` (add draws 2--4), `28.666 ms` (add
+draws 5--8), and `244.746 ms` (add draws 9--49). Materializing the already-computed 49-draw
+authoritative float64 snapshot added `59.351 ms`. Before projection-only specialization, compatible
+model rebuild/rebind/first-preview medians were `15.039/20.161/16.241 ms`, and complete detector
+interaction preparation took roughly `69--81 ms`. After specialization, 10 interleaved warmed pitch
+and translation revisions measured `28.074 ms` and `28.342 ms` median through full-native texture
+preparation; every revision stayed below `31 ms`. The four transport device arrays retained exact
+object identity. Device normalization and pinned full-native transfer are included in preview
+stages. Persistent full-native OpenGL upload plus shader draw separately measured `11.691 ms`
+median with a GPU completion fence. The `5 ms` scheduler cadence coalesces input continuously while
+latest-only cancellation prevents a stale backlog. Long-refinement cancellation returned
+`11.594 ms` median and `28.935 ms`
+maximum after the user-event signal. The workspace owned `105.464 MiB` of device buffers plus one
+reused `34.332 MiB` pinned host frame; process RSS was about `353 MiB` in the memory probe. These are
+execution measurements, not scientific tolerances.
+
+Legacy CPU forward results with an identical explicit latent block are `MATCH`. The change from the
+v11 PCG64 realization to Philox is `NO_ORACLE` pixel-for-pixel because both are stochastic estimates
+of the same measure; the independent latent integral and conservation laws remain the authority.
+CUDA is `MATCH` within the frozen cross-device tolerance. Legacy release-only scheduling and
+Matplotlib latency are `NO_ORACLE` operational behavior.
+
+The clean reference-integrity gate streams and validates all eight declared compressed OSC inputs,
+then compares the three named immutable-pack OSC identities and intermediates. Its inventory is
+identity-based rather than frozen to the historical five-file count; Python example tools are
+tracked by the repository file manifest, and tools or generated bytecode are not classified as
+scientific input data. Cache residue remains a separate clean-worktree failure.
 
 ### Complete detector-density reduction cutover
 

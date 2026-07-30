@@ -29,6 +29,9 @@ detector geometry.
   center sampling, or deterministic detector box integration.
 - Optional streaming Monte Carlo estimation of all-source, all-rod, all-root native-pixel mass by
   weighted forward sampling of the declared mosaic law and exact hard pixel ownership.
+- Prefix-stable progressive CPU/CUDA execution through an explicit mutable compiled sampler,
+  latest-only cancellation, causal geometry rebinding, and full-native OpenGL or Matplotlib
+  presentation without spatial downsampling.
 - Explicit detector distance, pitch, beam center, rigid pose, and two intrinsic detector tilts.
 - Exact integer-L marker identities and bounded detector-native fitting of the identifiable local
   detector-tilt and effective sample-normal correction pack.

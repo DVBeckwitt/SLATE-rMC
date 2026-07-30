@@ -1,5 +1,5 @@
 {
-  "file_count": 280,
+  "file_count": 283,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -33,8 +33,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "0b7af91225b874ba7e27e041d73674ae8e267e570a0c1d3b0fefb7f3f4116860",
-      "size_bytes": 4136
+      "sha256": "61f179bc8471278e3e8bcb074ea81f2652a36141f69661f2faefd190d8505ed9",
+      "size_bytes": 4736
     },
     {
       "path": "SEED_CONTENTS.md",
@@ -68,8 +68,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "d661d63097f41902a0e172e4b8d7697abe24a0bf3a48f493619b9e94cceab34c",
-      "size_bytes": 12904
+      "sha256": "c5154a4ba519a125e0f1ab6589ca0559752ea0dda608b8be6a2c0c9624865e3a",
+      "size_bytes": 14090
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "95305e0b525adf3c389ab24ea1a9df8bc7460d46b5505b1cabc77717892d7c75",
-      "size_bytes": 47834
+      "sha256": "50b5288dfdab9578eedef2ca85f103dddff6463c274dc41a8ad9f52a1880b1cc",
+      "size_bytes": 49426
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -93,23 +93,23 @@
     },
     {
       "path": "docs/DECISIONS.md",
-      "sha256": "6516ad1731e8b89bb696fa80df884e71c75cce02d74b000dc330d6fd5133bc49",
-      "size_bytes": 13994
+      "sha256": "5d78a618498c5abb604162d97f84d7e0734b3a7fdee871748ae598198577ec4a",
+      "size_bytes": 16103
     },
     {
       "path": "docs/DOVETAIL_MATRIX.md",
-      "sha256": "69e9bfdbc31f0b91471a5be324f79c52d13f7f8da68cdab25a663f5862cf084b",
-      "size_bytes": 8057
+      "sha256": "65bc80055022519aec240493fc550e779a5473e6707e6d2f80baf5de0400bc58",
+      "size_bytes": 8692
     },
     {
       "path": "docs/ERROR_INJECTION.md",
-      "sha256": "a56006a6571e2e75badff330d2f3796731250d56e4102ad65f7c556a6a77bace",
-      "size_bytes": 16579
+      "sha256": "6178d86f3a08a55ac3c057d606122ed7b23aacc43b6526d1fc49ad51502149c4",
+      "size_bytes": 17716
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "fe61fc16101d648386702629c82831e2b83709cffb92cbec8cf755165ff4368b",
-      "size_bytes": 32350
+      "sha256": "a4671c40e56c260ebfdcc727d5cfd59501f870d08ad321eec380e27b4ab7c2bb",
+      "size_bytes": 33824
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -128,33 +128,33 @@
     },
     {
       "path": "docs/PERFORMANCE.md",
-      "sha256": "e878c81c1ac9a03c979963831389a315e84f054d42d78624ab5d22f2035284ce",
-      "size_bytes": 4286
+      "sha256": "f1f2f358ba36f290cbf97f9c47317b67771d49fe16d821d5c5c839266ab45242",
+      "size_bytes": 7895
     },
     {
       "path": "docs/PHYSICS_LEDGER.md",
-      "sha256": "fd83b63ca9b82a364ef911e0f27ede2a198271433a4ac9893abaa16781b856a9",
-      "size_bytes": 29471
+      "sha256": "3effb3c9670169048431e41e547cdb8ea59b918aad11f23d0ffba9b108414f09",
+      "size_bytes": 29502
     },
     {
       "path": "docs/RESULT_MEASURE.md",
-      "sha256": "ad470dc04453e7fbb4395f65dd5c070e10f31b6d0c0712233e445272a323329f",
-      "size_bytes": 12792
+      "sha256": "2a1182d2639c64034ec8182ea575a3e99aae8d3b0f3d9ac53343027e126ca3a7",
+      "size_bytes": 13288
     },
     {
       "path": "docs/SCOPE_AND_PHASES.md",
-      "sha256": "34c85b1185557c295b694cafc416b92fae7040d9e095ac60f2cb8a5113c33eff",
-      "size_bytes": 5778
+      "sha256": "ad8401976409e6b53c7495194cbd2a69809d41ebcb19c44d13e743d94a8ab609",
+      "size_bytes": 6008
     },
     {
       "path": "docs/TRACE_SCHEMA.md",
-      "sha256": "b81ffb1497469851aba130f8cf108f159272dc0eb0cb00ed9071792b1bff0f45",
-      "size_bytes": 7221
+      "sha256": "deddc923d40bc6a5d421bfc6c382b100b19f4ffb52b5bec8131bb1f4dae6e92b",
+      "size_bytes": 7372
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "636201a1e55e57b785a015b08eca53b9b2fefe12f93ee346855da437461c4da3",
-      "size_bytes": 91352
+      "sha256": "da1dac29cb2aa9b5c0246f92c2d4fdb9daa6e29428c632afa0bc151279954127",
+      "size_bytes": 96421
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -168,7 +168,7 @@
     },
     {
       "path": "examples/MANIFEST.toml",
-      "sha256": "f8f9ea68cb51e324c9934661bbacc949ad9452ef9929d2b2d4d82a2caa9b4360",
+      "sha256": "20c12df1844dbf696516d901ae6ce279703f0c89c9a285a2f5850ea90ca45692",
       "size_bytes": 5055
     },
     {
@@ -203,7 +203,7 @@
     },
     {
       "path": "examples/bi2se3/experiment/staged_fit_replay.toml",
-      "sha256": "27ba4ddbddacde70fca99a7aa1354516c6e570aaa7c0cd8a766ad223d38a8fdc",
+      "sha256": "e79ebbc4de978142fb5e9e11d28aa3c351bc80cba714b091af944e881633ec60",
       "size_bytes": 7095
     },
     {
@@ -263,7 +263,7 @@
     },
     {
       "path": "examples/bi2te3/experiment/staged_fit_replay.toml",
-      "sha256": "53442a946b6ec79be363dfe38680e88b07d1b6c322ed8626f935fd8d358076db",
+      "sha256": "270fe564f4dcaf2611f61b0a5d503e90feab4834a570b25fd501e98e8eeaeff8",
       "size_bytes": 11037
     },
     {
@@ -352,9 +352,24 @@
       "size_bytes": 1963
     },
     {
+      "path": "interactive/README.md",
+      "sha256": "9406562e6daa25f670e5ea9e24448a6d34ceb523640fa5c652faae46b8b0de4e",
+      "size_bytes": 1653
+    },
+    {
+      "path": "interactive/detector_viewer.py",
+      "sha256": "93739edea8ff556996b607519461f3c26d5111184bd7679971a2caf893e1a426",
+      "size_bytes": 70251
+    },
+    {
+      "path": "interactive/ewald_sphere_viewer.py",
+      "sha256": "f902763942266b5b532408e734645db45aaa789480f83e68fd83e54d182ceaca",
+      "size_bytes": 63630
+    },
+    {
       "path": "pyproject.toml",
-      "sha256": "e086a205dc7b95c827f889db0cc7e4dc21296206defe7039463bd3d247d17678",
-      "size_bytes": 930
+      "sha256": "98cd1e852a25ab3fe7341d727caa689de4eec53aa8aa6447b3cca18e2064be06",
+      "size_bytes": 962
     },
     {
       "path": "reference/README.md",
@@ -597,11 +612,6 @@
       "size_bytes": 6755
     },
     {
-      "path": "scripts/figures/ewald_sphere_viewer.py",
-      "sha256": "8c4e9f9700b2c55122f63c20391169a81c9c3ba88e41244bbaf5e4a9ca0ecedd",
-      "size_bytes": 63634
-    },
-    {
       "path": "scripts/figures/render_bi2se3_publication_mapping.py",
       "sha256": "46ae82e7940649b514fe0711f66095b7b07cb532d348d3e5f40a6cfba1ab2b4e",
       "size_bytes": 137626
@@ -625,11 +635,6 @@
       "path": "scripts/index_bi2se3_osc.py",
       "sha256": "3e163a3af6bbf4d5b6d0ea4610492c655fed9c8c57c9d811ce3bd4b6441d3006",
       "size_bytes": 27593
-    },
-    {
-      "path": "scripts/interactive_detector_viewer.py",
-      "sha256": "07d667e51094dedd919c00475a691efb7dfe8a299612b906ebb5d2d9cd32b036",
-      "size_bytes": 33917
     },
     {
       "path": "scripts/recover_bi2se3_mosaic.py",
@@ -728,7 +733,7 @@
     },
     {
       "path": "src/rasim_next/core/contracts.py",
-      "sha256": "674fac0a9d8370d959ad64254ece77e573f5bf2c9059c2f30d3098bde80e638b",
+      "sha256": "776e455241593e57e3fa337b00717c0fc4c536a8a6548096a2ef9d12cbde97f0",
       "size_bytes": 26928
     },
     {
@@ -933,13 +938,18 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
-      "sha256": "4b1f7b1fd1fcf4d060be2d9ea2289acd8b80280d367f967d5b27bcc2c4a89c11",
-      "size_bytes": 44297
+      "sha256": "5440a68c30017f5ddb0a1aa11fcc6240b8974959ab9668cf6e820cebc97ae777",
+      "size_bytes": 44170
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "4d4c935a46c345734f2b8cd7a0bc2672d0a0f91a0c985d3810b0077c1dbde8b1",
-      "size_bytes": 78298
+      "sha256": "aba1e0154d437f27db2cd7e23e444461142ade8666d721b3c4f0d383dec694a0",
+      "size_bytes": 82464
+    },
+    {
+      "path": "src/rasim_next/pipeline/_forward_detector_cuda.py",
+      "sha256": "4a08eacf4a1a666876645276db1345324ab24d2c7a6df80ba326ccee28ba750f",
+      "size_bytes": 36980
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -958,8 +968,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "51b77d541861af4ebe454768f8ac9a0806b4db04b689f26231b281afd9d133be",
-      "size_bytes": 70033
+      "sha256": "b1402672f926f604f079f4a0895b426487d4097a157ba7e6c17e6b4526c0f79b",
+      "size_bytes": 98798
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1182,14 +1192,19 @@
       "size_bytes": 14076
     },
     {
+      "path": "tasks/19_fluid_detector_viewer.md",
+      "sha256": "39219375252561e4a104635af8e79ee517645a5332049fc80f638a1c077a6ce9",
+      "size_bytes": 12304
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
-      "sha256": "ef8f7bb7211c722bda15287fe84f0cadeca2395091c883a6ce3c6563c34d7e52",
-      "size_bytes": 651
+      "sha256": "cc6c9189db77cd02b6e8868dc51ac8617a4b54757d1e7db9a120e94116bf2323",
+      "size_bytes": 647
     },
     {
       "path": "tasks/README.md",
-      "sha256": "f380f43b0b172f6b98e9ab50f4fb6056334ab58bb89bff9565dcf1d19594be5c",
-      "size_bytes": 1394
+      "sha256": "2e7a186b7878cf3bf62382339827a6e60c189037425b13deae41907ffaa310be",
+      "size_bytes": 1663
     },
     {
       "path": "tasks/continuous_ewald_coating_replacement_plan.md",
@@ -1223,8 +1238,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "36206dcfb95057c85d9e1ed73683285b580c4dff3178e5509adeab5d2972ebd3",
-      "size_bytes": 2634
+      "sha256": "a1bef216aeb0b7ee73418cad2deb3dba6d9455ebf4d60e0070bd8e59276822e7",
+      "size_bytes": 2770
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1333,8 +1348,8 @@
     },
     {
       "path": "tests/test_ewald_sphere_viewer.py",
-      "sha256": "95314ee4dcc2afc856a2299e2d541bbc94ee9fe52a40e8254f3a62d9a26ac4bb",
-      "size_bytes": 2569
+      "sha256": "e5eb8c2f4e3473cf8ee5acf024fd815b46f33d1e8c209eef5c6e6911e1ae0680",
+      "size_bytes": 2561
     },
     {
       "path": "tests/test_fit_osc_geometry_cli.py",
@@ -1353,8 +1368,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "e4c729e621c5c80a3245d6ea74aba48ab483f200676ae85f734e0ebe961ea7dc",
-      "size_bytes": 194960
+      "sha256": "00971c5f2959527030cd3b8e8726d2aa3e52e218c10393b288f250517c6ea430",
+      "size_bytes": 219305
     },
     {
       "path": "tests/test_mosaic_ewald.py",
@@ -1398,8 +1413,8 @@
     },
     {
       "path": "uv.lock",
-      "sha256": "8831fcef5b86924caf8d39404b4bec31ef9f26641ab741cf47bad4d3465b438a",
-      "size_bytes": 110095
+      "sha256": "543d14f3bfeaa58a64ad0e55166242c3122ee805ea7feb9a921e4c2f749a1fd4",
+      "size_bytes": 113696
     }
   ]
 }

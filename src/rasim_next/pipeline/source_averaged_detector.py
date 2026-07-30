@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from math import fsum, isfinite, pi, tanh
 
 import numpy as np
@@ -18,6 +19,7 @@ from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.optics import mode_decay_constant
 from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorEvaluator,
+    _compile_detector_projection,
     pack_bi2se3_two_h_structures,
 )
 from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
@@ -31,7 +33,57 @@ from rasim_next.pipeline.continuous_detector import (
 )
 
 FloatArray = NDArray[np.float64]
+Float32Array = NDArray[np.float32]
 BoolArray = NDArray[np.bool_]
+_ARRAY_OWNERSHIP_TOKEN = object()
+
+
+def _detector_pose_arrays(
+    instrument: CompiledInstrument,
+) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+    detector_rotation = instrument.lab_from_detector.rotation
+    column_step_lab = detector_rotation[:, 0] * instrument.detector_column_pitch_m
+    row_step_lab = detector_rotation[:, 1] * instrument.detector_row_pitch_m
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
+    detector_zero_lab = (
+        instrument.lab_from_detector.translation_m
+        - reference_column * column_step_lab
+        - reference_row * row_step_lab
+    )
+    arrays = (
+        np.ascontiguousarray(detector_zero_lab),
+        np.ascontiguousarray(column_step_lab),
+        np.ascontiguousarray(row_step_lab),
+        np.ascontiguousarray(np.cross(column_step_lab, row_step_lab)),
+        np.ascontiguousarray(instrument.sample_from_lab.rotation),
+    )
+    for value in arrays:
+        value.setflags(write=False)
+    return arrays
+
+
+def _geometry_rebind_instrument_invariants(
+    old: CompiledInstrument,
+    new: CompiledInstrument,
+) -> bool:
+    return (
+        new.detector_shape_rc == old.detector_shape_rc
+        and new.detector_row_pitch_m == old.detector_row_pitch_m
+        and new.detector_column_pitch_m == old.detector_column_pitch_m
+        and new.detector_reference_coordinate_px == old.detector_reference_coordinate_px
+        and new.sample_support_model_id == old.sample_support_model_id
+        and new.sample_width_m == old.sample_width_m
+        and new.sample_length_m == old.sample_length_m
+        and new.film_thickness_A == old.film_thickness_A
+        and np.array_equal(
+            new.sample_from_crystal.rotation,
+            old.sample_from_crystal.rotation,
+        )
+        and np.array_equal(
+            new.sample_from_crystal.translation_m,
+            old.sample_from_crystal.translation_m,
+        )
+    )
 
 
 def _validated_cuda_coordinate_chunk_size(
@@ -281,16 +333,27 @@ class MonteCarloDetectorPixelMass:
     source_revision: str
     rod_catalog_revision: str
     detector_visible_m0_q_gap_Ainv: float | None
+    execution_backend: str = "numba_cpu_forward_monte_carlo.v2"
+    execution_device: str | None = None
+    execution_worker_count: int | None = 1
+    _array_ownership_token: InitVar[object | None] = None
     measure_id: str = field(
         init=False,
         default="raw_detector_pixel_mass_monte_carlo_estimate_A2.v1",
     )
     proposal_id: str = field(init=False, default="folded_wrapped_mosaic_full_beta.v1")
-    rng_model_id: str = field(init=False, default="numpy.pcg64.source_index_substream.v1")
-    execution_backend: str = field(init=False, default="numba_cpu_forward_monte_carlo.v1")
+    rng_model_id: str = field(
+        init=False,
+        default="numpy.philox.fixed_width_source_draw.v1",
+    )
 
-    def __post_init__(self) -> None:
-        image = np.array(self.image_A2, dtype=np.float64, copy=True, order="C")
+    def __post_init__(self, _array_ownership_token: object | None) -> None:
+        if _array_ownership_token is _ARRAY_OWNERSHIP_TOKEN:
+            image = np.asarray(self.image_A2, dtype=np.float64, order="C")
+            if image.base is not None or not image.flags.owndata:
+                raise RuntimeError("internally owned Monte Carlo images must own their storage")
+        else:
+            image = np.array(self.image_A2, dtype=np.float64, copy=True, order="C")
         if image.ndim != 2 or not np.all(np.isfinite(image)) or np.any(image < 0.0):
             raise ValueError("image_A2 must be a finite nonnegative detector array")
         draws = positive_integer(self.draws_per_source_state, "draws_per_source_state")
@@ -340,6 +403,27 @@ class MonteCarloDetectorPixelMass:
         for name in ("source_revision", "rod_catalog_revision"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ValueError(f"{name} must be nonempty")
+        if self.execution_backend not in {
+            "numba_cpu_forward_monte_carlo.v2",
+            "numba_cuda_forward_monte_carlo.v1",
+        }:
+            raise ValueError("unsupported forward Monte Carlo execution_backend")
+        if (self.execution_backend == "numba_cuda_forward_monte_carlo.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("execution_device must identify exactly the CUDA backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("execution_device must be a nonempty string when supplied")
+        if self.execution_worker_count is None:
+            if self.execution_backend != "numba_cuda_forward_monte_carlo.v1":
+                raise ValueError("only the CUDA backend omits a CPU execution worker count")
+        else:
+            workers = positive_integer(self.execution_worker_count, "execution_worker_count")
+            if self.execution_backend != "numba_cpu_forward_monte_carlo.v2" or workers > 4:
+                raise ValueError("CPU forward Monte Carlo uses between one and four workers")
+            object.__setattr__(self, "execution_worker_count", workers)
         image.setflags(write=False)
         object.__setattr__(self, "image_A2", image)
         object.__setattr__(self, "replicate_total_mass_A2", replicate)
@@ -355,35 +439,118 @@ class MonteCarloDetectorPixelMass:
         object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
 
 
-def _sample_mosaic_orientations(
+@dataclass(frozen=True, slots=True)
+class MonteCarloDetectorPresentation:
+    """Full-native float32 display lease valid until the sampler's next operation."""
+
+    image_A2: Float32Array
+    total_detector_mass_A2: float
+    draws_per_source_state: int
+    source_state_count: int
+    active_source_state_count: int
+    attempted_root_count: int
+    visible_hit_count: int
+    maximum_root_deposit_A2: float
+    seed: int
+    rod_count: int
+    execution_backend: str
+    execution_device: str | None
+
+    def __post_init__(self) -> None:
+        image = np.asarray(self.image_A2)
+        if image.dtype != np.float32 or image.ndim != 2 or not image.flags.c_contiguous:
+            raise ValueError(
+                "presentation image must be a contiguous two-dimensional float32 array"
+            )
+        draws = positive_integer(self.draws_per_source_state, "draws_per_source_state")
+        source_count = positive_integer(self.source_state_count, "source_state_count")
+        active_count = positive_integer(
+            self.active_source_state_count,
+            "active_source_state_count",
+        )
+        attempted = positive_integer(self.attempted_root_count, "attempted_root_count")
+        visible = integer(self.visible_hit_count, "visible_hit_count")
+        rods = positive_integer(self.rod_count, "rod_count")
+        seed = integer(self.seed, "seed")
+        total = float(self.total_detector_mass_A2)
+        maximum = float(self.maximum_root_deposit_A2)
+        if active_count > source_count or visible < 0 or visible > attempted:
+            raise ValueError("presentation work ledgers are inconsistent")
+        if not isfinite(total) or total < 0.0 or not isfinite(maximum) or maximum < 0.0:
+            raise ValueError("presentation detector masses must be finite and nonnegative")
+        if seed < 0 or seed >= 2**64:
+            raise ValueError("seed must be an integer in [0, 2**64)")
+        if self.execution_backend not in {
+            "numba_cpu_forward_monte_carlo.v2",
+            "numba_cuda_forward_monte_carlo.v1",
+        }:
+            raise ValueError("unsupported presentation execution backend")
+        if (self.execution_backend == "numba_cuda_forward_monte_carlo.v1") != (
+            self.execution_device is not None
+        ):
+            raise ValueError("presentation device must identify exactly the CUDA backend")
+        if self.execution_device is not None and (
+            not isinstance(self.execution_device, str) or not self.execution_device
+        ):
+            raise ValueError("presentation device must be a nonempty string when supplied")
+        object.__setattr__(self, "draws_per_source_state", draws)
+        object.__setattr__(self, "source_state_count", source_count)
+        object.__setattr__(self, "active_source_state_count", active_count)
+        object.__setattr__(self, "attempted_root_count", attempted)
+        object.__setattr__(self, "visible_hit_count", visible)
+        object.__setattr__(self, "rod_count", rods)
+        object.__setattr__(self, "seed", seed)
+        object.__setattr__(self, "total_detector_mass_A2", total)
+        object.__setattr__(self, "maximum_root_deposit_A2", maximum)
+
+
+class MonteCarloSamplingCancelled(RuntimeError):
+    """Raised when a caller supersedes forward Monte Carlo work."""
+
+
+def _sample_mosaic_orientation_matrix(
     mosaic: MosaicParameters,
     draw_count: int,
-    rng: np.random.Generator,
+    *,
+    seed: int,
+    source_state_count: int,
+    draw_start: int = 0,
 ) -> tuple[FloatArray, FloatArray]:
-    """Draw the declared folded-alpha/full-beta density exactly."""
+    """Draw source-count-independent fixed-width Philox lanes for every stratum."""
 
+    start = integer(draw_start, "draw_start")
+    if start < 0 or start >= draw_count:
+        raise ValueError("draw_start must precede draw_count")
+    if source_state_count * 2 >= 2**64 or draw_count >= 2**128:
+        raise ValueError("Philox source or draw count exceeds the reserved counter layout")
+    latent_uniform = np.empty((draw_count - start, source_state_count, 5), dtype=np.float64)
+    philox_key = np.random.SeedSequence(seed).generate_state(2, dtype=np.uint64)
+    for local_draw_index, draw_index in enumerate(range(start, draw_count)):
+        fixed_width = np.random.Generator(
+            np.random.Philox(key=philox_key, counter=draw_index << 64)
+        ).random((source_state_count, 8))
+        latent_uniform[local_draw_index] = fixed_width[:, :5]
     eta = mosaic.lorentzian_probability
-    signed_tilt = np.empty(draw_count, dtype=np.float64)
-    if eta == 0.0:
-        signed_tilt[:] = rng.normal(0.0, mosaic.gaussian_sigma_rad, draw_count)
-    elif eta == 1.0:
-        scale = tanh(0.5 * mosaic.lorentzian_half_width_rad)
-        signed_tilt[:] = 2.0 * np.arctan(scale * np.tan(pi * (rng.random(draw_count) - 0.5)))
-    else:
-        lorentzian = rng.random(draw_count) < eta
-        gaussian_count = int(np.count_nonzero(~lorentzian))
-        signed_tilt[~lorentzian] = rng.normal(
-            0.0,
-            mosaic.gaussian_sigma_rad,
-            gaussian_count,
+    radius = np.sqrt(
+        -2.0
+        * np.log(
+            np.maximum(
+                latent_uniform[:, :, 1],
+                np.finfo(np.float64).tiny,
+            )
         )
-        scale = tanh(0.5 * mosaic.lorentzian_half_width_rad)
-        signed_tilt[lorentzian] = 2.0 * np.arctan(
-            scale * np.tan(pi * (rng.random(draw_count - gaussian_count) - 0.5))
-        )
+    )
+    gaussian_tilt = mosaic.gaussian_sigma_rad * radius * np.cos(2.0 * pi * latent_uniform[:, :, 2])
+    scale = tanh(0.5 * mosaic.lorentzian_half_width_rad)
+    lorentzian_tilt = 2.0 * np.arctan(scale * np.tan(pi * (latent_uniform[:, :, 3] - 0.5)))
+    signed_tilt = np.where(
+        latent_uniform[:, :, 0] < eta,
+        lorentzian_tilt,
+        gaussian_tilt,
+    )
     wrapped = np.remainder(signed_tilt + pi, 2.0 * pi) - pi
-    alpha = np.ascontiguousarray(np.abs(wrapped))
-    beta = np.ascontiguousarray(rng.uniform(0.0, 2.0 * pi, draw_count))
+    alpha = np.ascontiguousarray(np.abs(wrapped).T)
+    beta = np.ascontiguousarray((2.0 * pi * latent_uniform[:, :, 4]).T)
     return alpha, beta
 
 
@@ -420,6 +587,74 @@ class _IndexedCompiledEvaluator:
         object.__setattr__(rebound, "master_rod_index", self.master_rod_index)
         object.__setattr__(rebound, "incident_state_index", self.incident_state_index)
         return rebound
+
+
+@dataclass(frozen=True, slots=True)
+class _ForwardMonteCarloBlockResult:
+    raw_image_A2: FloatArray
+    replicate_total_mass_A2: FloatArray
+    attempted_root_count: int
+    visible_hit_count: int
+    maximum_root_weight_A2: float
+
+
+def _forward_monte_carlo_blocks(
+    evaluator_blocks: tuple[tuple[_IndexedCompiledEvaluator, ...], ...],
+) -> tuple[tuple[_IndexedCompiledEvaluator, ...], ...]:
+    evaluators = tuple(indexed for block in evaluator_blocks for indexed in block)
+    block_size = max(1, (len(evaluators) + 3) // 4)
+    return tuple(
+        tuple(evaluators[start : start + block_size])
+        for start in range(0, len(evaluators), block_size)
+    )
+
+
+def _raise_if_monte_carlo_cancelled(
+    cancel_requested: Callable[[], bool] | None,
+) -> None:
+    if cancel_requested is not None and cancel_requested():
+        raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+
+
+def _accumulate_forward_monte_carlo_block(
+    evaluators: tuple[_IndexedCompiledEvaluator, ...],
+    *,
+    alpha_rad: FloatArray,
+    beta_rad: FloatArray,
+    detector_pixel_count: int,
+    cancel_requested: Callable[[], bool] | None,
+) -> _ForwardMonteCarloBlockResult:
+    """Accumulate one fixed source block into private full-native scratch."""
+
+    _raise_if_monte_carlo_cancelled(cancel_requested)
+    draw_count = alpha_rad.shape[1]
+    raw_image = np.zeros(detector_pixel_count, dtype=np.float64)
+    replicate_total = np.zeros(draw_count, dtype=np.float64)
+    attempted_root_count = 0
+    visible_hit_count = 0
+    maximum_root_weight = 0.0
+    for indexed in evaluators:
+        _raise_if_monte_carlo_cancelled(cancel_requested)
+        state_visible, state_maximum = indexed.evaluator.accumulate_latent_pixel_mass(
+            alpha_rad[indexed.incident_state_index],
+            beta_rad[indexed.incident_state_index],
+            raw_image,
+            replicate_total,
+            image_weight_scale=1.0,
+        )
+        state_rods = indexed.evaluator.state.rod_hk_population
+        m0_count = int(np.count_nonzero((state_rods[:, 0] == 0.0) & (state_rods[:, 1] == 0.0)))
+        attempted_root_count += draw_count * (2 * state_rods.shape[0] - m0_count)
+        visible_hit_count += state_visible
+        maximum_root_weight = max(maximum_root_weight, state_maximum)
+    _raise_if_monte_carlo_cancelled(cancel_requested)
+    return _ForwardMonteCarloBlockResult(
+        raw_image_A2=raw_image,
+        replicate_total_mass_A2=replicate_total,
+        attempted_root_count=attempted_root_count,
+        visible_hit_count=visible_hit_count,
+        maximum_root_weight_A2=maximum_root_weight,
+    )
 
 
 def _sum_compiled_evaluator_block(
@@ -755,65 +990,38 @@ class SourceAveragedDetectorEwaldMeasure:
         *,
         draws_per_source_state: int,
         seed: int,
+        execution_backend: str = "cpu",
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> MonteCarloDetectorPixelMass:
         """Estimate native pixel mass by forward-sampling mosaic orientation.
 
-        Each valid canonical incident state is a source stratum. States with no
-        reachable selected rod have identically zero weight and need no random
-        draw; every active state enumerates all reachable physical rods and
-        retained roots. The root ledger is numerical work evidence, not a
-        calibrated detector count.
+        Each valid canonical incident state is a source stratum. Known-zero
+        states retain fixed latent lanes for prefix identity but perform no root
+        or physics work; every active state enumerates all reachable physical
+        rods and retained roots. The root ledger is numerical work evidence,
+        not a calibrated detector count.
         """
 
-        draws = positive_integer(draws_per_source_state, "draws_per_source_state")
-        detector_seed = integer(seed, "seed")
-        if not 0 <= detector_seed < 2**64:
-            raise ValueError("seed must be an integer in [0, 2**64)")
-        rows, columns = self._instrument.detector_shape_rc
-        image = np.zeros(rows * columns, dtype=np.float64)
-        replicate_total = np.zeros(draws, dtype=np.float64)
-        attempted_root_count = 0
-        visible_hit_count = 0
-        maximum_deposit = 0.0
-        for block in self._evaluator_blocks:
-            for indexed in block:
-                rng = np.random.Generator(
-                    np.random.PCG64(
-                        np.random.SeedSequence(
-                            detector_seed,
-                            spawn_key=(indexed.incident_state_index,),
-                        )
-                    )
-                )
-                alpha, beta = _sample_mosaic_orientations(self._mosaic, draws, rng)
-                state_visible, state_maximum = indexed.evaluator.accumulate_latent_pixel_mass(
-                    alpha,
-                    beta,
-                    image,
-                    replicate_total,
-                )
-                state_rods = indexed.evaluator.state.rod_hk_population
-                m0_count = int(
-                    np.count_nonzero((state_rods[:, 0] == 0.0) & (state_rods[:, 1] == 0.0))
-                )
-                attempted_root_count += draws * (2 * state_rods.shape[0] - m0_count)
-                visible_hit_count += state_visible
-                maximum_deposit = max(maximum_deposit, state_maximum)
-        return MonteCarloDetectorPixelMass(
-            image_A2=image.reshape(rows, columns),
-            replicate_total_mass_A2=replicate_total,
-            total_detector_mass_A2=fsum(replicate_total) / draws,
-            draws_per_source_state=draws,
-            source_state_count=self.source_state_count,
-            active_source_state_count=self.valid_source_state_count,
-            attempted_root_count=attempted_root_count,
-            visible_hit_count=visible_hit_count,
-            maximum_root_deposit_A2=maximum_deposit,
-            seed=detector_seed,
-            rods=self._rods,
-            source_revision=self._incident.states.source_revision,
-            rod_catalog_revision=self._rod_catalog_revision,
-            detector_visible_m0_q_gap_Ainv=self._detector_visible_m0_q_gap_Ainv,
+        return self.compile_monte_carlo_sampler(
+            execution_backend=execution_backend,
+            seed=seed,
+        ).advance_to(
+            draws_per_source_state,
+            cancel_requested=cancel_requested,
+        )
+
+    def compile_monte_carlo_sampler(
+        self,
+        *,
+        execution_backend: str,
+        seed: int,
+    ) -> CompiledMonteCarloDetectorSampler:
+        """Compile a mutable progressive execution resource for this immutable detector."""
+
+        return CompiledMonteCarloDetectorSampler(
+            self,
+            execution_backend=execution_backend,
+            seed=seed,
         )
 
     def restrict_rods(
@@ -992,85 +1200,71 @@ class SourceAveragedDetectorEwaldMeasure:
                 "geometry rebind requires unchanged source, material, and transport identity"
             )
         old_instrument = self._instrument
-        invariant_instrument = (
-            instrument.detector_shape_rc == old_instrument.detector_shape_rc
-            and instrument.detector_row_pitch_m == old_instrument.detector_row_pitch_m
-            and instrument.detector_column_pitch_m == old_instrument.detector_column_pitch_m
-            and instrument.detector_reference_coordinate_px
-            == old_instrument.detector_reference_coordinate_px
-            and instrument.sample_support_model_id == old_instrument.sample_support_model_id
-            and instrument.sample_width_m == old_instrument.sample_width_m
-            and instrument.sample_length_m == old_instrument.sample_length_m
-            and instrument.film_thickness_A == old_instrument.film_thickness_A
-            and np.array_equal(
-                instrument.sample_from_crystal.rotation,
-                old_instrument.sample_from_crystal.rotation,
-            )
-            and np.array_equal(
-                instrument.sample_from_crystal.translation_m,
-                old_instrument.sample_from_crystal.translation_m,
-            )
-        )
-        if not invariant_instrument:
+        if not _geometry_rebind_instrument_invariants(old_instrument, instrument):
             raise ValueError(
                 "geometry rebind requires unchanged detector calibration, sample support, "
                 "film, and crystal mounting"
             )
 
-        detector_rotation = instrument.lab_from_detector.rotation
-        column_step_lab = detector_rotation[:, 0] * instrument.detector_column_pitch_m
-        row_step_lab = detector_rotation[:, 1] * instrument.detector_row_pitch_m
-        reference_column, reference_row = instrument.detector_reference_coordinate_px
-        detector_zero_lab = (
-            instrument.lab_from_detector.translation_m
-            - reference_column * column_step_lab
-            - reference_row * row_step_lab
+        (
+            detector_zero_lab,
+            column_step_lab,
+            row_step_lab,
+            detector_area_vector,
+            sample_from_lab,
+        ) = _detector_pose_arrays(instrument)
+        propagation_direction = np.where(new_states.direction_sample[:, 2] < 0.0, -1, 1)
+        incident_decay_Ainv = np.asarray(
+            mode_decay_constant(new_states.kz_film_Ainv, propagation_direction),
+            dtype=np.float64,
         )
-        detector_area_vector = np.cross(column_step_lab, row_step_lab)
+        source_phase_weight = (
+            new_states.source_weight
+            * new_states.footprint_acceptance
+            * self._phase_polarization_weight
+        )
+        internal_k_Ainv = np.linalg.norm(new_states.k_film_phase_sample_Ainv, axis=1)
+        evaluator_state_indices = tuple(
+            indexed.incident_state_index for block in self._evaluator_blocks for indexed in block
+        )
+        projection = _compile_detector_projection(
+            detector_zero_lab_m=detector_zero_lab,
+            detector_column_step_lab_m=column_step_lab,
+            detector_row_step_lab_m=row_step_lab,
+            detector_pixel_area_vector_lab_m2=detector_area_vector,
+            sample_from_lab=sample_from_lab,
+            ray_origin_lab_m=np.ascontiguousarray(
+                new_states.sample_intersection_lab_m[
+                    np.asarray(evaluator_state_indices, dtype=np.int64)
+                ]
+            ),
+        )
         rebound_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
+        projection_index = 0
         for block in self._evaluator_blocks:
             rebound_block: list[_IndexedCompiledEvaluator] = []
             for indexed in block:
                 state_index = indexed.incident_state_index
-                incident_direction = -1 if new_states.direction_sample[state_index, 2] < 0.0 else 1
-                incident_decay = float(
-                    mode_decay_constant(
-                        new_states.kz_film_Ainv[state_index],
-                        incident_direction,
-                    )
-                )
-                source_phase_weight = float(
-                    new_states.source_weight[state_index]
-                    * new_states.footprint_acceptance[state_index]
-                    * self._phase_polarization_weight
-                )
-                rebound_state = indexed.evaluator.state.rebind_geometry(
-                    detector_zero_lab_m=np.ascontiguousarray(detector_zero_lab),
-                    detector_column_step_lab_m=np.ascontiguousarray(column_step_lab),
-                    detector_row_step_lab_m=np.ascontiguousarray(row_step_lab),
-                    detector_pixel_area_vector_lab_m2=np.ascontiguousarray(detector_area_vector),
-                    ray_origin_lab_m=np.ascontiguousarray(
-                        new_states.sample_intersection_lab_m[state_index]
-                    ),
-                    sample_from_lab=np.ascontiguousarray(instrument.sample_from_lab.rotation),
-                    ki_film_sample_Ainv=np.ascontiguousarray(
-                        new_states.k_film_phase_sample_Ainv[state_index]
-                    ),
-                    internal_k_Ainv=float(
-                        np.linalg.norm(new_states.k_film_phase_sample_Ainv[state_index])
-                    ),
+                rebound_state = indexed.evaluator.state._rebind_validated_geometry(
+                    detector_zero_lab_m=detector_zero_lab,
+                    detector_column_step_lab_m=column_step_lab,
+                    detector_row_step_lab_m=row_step_lab,
+                    detector_pixel_area_vector_lab_m2=detector_area_vector,
+                    ray_origin_lab_m=new_states.sample_intersection_lab_m[state_index],
+                    sample_from_lab=sample_from_lab,
+                    ki_film_sample_Ainv=new_states.k_film_phase_sample_Ainv[state_index],
+                    internal_k_Ainv=float(internal_k_Ainv[state_index]),
                     entrance_amplitude=complex(new_states.entrance_amplitude[state_index]),
-                    incident_decay_Ainv=incident_decay,
-                    source_phase_weight=source_phase_weight,
+                    incident_decay_Ainv=float(incident_decay_Ainv[state_index]),
+                    source_phase_weight=float(source_phase_weight[state_index]),
                 )
-                rebound_block.append(
-                    indexed.with_evaluator(
-                        CompiledDetectorEvaluator(
-                            rebound_state,
-                            instrument.detector_shape_rc,
-                        )
-                    )
+                rebound_evaluator = indexed.evaluator._rebind_validated_projection(
+                    rebound_state,
+                    projection,
+                    state_index=projection_index,
                 )
+                projection_index += 1
+                rebound_block.append(indexed.with_evaluator(rebound_evaluator))
             rebound_blocks.append(tuple(rebound_block))
 
         m0_gap: float | None = None
@@ -1498,8 +1692,511 @@ class SourceAveragedDetectorEwaldMeasure:
         )
 
 
+class CompiledMonteCarloDetectorSampler:
+    """Mutable progressive execution state bound to one immutable detector model."""
+
+    __slots__ = (
+        "_attempted_root_count",
+        "_attempted_root_count_per_draw",
+        "_bound_instrument",
+        "_cuda_workspace",
+        "_detector",
+        "_draw_count",
+        "_execution_backend",
+        "_execution_device",
+        "_execution_worker_count",
+        "_forward_blocks",
+        "_maximum_root_weight_A2",
+        "_poisoned",
+        "_presentation_image_A2",
+        "_raw_image_A2",
+        "_replicate_total_mass_A2",
+        "_seed",
+        "_visible_hit_count",
+    )
+
+    def __init__(
+        self,
+        detector: SourceAveragedDetectorEwaldMeasure,
+        *,
+        execution_backend: str,
+        seed: int,
+    ) -> None:
+        if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+            raise TypeError("detector must be a SourceAveragedDetectorEwaldMeasure")
+        if execution_backend not in {"cpu", "cuda"}:
+            raise ValueError("execution_backend must be cpu or cuda")
+        detector_seed = integer(seed, "seed")
+        if not 0 <= detector_seed < 2**64:
+            raise ValueError("seed must be an integer in [0, 2**64)")
+        forward_blocks = _forward_monte_carlo_blocks(detector._evaluator_blocks)
+        rows, columns = detector.instrument.detector_shape_rc
+        self._detector = detector
+        self._bound_instrument = detector.instrument
+        self._seed = detector_seed
+        self._cuda_workspace: object | None = None
+        if execution_backend == "cuda":
+            from rasim_next.pipeline._forward_detector_cuda import (
+                CudaForwardMonteCarloWorkspace,
+            )
+
+            workspace = CudaForwardMonteCarloWorkspace(
+                detector._evaluator_blocks,
+                detector_shape_rc=detector.instrument.detector_shape_rc,
+                master_rod_count=len(detector.rods),
+            )
+            self._cuda_workspace = workspace
+            self._execution_backend = "numba_cuda_forward_monte_carlo.v1"
+            self._execution_device = workspace.device_name
+            self._execution_worker_count = None
+        else:
+            self._execution_backend = "numba_cpu_forward_monte_carlo.v2"
+            self._execution_device = None
+            self._execution_worker_count = min(
+                detector._worker_count,
+                len(forward_blocks),
+                4,
+            )
+        self._forward_blocks = forward_blocks
+        self._poisoned = False
+        self._attempted_root_count_per_draw = sum(
+            2 * indexed.evaluator.state.rod_hk_population.shape[0]
+            - int(
+                np.count_nonzero(
+                    (indexed.evaluator.state.rod_hk_population[:, 0] == 0.0)
+                    & (indexed.evaluator.state.rod_hk_population[:, 1] == 0.0)
+                )
+            )
+            for block in forward_blocks
+            for indexed in block
+        )
+        self._raw_image_A2 = (
+            np.empty(0, dtype=np.float64)
+            if self._cuda_workspace is not None
+            else np.zeros(rows * columns, dtype=np.float64)
+        )
+        self._presentation_image_A2 = (
+            np.empty(0, dtype=np.float32)
+            if self._cuda_workspace is not None
+            else np.empty(rows * columns, dtype=np.float32)
+        )
+        self._replicate_total_mass_A2 = np.empty(0, dtype=np.float64)
+        self._draw_count = 0
+        self._attempted_root_count = 0
+        self._visible_hit_count = 0
+        self._maximum_root_weight_A2 = 0.0
+
+    @property
+    def draws_completed(self) -> int:
+        return self._draw_count
+
+    def _require_usable(self) -> None:
+        if self._poisoned:
+            raise RuntimeError("the failed CUDA sampler must be discarded")
+
+    def _reset_host_state(self) -> None:
+        self._raw_image_A2.fill(0.0)
+        self._replicate_total_mass_A2 = np.empty(0, dtype=np.float64)
+        self._draw_count = 0
+        self._attempted_root_count = 0
+        self._visible_hit_count = 0
+        self._maximum_root_weight_A2 = 0.0
+
+    def reset(self, *, seed: int | None = None) -> None:
+        """Discard accumulated draws while retaining compiled execution state."""
+
+        self._require_usable()
+        detector_seed = self._seed
+        if seed is not None:
+            detector_seed = integer(seed, "seed")
+            if not 0 <= detector_seed < 2**64:
+                raise ValueError("seed must be an integer in [0, 2**64)")
+        if self._cuda_workspace is not None:
+            try:
+                self._cuda_workspace.reset()
+            except Exception:
+                self._poisoned = True
+                raise
+        self._seed = detector_seed
+        self._reset_host_state()
+
+    def rebind_detector_pose(self, instrument: CompiledInstrument) -> None:
+        """Reset sampling after changing only the detector's rigid lab pose."""
+
+        if not isinstance(instrument, CompiledInstrument):
+            raise TypeError("instrument must be a CompiledInstrument")
+        self._require_usable()
+        old_instrument = self._bound_instrument
+        unchanged_sample_pose = (
+            instrument.sample_geometry_revision == old_instrument.sample_geometry_revision
+            and np.array_equal(
+                instrument.sample_from_lab.rotation,
+                old_instrument.sample_from_lab.rotation,
+            )
+            and np.array_equal(
+                instrument.sample_from_lab.translation_m,
+                old_instrument.sample_from_lab.translation_m,
+            )
+        )
+        if (
+            not _geometry_rebind_instrument_invariants(old_instrument, instrument)
+            or not unchanged_sample_pose
+        ):
+            raise ValueError(
+                "detector-pose rebind requires unchanged detector calibration and sample pose"
+            )
+        (
+            detector_zero_lab,
+            column_step_lab,
+            row_step_lab,
+            detector_area_vector,
+            sample_from_lab,
+        ) = _detector_pose_arrays(instrument)
+        indexed_evaluators = tuple(indexed for block in self._forward_blocks for indexed in block)
+        state_indices = np.fromiter(
+            (indexed.incident_state_index for indexed in indexed_evaluators),
+            dtype=np.int64,
+            count=len(indexed_evaluators),
+        )
+        projection = _compile_detector_projection(
+            detector_zero_lab_m=detector_zero_lab,
+            detector_column_step_lab_m=column_step_lab,
+            detector_row_step_lab_m=row_step_lab,
+            detector_pixel_area_vector_lab_m2=detector_area_vector,
+            sample_from_lab=sample_from_lab,
+            ray_origin_lab_m=np.ascontiguousarray(
+                self._detector.incident.states.sample_intersection_lab_m[state_indices]
+            ),
+        )
+        rebound_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
+        projection_index = 0
+        for block in self._forward_blocks:
+            rebound_block: list[_IndexedCompiledEvaluator] = []
+            for indexed in block:
+                rebound_block.append(
+                    indexed.with_evaluator(
+                        indexed.evaluator._rebind_validated_projection(
+                            indexed.evaluator.state,
+                            projection,
+                            state_index=projection_index,
+                        )
+                    )
+                )
+                projection_index += 1
+            rebound_blocks.append(tuple(rebound_block))
+        if self._cuda_workspace is not None:
+            try:
+                self._cuda_workspace.rebind_detector_projection(projection)
+            except Exception:
+                self._poisoned = True
+                raise
+        self._forward_blocks = tuple(rebound_blocks)
+        self._bound_instrument = instrument
+        if self._cuda_workspace is None:
+            self.reset()
+        else:
+            self._reset_host_state()
+
+    def rebind_geometry(self, detector: SourceAveragedDetectorEwaldMeasure) -> None:
+        """Bind an already validated geometry view and reset its sampled estimate."""
+
+        if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+            raise TypeError("detector must be a SourceAveragedDetectorEwaldMeasure")
+        self._require_usable()
+        old_states = self._detector.incident.states
+        new_states = detector.incident.states
+        invariant_source_arrays = (
+            np.array_equal(old_states.incident_state_id, new_states.incident_state_id)
+            and np.array_equal(old_states.incident_sample_id, new_states.incident_sample_id)
+            and np.array_equal(old_states.source_weight, new_states.source_weight)
+            and np.array_equal(old_states.wavelength_A, new_states.wavelength_A)
+            and np.array_equal(old_states.valid, new_states.valid)
+        )
+        old_instrument = self._bound_instrument
+        new_instrument = detector.instrument
+        invariant_instrument = _geometry_rebind_instrument_invariants(
+            old_instrument,
+            new_instrument,
+        )
+        old_evaluators = tuple(
+            indexed for block in self._detector._evaluator_blocks for indexed in block
+        )
+        new_evaluators = tuple(indexed for block in detector._evaluator_blocks for indexed in block)
+        invariant_topology = len(old_evaluators) == len(new_evaluators) and all(
+            old.incident_state_index == new.incident_state_index
+            and np.array_equal(old.master_rod_index, new.master_rod_index)
+            for old, new in zip(old_evaluators, new_evaluators, strict=True)
+        )
+        if (
+            not invariant_source_arrays
+            or not invariant_instrument
+            or not invariant_topology
+            or detector.source_state_count != self._detector.source_state_count
+            or detector.rods != self._detector.rods
+            or detector.rod_catalog_revision != self._detector.rod_catalog_revision
+            or detector.mosaic is not self._detector.mosaic
+            or detector.strength_model is not self._detector.strength_model
+            or detector.material.material_revision != self._detector.material.material_revision
+            or detector.incident.states.source_revision
+            != self._detector.incident.states.source_revision
+            or detector._phase_polarization_weight != self._detector._phase_polarization_weight
+            or detector.instrument.detector_shape_rc != self._detector.instrument.detector_shape_rc
+        ):
+            raise ValueError(
+                "geometry rebind requires unchanged source, rods, physics, and detector shape"
+            )
+        forward_blocks = _forward_monte_carlo_blocks(detector._evaluator_blocks)
+        if self._cuda_workspace is not None:
+            try:
+                self._cuda_workspace.rebind_geometry(detector._evaluator_blocks)
+            except Exception:
+                self._poisoned = True
+                raise
+        self._detector = detector
+        self._bound_instrument = detector.instrument
+        self._forward_blocks = forward_blocks
+        if self._cuda_workspace is None:
+            self._execution_worker_count = min(
+                detector._worker_count,
+                len(self._forward_blocks),
+                4,
+            )
+        if self._cuda_workspace is None:
+            self.reset()
+        else:
+            self._reset_host_state()
+
+    def advance_to(
+        self,
+        draws_per_source_state: int,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> MonteCarloDetectorPixelMass:
+        """Add only the missing Philox draw prefix and return an immutable snapshot."""
+
+        self._advance_to_count(
+            draws_per_source_state,
+            cancel_requested=cancel_requested,
+        )
+        return self._snapshot()
+
+    def advance_preview_to(
+        self,
+        draws_per_source_state: int,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> MonteCarloDetectorPresentation:
+        """Advance and lease a float32 frame until this sampler's next operation."""
+
+        self._advance_to_count(
+            draws_per_source_state,
+            cancel_requested=cancel_requested,
+        )
+        return self._presentation_snapshot()
+
+    def _advance_to_count(
+        self,
+        draws_per_source_state: int,
+        *,
+        cancel_requested: Callable[[], bool] | None,
+    ) -> None:
+        self._require_usable()
+        target_draw_count = positive_integer(
+            draws_per_source_state,
+            "draws_per_source_state",
+        )
+        if target_draw_count < self._draw_count:
+            raise ValueError("progressive draw count cannot decrease; reset the sampler first")
+        try:
+            _raise_if_monte_carlo_cancelled(cancel_requested)
+            if target_draw_count > self._draw_count:
+                if self._cuda_workspace is None:
+                    self._advance_cpu(
+                        target_draw_count,
+                        cancel_requested=cancel_requested,
+                    )
+                else:
+                    self._advance_cuda(
+                        target_draw_count,
+                        cancel_requested=cancel_requested,
+                    )
+        except Exception:
+            try:
+                self.reset()
+            except Exception as reset_error:
+                self._poisoned = True
+                raise RuntimeError(
+                    "forward Monte Carlo cleanup failed; discard the sampler"
+                ) from reset_error
+            raise
+
+    def _advance_cuda(
+        self,
+        target_draw_count: int,
+        *,
+        cancel_requested: Callable[[], bool] | None,
+    ) -> None:
+        draw_start = self._draw_count
+        evaluators = tuple(indexed for block in self._forward_blocks for indexed in block)
+        draw_count = target_draw_count - draw_start
+        all_alpha, all_beta = _sample_mosaic_orientation_matrix(
+            self._detector.mosaic,
+            target_draw_count,
+            seed=self._seed,
+            source_state_count=self._detector.source_state_count,
+            draw_start=draw_start,
+        )
+        state_index = np.asarray(
+            [indexed.incident_state_index for indexed in evaluators],
+            dtype=np.int64,
+        )
+        alpha = np.ascontiguousarray(all_alpha[state_index])
+        beta = np.ascontiguousarray(all_beta[state_index])
+        _raise_if_monte_carlo_cancelled(cancel_requested)
+        completed = self._cuda_workspace.advance(
+            alpha,
+            beta,
+            draw_start=draw_start,
+            draw_stop=target_draw_count,
+            cancel_requested=cancel_requested,
+        )
+        if not completed:
+            raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        self._draw_count = target_draw_count
+        self._attempted_root_count += draw_count * self._attempted_root_count_per_draw
+
+    def _advance_cpu(
+        self,
+        target_draw_count: int,
+        *,
+        cancel_requested: Callable[[], bool] | None,
+    ) -> None:
+        draw_start = self._draw_count
+        rows, columns = self._detector.instrument.detector_shape_rc
+        alpha, beta = _sample_mosaic_orientation_matrix(
+            self._detector.mosaic,
+            target_draw_count,
+            seed=self._seed,
+            source_state_count=self._detector.source_state_count,
+            draw_start=draw_start,
+        )
+
+        def accumulate(
+            block: tuple[_IndexedCompiledEvaluator, ...],
+        ) -> _ForwardMonteCarloBlockResult:
+            return _accumulate_forward_monte_carlo_block(
+                block,
+                alpha_rad=alpha,
+                beta_rad=beta,
+                detector_pixel_count=rows * columns,
+                cancel_requested=cancel_requested,
+            )
+
+        if self._execution_worker_count == 1:
+            block_results = tuple(accumulate(block) for block in self._forward_blocks)
+        else:
+            with ThreadPoolExecutor(max_workers=self._execution_worker_count) as executor:
+                futures = tuple(
+                    executor.submit(accumulate, block) for block in self._forward_blocks
+                )
+                block_results = tuple(future.result() for future in futures)
+        _raise_if_monte_carlo_cancelled(cancel_requested)
+
+        replicate_total = np.zeros(target_draw_count, dtype=np.float64)
+        replicate_total[:draw_start] = self._replicate_total_mass_A2
+        attempted = self._attempted_root_count
+        visible = self._visible_hit_count
+        maximum = self._maximum_root_weight_A2
+        for result in block_results:
+            self._raw_image_A2 += result.raw_image_A2
+            replicate_total[draw_start:] += result.replicate_total_mass_A2
+            attempted += result.attempted_root_count
+            visible += result.visible_hit_count
+            maximum = max(maximum, result.maximum_root_weight_A2)
+        self._replicate_total_mass_A2 = replicate_total
+        self._draw_count = target_draw_count
+        self._attempted_root_count = attempted
+        self._visible_hit_count = visible
+        self._maximum_root_weight_A2 = maximum
+
+    def _snapshot(self) -> MonteCarloDetectorPixelMass:
+        if self._draw_count < 1:
+            raise RuntimeError("a Monte Carlo snapshot requires at least one completed draw")
+        rows, columns = self._detector.instrument.detector_shape_rc
+        if self._cuda_workspace is not None:
+            (
+                self._raw_image_A2,
+                self._replicate_total_mass_A2,
+                self._visible_hit_count,
+                self._maximum_root_weight_A2,
+            ) = self._cuda_workspace.snapshot()
+        normalized_image_A2 = np.empty((rows, columns), dtype=np.float64)
+        np.divide(
+            self._raw_image_A2.reshape(rows, columns),
+            self._draw_count,
+            out=normalized_image_A2,
+        )
+        return MonteCarloDetectorPixelMass(
+            image_A2=normalized_image_A2,
+            replicate_total_mass_A2=self._replicate_total_mass_A2,
+            total_detector_mass_A2=fsum(self._replicate_total_mass_A2) / self._draw_count,
+            draws_per_source_state=self._draw_count,
+            source_state_count=self._detector.source_state_count,
+            active_source_state_count=self._detector.valid_source_state_count,
+            attempted_root_count=self._attempted_root_count,
+            visible_hit_count=self._visible_hit_count,
+            maximum_root_deposit_A2=self._maximum_root_weight_A2 / self._draw_count,
+            seed=self._seed,
+            rods=self._detector.rods,
+            source_revision=self._detector.incident.states.source_revision,
+            rod_catalog_revision=self._detector.rod_catalog_revision,
+            detector_visible_m0_q_gap_Ainv=(self._detector.detector_visible_m0_q_gap_Ainv),
+            execution_backend=self._execution_backend,
+            execution_device=self._execution_device,
+            execution_worker_count=self._execution_worker_count,
+            _array_ownership_token=_ARRAY_OWNERSHIP_TOKEN,
+        )
+
+    def _presentation_snapshot(self) -> MonteCarloDetectorPresentation:
+        if self._draw_count < 1:
+            raise RuntimeError("a Monte Carlo presentation requires at least one completed draw")
+        rows, columns = self._detector.instrument.detector_shape_rc
+        if self._cuda_workspace is None:
+            np.multiply(
+                self._raw_image_A2,
+                1.0 / self._draw_count,
+                out=self._presentation_image_A2,
+                casting="unsafe",
+            )
+            presentation_image = self._presentation_image_A2.reshape(rows, columns)
+        else:
+            (
+                presentation_image,
+                self._replicate_total_mass_A2,
+                self._visible_hit_count,
+                self._maximum_root_weight_A2,
+            ) = self._cuda_workspace.presentation_snapshot()
+        return MonteCarloDetectorPresentation(
+            image_A2=presentation_image,
+            total_detector_mass_A2=fsum(self._replicate_total_mass_A2) / self._draw_count,
+            draws_per_source_state=self._draw_count,
+            source_state_count=self._detector.source_state_count,
+            active_source_state_count=self._detector.valid_source_state_count,
+            attempted_root_count=self._attempted_root_count,
+            visible_hit_count=self._visible_hit_count,
+            maximum_root_deposit_A2=self._maximum_root_weight_A2 / self._draw_count,
+            seed=self._seed,
+            rod_count=len(self._detector.rods),
+            execution_backend=self._execution_backend,
+            execution_device=self._execution_device,
+        )
+
+
 __all__ = [
+    "CompiledMonteCarloDetectorSampler",
     "MonteCarloDetectorPixelMass",
+    "MonteCarloDetectorPresentation",
+    "MonteCarloSamplingCancelled",
     "SourceAveragedDetectorCoordinateDensity",
     "SourceAveragedDetectorCoordinateIntensity",
     "SourceAveragedDetectorEwaldMeasure",

@@ -65,7 +65,7 @@ detector_native_dtype = "int32"
 [[files]]
 role = "environment_lock"
 path = "../../../uv.lock"
-sha256 = "8831fcef5b86924caf8d39404b4bec31ef9f26641ab741cf47bad4d3465b438a"
+sha256 = "543d14f3bfeaa58a64ad0e55166242c3122ee805ea7feb9a921e4c2f749a1fd4"
 
 [geometry]
 selection_mode = "position_free_discovery_with_frozen_catalog_audit"

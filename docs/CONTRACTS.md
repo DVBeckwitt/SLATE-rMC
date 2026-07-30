@@ -5,6 +5,8 @@ Contract API version: **12**. Trace schema version: **4**. Reference pack versio
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
 and ordering are validated eagerly.
+The sole presentation exception is the explicitly leased `MonteCarloDetectorPresentation` buffer,
+whose lifetime ends at the sampler's next operation and which is never retained scientific state.
 
 ## Global conventions
 
@@ -125,13 +127,15 @@ integrator is deliberately branch-specific and rejects any model containing `m=0
 all-root macrobin path is an explicitly nonquantitative display preview. Source state order and
 weights are preserved; wavelength-dependent evaluators are never collapsed geometrically.
 
-`sample_native_pixel_mass(*, draws_per_source_state, seed)` is the optional all-root stochastic
-terminal. Every valid canonical source state is a mathematical stratum; states with no reachable
-selected rod are identically zero and allocate no random work. For each active state, a PCG64
-substream keyed by the unsigned 64-bit seed and immutable source-state index samples the exact
-folded wrapped-Gaussian/wrapped-Cauchy mixture and uniform full beta. Every reachable physical rod
-and retained root is then mapped through the canonical exit optics and detector geometry. The
-natural mosaic proposal cancels its probability density, so each visible root deposits
+`sample_native_pixel_mass(*, draws_per_source_state, seed, execution_backend,
+cancel_requested=None)` is the optional all-root stochastic terminal. Every valid canonical source
+state is a mathematical stratum. A fixed-width NumPy Philox counter layout reserves eight raw lanes
+and consumes five for every `(seed, draw index, canonical source-state index)`, including known-zero
+states; changing the requested draw or source count therefore cannot change an existing latent
+prefix. Its identity is `numpy.philox.fixed_width_source_draw.v1`. Known-zero states perform no root
+or physics work. Every active state maps every reachable
+physical rod and retained root through the canonical exit optics and detector geometry. The natural
+mosaic proposal cancels its probability density, so each visible root deposits
 `source * rod population * structure * Ewald coarea * optics / draws` directly into its native
 pixel. Internal pixel boundaries use the half-open owner `floor(coordinate + 0.5)`; an exact closed
 outer-panel edge belongs to the final pixel. Invalid sources, no roots, nonpropagating exits, and
@@ -145,6 +149,21 @@ detector-visible m=0 support gap is retained whenever the rod set contains m=0. 
 `raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`. It returns no event or hit table;
 `visible_hit_count` counts deposited roots and is not a detector count. Replicate totals expose seed
 stability but do not assert finite variance or a Gaussian confidence interval near Ewald folds.
+It also records the explicit CPU/CUDA backend, CUDA device when applicable, and bounded CPU worker
+count. CUDA selection fails closed and never changes to CPU implicitly.
+
+`compile_monte_carlo_sampler(*, execution_backend, seed)` creates the explicit mutable,
+thread-confined `CompiledMonteCarloDetectorSampler`. `advance_to(...)` returns the authoritative
+float64 result; `advance_preview_to(...)` leases a full-native contiguous float32 presentation frame
+until the sampler's next operation. `reset(...)` retains compiled state.
+`rebind_detector_pose(...)` requires unchanged detector calibration and sample pose, resets the
+accumulator, and changes only the four ray-to-pixel projection arrays.
+`rebind_geometry(...)` accepts only unchanged source rows, topology, rods, physics, detector
+calibration, sample support, film, and crystal mounting. A superseded request raises
+`MonteCarloSamplingCancelled`; no partial result is returned. The CPU backend uses at most four
+private full-native accumulators and stable block-order reduction. The CUDA backend owns persistent
+packed state and raw/presentation buffers, deposits roots directly without an event table, and
+uses separate failure-atomic projection and transport buffers on a valid rebind.
 
 `evaluate_detector_density_all_roots(...)` completes this source reduction and returns one detector
 function. Downstream peak-center comparison, display sampling, and pixel integration consume that

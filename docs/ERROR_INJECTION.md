@@ -38,6 +38,8 @@ Expected detection: OSC mapping, rigid transform, detector ray, or detector roun
 - Duplicate or omit a source stratum.
 - Recompute or slice a parent revision instead of preserving the complete realization.
 - Let detector-only state invalidate incident `ki`.
+- Accept a changed sample pose through the detector-projection-only rebind, or copy transport arrays
+  during a detector-only revision.
 - Erase accepted geometry when a later optical stage fails.
 
 Expected detection: exact strata, revision ownership, causal invalidation, or status payload.
@@ -104,7 +106,7 @@ normalization, or reflectivity limit.
   an invalid/back-facing ray.
 - When deterministic pixel mass is requested, replace the box integral with a center sample,
   undeclared histogram, blur, or point deposit. A separately declared display-only center-density
-  sample or API-v11 stochastic estimate is not this error.
+  sample or API-v12 stochastic estimate is not this error.
 - In the stochastic estimator, omit a source/rod/root, divide by accepted rather than attempted
   draws, multiply the natural-proposal mosaic density back in, apply the detector Jacobian or solid
   angle, renormalize after off-panel rejection, swap row/column ownership, or drop regular nonzero
@@ -112,12 +114,24 @@ normalization, or reflectivity limit.
 - Reuse colliding RNG streams across source indices, make the result depend on worker/chunk order,
   accept a noninteger seed, silently discard nonfinite weights, expose root hits as calibrated
   detector counts, or report ordinary Gaussian standard errors at an unexcluded Ewald fold.
+- Make a later Philox draw or source-count request alter an existing source/draw prefix; consume a
+  variable number of RNG lanes at Gaussian/Lorentzian mixture limits; or let CPU and CUDA transform
+  different latent coordinates.
+- Publish a superseded render revision, queue every slider event, restart an accepted prefix for its
+  settled stage, reuse a sampler after a failed cancellation reset, or accept a geometry rebind
+  after source rows, rods, evaluator topology, detector calibration, sample support, film, or crystal
+  mount changed.
+- Downsample, crop, transpose, or interpolate the presentation frame; flip detector rows twice or
+  not at all; mutate a leased float32 frame before upload completes; or silently change CUDA/OpenGL
+  to CPU/Matplotlib while retaining the requested backend identity.
 - Hide an unresolved adaptive pixel or a caustic behind display interpolation.
 
 Expected detection: detector ray/Q identity, forward/inverse round-trip, per-rod/source reduction,
 constant-field pixel identity, caustic finite-box oracle, quadrature refinement, exact seeded
 forward-oracle ownership, refined latent mass/shape comparison, mass conservation, seed-ledger
-identity, or invalid-support contract.
+identity, draw/source-prefix identity, CPU/CUDA and worker parity, latest-only scheduler rejection,
+causal-rebind validation, asymmetric full-native texture ownership, fail-closed backend identity, or
+invalid-support contract.
 
 ### Continuous angle-coordinate measure
 
