@@ -44,6 +44,8 @@ from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
 )
 
+DETECTOR_VIEWER_SCRIPT = Path(__file__).resolve().parents[1] / "interactive" / "detector_viewer.py"
+
 
 def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> object:
     root = Path(__file__).resolve().parents[1]
@@ -336,9 +338,7 @@ def test_forward_monte_carlo_is_prefix_stable_and_worker_order_invariant() -> No
     with pytest.raises(ValueError, match="unchanged source, rods, physics"):
         progressive.rebind_geometry(changed_topology)
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     rebound_instrument = viewer["apply_geometry_deltas"](
         parallel_detector.instrument,
         viewer["GeometryDeltas"](
@@ -2054,9 +2054,7 @@ def test_cuda_forward_monte_carlo_matches_cpu_and_progressive_prefix(
     recovered = progressive.advance_to(draws)
     np.testing.assert_allclose(recovered.image_A2, gpu.image_A2, rtol=8.0e-11, atol=3.0e-24)
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     rebound_instrument = viewer["apply_geometry_deltas"](
         detector.instrument,
         viewer["GeometryDeltas"](
@@ -4689,9 +4687,7 @@ def test_normalized_field_freezes_masks_losses_divide_order_and_phi_permutation(
 def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> None:
     from types import SimpleNamespace
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     sample_detector_raster = viewer["sample_detector_raster"]
 
     class MonteCarloDetectorSpy:
@@ -4761,9 +4757,7 @@ def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> Non
 
 
 def test_interactive_incidence_control_is_absolute_zero_to_twenty_degrees() -> None:
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     incidence_field = "effective_incidence_angle_offset_deg"
     incidence_spec = next(
         spec for spec in viewer["_CONTROL_SPECS"] if spec.field_name == incidence_field
@@ -4785,9 +4779,7 @@ def test_interactive_incidence_control_is_absolute_zero_to_twenty_degrees() -> N
 
 
 def test_interactive_render_scheduler_is_latest_only_and_progressive() -> None:
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     RenderRequest = viewer["_RenderRequest"]
     RenderScheduler = viewer["_ProgressiveRenderScheduler"]
     GeometryDeltas = viewer["GeometryDeltas"]
@@ -4871,9 +4863,7 @@ def test_interactive_render_scheduler_is_latest_only_and_progressive() -> None:
 def test_interactive_detector_only_change_reuses_incident_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(
         root / "configs" / "bi2se3_simulation.yaml",
@@ -4995,9 +4985,7 @@ def test_interactive_detector_only_change_reuses_incident_transport(
 
 
 def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(
         root / "configs" / "bi2se3_simulation.yaml",
@@ -5015,9 +5003,7 @@ def test_interactive_detector_viewer_requires_all_m_catalogue() -> None:
 def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -> None:
     from painted_ewald import enumerate_rods_within_ewald_sphere
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(
         root / "configs" / "bi2se3_simulation.yaml",
@@ -5089,9 +5075,7 @@ def test_interactive_geometry_deltas_use_domain_names_and_apply_base_local_pose(
 
     from rasim_next.geometry.instrument import CompiledInstrument
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     GeometryDeltas = viewer["GeometryDeltas"]
     apply_geometry_deltas = viewer["apply_geometry_deltas"]
 
@@ -5123,7 +5107,7 @@ def test_interactive_geometry_deltas_use_domain_names_and_apply_base_local_pose(
         "detector_distance_offset_mm": r"\Delta D_n",
         "goniometer_axis_pitch_offset_deg": r"\Delta\alpha$ [RA-SIM cor_angle]",
         "goniometer_axis_yaw_offset_deg": r"\Delta\psi_g$ [RA-SIM psi_z]",
-        "effective_incidence_angle_offset_deg": r"\Delta\theta_i",
+        "effective_incidence_angle_offset_deg": r"\theta_i",
         "effective_sample_tilt_offset_deg": r"\Delta\delta",
         "sample_in_plane_rotation_offset_deg": r"RA-SIM $-\Delta\psi$",
         "sample_in_plane_x_translation_mm": r"\Delta x_S",
@@ -5240,9 +5224,7 @@ def test_interactive_goniometer_axis_deltas_rebuild_the_pivoted_commanded_motion
     from rasim_next.geometry import AxisRotation
     from rasim_next.pipeline.configured_simulation import AxisRotationConfiguration
 
-    viewer = runpy.run_path(
-        Path(__file__).resolve().parents[1] / "scripts" / "interactive_detector_viewer.py"
-    )
+    viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
     GeometryDeltas = viewer["GeometryDeltas"]
     apply_geometry_deltas = viewer["apply_geometry_deltas"]
 

@@ -1,4 +1,4 @@
-"""Interactively view Monte Carlo detector-native pixel mass."""
+"""Interactive full-native Monte Carlo detector viewer."""
 
 from __future__ import annotations
 

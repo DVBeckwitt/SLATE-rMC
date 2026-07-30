@@ -1,5 +1,5 @@
 {
-  "file_count": 278,
+  "file_count": 279,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -33,8 +33,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "0b7af91225b874ba7e27e041d73674ae8e267e570a0c1d3b0fefb7f3f4116860",
-      "size_bytes": 4136
+      "sha256": "61f179bc8471278e3e8bcb074ea81f2652a36141f69661f2faefd190d8505ed9",
+      "size_bytes": 4736
     },
     {
       "path": "SEED_CONTENTS.md",
@@ -108,8 +108,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "0ae318f0f88cddce4eb5d75371d9f3848d44f1551ec882946bc49d1d29e9b5ad",
-      "size_bytes": 26887
+      "sha256": "7d074b44ba3e76e4a6528b43cb4eff2f724cb9cc495d852bc354bd1aff3f1d2a",
+      "size_bytes": 26985
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -327,11 +327,6 @@
       "size_bytes": 6154
     },
     {
-      "path": "examples/ewald_sphere_viewer.py",
-      "sha256": "f8d687fb38d52817949d56f3adaa007c0c8ef9302352ada5491175292981a2df",
-      "size_bytes": 63407
-    },
-    {
       "path": "examples/pbi2/README.md",
       "sha256": "b2f23f57dee74675e4a50733febc8223dda2b2bf057744ed33ebd860096f5ea4",
       "size_bytes": 273
@@ -355,6 +350,21 @@
       "path": "examples/pbi2/structures/PbI2_6H.cif",
       "sha256": "85c7727d74aca6eb30e1abc7bdcc6e9c5738c9f24f6350f4fa322940f05d45ca",
       "size_bytes": 1963
+    },
+    {
+      "path": "interactive/README.md",
+      "sha256": "9406562e6daa25f670e5ea9e24448a6d34ceb523640fa5c652faae46b8b0de4e",
+      "size_bytes": 1653
+    },
+    {
+      "path": "interactive/detector_viewer.py",
+      "sha256": "93739edea8ff556996b607519461f3c26d5111184bd7679971a2caf893e1a426",
+      "size_bytes": 70251
+    },
+    {
+      "path": "interactive/ewald_sphere_viewer.py",
+      "sha256": "d6f4b0bb5d87fd538820ea2eebd0584123e36d7fa0881150158ad9705ac3952b",
+      "size_bytes": 63410
     },
     {
       "path": "pyproject.toml",
@@ -615,11 +625,6 @@
       "path": "scripts/index_bi2se3_osc.py",
       "sha256": "3e163a3af6bbf4d5b6d0ea4610492c655fed9c8c57c9d811ce3bd4b6441d3006",
       "size_bytes": 27593
-    },
-    {
-      "path": "scripts/interactive_detector_viewer.py",
-      "sha256": "d1aa1426617b33e53f9017838f85cf6263d8c716668146b88f815005306a5898",
-      "size_bytes": 70257
     },
     {
       "path": "scripts/recover_bi2se3_mosaic.py",
@@ -1178,8 +1183,8 @@
     },
     {
       "path": "tasks/19_fluid_detector_viewer.md",
-      "sha256": "c9b3444702aa5275abf8ab8838fb337edb2e969ec8a5a59696a9ca8484693600",
-      "size_bytes": 12320
+      "sha256": "39219375252561e4a104635af8e79ee517645a5332049fc80f638a1c077a6ce9",
+      "size_bytes": 12304
     },
     {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
@@ -1333,8 +1338,8 @@
     },
     {
       "path": "tests/test_ewald_sphere_viewer.py",
-      "sha256": "7f56720c67295603ad6da25ccaafe0c12c01e21c72f677d9abe96c8b2be3f441",
-      "size_bytes": 2343
+      "sha256": "4f90d8f1a32a3be2ba1b1407c788659bdc749edafb8c4c9ca2538fca601c6b70",
+      "size_bytes": 2346
     },
     {
       "path": "tests/test_fit_osc_geometry_cli.py",
@@ -1353,8 +1358,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "fb90772290e7f01d52142186d727f7f8e6ce66216966159492930d06c9befa8c",
-      "size_bytes": 208449
+      "sha256": "f5915547105da660a20791a6b7496ed866a5ab092a4af6713785a347e6a262dc",
+      "size_bytes": 207804
     },
     {
       "path": "tests/test_mosaic_ewald.py",

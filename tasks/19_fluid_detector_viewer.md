@@ -5,7 +5,7 @@ Status: `READY`
 ## Activation and objective
 
 This task is activated by the user request to make every parameter control in
-`scripts/interactive_detector_viewer.py` update the complete detector image continuously, without
+`interactive/detector_viewer.py` update the complete detector image continuously, without
 spatial downsampling, and to implement the approved scheduler, invalidation, progressive-sampling,
 CPU, CUDA, and presentation improvements as one cohesive slice.
 
@@ -57,7 +57,7 @@ ownership `floor(coordinate_px + 0.5)`. This task adds no new scattering equatio
 - `src/rasim_next/pipeline/_continuous_detector_kernel.py`
 - one narrow forward-CUDA module under `src/rasim_next/pipeline/` if separation is smaller than
   extending the inverse-coordinate CUDA module
-- `scripts/interactive_detector_viewer.py` and at most one narrow presentation helper under
+- `interactive/detector_viewer.py` and at most one narrow presentation helper under
   `src/rasim_next/visualization/`
 - `tests/test_integration.py`
 - `pyproject.toml` and `uv.lock` only if the measured GPU presentation requires one optional

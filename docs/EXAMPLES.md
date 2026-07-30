@@ -239,10 +239,12 @@ runtime of the full incoherent ensemble is intended.
 
 ## Interactive Monte Carlo detector viewer
 
+All supported live viewers are indexed in [`interactive/README.md`](../interactive/README.md).
+
 Open the native-pixel detector view with sample/detector pose controls:
 
 ```powershell
-uv run --extra visualization python scripts/interactive_detector_viewer.py `
+uv run --extra visualization python interactive/detector_viewer.py `
   --execution-backend cuda `
   --presentation-backend opengl
 ```
@@ -259,9 +261,9 @@ bundle. The fixed Philox seed preserves source/draw prefixes across pose and dra
 reducing visual flicker while preserving the declared estimator. Press `R` to render, `0` to reset,
 or `Q` to close.
 
-Every geometry slider is a zero-based correction to the configured geometry. The labels use the
-original RA-SIM and manuscript vocabulary while distinguishing mechanical goniometer controls from
-effective end-pose controls:
+Every geometry slider except absolute `theta_i` is a zero-based correction to the configured
+geometry. The labels use the original RA-SIM and manuscript vocabulary while distinguishing
+mechanical goniometer controls from effective end-pose controls:
 
 - detector pitch is the current column-axis correction, equal to `-delta gamma` in the original
   RA-SIM sign convention; detector yaw is the row-axis `delta Gamma` correction;
@@ -305,7 +307,7 @@ path silently falls back. Use the complete full-native CPU/Matplotlib proof path
 needed:
 
 ```powershell
-uv run --extra visualization python scripts/interactive_detector_viewer.py `
+uv run --extra visualization python interactive/detector_viewer.py `
   --execution-backend cpu `
   --presentation-backend matplotlib
 ```
@@ -313,7 +315,7 @@ uv run --extra visualization python scripts/interactive_detector_viewer.py `
 Override source count, settled draw count, or detector seed explicitly when desired:
 
 ```powershell
-uv run --extra visualization python scripts/interactive_detector_viewer.py `
+uv run --extra visualization python interactive/detector_viewer.py `
   --ki-samples 1000 `
   --draws-per-ki 49 `
   --seed 20260728 `

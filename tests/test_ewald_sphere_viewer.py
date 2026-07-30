@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-SCRIPT = Path(__file__).parents[1] / "examples" / "ewald_sphere_viewer.py"
+SCRIPT = Path(__file__).parents[1] / "interactive" / "ewald_sphere_viewer.py"
 SPEC = importlib.util.spec_from_file_location("ewald_sphere_viewer", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 VIEWER = importlib.util.module_from_spec(SPEC)
