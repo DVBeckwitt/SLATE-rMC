@@ -36,7 +36,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
-| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared nine-coordinate correction pack, with fixed-coordinate provenance, per-image metrics, and rank diagnostics |
+| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta, with fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
 | `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 
 `axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
@@ -358,7 +358,7 @@ nonnegative direction): `|o.T@(Qhat-Q)@o| <= rho*(o.T@Q@o + 1e-12*S_p*||o||^2)`,
 the largest direct spectral norm across that profile's validation nodes. No scale is pooled across
 profiles; the additive term explicitly governs exactly extinct or numerically rank-deficient modes.
 The response compiler contract revision is
-`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Recovery schema v3 stores
+`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Recovery schema v4 stores
 that revision and the `1e-12` floor, and rendering rejects an older or missing contract before any
 detector evaluation.
 Its digest binds the source count/revision, instrument, material, mosaic, rods, selected centers,
@@ -374,14 +374,17 @@ the synthetic selected-center structure-factor recovery. There is no per-source 
 selected-group rod restriction is linear, and all retained source/root contributions are summed
 before the one dataset-scale projection and joint three-incidence residual.
 
-The measured-mosaic handoff uses schema `rasim-bi2se3-real-mosaic-fit-v2` and support-gate revision
+The measured-mosaic handoff uses schema `rasim-bi2se3-real-mosaic-fit-v3` and support-gate revision
 `positive-combined-detector-m0-profile-signal.v2`. Every candidate selection record carries its
 combined-source modeled signal and Boolean support decision. Ordered-intensity consumers reject
 the earlier schema or a missing/mismatched gate revision. They also reconstruct the support
 decision from an integral `family_m` and a finite, nonnegative signal, rejecting inconsistent
 records instead of trusting serialized Boolean state. The v2 gate includes raw-significant
 nominally unsupported `m=0` observations as provisional candidates, and consumers require every
-fit-eligible identity and dataset to be present in the compiled response.
+fit-eligible identity and dataset to be present in the compiled response. Schema v3 additionally
+binds the upstream position-artifact revision, the nine shared correction values, one common
+incidence-angle delta, and the commanded/effective angle vectors. Ordered-intensity schema v4
+rebuilds and records that exact position state; it never falls back to case-file geometry.
 
 Before compiling an admitted `m=0` anchor, the tracked runner evaluates its baseline structure
 through the complete source-averaged selected-group detector and requires positive finite modeled
@@ -551,10 +554,11 @@ state before the residual hot path is admitted.
 `fit_indexed_geometry_series(...)` owns one complete nine-coordinate vector shared by every image,
 concatenates the existing canonical per-image residual blocks in sorted image-ID order, and uses
 bounded TRF least squares. `SHARED_GEOMETRY_PARAMETER_NAMES` declares the only accepted coordinate
-names and their canonical order. `fitted_parameter_names` selects any nonempty subset; names are
-canonicalized before optimization and every omitted coordinate is copied bit-exactly from
-`initial` into every residual evaluation and the final correction. The default selects all nine.
-The complete pack is, in order:
+names and their canonical order. `fitted_parameter_names` selects any subset; it may be empty only
+when the common incidence-angle delta remains active. Names are canonicalized before optimization
+and every omitted coordinate is copied bit-exactly from `initial` into every residual evaluation
+and the final correction. The default selects all nine shared coordinates.
+The complete shared pack is, in order:
 
 ```text
 detector local-column tilt, detector current-local-row tilt,
@@ -573,10 +577,20 @@ axial-powder gauge, and detector center/distance/pitch remain calibration-owned.
 The hard half-spans are `(10 deg, 10 deg, 5 deg, 5 deg, 5 deg, 5 deg, 0.1 mm, 0.1 mm, 0.1 mm)` in
 the declared parameter order.
 
+An optional `IncidenceAngleDeltaBounds` activates exactly one additional series-level coordinate,
+`incidence_angle_delta_rad`. It is additive and common:
+`effective_angle[j] = commanded_angle[j] + incidence_angle_delta_rad` for every image. There is no
+per-image incidence correction API. The delta is applied once by rebinding each image's configured
+axis angle before the remaining shared corrections. At the nominal x incidence axis it occupies the
+same gauge as `sample_normal_x_tilt_rad`, so activating both fails before optimization. The accepted
+Bi2Se3 parameterization fixes that sample-x coordinate at zero, fits the other eight shared
+coordinates plus the common delta, and bounds the delta to `+/-0.5 deg`.
+
 The actual bound-scaled Jacobian must have rank equal to the selected coordinate count with
 condition at most `1e8` before optimization. Singular values, weakest direction, and active-bound
-flags have that same selected-coordinate length; the result explicitly reports canonical fitted
-and fixed names. For the default qualifying Bi2Se3 pack the rank ladder is 5/9 for 5 degrees, 7/9
+flags have that same combined-coordinate length; the result explicitly reports canonical shared
+fitted/fixed names and `jacobian_parameter_names`, whose last entry is the common delta when active.
+For the qualifying Bi2Se3 eight-shared-plus-delta pack the rank ladder is 5/9 for 5 degrees, 7/9
 after adding 10 degrees, and 9/9 only after adding 15 degrees. Full rank does not imply precise
 pivot recovery; the weakest direction must be reported. Beam center and lattice constants are not
 members of this pack and cannot be activated accidentally.
@@ -602,7 +616,7 @@ visible or differently selected unfitted lobes are reported but never censor or 
 
 ### Portable staged-fit replay
 
-`rasim-staged-fit-replay-v1` is a strict, material-case manifest for geometry, mosaic,
+`rasim-staged-fit-replay-v2` is a strict, material-case manifest for geometry, mosaic,
 ordered-intensity, and optional render stages. Every path is case-relative and must remain inside
 the repository. Every file has an exact SHA-256; OSC records additionally bind decoded native
 shape, dtype, and `[row,column]` byte content. Paths nested inside geometry-series, simulation,
@@ -611,11 +625,14 @@ hash-complete decoy roles are rejected. Bi2Se3 and Bi2Te3 cases require the decl
 5/10/15-degree triplet, source seed 1729, one ideal source state for geometry, and the identical
 250-state realization for mosaic and ordered intensity.
 
-Each stage emits `rasim-staged-fit-replay-stage-v1` with case/material identity, case hash, backend,
-its actual execution runtime, source identity, compact scientific state, and the immediately
-preceding scientific revision.
-`rasim-staged-fit-replay-certificate-v1` records the ordered revision chain and the verified
-summary. Before creating output, the runner reloads and exact-compares the case, all role mappings,
+Each stage emits `rasim-staged-fit-replay-stage-v2` with case/material identity, a stage-scoped case
+hash, backend, its actual execution runtime, source identity, compact scientific state, and the
+immediately preceding scientific revision. Every stage declares its consumed file roles; its case
+hash includes only those file records, that stage's configuration and expected result, and that
+stage's tolerances. Downstream-only case edits therefore do not invalidate a verified position
+checkpoint. `rasim-staged-fit-replay-certificate-v2` records the complete current case hash, the
+ordered revision chain, and the verified summary. Before creating output, the runner reloads and
+exact-compares the case, all role mappings,
 all file hashes, decoded OSC identities, and nested consumed paths. It reads and hashes one
 case-bound `uv.lock` byte snapshot, then
 requires the complete transitive numerical dependency closure to equal that lock; a render replay
@@ -625,8 +642,17 @@ versions. Runtime is operational provenance excluded from scientific revisions, 
 the stored stage runtime to match the current stage runtime exactly. Fresh and resumed stage results
 receive the same exact envelope, recomputed-revision, artifact-contract, and upstream checks. A
 verified stage must pass its partial scientific summary before its JSON is written or it can become
-an upstream input. Resume rejects a changed case, backend, source, compact state, or externally
-referenced artifact hash.
+an upstream input. Resume rejects a changed stage-scoped case, backend, source, compact state, or
+canonical scientific projection of an externally referenced artifact. A caller may stop after any
+stage. The replay CLI resumes from
+the complete verified predecessor chain in the same output directory; direct external-artifact
+ingestion is not yet a replay CLI option. A later fit never infers, silently recomputes, or
+substitutes an earlier result. The measured mosaic CLI requires one verified position artifact and
+atomically extracts its revision, all nine corrections, and one common incidence delta; its output
+and the ordered/SF consumer both retain and exact-check the complete state.
+The Bi2Se3 geometry state records the commanded image angles, the one common fitted delta, all three
+effective angles, and the fixed sample-x gauge so mosaic and ordered/SF construction reproduce the
+same transforms exactly.
 
 This is a nominal scientific-replay contract. It assumes trusted stage implementations and that the
 declared repository inputs are not edited during an active stage; it is not an adversarial

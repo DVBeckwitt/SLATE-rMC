@@ -863,9 +863,11 @@ the default panel.
 
 ### Multi-incidence indexed geometry proof
 
-The shared-series proof independently constructs a nonzero hidden nine-coordinate pose and exact
-observations at 5, 10, and 15 degrees. It rejects the one-image and two-image subsets at rank 5/9
-and 7/9, then requires rank 9/9 for the three-image fit. The permanent fixture verifies normalized
+The shared-series proof independently constructs a nonzero hidden pose with eight shared geometry
+coordinates plus one common incidence-angle delta and exact observations at 5, 10, and 15 commanded
+degrees. It rejects the one-image and two-image subsets at rank 5/9 and 7/9, then requires rank 9/9
+for the three-image fit. Activating both the common delta and `sample_normal_x_tilt_rad` fails
+explicitly because they share the nominal incidence-axis gauge. The permanent fixture verifies normalized
 parameter recovery, detector-native training and held-out errors, signed final-normal displacement,
 canonical image-ID ordering, and an independent continuous-Ewald root audit. A second-CIF PbI2
 fixture monkeypatches Bi2Se3 strength and `MosaicBraggSpace` construction to fail while exercising
@@ -899,14 +901,18 @@ operational discovery sensitivities, not relabels of the 26 frozen coordinates.
 The qualifying real fit uses manifest
 `sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132`.
 Pooled raw-pixel RMS improves from `12.8312707` to `1.5589418` and maximum error from
-`21.3000088` to `5.6507942`. Per-image RMS is `1.2531698`, `0.8406037`, and `2.2866603` pixels for
-5, 10, and 15 degrees. The scaled Jacobian is rank 9 with condition `8689.155`; its singular values
-are `(76.2284, 72.4703, 58.1766, 22.8074, 4.35393, 3.33615, 0.256518, 0.100480,
-0.00877282)`. Three deterministic starts differ by at most `3.164e-5` pixels in predicted native
-coordinates. Holding out `L={4,11}` gives RMS/max `1.3173871/2.0219100` pixels.
+`21.3000088` to `5.6507934`. Per-image RMS is `1.2531695`, `0.8406036`, and `2.2866604` pixels for
+5, 10, and 15 commanded degrees. The scaled Jacobian is rank 9 with condition `8689.9123`; its
+singular values are `(76.2350, 72.4742, 58.2316, 4.34862, 3.34098, 2.27897, 0.256387,
+0.100492, 0.00877282)`. Three deterministic starts differ by at most `2.658e-5` pixels in predicted
+native coordinates. Holding out `L={4,11}` gives RMS/max `1.3173882/2.0219029` pixels.
 
-The fitted corrections, in contract order, are `(-0.004499434, -0.023011841, 0.007325549,
-0.015659150, -0.015187627, -0.015250741, 49.5499 um, 99.999997 um, -27.7328 um)`.
+The shared correction vector, in contract order, is `(-0.004499432, -0.023011841, 0,
+0.015547811, -0.015190829, -0.015251339, 49.5499 um, 99.999996 um, -27.7326 um)`.
+The ninth fitted Jacobian coordinate is the one common
+`delta_theta_i=0.0073255030 rad=0.419720406 deg`, producing effective incidences
+`5.419720406`, `10.419720406`, and `15.419720406 deg`. It is one scalar, not three image-specific
+offsets.
 Pivot-pitch is within `1e-6` of its normalized upper-bound span, so detector-coordinate prediction
 passes but parameter precision does not. Widening that bound through 0.2, 0.5, and 1.0 mm changes
 pooled RMS only from about `1.55875` to `1.55815` pixels while the pivot estimate remains
@@ -943,13 +949,14 @@ the selected solve `2.003 s`, warm residual median `0.01649 s`, and traced fit p
 `144,527 bytes`. Source-state count remained one and fitting performed zero mosaic, intensity,
 raster, or pixel work.
 
-Measured timing was `91.851` seconds for initial OSC discovery/indexing and `95.200` seconds for
-the separate fresh global diagnostic. Geometry-only setup took `0.05587` seconds, the selected
-primary solve `7.6590` seconds, frozen-coordinate relabeling `0.3533` seconds, and the warm joint
-residual median `0.007240` seconds. Traced fit peak memory was `99,630` bytes; OSC decoding and the
-global searches are reported separately because they retain detector-sized arrays.
+The verified v2 shared-delta checkpoint took `246.109124` seconds for the two separately reported
+OSC discovery/indexing passes (`122.717221` and `123.391902` seconds). Geometry-only setup took
+`0.0641544` seconds, the selected primary solve `3.259482` seconds, frozen-coordinate relabeling
+`0.626129` seconds, and the warm joint residual median `0.0285933` seconds. Traced fit peak memory
+was `298,023` bytes; OSC decoding and the global searches are reported separately because they
+retain detector-sized arrays.
 
-The nine-coordinate rank is a statement under fixed detector calibration and explicit gauge
+The combined nine-coordinate rank is a statement under fixed detector calibration and explicit gauge
 ownership, not a claim that every viewer control is estimable. Detector roll, sample/crystal roll,
 axis-parallel pivot motion, sample tangent translations, detector center/pitch/distance, wavelength,
 and per-image corrections stay fixed. The pivot-pitch/pivot-yaw/plane-offset combination is the
@@ -1062,9 +1069,12 @@ secondary-lobe pair. Every branchless `m=0` candidate must first have positive f
 complete 250-state source-averaged simulated profile; the selection audit records that modeled
 support. Of 34 indexed candidates, the joint fit retains these 15 profiles:
 
-The regenerated handoff uses mosaic schema `rasim-bi2se3-real-mosaic-fit-v2` and modeled-support
-gate revision `positive-combined-detector-m0-profile-signal.v2`; the ordered-intensity runner
-rejects older artifacts before compiling a response.
+The current handoff uses mosaic schema `rasim-bi2se3-real-mosaic-fit-v3` and modeled-support gate
+revision `positive-combined-detector-m0-profile-signal.v2`. Version 3 additionally carries the
+upstream position revision, corrections, common incidence delta, and commanded/effective angles;
+the ordered-intensity runner rejects older artifacts before compiling a response. The numerical
+mosaic result below predates this v3 position handoff and awaits requalification after the verified
+position checkpoint.
 
 - 5 degrees: `m=0` orders `003` and `006`;
 - 10 degrees: `m=0` order `006`, plus both sides of `m=1,L=5` and `m=1,L=10`;
@@ -1149,9 +1159,11 @@ occupancy direction through a profile-local generalized-eigenvalue bound with a 
 extinct-mode floor; no scale is shared across profiles. The maximum occupancy-signal certificate is
 `2.084780066e-10`, and a fresh authoritative combined-detector truth
 prediction agreed with the compact response to `8.976202640e-15` maximum relative error.
-The ordered result uses schema `rasim-bi2se3-ordered-intensity-recovery-v3` and compiler contract
-`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`; the renderer rejects the
-older coefficient-norm certificate contract.
+The current ordered result contract is `rasim-bi2se3-ordered-intensity-recovery-v4` with compiler
+contract `source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Version 4 binds
+and reconstructs the upstream v3 position state; the renderer rejects the older position handoff or
+coefficient-norm certificate contract. The numerical ordered result below is the prior v3 proof and
+awaits requalification after mosaic is resumed.
 
 For the final native-center images, an exact fitted 10-degree 250-state/85-rod/all-root 96-by-96
 block benchmark took `1.17849 s` on CPU and `0.499570 s` on the NVIDIA GeForce RTX 3060 (`2.36x`).
@@ -1316,7 +1328,7 @@ correlations are not substitutes for independent data validation or statistical 
 
 ## Portable Bi2Se3/Bi2Te3 staged-fit replay
 
-The two tracked `rasim-staged-fit-replay-v1` cases make the accepted 5/10/15-degree results
+The two tracked `rasim-staged-fit-replay-v2` cases make the accepted 5/10/15-degree results
 repeatable from a clean clone. Exact checks cover every input hash and decoded OSC array, source
 realization, fitted/fixed coordinate list, active-bound mask, profile and `m=0` identity, stage
 revision, execution-runtime lineage, and classification. Numerical fits use the tolerances declared
@@ -1324,9 +1336,14 @@ in each case. The runner validates the complete transitive numerical dependency 
 hash-checked `uv.lock` read immediately before execution; resume rejects a stage from a different
 runtime even though runtime provenance is deliberately excluded from its scientific revision.
 
-Bi2Se3 replays the qualified detector-coordinate geometry fit (nine coordinates, one pivot bound,
-so parameter precision remains unqualified), the gate-v2 measured mosaic fit, and the synthetic
-selected-component ordered-intensity proof. The mosaic target is
+Bi2Se3 now has a verified geometry-only replay checkpoint: eight shared corrections plus one common
+incidence delta, one pivot bound, so parameter precision remains unqualified. The artifact is
+certified only through geometry as requested. Its stage-case SHA-256 is
+`c87e86f00372e7a3eaf84e71f1315eda9d55381d2513c04d5e494639cd29d6df` and its scientific revision
+is `sha256-a5de9f498f8ee16f8a7d6966c958acab0250d0e416ac0bcfd305435b5c91bc72`.
+Mosaic and ordered/SF code consume that exact position
+state, but their numerical references below predate it and must be requalified when those stages are
+resumed. The prior mosaic target was
 `(sigma_G,HWHM_L,eta)=(1.3228756555 deg,0.4898979486 deg,0.4480961630)` with objective
 `1.6802591883` over 15 profiles including five `m=0`. Its profile RMS/max residuals
 `0.33469/0.75333` and eight negative reconstructed bins demonstrate model limitation. The ordered

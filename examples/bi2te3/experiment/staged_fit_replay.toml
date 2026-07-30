@@ -1,4 +1,4 @@
-schema_version = "rasim-staged-fit-replay-v1"
+schema_version = "rasim-staged-fit-replay-v2"
 case_id = "bi2te3-osc-5-10-15-250ki-v1"
 material_id = "Bi2Te3"
 classification = "MODEL_LIMITED_MEASURED_STAGED_FIT_NO_STRUCTURE_ORACLE"
@@ -68,6 +68,16 @@ path = "../../../uv.lock"
 sha256 = "543d14f3bfeaa58a64ad0e55166242c3122ee805ea7feb9a921e4c2f749a1fd4"
 
 [geometry]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "geometry_series",
+  "indexed_catalog",
+  "cif",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
+]
 selection_mode = "position_free_discovery_with_frozen_catalog_audit"
 series_role = "geometry_series"
 catalog_role = "indexed_catalog"
@@ -91,6 +101,16 @@ heldout_integer_l = []
 benchmark = false
 
 [mosaic]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "indexed_catalog",
+  "cif",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
+  "dark",
+]
 implementation = "measured_angle_profiles_v1"
 execution_source_state_count = 250
 catalog_role = "indexed_catalog"
@@ -173,6 +193,7 @@ column_px = 762.920
 row_px = 1344.719
 
 [ordered_intensity]
+input_roles = ["environment_lock", "simulation_config", "cif"]
 implementation = "measured_transferred_mosaic_amplitudes_v1"
 execution_source_state_count = 250
 fit_atomic_positions = false
@@ -191,6 +212,14 @@ maximum_function_evaluations = 5000
 claim_boundary = "mosaic nuisance amplitudes multiplied by baseline 250-source peak-center signals; not a direct count-calibrated raw-OSC structure-factor recovery"
 
 [render]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "cif",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
+]
 enabled = true
 image_size = 3000
 source_state_count = 250

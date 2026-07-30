@@ -63,9 +63,11 @@ contributing rod/orientation branches on the active detector panel.
 - `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
   the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
   fitting, rank diagnostics, and post-fit root re-enumeration.
-- `fitting/indexed_series.py`: exact image-ID joins and one shared nine-coordinate
-  detector/sample/axis/pivot correction pack across an arbitrary nonempty commanded-angle series;
-  any nonempty coordinate subset may be active while the complement remains exactly fixed.
+- `fitting/indexed_series.py`: exact image-ID joins, one shared nine-coordinate
+  detector/sample/axis/pivot correction pack, and an optional single additive incidence-angle delta
+  across an arbitrary nonempty commanded-angle series. Any nonempty identifiable coordinate subset
+  may be active while the complement remains exactly fixed; the common delta and overlapping
+  sample-x gauge cannot be active together.
 - `fitting/mosaic.py`: immutable finite-bin profile identities and response banks, exact
   per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
   search, and local/global identifiability diagnostics. Its continuous-profile entry point is a

@@ -1,7 +1,7 @@
-schema_version = "rasim-staged-fit-replay-v1"
-case_id = "bi2se3-osc-5-10-15-250ki-v1"
+schema_version = "rasim-staged-fit-replay-v2"
+case_id = "bi2se3-osc-5-10-15-250ki-v2"
 material_id = "Bi2Se3"
-classification = "MEASURED_GEOMETRY_AND_MOSAIC_WITH_SYNTHETIC_ORDERED_INTENSITY_PROOF"
+classification = "MEASURED_GEOMETRY_SHARED_INCIDENCE_DELTA_CHECKPOINT"
 source_state_count = 250
 source_seed = 1729
 incidence_angles_deg = [5.0, 10.0, 15.0]
@@ -74,13 +74,21 @@ path = "../../../uv.lock"
 sha256 = "543d14f3bfeaa58a64ad0e55166242c3122ee805ea7feb9a921e4c2f749a1fd4"
 
 [geometry]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "geometry_series",
+  "cif",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
+]
 selection_mode = "position_free_discovery"
 series_role = "geometry_series"
 source_state_count = 1
 fitted_parameter_names = [
   "detector_column_tilt_rad",
   "detector_row_tilt_rad",
-  "sample_normal_x_tilt_rad",
   "sample_normal_y_tilt_rad",
   "goniometer_axis_pitch_rad",
   "goniometer_axis_yaw_rad",
@@ -88,11 +96,36 @@ fitted_parameter_names = [
   "goniometer_pivot_pitch_offset_m",
   "goniometer_pivot_yaw_offset_m",
 ]
-fixed_parameter_names = []
+fixed_parameter_names = ["sample_normal_x_tilt_rad"]
+fit_incidence_angle_delta = true
+incidence_angle_delta_half_span_deg = 0.5
+initial_corrections = [
+  -0.00449943391543809,
+  -0.023011840834110096,
+  0.0,
+  0.01565915036224212,
+  -0.015187627126648262,
+  -0.015250740996104902,
+  4.954992196687335e-05,
+  9.999999689372352e-05,
+  -2.7732760149498375e-05,
+]
+initial_incidence_angle_delta_rad = 0.007325549165585003
 heldout_integer_l = [4, 11]
 benchmark = true
 
 [mosaic]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "mosaic_case",
+  "measured_profile_policy",
+  "cif",
+  "legacy_peak_observations",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
+]
 implementation = "bi2se3_measured_profiles_v2"
 case_role = "mosaic_case"
 measured_profile_policy_role = "measured_profile_policy"
@@ -101,6 +134,13 @@ execution_source_state_count = 250
 render_images = false
 
 [ordered_intensity]
+input_roles = [
+  "environment_lock",
+  "simulation_config",
+  "mosaic_case",
+  "ordered_intensity_case",
+  "cif",
+]
 implementation = "bi2se3_synthetic_selected_component_v3"
 case_role = "ordered_intensity_case"
 execution_source_state_count = 250
@@ -115,6 +155,7 @@ active_parameters = [
 claim_boundary = "synthetic selected-component peak-center recovery on the measured mosaic selection; not unresolved raw OSC intensity, not integrated peak mass, and not raw OSC structure-factor fitting"
 
 [render]
+input_roles = ["environment_lock"]
 enabled = false
 reason = "No current gate-v2 Bi2Se3 render was produced; older images bind a retired mosaic result."
 
@@ -127,7 +168,6 @@ selection_revision = "sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd
 fitted_parameter_names = [
   "detector_column_tilt_rad",
   "detector_row_tilt_rad",
-  "sample_normal_x_tilt_rad",
   "sample_normal_y_tilt_rad",
   "goniometer_axis_pitch_rad",
   "goniometer_axis_yaw_rad",
@@ -135,22 +175,45 @@ fitted_parameter_names = [
   "goniometer_pivot_pitch_offset_m",
   "goniometer_pivot_yaw_offset_m",
 ]
-fixed_parameter_names = []
+fixed_parameter_names = ["sample_normal_x_tilt_rad"]
+jacobian_parameter_names = [
+  "detector_column_tilt_rad",
+  "detector_row_tilt_rad",
+  "sample_normal_y_tilt_rad",
+  "goniometer_axis_pitch_rad",
+  "goniometer_axis_yaw_rad",
+  "sample_plane_normal_offset_m",
+  "goniometer_pivot_pitch_offset_m",
+  "goniometer_pivot_yaw_offset_m",
+  "incidence_angle_delta_rad",
+]
 corrections = [
-  -0.00449943391543809,
-  -0.023011840834110096,
-  0.007325549165585003,
-  0.01565915036224212,
-  -0.015187627126648262,
-  -0.015250740996104902,
-  4.954992196687335e-05,
-  9.999999689372352e-05,
-  -2.7732760149498375e-05,
+  -0.004499431787307128,
+  -0.02301184090472325,
+  0.0,
+  0.015547810920751496,
+  -0.015190829451488233,
+  -0.015251338945555188,
+  4.954990754029806e-05,
+  9.999999581516674e-05,
+  -2.773259899649183e-05,
+]
+incidence_angle_delta_rad = 0.007325503018138858
+incidence_angle_image_ids = ["Bi2Se3_5m_5d", "Bi2Se3_10d_5m", "Bi2Se3_15d_5m"]
+commanded_incidence_angles_rad = [
+  0.08726646259971647,
+  0.17453292519943295,
+  0.2617993877991494,
+]
+effective_incidence_angles_rad = [
+  0.09459196561785534,
+  0.1818584282175718,
+  0.26912489081728824,
 ]
 rank = 9
-active_bounds = [false, false, false, false, false, false, false, true, false]
-site_rms_px = 1.5589418
-site_max_px = 5.6507942
+active_bounds = [false, false, false, false, false, false, true, false, false]
+site_rms_px = 1.5589417187168004
+site_max_px = 5.650793410705105
 per_incidence_profile_count = [10, 8, 8]
 
 [expected.mosaic]

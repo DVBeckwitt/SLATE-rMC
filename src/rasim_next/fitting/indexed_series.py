@@ -40,6 +40,7 @@ from rasim_next.pipeline.configured_simulation import (
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
+INCIDENCE_ANGLE_DELTA_PARAMETER_NAME = "incidence_angle_delta_rad"
 SHARED_GEOMETRY_PARAMETER_NAMES = (
     "detector_column_tilt_rad",
     "detector_row_tilt_rad",
@@ -69,13 +70,19 @@ _OPTIMIZER_SCALE = (
     5.0e-5,
     5.0e-5,
 )
+_INCIDENCE_ANGLE_DELTA_RANK_STEP_RAD = 1.0e-5
+_INCIDENCE_ANGLE_DELTA_OPTIMIZER_SCALE_RAD = math.radians(0.5)
 
 
-def _canonical_fitted_parameter_names(value: tuple[str, ...]) -> tuple[str, ...]:
+def _canonical_fitted_parameter_names(
+    value: tuple[str, ...],
+    *,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
     if isinstance(value, (str, bytes)):
         raise TypeError("fitted_parameter_names must be a sequence of parameter names")
     names = tuple(value)
-    if not names:
+    if not names and not allow_empty:
         raise ValueError("fitted_parameter_names must contain at least one parameter")
     if any(not isinstance(name, str) for name in names):
         raise TypeError("fitted_parameter_names must contain only strings")
@@ -168,6 +175,31 @@ class SharedGeometryCorrectionBounds:
             (9,),
             "shared geometry half span",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class IncidenceAngleDeltaBounds:
+    """Hard bounds for one common additive commanded-incidence correction."""
+
+    lower_rad: float
+    upper_rad: float
+
+    def __post_init__(self) -> None:
+        lower = float(self.lower_rad)
+        upper = float(self.upper_rad)
+        if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+            raise ValueError("incidence-angle delta bounds must be finite and increasing")
+        object.__setattr__(self, "lower_rad", lower)
+        object.__setattr__(self, "upper_rad", upper)
+
+    @classmethod
+    def rasim_shared_offset(cls) -> IncidenceAngleDeltaBounds:
+        half_span_rad = math.radians(0.5)
+        return cls(lower_rad=-half_span_rad, upper_rad=half_span_rad)
+
+    @property
+    def half_span_rad(self) -> float:
+        return 0.5 * (self.upper_rad - self.lower_rad)
 
 
 def _axis_pitch_yaw(axis_lab: ArrayLike) -> tuple[float, float]:
@@ -374,10 +406,28 @@ class IndexedGeometryImage:
     def corrected_instrument(
         self,
         corrections: SharedGeometryCorrections,
+        *,
+        incidence_angle_delta_rad: float = 0.0,
     ) -> CompiledInstrument:
+        delta = float(incidence_angle_delta_rad)
+        if not math.isfinite(delta):
+            raise ValueError("incidence_angle_delta_rad must be finite")
+        config = self.model.inputs.config
+        axis = config.instrument.axis_rotations[0]
+        shifted_config = replace(
+            config,
+            instrument=replace(
+                config.instrument,
+                axis_rotations=(replace(axis, angle_deg=axis.angle_deg + math.degrees(delta)),),
+            ),
+        )
+        shifted_inputs = rebind_configured_geometry_instrument(
+            self.model.inputs,
+            shifted_config,
+        )
         return apply_shared_geometry_corrections(
-            self.model.instrument,
-            self.model.inputs.config.instrument.axis_rotations,
+            shifted_inputs.instrument,
+            shifted_config.instrument.axis_rotations,
             corrections,
         )
 
@@ -385,10 +435,15 @@ class IndexedGeometryImage:
         self,
         keys: tuple[IntegerLMarkerKey, ...],
         corrections: SharedGeometryCorrections,
+        *,
+        incidence_angle_delta_rad: float = 0.0,
     ) -> IntegerLMarkerPrediction:
         return self.model.predict_integer_l_tags(
             keys,
-            instrument=self.corrected_instrument(corrections),
+            instrument=self.corrected_instrument(
+                corrections,
+                incidence_angle_delta_rad=incidence_angle_delta_rad,
+            ),
         )
 
 
@@ -436,6 +491,8 @@ def _canonical_images(images: tuple[IndexedGeometryImage, ...]) -> tuple[Indexed
 def evaluate_indexed_geometry_series_residual(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
+    *,
+    incidence_angle_delta_rad: float = 0.0,
 ) -> FloatArray:
     """Concatenate canonical per-image detector-native residual blocks."""
 
@@ -444,7 +501,11 @@ def evaluate_indexed_geometry_series_residual(
     ordered = _canonical_images(images)
     blocks = []
     for image in ordered:
-        prediction = image.predict_integer_l_tags(image.observations.keys, corrections)
+        prediction = image.predict_integer_l_tags(
+            image.observations.keys,
+            corrections,
+            incidence_angle_delta_rad=incidence_angle_delta_rad,
+        )
         blocks.append(evaluate_tagged_geometry_objective_residual(image.observations, prediction))
     residual = np.concatenate(blocks)
     residual.setflags(write=False)
@@ -477,6 +538,8 @@ class IndexedGeometryImageMetrics:
 @dataclass(frozen=True, slots=True)
 class IndexedGeometryFitResult:
     corrections: SharedGeometryCorrections
+    incidence_angle_delta_rad: float
+    incidence_angle_delta_fitted: bool
     success: bool
     message: str
     image_ids: tuple[str, ...]
@@ -496,6 +559,12 @@ class IndexedGeometryFitResult:
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES
     fixed_parameter_names: tuple[str, ...] = ()
 
+    @property
+    def jacobian_parameter_names(self) -> tuple[str, ...]:
+        return self.fitted_parameter_names + (
+            (INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,) if self.incidence_angle_delta_fitted else ()
+        )
+
     def __post_init__(self) -> None:
         if not isinstance(self.corrections, SharedGeometryCorrections):
             raise TypeError("corrections must be SharedGeometryCorrections")
@@ -503,7 +572,15 @@ class IndexedGeometryFitResult:
             raise TypeError("success must be bool")
         if not isinstance(self.message, str) or not self.message:
             raise ValueError("message must be nonempty")
-        fitted_names = _canonical_fitted_parameter_names(self.fitted_parameter_names)
+        if not isinstance(self.incidence_angle_delta_fitted, bool):
+            raise TypeError("incidence_angle_delta_fitted must be bool")
+        incidence_delta = float(self.incidence_angle_delta_rad)
+        if not math.isfinite(incidence_delta):
+            raise ValueError("incidence_angle_delta_rad must be finite")
+        fitted_names = _canonical_fitted_parameter_names(
+            self.fitted_parameter_names,
+            allow_empty=self.incidence_angle_delta_fitted,
+        )
         fixed_names = tuple(
             name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in fitted_names
         )
@@ -511,7 +588,7 @@ class IndexedGeometryFitResult:
             raise ValueError("fitted_parameter_names must use canonical parameter order")
         if tuple(self.fixed_parameter_names) != fixed_names:
             raise ValueError("fixed_parameter_names must be the canonical fitted complement")
-        fitted_count = len(fitted_names)
+        fitted_count = len(fitted_names) + int(self.incidence_angle_delta_fitted)
         if not self.image_ids or len(set(self.image_ids)) != len(self.image_ids):
             raise ValueError("image_ids must contain unique nonempty IDs")
         if any(not isinstance(value, str) or not value for value in self.image_ids):
@@ -574,6 +651,7 @@ class IndexedGeometryFitResult:
             raise ValueError("a successful fit must have a full acceptable Jacobian")
         object.__setattr__(self, "fitted_parameter_names", fitted_names)
         object.__setattr__(self, "fixed_parameter_names", fixed_names)
+        object.__setattr__(self, "incidence_angle_delta_rad", incidence_delta)
         object.__setattr__(self, "scaled_jacobian_singular_values", singular)
         object.__setattr__(self, "scaled_jacobian_weakest_direction", weakest)
         object.__setattr__(self, "active_bounds", active)
@@ -639,6 +717,8 @@ class IndexedGeometrySeriesRootAudit:
 def audit_indexed_geometry_series_roots(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
+    *,
+    incidence_angle_delta_rad: float = 0.0,
 ) -> IndexedGeometrySeriesRootAudit:
     """Audit every frozen root through the independent continuous-surface solver."""
 
@@ -651,7 +731,10 @@ def audit_indexed_geometry_series_roots(
             audit=audit_exact_tag_geometry_roots(
                 image.model,
                 image.observations.keys,
-                instrument=image.corrected_instrument(corrections),
+                instrument=image.corrected_instrument(
+                    corrections,
+                    incidence_angle_delta_rad=incidence_angle_delta_rad,
+                ),
             ),
         )
         for image in ordered
@@ -667,12 +750,17 @@ def audit_indexed_geometry_series_roots(
 def _fit_metrics(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
+    incidence_angle_delta_rad: float,
 ) -> tuple[tuple[IndexedGeometryImageMetrics, ...], FloatArray, FloatArray]:
     per_image: list[IndexedGeometryImageMetrics] = []
     all_site_error: list[FloatArray] = []
     all_chord_angle: list[FloatArray] = []
     for image in images:
-        prediction = image.predict_integer_l_tags(image.observations.keys, corrections)
+        prediction = image.predict_integer_l_tags(
+            image.observations.keys,
+            corrections,
+            incidence_angle_delta_rad=incidence_angle_delta_rad,
+        )
         if not np.all(prediction.active_panel):
             raise GeometryPredictionError(
                 "the fitted marker set does not remain on the active panel"
@@ -708,11 +796,17 @@ def _fit_metrics(
 def evaluate_indexed_geometry_series_metrics(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
+    *,
+    incidence_angle_delta_rad: float = 0.0,
 ) -> IndexedGeometrySeriesMetrics:
     """Report raw detector-pixel and chord metrics without optimizing."""
 
     ordered = _canonical_images(images)
-    per_image, site_error, chord_angle = _fit_metrics(ordered, corrections)
+    per_image, site_error, chord_angle = _fit_metrics(
+        ordered,
+        corrections,
+        incidence_angle_delta_rad,
+    )
     return IndexedGeometrySeriesMetrics(
         image_ids=tuple(image.image_id for image in ordered),
         per_image=per_image,
@@ -728,15 +822,26 @@ def fit_indexed_geometry_series(
     initial: SharedGeometryCorrections,
     bounds: SharedGeometryCorrectionBounds,
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
+    initial_incidence_angle_delta_rad: float = 0.0,
+    incidence_angle_delta_bounds: IncidenceAngleDeltaBounds | None = None,
 ) -> IndexedGeometryFitResult:
-    """Fit a selected shared-coordinate subset to all indexed images at once."""
+    """Fit selected shared coordinates and an optional common incidence delta."""
 
     ordered = _canonical_images(images)
     if not isinstance(initial, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections")
     if not isinstance(bounds, SharedGeometryCorrectionBounds):
         raise TypeError("bounds must be SharedGeometryCorrectionBounds")
-    fitted_names = _canonical_fitted_parameter_names(fitted_parameter_names)
+    incidence_delta_fitted = incidence_angle_delta_bounds is not None
+    fitted_names = _canonical_fitted_parameter_names(
+        fitted_parameter_names,
+        allow_empty=incidence_delta_fitted,
+    )
+    if incidence_delta_fitted and "sample_normal_x_tilt_rad" in fitted_names:
+        raise ValueError(
+            "incidence_angle_delta_rad and sample_normal_x_tilt_rad share the nominal "
+            "incidence-axis gauge; fix sample_normal_x_tilt_rad when fitting the common delta"
+        )
     fitted_indices = np.asarray(
         [SHARED_GEOMETRY_PARAMETER_NAMES.index(name) for name in fitted_names],
         dtype=np.int64,
@@ -746,6 +851,18 @@ def fit_indexed_geometry_series(
     initial_values = initial.as_array()
     if np.any(initial_values < lower) or np.any(initial_values > upper):
         raise ValueError("initial shared geometry corrections must lie inside the bounds")
+    initial_incidence_delta = float(initial_incidence_angle_delta_rad)
+    if not math.isfinite(initial_incidence_delta):
+        raise ValueError("initial_incidence_angle_delta_rad must be finite")
+    if incidence_angle_delta_bounds is not None:
+        if not isinstance(incidence_angle_delta_bounds, IncidenceAngleDeltaBounds):
+            raise TypeError("incidence_angle_delta_bounds must be IncidenceAngleDeltaBounds")
+        if not (
+            incidence_angle_delta_bounds.lower_rad
+            <= initial_incidence_delta
+            <= incidence_angle_delta_bounds.upper_rad
+        ):
+            raise ValueError("initial incidence-angle delta must lie inside its bounds")
 
     model_evaluation_count = 0
 
@@ -753,28 +870,49 @@ def fit_indexed_geometry_series(
         nonlocal model_evaluation_count
         model_evaluation_count += 1
         full_value = np.array(initial_values, copy=True)
-        full_value[fitted_indices] = value
+        shared_value_count = len(fitted_indices)
+        full_value[fitted_indices] = value[:shared_value_count]
+        incidence_delta = float(value[-1]) if incidence_delta_fitted else initial_incidence_delta
         return evaluate_indexed_geometry_series_residual(
             ordered,
             SharedGeometryCorrections.from_array(full_value),
+            incidence_angle_delta_rad=incidence_delta,
         )
 
     fitted_lower = lower[fitted_indices]
     fitted_upper = upper[fitted_indices]
     fitted_initial = initial_values[fitted_indices]
     fitted_half_span = bounds.half_span[fitted_indices]
+    fitted_rank_step = np.asarray(_RANK_STEP)[fitted_indices]
+    fitted_optimizer_scale = np.asarray(_OPTIMIZER_SCALE)[fitted_indices]
+    if incidence_angle_delta_bounds is not None:
+        fitted_lower = np.append(fitted_lower, incidence_angle_delta_bounds.lower_rad)
+        fitted_upper = np.append(fitted_upper, incidence_angle_delta_bounds.upper_rad)
+        fitted_initial = np.append(fitted_initial, initial_incidence_delta)
+        fitted_half_span = np.append(
+            fitted_half_span,
+            incidence_angle_delta_bounds.half_span_rad,
+        )
+        fitted_rank_step = np.append(
+            fitted_rank_step,
+            _INCIDENCE_ANGLE_DELTA_RANK_STEP_RAD,
+        )
+        fitted_optimizer_scale = np.append(
+            fitted_optimizer_scale,
+            _INCIDENCE_ANGLE_DELTA_OPTIMIZER_SCALE_RAD,
+        )
     preflight = _finite_difference_jacobian(
         residual,
         fitted_initial,
         fitted_lower,
         fitted_upper,
-        step_size=np.asarray(_RANK_STEP)[fitted_indices],
+        step_size=fitted_rank_step,
     )
-    fitted_count = len(fitted_names)
+    fitted_count = len(fitted_names) + int(incidence_delta_fitted)
     rank, condition, _ = _rank_diagnostics(preflight, fitted_half_span)
     if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
-            "shared geometry Jacobian rank/conditioning failed: "
+            "indexed geometry Jacobian rank/conditioning failed: "
             f"rank={rank}/{fitted_count}, "
             f"condition={condition:.6g}"
         )
@@ -785,23 +923,31 @@ def fit_indexed_geometry_series(
         bounds=(fitted_lower, fitted_upper),
         method="trf",
         jac="2-point",
-        x_scale=np.asarray(_OPTIMIZER_SCALE)[fitted_indices],
+        x_scale=fitted_optimizer_scale,
         ftol=1.0e-12,
         xtol=1.0e-12,
         gtol=1.0e-12,
         max_nfev=150,
     )
     fitted_values = np.array(initial_values, copy=True)
-    fitted_values[fitted_indices] = optimized.x
+    shared_value_count = len(fitted_indices)
+    fitted_values[fitted_indices] = optimized.x[:shared_value_count]
+    incidence_angle_delta_rad = (
+        float(optimized.x[-1]) if incidence_delta_fitted else initial_incidence_delta
+    )
     corrections = SharedGeometryCorrections.from_array(fitted_values)
-    per_image, site_error, chord_angle = _fit_metrics(ordered, corrections)
+    per_image, site_error, chord_angle = _fit_metrics(
+        ordered,
+        corrections,
+        incidence_angle_delta_rad,
+    )
     rank, condition, singular = _rank_diagnostics(
         np.asarray(optimized.jac, dtype=np.float64),
         fitted_half_span,
     )
     if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
-            "fitted shared geometry Jacobian rank/conditioning failed: "
+            "fitted indexed geometry Jacobian rank/conditioning failed: "
             f"rank={rank}/{fitted_count}, "
             f"condition={condition:.6g}"
         )
@@ -819,6 +965,8 @@ def fit_indexed_geometry_series(
     )
     return IndexedGeometryFitResult(
         corrections=corrections,
+        incidence_angle_delta_rad=incidence_angle_delta_rad,
+        incidence_angle_delta_fitted=incidence_delta_fitted,
         success=bool(optimized.success),
         message=str(optimized.message),
         fitted_parameter_names=fitted_names,
@@ -844,7 +992,9 @@ def fit_indexed_geometry_series(
 
 
 __all__ = [
+    "INCIDENCE_ANGLE_DELTA_PARAMETER_NAME",
     "SHARED_GEOMETRY_PARAMETER_NAMES",
+    "IncidenceAngleDeltaBounds",
     "IndexedGeometryFitResult",
     "IndexedGeometryImage",
     "IndexedGeometryImageMetrics",

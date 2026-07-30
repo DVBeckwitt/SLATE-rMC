@@ -20,6 +20,7 @@ from scipy.ndimage import map_coordinates
 
 from painted_ewald import MosaicParameters, Rod, wrapped_mosaic_line_density_rad_inv
 from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.staged_fit import verify_staged_fit_stage_artifact
 from rasim_next.fitting import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
@@ -96,6 +97,29 @@ _ACCEPTED_FIXED_GEOMETRY_CORRECTIONS = (
     9.999999689372352e-05,
     -2.7732760149498375e-05,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _FixedPositionState:
+    artifact_revision: str
+    corrections: SharedGeometryCorrections
+    incidence_angle_delta_rad: float
+
+    def __post_init__(self) -> None:
+        revision = str(self.artifact_revision)
+        if (
+            not revision.startswith("sha256-")
+            or len(revision) != 71
+            or any(character not in "0123456789abcdef" for character in revision[7:])
+        ):
+            raise ValueError("position artifact revision must be a sha256- prefixed digest")
+        if not isinstance(self.corrections, SharedGeometryCorrections):
+            raise TypeError("position corrections must be SharedGeometryCorrections")
+        delta_rad = float(self.incidence_angle_delta_rad)
+        if not math.isfinite(delta_rad):
+            raise ValueError("incidence_angle_delta_rad must be finite")
+        object.__setattr__(self, "artifact_revision", revision)
+        object.__setattr__(self, "incidence_angle_delta_rad", delta_rad)
 
 
 @dataclass(frozen=True, slots=True)
@@ -630,6 +654,7 @@ def _fixed_geometry_inputs(
     case: dict[str, Any],
     *,
     source_sample_count: int,
+    position: _FixedPositionState,
 ) -> tuple[
     ConfiguredSimulationInputs,
     tuple[ConfiguredSimulationInputs, ...],
@@ -637,9 +662,14 @@ def _fixed_geometry_inputs(
 ]:
     if isinstance(source_sample_count, bool) or source_sample_count < 1:
         raise ValueError("source_sample_count must be a positive integer")
+    if not isinstance(position, _FixedPositionState):
+        raise TypeError("position must be _FixedPositionState")
+    delta_rad = position.incidence_angle_delta_rad
+    corrections = position.corrections
+    incidence_delta_deg = math.degrees(delta_rad)
     config_path = (case_path.parent / str(case["simulation_config"])).resolve()
     config = load_simulation_config(config_path)
-    first_incidence_deg = float(case["incidence_angles_deg"][0])
+    first_incidence_deg = float(case["incidence_angles_deg"][0]) + incidence_delta_deg
     config = replace(
         config,
         source=replace(
@@ -675,16 +705,16 @@ def _fixed_geometry_inputs(
         reciprocal=nominal_base.reciprocal,
         rods=nominal_base.rods,
     )
-    corrections = SharedGeometryCorrections.from_array(case["shared_geometry_corrections"])
     series: list[ConfiguredSimulationInputs] = []
     nominal_series: list[ConfiguredSimulationInputs] = []
-    for incidence_deg in case["incidence_angles_deg"]:
+    for commanded_incidence_deg in case["incidence_angles_deg"]:
+        effective_incidence_deg = float(commanded_incidence_deg) + incidence_delta_deg
         angle_config = replace(
             config,
             instrument=replace(
                 config.instrument,
                 axis_rotations=tuple(
-                    replace(axis, angle_deg=float(incidence_deg))
+                    replace(axis, angle_deg=effective_incidence_deg)
                     for axis in config.instrument.axis_rotations
                 ),
             ),
@@ -727,6 +757,115 @@ def _fixed_geometry_inputs(
             )
         )
     return base, tuple(series), tuple(nominal_series)
+
+
+def _fixed_geometry_record(
+    case: dict[str, Any],
+    base: ConfiguredSimulationInputs,
+    position: _FixedPositionState,
+) -> dict[str, object]:
+    commanded_deg = tuple(float(value) for value in case["incidence_angles_deg"])
+    delta_rad = position.incidence_angle_delta_rad
+    effective_deg = tuple(value + math.degrees(delta_rad) for value in commanded_deg)
+    return {
+        "position_artifact_revision": position.artifact_revision,
+        "corrections": {
+            name: float(value)
+            for name, value in zip(
+                SHARED_GEOMETRY_PARAMETER_NAMES,
+                position.corrections.as_array(),
+                strict=True,
+            )
+        },
+        "incidence_angle_model_id": "commanded_angle_plus_common_delta.v1",
+        "incidence_angle_delta_rad": delta_rad,
+        "commanded_incidence_angles_deg": commanded_deg,
+        "effective_incidence_angles_deg": effective_deg,
+        "beam_center_column_row_px": tuple(
+            float(value) for value in base.config.instrument.detector_reference_coordinate_px
+        ),
+        "geometry_parameters_fitted_here": False,
+    }
+
+
+def _case_fixed_position_state(case: dict[str, Any]) -> _FixedPositionState:
+    return _FixedPositionState(
+        artifact_revision=f"sha256-{case['geometry_manifest_sha256']}",
+        corrections=SharedGeometryCorrections.from_array(case["shared_geometry_corrections"]),
+        incidence_angle_delta_rad=0.0,
+    )
+
+
+def _position_artifact_state(
+    path: Path,
+    case: dict[str, Any],
+) -> _FixedPositionState:
+    document = json.loads(path.resolve().read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("position artifact must contain one JSON object")
+    revision = verify_staged_fit_stage_artifact(document, expected_stage="geometry")
+    if document.get("material_id") != "Bi2Se3":
+        raise ValueError("position artifact is not a Bi2Se3 geometry result")
+    state = document.get("state")
+    if not isinstance(state, dict) or set(state) != {
+        "corrections",
+        "fit_evidence",
+        "incidence_angle_delta_rad",
+        "incidence_angles",
+    }:
+        raise ValueError("position artifact has an invalid geometry state")
+    corrections_record = state["corrections"]
+    if (
+        not isinstance(corrections_record, list)
+        or len(corrections_record) != len(SHARED_GEOMETRY_PARAMETER_NAMES)
+        or any(not math.isfinite(float(value)) for value in corrections_record)
+        or float(corrections_record[2]) != 0.0
+    ):
+        raise ValueError("position artifact has invalid shared geometry corrections")
+    delta_rad = float(state["incidence_angle_delta_rad"])
+    if not math.isfinite(delta_rad):
+        raise ValueError("position artifact has a nonfinite common incidence-angle delta")
+    incidence_records = state["incidence_angles"]
+    commanded_deg = tuple(float(value) for value in case["incidence_angles_deg"])
+    if not isinstance(incidence_records, list) or len(incidence_records) != len(commanded_deg):
+        raise ValueError("position artifact has an incomplete incidence-angle series")
+    for index, (record, angle_deg) in enumerate(
+        zip(incidence_records, commanded_deg, strict=True)
+    ):
+        if not isinstance(record, dict) or set(record) != {
+            "commanded_angle_rad",
+            "effective_angle_rad",
+            "image_id",
+        }:
+            raise ValueError(f"position artifact incidence record {index} is invalid")
+        commanded_rad = math.radians(angle_deg)
+        if (
+            float(record["commanded_angle_rad"]) != commanded_rad
+            or float(record["effective_angle_rad"]) != commanded_rad + delta_rad
+        ):
+            raise ValueError("position artifact does not apply one common incidence-angle delta")
+    fit_evidence = state["fit_evidence"]
+    qualification = fit_evidence.get("qualification") if isinstance(fit_evidence, dict) else None
+    if (
+        not isinstance(qualification, dict)
+        or not bool(qualification.get("accepted"))
+        or fit_evidence.get("indexed_manifest_hash")
+        != f"sha256-{case['geometry_manifest_sha256']}"
+    ):
+        raise ValueError("position artifact is not qualified for downstream fitting")
+    summary = document.get("scientific_summary")
+    geometry_summary = summary.get("geometry") if isinstance(summary, dict) else None
+    if (
+        not isinstance(geometry_summary, dict)
+        or geometry_summary.get("corrections") != corrections_record
+        or geometry_summary.get("incidence_angle_delta_rad") != delta_rad
+    ):
+        raise ValueError("position artifact state disagrees with its scientific summary")
+    return _FixedPositionState(
+        artifact_revision=revision,
+        corrections=SharedGeometryCorrections.from_array(corrections_record),
+        incidence_angle_delta_rad=delta_rad,
+    )
 
 
 def _geometry_excluded_bin_map(
@@ -832,12 +971,21 @@ def _profile_definitions(
     tuple[dict[str, object], ...],
     dict[str, object],
 ]:
+    effective_incidence_deg = float(inputs.config.instrument.axis_rotations[0].angle_deg)
+    frame_revision = (
+        f"fixed-nine-coordinate-{incidence_deg:g}deg.v1"
+        if effective_incidence_deg == incidence_deg
+        else (
+            "fixed-position-state-"
+            f"commanded-{incidence_deg:g}deg-effective-{effective_incidence_deg:.12g}deg.v2"
+        )
+    )
     context = build_nominal_ewald_context(inputs)
     frame = build_osc_angle_frame(
         mean_direction_lab=inputs.config.source.mean_direction_lab,
         instrument=inputs.instrument,
         sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
-        revision=f"fixed-nine-coordinate-{incidence_deg:g}deg.v1",
+        revision=frame_revision,
     )
     markers = evaluate_nominal_integer_l_markers(context)
     indexed_nonzero_peaks = tuple(osc_observation["indexed_nonzero_peaks"])
@@ -925,7 +1073,7 @@ def _profile_definitions(
             MosaicProfileDefinition(
                 identity=MosaicProfileIdentity(
                     dataset_id=f"Bi2Se3-{incidence_deg:g}deg",
-                    incidence_angle_rad=math.radians(incidence_deg),
+                    incidence_angle_rad=math.radians(effective_incidence_deg),
                     group_key=MosaicReflectionGroupKey(
                         group_id=f"Bi2Se3:m={family_m}:L={integer_l}",
                         rod_catalog_revision=rod_catalog_revision,
@@ -1163,7 +1311,7 @@ def _profile_definitions(
             MosaicProfileDefinition(
                 identity=MosaicProfileIdentity(
                     dataset_id=f"Bi2Se3-{incidence_deg:g}deg",
-                    incidence_angle_rad=math.radians(incidence_deg),
+                    incidence_angle_rad=math.radians(effective_incidence_deg),
                     group_key=MosaicReflectionGroupKey(
                         group_id=f"Bi2Se3:m=0:L={integer_l_value}",
                         rod_catalog_revision=rod_catalog_revision,
@@ -1348,15 +1496,15 @@ def _profile_revision(
     cif_sha256: str,
     rod_catalog_revision: str,
     source_revision: str,
+    fixed_geometry: dict[str, object],
     measured_profile_policy_sha256: str | None = None,
 ) -> str:
     payload = {
-        "geometry_manifest_sha256": case["geometry_manifest_sha256"],
+        "fixed_geometry": fixed_geometry,
         "simulation_config_sha256": simulation_config_sha256,
         "configured_physics_revision": configured_physics_revision,
         "cif_sha256": cif_sha256,
         "rod_catalog_revision": rod_catalog_revision,
-        "shared_geometry_corrections": case["shared_geometry_corrections"],
         "source_policy": "seeded-empirical-source-ensemble.v1",
         "source_revision": source_revision,
         "excluded_bin_policy": case["profiles"]["excluded_bin_policy"],
@@ -2185,6 +2333,7 @@ def _run_real_osc_fit(
     execution_backend: str,
     setup_seconds: float,
     total_start: float,
+    fixed_geometry: dict[str, object],
 ) -> None:
     observation_start = perf_counter()
     model_layout, _ = _evaluate_profile_series(
@@ -2393,7 +2542,7 @@ def _run_real_osc_fit(
     )
     current_bytes, peak_bytes = tracemalloc.get_traced_memory()
     manifest = {
-        "schema_version": "rasim-bi2se3-real-mosaic-fit-v2",
+        "schema_version": "rasim-bi2se3-real-mosaic-fit-v3",
         "status": "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE",
         "legacy_classification": "NO_ORACLE",
         "interpretation": (
@@ -2459,21 +2608,7 @@ def _run_real_osc_fit(
                 "is claimed because OSC covariance and instrument PSF are not calibrated."
             ),
         },
-        "fixed_geometry": {
-            "nine_coordinate_manifest_sha256": case["geometry_manifest_sha256"],
-            "corrections": {
-                name: value
-                for name, value in zip(
-                    SHARED_GEOMETRY_PARAMETER_NAMES,
-                    case["shared_geometry_corrections"],
-                    strict=True,
-                )
-            },
-            "beam_center_column_row_px": list(
-                base.config.instrument.detector_reference_coordinate_px
-            ),
-            "geometry_parameters_fitted_here": False,
-        },
+        "fixed_geometry": fixed_geometry,
         "observations": {
             "joint_dataset_count": len(osc_audit),
             "datasets": list(osc_audit),
@@ -2606,20 +2741,38 @@ def main(argv: list[str] | None = None) -> None:
         choices=("cpu", "cuda"),
         help="override the configured profile and render backend",
     )
+    parser.add_argument(
+        "--position-artifact",
+        type=Path,
+        help="verified geometry.json from the completed upstream position fit",
+    )
     parser.add_argument("--skip-images", action="store_true")
     args = parser.parse_args(argv)
     case_path = args.case.resolve()
-    output_directory = _external_directory(args.output_directory)
     case, case_bytes, case_sha256 = _case(case_path)
+    if args.observation_mode == "osc" and args.position_artifact is None:
+        raise ValueError("measured OSC mosaic fitting requires --position-artifact")
     execution_backend = args.execution_backend or str(case["profiles"]["execution_backend"])
     tracemalloc.start()
     total_start = perf_counter()
 
     setup_start = perf_counter()
+    position = (
+        _case_fixed_position_state(case)
+        if args.position_artifact is None
+        else _position_artifact_state(args.position_artifact, case)
+    )
+    output_directory = _external_directory(args.output_directory)
     base, series, nominal_series = _fixed_geometry_inputs(
         case_path,
         case,
         source_sample_count=args.source_sample_count,
+        position=position,
+    )
+    fixed_geometry = _fixed_geometry_record(
+        case,
+        base,
+        position,
     )
     profile_physics, profile_geometry = _profile_forward_contexts(base, series)
     rod_catalog_revision = configured_rod_catalog_revision(base)
@@ -2696,6 +2849,7 @@ def main(argv: list[str] | None = None) -> None:
         base.config.cif_sha256,
         rod_catalog_revision,
         base.samples.source_revision,
+        fixed_geometry,
         None if measured_profile_policy is None else measured_profile_policy.sha256,
     )
     truth_profile_revision = _profile_revision(
@@ -2709,6 +2863,7 @@ def main(argv: list[str] | None = None) -> None:
         base.config.cif_sha256,
         rod_catalog_revision,
         base.samples.source_revision,
+        fixed_geometry,
     )
     setup_seconds = perf_counter() - setup_start
 
@@ -2734,6 +2889,7 @@ def main(argv: list[str] | None = None) -> None:
             execution_backend=execution_backend,
             setup_seconds=setup_seconds,
             total_start=total_start,
+            fixed_geometry=fixed_geometry,
         )
         return
 
@@ -2893,7 +3049,7 @@ def main(argv: list[str] | None = None) -> None:
         distribution_path = _write_distribution_plot(output_directory, distribution)
         images, image_paths, render_execution, render_seconds = _render_images(
             truth_detectors,
-            tuple(float(value) for value in case["incidence_angles_deg"]),
+            tuple(float(value) for value in fixed_geometry["effective_incidence_angles_deg"]),
             output_directory=output_directory,
             render_config=case["render"],
             execution_backend=execution_backend,
@@ -3036,7 +3192,7 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError:
         case_repository_path = None
     manifest = {
-        "schema_version": "rasim-mosaic-recovery-result-v2",
+        "schema_version": "rasim-mosaic-recovery-result-v3",
         "case": {
             "repository_path": case_repository_path,
             "resolved_path": str(case_path),
@@ -3193,20 +3349,7 @@ def main(argv: list[str] | None = None) -> None:
             "maximum_component_normalization_difference": normalization_invariance_error,
             "refinement_history": refinement_history,
         },
-        "fixed_geometry": {
-            "manifest_sha256": case["geometry_manifest_sha256"],
-            "corrections": {
-                name: value
-                for name, value in zip(
-                    SHARED_GEOMETRY_PARAMETER_NAMES,
-                    case["shared_geometry_corrections"],
-                    strict=True,
-                )
-            },
-            "beam_center_column_row_px": list(
-                base.config.instrument.detector_reference_coordinate_px
-            ),
-        },
+        "fixed_geometry": fixed_geometry,
         "source": _source_model_record(base),
         "mosaic_orientation_quadrature": {
             "alpha_panel_count": profile_physics.alpha_panel_count,

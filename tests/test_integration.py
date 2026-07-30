@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import runpy
 from dataclasses import replace
@@ -4356,10 +4357,19 @@ def test_mosaic_runner_separates_nominal_geometry_from_one_shared_source_ensembl
     case_path = root / "examples" / "bi2se3" / "experiment" / "mosaic_fit_truth.toml"
     case, _, _ = runner["_case"](case_path)
 
+    incidence_angle_delta_rad = math.radians(0.2)
+    position = runner["_FixedPositionState"](
+        artifact_revision="sha256-" + "0" * 64,
+        corrections=runner["SharedGeometryCorrections"].from_array(
+            case["shared_geometry_corrections"]
+        ),
+        incidence_angle_delta_rad=incidence_angle_delta_rad,
+    )
     base, series, nominal_series = runner["_fixed_geometry_inputs"](
         case_path,
         case,
         source_sample_count=4,
+        position=position,
     )
 
     assert base.samples.incident_sample_id.size == 4
@@ -4378,6 +4388,134 @@ def test_mosaic_runner_separates_nominal_geometry_from_one_shared_source_ensembl
         float(item.samples.wavelength_A[0]) == base.config.source.mean_wavelength_A
         for item in nominal_series
     )
+    expected_effective_angles_deg = (5.2, 10.2, 15.2)
+    assert tuple(
+        item.config.instrument.axis_rotations[0].angle_deg for item in series
+    ) == pytest.approx(expected_effective_angles_deg, abs=1.0e-14)
+    assert tuple(
+        item.config.instrument.axis_rotations[0].angle_deg for item in nominal_series
+    ) == pytest.approx(expected_effective_angles_deg, abs=1.0e-14)
+
+    ordered_runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+    corrections = runner["SharedGeometryCorrections"].from_array(
+        case["shared_geometry_corrections"]
+    )
+    fixed_geometry = json.loads(
+        json.dumps(
+            runner["_fixed_geometry_record"](
+                case,
+                base,
+                runner["_FixedPositionState"](
+                    artifact_revision="sha256-" + "1" * 64,
+                    corrections=corrections,
+                    incidence_angle_delta_rad=incidence_angle_delta_rad,
+                ),
+            )
+        )
+    )
+    fixed_position = ordered_runner["_fixed_position_state"](fixed_geometry, case)
+    assert ordered_runner["_fixed_position_record"](fixed_position) == fixed_geometry
+    unknown_position_field = {**fixed_geometry, "independent_angle_delta_rad": 0.0}
+    with pytest.raises(ValueError, match="invalid fixed position record"):
+        ordered_runner["_fixed_position_state"](unknown_position_field, case)
+    ordered_series = ordered_runner["_fixed_inputs"](
+        case_path,
+        case,
+        source_sample_count=2,
+        mosaic_parameters={
+            "gaussian_sigma_deg": float(case["truth"]["gaussian_sigma_deg"]),
+            "lorentzian_hwhm_deg": float(case["truth"]["lorentzian_hwhm_deg"]),
+            "lorentzian_probability": float(case["truth"]["lorentzian_probability"]),
+        },
+        fixed_position=fixed_position,
+    )
+    assert tuple(
+        item.config.instrument.axis_rotations[0].angle_deg for item in ordered_series
+    ) == pytest.approx(expected_effective_angles_deg, abs=1.0e-14)
+    for mosaic_inputs, ordered_inputs in zip(series, ordered_series, strict=True):
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.sample_from_crystal.rotation,
+            mosaic_inputs.instrument.sample_from_crystal.rotation,
+        )
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.sample_from_crystal.translation_m,
+            mosaic_inputs.instrument.sample_from_crystal.translation_m,
+        )
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.lab_from_sample.rotation,
+            mosaic_inputs.instrument.lab_from_sample.rotation,
+        )
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.lab_from_sample.translation_m,
+            mosaic_inputs.instrument.lab_from_sample.translation_m,
+        )
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.lab_from_detector.rotation,
+            mosaic_inputs.instrument.lab_from_detector.rotation,
+        )
+        np.testing.assert_array_equal(
+            ordered_inputs.instrument.lab_from_detector.translation_m,
+            mosaic_inputs.instrument.lab_from_detector.translation_m,
+        )
+
+
+def test_measured_mosaic_cli_requires_one_atomic_position_artifact_state(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_mosaic.py")
+    output = tmp_path / "unused"
+    with pytest.raises(ValueError, match="requires --position-artifact"):
+        runner["main"](
+            [
+                "--output-directory",
+                str(output),
+                "--observation-mode",
+                "osc",
+            ]
+        )
+    assert not output.exists()
+
+    invalid_artifact = tmp_path / "geometry.json"
+    invalid_artifact.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported staged-fit artifact schema"):
+        runner["main"](
+            [
+                "--output-directory",
+                str(output),
+                "--observation-mode",
+                "osc",
+                "--position-artifact",
+                str(invalid_artifact),
+            ]
+        )
+    assert not output.exists()
+
+
+def test_ordered_recovery_requires_mosaic_or_explicit_synthetic_proof(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
+
+    with pytest.raises(ValueError, match="requires --mosaic-result or --synthetic-truth-proof"):
+        runner["main"]([])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        runner["main"](
+            [
+                "--mosaic-result",
+                str(tmp_path / "unused.json"),
+                "--synthetic-truth-proof",
+            ]
+        )
+
+    case_path = runner["DEFAULT_CASE"]
+    _, mosaic_case_path, mosaic_case = runner["_load_case"](case_path)
+    position = runner["_case_fixed_position_state"](mosaic_case_path, mosaic_case)
+    with pytest.raises(ValueError, match="complete upstream mosaic artifact state"):
+        runner["run_recovery"](
+            case_path,
+            source_sample_count=1,
+            fixed_position=position,
+        )
 
 
 def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -> None:
@@ -4397,6 +4535,7 @@ def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -
         case_path,
         case,
         source_sample_count=2,
+        position=runner["_case_fixed_position_state"](case),
     )
     physics, geometry = runner["_profile_forward_contexts"](base, (series[0],))
     nominal_context = build_nominal_ewald_context(nominal_series[0])
@@ -4526,6 +4665,7 @@ def test_mosaic_runner_passes_nominally_unsupported_m0_to_combined_source_gate()
         case_path,
         case,
         source_sample_count=2,
+        position=runner["_case_fixed_position_state"](case),
     )
     shared = {
         "source_inputs": series[1],
@@ -4604,6 +4744,10 @@ def test_ordered_renderer_validates_gate_v2_measured_profile_catalog() -> None:
         mosaic_case,
         source_sample_count=2,
         mosaic_parameters=mosaic_parameters,
+        fixed_position=runner["_case_fixed_position_state"](
+            mosaic_case_path,
+            mosaic_case,
+        ),
     )
     eligible = frozenset(
         {
@@ -4679,7 +4823,7 @@ def test_recovery_runners_reject_pre_combined_source_provenance() -> None:
             }
         )
     current = {
-        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v3",
+        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v4",
         "accepted": True,
         "positions_frozen": True,
         "response_contract": runner["_response_contract_record"](),

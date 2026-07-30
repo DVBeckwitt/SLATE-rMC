@@ -21,7 +21,9 @@ from rasim_next.fitting.geometry import (
     fit_tagged_detector_function_geometry,
 )
 from rasim_next.fitting.indexed_series import (
+    INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    IncidenceAngleDeltaBounds,
     IndexedGeometryFitResult,
     IndexedGeometryImage,
     IndexedGeometryImageMetrics,
@@ -84,6 +86,7 @@ from rasim_next.fitting.stacking_intensity import (
 )
 
 __all__ = [
+    "INCIDENCE_ANGLE_DELTA_PARAMETER_NAME",
     "SHARED_GEOMETRY_PARAMETER_NAMES",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR",
@@ -100,6 +103,7 @@ __all__ = [
     "GeometryFitResult",
     "GeometryPredictionError",
     "GeometryRankError",
+    "IncidenceAngleDeltaBounds",
     "IndexedGeometryFitResult",
     "IndexedGeometryImage",
     "IndexedGeometryImageMetrics",

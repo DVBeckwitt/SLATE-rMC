@@ -9,7 +9,7 @@ import json
 import math
 import tomllib
 import tracemalloc
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from numbers import Integral, Real
 from pathlib import Path
 from time import perf_counter
@@ -19,6 +19,7 @@ import numpy as np
 
 from painted_ewald import MosaicBraggSpace
 from rasim_next.fitting import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
     SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
     SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
@@ -58,6 +59,132 @@ _REQUIRED_MEASURED_PROFILE_SELECTION_SAMPLER_REVISION = (
     "detector-native-bilinear-profile-centerline-sidebands.v1"
 )
 _ProfileIdentityKey = tuple[str, int, int, int, int | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _FixedPositionState:
+    artifact_revision: str
+    corrections: SharedGeometryCorrections
+    incidence_angle_delta_rad: float
+    commanded_incidence_angles_deg: tuple[float, ...]
+    effective_incidence_angles_deg: tuple[float, ...]
+    beam_center_column_row_px: tuple[float, float]
+    geometry_parameters_fitted_here: bool
+
+
+def _fixed_position_state(
+    fixed_geometry: object,
+    mosaic_case: dict[str, Any],
+) -> _FixedPositionState:
+    if not isinstance(fixed_geometry, dict):
+        raise ValueError("mosaic result lacks its fixed position state")
+    if set(fixed_geometry) != {
+        "position_artifact_revision",
+        "corrections",
+        "incidence_angle_model_id",
+        "incidence_angle_delta_rad",
+        "commanded_incidence_angles_deg",
+        "effective_incidence_angles_deg",
+        "beam_center_column_row_px",
+        "geometry_parameters_fitted_here",
+    }:
+        raise ValueError("mosaic result has an invalid fixed position record")
+    revision = fixed_geometry.get("position_artifact_revision")
+    if (
+        not isinstance(revision, str)
+        or not revision.startswith("sha256-")
+        or len(revision) != 71
+        or any(character not in "0123456789abcdef" for character in revision[7:])
+    ):
+        raise ValueError("mosaic result lacks its upstream position-artifact revision")
+    if fixed_geometry.get("incidence_angle_model_id") != ("commanded_angle_plus_common_delta.v1"):
+        raise ValueError("mosaic result uses an unsupported incidence-angle model")
+    correction_record = fixed_geometry.get("corrections")
+    if not isinstance(correction_record, dict) or set(correction_record) != set(
+        SHARED_GEOMETRY_PARAMETER_NAMES
+    ):
+        raise ValueError("mosaic result has an invalid fixed position correction record")
+    corrections = SharedGeometryCorrections.from_array(
+        [float(correction_record[name]) for name in SHARED_GEOMETRY_PARAMETER_NAMES]
+    )
+    delta_rad = float(fixed_geometry.get("incidence_angle_delta_rad"))
+    if not math.isfinite(delta_rad):
+        raise ValueError("mosaic result has a nonfinite common incidence-angle delta")
+    commanded = tuple(
+        float(value) for value in fixed_geometry.get("commanded_incidence_angles_deg", ())
+    )
+    effective = tuple(
+        float(value) for value in fixed_geometry.get("effective_incidence_angles_deg", ())
+    )
+    expected_commanded = tuple(float(value) for value in mosaic_case["incidence_angles_deg"])
+    expected_effective = tuple(value + math.degrees(delta_rad) for value in expected_commanded)
+    if (
+        commanded != expected_commanded
+        or len(effective) != len(expected_effective)
+        or any(
+            not math.isfinite(observed)
+            or not math.isclose(observed, expected, rel_tol=0.0, abs_tol=1.0e-12)
+            for observed, expected in zip(effective, expected_effective, strict=True)
+        )
+    ):
+        raise ValueError("mosaic result does not apply one common delta to the incidence series")
+    beam_center = tuple(float(value) for value in fixed_geometry["beam_center_column_row_px"])
+    if len(beam_center) != 2 or not all(math.isfinite(value) for value in beam_center):
+        raise ValueError("mosaic result has an invalid fixed detector beam center")
+    fitted_here = fixed_geometry["geometry_parameters_fitted_here"]
+    if fitted_here is not False:
+        raise ValueError("mosaic result must keep every position parameter fixed")
+    return _FixedPositionState(
+        artifact_revision=revision,
+        corrections=corrections,
+        incidence_angle_delta_rad=delta_rad,
+        commanded_incidence_angles_deg=commanded,
+        effective_incidence_angles_deg=effective,
+        beam_center_column_row_px=(beam_center[0], beam_center[1]),
+        geometry_parameters_fitted_here=fitted_here,
+    )
+
+
+def _case_fixed_position_state(
+    mosaic_case_path: Path,
+    mosaic_case: dict[str, Any],
+) -> _FixedPositionState:
+    commanded = tuple(float(value) for value in mosaic_case["incidence_angles_deg"])
+    config = load_simulation_config(
+        (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
+    )
+    beam_center = tuple(float(value) for value in config.instrument.detector_reference_coordinate_px)
+    return _FixedPositionState(
+        artifact_revision=f"sha256-{mosaic_case['geometry_manifest_sha256']}",
+        corrections=SharedGeometryCorrections.from_array(
+            mosaic_case["shared_geometry_corrections"]
+        ),
+        incidence_angle_delta_rad=0.0,
+        commanded_incidence_angles_deg=commanded,
+        effective_incidence_angles_deg=commanded,
+        beam_center_column_row_px=(beam_center[0], beam_center[1]),
+        geometry_parameters_fitted_here=False,
+    )
+
+
+def _fixed_position_record(state: _FixedPositionState) -> dict[str, object]:
+    return {
+        "position_artifact_revision": state.artifact_revision,
+        "corrections": {
+            name: float(value)
+            for name, value in zip(
+                SHARED_GEOMETRY_PARAMETER_NAMES,
+                state.corrections.as_array(),
+                strict=True,
+            )
+        },
+        "incidence_angle_model_id": "commanded_angle_plus_common_delta.v1",
+        "incidence_angle_delta_rad": state.incidence_angle_delta_rad,
+        "commanded_incidence_angles_deg": list(state.commanded_incidence_angles_deg),
+        "effective_incidence_angles_deg": list(state.effective_incidence_angles_deg),
+        "beam_center_column_row_px": list(state.beam_center_column_row_px),
+        "geometry_parameters_fitted_here": state.geometry_parameters_fitted_here,
+    }
 
 
 def _profile_identity_key(record: dict[str, Any]) -> _ProfileIdentityKey:
@@ -208,7 +335,7 @@ def _response_contract_record() -> dict[str, str | float]:
 
 def _validate_ordered_result_header(document: dict[str, Any]) -> None:
     if (
-        document.get("schema_version") != "rasim-bi2se3-ordered-intensity-recovery-v3"
+        document.get("schema_version") != "rasim-bi2se3-ordered-intensity-recovery-v4"
         or document.get("accepted") is not True
         or document.get("positions_frozen") is not True
     ):
@@ -234,24 +361,31 @@ def _validated_mosaic_result(
     mosaic_case_path: Path,
     mosaic_case: dict[str, Any],
     source_sample_count: int,
-) -> tuple[dict[str, float], str, str, frozenset[_ProfileIdentityKey]]:
+) -> tuple[
+    dict[str, float],
+    str,
+    str,
+    frozenset[_ProfileIdentityKey],
+    _FixedPositionState,
+]:
     if (
-        document.get("schema_version") != "rasim-bi2se3-real-mosaic-fit-v2"
+        document.get("schema_version") != "rasim-bi2se3-real-mosaic-fit-v3"
         or document.get("status") != "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
     ):
         raise ValueError("ordered-intensity recovery requires the accepted real-OSC mosaic result")
-    fixed_geometry = document.get("fixed_geometry")
-    if not isinstance(fixed_geometry, dict) or fixed_geometry.get(
-        "nine_coordinate_manifest_sha256"
-    ) != mosaic_case.get("geometry_manifest_sha256"):
-        raise ValueError("mosaic result does not match the frozen nine-coordinate geometry")
+    fixed_position = _fixed_position_state(document.get("fixed_geometry"), mosaic_case)
     provenance = document.get("provenance")
     expected_case_sha256 = hashlib.sha256(mosaic_case_path.read_bytes()).hexdigest()
     if not isinstance(provenance, dict) or provenance.get("case_sha256") != expected_case_sha256:
         raise ValueError("mosaic result does not match the immutable mosaic case")
     config_path = (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
     base_config = load_simulation_config(config_path)
-    first_incidence_deg = float(mosaic_case["incidence_angles_deg"][0])
+    expected_beam_center = tuple(
+        float(value) for value in base_config.instrument.detector_reference_coordinate_px
+    )
+    if fixed_position.beam_center_column_row_px != expected_beam_center:
+        raise ValueError("mosaic result fixed beam center does not match its simulation config")
+    first_incidence_deg = fixed_position.effective_incidence_angles_deg[0]
     expected_mosaic_config = replace(
         base_config,
         source=replace(base_config.source, sample_count=source_sample_count),
@@ -304,7 +438,7 @@ def _validated_mosaic_result(
         raise ValueError("mosaic result has invalid recovered distribution parameters") from error
     if not all(math.isfinite(value) for value in parameters.values()):
         raise ValueError("mosaic result has nonfinite recovered distribution parameters")
-    return parameters, source_revision, cif_sha256, eligible_profile_keys
+    return parameters, source_revision, cif_sha256, eligible_profile_keys, fixed_position
 
 
 def _fixed_inputs(
@@ -313,6 +447,7 @@ def _fixed_inputs(
     *,
     source_sample_count: int,
     mosaic_parameters: dict[str, float],
+    fixed_position: _FixedPositionState,
 ) -> tuple[ConfiguredSimulationInputs, ...]:
     if (
         isinstance(source_sample_count, bool)
@@ -322,9 +457,9 @@ def _fixed_inputs(
         raise ValueError("source_sample_count must be a positive integer")
     config_path = (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
     source_config = load_simulation_config(config_path)
-    corrections = SharedGeometryCorrections.from_array(mosaic_case["shared_geometry_corrections"])
+    corrections = fixed_position.corrections
     series: list[ConfiguredSimulationInputs] = []
-    for incidence_deg in mosaic_case["incidence_angles_deg"]:
+    for incidence_deg in fixed_position.effective_incidence_angles_deg:
         config = replace(
             source_config,
             source=replace(
@@ -392,12 +527,21 @@ def _profile_definitions(
     phi_gauss_order: int,
     eligible_profile_keys: frozenset[_ProfileIdentityKey] | None = None,
 ) -> tuple[object, tuple[MosaicProfileDefinition, ...]]:
+    effective_incidence_deg = float(inputs.config.instrument.axis_rotations[0].angle_deg)
+    frame_revision = (
+        f"ordered-intensity-fixed-nine-{incidence_deg:g}deg.v1"
+        if effective_incidence_deg == incidence_deg
+        else (
+            "ordered-intensity-fixed-position-"
+            f"commanded-{incidence_deg:g}deg-effective-{effective_incidence_deg:.12g}deg.v2"
+        )
+    )
     context = build_nominal_ewald_context(inputs)
     frame = build_osc_angle_frame(
         mean_direction_lab=inputs.config.source.mean_direction_lab,
         instrument=inputs.instrument,
         sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
-        revision=f"ordered-intensity-fixed-nine-{incidence_deg:g}deg.v1",
+        revision=frame_revision,
     )
     markers = evaluate_nominal_integer_l_markers(context)
     selected_marker = np.flatnonzero((markers.family_m > 0) & (markers.root_sign != 0))
@@ -461,7 +605,7 @@ def _profile_definitions(
             MosaicProfileDefinition(
                 identity=MosaicProfileIdentity(
                     dataset_id=dataset_id,
-                    incidence_angle_rad=math.radians(incidence_deg),
+                    incidence_angle_rad=math.radians(effective_incidence_deg),
                     group_key=MosaicReflectionGroupKey(
                         group_id=f"Bi2Se3:m=0:L={integer_l}",
                         rod_catalog_revision=revision,
@@ -486,7 +630,7 @@ def _profile_definitions(
             MosaicProfileDefinition(
                 identity=MosaicProfileIdentity(
                     dataset_id=dataset_id,
-                    incidence_angle_rad=math.radians(incidence_deg),
+                    incidence_angle_rad=math.radians(effective_incidence_deg),
                     group_key=MosaicReflectionGroupKey(
                         group_id=f"Bi2Se3:m={family}:L={integer_l}",
                         rod_catalog_revision=revision,
@@ -628,20 +772,32 @@ def run_recovery(
     required_cif_sha256: str | None = None,
     upstream_mosaic_result_sha256: str | None = None,
     eligible_profile_keys: frozenset[_ProfileIdentityKey] | None = None,
+    fixed_position: _FixedPositionState,
+    synthetic_truth_proof: bool = False,
     execution_backend: str = "cpu",
 ) -> dict[str, Any]:
     case, mosaic_case_path, mosaic_case = _load_case(case_path)
     if execution_backend not in {"cpu", "cuda"}:
         raise ValueError("execution_backend must be cpu or cuda")
-    active_mosaic = (
-        {
+    upstream_values = (
+        mosaic_parameters,
+        required_source_revision,
+        required_cif_sha256,
+        upstream_mosaic_result_sha256,
+        eligible_profile_keys,
+    )
+    if synthetic_truth_proof:
+        if any(value is not None for value in upstream_values):
+            raise ValueError("synthetic truth proof cannot consume a mosaic result")
+        active_mosaic = {
             "gaussian_sigma_deg": float(mosaic_case["truth"]["gaussian_sigma_deg"]),
             "lorentzian_hwhm_deg": float(mosaic_case["truth"]["lorentzian_hwhm_deg"]),
             "lorentzian_probability": float(mosaic_case["truth"]["lorentzian_probability"]),
         }
-        if mosaic_parameters is None
-        else {name: float(value) for name, value in mosaic_parameters.items()}
-    )
+    else:
+        if any(value is None for value in upstream_values) or mosaic_parameters is None:
+            raise ValueError("ordered recovery requires a complete upstream mosaic artifact state")
+        active_mosaic = {name: float(value) for name, value in mosaic_parameters.items()}
     if set(active_mosaic) != {
         "gaussian_sigma_deg",
         "lorentzian_hwhm_deg",
@@ -655,6 +811,7 @@ def run_recovery(
         mosaic_case,
         source_sample_count=source_sample_count,
         mosaic_parameters=active_mosaic,
+        fixed_position=fixed_position,
     )
     if required_source_revision is not None and (
         not isinstance(required_source_revision, str)
@@ -1016,7 +1173,7 @@ def run_recovery(
         and not np.any(relative.active_bounds)
     )
     return {
-        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v3",
+        "schema_version": "rasim-bi2se3-ordered-intensity-recovery-v4",
         "accepted": accepted,
         "positions_frozen": True,
         "provenance": {
@@ -1080,6 +1237,8 @@ def run_recovery(
             "wavelength_sigma_A": series[0].config.source.wavelength_sigma_A,
         },
         "fixed_mosaic": active_mosaic,
+        "fixed_position": _fixed_position_record(fixed_position),
+        "effective_incidence_angles_deg": list(fixed_position.effective_incidence_angles_deg),
         "upstream_fit_eligible_profiles": _profile_identity_records(eligible_profile_keys),
         "truth_generation": ("fresh_source_averaged_selected_group_peak_center_signal_density.v1"),
         "observable_interpretation": (
@@ -1172,7 +1331,13 @@ def render_recovered_images(
         raise ValueError("render output directory must be empty")
     resolved_output.mkdir(parents=True, exist_ok=True)
     case, mosaic_case_path, mosaic_case = _load_case(case_path)
-    mosaic_parameters, _, mosaic_cif_sha256, eligible_profile_keys = _validated_mosaic_result(
+    (
+        mosaic_parameters,
+        _,
+        mosaic_cif_sha256,
+        eligible_profile_keys,
+        fixed_position,
+    ) = _validated_mosaic_result(
         mosaic_result,
         mosaic_case_path=mosaic_case_path,
         mosaic_case=mosaic_case,
@@ -1181,6 +1346,8 @@ def render_recovered_images(
     _validate_ordered_result_header(ordered_result)
     if ordered_result.get("fixed_mosaic") != mosaic_parameters:
         raise ValueError("ordered-intensity result does not use the recovered mosaic parameters")
+    if ordered_result.get("fixed_position") != _fixed_position_record(fixed_position):
+        raise ValueError("ordered-intensity result does not preserve the fitted position state")
     if ordered_result.get("upstream_fit_eligible_profiles") != _profile_identity_records(
         eligible_profile_keys
     ):
@@ -1197,6 +1364,7 @@ def render_recovered_images(
         mosaic_case,
         source_sample_count=source_sample_count,
         mosaic_parameters=mosaic_parameters,
+        fixed_position=fixed_position,
     )
     baseline = Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal)
     ordered_provenance = ordered_result.get("provenance")
@@ -1517,6 +1685,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", type=Path, default=DEFAULT_CASE)
     parser.add_argument("--source-sample-count", type=int, default=250)
     parser.add_argument("--mosaic-result", type=Path)
+    parser.add_argument(
+        "--synthetic-truth-proof",
+        action="store_true",
+        help="run the explicit planted-truth proof without a prior mosaic artifact",
+    )
     parser.add_argument("--ordered-result", type=Path)
     parser.add_argument("--execution-backend", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--output", type=Path)
@@ -1524,28 +1697,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--render-only", action="store_true")
     parser.add_argument("--json", action="store_true")
     arguments = parser.parse_args(argv)
+    if arguments.mosaic_result is not None and arguments.synthetic_truth_proof:
+        raise ValueError("--mosaic-result and --synthetic-truth-proof are mutually exclusive")
+    if arguments.render_only and arguments.synthetic_truth_proof:
+        raise ValueError("--render-only cannot use --synthetic-truth-proof")
+    if not arguments.render_only and not (
+        arguments.mosaic_result is not None or arguments.synthetic_truth_proof
+    ):
+        raise ValueError("ordered recovery requires --mosaic-result or --synthetic-truth-proof")
     mosaic_parameters = None
     mosaic_result_document = None
     required_source_revision = None
     required_cif_sha256 = None
     eligible_profile_keys = None
+    _, mosaic_case_path, mosaic_case = _load_case(arguments.case.resolve())
+    fixed_position = None
     mosaic_result_sha256 = None
     if arguments.mosaic_result is not None:
         mosaic_result_bytes = arguments.mosaic_result.resolve().read_bytes()
         mosaic_result_sha256 = hashlib.sha256(mosaic_result_bytes).hexdigest()
         mosaic_result_document = json.loads(mosaic_result_bytes)
-        _, mosaic_case_path, mosaic_case = _load_case(arguments.case.resolve())
         (
             mosaic_parameters,
             required_source_revision,
             required_cif_sha256,
             eligible_profile_keys,
+            fixed_position,
         ) = _validated_mosaic_result(
             mosaic_result_document,
             mosaic_case_path=mosaic_case_path,
             mosaic_case=mosaic_case,
             source_sample_count=arguments.source_sample_count,
         )
+    if arguments.synthetic_truth_proof:
+        fixed_position = _case_fixed_position_state(mosaic_case_path, mosaic_case)
     if arguments.render_only:
         if (
             mosaic_result_document is None
@@ -1569,6 +1754,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(rendered, indent=None if arguments.json else 2, sort_keys=True))
         return 0
+    if fixed_position is None:
+        raise RuntimeError("ordered recovery lacks its fixed position state")
     result = run_recovery(
         arguments.case.resolve(),
         source_sample_count=arguments.source_sample_count,
@@ -1577,6 +1764,8 @@ def main(argv: list[str] | None = None) -> int:
         required_cif_sha256=required_cif_sha256,
         upstream_mosaic_result_sha256=mosaic_result_sha256,
         eligible_profile_keys=eligible_profile_keys,
+        fixed_position=fixed_position,
+        synthetic_truth_proof=arguments.synthetic_truth_proof,
         execution_backend=arguments.execution_backend,
     )
     if arguments.render_directory is not None:

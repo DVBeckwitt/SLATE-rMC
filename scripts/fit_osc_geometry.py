@@ -15,7 +15,9 @@ from time import perf_counter
 import numpy as np
 
 from rasim_next.fitting import (
+    INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    IncidenceAngleDeltaBounds,
     IndexedGeometryImage,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
@@ -42,6 +44,9 @@ _MAXIMUM_HELDOUT_RMS_PX = 5.0
 _MAXIMUM_HELDOUT_ERROR_PX = 10.0
 _MAXIMUM_MULTISTART_SEPARATION_PX = 0.25
 _BI2SE3_QUALIFICATION_PROFILE = "bi2se3-osc-5-10-15.v1"
+_BI2SE3_FITTED_SHARED_PARAMETER_NAMES = tuple(
+    name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name != "sample_normal_x_tilt_rad"
+)
 _BI2SE3_INDEXED_MANIFEST_HASH = (
     "sha256-1de21e03a801fa38390ef5280133666474bfd969377024ef6dd4fb34e40f3132"
 )
@@ -87,7 +92,10 @@ def _fit_payload(result: object) -> dict[str, object]:
         "parameterization_id": result.parameterization_id,
         "fitted_parameter_names": result.fitted_parameter_names,
         "fixed_parameter_names": result.fixed_parameter_names,
+        "jacobian_parameter_names": result.jacobian_parameter_names,
         "corrections": asdict(result.corrections),
+        "incidence_angle_delta_rad": result.incidence_angle_delta_rad,
+        "incidence_angle_delta_fitted": result.incidence_angle_delta_fitted,
         "jacobian_rank": result.jacobian_rank,
         "jacobian_condition": result.jacobian_condition,
         "scaled_jacobian_singular_values": result.scaled_jacobian_singular_values.tolist(),
@@ -116,10 +124,15 @@ def _key_payload(key: object) -> dict[str, object]:
 def _prediction_payload(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
+    incidence_angle_delta_rad: float,
 ) -> tuple[dict[str, object], ...]:
     payload = []
     for image in sorted(images, key=lambda item: item.image_id):
-        prediction = image.predict_integer_l_tags(image.observations.keys, corrections)
+        prediction = image.predict_integer_l_tags(
+            image.observations.keys,
+            corrections,
+            incidence_angle_delta_rad=incidence_angle_delta_rad,
+        )
         entries = []
         for index, key in enumerate(image.observations.keys):
             error = prediction.coordinates_px[index] - image.observations.coordinates_px[index]
@@ -136,30 +149,72 @@ def _prediction_payload(
     return tuple(payload)
 
 
+def _incidence_angle_payload(
+    images: tuple[IndexedGeometryImage, ...],
+    incidence_angle_delta_rad: float,
+) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "image_id": image.image_id,
+            "commanded_angle_rad": image.commanded_angle_rad,
+            "effective_angle_rad": image.commanded_angle_rad + incidence_angle_delta_rad,
+        }
+        for image in sorted(images, key=lambda item: (item.commanded_angle_rad, item.image_id))
+    )
+
+
 def _deterministic_starts(
     bounds: SharedGeometryCorrectionBounds,
     fitted_parameter_names: tuple[str, ...],
-) -> tuple[SharedGeometryCorrections, ...]:
+    *,
+    initial: SharedGeometryCorrections,
+    initial_incidence_angle_delta_rad: float,
+    incidence_angle_delta_bounds: IncidenceAngleDeltaBounds | None,
+) -> tuple[tuple[SharedGeometryCorrections, float], ...]:
     pattern = np.asarray((1.0, -0.8, 0.6, -0.4, 0.7, -0.5, 0.3, 0.9, -0.7))
     offset = 0.08 * bounds.half_span * pattern
     fitted = set(fitted_parameter_names)
     offset[[name not in fitted for name in SHARED_GEOMETRY_PARAMETER_NAMES]] = 0.0
+    if incidence_angle_delta_bounds is None:
+        positive_incidence_start = initial_incidence_angle_delta_rad
+        negative_incidence_start = initial_incidence_angle_delta_rad
+    else:
+        incidence_offset = 0.08 * incidence_angle_delta_bounds.half_span_rad
+        positive_incidence_start = incidence_offset
+        negative_incidence_start = -incidence_offset
+    positive = np.array(offset, copy=True)
+    negative = -offset
+    initial_values = initial.as_array()
+    for index, name in enumerate(SHARED_GEOMETRY_PARAMETER_NAMES):
+        if name not in fitted:
+            positive[index] = initial_values[index]
+            negative[index] = initial_values[index]
     return (
-        SharedGeometryCorrections.zero(),
-        SharedGeometryCorrections.from_array(offset),
-        SharedGeometryCorrections.from_array(-offset),
+        (initial, initial_incidence_angle_delta_rad),
+        (SharedGeometryCorrections.from_array(positive), positive_incidence_start),
+        (SharedGeometryCorrections.from_array(negative), negative_incidence_start),
     )
 
 
 def _maximum_prediction_separation_px(
     images: tuple[IndexedGeometryImage, ...],
     first: SharedGeometryCorrections,
+    first_incidence_angle_delta_rad: float,
     second: SharedGeometryCorrections,
+    second_incidence_angle_delta_rad: float,
 ) -> float:
     maximum = 0.0
     for image in images:
-        left = image.predict_integer_l_tags(image.observations.keys, first)
-        right = image.predict_integer_l_tags(image.observations.keys, second)
+        left = image.predict_integer_l_tags(
+            image.observations.keys,
+            first,
+            incidence_angle_delta_rad=first_incidence_angle_delta_rad,
+        )
+        right = image.predict_integer_l_tags(
+            image.observations.keys,
+            second,
+            incidence_angle_delta_rad=second_incidence_angle_delta_rad,
+        )
         maximum = max(
             maximum,
             float(np.max(np.linalg.norm(left.coordinates_px - right.coordinates_px, axis=1))),
@@ -186,49 +241,97 @@ def fit_osc_geometry_series(
     heldout_integer_l: tuple[int, ...] = (),
     benchmark: bool = False,
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
+    fit_incidence_angle_delta: bool = False,
+    incidence_angle_delta_half_span_deg: float = 0.5,
+    initial: SharedGeometryCorrections | None = None,
+    initial_incidence_angle_delta_rad: float = 0.0,
 ) -> dict[str, object]:
     """Index once, fit frozen observations jointly, and audit without reassignment."""
 
-    if not fitted_parameter_names:
-        raise ValueError("at least one shared geometry parameter must remain fitted")
+    if not fitted_parameter_names and not fit_incidence_angle_delta:
+        raise ValueError("at least one geometry parameter must remain fitted")
+    if fit_incidence_angle_delta and "sample_normal_x_tilt_rad" in fitted_parameter_names:
+        raise ValueError("fit_incidence_angle_delta requires sample_normal_x_tilt_rad to be frozen")
+    delta_half_span_deg = float(incidence_angle_delta_half_span_deg)
+    if not math.isfinite(delta_half_span_deg) or delta_half_span_deg <= 0.0:
+        raise ValueError("incidence_angle_delta_half_span_deg must be positive and finite")
     series = load_osc_geometry_series(manifest_path)
     if series.qualification_profile not in {None, _BI2SE3_QUALIFICATION_PROFILE}:
         raise ValueError(f"unsupported qualification profile {series.qualification_profile!r}")
-    indexing = index_osc_geometry_series(series)
     zero = SharedGeometryCorrections.zero()
+    initial_corrections = zero if initial is None else initial
+    if not isinstance(initial_corrections, SharedGeometryCorrections):
+        raise TypeError("initial must be SharedGeometryCorrections or None")
+    if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and (
+        initial_corrections.sample_normal_x_tilt_rad != 0.0
+        or not fit_incidence_angle_delta
+        or delta_half_span_deg != 0.5
+    ):
+        raise ValueError(
+            "the Bi2Se3 qualification requires sample_normal_x_tilt_rad fixed at zero "
+            "and one common incidence-angle delta bounded by exactly +/-0.5 degrees"
+        )
+    indexing = index_osc_geometry_series(series)
     bounds = SharedGeometryCorrectionBounds.rasim_multi_angle_pose()
+    incidence_bounds = (
+        IncidenceAngleDeltaBounds(
+            lower_rad=-math.radians(delta_half_span_deg),
+            upper_rad=math.radians(delta_half_span_deg),
+        )
+        if fit_incidence_angle_delta
+        else None
+    )
     if indexing.indexed_images is None:
         raise RuntimeError("the initial indexing run did not retain fit-ready geometry models")
     images = indexing.indexed_images
     baseline = evaluate_indexed_geometry_series_metrics(images, zero)
 
-    starts = _deterministic_starts(bounds, fitted_parameter_names)
+    starts = _deterministic_starts(
+        bounds,
+        fitted_parameter_names,
+        initial=initial_corrections,
+        initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
+        incidence_angle_delta_bounds=incidence_bounds,
+    )
     fit_results = []
     fit_wall_times = []
-    for initial in starts:
+    for initial_correction, initial_delta in starts:
         started = perf_counter()
         fit_results.append(
             fit_indexed_geometry_series(
                 images,
-                initial=initial,
+                initial=initial_correction,
                 bounds=bounds,
                 fitted_parameter_names=fitted_parameter_names,
+                initial_incidence_angle_delta_rad=initial_delta,
+                incidence_angle_delta_bounds=incidence_bounds,
             )
         )
         fit_wall_times.append(perf_counter() - started)
     fit_objective_sums = []
     for candidate in fit_results:
-        residual = evaluate_indexed_geometry_series_residual(images, candidate.corrections)
+        residual = evaluate_indexed_geometry_series_residual(
+            images,
+            candidate.corrections,
+            incidence_angle_delta_rad=candidate.incidence_angle_delta_rad,
+        )
         fit_objective_sums.append(float(np.dot(residual, residual)))
     selected_start_index = min(
         range(len(fit_results)),
         key=lambda index: (not fit_results[index].success, fit_objective_sums[index]),
     )
     result = fit_results[selected_start_index]
-    post_fit = evaluate_indexed_geometry_series_metrics(images, result.corrections)
+    post_fit = evaluate_indexed_geometry_series_metrics(
+        images,
+        result.corrections,
+        incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+    )
     multi_start = tuple(
         {
-            "initial": asdict(initial),
+            "initial": {
+                "corrections": asdict(initial_correction),
+                "incidence_angle_delta_rad": initial_delta,
+            },
             "fit": _fit_payload(candidate),
             "normalized_correction_separation_from_selected_start": float(
                 np.max(
@@ -236,27 +339,42 @@ def fit_osc_geometry_series(
                     / bounds.half_span
                 )
             ),
+            "absolute_incidence_angle_delta_separation_from_selected_start_rad": abs(
+                candidate.incidence_angle_delta_rad - result.incidence_angle_delta_rad
+            ),
             "maximum_prediction_separation_from_selected_start_px": (
                 _maximum_prediction_separation_px(
                     images,
                     result.corrections,
+                    result.incidence_angle_delta_rad,
                     candidate.corrections,
+                    candidate.incidence_angle_delta_rad,
                 )
             ),
             "objective_sum_squares": objective_sum,
             "wall_time_seconds": elapsed,
         }
-        for initial, candidate, objective_sum, elapsed in zip(
+        for (initial_correction, initial_delta), candidate, objective_sum, elapsed in zip(
             starts, fit_results, fit_objective_sums, fit_wall_times, strict=True
         )
     )
 
-    root_audit = audit_indexed_geometry_series_roots(images, result.corrections)
+    root_audit = audit_indexed_geometry_series_roots(
+        images,
+        result.corrections,
+        incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+    )
     if root_audit.classification != "SAME":
         raise RuntimeError("the independent fitted-root audit changed a frozen marker")
 
     indexing_wall_times = [indexing.elapsed_seconds]
-    corrected = {image.image_id: image.corrected_instrument(result.corrections) for image in images}
+    corrected = {
+        image.image_id: image.corrected_instrument(
+            result.corrections,
+            incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+        )
+        for image in images
+    }
     frozen_reindex_started = perf_counter()
     frozen_reindexed = reindex_frozen_osc_geometry_series(
         indexing,
@@ -327,9 +445,11 @@ def fit_osc_geometry_series(
         started = perf_counter()
         cross_fit = fit_indexed_geometry_series(
             training_images,
-            initial=zero,
+            initial=initial_corrections,
             bounds=bounds,
             fitted_parameter_names=fitted_parameter_names,
+            initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
+            incidence_angle_delta_bounds=incidence_bounds,
         )
         cross_validation_fit_succeeded = cross_fit.success
         cross_validation = {
@@ -339,11 +459,13 @@ def fit_osc_geometry_series(
                 evaluate_indexed_geometry_series_metrics(
                     heldout_images,
                     cross_fit.corrections,
+                    incidence_angle_delta_rad=cross_fit.incidence_angle_delta_rad,
                 )
             ),
             "heldout_predictions": _prediction_payload(
                 heldout_images,
                 cross_fit.corrections,
+                cross_fit.incidence_angle_delta_rad,
             ),
             "wall_time_seconds": perf_counter() - started,
         }
@@ -354,15 +476,21 @@ def fit_osc_geometry_series(
         residual_times = []
         for _ in range(25):
             started = perf_counter()
-            evaluate_indexed_geometry_series_residual(images, result.corrections)
+            evaluate_indexed_geometry_series_residual(
+                images,
+                result.corrections,
+                incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+            )
             residual_times.append(perf_counter() - started)
         warm_residual_median_seconds = float(np.median(residual_times))
         tracemalloc.start()
         fit_indexed_geometry_series(
             images,
-            initial=zero,
+            initial=initial_corrections,
             bounds=bounds,
             fitted_parameter_names=fitted_parameter_names,
+            initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
+            incidence_angle_delta_bounds=incidence_bounds,
         )
         _, fit_peak_memory_bytes = tracemalloc.get_traced_memory()
         tracemalloc.stop()
@@ -378,7 +506,9 @@ def fit_osc_geometry_series(
             "maximum_prediction_separation_px": _maximum_prediction_separation_px(
                 images,
                 fit_results[left].corrections,
+                fit_results[left].incidence_angle_delta_rad,
                 fit_results[right].corrections,
+                fit_results[right].incidence_angle_delta_rad,
             ),
         }
         for left, right in combinations(range(len(fit_results)), 2)
@@ -425,7 +555,15 @@ def fit_osc_geometry_series(
         indexing.selection.manifest_hash == _BI2SE3_INDEXED_MANIFEST_HASH
     )
     qualification_parameterization_matches = (
-        result.fitted_parameter_names == SHARED_GEOMETRY_PARAMETER_NAMES
+        result.fitted_parameter_names == _BI2SE3_FITTED_SHARED_PARAMETER_NAMES
+        and result.fixed_parameter_names == ("sample_normal_x_tilt_rad",)
+        and result.corrections.sample_normal_x_tilt_rad == 0.0
+        and result.incidence_angle_delta_fitted
+        and incidence_bounds is not None
+        and incidence_bounds.lower_rad == -math.radians(0.5)
+        and incidence_bounds.upper_rad == math.radians(0.5)
+        and result.jacobian_parameter_names
+        == (*_BI2SE3_FITTED_SHARED_PARAMETER_NAMES, INCIDENCE_ANGLE_DELTA_PARAMETER_NAME)
     )
     accepted = all(
         (
@@ -442,7 +580,7 @@ def fit_osc_geometry_series(
     )
 
     return {
-        "schema": "rasim-osc-geometry-fit-result-v4",
+        "schema": "rasim-osc-geometry-fit-result-v5",
         "manifest_path": str(Path(manifest_path).resolve()),
         "indexed_manifest_hash": indexing.selection.manifest_hash,
         "run_completed": run_completed,
@@ -460,10 +598,16 @@ def fit_osc_geometry_series(
         "baseline": _metrics_payload(baseline),
         "cross_validation": cross_validation,
         "fit": _fit_payload(result),
+        "incidence_angle_correction": {
+            "model_id": "commanded_angle_plus_common_delta.v1",
+            "parameter_name": INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
+            "delta_rad": result.incidence_angle_delta_rad,
+            "images": _incidence_angle_payload(images, result.incidence_angle_delta_rad),
+        },
         "post_fit": _metrics_payload(post_fit),
         "selected_start_index": selected_start_index,
         "primary_fit_wall_time_seconds": fit_wall_times[selected_start_index],
-        "zero_start_fit_wall_time_seconds": fit_wall_times[0],
+        "initial_start_fit_wall_time_seconds": fit_wall_times[0],
         "multi_start": multi_start,
         "pairwise_multistart_prediction_separation": (pairwise_multistart_prediction_separation),
         "root_audit": asdict(root_audit),
@@ -526,6 +670,17 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="shared geometry coordinate to hold at its configured/initial value; repeatable",
     )
+    parser.add_argument(
+        "--fit-incidence-angle-delta",
+        action="store_true",
+        help="fit one additive incidence-angle delta shared by every OSC image",
+    )
+    parser.add_argument(
+        "--incidence-angle-delta-half-span-deg",
+        type=float,
+        default=0.5,
+        help="symmetric bound in degrees for the one shared incidence-angle delta",
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -537,13 +692,15 @@ def main(argv: list[str] | None = None) -> int:
         name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in frozen
     )
     try:
-        if not fitted_parameter_names:
+        if not fitted_parameter_names and not arguments.fit_incidence_angle_delta:
             raise ValueError("at least one shared geometry parameter must remain fitted")
         payload = fit_osc_geometry_series(
             arguments.manifest,
             heldout_integer_l=tuple(arguments.heldout_integer_l),
             benchmark=arguments.benchmark,
             fitted_parameter_names=fitted_parameter_names,
+            fit_incidence_angle_delta=arguments.fit_incidence_angle_delta,
+            incidence_angle_delta_half_span_deg=(arguments.incidence_angle_delta_half_span_deg),
         )
     except (OSError, ValueError, RuntimeError) as error:
         if arguments.json:
@@ -584,6 +741,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"corrections={payload['fit']['corrections']}")
     print(f"fitted_parameters={payload['fit']['fitted_parameter_names']}")
     print(f"fixed_parameters={payload['fit']['fixed_parameter_names']}")
+    incidence = payload["incidence_angle_correction"]
+    print(
+        "shared_incidence_angle_delta_rad="
+        f"{incidence['delta_rad']:.12g} "
+        f"shared_incidence_angle_delta_deg={math.degrees(incidence['delta_rad']):.12g}"
+    )
+    for item in incidence["images"]:
+        print(
+            f"{item['image_id']}: commanded_theta_i_deg="
+            f"{math.degrees(item['commanded_angle_rad']):.12g} "
+            "effective_theta_i_deg="
+            f"{math.degrees(item['effective_angle_rad']):.12g}"
+        )
     print(
         f"rank={payload['fit']['jacobian_rank']} "
         f"condition={payload['fit']['jacobian_condition']:.6g}"

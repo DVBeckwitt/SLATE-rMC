@@ -238,14 +238,18 @@ Replay every fit stage into a new directory outside the repository:
 
 ```powershell
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\external\bi2se3-replay --backend cuda
+  --output-directory C:\external\bi2se3-replay --backend cuda --through geometry
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
   --output-directory C:\external\bi2te3-replay --backend cuda
 ```
 
 `--through geometry`, `--through mosaic`, and `--resume` retain strict stage order and scientific
-revision chaining. Resume also requires the exact per-stage execution runtime recorded in the
-stage artifact. Geometry uses the ideal source center, zero divergence, and mean wavelength.
+revision chaining. A run may stop after any stage, but a later stage requires its verified immediate
+predecessor; stages cannot be skipped by silently refitting or substituting case defaults. Resume
+also requires the exact per-stage execution runtime recorded in the stage artifact. Each v2 stage
+hashes only its declared inputs, configuration, expected result, and tolerances, so changing a later
+stage does not invalidate a verified earlier checkpoint. Geometry uses the ideal source center,
+zero divergence, and mean wavelength.
 Mosaic and ordered intensity each use the case's identical 250-state realization and compare the
 single fully reduced detector function per incidence; neither fit constructs 3,000 x 3,000 images.
 Bi2Te3 can additionally render the six native images with `--through render`. Bi2Se3 render is
@@ -253,7 +257,10 @@ disabled because the available images bind a retired mosaic gate.
 
 The frozen replay targets are:
 
-- Bi2Se3 geometry: nine active coordinates, RMS/max `1.55894/5.65079 px`; measured mosaic:
+- Bi2Se3 current verified terminal, geometry: eight shared corrections plus one common incidence delta, RMS/max
+  `1.55894/5.65079 px`; `delta_theta_i=0.4197204 deg` gives effective angles
+  `5.4197204/10.4197204/15.4197204 deg`. The following prior-stage targets await rerun against this
+  position artifact: measured mosaic
   `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809616)` from 15 profiles including
   five `m=0`; ordered stage: exact synthetic selected-component recovery
   `(0.94, 0.78, 0.86, 0.007, 0.034)`.
@@ -464,6 +471,8 @@ separate timing/memory evidence:
 ```powershell
 uv run --frozen python scripts/fit_osc_geometry.py `
   configs/bi2se3_osc_geometry_fit.yaml `
+  --fit-incidence-angle-delta `
+  --freeze-parameter sample_normal_x_tilt_rad `
   --heldout-integer-l 4 11 `
   --benchmark `
   --json
@@ -479,7 +488,10 @@ numerical run completion without applying or claiming the Bi2Se3 thresholds.
 The primary fit always uses every frozen key; `--heldout-integer-l` requests a separate training
 refit and held-out prediction report without changing that primary data set.
 Every geometry coordinate is active by default. Repeat `--freeze-parameter NAME` to hold any
-coordinate at its configured base value; at least one coordinate must remain active. For example,
+coordinate at its configured base value; at least one shared coordinate or the common delta must
+remain active. `--fit-incidence-angle-delta` activates one scalar added to every commanded angle;
+it is never independent by image and requires `sample_normal_x_tilt_rad` to be frozen because both
+occupy the nominal incidence-axis gauge. For example,
 to use calibrated detector tilts without refitting them:
 
 ```powershell
@@ -490,7 +502,8 @@ uv run --frozen python scripts/fit_osc_geometry.py `
   --json
 ```
 
-The JSON fit record lists canonical `fitted_parameter_names` and `fixed_parameter_names`. Beam
+The JSON fit record lists canonical `fitted_parameter_names`, `fixed_parameter_names`, combined
+`jacobian_parameter_names`, the common delta, and every commanded/effective incidence pair. Beam
 center and lattice constants are calibration/material inputs, not switchable fit coordinates.
 The objective evaluates one ideal nominal incident state and no mosaic, structure intensity,
 raster, or pixel integration. JSON reports the frozen manifest, pooled/per-image metrics, rank and
@@ -509,7 +522,10 @@ uv run --frozen python scripts/recover_bi2se3_mosaic.py `
   --output-directory C:\path\outside\the\repository\mosaic-recovery
 ```
 
-The case fixes the accepted nine-coordinate geometry, beam center, and lattice. Geometry marker
+The default standalone case fixes its legacy nine-coordinate geometry, beam center, and lattice.
+The staged replay instead passes its verified `geometry.json` into this same runner, which extracts
+the bound position revision, shared corrections, common incidence delta, and effective angles
+atomically. Geometry marker
 centers use one exact source-center, zero-divergence, mean-wavelength companion state, but that state
 contributes no detector intensity. By default each incidence instead reduces the same 250 sampled
 positions, directions, and wavelengths into one detector function before profile comparison. The
@@ -536,10 +552,14 @@ To fit the same fixed geometry to the three detector-native Bi2Se3 OSC images, r
 ```powershell
 uv run --frozen python scripts/recover_bi2se3_mosaic.py `
   --observation-mode osc `
+  --position-artifact C:\path\outside\the\repository\positions\geometry.json `
   --source-sample-count 250 `
   --skip-images `
   --output-directory C:\path\outside\the\repository\bi2se3-real-mosaic
 ```
+
+Here `geometry.json` is the v2 stage artifact written by the earlier position-only staged replay;
+raw correction values and an unverified revision cannot be substituted for it.
 
 The tracked `mosaic_fit_measured_policy.toml` binds the selection to the immutable case. It excludes
 each weak profile as a whole when its central excess energy is less than five times the local
@@ -564,11 +584,14 @@ python scripts/recover_bi2se3_ordered_intensity.py `
   --json
 ```
 
-The tracked case uses one shared 250-state source realization at 5, 10, and 15 degrees, the accepted
-nine geometry corrections, and the supplied recovered mosaic. With the shown measured-mosaic
+The tracked case uses one shared 250-state source realization at 5, 10, and 15 commanded degrees,
+the exact position state embedded in the supplied mosaic artifact, and the supplied recovered
+mosaic. The ordered runner reconstructs the recorded effective angles and rejects a missing or
+incompatible position revision. With the shown measured-mosaic
 handoff, its exact fit-eligible selection is authoritative: `2/5/8 = 15` centers, including five
-`00L` anchors, enter one joint fit. Running without `--mosaic-result` is the separate full-catalog
-synthetic proof and retains `88/78/72 = 238` centers and six `00L` anchors. Each view produces one
+`00L` anchors, enter one joint fit. Running with the explicit `--synthetic-truth-proof` flag instead
+of `--mosaic-result` is the separate full-catalog synthetic proof and retains `88/78/72 = 238`
+centers and six `00L` anchors. Each view produces one
 incoherently source-summed detector function before any comparison. Bi and Se2 Wyckoff coordinates
 remain exactly at their CIF values. The absolute proof
 fits three occupancies plus `Ur/Uz`; the relative proof fixes `oBi=1`, reports the two Se/Bi ratios,

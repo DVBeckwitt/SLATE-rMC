@@ -62,8 +62,8 @@ sha256 = "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c"
 
 [[file]]
 path = "examples/bi2se3/experiment/staged_fit_replay.toml"
-size_bytes = 7095
-sha256 = "e79ebbc4de978142fb5e9e11d28aa3c351bc80cba714b091af944e881633ec60"
+size_bytes = 8569
+sha256 = "e20dde5226764ac9553e0f0dc3141931e1fa49a62d6b28a95bdfa003d562e8f2"
 
 [[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
@@ -152,5 +152,5 @@ sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
 
 [[file]]
 path = "examples/bi2te3/experiment/staged_fit_replay.toml"
-size_bytes = 11037
-sha256 = "270fe564f4dcaf2611f61b0a5d503e90feab4834a570b25fd501e98e8eeaeff8"
+size_bytes = 11521
+sha256 = "259aa2715fe3542c0293f3fc6ea84e406cb2dfa9361941151124d91bc18dacc9"

@@ -21,13 +21,33 @@ from typing import Any
 import yaml
 from packaging.markers import InvalidMarker, Marker
 
+from rasim_next.core.staged_fit import (
+    STAGED_FIT_STAGE_SCHEMA_VERSION,
+)
+from rasim_next.core.staged_fit import (
+    staged_fit_scientific_revision as scientific_revision,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
-_SCHEMA_VERSION = "rasim-staged-fit-replay-v1"
+_SCHEMA_VERSION = "rasim-staged-fit-replay-v2"
+_STAGE_SCHEMA_VERSION = STAGED_FIT_STAGE_SCHEMA_VERSION
+_CERTIFICATE_SCHEMA_VERSION = "rasim-staged-fit-replay-certificate-v2"
 _STAGES = ("geometry", "mosaic", "ordered_intensity", "render")
+_SHARED_GEOMETRY_PARAMETER_NAMES = (
+    "detector_column_tilt_rad",
+    "detector_row_tilt_rad",
+    "sample_normal_x_tilt_rad",
+    "sample_normal_y_tilt_rad",
+    "goniometer_axis_pitch_rad",
+    "goniometer_axis_yaw_rad",
+    "sample_plane_normal_offset_m",
+    "goniometer_pivot_pitch_offset_m",
+    "goniometer_pivot_yaw_offset_m",
+)
 _SHA256_PREFIX = "sha256-"
 _STAGE_RESULT_KEYS = {
     "case_id",
-    "case_sha256",
+    "stage_case_sha256",
     "execution_backend",
     "material_id",
     "runtime",
@@ -67,19 +87,11 @@ _TOLERANCE_KEYS = {
 }
 _PROJECT_PACKAGE = "rasim-next"
 _RENDER_RUNTIME_PACKAGES = ("pillow",)
-_VOLATILE_SCIENTIFIC_FIELDS = {
-    "artifact",
-    "artifact_sha256",
-    "diagnostic",
-    "elapsed_seconds",
-    "execution_device",
-    "manifest_path",
-    "output_directory",
-    "path",
-    "peak_memory_bytes",
-    "runtime",
-    "timing_seconds",
-    "wall_time_seconds",
+_STAGE_TOLERANCE_NAMES = {
+    "geometry": ("geometry_correction_absolute", "geometry_metric_absolute"),
+    "mosaic": ("mosaic_parameter_absolute", "mosaic_objective_absolute"),
+    "ordered_intensity": ("ordered_parameter_absolute", "ordered_objective_absolute"),
+    "render": (),
 }
 
 
@@ -537,9 +549,14 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
         "Bi2Se3": {
             "geometry": {
                 "benchmark",
+                "fit_incidence_angle_delta",
                 "fitted_parameter_names",
                 "fixed_parameter_names",
                 "heldout_integer_l",
+                "incidence_angle_delta_half_span_deg",
+                "initial_corrections",
+                "initial_incidence_angle_delta_rad",
+                "input_roles",
                 "selection_mode",
                 "series_role",
                 "source_state_count",
@@ -548,6 +565,7 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "case_role",
                 "execution_source_state_count",
                 "implementation",
+                "input_roles",
                 "measured_profile_policy_role",
                 "observation_mode",
                 "render_images",
@@ -559,8 +577,9 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "execution_source_state_count",
                 "fit_atomic_positions",
                 "implementation",
+                "input_roles",
             },
-            "render": {"enabled", "reason"},
+            "render": {"enabled", "input_roles", "reason"},
         },
         "Bi2Te3": {
             "geometry": {
@@ -572,6 +591,7 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "fixed_parameter_names",
                 "heldout_integer_l",
                 "historical_selection_revision",
+                "input_roles",
                 "multistart_fraction",
                 "multistart_pattern",
                 "selection_mode",
@@ -588,6 +608,7 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "extra_nonzero_profiles",
                 "gaussian_sigma_bounds_deg",
                 "implementation",
+                "input_roles",
                 "lorentzian_hwhm_bounds_deg",
                 "m0_landmark_maximum_distance_px",
                 "m0_phi_gauss_order",
@@ -619,6 +640,7 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "execution_source_state_count",
                 "fit_atomic_positions",
                 "implementation",
+                "input_roles",
                 "lower_bounds",
                 "maximum_function_evaluations",
                 "multistarts",
@@ -631,6 +653,7 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "cuda_state_block_count",
                 "enabled",
                 "image_size",
+                "input_roles",
                 "raw_display_model",
                 "simulation_display_model",
                 "source_state_count",
@@ -639,6 +662,15 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
     }
     for stage, keys in schemas[str(document["material_id"])].items():
         _strict_keys(stages[stage], keys, stage)
+        input_roles = stages[stage]["input_roles"]
+        if (
+            not isinstance(input_roles, list)
+            or not input_roles
+            or any(not isinstance(role, str) or not role for role in input_roles)
+            or len(set(input_roles)) != len(input_roles)
+            or "environment_lock" not in input_roles
+        ):
+            raise ValueError(f"{stage}.input_roles must be unique and include environment_lock")
     geometry = stages["geometry"]
     fitted = tuple(geometry.get("fitted_parameter_names", ()))
     fixed = tuple(geometry.get("fixed_parameter_names", ()))
@@ -653,8 +685,23 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
     if bool(stages["ordered_intensity"]["fit_atomic_positions"]):
         raise ValueError("accepted ordered-intensity replay keeps atomic positions frozen")
     if document["material_id"] == "Bi2Se3":
+        expected_fitted = tuple(
+            name for name in _SHARED_GEOMETRY_PARAMETER_NAMES if name != "sample_normal_x_tilt_rad"
+        )
+        initial_corrections = tuple(float(value) for value in geometry["initial_corrections"])
+        incidence_half_span_deg = float(geometry["incidence_angle_delta_half_span_deg"])
+        initial_incidence_delta = float(geometry["initial_incidence_angle_delta_rad"])
         if (
             geometry["selection_mode"] != "position_free_discovery"
+            or tuple(fitted) != expected_fitted
+            or tuple(fixed) != ("sample_normal_x_tilt_rad",)
+            or not bool(geometry["fit_incidence_angle_delta"])
+            or incidence_half_span_deg != 0.5
+            or len(initial_corrections) != len(_SHARED_GEOMETRY_PARAMETER_NAMES)
+            or any(not math.isfinite(value) for value in initial_corrections)
+            or initial_corrections[2] != 0.0
+            or not math.isfinite(initial_incidence_delta)
+            or abs(initial_incidence_delta) > math.radians(incidence_half_span_deg)
             or stages["mosaic"]["implementation"] != "bi2se3_measured_profiles_v2"
             or stages["mosaic"]["observation_mode"] != "osc"
             or bool(stages["mosaic"]["render_images"])
@@ -722,7 +769,14 @@ def _expected_summary(document: dict[str, Any]) -> dict[str, Any]:
     ordered_keys = profile_keys | {"active_bounds", "claim_boundary"}
     schemas = {
         "Bi2Se3": {
-            "geometry": geometry_keys,
+            "geometry": geometry_keys
+            | {
+                "commanded_incidence_angles_rad",
+                "effective_incidence_angles_rad",
+                "incidence_angle_delta_rad",
+                "incidence_angle_image_ids",
+                "jacobian_parameter_names",
+            },
             "mosaic": profile_keys | {"per_incidence_profile_count"},
             "ordered_intensity": ordered_keys,
         },
@@ -832,6 +886,12 @@ def load_replay_case(
     }
     if set(input_paths) != expected_roles[str(document["material_id"])]:
         raise ValueError("replay file roles do not match the accepted material case")
+    for stage, config in stages.items():
+        unknown_roles = set(config["input_roles"]) - set(input_paths)
+        if unknown_roles:
+            raise ValueError(
+                f"{stage}.input_roles contains unknown role {sorted(unknown_roles)[0]!r}"
+            )
     _validate_consumed_input_paths(
         str(document["material_id"]),
         input_paths=input_paths,
@@ -867,36 +927,38 @@ def load_replay_case(
     )
 
 
-def _stable_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _stable_value(item)
-            for key, item in sorted(value.items())
-            if key not in _VOLATILE_SCIENTIFIC_FIELDS
-        }
-    if isinstance(value, (list, tuple)):
-        return [_stable_value(item) for item in value]
-    if isinstance(value, Path):
-        raise TypeError("scientific revisions cannot contain paths")
-    return value
-
-
-def scientific_revision(stage: str, payload: dict[str, Any]) -> str:
-    """Hash a path-, device-, and timing-free scientific stage payload."""
+def _stage_case_sha256(case: ReplayCase, stage: str) -> str:
+    """Hash only the case fields and declared files consumed by one stage."""
 
     if stage not in _STAGES:
         raise ValueError(f"unsupported replay stage {stage!r}")
+    input_roles = frozenset(str(role) for role in case.stage_config[stage]["input_roles"])
+    file_records = sorted(
+        (record for record in case.file_records if str(record["role"]) in input_roles),
+        key=lambda record: str(record["role"]),
+    )
+    if {str(record["role"]) for record in file_records} != input_roles:
+        raise ValueError(f"{stage} stage input-role records are incomplete")
     encoded = json.dumps(
         {
-            "schema": "rasim-staged-fit-scientific-revision-v1",
+            "schema": "rasim-staged-fit-stage-case-v1",
+            "case_id": case.case_id,
+            "material_id": case.material_id,
+            "source_state_count": case.source_state_count,
+            "source_seed": case.source_seed,
+            "incidence_angles_deg": case.incidence_angles_deg,
             "stage": stage,
-            "payload": _stable_value(payload),
+            "stage_config": case.stage_config[stage],
+            "expected_source_revision": case.expected_scientific_summary["source_revision"],
+            "expected_stage": case.expected_scientific_summary.get(stage),
+            "tolerances": {name: case.tolerances[name] for name in _STAGE_TOLERANCE_NAMES[stage]},
+            "files": file_records,
         },
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
-    return _SHA256_PREFIX + hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _mismatch(path: str, expected: object, actual: object) -> None:
@@ -962,6 +1024,14 @@ def verify_scientific_summary(
             "selection_revision",
             "fitted_parameter_names",
             "fixed_parameter_names",
+            *(
+                (
+                    "jacobian_parameter_names",
+                    "incidence_angle_image_ids",
+                )
+                if case.material_id == "Bi2Se3"
+                else ()
+            ),
             "rank",
             "active_bounds",
             "per_incidence_profile_count",
@@ -980,6 +1050,20 @@ def verify_scientific_summary(
         case.tolerances["geometry_correction_absolute"],
         "geometry.corrections",
     )
+    if case.material_id == "Bi2Se3":
+        _close_scalar(
+            geometry.get("incidence_angle_delta_rad"),
+            expected_geometry["incidence_angle_delta_rad"],
+            case.tolerances["geometry_correction_absolute"],
+            "geometry.incidence_angle_delta_rad",
+        )
+        for name in ("commanded_incidence_angles_rad", "effective_incidence_angles_rad"):
+            _close_vector(
+                geometry.get(name, ()),
+                expected_geometry[name],
+                case.tolerances["geometry_correction_absolute"],
+                f"geometry.{name}",
+            )
     for name in ("site_rms_px", "site_max_px"):
         _close_scalar(
             geometry.get(name),
@@ -1136,11 +1220,11 @@ def _stage_result(
         case_source_revision=case_source_revision,
     )
     result = {
-        "schema_version": "rasim-staged-fit-replay-stage-v1",
+        "schema_version": _STAGE_SCHEMA_VERSION,
         "stage": stage,
         "case_id": case.case_id,
         "material_id": case.material_id,
-        "case_sha256": _sha256(case.path),
+        "stage_case_sha256": _stage_case_sha256(case, stage),
         "execution_backend": backend,
         "runtime": case.runtime_identity,
         "source_state_count": source_state_count,
@@ -1185,6 +1269,122 @@ def _profile_summary(
     return identities, m0, counts
 
 
+def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, Any]:
+    if (
+        document.get("schema_version") != "rasim-bi2se3-real-mosaic-fit-v3"
+        or document.get("status") != "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+    ):
+        raise ValueError("mosaic stage artifact has an unsupported scientific contract")
+    recovered = document.get("recovered_effective_distribution")
+    fit = document.get("fit")
+    profiles = fit.get("profiles") if isinstance(fit, dict) else None
+    if not isinstance(recovered, dict) or not isinstance(profiles, list) or not all(
+        isinstance(record, dict) for record in profiles
+    ):
+        raise ValueError("mosaic stage artifact lacks its fitted profile state")
+    parameters = [
+        float(recovered["gaussian_sigma_deg"]),
+        float(recovered["lorentzian_hwhm_deg"]),
+        float(recovered["lorentzian_probability"]),
+    ]
+    identities, m0_identities, counts = _profile_summary(profiles)
+    observations = document.get("observations")
+    measured_policy = (
+        observations.get("measured_profile_policy") if isinstance(observations, dict) else None
+    )
+    selection = measured_policy.get("profile_selection") if isinstance(measured_policy, dict) else None
+    if not isinstance(selection, list) or not all(isinstance(record, dict) for record in selection):
+        raise ValueError("mosaic stage artifact lacks its measured profile selection")
+    eligible_identities = sorted(
+        _identity_text(record) for record in selection if record.get("fit_eligible") is True
+    )
+    if eligible_identities != identities:
+        raise ValueError("mosaic stage artifact changed its fit-eligible profile selection")
+    fixed_position = document.get("fixed_geometry")
+    source_model = document.get("source_model")
+    provenance = document.get("provenance")
+    if not all(isinstance(value, dict) for value in (fixed_position, source_model, provenance)):
+        raise ValueError("mosaic stage artifact lacks its bound position or provenance")
+    return {
+        "state": {
+            "fixed_position": fixed_position,
+            "parameters": parameters,
+            "profile_identities": identities,
+        },
+        "summary": {
+            "classification": document["status"],
+            "parameters": parameters,
+            "objective": float(fit["objective"]),
+            "rank": int(fit["sensitivity_rank"]),
+            "profile_count": len(identities),
+            "m0_profile_count": len(m0_identities),
+            "per_incidence_profile_count": counts,
+            "profile_identities": identities,
+            "m0_profile_identities": m0_identities,
+        },
+        "source_model": source_model,
+        "provenance": provenance,
+    }
+
+
+def _bi2se3_ordered_artifact_projection(
+    document: dict[str, Any],
+    *,
+    active_parameter_names: tuple[str, ...],
+    claim_boundary: str,
+) -> dict[str, Any]:
+    if (
+        document.get("schema_version") != "rasim-bi2se3-ordered-intensity-recovery-v4"
+        or document.get("accepted") is not True
+        or document.get("positions_frozen") is not True
+    ):
+        raise ValueError("ordered-intensity stage artifact has an unsupported scientific contract")
+    absolute = document.get("absolute")
+    fitted = absolute.get("fit") if isinstance(absolute, dict) else None
+    active_bounds = absolute.get("active_bounds") if isinstance(absolute, dict) else None
+    profiles = document.get("upstream_fit_eligible_profiles")
+    if (
+        not isinstance(fitted, dict)
+        or not isinstance(active_bounds, dict)
+        or not isinstance(profiles, list)
+        or not all(isinstance(record, dict) for record in profiles)
+    ):
+        raise ValueError("ordered-intensity stage artifact lacks its fitted structure state")
+    parameters = [float(fitted[name]) for name in active_parameter_names]
+    identities, m0_identities, _ = _profile_summary(profiles)
+    fixed_position = document.get("fixed_position")
+    fixed_mosaic = document.get("fixed_mosaic")
+    source_model = document.get("source_model")
+    provenance = document.get("provenance")
+    if not all(
+        isinstance(value, dict)
+        for value in (fixed_position, fixed_mosaic, source_model, provenance)
+    ):
+        raise ValueError("ordered-intensity stage artifact lacks its upstream handoff state")
+    return {
+        "state": {
+            "fixed_position": fixed_position,
+            "parameters": parameters,
+            "structure_representative": fitted,
+        },
+        "summary": {
+            "classification": "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY",
+            "claim_boundary": claim_boundary,
+            "parameters": parameters,
+            "objective": float(absolute["objective"]),
+            "rank": int(absolute["sensitivity_rank"]),
+            "profile_count": len(identities),
+            "m0_profile_count": len(m0_identities),
+            "active_bounds": [bool(active_bounds[name]) for name in active_parameter_names],
+            "profile_identities": identities,
+            "m0_profile_identities": m0_identities,
+        },
+        "fixed_mosaic": fixed_mosaic,
+        "source_model": source_model,
+        "provenance": provenance,
+    }
+
+
 def _bi2se3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
     runner = _load_script_module("staged_fit_bi2se3_geometry", "fit_osc_geometry.py")
     config = case.stage_config["geometry"]
@@ -1193,25 +1393,67 @@ def _bi2se3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
         heldout_integer_l=tuple(int(value) for value in config["heldout_integer_l"]),
         benchmark=bool(config["benchmark"]),
         fitted_parameter_names=tuple(config["fitted_parameter_names"]),
+        fit_incidence_angle_delta=bool(config["fit_incidence_angle_delta"]),
+        incidence_angle_delta_half_span_deg=float(config["incidence_angle_delta_half_span_deg"]),
+        initial=runner.SharedGeometryCorrections.from_array(config["initial_corrections"]),
+        initial_incidence_angle_delta_rad=float(config["initial_incidence_angle_delta_rad"]),
     )
     corrections = result["fit"]["corrections"]
     values = [float(corrections[name]) for name in runner.SHARED_GEOMETRY_PARAMETER_NAMES]
     counts = [
         int(result["image_site_counts"][image_id]) for image_id in result["image_site_counts"]
     ]
+    incidence_records = list(result["incidence_angle_correction"]["images"])
     summary = {
         "classification": case.expected_scientific_summary["geometry"]["classification"],
         "selection_revision": result["indexed_manifest_hash"],
         "fitted_parameter_names": list(result["fit"]["fitted_parameter_names"]),
         "fixed_parameter_names": list(result["fit"]["fixed_parameter_names"]),
+        "jacobian_parameter_names": list(result["fit"]["jacobian_parameter_names"]),
         "corrections": values,
+        "incidence_angle_delta_rad": float(result["fit"]["incidence_angle_delta_rad"]),
+        "incidence_angle_image_ids": [str(item["image_id"]) for item in incidence_records],
+        "commanded_incidence_angles_rad": [
+            float(item["commanded_angle_rad"]) for item in incidence_records
+        ],
+        "effective_incidence_angles_rad": [
+            float(item["effective_angle_rad"]) for item in incidence_records
+        ],
         "rank": int(result["fit"]["jacobian_rank"]),
         "active_bounds": list(result["fit"]["active_bounds"]),
         "site_rms_px": float(result["post_fit"]["site_rms_px"]),
         "site_max_px": float(result["post_fit"]["site_max_px"]),
         "per_incidence_profile_count": counts,
     }
-    return summary, {"corrections": values}
+    evidence_keys = (
+        "schema",
+        "indexed_manifest_hash",
+        "run_completed",
+        "source_state_policy",
+        "source_state_count_per_image",
+        "baseline",
+        "cross_validation",
+        "fit",
+        "post_fit",
+        "selected_start_index",
+        "multi_start",
+        "pairwise_multistart_prediction_separation",
+        "root_audit",
+        "outer_audit",
+        "qualification",
+        "benchmark",
+        "geometry_setup_wall_time_seconds",
+        "indexing_pass_wall_times_seconds",
+        "indexing_wall_time_seconds",
+        "initial_start_fit_wall_time_seconds",
+        "primary_fit_wall_time_seconds",
+    )
+    return summary, {
+        "corrections": values,
+        "incidence_angle_delta_rad": summary["incidence_angle_delta_rad"],
+        "incidence_angles": incidence_records,
+        "fit_evidence": {name: result[name] for name in evidence_keys},
+    }
 
 
 def _bi2te3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1266,6 +1508,38 @@ def _run_geometry_stage(
     )
 
 
+def _bi2se3_position_projection(
+    case: ReplayCase,
+    geometry_stage: dict[str, Any],
+) -> dict[str, Any]:
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+    delta_rad = float(geometry_stage["state"]["incidence_angle_delta_rad"])
+    commanded_deg = [float(value) for value in case.incidence_angles_deg]
+    beam_center = load_simulation_config(
+        case.input_paths["simulation_config"]
+    ).instrument.detector_reference_coordinate_px
+    return {
+        "position_artifact_revision": geometry_stage["scientific_revision"],
+        "corrections": {
+            name: float(value)
+            for name, value in zip(
+                _SHARED_GEOMETRY_PARAMETER_NAMES,
+                geometry_stage["state"]["corrections"],
+                strict=True,
+            )
+        },
+        "incidence_angle_model_id": "commanded_angle_plus_common_delta.v1",
+        "incidence_angle_delta_rad": delta_rad,
+        "commanded_incidence_angles_deg": commanded_deg,
+        "effective_incidence_angles_deg": [
+            value + math.degrees(delta_rad) for value in commanded_deg
+        ],
+        "beam_center_column_row_px": [float(value) for value in beam_center],
+        "geometry_parameters_fitted_here": False,
+    }
+
+
 def _bi2se3_mosaic(
     case: ReplayCase,
     upstream: dict[str, Any],
@@ -1279,6 +1553,12 @@ def _bi2se3_mosaic(
         expected_corrections,
         case.tolerances["geometry_correction_absolute"],
         "geometry.corrections",
+    )
+    _close_scalar(
+        upstream["state"]["incidence_angle_delta_rad"],
+        case.expected_scientific_summary["geometry"]["incidence_angle_delta_rad"],
+        case.tolerances["geometry_correction_absolute"],
+        "geometry.incidence_angle_delta_rad",
     )
     runner = _load_script_module("staged_fit_bi2se3_mosaic", "recover_bi2se3_mosaic.py")
     artifact_directory = output_directory / "mosaic_artifacts"
@@ -1295,42 +1575,36 @@ def _bi2se3_mosaic(
         str(case.source_state_count),
         "--execution-backend",
         backend,
+        "--position-artifact",
+        str(output_directory / "geometry.json"),
         "--skip-images",
     ]
     with contextlib.redirect_stdout(io.StringIO()):
         runner.main(arguments)
     artifact = artifact_directory / "bi2se3_real_mosaic_fit.json"
     document = json.loads(artifact.read_text(encoding="utf-8"))
-    source_model = document.get("source_model", {})
+    projection = _bi2se3_mosaic_artifact_projection(document)
+    expected_fixed_geometry = _bi2se3_position_projection(case, upstream)
+    if projection["state"]["fixed_position"] != expected_fixed_geometry:
+        raise RuntimeError("Bi2Se3 mosaic artifact changed its upstream position state")
+    source_model = projection["source_model"]
     if (
         source_model.get("sample_count") != case.source_state_count
         or source_model.get("source_seed") != case.source_seed
         or source_model.get("source_revision") != _source_revision(case)
+        or source_model.get("reduction")
+        != "one_incoherent_weighted_detector_function_per_incidence.v1"
     ):
         raise RuntimeError("Bi2Se3 mosaic artifact changed its source realization")
-    records = list(document["fit"]["profiles"])
-    identities, m0_identities, counts = _profile_summary(records)
-    recovered = document["recovered_effective_distribution"]
-    summary = {
-        "classification": document["status"],
-        "parameters": [
-            float(recovered["gaussian_sigma_deg"]),
-            float(recovered["lorentzian_hwhm_deg"]),
-            float(recovered["lorentzian_probability"]),
-        ],
-        "objective": float(document["fit"]["objective"]),
-        "rank": int(document["fit"]["sensitivity_rank"]),
-        "profile_count": len(identities),
-        "m0_profile_count": len(m0_identities),
-        "per_incidence_profile_count": counts,
-        "profile_identities": identities,
-        "m0_profile_identities": m0_identities,
-    }
+    if projection["provenance"].get("case_sha256") != _sha256(
+        case.input_paths[str(stage["case_role"])]
+    ):
+        raise RuntimeError("Bi2Se3 mosaic artifact changed its immutable case")
+    summary = projection["summary"]
     state = {
         "artifact": str(artifact),
         "artifact_sha256": _sha256(artifact),
-        "parameters": summary["parameters"],
-        "profile_identities": identities,
+        **projection["state"],
     }
     return _stage_result(
         "mosaic",
@@ -1352,10 +1626,20 @@ def _bi2te3_fixed_inputs(
         "incidence_angles_deg": list(case.incidence_angles_deg),
         "shared_geometry_corrections": corrections,
     }
+    revision = (
+        "sha256-"
+        + hashlib.sha256(json.dumps(corrections, separators=(",", ":")).encode("utf-8")).hexdigest()
+    )
+    position = mosaic_runner._FixedPositionState(
+        artifact_revision=revision,
+        corrections=mosaic_runner.SharedGeometryCorrections.from_array(corrections),
+        incidence_angle_delta_rad=0.0,
+    )
     return mosaic_runner._fixed_geometry_inputs(
         case.path,
         runtime_case,
         source_sample_count=case.source_state_count,
+        position=position,
     )
 
 
@@ -1918,6 +2202,15 @@ def _bi2se3_ordered_intensity(
     mosaic_artifact = Path(upstream["state"]["artifact"])
     if _sha256(mosaic_artifact) != upstream["state"]["artifact_sha256"]:
         raise RuntimeError("Bi2Se3 mosaic artifact changed before ordered fitting")
+    mosaic_document = json.loads(mosaic_artifact.read_text(encoding="utf-8"))
+    mosaic_projection = _bi2se3_mosaic_artifact_projection(mosaic_document)
+    if mosaic_projection["state"] != {
+        name: upstream["state"][name]
+        for name in ("fixed_position", "parameters", "profile_identities")
+    }:
+        raise RuntimeError(
+            "Bi2Se3 mosaic artifact changed its scientific state before ordered fitting"
+        )
     artifact = output_directory / "ordered_intensity_artifacts" / "bi2se3_ordered.json"
     arguments = [
         "--case",
@@ -1937,35 +2230,54 @@ def _bi2se3_ordered_intensity(
     if exit_code != 0:
         raise RuntimeError("Bi2Se3 ordered-intensity replay failed its proof gate")
     document = json.loads(artifact.read_text(encoding="utf-8"))
-    source_model = document.get("source_model", {})
+    parameter_names = tuple(str(name) for name in stage["active_parameters"])
+    projection = _bi2se3_ordered_artifact_projection(
+        document,
+        active_parameter_names=parameter_names,
+        claim_boundary=str(stage["claim_boundary"]),
+    )
+    expected_fixed_position = upstream["state"]["fixed_position"]
+    if projection["state"]["fixed_position"] != expected_fixed_position:
+        raise RuntimeError("Bi2Se3 ordered artifact changed its upstream position state")
+    source_model = projection["source_model"]
     if (
         source_model.get("sample_count") != case.source_state_count
         or source_model.get("source_seed") != case.source_seed
         or source_model.get("source_revision") != _source_revision(case)
+        or source_model.get("reduction")
+        != "one_incoherent_weighted_detector_function_per_incidence.v1"
     ):
         raise RuntimeError("Bi2Se3 ordered artifact changed its source realization")
-    absolute = document["absolute"]
-    fitted = absolute["fit"]
-    parameter_names = tuple(stage["active_parameters"])
-    parameters = [float(fitted[name]) for name in parameter_names]
     mosaic_summary = upstream["scientific_summary"]["mosaic"]
-    summary = {
-        "classification": "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY",
-        "claim_boundary": str(stage["claim_boundary"]),
-        "parameters": parameters,
-        "objective": float(absolute["objective"]),
-        "rank": int(absolute["sensitivity_rank"]),
-        "profile_count": int(mosaic_summary["profile_count"]),
-        "m0_profile_count": int(mosaic_summary["m0_profile_count"]),
-        "active_bounds": [bool(absolute["active_bounds"][name]) for name in parameter_names],
-        "profile_identities": list(mosaic_summary["profile_identities"]),
-        "m0_profile_identities": list(mosaic_summary["m0_profile_identities"]),
-    }
+    if (
+        projection["summary"]["profile_identities"] != mosaic_summary["profile_identities"]
+        or projection["summary"]["m0_profile_identities"]
+        != mosaic_summary["m0_profile_identities"]
+    ):
+        raise RuntimeError("Bi2Se3 ordered artifact changed its upstream profile selection")
+    expected_mosaic = dict(
+        zip(
+            ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "lorentzian_probability"),
+            upstream["state"]["parameters"],
+            strict=True,
+        )
+    )
+    if projection["fixed_mosaic"] != expected_mosaic:
+        raise RuntimeError("Bi2Se3 ordered artifact changed its upstream mosaic parameters")
+    provenance = projection["provenance"]
+    if (
+        provenance.get("ordered_case_sha256")
+        != _sha256(case.input_paths[str(stage["case_role"])])
+        or provenance.get("mosaic_case_sha256") != _sha256(case.input_paths["mosaic_case"])
+        or provenance.get("upstream_mosaic_result_sha256")
+        != upstream["state"]["artifact_sha256"]
+    ):
+        raise RuntimeError("Bi2Se3 ordered artifact changed its upstream provenance")
+    summary = projection["summary"]
     state = {
         "artifact": str(artifact),
         "artifact_sha256": _sha256(artifact),
-        "parameters": parameters,
-        "structure_representative": fitted,
+        **projection["state"],
     }
     return _stage_result(
         "ordered_intensity",
@@ -2418,11 +2730,11 @@ def _validate_stage_envelope(
         case_source_revision=case_source_revision,
     )
     expected_envelope = {
-        "schema_version": "rasim-staged-fit-replay-stage-v1",
+        "schema_version": _STAGE_SCHEMA_VERSION,
         "stage": stage,
         "case_id": case.case_id,
         "material_id": case.material_id,
-        "case_sha256": _sha256(case.path),
+        "stage_case_sha256": _stage_case_sha256(case, stage),
         "execution_backend": backend,
         "runtime": runtime_identity,
         "source_state_count": source_state_count,
@@ -2435,6 +2747,81 @@ def _validate_stage_envelope(
     state = result.get("state")
     if not isinstance(state, dict):
         raise ValueError(f"{stage} stage result lacks scientific state")
+    if case.material_id == "Bi2Se3" and stage == "geometry":
+        _strict_keys(
+            state,
+            {"corrections", "fit_evidence", "incidence_angle_delta_rad", "incidence_angles"},
+            "Bi2Se3 geometry state",
+        )
+        summary = result.get("scientific_summary")
+        geometry = summary.get("geometry") if isinstance(summary, dict) else None
+        if not isinstance(geometry, dict):
+            raise ValueError("Bi2Se3 geometry stage lacks its scientific summary")
+        corrections = state["corrections"]
+        delta_rad = float(state["incidence_angle_delta_rad"])
+        angles = state["incidence_angles"]
+        fit_evidence = state["fit_evidence"]
+        qualification = (
+            fit_evidence.get("qualification") if isinstance(fit_evidence, dict) else None
+        )
+        image_ids = tuple(geometry.get("incidence_angle_image_ids", ()))
+        if (
+            corrections != geometry.get("corrections")
+            or not isinstance(corrections, list)
+            or len(corrections) != len(_SHARED_GEOMETRY_PARAMETER_NAMES)
+            or any(not math.isfinite(float(value)) for value in corrections)
+            or float(corrections[2]) != 0.0
+            or not math.isfinite(delta_rad)
+            or delta_rad != geometry.get("incidence_angle_delta_rad")
+            or not isinstance(angles, list)
+            or len(angles) != len(case.incidence_angles_deg)
+            or len(image_ids) != len(case.incidence_angles_deg)
+            or not isinstance(fit_evidence, dict)
+            or not isinstance(qualification, dict)
+            or not bool(qualification.get("accepted"))
+        ):
+            raise ValueError("Bi2Se3 geometry state is incomplete or inconsistent")
+        for index, (record, commanded_deg, image_id) in enumerate(
+            zip(angles, case.incidence_angles_deg, image_ids, strict=True)
+        ):
+            if not isinstance(record, dict):
+                raise ValueError(f"Bi2Se3 geometry incidence record {index} is invalid")
+            _strict_keys(
+                record,
+                {"commanded_angle_rad", "effective_angle_rad", "image_id"},
+                f"Bi2Se3 geometry incidence record {index}",
+            )
+            commanded_rad = math.radians(commanded_deg)
+            if (
+                record["image_id"] != image_id
+                or float(record["commanded_angle_rad"]) != commanded_rad
+                or float(record["effective_angle_rad"]) != commanded_rad + delta_rad
+            ):
+                raise ValueError("Bi2Se3 geometry state does not use one common angle delta")
+    if case.material_id == "Bi2Se3" and stage == "mosaic":
+        _strict_keys(
+            state,
+            {
+                "artifact",
+                "artifact_sha256",
+                "fixed_position",
+                "parameters",
+                "profile_identities",
+            },
+            "Bi2Se3 mosaic state",
+        )
+    if case.material_id == "Bi2Se3" and stage == "ordered_intensity":
+        _strict_keys(
+            state,
+            {
+                "artifact",
+                "artifact_sha256",
+                "fixed_position",
+                "parameters",
+                "structure_representative",
+            },
+            "Bi2Se3 ordered-intensity state",
+        )
     artifact = state.get("artifact")
     artifact_sha256 = state.get("artifact_sha256")
     artifact_contract = {
@@ -2454,6 +2841,57 @@ def _validate_stage_envelope(
         artifact_path = Path(artifact)
         if not artifact_path.is_file() or _sha256(artifact_path) != artifact_sha256:
             raise ValueError(f"{stage} stage result changed its external result")
+        if case.material_id == "Bi2Se3" and stage in {"mosaic", "ordered_intensity"}:
+            artifact_document = json.loads(artifact_path.read_text(encoding="utf-8"))
+            if stage == "mosaic":
+                projection = _bi2se3_mosaic_artifact_projection(artifact_document)
+                projected_state = {
+                    name: state[name]
+                    for name in ("fixed_position", "parameters", "profile_identities")
+                }
+            else:
+                stage_config = case.stage_config["ordered_intensity"]
+                projection = _bi2se3_ordered_artifact_projection(
+                    artifact_document,
+                    active_parameter_names=tuple(
+                        str(name) for name in stage_config["active_parameters"]
+                    ),
+                    claim_boundary=str(stage_config["claim_boundary"]),
+                )
+                projected_state = {
+                    name: state[name]
+                    for name in ("fixed_position", "parameters", "structure_representative")
+                }
+            if projection["state"] != projected_state:
+                raise ValueError(f"{stage} stage external artifact changed its scientific state")
+            summary = result.get("scientific_summary")
+            stage_summary = summary.get(stage) if isinstance(summary, dict) else None
+            if projection["summary"] != stage_summary:
+                raise ValueError(f"{stage} stage external artifact changed its scientific summary")
+            source_model = projection["source_model"]
+            if (
+                source_model.get("sample_count") != source_state_count
+                or source_model.get("source_seed") != source_seed
+                or source_model.get("source_revision") != source_revision
+                or source_model.get("reduction")
+                != "one_incoherent_weighted_detector_function_per_incidence.v1"
+            ):
+                raise ValueError(f"{stage} stage external artifact changed its source identity")
+            provenance = projection["provenance"]
+            stage_config = case.stage_config[stage]
+            if stage == "mosaic":
+                provenance_matches = provenance.get("case_sha256") == _sha256(
+                    case.input_paths[str(stage_config["case_role"])]
+                )
+            else:
+                provenance_matches = (
+                    provenance.get("ordered_case_sha256")
+                    == _sha256(case.input_paths[str(stage_config["case_role"])])
+                    and provenance.get("mosaic_case_sha256")
+                    == _sha256(case.input_paths["mosaic_case"])
+                )
+            if not provenance_matches:
+                raise ValueError(f"{stage} stage external artifact changed its case provenance")
         return
     if artifact_contract == "images":
         identities = state.get("artifact_identity")
@@ -2522,6 +2960,51 @@ def _validate_stage_result(
     expected_upstream = None if upstream is None else upstream["scientific_revision"]
     if result.get("upstream_scientific_revision") != expected_upstream:
         raise ValueError(f"{stage} stage changed its upstream scientific revision")
+    if case.material_id == "Bi2Se3" and stage == "mosaic":
+        if upstream is None or upstream.get("stage") != "geometry":
+            raise ValueError("Bi2Se3 mosaic stage requires its geometry artifact")
+        fixed_position = result["state"].get("fixed_position")
+        expected_position_projection = _bi2se3_position_projection(case, upstream)
+        if fixed_position != expected_position_projection:
+            raise ValueError("Bi2Se3 mosaic stage changed its geometry position handoff")
+    if case.material_id == "Bi2Se3" and stage == "ordered_intensity":
+        if upstream is None or upstream.get("stage") != "mosaic":
+            raise ValueError("Bi2Se3 ordered-intensity stage requires its mosaic artifact")
+        mosaic_position = upstream["state"].get("fixed_position")
+        ordered_position = result["state"].get("fixed_position")
+        if not isinstance(mosaic_position, dict) or ordered_position != mosaic_position:
+            raise ValueError("Bi2Se3 ordered-intensity stage changed its position handoff")
+        artifact_document = json.loads(
+            Path(result["state"]["artifact"]).read_text(encoding="utf-8")
+        )
+        stage_config = case.stage_config["ordered_intensity"]
+        projection = _bi2se3_ordered_artifact_projection(
+            artifact_document,
+            active_parameter_names=tuple(str(name) for name in stage_config["active_parameters"]),
+            claim_boundary=str(stage_config["claim_boundary"]),
+        )
+        expected_mosaic = dict(
+            zip(
+                ("gaussian_sigma_deg", "lorentzian_hwhm_deg", "lorentzian_probability"),
+                upstream["state"]["parameters"],
+                strict=True,
+            )
+        )
+        upstream_summary = upstream["scientific_summary"]["mosaic"]
+        if projection["fixed_mosaic"] != expected_mosaic:
+            raise ValueError("Bi2Se3 ordered-intensity artifact changed its mosaic handoff")
+        if (
+            projection["summary"]["profile_identities"]
+            != upstream_summary["profile_identities"]
+            or projection["summary"]["m0_profile_identities"]
+            != upstream_summary["m0_profile_identities"]
+        ):
+            raise ValueError("Bi2Se3 ordered-intensity artifact changed its profile handoff")
+        if (
+            projection["provenance"].get("upstream_mosaic_result_sha256")
+            != upstream["state"]["artifact_sha256"]
+        ):
+            raise ValueError("Bi2Se3 ordered-intensity artifact changed its mosaic provenance")
 
 
 def _combined_scientific_summary(
@@ -2638,7 +3121,7 @@ def run_replay(
         stages[stage_name] = stage_result
         upstream = stage_result
     certificate = {
-        "schema_version": "rasim-staged-fit-replay-certificate-v1",
+        "schema_version": _CERTIFICATE_SCHEMA_VERSION,
         "case_id": case.case_id,
         "material_id": case.material_id,
         "case_sha256": _sha256(case.path),

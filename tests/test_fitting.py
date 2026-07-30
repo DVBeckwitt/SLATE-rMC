@@ -26,6 +26,7 @@ from rasim_next.fitting import (
     GeometryCorrections,
     GeometryPredictionError,
     GeometryRankError,
+    IncidenceAngleDeltaBounds,
     IndexedGeometryImage,
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
@@ -367,6 +368,8 @@ def _axis_rotation_matrix(axis: np.ndarray, angle_rad: float) -> np.ndarray:
 def _shared_truth_instrument(
     geometry_inputs: object,
     truth: SharedGeometryCorrections,
+    *,
+    incidence_angle_delta_rad: float = 0.0,
 ) -> object:
     """Construct the nine-coordinate hidden pose independently of production fitting code."""
 
@@ -378,7 +381,8 @@ def _shared_truth_instrument(
     base_pitch = math.atan2(base_axis[2], horizontal)
     base_yaw = math.atan2(-base_axis[1], base_axis[0])
     pivot = np.asarray(axis.pivot_lab_m, dtype=np.float64)
-    angle = math.radians(axis.angle_deg)
+    base_angle = math.radians(axis.angle_deg)
+    corrected_angle = base_angle + incidence_angle_delta_rad
     corrected_axis = _axis_from_pitch_yaw(
         base_pitch + truth.goniometer_axis_pitch_rad,
         base_yaw + truth.goniometer_axis_yaw_rad,
@@ -394,13 +398,13 @@ def _shared_truth_instrument(
     )
     assert float(corrected_axis @ (corrected_pivot - pivot)) == pytest.approx(0.0, abs=1e-18)
     base = geometry_inputs.instrument
-    base_motion_rotation = _axis_rotation_matrix(base_axis, angle)
+    base_motion_rotation = _axis_rotation_matrix(base_axis, base_angle)
     base_motion_translation = pivot - base_motion_rotation @ pivot
     zero_sample_rotation = base_motion_rotation.T @ base.lab_from_sample.rotation
     zero_sample_translation = base_motion_rotation.T @ (
         base.lab_from_sample.translation_m - base_motion_translation
     )
-    corrected_motion_rotation = _axis_rotation_matrix(corrected_axis, angle)
+    corrected_motion_rotation = _axis_rotation_matrix(corrected_axis, corrected_angle)
     corrected_motion_translation = corrected_pivot - corrected_motion_rotation @ corrected_pivot
     sample_after_axis_rotation = corrected_motion_rotation @ zero_sample_rotation
     sample_after_axis_translation = (
@@ -1001,7 +1005,7 @@ def test_three_incidence_hidden_shared_geometry_recovery(
     truth = SharedGeometryCorrections(
         detector_column_tilt_rad=math.radians(0.25),
         detector_row_tilt_rad=math.radians(-0.45),
-        sample_normal_x_tilt_rad=math.radians(0.18),
+        sample_normal_x_tilt_rad=0.0,
         sample_normal_y_tilt_rad=math.radians(-0.27),
         goniometer_axis_pitch_rad=math.radians(0.15),
         goniometer_axis_yaw_rad=math.radians(-0.22),
@@ -1009,6 +1013,11 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         goniometer_pivot_pitch_offset_m=3.0e-5,
         goniometer_pivot_yaw_offset_m=-2.5e-5,
     )
+    truth_incidence_angle_delta_rad = math.radians(0.18)
+    fitted_with_incidence_delta = tuple(
+        name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name != "sample_normal_x_tilt_rad"
+    )
+    incidence_bounds = IncidenceAngleDeltaBounds.rasim_shared_offset()
     ell_by_angle = {
         5.0: {4, 5, 8, 10, 11},
         10.0: {4, 5, 8, 10},
@@ -1060,7 +1069,11 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         model = ExactTagGeometryModel(geometry_inputs)
         truth_prediction = model.predict_integer_l_tags(
             keys,
-            instrument=_shared_truth_instrument(geometry_inputs, truth),
+            instrument=_shared_truth_instrument(
+                geometry_inputs,
+                truth,
+                incidence_angle_delta_rad=truth_incidence_angle_delta_rad,
+            ),
         )
         observations = IntegerLMarkerObservations.from_prediction(
             truth_prediction,
@@ -1124,31 +1137,54 @@ def test_three_incidence_hidden_shared_geometry_recovery(
             tuple(images[:1]),
             initial=SharedGeometryCorrections.zero(),
             bounds=bounds,
+            fitted_parameter_names=fitted_with_incidence_delta,
+            incidence_angle_delta_bounds=incidence_bounds,
         )
     with pytest.raises(GeometryRankError, match=r"rank=7/9"):
         fit_indexed_geometry_series(
             tuple(images[:2]),
             initial=SharedGeometryCorrections.zero(),
             bounds=bounds,
+            fitted_parameter_names=fitted_with_incidence_delta,
+            incidence_angle_delta_bounds=incidence_bounds,
+        )
+
+    with pytest.raises(ValueError, match="share the nominal incidence-axis gauge"):
+        fit_indexed_geometry_series(
+            tuple(images),
+            initial=SharedGeometryCorrections.zero(),
+            bounds=bounds,
+            incidence_angle_delta_bounds=incidence_bounds,
         )
 
     result = fit_indexed_geometry_series(
         tuple(reversed(images)),
         initial=SharedGeometryCorrections.zero(),
         bounds=bounds,
+        fitted_parameter_names=fitted_with_incidence_delta,
+        initial_incidence_angle_delta_rad=math.radians(0.1),
+        incidence_angle_delta_bounds=incidence_bounds,
     )
     assert result.success, result.message
     np.testing.assert_array_equal(
         evaluate_indexed_geometry_series_residual(
             tuple(reversed(images)),
             SharedGeometryCorrections.zero(),
+            incidence_angle_delta_rad=0.0,
         ),
         evaluate_indexed_geometry_series_residual(
             tuple(images),
             SharedGeometryCorrections.zero(),
+            incidence_angle_delta_rad=0.0,
         ),
     )
     assert result.image_ids == ("osc-05", "osc-10", "osc-15")
+    assert result.fitted_parameter_names == fitted_with_incidence_delta
+    assert result.fixed_parameter_names == ("sample_normal_x_tilt_rad",)
+    assert result.jacobian_parameter_names == (
+        *fitted_with_incidence_delta,
+        "incidence_angle_delta_rad",
+    )
     assert result.jacobian_rank == 9
     assert result.jacobian_condition < 15_000.0
     assert not np.any(result.active_bounds)
@@ -1156,12 +1192,15 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         np.abs(result.corrections.as_array() - truth.as_array()) / bounds.half_span,
         np.full(9, 2.5e-5),
     )
+    assert result.incidence_angle_delta_rad == pytest.approx(
+        truth_incidence_angle_delta_rad,
+        abs=2.5e-5 * incidence_bounds.half_span_rad,
+    )
     assert result.training_site_rms_px < 1.0e-3
     assert result.training_site_max_px < 5.0e-3
     assert result.training_chord_angle_rms_rad < 1.0e-7
 
     fitted_without_detector_tilts = (
-        "sample_normal_x_tilt_rad",
         "sample_normal_y_tilt_rad",
         "goniometer_axis_pitch_rad",
         "goniometer_axis_yaw_rad",
@@ -1179,12 +1218,19 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         initial=fixed_detector_tilts,
         bounds=bounds,
         fitted_parameter_names=fitted_without_detector_tilts,
+        initial_incidence_angle_delta_rad=math.radians(0.1),
+        incidence_angle_delta_bounds=incidence_bounds,
     )
     assert constrained.success, constrained.message
     assert constrained.fitted_parameter_names == fitted_without_detector_tilts
     assert constrained.fixed_parameter_names == (
         "detector_column_tilt_rad",
         "detector_row_tilt_rad",
+        "sample_normal_x_tilt_rad",
+    )
+    assert constrained.jacobian_parameter_names == (
+        *fitted_without_detector_tilts,
+        "incidence_angle_delta_rad",
     )
     assert constrained.jacobian_rank == 7
     assert constrained.scaled_jacobian_singular_values.shape == (7,)
@@ -1200,6 +1246,10 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         np.abs(constrained.corrections.as_array()[2:] - truth.as_array()[2:])
         / bounds.half_span[2:],
         np.full(7, 2.5e-5),
+    )
+    assert constrained.incidence_angle_delta_rad == pytest.approx(
+        truth_incidence_angle_delta_rad,
+        abs=2.5e-5 * incidence_bounds.half_span_rad,
     )
     with pytest.raises(ValueError, match="unknown shared geometry parameter"):
         fit_indexed_geometry_series(
@@ -1230,6 +1280,7 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         initial=sparse_initial,
         bounds=bounds,
         fitted_parameter_names=requested_sparse_names,
+        initial_incidence_angle_delta_rad=truth_incidence_angle_delta_rad,
     )
     assert sparse.fitted_parameter_names == expected_sparse_names
     fixed_indices = np.asarray(
@@ -1270,15 +1321,20 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         prediction = image.predict_integer_l_tags(
             heldout[image.image_id].keys,
             result.corrections,
+            incidence_angle_delta_rad=result.incidence_angle_delta_rad,
         )
         error = prediction.coordinates_px - heldout[image.image_id].coordinates_px
         assert float(np.max(np.linalg.norm(error, axis=1), initial=0.0)) < 1.0e-2
 
     for image in images:
-        fitted = image.corrected_instrument(result.corrections)
+        fitted = image.corrected_instrument(
+            result.corrections,
+            incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+        )
         normal = fitted.lab_from_sample.rotation[:, 2]
         zero_offset = image.corrected_instrument(
-            replace(result.corrections, sample_plane_normal_offset_m=0.0)
+            replace(result.corrections, sample_plane_normal_offset_m=0.0),
+            incidence_angle_delta_rad=result.incidence_angle_delta_rad,
         )
         translation_delta = (
             fitted.lab_from_sample.translation_m - zero_offset.lab_from_sample.translation_m
@@ -1293,7 +1349,11 @@ def test_three_incidence_hidden_shared_geometry_recovery(
             rtol=0.0,
             atol=2.0e-18,
         )
-    root_audit = audit_indexed_geometry_series_roots(tuple(images), result.corrections)
+    root_audit = audit_indexed_geometry_series_roots(
+        tuple(images),
+        result.corrections,
+        incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+    )
     assert root_audit.classification == "SAME"
     assert all(
         item.audit.expected_count == item.audit.enumerated_count for item in root_audit.images
@@ -1312,7 +1372,11 @@ def test_three_incidence_hidden_shared_geometry_recovery(
         "solve_integer_l_ewald_roots",
         swapped_beta_solver,
     )
-    swapped_audit = audit_indexed_geometry_series_roots(tuple(images), result.corrections)
+    swapped_audit = audit_indexed_geometry_series_roots(
+        tuple(images),
+        result.corrections,
+        incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+    )
     assert swapped_audit.classification == "CHANGED"
     assert any(item.audit.classification == "CHANGED" for item in swapped_audit.images)
 

@@ -114,9 +114,10 @@ fitting.held_out_metric
 fitting.invalidation_summary
 ```
 
-The additive `rasim-osc-geometry-fit-result-v4` typed proof envelope carries its series manifest,
+The additive `rasim-osc-geometry-fit-result-v5` typed proof envelope carries its series manifest,
 image IDs and commanded angles, parameterization, canonical fitted/fixed coordinate names, shared
-corrections, selected-coordinate scaled singular spectrum and weakest direction, active bounds,
+corrections, the optional one common incidence-angle delta and per-image effective angles, combined
+Jacobian parameter names, scaled singular spectrum and weakest direction, active bounds,
 per-image native errors, the direct-root and frozen-candidate acceptance audits, the
 frozen-reindexing lineage, optional data-specific qualification profile, and the separate
 global-rediscovery diagnostic. Expected input or numerical rejection in JSON mode uses
@@ -126,17 +127,20 @@ map to the existing `selection.manifest_hash`, `fitting.detector_parameters`,
 `fitting.held_out_metric`, and `fitting.invalidation_summary` stages; they do not extend or renumber
 frozen trace schema v4.
 
-The additive `rasim-staged-fit-replay-certificate-v1` envelope is an orchestration proof, not a new
+The additive `rasim-staged-fit-replay-certificate-v2` envelope is an orchestration proof, not a new
 physics trace stage. It carries the exact case SHA-256, material, requested backend and terminal
 stage, a `verification_runtime` with the case-bound lock hash and actual
 interpreter/platform/package identity, the ordered
 `geometry -> mosaic -> ordered_intensity -> render` scientific revisions, and the verified compact
-summaries. Each `rasim-staged-fit-replay-stage-v1` member records the execution runtime and binds its
-immediate upstream revision, case/source identity, and compact scientific state. Runtime identity is
+summaries. Each `rasim-staged-fit-replay-stage-v2` member records the execution runtime and binds its
+stage-scoped case hash, which covers the declared consumed-file records, together with its immediate
+upstream revision, case/source identity, and compact scientific state. Runtime identity is
 operational provenance and does not enter a stage scientific revision, but a resumed stage must
 match it exactly so the verifier cannot claim a reused result was executed by its own runtime.
-Geometry records the canonical one-state source batch; later stages record the common 250-state
-batch. Fresh and resumed envelopes use the same strict validation, and a stage's compact summary is
+Geometry records the canonical one-state source batch plus commanded/effective incidence vectors,
+one common delta, fixed gauge, and the full position proof evidence; later stages record the common
+250-state batch and the consumed upstream revision. Fresh and resumed envelopes use the same strict
+validation, and a stage's compact summary is
 verified before that stage is persisted or supplied downstream. Volatile artifact paths and
 path-dependent JSON container hashes, timings, device labels,
 and memory measurements do not enter a scientific revision. Decoded render identities do. Missing
