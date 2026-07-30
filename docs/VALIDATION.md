@@ -1131,8 +1131,9 @@ and model layout, `289.755 s` component-bank construction and constant-backgroun
 `96.328 s` for the affine-background robustness fit. Traced Python/NumPy peak memory was
 `205,659,618` bytes. Its JSON SHA-256 is
 `9ba0a9472dac0cd8acb58c41c167933772e87aab811069c03d357d15a2225aba`; the diagnostic NPZ SHA-256
-is `e01e18f88e8f3661e8d1152db0aa761ce5833b957a76e7713d3b69f3039b2fed`. The replay mosaic stage
-has scientific revision `sha256-7f89791d7f33373b5dcbcb6ecd3cf721325c1d79de3a1fcd5c7f141f645bf4ce`.
+is `e01e18f88e8f3661e8d1152db0aa761ce5833b957a76e7713d3b69f3039b2fed`. The replay mosaic stage,
+whose scientific state now binds every identity-matched fitted amplitude, has scientific revision
+`sha256-2c0e6830cf0efbfb81c542118445cff3716e36f79a9a24983d083b41177ade9c`.
 An unchanged resume verified in `8 s` without recomputation and preserved every geometry, mosaic,
 diagnostic, and certificate hash. The external artifacts are under
 `C:\Users\Kenpo\.codex\visualizations\2026\07\30\019fb3d1-1741-7813-9f7c-c06c43cb0f6a\bi2se3_positions_theta_delta_v2_final`.
@@ -1141,6 +1142,65 @@ The retired gate-v1 JSON SHA-256
 evidence only; current consumers reject its 32-candidate catalog. No independently denser
 source-support or higher-order response convergence audit was completed, so the estimate remains
 explicitly model-limited.
+
+## Model-limited three-OSC Bi2Se3 relative structure estimate
+
+The measured ordered-intensity stage consumes the verified geometry and mosaic states above and
+stops before stacking-disorder fitting or detector rendering. Its case SHA-256 is
+`9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3`. All 15 fitted mosaic
+nuisance amplitudes are transferred by exact profile identity: each amplitude multiplies the
+matching baseline 250-source continuous peak-center signal. The measured amplitudes originate in
+the upstream exact physical-pixel OSC projection, but the simulated ordered response is never
+detector-rasterized. One analytic relative scale is eliminated per incidence. Geometry, the one
+common incidence-angle delta, mosaic, the Bi and Se2 fractional coordinates, lattice, and the
+52-layer nearly-perfect 2H state with epsilon `0.001` remain frozen.
+
+Bi occupancy is only the relative-scale reference. The four fitted coordinates and boundary
+solution are
+
+```text
+Se1/Bi       = 1.1900789235
+Se2/Bi       = 1.1323307344
+U_radial     = 4.45e-25 A2  (zero lower bound)
+U_normal     = 1.04e-27 A2  (zero lower bound)
+objective    = 9.716212268   (unweighted relative SSE)
+```
+
+The normalized admissible representative
+`(Bi,Se1,Se2)=(0.8402804051,1,0.9514753282)` is a gauge representation, not three absolute
+occupancies. Sensitivity rank is four and condition is `648.083`. Six deterministic starts all
+converge to the same objective-equivalent basin; maximum ratio spans are `1.97e-8` and `3.12e-9`.
+The compiled response interpolation differs from its certified nodes by at most `1.87e-11`
+relative, and cached predictions match a fresh continuous evaluation to `3.46e-15`.
+
+The model does not adequately reproduce the transferred real-data observable. Relative-residual
+RMS is `0.804828` overall, `0.067853` for the five `m=0` profiles, and `0.984540` for the ten
+`m=1` profiles; the maximum absolute residual is `0.995222`. Per-incidence RMS values are
+`0.027576`, `0.889514`, and `0.848419` at 5, 10, and 15 degrees. This is therefore classified
+`MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE` with adequacy
+`UNQUALIFIED_BOUNDARY_HIGH_RESIDUAL`. It is not a calibrated occupancy measurement, not a
+successful material structure-factor determination, and not evidence by itself against 2H
+stacking; it is a failure of the frozen near-perfect-2H forward model under this transferred-
+amplitude and inherited-background observable.
+
+The RTX-3060 CUDA run took `377.683 s`, including `354.955 s` response compilation, `0.486 s`
+multistart fitting, and `9.036 s` for the fresh continuous oracle. Traced peak memory was
+`65,387,179` bytes. The raw JSON SHA-256 is
+`1da303f14ab168a57f198b4806b31446d39030c3e6745f7e2a766270043397f6`; the ordered stage
+scientific revision is
+`sha256-30591efc225bfc042d68f7a2d21bd34d6f304927d28f23e6850f824dbe947fca`. A missing stage
+envelope was rebuilt from the hash-bound raw artifact without refitting, and an unchanged resume
+verified the exact three-stage chain. The artifact contract binds the fit recipe, response
+compiler contract, continuous-response error limits, occupancy gauge, all profile amplitudes, and
+the absence of simulated detector rasterization.
+
+After extracting the stage into its standalone prepared-input interface and making the fresh
+oracle fail closed on invalid arrays, a second uncached RTX-3060 qualification reproduced the four
+parameters, objective, residual RMS, interpolation error, cached-versus-fresh error, and ordered
+scientific revision exactly. Its numerical-stage time was `396.769 s`, including `374.226 s`
+response compilation, and its traced peak memory was `65,390,233` bytes. Its raw JSON SHA-256 is
+`a9c8d50ccfa963a40af5eb69837dded21a331b9b8a55439fe6efca4f7a616f10`; raw bytes differ from the
+accepted checkpoint only in explicitly non-scientific run metadata.
 
 ## 250-state fixed-position full-catalog synthetic ordered-intensity recovery
 
@@ -1348,19 +1408,21 @@ in each case. The runner validates the complete transitive numerical dependency 
 hash-checked `uv.lock` read immediately before execution; resume rejects a stage from a different
 runtime even though runtime provenance is deliberately excluded from its scientific revision.
 
-Bi2Se3 now has a verified geometry-then-mosaic replay checkpoint. Geometry contains eight shared
-corrections plus one common incidence delta and one pivot bound, so geometry-parameter precision
-remains unqualified. Its stage-case SHA-256 is
+Bi2Se3 now has a verified geometry-through-ordered-intensity replay checkpoint. Geometry contains
+eight shared corrections plus one common incidence delta and one pivot bound, so
+geometry-parameter precision remains unqualified. Its stage-case SHA-256 is
 `c87e86f00372e7a3eaf84e71f1315eda9d55381d2513c04d5e494639cd29d6df` and its scientific revision
 is `sha256-a5de9f498f8ee16f8a7d6966c958acab0250d0e416ac0bcfd305435b5c91bc72`.
 The mosaic stage consumes that exact position state and is verified at scientific revision
-`sha256-7f89791d7f33373b5dcbcb6ecd3cf721325c1d79de3a1fcd5c7f141f645bf4ce`. It recovered
+`sha256-2c0e6830cf0efbfb81c542118445cff3716e36f79a9a24983d083b41177ade9c`. It recovered
 `(sigma_G,HWHM_L,eta)=(1.3228756555 deg,0.4898979486 deg,0.4480961989)` with objective
 `1.6802589099` over 15 profiles including five `m=0`. Its profile RMS/max residuals
-`0.33469/0.75333` and eight negative reconstructed bins demonstrate model limitation. The ordered
-target `(oBi,oSe1,oSe2,Ur,Uz)=(0.94,0.78,0.86,0.007,0.034)` still awaits requalification against
-this mosaic artifact; it is machine-precision synthetic recovery, not unresolved raw-OSC intensity
-or integrated peak mass.
+`0.33469/0.75333` and eight negative reconstructed bins demonstrate model limitation. The measured
+ordered stage is verified at scientific revision
+`sha256-30591efc225bfc042d68f7a2d21bd34d6f304927d28f23e6850f824dbe947fca`. It fitted
+`(Se1/Bi,Se2/Bi,Ur,Uz)=(1.1900789235,1.1323307344,0,0)` over the same 15 transferred profile
+amplitudes. Its overall/`m=1` residual RMS values `0.80483/0.98454` make it an unqualified
+boundary estimate, not a validated structure result.
 
 Bi2Te3 recomputes position-free geometry from the tracked gzip OSCs while retaining the historical
 catalog for audit. Under the case-bound runtime, the tracked-container selection revision is
@@ -1392,7 +1454,8 @@ geometry executes or an output directory is created. The optional 250-state 3,00
 separate historical CUDA qualification described below. Render verification hashes decoded
 grayscale pixels, not PNG container bytes. Paths, timings, peak memory, and device labels are
 excluded from scientific identity. Bi2Se3 rendering is disabled in this replay because available
-images bind a retired mosaic result.
+images bind a retired mosaic result; its current certificate terminates exactly at ordered
+intensity.
 
 The locked fit-stage qualification replay used Python `3.13.13`, uv `0.11.7`, NumPy `2.4.6`,
 SciPy `1.18.0`, Numba `0.66.0`, and an NVIDIA GeForce RTX 3060 with driver `572.47`. Commands use

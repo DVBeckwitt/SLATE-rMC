@@ -300,10 +300,11 @@ Proof:
 
 Goal: fit relative ordered Bragg intensities after source, geometry, and mosaicity are fixed.
 
-The current 250-state Bi2Se3 selected-center slice is a synthetic accelerator and identifiability
-proof for this stage. It sums every incident-state intensity before comparison, but it does not
-satisfy the raw-OSC ROI, background, count-calibration, PSF, or component-deblending requirements
-below.
+The current 250-state Bi2Se3 replay transfers all identity-matched nuisance amplitudes extracted
+from the three measured OSC images onto continuous selected-center responses. It sums every
+incident-state intensity before comparison, but it remains model-limited and does not satisfy the
+direct raw-OSC ROI, count-calibration, PSF, or component-deblending requirements below. The
+separate synthetic recovery remains the accelerator and identifiability proof for this stage.
 
 Selection:
 

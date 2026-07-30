@@ -72,6 +72,20 @@ class _FixedPositionState:
     geometry_parameters_fitted_here: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedMeasuredOrderedInputs:
+    """Validated fixed inputs for an independently runnable measured ordered fit."""
+
+    series: tuple[ConfiguredSimulationInputs, ...]
+    profile_catalogs: tuple[tuple[object, tuple[MosaicProfileDefinition, ...]], ...]
+    anchor_counts: tuple[dict[str, int | str], ...]
+    mosaic_parameters: dict[str, float]
+    source_revision: str
+    cif_sha256: str
+    fixed_position_record: dict[str, object]
+    baseline_parameters: Bi2Se3QuintupleLayerParameters
+
+
 def _fixed_position_state(
     fixed_geometry: object,
     mosaic_case: dict[str, Any],
@@ -153,7 +167,9 @@ def _case_fixed_position_state(
     config = load_simulation_config(
         (mosaic_case_path.parent / str(mosaic_case["simulation_config"])).resolve()
     )
-    beam_center = tuple(float(value) for value in config.instrument.detector_reference_coordinate_px)
+    beam_center = tuple(
+        float(value) for value in config.instrument.detector_reference_coordinate_px
+    )
     return _FixedPositionState(
         artifact_revision=f"sha256-{mosaic_case['geometry_manifest_sha256']}",
         corrections=SharedGeometryCorrections.from_array(
@@ -761,6 +777,54 @@ def _parameter_record(parameters: Bi2Se3QuintupleLayerParameters) -> dict[str, f
         "u_radial_A2": parameters.u_radial_A2,
         "u_normal_A2": parameters.u_normal_A2,
     }
+
+
+def prepare_measured_ordered_inputs(
+    mosaic_document: dict[str, Any],
+    *,
+    mosaic_case_path: Path,
+    mosaic_case: dict[str, Any],
+    profile_config: dict[str, Any],
+    source_sample_count: int,
+) -> PreparedMeasuredOrderedInputs:
+    """Validate one mosaic checkpoint and construct the fixed continuous fit inputs."""
+
+    (
+        mosaic_parameters,
+        source_revision,
+        cif_sha256,
+        eligible_profile_keys,
+        fixed_position,
+    ) = _validated_mosaic_result(
+        mosaic_document,
+        mosaic_case_path=mosaic_case_path,
+        mosaic_case=mosaic_case,
+        source_sample_count=source_sample_count,
+    )
+    series = _fixed_inputs(
+        mosaic_case_path,
+        mosaic_case,
+        source_sample_count=source_sample_count,
+        mosaic_parameters=mosaic_parameters,
+        fixed_position=fixed_position,
+    )
+    profile_catalogs, anchor_counts = _validated_profile_catalogs(
+        series,
+        incidence_angles_deg=mosaic_case["incidence_angles_deg"],
+        m0_observations=mosaic_case["m0_observations"],
+        profile_config=profile_config,
+        eligible_profile_keys=eligible_profile_keys,
+    )
+    return PreparedMeasuredOrderedInputs(
+        series=series,
+        profile_catalogs=profile_catalogs,
+        anchor_counts=anchor_counts,
+        mosaic_parameters=mosaic_parameters,
+        source_revision=source_revision,
+        cif_sha256=cif_sha256,
+        fixed_position_record=_fixed_position_record(fixed_position),
+        baseline_parameters=Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal),
+    )
 
 
 def run_recovery(

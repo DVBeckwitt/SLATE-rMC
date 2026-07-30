@@ -45,7 +45,7 @@ external directory:
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml --inputs-only
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml --inputs-only
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda --through mosaic
+  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda --through ordered_intensity
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
   --output-directory C:\path\outside\the\repository\bi2te3-replay --backend cuda
 ```

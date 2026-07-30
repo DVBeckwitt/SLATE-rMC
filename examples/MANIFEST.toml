@@ -61,9 +61,14 @@ size_bytes = 1363
 sha256 = "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c"
 
 [[file]]
+path = "examples/bi2se3/experiment/ordered_intensity_fit_measured.toml"
+size_bytes = 948
+sha256 = "9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3"
+
+[[file]]
 path = "examples/bi2se3/experiment/staged_fit_replay.toml"
-size_bytes = 8569
-sha256 = "e20dde5226764ac9553e0f0dc3141931e1fa49a62d6b28a95bdfa003d562e8f2"
+size_bytes = 9348
+sha256 = "0239dbb4cfc302fe70e1bae2199bb002f58c9ef997cd1fb91244f0ceba380f92"
 
 [[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"

@@ -1,7 +1,7 @@
 schema_version = "rasim-staged-fit-replay-v2"
 case_id = "bi2se3-osc-5-10-15-250ki-v2"
 material_id = "Bi2Se3"
-classification = "MEASURED_GEOMETRY_SHARED_INCIDENCE_DELTA_CHECKPOINT"
+classification = "MEASURED_GEOMETRY_MOSAIC_WITH_UNQUALIFIED_STRUCTURE_BOUNDARY_ESTIMATE"
 source_state_count = 250
 source_seed = 1729
 incidence_angles_deg = [5.0, 10.0, 15.0]
@@ -28,8 +28,8 @@ sha256 = "c85286056aab0858bc70fd5236504e193d05cbf0b30cad87ed69160a82b7c027"
 
 [[files]]
 role = "ordered_intensity_case"
-path = "ordered_intensity_fit_truth.toml"
-sha256 = "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c"
+path = "ordered_intensity_fit_measured.toml"
+sha256 = "9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3"
 
 [[files]]
 role = "cif"
@@ -138,21 +138,38 @@ input_roles = [
   "environment_lock",
   "simulation_config",
   "mosaic_case",
+  "measured_profile_policy",
   "ordered_intensity_case",
   "cif",
+  "legacy_peak_observations",
+  "osc_5deg",
+  "osc_10deg",
+  "osc_15deg",
 ]
-implementation = "bi2se3_synthetic_selected_component_v3"
+implementation = "measured_transferred_mosaic_amplitudes_v1"
 case_role = "ordered_intensity_case"
 execution_source_state_count = 250
 fit_atomic_positions = false
+occupancy_ratio_reference = "bi_occupancy"
 active_parameters = [
-  "bi_occupancy",
-  "se1_occupancy",
-  "se2_occupancy",
+  "se1_over_bi",
+  "se2_over_bi",
   "u_radial_A2",
   "u_normal_A2",
 ]
-claim_boundary = "synthetic selected-component peak-center recovery on the measured mosaic selection; not unresolved raw OSC intensity, not integrated peak mass, and not raw OSC structure-factor fitting"
+lower_bounds = [0.0, 0.0, 0.0, 0.0]
+upper_bounds = [2.0, 2.0, 0.1, 0.1]
+parameter_scales = [1.0, 1.0, 0.1, 0.1]
+multistarts = [
+  [1.0, 0.989, 0.0046, 0.0485],
+  [0.8297872340425532, 0.9148936170212766, 0.007, 0.034],
+  [1.0, 1.0, 0.0, 0.0],
+  [0.8, 1.2, 0.02, 0.05],
+  [1.2, 0.8, 0.05, 0.02],
+  [0.6, 1.4, 0.08, 0.08],
+]
+maximum_function_evaluations = 5000
+claim_boundary = "mosaic nuisance amplitudes from all three OSC images multiplied by baseline 250-source continuous peak-center signals; model-limited and not a direct count-calibrated raw-OSC structure-factor recovery"
 
 [render]
 input_roles = ["environment_lock"]
@@ -250,14 +267,23 @@ m0_profile_identities = [
 ]
 
 [expected.ordered_intensity]
-classification = "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY"
-claim_boundary = "synthetic selected-component peak-center recovery on the measured mosaic selection; not unresolved raw OSC intensity, not integrated peak mass, and not raw OSC structure-factor fitting"
-parameters = [0.94, 0.78, 0.86, 0.007, 0.034]
-objective = 5.509700384903004e-30
-rank = 5
+classification = "MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE"
+adequacy = "UNQUALIFIED_BOUNDARY_HIGH_RESIDUAL"
+claim_boundary = "mosaic nuisance amplitudes from all three OSC images multiplied by baseline 250-source continuous peak-center signals; model-limited and not a direct count-calibrated raw-OSC structure-factor recovery"
+parameters = [
+  1.1900789235455336,
+  1.1323307343772355,
+  4.449496989858026e-25,
+  1.0373717318417977e-27,
+]
+objective = 9.716212267981469
+rank = 4
+relative_residual_rms = 0.8048276116859423
+m0_relative_residual_rms = 0.06785261990695007
+m1_relative_residual_rms = 0.9845401148678649
 profile_count = 15
 m0_profile_count = 5
-active_bounds = [false, false, false, false, false]
+active_bounds = [false, false, true, true]
 profile_identities = [
   "Bi2Se3-10deg|0|6|0|none",
   "Bi2Se3-10deg|1|10|2|1",
@@ -288,5 +314,5 @@ geometry_correction_absolute = 1.0e-7
 geometry_metric_absolute = 1.0e-4
 mosaic_parameter_absolute = 1.0e-6
 mosaic_objective_absolute = 1.0e-6
-ordered_parameter_absolute = 1.0e-10
-ordered_objective_absolute = 1.0e-20
+ordered_parameter_absolute = 5.0e-8
+ordered_objective_absolute = 1.0e-10

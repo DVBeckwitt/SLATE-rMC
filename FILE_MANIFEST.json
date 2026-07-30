@@ -1,5 +1,5 @@
 {
-  "file_count": 284,
+  "file_count": 286,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -33,8 +33,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "b71ed4fbbd5b9f0fa556f4aa0203c88ea7fabad7660a49e9e353a7dbc79e2ae5",
-      "size_bytes": 4771
+      "sha256": "bf8dd98b40195b5e645bca2bcc42cf3f63a3cdb87e69297db5d1b8dbc10d3053",
+      "size_bytes": 4782
     },
     {
       "path": "SEED_CONTENTS.md",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "656182c8249851af6e5d306d118d45a0448f0184756d17dd73e1a34264035066",
-      "size_bytes": 51788
+      "sha256": "c330a63d58f8328abe6c45f64ec8390511beb11ada9c2b597d4236f2ccc984d8",
+      "size_bytes": 51914
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -108,13 +108,13 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "bcdf4ad51119091eb78af42bb96842cf2634822a02f15b148f3777301ea62839",
-      "size_bytes": 35567
+      "sha256": "0632499ac7dfa289a333f1876bf4fdfd7ec1395e5f875ac347768d6f1dcb3111",
+      "size_bytes": 37978
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
-      "sha256": "42d874a90abb08e360e3160d7943204302b3ab6774a63ded0bcd8f93006ef529",
-      "size_bytes": 17593
+      "sha256": "52edf4b38f3a7d1c187a25d677a5832f236cc58f8a70d501b15bef8f6ff6d812",
+      "size_bytes": 17767
     },
     {
       "path": "docs/HBN_RING_FITTER_MINIMUM_SPEC.md",
@@ -153,8 +153,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "5e26052396f3d00dad89e470f29d15e4a18bafa0225c8f6b4fc9d7fe46962a1d",
-      "size_bytes": 98938
+      "sha256": "772691500f99aa09b7b1c7e9541e9eac8c828dfd6eb8cb9c58541dcb9cf5949f",
+      "size_bytes": 103112
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -168,8 +168,8 @@
     },
     {
       "path": "examples/MANIFEST.toml",
-      "sha256": "ac7f4568f5b150c04c12c6661d5b38b33a70d5f360c2c50e384809e5ee498bd6",
-      "size_bytes": 5055
+      "sha256": "2a5e25420e2ed8b5ada46098fb77e5a432f30e1e956fee63e44e77bd828ac229",
+      "size_bytes": 5230
     },
     {
       "path": "examples/README.md",
@@ -197,14 +197,19 @@
       "size_bytes": 15491
     },
     {
+      "path": "examples/bi2se3/experiment/ordered_intensity_fit_measured.toml",
+      "sha256": "9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3",
+      "size_bytes": 948
+    },
+    {
       "path": "examples/bi2se3/experiment/ordered_intensity_fit_truth.toml",
       "sha256": "49005960148485dc27390b036b598bfec6ce4845502172955650a3c66b8f1a4c",
       "size_bytes": 1363
     },
     {
       "path": "examples/bi2se3/experiment/staged_fit_replay.toml",
-      "sha256": "e20dde5226764ac9553e0f0dc3141931e1fa49a62d6b28a95bdfa003d562e8f2",
-      "size_bytes": 8569
+      "sha256": "0239dbb4cfc302fe70e1bae2199bb002f58c9ef997cd1fb91244f0ceba380f92",
+      "size_bytes": 9348
     },
     {
       "path": "examples/bi2se3/observations/legacy_peak_selections.csv",
@@ -643,8 +648,8 @@
     },
     {
       "path": "scripts/recover_bi2se3_ordered_intensity.py",
-      "sha256": "5c043ba2c69e34af7b52a1ff25b51fb5a9f2319e6ccee270e0adeafb8429d8b2",
-      "size_bytes": 81441
+      "sha256": "47f4e580a07b4d84822bc326a18c04babbf1754cb763bddc7b4625e2abe399a0",
+      "size_bytes": 83595
     },
     {
       "path": "scripts/recover_pbi2_stacking_population.py",
@@ -658,13 +663,18 @@
     },
     {
       "path": "scripts/replay_staged_fit.py",
-      "sha256": "20ad55dc48068ff0208f84d9032fb1219b1de39618fb0200ee9ec33e0c22a57d",
-      "size_bytes": 130180
+      "sha256": "be80cd7cf8c150d918e01a5185c9da3c9b0c048d88dede8de68e5ad870b66d30",
+      "size_bytes": 134290
     },
     {
       "path": "scripts/run_configured_simulation.py",
       "sha256": "c5b6979ee0fb61bb3b2923f8d3913f324b76babb365f8d7eb122043b7a5bb521",
       "size_bytes": 24278
+    },
+    {
+      "path": "scripts/staged_fit_ordered_intensity.py",
+      "sha256": "08c9541704f8d3e4fe006b74bf53b76761569b3a0c55ac3af486b6661499dca0",
+      "size_bytes": 42609
     },
     {
       "path": "scripts/verify_seed.py",
@@ -1408,8 +1418,8 @@
     },
     {
       "path": "tests/test_staged_fit_replay_cli.py",
-      "sha256": "b5fae396bf1bff711cdb259b9f241dda98ef257eb5f03ce873f950d058ff37a6",
-      "size_bytes": 49003
+      "sha256": "9b89a63c6af9d97119432e536bcfce24a6a3b8aa8c0e9998679677e5e841777b",
+      "size_bytes": 72311
     },
     {
       "path": "tools/check_docs.py",

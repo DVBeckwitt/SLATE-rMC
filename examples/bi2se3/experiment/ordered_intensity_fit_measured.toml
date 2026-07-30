@@ -1,0 +1,25 @@
+schema_version = "rasim-measured-ordered-intensity-fit-v1"
+mosaic_case = "mosaic_fit_truth.toml"
+observation_model = "measured_mosaic_nuisance_scale_times_baseline_source_averaged_peak_center_signal.v1"
+background_inheritance = "local_phi_constant_from_mosaic_fit.v1"
+
+[profiles]
+two_theta_half_width_deg = 0.04
+phi_half_width_deg = 5.0
+phi_bin_count = 21
+response_two_theta_gauss_order = 12
+response_phi_gauss_order = 4
+expected_total_count = [88, 78, 72]
+expected_nonzero_count = [86, 76, 70]
+expected_m0_count = [2, 2, 2]
+expected_catalog_revision = [
+  "198eb585e118e0e719e13303c480cc61a5ef3f0628e64220d26844875bc1114f",
+  "4e448c4c05b32813d6a998db3da65622ee4ef3a3e1757b349da9ea869984f679",
+  "73ce9345df429759d17445f9d7aa48ab4a07600be5575886c4f6a208fab652b3",
+]
+supported_m0_integer_L_5deg = [3, 6]
+supported_m0_integer_L_10deg = [6, 9]
+supported_m0_integer_L_15deg = [6, 9]
+
+[response_validation]
+maximum_interpolation_relative_error = 0.002

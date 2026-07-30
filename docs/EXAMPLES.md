@@ -238,7 +238,7 @@ Replay every fit stage into a new directory outside the repository:
 
 ```powershell
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\external\bi2se3-replay --backend cuda --through geometry
+  --output-directory C:\external\bi2se3-replay --backend cuda --through ordered_intensity
 uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
   --output-directory C:\external\bi2te3-replay --backend cuda
 ```
@@ -257,13 +257,15 @@ disabled because the available images bind a retired mosaic gate.
 
 The frozen replay targets are:
 
-- Bi2Se3 current verified terminal, mosaic. Geometry has eight shared corrections plus one common
+- Bi2Se3 current verified terminal, ordered intensity. Geometry has eight shared corrections plus one common
   incidence delta, RMS/max `1.55894/5.65079 px`; `delta_theta_i=0.4197204 deg` gives effective angles
   `5.4197204/10.4197204/15.4197204 deg`. The measured mosaic fit recovered
   `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809620)` with objective
-  `1.68025891` from 15 profiles including five `m=0`. The ordered stage remains the next unrun
-  checkpoint; its prior exact synthetic selected-component target is
-  `(0.94, 0.78, 0.86, 0.007, 0.034)`.
+  `1.68025891` from 15 profiles including five `m=0`. With Bi fixed as the relative-occupancy
+  gauge, the real-OSC transferred-amplitude ordered fit gives
+  `(Se1/Bi, Se2/Bi, Ur, Uz)=(1.19007892, 1.13233073, 0, 0)` and objective `9.71621227`.
+  This is an unqualified boundary result: overall relative-residual RMS is `0.804828`, and the
+  ten `m=1` profiles have RMS `0.984540`. It is not a calibrated physical occupancy result.
 - Bi2Te3 geometry: detector tilts fixed, seven active coordinates, RMS/max
   `7.17509/15.07787 px`; measured mosaic `(1.0340984 deg, 0.66004834 deg, 0.34468382)` from 33
   profiles including three `m=0`; relative SF parameters
@@ -274,8 +276,8 @@ source revision, masks, classifications, stage lineage, and decoded display pixe
 the declared absolute tolerances; PNG container bytes, paths, timings, memory, and device strings
 are not scientific identity. The Bi2Te3 mosaic and ordered stages are current-lock CUDA-qualified;
 the render has the separate historical qualification below. Both measured mosaic fits are
-model-limited effective envelopes, and the Bi2Te3 bound-seeking SF fit is `NO_ORACLE`, not a direct
-count-calibrated raw-intensity recovery.
+model-limited effective envelopes. Both ordered fits are `NO_ORACLE` transferred-amplitude
+estimates, not direct count-calibrated raw-intensity recoveries.
 
 `--frozen` makes the complete numerical dependency closure in `uv.lock` part of the operational
 replay. The lock bytes are re-hashed immediately before execution, before an output directory or
@@ -571,7 +573,40 @@ intensity. The output is an effective common radial envelope: uncalibrated detec
 resolution and remaining forward-model disagreement prevent interpreting it as a unique intrinsic
 mosaic distribution or a statistical confidence interval.
 
-## Recover fixed-position Bi2Se3 occupancies and directional displacement
+## Fit real-OSC Bi2Se3 relative structure parameters
+
+After the verified position and mosaic stages, resume the portable case through ordered intensity:
+
+```powershell
+uv run --frozen python scripts/replay_staged_fit.py `
+  examples/bi2se3/experiment/staged_fit_replay.toml `
+  --output-directory C:\external\bi2se3-replay `
+  --backend cuda --through ordered_intensity --resume
+```
+
+The tracked `ordered_intensity_fit_measured.toml` transfers all 15 identity-matched nuisance peak
+amplitudes extracted from the three physical-pixel OSC projections. It multiplies each by the
+corresponding baseline 250-source continuous peak-center response and jointly fits `Se1/Bi`,
+`Se2/Bi`, `Ur`, and `Uz`, with one analytic scale per incidence. The simulated distribution is
+never detector-rasterized; measured detector pixels enter only through the upstream exact-overlap
+profile amplitudes. Geometry, the common incidence-angle delta, mosaic, atomic positions, and the
+52-layer nearly-perfect 2H state remain frozen. The stage may be resumed independently, but its
+verified geometry and mosaic predecessors must already exist or be supplied.
+
+The implementation keeps preparation and fitting as separate callable boundaries:
+`prepare_measured_ordered_inputs` validates and constructs the fixed upstream state, while
+`fit_prepared_bi2se3_measured_ordered_document` consumes that prepared state and returns the
+standalone fit artifact. The response compiler and inverse solver remain reusable core functions.
+The present end-to-end parameter mapping is intentionally Bi2Se3 quintuple-layer-specific; a
+material-neutral structural-coordinate interface is later work, not an implied result of this fit.
+
+The present result is deliberately fail-closed as
+`MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE` with adequacy
+`UNQUALIFIED_BOUNDARY_HIGH_RESIDUAL`. Do not interpret its normalized
+`(Bi,Se1,Se2)=(0.84028,1,0.95148)` representative as absolute occupancy; it is only the admissible
+gauge representation of the two fitted ratios.
+
+## Run the synthetic fixed-position Bi2Se3 structure proof
 
 After accepting the geometry and mosaic stages, run the deterministic three-incidence structure
 recovery with the accepted external mosaic result:
@@ -584,7 +619,9 @@ python scripts/recover_bi2se3_ordered_intensity.py `
   --json
 ```
 
-The tracked case uses one shared 250-state source realization at 5, 10, and 15 commanded degrees,
+This standalone command is the synthetic identifiability and response-compiler proof, not the
+real-OSC transferred-amplitude fit above. Its tracked case uses one shared 250-state source
+realization at 5, 10, and 15 commanded degrees,
 the exact position state embedded in the supplied mosaic artifact, and the supplied recovered
 mosaic. The ordered runner reconstructs the recorded effective angles and rejects a missing or
 incompatible position revision. With the shown measured-mosaic

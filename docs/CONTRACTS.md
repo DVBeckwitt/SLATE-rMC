@@ -672,11 +672,12 @@ Path-dependent JSON artifact container hashes are operational resume checks and 
 the scientific revision; the consumed compact state remains revision-bound. Render artifact mode,
 size, and decoded-pixel hashes are revision-bound and rechecked from every PNG during resume.
 
-The Bi2Se3 ordered replay remains synthetic selected-component peak-center recovery. The Bi2Te3
-ordered replay transfers measured-mosaic nuisance amplitudes onto baseline 250-source peak-center
-signals and is model-limited `NO_ORACLE`; it is not direct count-calibrated raw-OSC structure
-recovery. Optional named active-parameter bounds narrow the canonical ordered-intensity optimizer
-bounds without activating frozen coordinates.
+The Bi2Se3 and Bi2Te3 ordered replays transfer identity-matched measured-mosaic nuisance
+amplitudes onto baseline 250-source continuous peak-center signals. Both are model-limited
+`NO_ORACLE` estimates, not direct count-calibrated raw-OSC structure recovery. The Bi2Se3 stage
+fixes Bi as the occupancy gauge and reports Se1/Bi and Se2/Bi ratios; its admissible normalized
+representative is not an absolute-occupancy result. Optional named active-parameter bounds narrow
+the canonical ordered-intensity optimizer bounds without activating frozen coordinates.
 
 ## Once-only factor ownership
 

@@ -525,6 +525,8 @@ def _validate_consumed_input_paths(
 
     ordered_path = input_paths["ordered_intensity_case"]
     ordered_document = tomllib.loads(ordered_path.read_text(encoding="utf-8"))
+    if ordered_document.get("schema_version") != "rasim-measured-ordered-intensity-fit-v1":
+        raise ValueError("Bi2Se3 ordered-intensity case must declare the measured fit schema")
     _require_nested_input(
         ordered_path,
         ordered_document.get("mosaic_case"),
@@ -578,6 +580,12 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
                 "fit_atomic_positions",
                 "implementation",
                 "input_roles",
+                "lower_bounds",
+                "maximum_function_evaluations",
+                "multistarts",
+                "occupancy_ratio_reference",
+                "parameter_scales",
+                "upper_bounds",
             },
             "render": {"enabled", "input_roles", "reason"},
         },
@@ -706,10 +714,38 @@ def _validate_stage_config(document: dict[str, Any]) -> dict[str, dict[str, Any]
             or stages["mosaic"]["observation_mode"] != "osc"
             or bool(stages["mosaic"]["render_images"])
             or stages["ordered_intensity"]["implementation"]
-            != "bi2se3_synthetic_selected_component_v3"
+            != "measured_transferred_mosaic_amplitudes_v1"
+            or stages["ordered_intensity"]["occupancy_ratio_reference"] != "bi_occupancy"
+            or tuple(stages["ordered_intensity"]["active_parameters"])
+            != ("se1_over_bi", "se2_over_bi", "u_radial_A2", "u_normal_A2")
+            or tuple(float(value) for value in stages["ordered_intensity"]["parameter_scales"])
+            != (1.0, 1.0, 0.1, 0.1)
             or bool(stages["render"]["enabled"])
         ):
             raise ValueError("Bi2Se3 replay changed an accepted stage implementation")
+        ordered = stages["ordered_intensity"]
+        lower = tuple(float(value) for value in ordered["lower_bounds"])
+        upper = tuple(float(value) for value in ordered["upper_bounds"])
+        multistarts = tuple(tuple(float(value) for value in row) for row in ordered["multistarts"])
+        if (
+            len(lower) != 4
+            or len(upper) != 4
+            or any(not math.isfinite(value) for value in (*lower, *upper))
+            or any(minimum >= maximum for minimum, maximum in zip(lower, upper, strict=True))
+            or not multistarts
+            or any(
+                len(row) != 4
+                or any(not math.isfinite(value) for value in row)
+                or any(
+                    value < minimum or value > maximum
+                    for value, minimum, maximum in zip(row, lower, upper, strict=True)
+                )
+                for row in multistarts
+            )
+            or isinstance(ordered["maximum_function_evaluations"], bool)
+            or int(ordered["maximum_function_evaluations"]) < 1
+        ):
+            raise ValueError("Bi2Se3 ordered-intensity bounds or multistarts are invalid")
     else:
         if (
             geometry["selection_mode"] != "position_free_discovery_with_frozen_catalog_audit"
@@ -778,7 +814,13 @@ def _expected_summary(document: dict[str, Any]) -> dict[str, Any]:
                 "jacobian_parameter_names",
             },
             "mosaic": profile_keys | {"per_incidence_profile_count"},
-            "ordered_intensity": ordered_keys,
+            "ordered_intensity": ordered_keys
+            | {
+                "adequacy",
+                "m0_relative_residual_rms",
+                "m1_relative_residual_rms",
+                "relative_residual_rms",
+            },
         },
         "Bi2Te3": {
             "geometry": geometry_keys | {"frozen_catalog_sha256"},
@@ -1244,29 +1286,14 @@ def _stage_result(
     return result
 
 
-def _identity_text(record: dict[str, Any]) -> str:
-    dataset_id = str(record["dataset_id"])
-    family_m = int(record.get("family_m", record.get("m")))
-    integer_l = int(record.get("integer_L", record.get("L")))
-    analytic_branch = int(record.get("analytic_branch_id", 0 if family_m == 0 else 2))
-    branch = record.get("root_side_branch_id", record.get("side"))
-    return f"{dataset_id}|{family_m}|{integer_l}|{analytic_branch}|{'none' if branch is None else int(branch)}"
-
-
-def _profile_summary(
-    records: list[dict[str, Any]],
-) -> tuple[list[str], list[str], list[int]]:
-    identities = sorted(_identity_text(record) for record in records)
-    m0 = sorted(
-        _identity_text(record)
-        for record in records
-        if int(record.get("family_m", record.get("m"))) == 0
-    )
-    counts = [
-        sum(str(record["dataset_id"]).endswith(f"-{angle:g}deg") for record in records)
-        for angle in (5.0, 10.0, 15.0)
-    ]
-    return identities, m0, counts
+_ORDERED_STAGE = _load_script_module(
+    "staged_fit_ordered_intensity",
+    "staged_fit_ordered_intensity.py",
+)
+_identity_text = _ORDERED_STAGE.profile_identity_text
+_profile_summary = _ORDERED_STAGE.profile_summary
+_measured_profile_scales = _ORDERED_STAGE.measured_profile_scales
+_transferred_profile_signal = _ORDERED_STAGE.transferred_profile_signal
 
 
 def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, Any]:
@@ -1278,8 +1305,10 @@ def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, An
     recovered = document.get("recovered_effective_distribution")
     fit = document.get("fit")
     profiles = fit.get("profiles") if isinstance(fit, dict) else None
-    if not isinstance(recovered, dict) or not isinstance(profiles, list) or not all(
-        isinstance(record, dict) for record in profiles
+    if (
+        not isinstance(recovered, dict)
+        or not isinstance(profiles, list)
+        or not all(isinstance(record, dict) for record in profiles)
     ):
         raise ValueError("mosaic stage artifact lacks its fitted profile state")
     parameters = [
@@ -1292,7 +1321,9 @@ def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, An
     measured_policy = (
         observations.get("measured_profile_policy") if isinstance(observations, dict) else None
     )
-    selection = measured_policy.get("profile_selection") if isinstance(measured_policy, dict) else None
+    selection = (
+        measured_policy.get("profile_selection") if isinstance(measured_policy, dict) else None
+    )
     if not isinstance(selection, list) or not all(isinstance(record, dict) for record in selection):
         raise ValueError("mosaic stage artifact lacks its measured profile selection")
     eligible_identities = sorted(
@@ -1300,6 +1331,13 @@ def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, An
     )
     if eligible_identities != identities:
         raise ValueError("mosaic stage artifact changed its fit-eligible profile selection")
+    measured_scales = _measured_profile_scales(document)
+    if set(measured_scales) != set(identities):
+        raise ValueError("mosaic stage artifact changed its fitted profile amplitudes")
+    profile_scales = [
+        {"identity": identity, "nuisance_peak_scale": measured_scales[identity]}
+        for identity in identities
+    ]
     fixed_position = document.get("fixed_geometry")
     source_model = document.get("source_model")
     provenance = document.get("provenance")
@@ -1310,6 +1348,7 @@ def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, An
             "fixed_position": fixed_position,
             "parameters": parameters,
             "profile_identities": identities,
+            "profile_scales": profile_scales,
         },
         "summary": {
             "classification": document["status"],
@@ -1327,62 +1366,8 @@ def _bi2se3_mosaic_artifact_projection(document: dict[str, Any]) -> dict[str, An
     }
 
 
-def _bi2se3_ordered_artifact_projection(
-    document: dict[str, Any],
-    *,
-    active_parameter_names: tuple[str, ...],
-    claim_boundary: str,
-) -> dict[str, Any]:
-    if (
-        document.get("schema_version") != "rasim-bi2se3-ordered-intensity-recovery-v4"
-        or document.get("accepted") is not True
-        or document.get("positions_frozen") is not True
-    ):
-        raise ValueError("ordered-intensity stage artifact has an unsupported scientific contract")
-    absolute = document.get("absolute")
-    fitted = absolute.get("fit") if isinstance(absolute, dict) else None
-    active_bounds = absolute.get("active_bounds") if isinstance(absolute, dict) else None
-    profiles = document.get("upstream_fit_eligible_profiles")
-    if (
-        not isinstance(fitted, dict)
-        or not isinstance(active_bounds, dict)
-        or not isinstance(profiles, list)
-        or not all(isinstance(record, dict) for record in profiles)
-    ):
-        raise ValueError("ordered-intensity stage artifact lacks its fitted structure state")
-    parameters = [float(fitted[name]) for name in active_parameter_names]
-    identities, m0_identities, _ = _profile_summary(profiles)
-    fixed_position = document.get("fixed_position")
-    fixed_mosaic = document.get("fixed_mosaic")
-    source_model = document.get("source_model")
-    provenance = document.get("provenance")
-    if not all(
-        isinstance(value, dict)
-        for value in (fixed_position, fixed_mosaic, source_model, provenance)
-    ):
-        raise ValueError("ordered-intensity stage artifact lacks its upstream handoff state")
-    return {
-        "state": {
-            "fixed_position": fixed_position,
-            "parameters": parameters,
-            "structure_representative": fitted,
-        },
-        "summary": {
-            "classification": "ACCEPTED_SYNTHETIC_SELECTED_COMPONENT_RECOVERY",
-            "claim_boundary": claim_boundary,
-            "parameters": parameters,
-            "objective": float(absolute["objective"]),
-            "rank": int(absolute["sensitivity_rank"]),
-            "profile_count": len(identities),
-            "m0_profile_count": len(m0_identities),
-            "active_bounds": [bool(active_bounds[name]) for name in active_parameter_names],
-            "profile_identities": identities,
-            "m0_profile_identities": m0_identities,
-        },
-        "fixed_mosaic": fixed_mosaic,
-        "source_model": source_model,
-        "provenance": provenance,
-    }
+_bi2se3_ordered_artifact_projection = _ORDERED_STAGE.project_bi2se3_ordered_artifact
+_validated_bi2se3_ordered_cached_artifact = _ORDERED_STAGE.validate_cached_bi2se3_ordered_artifact
 
 
 def _bi2se3_geometry(case: ReplayCase) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2197,8 +2182,20 @@ def _bi2se3_ordered_intensity(
     backend: str,
     output_directory: Path,
 ) -> dict[str, Any]:
+    if backend != "cuda":
+        raise ValueError(
+            "the accepted Bi2Se3 measured ordered-intensity fit is CUDA-qualified only"
+        )
+    from rasim_next.fitting import (
+        ordered_intensity_structure_model_revision,
+    )
+    from rasim_next.pipeline.configured_simulation import configured_rod_catalog_revision
+
     stage = case.stage_config["ordered_intensity"]
-    runner = _load_script_module("staged_fit_bi2se3_ordered", "recover_bi2se3_ordered_intensity.py")
+    runner = _load_script_module(
+        "staged_fit_bi2se3_ordered",
+        "recover_bi2se3_ordered_intensity.py",
+    )
     mosaic_artifact = Path(upstream["state"]["artifact"])
     if _sha256(mosaic_artifact) != upstream["state"]["artifact_sha256"]:
         raise RuntimeError("Bi2Se3 mosaic artifact changed before ordered fitting")
@@ -2206,38 +2203,139 @@ def _bi2se3_ordered_intensity(
     mosaic_projection = _bi2se3_mosaic_artifact_projection(mosaic_document)
     if mosaic_projection["state"] != {
         name: upstream["state"][name]
-        for name in ("fixed_position", "parameters", "profile_identities")
+        for name in ("fixed_position", "parameters", "profile_identities", "profile_scales")
     }:
         raise RuntimeError(
             "Bi2Se3 mosaic artifact changed its scientific state before ordered fitting"
         )
-    artifact = output_directory / "ordered_intensity_artifacts" / "bi2se3_ordered.json"
-    arguments = [
-        "--case",
-        str(case.input_paths[str(stage["case_role"])]),
-        "--source-sample-count",
-        str(case.source_state_count),
-        "--mosaic-result",
-        str(mosaic_artifact),
-        "--execution-backend",
-        backend,
-        "--output",
-        str(artifact),
-        "--json",
-    ]
-    with contextlib.redirect_stdout(io.StringIO()):
-        exit_code = runner.main(arguments)
-    if exit_code != 0:
-        raise RuntimeError("Bi2Se3 ordered-intensity replay failed its proof gate")
-    document = json.loads(artifact.read_text(encoding="utf-8"))
-    parameter_names = tuple(str(name) for name in stage["active_parameters"])
-    projection = _bi2se3_ordered_artifact_projection(
-        document,
-        active_parameter_names=parameter_names,
-        claim_boundary=str(stage["claim_boundary"]),
+
+    ordered_case_path = case.input_paths[str(stage["case_role"])]
+    ordered_case = tomllib.loads(ordered_case_path.read_text(encoding="utf-8"))
+    _strict_keys(
+        ordered_case,
+        {
+            "background_inheritance",
+            "mosaic_case",
+            "observation_model",
+            "profiles",
+            "response_validation",
+            "schema_version",
+        },
+        "Bi2Se3 measured ordered-intensity case",
     )
-    expected_fixed_position = upstream["state"]["fixed_position"]
-    if projection["state"]["fixed_position"] != expected_fixed_position:
+    if ordered_case["schema_version"] != "rasim-measured-ordered-intensity-fit-v1":
+        raise ValueError("unsupported Bi2Se3 measured ordered-intensity case")
+    profile_config = ordered_case["profiles"]
+    response_validation = ordered_case["response_validation"]
+    if not isinstance(profile_config, dict) or not isinstance(response_validation, dict):
+        raise ValueError("measured ordered-intensity profiles and validation must be tables")
+    _strict_keys(
+        profile_config,
+        {
+            "expected_catalog_revision",
+            "expected_m0_count",
+            "expected_nonzero_count",
+            "expected_total_count",
+            "phi_bin_count",
+            "phi_half_width_deg",
+            "response_phi_gauss_order",
+            "response_two_theta_gauss_order",
+            "supported_m0_integer_L_10deg",
+            "supported_m0_integer_L_15deg",
+            "supported_m0_integer_L_5deg",
+            "two_theta_half_width_deg",
+        },
+        "Bi2Se3 measured ordered-intensity profiles",
+    )
+    _strict_keys(
+        response_validation,
+        {"maximum_interpolation_relative_error"},
+        "Bi2Se3 measured ordered-intensity response validation",
+    )
+    interpolation_limit = float(response_validation["maximum_interpolation_relative_error"])
+    if not math.isfinite(interpolation_limit) or interpolation_limit <= 0.0:
+        raise ValueError("ordered-intensity interpolation tolerance must be positive and finite")
+
+    mosaic_case_path = case.input_paths["mosaic_case"]
+    mosaic_case = tomllib.loads(mosaic_case_path.read_text(encoding="utf-8"))
+    prepared = runner.prepare_measured_ordered_inputs(
+        mosaic_document,
+        mosaic_case_path=mosaic_case_path,
+        mosaic_case=mosaic_case,
+        profile_config=profile_config,
+        source_sample_count=case.source_state_count,
+    )
+    if prepared.source_revision != _source_revision(case):
+        raise RuntimeError("Bi2Se3 ordered fit changed its source realization")
+    series = prepared.series
+    if (
+        series[0].samples.source_revision != prepared.source_revision
+        or series[0].samples.source_seed != case.source_seed
+        or _sha256(series[0].config.material.cif_path) != prepared.cif_sha256
+    ):
+        raise RuntimeError("Bi2Se3 ordered fit changed its source or structure provenance")
+    measured_scales = _measured_profile_scales(mosaic_document)
+    baseline = prepared.baseline_parameters
+    expected_source_model = {
+        "reduction": "one_incoherent_weighted_detector_function_per_incidence.v1",
+        "sample_count": case.source_state_count,
+        "source_revision": series[0].samples.source_revision,
+        "source_sampling_model_id": series[0].samples.source_sampling_model_id,
+        "source_rng_model_id": series[0].samples.source_rng_model_id,
+        "source_seed": series[0].samples.source_seed,
+        "spatial_sigma_m": list(series[0].config.source.spatial_sigma_m),
+        "divergence_sigma_rad": list(series[0].config.source.divergence_sigma_rad),
+        "wavelength_sigma_A": series[0].config.source.wavelength_sigma_A,
+    }
+    artifact = output_directory / "ordered_intensity_artifacts" / "bi2se3_ordered.json"
+    expected_provenance = {
+        "ordered_case_sha256": _sha256(ordered_case_path),
+        "mosaic_case_sha256": _sha256(mosaic_case_path),
+        "upstream_mosaic_result_sha256": upstream["state"]["artifact_sha256"],
+        "measured_profile_policy_sha256": _sha256(case.input_paths["measured_profile_policy"]),
+        "cif_sha256": prepared.cif_sha256,
+        "rod_catalog_revision": configured_rod_catalog_revision(series[0]),
+        "structure_model_revision": ordered_intensity_structure_model_revision(series[0].strength),
+        "osc_sha256": {
+            role: _sha256(case.input_paths[role]) for role in ("osc_5deg", "osc_10deg", "osc_15deg")
+        },
+    }
+    expected_profile_scales = [
+        {"identity": identity, "nuisance_peak_scale": measured_scales[identity]}
+        for identity in sorted(measured_scales)
+    ]
+
+    if artifact.is_file():
+        document = json.loads(artifact.read_text(encoding="utf-8"))
+        _validated_bi2se3_ordered_cached_artifact(
+            document,
+            case=case,
+            expected_provenance=expected_provenance,
+            expected_fixed_mosaic=prepared.mosaic_parameters,
+            expected_fixed_position=prepared.fixed_position_record,
+            expected_source_model=expected_source_model,
+            expected_profile_scales=expected_profile_scales,
+            expected_bi_fractional_z=baseline.bi_fractional_z,
+            expected_se2_fractional_z=baseline.se2_fractional_z,
+        )
+    else:
+        document = _ORDERED_STAGE.fit_prepared_bi2se3_measured_ordered_document(
+            prepared,
+            mosaic_document,
+            backend=backend,
+            stage=stage,
+            source_state_count=case.source_state_count,
+            interpolation_limit=interpolation_limit,
+            source_model=expected_source_model,
+            observation_model=ordered_case["observation_model"],
+            background_inheritance=ordered_case["background_inheritance"],
+            provenance=expected_provenance,
+        )
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(artifact, document)
+
+    projection = _bi2se3_ordered_artifact_projection(document, case=case)
+    if projection["state"]["fixed_position"] != upstream["state"]["fixed_position"]:
         raise RuntimeError("Bi2Se3 ordered artifact changed its upstream position state")
     source_model = projection["source_model"]
     if (
@@ -2251,8 +2349,7 @@ def _bi2se3_ordered_intensity(
     mosaic_summary = upstream["scientific_summary"]["mosaic"]
     if (
         projection["summary"]["profile_identities"] != mosaic_summary["profile_identities"]
-        or projection["summary"]["m0_profile_identities"]
-        != mosaic_summary["m0_profile_identities"]
+        or projection["summary"]["m0_profile_identities"] != mosaic_summary["m0_profile_identities"]
     ):
         raise RuntimeError("Bi2Se3 ordered artifact changed its upstream profile selection")
     expected_mosaic = dict(
@@ -2264,16 +2361,8 @@ def _bi2se3_ordered_intensity(
     )
     if projection["fixed_mosaic"] != expected_mosaic:
         raise RuntimeError("Bi2Se3 ordered artifact changed its upstream mosaic parameters")
-    provenance = projection["provenance"]
-    if (
-        provenance.get("ordered_case_sha256")
-        != _sha256(case.input_paths[str(stage["case_role"])])
-        or provenance.get("mosaic_case_sha256") != _sha256(case.input_paths["mosaic_case"])
-        or provenance.get("upstream_mosaic_result_sha256")
-        != upstream["state"]["artifact_sha256"]
-    ):
+    if projection["provenance"] != expected_provenance:
         raise RuntimeError("Bi2Se3 ordered artifact changed its upstream provenance")
-    summary = projection["summary"]
     state = {
         "artifact": str(artifact),
         "artifact_sha256": _sha256(artifact),
@@ -2284,7 +2373,7 @@ def _bi2se3_ordered_intensity(
         case=case,
         upstream=upstream,
         backend=backend,
-        summary=summary,
+        summary=projection["summary"],
         state=state,
     )
 
@@ -2303,7 +2392,6 @@ def _bi2te3_ordered_intensity(
     from rasim_next.fitting import (
         OrderedIntensityPeakCenterObservations,
         compile_source_averaged_ordered_intensity_response,
-        evaluate_source_averaged_ordered_intensity_point_signal,
         fit_ordered_intensity_series,
     )
     from rasim_next.io.osc import read_osc
@@ -2462,26 +2550,13 @@ def _bi2te3_ordered_intensity(
         raise RuntimeError("relative fit changed the frozen Bi occupancy gauge")
     if result.occupancy_ratios is None:
         raise RuntimeError("relative fit did not report occupancy ratios")
-    oracle_error = 0.0
-    for detector, frame, definitions, cached in zip(
-        detectors,
-        frames,
-        definitions_by_dataset,
-        result.predicted_signal_density_A2_per_rad2,
-        strict=True,
-    ):
-        fresh = evaluate_source_averaged_ordered_intensity_point_signal(
-            detector,
-            angle_frame=frame,
-            definitions=definitions,
-            structure_parameters=result.structure_representative,
-            execution_backend=backend,
-        )
-        scale = max(float(np.max(fresh)), np.finfo(np.float64).tiny)
-        oracle_error = max(
-            oracle_error,
-            float(np.max(np.abs(cached - fresh) / np.maximum(fresh, 1.0e-12 * scale))),
-        )
+    oracle_error = _ORDERED_STAGE.cached_vs_fresh_ordered_response_max_relative_error(
+        tuple(detectors),
+        tuple(zip(frames, definitions_by_dataset, strict=True)),
+        tuple(result.predicted_signal_density_A2_per_rad2),
+        result.structure_representative,
+        backend=backend,
+    )
     records = [
         {
             "dataset_id": definition.identity.dataset_id,
@@ -2807,6 +2882,7 @@ def _validate_stage_envelope(
                 "fixed_position",
                 "parameters",
                 "profile_identities",
+                "profile_scales",
             },
             "Bi2Se3 mosaic state",
         )
@@ -2818,6 +2894,7 @@ def _validate_stage_envelope(
                 "artifact_sha256",
                 "fixed_position",
                 "parameters",
+                "profile_scales",
                 "structure_representative",
             },
             "Bi2Se3 ordered-intensity state",
@@ -2847,20 +2924,26 @@ def _validate_stage_envelope(
                 projection = _bi2se3_mosaic_artifact_projection(artifact_document)
                 projected_state = {
                     name: state[name]
-                    for name in ("fixed_position", "parameters", "profile_identities")
+                    for name in (
+                        "fixed_position",
+                        "parameters",
+                        "profile_identities",
+                        "profile_scales",
+                    )
                 }
             else:
-                stage_config = case.stage_config["ordered_intensity"]
                 projection = _bi2se3_ordered_artifact_projection(
                     artifact_document,
-                    active_parameter_names=tuple(
-                        str(name) for name in stage_config["active_parameters"]
-                    ),
-                    claim_boundary=str(stage_config["claim_boundary"]),
+                    case=case,
                 )
                 projected_state = {
                     name: state[name]
-                    for name in ("fixed_position", "parameters", "structure_representative")
+                    for name in (
+                        "fixed_position",
+                        "parameters",
+                        "profile_scales",
+                        "structure_representative",
+                    )
                 }
             if projection["state"] != projected_state:
                 raise ValueError(f"{stage} stage external artifact changed its scientific state")
@@ -2884,11 +2967,10 @@ def _validate_stage_envelope(
                     case.input_paths[str(stage_config["case_role"])]
                 )
             else:
-                provenance_matches = (
-                    provenance.get("ordered_case_sha256")
-                    == _sha256(case.input_paths[str(stage_config["case_role"])])
-                    and provenance.get("mosaic_case_sha256")
-                    == _sha256(case.input_paths["mosaic_case"])
+                provenance_matches = provenance.get("ordered_case_sha256") == _sha256(
+                    case.input_paths[str(stage_config["case_role"])]
+                ) and provenance.get("mosaic_case_sha256") == _sha256(
+                    case.input_paths["mosaic_case"]
                 )
             if not provenance_matches:
                 raise ValueError(f"{stage} stage external artifact changed its case provenance")
@@ -2977,11 +3059,9 @@ def _validate_stage_result(
         artifact_document = json.loads(
             Path(result["state"]["artifact"]).read_text(encoding="utf-8")
         )
-        stage_config = case.stage_config["ordered_intensity"]
         projection = _bi2se3_ordered_artifact_projection(
             artifact_document,
-            active_parameter_names=tuple(str(name) for name in stage_config["active_parameters"]),
-            claim_boundary=str(stage_config["claim_boundary"]),
+            case=case,
         )
         expected_mosaic = dict(
             zip(
@@ -2994,12 +3074,15 @@ def _validate_stage_result(
         if projection["fixed_mosaic"] != expected_mosaic:
             raise ValueError("Bi2Se3 ordered-intensity artifact changed its mosaic handoff")
         if (
-            projection["summary"]["profile_identities"]
-            != upstream_summary["profile_identities"]
+            projection["summary"]["profile_identities"] != upstream_summary["profile_identities"]
             or projection["summary"]["m0_profile_identities"]
             != upstream_summary["m0_profile_identities"]
         ):
             raise ValueError("Bi2Se3 ordered-intensity artifact changed its profile handoff")
+        if projection["state"]["profile_scales"] != upstream["state"].get("profile_scales"):
+            raise ValueError(
+                "Bi2Se3 ordered-intensity artifact changed its profile amplitude handoff"
+            )
         if (
             projection["provenance"].get("upstream_mosaic_result_sha256")
             != upstream["state"]["artifact_sha256"]
