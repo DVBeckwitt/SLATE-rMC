@@ -39,9 +39,13 @@ regular roots, a typed tangent, or no root. It verifies
 |Q + ki_film| = |ki_film|
 ```
 
-within the declared residual tolerance. The intrinsic coating applies the coarea factor once and
-then tests exit and active-panel visibility. No sphere mesh, texture, triangulation, or global sphere
-sampling is created.
+within the declared residual tolerance. The forward latent coating applies the coarea factor once;
+the later detector route tests exit and active-panel visibility. The contract-v12 intrinsic
+outgoing-direction result instead inverse-pushes the latent density directly to the complete
+internal-film sphere with surface Jacobian `|ki_film|^2 / |w*x|`. Its coarea factor has already
+canceled in that change of variables, and it applies no exit, `Qz`, or detector mask. No sphere
+mesh, texture, triangulation, or global sphere raster is retained as the scientific model; a
+publication renderer may point-sample the callable result as an explicitly ephemeral view.
 
 `m=0` is geometrically well defined, but its zero-transverse-width direct root at `Q=0` is singular
 and excluded. A top-exit detector can see a separate nonzero `m=0` solution. The all-roots runtime

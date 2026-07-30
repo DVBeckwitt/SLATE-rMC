@@ -15,7 +15,8 @@ detector geometry.
 - CIF parsing, reciprocal basis, complete physical rod catalogs, and finite ordered/stacked
   intensities.
 - Wrapped Gaussian/Lorentzian mosaic probability in continuous latent coordinates.
-- Analytic infinite-rod Ewald roots and detector-visible intrinsic coating diagnostics.
+- Analytic infinite-rod Ewald roots, detector-visible latent coating diagnostics, and an exact
+  almost-everywhere full-sphere intrinsic density in internal-film `A2/sr`.
 - Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
 - Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
   normalization densities before division.
@@ -60,6 +61,10 @@ detector-efficiency/solid-angle correction.
 
 The optional reciprocal-space, Ewald-coating, and detector PNGs are display artifacts evaluated from
 these functions. They are not stored model state.
+
+`intrinsic_ewald_direction_density_A2_per_sr.v1` is a declared detector-independent diagnostic
+callable over internal-film outgoing directions. It is not a replacement authoritative detector
+observable, and any sphere mesh or raster is only a display sample of that function.
 
 ## Deferred work
 

@@ -14,6 +14,8 @@ phases but do not override these owners.
 | finite-2H strength | per-rod `S_r(L;K)` | `MosaicBraggSpace` | raw nonnegative strength; no source, mosaic, optics, or detector factor |
 | `MosaicBraggSpace` | latent `Q` and Bragg density | Ewald coating and detector inverse map | folded-alpha/full-beta law; rod intensities summed only after per-rod evaluation |
 | analytic Ewald solver | roots and coarea | intrinsic coating | stable line/sphere equation; explicit regular/tangent/no-root status |
+| `DetectorEwaldMeasure` intrinsic direction evaluator | `EwaldDirectionIntensity` | proof and publication sampling | complete internal-film outgoing sphere in `A2/sr`; all regular inverse preimages; no exit, `Qz`, panel, optical, source, or detector-solid-angle factor; non-specular `m=0` excluded |
+| `DetectorEwaldMeasure` detector-visible direction evaluator | `DetectorVisibleEwaldDirectionIntensity` | active-panel Ewald publication patch | configured detector coordinates select top-exit directions; intrinsic `A2/sr` density retains no optical/source/detector Jacobian; all regular inverse preimages include nonzero `m=0`; positive Q gap excludes direct `Q=0` |
 | detector geometry | arbitrary coordinate rays | detector measure | detector point → front-facing air ray → refracted film `kf` → `Q`; active panel only |
 | `DetectorEwaldMeasure` | one-state coordinate density | source average / pixel integration | all inverse branches, optics, source and phase factors exactly once |
 | source-averaged measure | summed coordinate density | pixel integrator | independent states and wavelengths add as intensities before one box integral |

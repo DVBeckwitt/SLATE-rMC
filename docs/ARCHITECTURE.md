@@ -19,9 +19,11 @@ strict YAML + CIF
   -> optional terminal alternative: weighted forward samples -> exact native-pixel owners
 ```
 
-No physical Ewald-sphere object is created. A detector coordinate determines an outgoing air ray;
-exit refraction determines its film wavevector; the elastic relation and inverse latent map recover
-all contributing rod/orientation branches. Only the active detector panel is evaluated.
+No retained Ewald-sphere mesh is physical model state. The intrinsic callable can evaluate the
+exact almost-everywhere density at arbitrary internal-film outgoing directions over the complete
+sphere. Independently, a detector coordinate determines an outgoing air ray; exit refraction
+determines its film wavevector; the elastic relation and inverse latent map recover all
+contributing rod/orientation branches on the active detector panel.
 
 ## Package ownership
 
@@ -47,8 +49,8 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 - `reciprocal`: reciprocal basis and complete physical rod catalogs.
 - `sampling`: deterministic source phase-space sampling only.
 - `pipeline/bragg_space.py`: binds CIF-derived finite-2H strength to rods and mosaic geometry.
-- `pipeline/continuous_detector.py`: one-incident-state detector pullback and native-pixel
-  integration.
+- `pipeline/continuous_detector.py`: shared inverse latent pushforward to intrinsic internal-film
+  solid angle or one-incident-state detector coordinates, plus native-pixel integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
   fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and the optional
   streaming CPU Monte Carlo pixel-mass estimator.
@@ -86,8 +88,10 @@ all contributing rod/orientation branches. Only the active detector panel is eva
 
 1. `MosaicBraggSpace` owns the latent reciprocal measure for every physical rod.
 2. `ContinuousEwaldCoating` restricts one rod to one analytic Ewald root for intrinsic diagnostics.
-3. `DetectorEwaldMeasure` pulls all inverse branches onto arbitrary detector coordinates and
-   integrates one incident state's pixels.
+3. `DetectorEwaldMeasure` uses one inverse-preimage implementation to evaluate the full
+   non-specular intrinsic direction density, the configured detector-visible intrinsic direction
+   patch including regular nonzero `m=0`, or the raw pullback onto arbitrary detector coordinates,
+   and integrates one incident state's pixels.
 4. `SourceAveragedDetectorEwaldMeasure` sums independent incident-state intensities before any
    selected-center comparison, display sample, or requested detector integration. Its optional
    stochastic terminal samples the same latent/source physics and streams weighted roots directly

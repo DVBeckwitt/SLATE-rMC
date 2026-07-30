@@ -224,3 +224,18 @@ pool, event table, hit table, or point-deposition subsystem. Its distinct measur
 importance weights can have an infinite second moment, so replicate spread is diagnostic rather
 than a guaranteed Gaussian error bar. Independent refined latent integration remains the proof
 authority.
+
+## D036: Direct intrinsic Ewald solid-angle density
+
+Contract API v12 replaces renderer-local orientation deposition with an exact almost-everywhere
+inverse pushforward evaluated at arbitrary internal-film outgoing directions. For each
+non-specular physical rod and every regular inverse preimage, the density is
+`p * population * strength * k_film^2 / |J_latent|` in `A2/sr`. The Ewald coarea factor cancels
+against the latent-root surface Jacobian and is not applied again. The detector and sphere routes
+share the same inverse-preimage implementation; detector optics, source factors, visibility, and
+the detector-coordinate Jacobian remain detector-only.
+
+The callable field is the model. Equal-solid-angle center samples, rendered meshes, and textures
+are display artifacts and are never retained numerical state. Full-sphere visualization applies no
+`Qz`, exit, or panel mask, excludes the current undefined continuous `m=0` coating, and marks exact
+fold caustics rather than blurring them.

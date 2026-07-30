@@ -54,6 +54,67 @@ at `Q=0` is excluded. For the top-exit detector geometry, the retained nonzero `
 separated from that root by the proven gap `|Q| > -ki_z > 0`; the all-roots detector path includes
 only this regular detector-visible support and reports the gap.
 
+## Intrinsic Ewald solid-angle measure
+
+For internal-film incident magnitude `k = |ki_film_sample|`, an outgoing unit direction
+`n_film_sample` defines
+
+```text
+kf_film_sample = k * n_film_sample
+Q_sample = kf_film_sample - ki_film_sample.
+```
+
+For every non-specular physical rod, all regular inverse latent preimages of this `Q` are summed as
+intensities. The exact almost-everywhere density is
+
+```text
+rho_Omega(n_film_sample) = sum_(rod,preimage) [
+    p(alpha,beta) * population_r * S_r(L) * k^2 / |J_latent(alpha,beta,u)|
+].
+```
+
+For the tied-rotation map, `|J_latent| = |w*x|`. The mosaic probability is already defined with
+respect to folded-alpha/full-beta `dalpha dbeta`, so no `sin(alpha)` factor is introduced. The
+factor `k^2` converts internal Ewald-sphere area to internal-film outgoing solid angle,
+`dA_Q = k^2 dOmega_film`. The Ewald coarea factor cancels against the latent-root surface Jacobian
+and is not multiplied again.
+
+The result measure is `intrinsic_ewald_direction_density_A2_per_sr.v1`. Its steradian is the
+internal-film outgoing-`kf` direction measure, not external-air solid angle and not detector pixel
+solid angle. Integrating this density over `dOmega_film` gives intensity in `A2`; a sampled display
+texture is not itself an integrated observable.
+
+The full-sphere selection contains every direction on the `Q` sphere centered at `-ki_film_sample`
+with radius `k` and applies no sample-frame `Qz`-sign mask. Both `Qz` signs occur in the validated
+grazing-incidence Bi2Se3 case; this is not a universal normal-incidence claim. It applies no
+exit-refraction, front-face, active-panel, or detector-visibility mask. The present intrinsic
+measure excludes the entire `m=0` rod; detector-visible regular nonzero `m=0` support remains a
+separately declared detector measure. At `|J_latent|=0`, an integrable fold is marked as a caustic.
+A strictly positive numerator carries `+inf`; a zero numerator uses the zero Radon--Nikodym
+representative at that measure-zero point. Display clipping, blur, and interpolation are not
+physical regularization.
+
+### Detector-visible intrinsic Ewald direction measure
+
+The separately named
+`detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1` uses native coordinates on one
+declared active detector panel to parameterize only the corresponding internal-film direction
+patch. For canonical top-exit/front-face/panel validity `V_D(n)`, its density is
+
+```text
+rho_visible(n) = V_D(n) * sum_(rod,regular preimage) [
+    p(alpha,beta) * population_r * S_r(L) * k^2 / |J_latent(alpha,beta,u)|
+].
+```
+
+This remains an intrinsic `A2/sr` measure: detector visibility is only a selection mask. No source,
+optical, attenuation, detector-coordinate Jacobian, detector solid angle, or Ewald coarea factor is
+introduced. Unlike the complete-sphere diagnostic, it includes the regular nonzero `m=0`
+preimages. With incident `ki_z < 0` and visible top-exit `kf_z > 0`, every selected point obeys
+`|Q| >= Qz > -ki_z > 0`; the collapsed direct `Q=0` root therefore cannot enter. The returned gap
+is part of the result contract. The direct/specular contribution remains owned by the separately
+named Parratt, kinematic, and composite specular models.
+
 ## Detector-coordinate measure
 
 A floating-point detector coordinate `(c,r)` determines one outgoing air ray. Exit refraction is
@@ -84,6 +145,19 @@ This direct change of variables is equivalent to the intrinsic Ewald coarea rest
 by the surface-to-detector map; it does not apply the coarea factor twice. The result is
 `raw_detector_coordinate_density_A2_per_px2.v1` and is callable at arbitrary detector coordinates.
 All inverse branches and rods sum as intensities.
+
+On the common non-specular subset, the same identity can be written
+
+```text
+d(c,r) = rho_Omega(n_film(c,r))
+         * J_Qsurface(c,r) / k^2
+         * optical_weight(c,r) * source_phase_weight.
+```
+
+Exit refraction determines `n_film` from the external detector ray. The detector result may also
+contain its separately supported regular nonzero `m=0` contribution. Consequently detector
+textures are independently evaluated pullbacks, not geometric warps or projections of displayed
+sphere colors.
 
 The zero-transverse-width rod model has integrable caustic curves. The coordinate density is an
 almost-everywhere representative: exact positive caustic points are marked and may be infinite,

@@ -6,12 +6,18 @@ from pathlib import Path
 
 import numpy as np
 
-SCRIPT = Path(__file__).parents[1] / "examples" / "ewald_sphere_viewer.py"
+SCRIPT = Path(__file__).parents[1] / "scripts" / "figures" / "ewald_sphere_viewer.py"
 SPEC = importlib.util.spec_from_file_location("ewald_sphere_viewer", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 VIEWER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = VIEWER
 SPEC.loader.exec_module(VIEWER)
+
+
+def test_embedded_intensity_texture_mosaic_settings_are_declared() -> None:
+    assert VIEWER.GAUSSIAN_SIGMA_DEG == 2.0
+    assert VIEWER.LORENTZIAN_HWHM_DEG == 0.2
+    assert VIEWER.LORENTZIAN_PROBABILITY == 0.1
 
 
 def test_ki_frame_is_right_handed_and_aligned_with_incident_wavevector() -> None:

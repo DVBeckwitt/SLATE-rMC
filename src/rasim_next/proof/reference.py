@@ -315,12 +315,14 @@ def _verify_examples(root: Path) -> list[dict[str, Any]]:
 
 def _verify_gzip_osc(root: Path, entries: list[dict[str, Any]], pack: dict[str, Any]) -> int:
     osc_entries = [item for item in entries if str(item["path"]).endswith(".osc.gz")]
-    _require(len(osc_entries) == 5, "expected five compressed OSC inputs")
+    expected = {item["name"]: item for item in pack["embedded"]["osc_files"]}
+    declared_names = {Path(str(item["path"])).stem for item in osc_entries}
+    _require(len(declared_names) == len(osc_entries), "duplicate compressed OSC input name")
+    _require(set(expected) <= declared_names, "reference compressed OSC input missing")
     arrays = pack["arrays"]
     positions = arrays["osc_selected_positions_row_col"]
     reference_position_count = positions.shape[0]
     orientation_probe_detector_rc = np.asarray(((1473, 1455), (1473, 1544)), dtype=np.int32)
-    expected = {item["name"]: item for item in pack["embedded"]["osc_files"]}
     observed: dict[str, dict[str, Any]] = {}
     for item in osc_entries:
         path = _path(root, item["path"])

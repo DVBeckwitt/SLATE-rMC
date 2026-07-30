@@ -367,6 +367,229 @@ class DetectorCoordinateIntensity:
 
 
 @dataclass(frozen=True, slots=True)
+class EwaldDirectionIntensity:
+    """A.e. intrinsic coating density on internal-film outgoing directions.
+
+    The zero-width rod model has integrable caustic curves. Exact positive
+    caustic directions are marked and carry ``+inf``; finite solid-angle
+    integrals require a separate quadrature.
+    """
+
+    outgoing_direction_sample: FloatArray
+    q_sample_Ainv: FloatArray
+    rods: tuple[Rod, ...]
+    branch: int | None
+    per_rod_density_A2_per_sr: FloatArray
+    density_A2_per_sr: FloatArray
+    per_rod_inverse_branch_count: NDArray[np.int64]
+    caustic: NDArray[np.bool_]
+    measure_id: str = "intrinsic_ewald_direction_density_A2_per_sr.v1"
+
+    def __post_init__(self) -> None:
+        direction = np.array(
+            self.outgoing_direction_sample,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        if direction.ndim < 1 or direction.shape[-1] != 3 or not np.all(np.isfinite(direction)):
+            raise ValueError(
+                "outgoing directions must be finite vectors with final dimension three"
+            )
+        shape = direction.shape[:-1]
+        norm = np.linalg.norm(direction, axis=-1)
+        if not np.allclose(
+            norm,
+            1.0,
+            rtol=0.0,
+            atol=4096.0 * np.finfo(np.float64).eps,
+        ):
+            raise ValueError("outgoing directions must be unit vectors")
+        q_sample = _float_array(self.q_sample_Ainv, (*shape, 3), "q_sample_Ainv")
+        rods = tuple(self.rods)
+        if (
+            not rods
+            or not all(isinstance(rod, Rod) and rod.family_m != 0 for rod in rods)
+            or len({(rod.h, rod.k) for rod in rods}) != len(rods)
+        ):
+            raise ValueError("rods must contain distinct non-specular physical rods")
+        if self.branch not in {None, 1, 2}:
+            raise ValueError("branch must be None, 1, or 2")
+        per_rod = np.array(
+            self.per_rod_density_A2_per_sr,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        if (
+            per_rod.shape != (*shape, len(rods))
+            or np.any(np.isnan(per_rod))
+            or np.any(per_rod < 0.0)
+        ):
+            raise ValueError("per-rod direction density has invalid shape or values")
+        total = np.array(self.density_A2_per_sr, dtype=np.float64, copy=True, order="C")
+        if total.shape != shape or np.any(np.isnan(total)) or np.any(total < 0.0):
+            raise ValueError("direction density has invalid shape or values")
+        expected = np.sum(per_rod, axis=-1, dtype=np.float64)
+        finite = np.isfinite(expected)
+        scale = np.maximum(np.abs(expected[finite]), np.finfo(np.float64).tiny)
+        if not np.all(
+            np.abs(total[finite] - expected[finite]) <= 1024.0 * np.finfo(np.float64).eps * scale
+        ) or not np.array_equal(np.isinf(total), np.isinf(expected)):
+            raise ValueError("direction density must equal the physical rod sum")
+        counts = np.array(
+            self.per_rod_inverse_branch_count,
+            dtype=np.int64,
+            copy=True,
+            order="C",
+        )
+        caustic = np.array(self.caustic, dtype=np.bool_, copy=True, order="C")
+        if counts.shape != (*shape, len(rods)) or np.any(counts < 0):
+            raise ValueError("inverse branch counts must align with directions and rods")
+        if caustic.shape != (*shape, len(rods)):
+            raise ValueError("caustic flags must align with directions and rods")
+        if np.any(np.isinf(per_rod) & ~caustic):
+            raise ValueError("only declared caustics may carry infinite direction density")
+        if self.measure_id != "intrinsic_ewald_direction_density_A2_per_sr.v1":
+            raise ValueError("unsupported intrinsic Ewald direction measure")
+        for value in (direction, per_rod, total, counts, caustic):
+            value.setflags(write=False)
+        object.__setattr__(self, "outgoing_direction_sample", direction)
+        object.__setattr__(self, "q_sample_Ainv", q_sample)
+        object.__setattr__(self, "rods", rods)
+        object.__setattr__(self, "per_rod_density_A2_per_sr", per_rod)
+        object.__setattr__(self, "density_A2_per_sr", total)
+        object.__setattr__(self, "per_rod_inverse_branch_count", counts)
+        object.__setattr__(self, "caustic", caustic)
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorVisibleEwaldDirectionIntensity:
+    """Intrinsic Ewald-direction density restricted to one active detector panel.
+
+    Detector coordinates parameterize the visible internal-film sphere patch.
+    The result contains all regular inverse mosaic preimages, including the
+    nonzero ``m=0`` support. The collapsed direct ``Q=0`` root is absent.
+    """
+
+    geometry: DetectorCoordinateGeometry
+    outgoing_direction_sample: FloatArray
+    rods: tuple[Rod, ...]
+    per_rod_density_A2_per_sr: FloatArray
+    density_A2_per_sr: FloatArray
+    per_rod_inverse_branch_count: NDArray[np.int64]
+    caustic: NDArray[np.bool_]
+    detector_visible_m0_q_gap_Ainv: float | None = None
+    measure_id: str = "detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.geometry, DetectorCoordinateGeometry):
+            raise TypeError("geometry must be DetectorCoordinateGeometry")
+        shape = self.geometry.column_px.shape
+        direction = np.array(
+            self.outgoing_direction_sample,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        if direction.shape != (*shape, 3) or not np.all(np.isfinite(direction)):
+            raise ValueError("outgoing directions must align with detector coordinates")
+        if np.any(self.geometry.valid):
+            norm = np.linalg.norm(direction[self.geometry.valid], axis=-1)
+            if not np.allclose(
+                norm,
+                1.0,
+                rtol=0.0,
+                atol=4096.0 * np.finfo(np.float64).eps,
+            ):
+                raise ValueError("detector-visible outgoing directions must be unit vectors")
+        if np.any(direction[~self.geometry.valid] != 0.0):
+            raise ValueError("invalid detector coordinates must use zero outgoing directions")
+
+        rods = tuple(self.rods)
+        if (
+            not rods
+            or not all(isinstance(rod, Rod) for rod in rods)
+            or len({(rod.h, rod.k) for rod in rods}) != len(rods)
+        ):
+            raise ValueError("rods must contain distinct physical rods")
+        per_rod = np.array(
+            self.per_rod_density_A2_per_sr,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        total = np.array(self.density_A2_per_sr, dtype=np.float64, copy=True, order="C")
+        if (
+            per_rod.shape != (*shape, len(rods))
+            or total.shape != shape
+            or np.any(np.isnan(per_rod))
+            or np.any(np.isnan(total))
+            or np.any(per_rod < 0.0)
+            or np.any(total < 0.0)
+        ):
+            raise ValueError("detector-visible direction density has invalid shape or values")
+        expected = np.sum(per_rod, axis=-1, dtype=np.float64)
+        finite = np.isfinite(expected)
+        scale = np.maximum(np.abs(expected[finite]), np.finfo(np.float64).tiny)
+        if not np.all(
+            np.abs(total[finite] - expected[finite]) <= 1024.0 * np.finfo(np.float64).eps * scale
+        ) or not np.array_equal(np.isinf(total), np.isinf(expected)):
+            raise ValueError("direction density must equal the physical rod sum")
+        if np.any((~self.geometry.valid)[..., None] & (per_rod != 0.0)):
+            raise ValueError("invalid detector coordinates cannot carry direction density")
+
+        counts = np.array(
+            self.per_rod_inverse_branch_count,
+            dtype=np.int64,
+            copy=True,
+            order="C",
+        )
+        caustic = np.array(self.caustic, dtype=np.bool_, copy=True, order="C")
+        if counts.shape != (*shape, len(rods)) or np.any(counts < 0):
+            raise ValueError("inverse branch counts must align with detector coordinates and rods")
+        if caustic.shape != (*shape, len(rods)):
+            raise ValueError("caustic flags must align with detector coordinates and rods")
+        if np.any(np.isinf(per_rod) & ~caustic):
+            raise ValueError("only declared caustics may carry infinite direction density")
+
+        has_m0 = any(rod.family_m == 0 for rod in rods)
+        gap = self.detector_visible_m0_q_gap_Ainv
+        if has_m0:
+            if gap is None or not isfinite(float(gap)) or float(gap) <= 0.0:
+                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            gap = float(gap)
+            visible_q_norm = np.linalg.norm(
+                self.geometry.q_sample_Ainv[self.geometry.valid],
+                axis=-1,
+            )
+            if np.any(visible_q_norm <= gap):
+                raise ValueError("detector-visible m=0 violated its reciprocal support gap")
+        elif gap is not None:
+            raise ValueError("an m=0 reciprocal support gap requires an m=0 rod")
+        if self.measure_id != ("detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1"):
+            raise ValueError("unsupported detector-visible Ewald direction measure")
+
+        for value in (direction, per_rod, total, counts, caustic):
+            value.setflags(write=False)
+        object.__setattr__(self, "outgoing_direction_sample", direction)
+        object.__setattr__(self, "rods", rods)
+        object.__setattr__(self, "per_rod_density_A2_per_sr", per_rod)
+        object.__setattr__(self, "density_A2_per_sr", total)
+        object.__setattr__(self, "per_rod_inverse_branch_count", counts)
+        object.__setattr__(self, "caustic", caustic)
+        object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", gap)
+
+    @property
+    def detector_visible(self) -> BoolArray:
+        return self.geometry.valid
+
+    @property
+    def detector_status(self) -> NDArray[np.str_]:
+        return self.geometry.status
+
+
+@dataclass(frozen=True, slots=True)
 class DetectorStructureResponse:
     """Sparse fixed-geometry coefficients multiplying candidate rod strengths."""
 
@@ -1547,8 +1770,12 @@ class DetectorEwaldMeasure:
     def _inverse_rod_density(
         self,
         *,
-        geometry: DetectorCoordinateGeometry,
+        q_sample_Ainv: FloatArray,
+        kf_sample_Ainv: FloatArray,
+        surface_jacobian_Ainv2_per_output: FloatArray,
+        coordinate_valid: BoolArray,
         optical_weight: FloatArray,
+        source_phase_weight: float,
         rod: Rod,
         branch: int,
         response_blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]]
@@ -1559,16 +1786,16 @@ class DetectorEwaldMeasure:
             raise ValueError("branch must be 0, 1, or 2")
         if (response_blocks is None) != (rod_index is None):
             raise ValueError("response_blocks and rod_index must be supplied together")
-        shape = geometry.column_px.shape
+        shape = q_sample_Ainv.shape[:-1]
         density = np.zeros(shape, dtype=np.float64)
         inverse_count = np.zeros(shape, dtype=np.int64)
         caustic = np.zeros(shape, dtype=np.bool_)
-        valid_rows = np.flatnonzero(geometry.valid.reshape(-1))
+        valid_rows = np.flatnonzero(coordinate_valid.reshape(-1))
         if not valid_rows.size:
             return density, inverse_count, caustic
 
-        q_sample = geometry.q_sample_Ainv.reshape(-1, 3)[valid_rows]
-        kf_sample = geometry.kf_film_sample_Ainv.reshape(-1, 3)[valid_rows]
+        q_sample = q_sample_Ainv.reshape(-1, 3)[valid_rows]
+        kf_sample = kf_sample_Ainv.reshape(-1, 3)[valid_rows]
         q_crystal = q_sample @ self._crystal_to_sample
         q_local = q_crystal @ self._crystal_from_local
         basis = self._coating.bragg_space.config.reciprocal_basis_Ainv
@@ -1603,7 +1830,7 @@ class DetectorEwaldMeasure:
         flat_count = inverse_count.reshape(-1)
         flat_caustic = caustic.reshape(-1)
         infinite_density = np.zeros(flat_caustic.shape, dtype=np.bool_)
-        area_jacobian = geometry.q_surface_jacobian_Ainv2_per_px2.reshape(-1)[valid_rows]
+        area_jacobian = surface_jacobian_Ainv2_per_output.reshape(-1)[valid_rows]
         optical = optical_weight.reshape(-1)[valid_rows]
         sample_from_local = self._crystal_to_sample @ self._crystal_from_local
         reconstruction_tolerance = (
@@ -1668,11 +1895,7 @@ class DetectorEwaldMeasure:
                     ]
                     singular[singular_rows] = True
                     flat_caustic[valid_rows[singular]] = True
-                    if (
-                        response_blocks is None
-                        and self._source_phase_weight > 0.0
-                        and np.any(singular)
-                    ):
+                    if response_blocks is None and source_phase_weight > 0.0 and np.any(singular):
                         singular_latent = self._coating.bragg_space.evaluate_latent(
                             rod=rod,
                             alpha_rad=alpha[singular],
@@ -1703,7 +1926,7 @@ class DetectorEwaldMeasure:
                         * rod.population
                         * area_jacobian[regular]
                         * optical[regular]
-                        * self._source_phase_weight
+                        * source_phase_weight
                         / jacobian[regular]
                     )
                     response_blocks.append(
@@ -1727,7 +1950,7 @@ class DetectorEwaldMeasure:
                     * rod.population
                     * area_jacobian[regular]
                     * optical[regular]
-                    * self._source_phase_weight
+                    * source_phase_weight
                     / jacobian[regular]
                 )
                 contribution = fixed_density * latent.rod_strength_A2
@@ -1739,6 +1962,144 @@ class DetectorEwaldMeasure:
         inverse_count.setflags(write=False)
         caustic.setflags(write=False)
         return density, inverse_count, caustic
+
+    def evaluate_intrinsic_ewald_directions(
+        self,
+        outgoing_direction_sample: ArrayLike,
+        *,
+        rods: tuple[Rod, ...],
+        branch: int | None = None,
+    ) -> EwaldDirectionIntensity:
+        """Evaluate the intrinsic non-specular coating per internal-film solid angle.
+
+        ``outgoing_direction_sample`` is a unit vector (or array of unit vectors)
+        in the sample frame. ``branch=None`` sums both retained analytic roots;
+        branches ``1`` and ``2`` select the lower- and upper-``u`` roots.
+        Detector visibility, exit optics, source weights, and detector solid
+        angle are deliberately absent.
+        """
+
+        selected = self._validated_intensity_rods(rods)
+        if branch not in {None, 1, 2}:
+            raise ValueError("branch must be None, 1, or 2")
+        supplied = np.asarray(outgoing_direction_sample)
+        if np.iscomplexobj(supplied) and np.any(supplied.imag != 0.0):
+            raise ValueError("outgoing directions must be real")
+        direction = np.array(supplied.real, dtype=np.float64, copy=True, order="C")
+        if direction.ndim < 1 or direction.shape[-1] != 3 or not np.all(np.isfinite(direction)):
+            raise ValueError(
+                "outgoing directions must be finite vectors with final dimension three"
+            )
+        norm = np.linalg.norm(direction, axis=-1)
+        if not np.allclose(
+            norm,
+            1.0,
+            rtol=0.0,
+            atol=4096.0 * np.finfo(np.float64).eps,
+        ):
+            raise ValueError("outgoing directions must be unit vectors")
+        direction /= norm[..., None]
+        shape = direction.shape[:-1]
+        k_magnitude_Ainv = float(np.linalg.norm(self._coating.ki_sample_Ainv))
+        kf_sample_Ainv = k_magnitude_Ainv * direction
+        q_sample_Ainv = kf_sample_Ainv - self._coating.ki_sample_Ainv
+        surface_jacobian = np.full(shape, k_magnitude_Ainv**2, dtype=np.float64)
+        valid = np.ones(shape, dtype=np.bool_)
+        optical = np.ones(shape, dtype=np.float64)
+        per_rod = np.zeros((*shape, len(selected)), dtype=np.float64)
+        counts = np.zeros((*shape, len(selected)), dtype=np.int64)
+        caustic = np.zeros((*shape, len(selected)), dtype=np.bool_)
+        for rod_index, rod in enumerate(selected):
+            rod_density, rod_count, rod_caustic = self._inverse_rod_density(
+                q_sample_Ainv=q_sample_Ainv,
+                kf_sample_Ainv=kf_sample_Ainv,
+                surface_jacobian_Ainv2_per_output=surface_jacobian,
+                coordinate_valid=valid,
+                optical_weight=optical,
+                source_phase_weight=1.0,
+                rod=rod,
+                branch=0 if branch is None else branch,
+            )
+            per_rod[..., rod_index] = rod_density
+            counts[..., rod_index] = rod_count
+            caustic[..., rod_index] = rod_caustic
+        return EwaldDirectionIntensity(
+            outgoing_direction_sample=direction,
+            q_sample_Ainv=q_sample_Ainv,
+            rods=selected,
+            branch=branch,
+            per_rod_density_A2_per_sr=per_rod,
+            density_A2_per_sr=np.sum(per_rod, axis=-1, dtype=np.float64),
+            per_rod_inverse_branch_count=counts,
+            caustic=caustic,
+        )
+
+    def evaluate_detector_visible_ewald_directions(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        rods: tuple[Rod, ...],
+    ) -> DetectorVisibleEwaldDirectionIntensity:
+        """Evaluate intrinsic solid-angle density on the active-panel sphere patch.
+
+        Native detector coordinates select internal-film outgoing directions
+        through the canonical exit-refraction round trip. Detector validity is
+        only a geometric support mask: source weights, optical factors,
+        attenuation, detector Jacobians, and detector solid angle are absent.
+        All regular inverse mosaic preimages are summed, including nonzero
+        ``m=0`` support. Top exit supplies a strict positive ``m=0`` Q gap, so
+        the collapsed direct root cannot enter this measure.
+        """
+
+        selected = self._validated_configured_rods(rods)
+        geometry, _ = self._detector_coordinate_state(
+            column_px,
+            row_px,
+            include_optical=True,
+            include_surface_jacobian=False,
+        )
+        shape = geometry.column_px.shape
+        k_magnitude_Ainv = float(np.linalg.norm(self._coating.ki_sample_Ainv))
+        direction = np.zeros((*shape, 3), dtype=np.float64)
+        direction[geometry.valid] = geometry.kf_film_sample_Ainv[geometry.valid] / k_magnitude_Ainv
+        surface_jacobian = np.where(geometry.valid, k_magnitude_Ainv**2, 0.0)
+        unit_optical = np.ones(shape, dtype=np.float64)
+        per_rod = np.zeros((*shape, len(selected)), dtype=np.float64)
+        counts = np.zeros((*shape, len(selected)), dtype=np.int64)
+        caustic = np.zeros((*shape, len(selected)), dtype=np.bool_)
+        for rod_index, rod in enumerate(selected):
+            rod_density, rod_count, rod_caustic = self._inverse_rod_density(
+                q_sample_Ainv=geometry.q_sample_Ainv,
+                kf_sample_Ainv=geometry.kf_film_sample_Ainv,
+                surface_jacobian_Ainv2_per_output=surface_jacobian,
+                coordinate_valid=geometry.valid,
+                optical_weight=unit_optical,
+                source_phase_weight=1.0,
+                rod=rod,
+                branch=0,
+            )
+            per_rod[..., rod_index] = rod_density
+            counts[..., rod_index] = rod_count
+            caustic[..., rod_index] = rod_caustic
+
+        m0_gap: float | None = None
+        if any(rod.family_m == 0 for rod in selected):
+            incident_normal_Ainv = float(self._coating.ki_sample_Ainv[2])
+            if incident_normal_Ainv >= 0.0:
+                raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
+            m0_gap = -incident_normal_Ainv
+
+        return DetectorVisibleEwaldDirectionIntensity(
+            geometry=geometry,
+            outgoing_direction_sample=direction,
+            rods=selected,
+            per_rod_density_A2_per_sr=per_rod,
+            density_A2_per_sr=np.sum(per_rod, axis=-1, dtype=np.float64),
+            per_rod_inverse_branch_count=counts,
+            caustic=caustic,
+            detector_visible_m0_q_gap_Ainv=m0_gap,
+        )
 
     def evaluate_detector_coordinates(
         self,
@@ -1770,8 +2131,12 @@ class DetectorEwaldMeasure:
         caustic = np.zeros((*shape, len(selected)), dtype=np.bool_)
         for rod_index, rod in enumerate(selected):
             rod_density, rod_count, rod_caustic = self._inverse_rod_density(
-                geometry=geometry,
+                q_sample_Ainv=geometry.q_sample_Ainv,
+                kf_sample_Ainv=geometry.kf_film_sample_Ainv,
+                surface_jacobian_Ainv2_per_output=(geometry.q_surface_jacobian_Ainv2_per_px2),
+                coordinate_valid=geometry.valid,
                 optical_weight=optical,
+                source_phase_weight=self._source_phase_weight,
                 rod=rod,
                 branch=branch,
             )
@@ -1804,8 +2169,12 @@ class DetectorEwaldMeasure:
         blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]] = []
         for response_rod_index, rod in enumerate(selected):
             _, _, rod_caustic = self._inverse_rod_density(
-                geometry=geometry,
+                q_sample_Ainv=geometry.q_sample_Ainv,
+                kf_sample_Ainv=geometry.kf_film_sample_Ainv,
+                surface_jacobian_Ainv2_per_output=(geometry.q_surface_jacobian_Ainv2_per_px2),
+                coordinate_valid=geometry.valid,
                 optical_weight=optical,
+                source_phase_weight=self._source_phase_weight,
                 rod=rod,
                 branch=0,
                 response_blocks=blocks,
@@ -1876,6 +2245,22 @@ class DetectorEwaldMeasure:
             column_px,
             row_px,
             include_optical=False,
+            include_surface_jacobian=include_surface_jacobian,
+        )[0]
+
+    def evaluate_detector_visible_geometry(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        *,
+        include_surface_jacobian: bool = False,
+    ) -> DetectorCoordinateGeometry:
+        """Return detector geometry after the canonical exit-refraction round trip."""
+
+        return self._detector_coordinate_state(
+            column_px,
+            row_px,
+            include_optical=True,
             include_surface_jacobian=include_surface_jacobian,
         )[0]
 
@@ -2563,6 +2948,8 @@ __all__ = [
     "DetectorPixelMass",
     "DetectorQuadrature",
     "DetectorVisibleEwaldCoating",
+    "DetectorVisibleEwaldDirectionIntensity",
+    "EwaldDirectionIntensity",
     "IntensityStatus",
     "PixelIntegrationMethod",
     "SpecularDetectorGeometry",

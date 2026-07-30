@@ -427,6 +427,51 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     )
     assert bool(caustic_density.caustic)
     assert np.isinf(caustic_density.density_A2_per_px2)
+    internal_k = float(np.linalg.norm(coating.ki_sample_Ainv))
+    caustic_direction = latent.geometry.kf_sample_Ainv / internal_k
+    intrinsic_caustic = detector.evaluate_intrinsic_ewald_directions(
+        caustic_direction,
+        rods=(rod,),
+        branch=2,
+    )
+    assert bool(intrinsic_caustic.caustic)
+    assert np.isposinf(intrinsic_caustic.density_A2_per_sr)
+
+    m0_rod = Rod(0, 0)
+    m0_bragg = MosaicBraggSpace(replace(bragg.config, rods=(m0_rod,)), bragg.strength_model)
+    m0_detector = DetectorEwaldMeasure(
+        coating=ContinuousEwaldCoating(
+            m0_bragg,
+            ki_sample_Ainv=coating.ki_sample_Ainv,
+        ),
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    with pytest.raises(ValueError, match="m=0 intensity is excluded"):
+        m0_detector.evaluate_intrinsic_ewald_directions(
+            caustic_direction,
+            rods=(m0_rod,),
+        )
+
+    zero_rod = Rod(rod.h, rod.k, population=0.0)
+    zero_bragg = MosaicBraggSpace(replace(bragg.config, rods=(zero_rod,)), bragg.strength_model)
+    zero_intrinsic_detector = DetectorEwaldMeasure(
+        coating=ContinuousEwaldCoating(
+            zero_bragg,
+            ki_sample_Ainv=coating.ki_sample_Ainv,
+        ),
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    zero_intrinsic_caustic = zero_intrinsic_detector.evaluate_intrinsic_ewald_directions(
+        caustic_direction,
+        rods=(zero_rod,),
+        branch=2,
+    )
+    assert bool(zero_intrinsic_caustic.caustic)
+    assert zero_intrinsic_caustic.density_A2_per_sr == 0.0
     zero_weight_detector = DetectorEwaldMeasure(
         coating=coating,
         incident=incident,
@@ -583,6 +628,46 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         rel=2.0e-8,
     )
 
+    regular_latent = coating.evaluate_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=regular_alpha,
+        beta_rad=regular_beta,
+    )
+    alpha_direction = alpha_pair.geometry.ewald_geometry.kf_sample_Ainv / internal_k
+    beta_direction = beta_pair.geometry.ewald_geometry.kf_sample_Ainv / internal_k
+    direction_d_alpha = (alpha_direction[1] - alpha_direction[0]) / (2.0 * step)
+    direction_d_beta = (beta_direction[1] - beta_direction[0]) / (2.0 * step)
+    solid_angle_jacobian = np.linalg.norm(np.cross(direction_d_alpha, direction_d_beta))
+    outgoing_direction = regular_latent.geometry.kf_sample_Ainv / internal_k
+    intrinsic = detector.evaluate_intrinsic_ewald_directions(
+        outgoing_direction,
+        rods=(rod,),
+        branch=2,
+    )
+    np.testing.assert_allclose(
+        intrinsic.q_sample_Ainv,
+        regular_latent.geometry.q_sample_Ainv,
+        rtol=0.0,
+        atol=3.0e-15,
+    )
+    assert intrinsic.per_rod_inverse_branch_count == 1
+    assert not bool(intrinsic.caustic)
+    assert intrinsic.density_A2_per_sr == pytest.approx(
+        regular_latent.coating_intensity_density_A2_rad2_inv / solid_angle_jacobian,
+        rel=5.0e-8,
+    )
+    assert intrinsic.density_A2_per_sr == pytest.approx(
+        regular_density.density_A2_per_px2
+        * internal_k**2
+        / regular_density.geometry.q_surface_jacobian_Ainv2_per_px2
+        / regular_mapped.optical_weight
+        / regular_mapped.source_phase_weight,
+        rel=3.0e-13,
+    )
+    assert intrinsic.measure_id == "intrinsic_ewald_direction_density_A2_per_sr.v1"
+    assert not intrinsic.density_A2_per_sr.flags.writeable
+
     detector_pose = instrument.lab_from_detector
     flipped_instrument = replace(
         instrument,
@@ -674,6 +759,108 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         math.fsum(oracle_contributions),
         rel=5.0e-8,
         abs=0.0,
+    )
+    sphere_direction = two_branch_seed.geometry.ewald_geometry.kf_sample_Ainv / internal_k
+    sphere_all = detector.evaluate_intrinsic_ewald_directions(
+        sphere_direction,
+        rods=(rod,),
+    )
+    sphere_lower = detector.evaluate_intrinsic_ewald_directions(
+        sphere_direction,
+        rods=(rod,),
+        branch=1,
+    )
+    sphere_upper = detector.evaluate_intrinsic_ewald_directions(
+        sphere_direction,
+        rods=(rod,),
+        branch=2,
+    )
+    assert sphere_all.branch is None
+    assert sphere_all.per_rod_inverse_branch_count == 4
+    np.testing.assert_array_equal(
+        sphere_all.per_rod_inverse_branch_count,
+        sphere_lower.per_rod_inverse_branch_count + sphere_upper.per_rod_inverse_branch_count,
+    )
+    np.testing.assert_allclose(
+        sphere_all.density_A2_per_sr,
+        sphere_lower.density_A2_per_sr + sphere_upper.density_A2_per_sr,
+        rtol=0.0,
+        atol=0.0,
+    )
+    sphere_preimages = {
+        1: (
+            (2.7942906020091502, 2.0),
+            (2.96705972839036, 2.3814947269767046),
+        ),
+        2: (
+            (0.17453292519943298, 2.0),
+            (0.34730205158064287, 2.3814947269767046),
+        ),
+    }
+    for branch, preimages in sphere_preimages.items():
+        branch_oracle = []
+        for inverse_alpha, inverse_beta in preimages:
+            inverse_forward = coating.evaluate_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=inverse_alpha,
+                beta_rad=inverse_beta,
+            )
+            np.testing.assert_allclose(
+                inverse_forward.geometry.q_sample_Ainv,
+                sphere_all.q_sample_Ainv,
+                rtol=0.0,
+                atol=8.0e-15,
+            )
+            alpha_pair = coating.evaluate_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=np.asarray((inverse_alpha - step, inverse_alpha + step)),
+                beta_rad=inverse_beta,
+            )
+            beta_pair = coating.evaluate_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=inverse_alpha,
+                beta_rad=np.remainder(
+                    np.asarray((inverse_beta - step, inverse_beta + step)),
+                    2.0 * np.pi,
+                ),
+            )
+            direction_d_alpha = np.diff(
+                alpha_pair.geometry.kf_sample_Ainv / internal_k,
+                axis=0,
+            )[0] / (2.0 * step)
+            direction_d_beta = np.diff(
+                beta_pair.geometry.kf_sample_Ainv / internal_k,
+                axis=0,
+            )[0] / (2.0 * step)
+            solid_angle_jacobian = np.linalg.norm(np.cross(direction_d_alpha, direction_d_beta))
+            branch_oracle.append(
+                float(inverse_forward.coating_intensity_density_A2_rad2_inv / solid_angle_jacobian)
+            )
+        branch_result = sphere_lower if branch == 1 else sphere_upper
+        assert branch_result.per_rod_inverse_branch_count == 2
+        assert branch_result.density_A2_per_sr == pytest.approx(
+            math.fsum(branch_oracle),
+            rel=5.0e-8,
+            abs=0.0,
+        )
+    near_unit = detector.evaluate_intrinsic_ewald_directions(
+        sphere_direction * (1.0 + 5.0e-13),
+        rods=(rod,),
+    )
+    np.testing.assert_allclose(
+        np.linalg.norm(near_unit.outgoing_direction_sample),
+        1.0,
+        rtol=0.0,
+        atol=2.0e-15,
+    )
+    np.testing.assert_allclose(
+        np.linalg.norm(near_unit.q_sample_Ainv + coating.ki_sample_Ainv),
+        internal_k,
+        rtol=0.0,
+        atol=2.0e-15,
     )
     mixed_density = detector.evaluate_detector_coordinates(
         np.array([regular_mapped.geometry.column_px, 0.0]),
@@ -1694,8 +1881,12 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         geometry, optical = scalar_oracle._detector_coordinate_state(column_px, row_px)
         for branch in (1, 2):
             density, _, _ = scalar_oracle._inverse_rod_density(
-                geometry=geometry,
+                q_sample_Ainv=geometry.q_sample_Ainv,
+                kf_sample_Ainv=geometry.kf_film_sample_Ainv,
+                surface_jacobian_Ainv2_per_output=(geometry.q_surface_jacobian_Ainv2_per_px2),
+                coordinate_valid=geometry.valid,
                 optical_weight=optical,
+                source_phase_weight=scalar_oracle._source_phase_weight,
                 rod=rods[0],
                 branch=branch,
             )
@@ -1752,6 +1943,121 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         rtol=4.0e-11,
         atol=3.0e-24,
     )
+
+
+def test_detector_visible_ewald_direction_density_includes_regular_m0() -> None:
+    context = build_nominal_ewald_context(_configured_inputs(sample_count=1, sample_angle_deg=10.0))
+    m0_rod = next(rod for rod in context.rods if rod.family_m == 0)
+    alpha_rad = math.radians(2.0)
+    beta_rad = math.radians(90.0)
+    derivative_step_rad = 1.0e-6
+    k_magnitude_Ainv = float(np.linalg.norm(context.ki_sample_Ainv))
+
+    seed = context.geometry.map_detector_visible_coating(
+        rod=m0_rod,
+        branch=0,
+        alpha_rad=alpha_rad,
+        beta_rad=beta_rad,
+    )
+    assert bool(seed.geometry.valid)
+
+    evaluated = context.geometry.evaluate_detector_visible_ewald_directions(
+        seed.geometry.column_px,
+        seed.geometry.row_px,
+        rods=(m0_rod,),
+    )
+
+    expected_density_A2_per_sr = 0.0
+    for inverse_alpha_rad, inverse_beta_rad in (
+        (alpha_rad, beta_rad),
+        (np.pi - alpha_rad, np.remainder(beta_rad + np.pi, 2.0 * np.pi)),
+    ):
+        center = context.geometry.map_detector_visible_coating(
+            rod=m0_rod,
+            branch=0,
+            alpha_rad=inverse_alpha_rad,
+            beta_rad=inverse_beta_rad,
+        )
+        alpha_pair = context.geometry.map_detector_visible_coating(
+            rod=m0_rod,
+            branch=0,
+            alpha_rad=np.asarray(
+                (inverse_alpha_rad - derivative_step_rad, inverse_alpha_rad + derivative_step_rad)
+            ),
+            beta_rad=inverse_beta_rad,
+        )
+        beta_pair = context.geometry.map_detector_visible_coating(
+            rod=m0_rod,
+            branch=0,
+            alpha_rad=inverse_alpha_rad,
+            beta_rad=np.asarray(
+                (inverse_beta_rad - derivative_step_rad, inverse_beta_rad + derivative_step_rad)
+            ),
+        )
+        dn_dalpha = np.diff(
+            alpha_pair.geometry.ewald_geometry.kf_sample_Ainv / k_magnitude_Ainv,
+            axis=0,
+        )[0] / (2.0 * derivative_step_rad)
+        dn_dbeta = np.diff(
+            beta_pair.geometry.ewald_geometry.kf_sample_Ainv / k_magnitude_Ainv,
+            axis=0,
+        )[0] / (2.0 * derivative_step_rad)
+        expected_density_A2_per_sr += float(
+            center.coating_intensity_density_A2_rad2_inv
+            / np.linalg.norm(np.cross(dn_dalpha, dn_dbeta))
+        )
+
+    assert bool(evaluated.detector_visible)
+    assert evaluated.detector_status.item() == "VALID"
+    assert evaluated.detector_visible_m0_q_gap_Ainv == pytest.approx(0.7077572188469623)
+    assert evaluated.per_rod_inverse_branch_count.item() == 2
+    assert np.isfinite(evaluated.density_A2_per_sr)
+    assert np.linalg.norm(evaluated.geometry.q_sample_Ainv) > (
+        evaluated.detector_visible_m0_q_gap_Ainv
+    )
+    np.testing.assert_allclose(
+        evaluated.density_A2_per_sr,
+        expected_density_A2_per_sr,
+        rtol=5.0e-8,
+        atol=0.0,
+    )
+    assert evaluated.measure_id == "detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1"
+
+    outside = context.geometry.evaluate_detector_visible_ewald_directions(
+        -1.0,
+        -1.0,
+        rods=(m0_rod,),
+    )
+    assert not bool(outside.detector_visible)
+    assert outside.detector_status.item() == "OUTSIDE_SUPPORT"
+    assert outside.density_A2_per_sr == 0.0
+    assert not evaluated.density_A2_per_sr.flags.writeable
+    assert not evaluated.detector_visible.flags.writeable
+
+    nonzero_rod = next(rod for rod in context.rods if (rod.h, rod.k) == (-1, 0))
+    nonzero_seed = context.geometry.map_latent_geometry(
+        rod=nonzero_rod,
+        branch=2,
+        alpha_rad=math.radians(0.1),
+        beta_rad=0.0,
+    )
+    assert bool(nonzero_seed.valid)
+    nonzero_visible = context.geometry.evaluate_detector_visible_ewald_directions(
+        nonzero_seed.column_px,
+        nonzero_seed.row_px,
+        rods=(nonzero_rod,),
+    )
+    nonzero_intrinsic = context.geometry.evaluate_intrinsic_ewald_directions(
+        nonzero_seed.ewald_geometry.kf_sample_Ainv / k_magnitude_Ainv,
+        rods=(nonzero_rod,),
+    )
+    np.testing.assert_allclose(
+        nonzero_visible.density_A2_per_sr,
+        nonzero_intrinsic.density_A2_per_sr,
+        rtol=4.0e-13,
+        atol=0.0,
+    )
+    assert nonzero_visible.detector_visible_m0_q_gap_Ainv is None
 
 
 def test_cuda_detector_backend_fails_closed_without_a_device(

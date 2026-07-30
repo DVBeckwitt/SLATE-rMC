@@ -10,16 +10,73 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## Current contract-v11 runtime
+## Current contract-v12 runtime
 
 The production runtime is the continuous detector pushforward described in
 `CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
-selection/deposition implementation remains retired. Contract v11 adds only the streaming weighted
-Monte Carlo pixel-mass terminal in D035; it exposes no sampled-event runtime. Current proof authority
-is the latent Bragg density, analytic line/sphere oracle, detector-coordinate inverse map, finite
-pixel-box integral, refined forward-latent integration, and scalar-versus-compiled backend
-agreement. Earlier sections in this file are retained historical evidence for the source-to-`ki`
-and scientific subsystem cutovers; they do not reinstate retired APIs.
+selection/deposition implementation remains retired. Contract v11 added the streaming weighted
+Monte Carlo pixel-mass terminal in D035; it exposes no sampled-event runtime. Contract v12 adds the
+deterministic, pointwise intrinsic Ewald outgoing-direction density in D036. Current proof authority
+is the latent Bragg density, analytic line/sphere oracle, detector-coordinate inverse map, intrinsic
+solid-angle inverse map, finite pixel-box integral, refined forward-latent integration, and
+scalar-versus-compiled backend agreement. Earlier sections in this file are retained historical
+evidence for the source-to-`ki` and scientific subsystem cutovers; they do not reinstate retired
+APIs.
+
+### Intrinsic Ewald outgoing-direction density
+
+The contract-v12 result evaluates the complete internal-film outgoing-direction sphere directly in
+sample coordinates. It returns density in `A2/sr`, includes both analytic inverse branches and all
+regular inverse preimages, preserves both signs of sample-frame `Qz`, excludes the separately owned
+`m=0` contract, and applies no exit, detector-visibility, or panel mask. Near-unit input directions
+are normalized before `Q = k_film * kf_hat - ki` is formed. Returned arrays are immutable; positive
+numerator caustics are explicitly marked and represented by positive infinity.
+
+The compact independent proof differentiates the forward outgoing unit direction with respect to
+the latent mosaic coordinates at a regular one-preimage point. Dividing the forward coating by the
+numerical solid-angle Jacobian agrees with the inverse result: `0.005631826764734138 A2/sr` versus
+`0.005631826767131236 A2/sr`, a relative error of `4.26e-10`. A known all-root point has four
+regular preimages and the branchless result equals the sum of branch 1 and branch 2. A separate
+change-of-measure test verifies
+
+```text
+detector_density = ewald_direction_density * J_Q / k_film^2
+                   * optical_weight * source_phase_weight
+```
+
+at the same ray. These checks detect a missing or duplicated `k_film^2`, an air-wavevector
+substitution, an extra Ewald coarea factor, a spurious `sin(alpha)`, dropped inverse sheets, and
+detector-only masking of the intrinsic sphere. A coarse whole-sphere midpoint sum is deliberately
+not a permanent total-intensity oracle: exact caustic curves and narrow structure-factor features
+make uniform-raster convergence non-monotone. The publication raster is therefore declared exact
+point sampling of the continuous function, while integrated-mass proof remains on regular patches
+and the independently refined forward-root integral.
+
+No accepted legacy result declares this solid-angle measure, so the legacy classification is
+`NO_ORACLE`; the analytic change of variables, independent finite differences, and detector bridge
+are its numerical authority.
+
+The detector-visible intrinsic variant uses the same inverse density and adds only the canonical
+active-panel selection. Its independent regular `m=0` proof differentiates the forward outgoing
+direction with respect to both mosaic coordinates and sums the two inverse orientation preimages.
+At the 10-degree Bi2Se3 seed (`alpha=2 degrees`, `beta=90 degrees`) the forward finite-difference
+oracle and inverse result agree at approximately `0.0063736772 A2/sr`. The reported gap is
+`0.7077572188 Ainv`, and the selected point has strictly larger `|Q|`; an off-panel coordinate is
+zero. A nonzero rod evaluated at the same visible direction agrees with the unmasked intrinsic
+direction evaluator, detecting accidental optical, source, coarea, or detector-Jacobian factors.
+Deterministic row tiles assembled from two Windows `spawn` workers are bitwise identical to the
+serial result on the compact proof grid.
+
+The historical full-sphere Bi2Se3 10-degree publication render evaluated the intrinsic sphere at `720 by 1440`
+(1,036,800 point samples), with 84 non-specular rods and 64-row tiles. The manifest-recorded exact
+Ewald stage took `2514.9363 s`; the configured build, reciprocal sample, untilted detector, tilted
+detector, and schematic-ray stages took `0.0867 s`, `37.5527 s`, `41.4108 s`, `36.8181 s`, and
+`8.0886 s`, respectively. Both detector fields were evaluated independently at `1440 by 1440`.
+From process start to atomic manifest installation the single-process run took approximately
+`3463 s`; the largest observed Windows working set was `5,058,682,880` bytes. The renderer performs
+no sphere rebinning: the publication surface consumes the direct pointwise raster at its declared
+resolution, while the small sphere glyph in the projection schematic alone uses a display-only
+coarsening.
 
 ### Weighted Monte Carlo detector-pixel estimate
 
@@ -623,6 +680,9 @@ Every branch must pass:
 - analytic roots versus an independent quadratic oracle
 - per-rod to exact-family intensity reduction
 - detector-visible coating and elastic closure
+- intrinsic `A2/sr` density versus an independent finite-difference solid-angle Jacobian
+- all-root branch decomposition and the detector-to-sphere change-of-measure identity
+- complete-sphere Ewald closure, both sample-frame `Qz` signs, and absence of detector-only masks
 - detector-coordinate and pixel-quadrature convergence
 - detector-angle inverse Jacobian, periodic seam, pole, and invalid-support behavior
 - continuous angle `S=dJ`, `N=J`, and `I=S/N` with the corrected pose owned by the detector function

@@ -81,6 +81,8 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-REC-007 | analytic Ewald roots, support, coarea, and convergence | old uniform/adaptive scan | numerical requirement | mosaic/integration | CORRECTED analytic |
 | PHY-REC-008 | complete-pool inverse-CDF event selection | event resampling paths | n/a | none | RETIRED by contract-v9 continuous pushforward |
 | PHY-REC-009 | external versus internal Q | inconsistent helper paths | refraction section | bootstrap/mosaic | CORRECTED |
+| PHY-REC-011 | exact intrinsic Ewald solid-angle inverse pushforward | absent; legacy paints sampled intersections | continuous change of variables | mosaic/integration | NO_ORACLE; NEW API-v12 `k_film^2 / |J_latent|`, all regular non-specular preimages, no repeated coarea |
+| PHY-REC-012 | detector-visible intrinsic Ewald solid-angle patch with regular nonzero `m=0` | absent | continuous change of variables plus canonical detector support | mosaic/integration | NO_ORACLE; same `k_film^2 / |J_latent|` density, panel selection only, positive Q-gap certificate, no direct `Q=0` |
 
 ## Ordered structure and rods
 
@@ -154,6 +156,8 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-MEA-008 | masks, beamstop, saturation, bad pixels | GUI/data paths | experimental handling | none | DEFERRED from forward core |
 | PHY-MEA-009 | background | GUI/fitting paths | later comparison | none | DEFERRED |
 | PHY-MEA-010 | multiple scattering and extinction | absent | not claimed | none | DEFERRED |
+| PHY-MEA-011 | internal-film outgoing-direction Ewald density | no declared equivalent | Ewald surface measure | mosaic/integration | NO_ORACLE; NEW `intrinsic_ewald_direction_density_A2_per_sr.v1`; full sphere diagnostic, not detector solid angle |
+| PHY-MEA-012 | configured detector-visible internal-film Ewald direction density | no declared equivalent | Ewald surface measure with named support | mosaic/integration | NO_ORACLE; NEW `detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1`; regular `m=0` included, detector optics/Jacobian absent |
 | PHY-MAP-001A | continuous detector-density pullback to canonical `2theta/phi` with separate `S/N` | `exact_cake_portable.py` continuous geometry | coordinate-measure identity | analysis | MATCH coordinate convention, NEW generalized pose/J/`S/N` under T17; no finite caking claim |
 
 Every non-deferred row must have one proof case or a documented reason that it is covered by a shared proof.

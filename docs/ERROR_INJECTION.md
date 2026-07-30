@@ -60,11 +60,29 @@ geometry before detector integration.
 - Collapse equal-family rods before evaluating their physical structure strengths.
 - Use the wrong `u`/`L` scale, omit population, or sum independent rod amplitudes.
 - Choose the wrong analytic root, emit a tangent as regular, omit the Ewald coarea factor in the
-  intrinsic route, or apply it twice.
+  latent Ewald-restriction route, or apply it twice.
 - Accept an elastic residual outside tolerance.
 
 Expected detection: probability normalization/moments, per-rod sum, quadratic-root oracle, elastic
 closure, or latent/coating agreement.
+
+### Intrinsic Ewald outgoing-direction density
+
+- Use the air wavenumber instead of the internal-film magnitude, or omit/apply the `k_film^2`
+  solid-angle surface Jacobian twice.
+- Apply the forward Ewald coarea factor again after inverse pushforward, or insert an undeclared
+  `sin(alpha)` mosaic-measure factor.
+- Drop an inverse preimage, retain only one analytic branch, or treat branch identity as the sign of
+  sample-frame `Qz`.
+- Apply an exit-valid, detector-visibility, positive-`Qz`, or panel mask to the complete intrinsic
+  sphere.
+- Admit the separately owned `m=0` direct root, hide a positive-numerator `|w*x|=0` caustic,
+  replace it with a finite interpolated value, or assign `+inf` to a zero-numerator fold instead of
+  the zero a.e. representative.
+
+Expected detection: the independent finite-difference solid-angle Jacobian, known four-preimage
+branch sum, positive/negative-`Qz` support, exact Ewald closure, explicit caustic contract, and the
+detector-to-sphere change-of-measure identity.
 
 ### Ordered, stacking, and reflectivity
 

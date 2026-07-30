@@ -67,6 +67,14 @@ The shared branch selector enforces the requested propagation direction and non-
 
 Real phase wavevectors define elastic event geometry. Imaginary normal components define field decay and attenuation.
 
+An intrinsic Ewald direction is the unit vector of the real internal-film
+`kf_film_sample` in the sample frame. Its solid angle `dOmega_film` is distinct from external-air
+ray solid angle and detector pixel solid angle. With `k = |ki_film_sample|`, the intrinsic sphere
+uses `Q_sample = k * kf_hat_film_sample - ki_film_sample` and `dA_Q = k^2 dOmega_film`.
+An incident-`ki`-aligned coordinate triad may be used only as a display basis; it does not change
+the sample-frame `Q` contract. A LAB-oriented sphere in an exploded schematic is a translated and
+scaled direction glyph, not reciprocal coordinates sharing a metre origin with detector planes.
+
 ## Scalar interface coefficient
 
 The first validated off-specular model uses

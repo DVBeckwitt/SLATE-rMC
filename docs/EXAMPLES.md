@@ -50,6 +50,116 @@ the active panel. Each tag declares `m`, integer `L`, and Ewald-root branch; the
 retains the contributing physical `(h,k)` rods and their exact beta coordinates. A center that is
 back-facing or off-panel is deliberately absent even if a nonzero-mosaic tail becomes visible.
 
+## Publication reciprocal-to-detector mapping
+
+Generate the reusable four-stage Bi2Se3 publication figure and its exploded projection schematic:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/figures/render_bi2se3_publication_mapping.py `
+  --output-directory C:\path\outside\the\repository\bi2se3-publication `
+  --ewald-worker-count 4
+```
+
+The defaults use one mean incident beam at 10 degrees, Gaussian sigma 2 degrees, Lorentzian HWHM
+0.2 degrees, and Lorentzian probability 0.1. The reciprocal panel takes 32 deterministic nodes from
+the compiled, scale-resolved mosaic support, resolves the narrow Lorentzian center, extends to
+nearly 180 degrees, and inserts every in-range integer-L finite-stack maximum and ±0.5/N shoulder
+sample.
+
+The Ewald panel evaluates the exact almost-everywhere intrinsic density at detector-native centers
+and maps only the configured active-panel support onto the internal-film outgoing-direction sphere.
+Every physical rod and every regular inverse preimage contributes, including regular nonzero
+`m=0`; the collapsed direct `Q=0` root remains excluded by the reported positive top-exit Q gap.
+The measure is `detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1`, where `sr` is
+internal-film outgoing-`kf` solid angle. Detector coordinates supply only the visibility
+parameterization: the field has no source, optical, attenuation, detector-coordinate Jacobian, or
+detector-solid-angle factor. Positive values below the displayed eight-decade window use the
+under-range color, exact positive fold caustics use the over-range color, and the faint unpainted
+wireframe provides whole-sphere context. Spawned CPU processes evaluate deterministic row batches;
+`--ewald-worker-count 1` selects the equivalent serial path.
+
+To update only this Ewald figure without recomputing the reciprocal or either detector mapping,
+add `--only-ewald`. This writes the standalone PNG/PDF and a focused provenance manifest:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/figures/render_bi2se3_publication_mapping.py `
+  --only-ewald --ewald-worker-count 8 `
+  --output-directory C:\path\outside\the\repository\bi2se3-ewald
+```
+
+To regenerate only the exploded sphere-to-plane projection while preserving its established
+camera, layout, colors, and guide styling, use `--only-schematic`. This skips reciprocal-space
+sampling and the 1440 × 1440 standalone detector maps. The two detector textures are evaluated
+directly at `--schematic-detector-cell-count`, while the Ewald patch still uses the spawned CPU
+workers:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/figures/render_bi2se3_publication_mapping.py `
+  --only-schematic --ewald-image-size 720 --ewald-worker-count 8 `
+  --schematic-detector-cell-count 480 `
+  --output-directory C:\path\outside\the\repository\bi2se3-projection
+```
+
+The two planar panels independently evaluate the complete continuous detector-coordinate density on
+1440 × 1440 center-sampled grids at the configured reference pose and at that pose plus an
+explicitly illustrative 20-degree row-axis increment. For the default YAML the reference detector
+tilt is zero. The increment is not a fitted calibration. Use `--tilt-column-deg` and
+`--tilt-row-deg` to choose a different illustrative increment.
+
+PNG and mixed vector/raster PDF outputs, four standalone panels, and a JSON provenance manifest are
+written by default. PDF text, labels, and axes remain vector while dense intensity layers are
+rasterized at the requested DPI. The detector panels are center-sampled displays of
+`raw_detector_coordinate_density_A2_per_px2.v1`; they include the detector-coordinate Jacobian and
+do not apply detector solid angle again. The exploded schematic textures the detector-visible Ewald
+patch over a faint whole-sphere wireframe. Full-mode rendering linearly block-averages each
+independently evaluated detector field to at most 480 × 480 cells for tractable 3D rendering; the
+schematic-only route evaluates those textures directly at that reduced resolution. It never
+averages in log space. The detector densities are evaluated at
+their physical poses, but the exploded sphere/plane positions and scales are diagrammatic; only
+their orientations are retained. The guides show a positive-`Qz`, exit-valid common-ray subset and
+are not a shared reciprocal/metre coordinate construction. Separate
+colorbars declare the sphere (`A^2/sr`) and detector (`A^2/px^2`) measures. Existing case files are
+never silently replaced: use `--case-name` for another parameter set or pass `--overwrite`
+intentionally.
+
+## Final reciprocal-space figures
+
+Generate the two final Bi2Se3 reciprocal-space views with one command:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/figures/render_bi2se3_reciprocal_intensity.py `
+  --output-directory C:\path\outside\the\repository\bi2se3-reciprocal
+```
+
+The first output shows the zero-mosaic reciprocal cylinders colored by the incoherent family sum
+of the configured 52-layer structure strength. The second shows the continuous reciprocal-space
+density produced by the normalized mosaic measure and the same structure strength; it is an
+axisymmetric annular finite-volume field, not a collection of representative rotated cylinders.
+Both use the physical hexagonal families `m=0`, `m=1`, and `m=3`. There is no physical `m=2`
+family in this indexing convention.
+
+Defaults retain the requested 10-degree incidence in configuration provenance and use Gaussian
+sigma 2 degrees, Lorentzian HWHM 0.2 degrees, and Lorentzian probability 0.1. Because these are
+intrinsic crystal-axis reciprocal-space plots, rigidly changing the beam/sample incidence does not
+change their distribution; incidence does affect the Ewald and detector figures above. Rod
+deposition is distributed across spawned CPU processes; set `--worker-count 1` for the
+deterministic serial path. The continuous calculation is cached as a provenance-bound external
+NPZ. Pass `--cache` to reuse a matching final-form cache or `--recompute` to replace it. Legacy
+pre-consolidation caches are rejected because their axial SF integration was not converged. The
+final 32,000-node axial rule gives at most 0.54% normalized-L1 and 0.64% peak error against a
+200,001-node binned oracle for the three displayed families after smoothing. Fixed,
+mass-conserving display smoothing is reported in the figure caption in radial and axial bins.
+
+For smooth interactive inspection of the final precomputed Ewald-surface textures, run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/figures/ewald_sphere_viewer.py --stride 1
+```
+
+The viewer keeps only positive-sample-`z` values, draws sphere coordinates aligned with the
+incident wavevector, and provides reset plus sample-`x`, sample-`y`, and sample-`z` view controls.
+Its textures are embedded so camera interaction does not rerun the expensive mappings.
+
 ## Fit tagged landmarks between continuous detector functions
 
 Bind the base simulation and every trial as continuous detector functions. The fit uses the exact

@@ -2,13 +2,15 @@
 
 Run from the repository root with::
 
-    python examples/ewald_sphere_viewer.py
+    python scripts/figures/ewald_sphere_viewer.py
 
 The figure uses one Cu K-alpha1 beam. Dragging temporarily focuses a lightweight
 preview of the selected panel; release to restore and synchronize all six
 high-resolution panels. Use the radio buttons or I/C keys to switch between the
 continuous intensity field and the zero-mosaic cylinder sections. Only the
-positive-z half of the displayed Ewald surface is included.
+positive-z half of the displayed Ewald surface is included. The embedded
+intensity textures use Gaussian sigma 2 degrees, Lorentzian HWHM 0.2 degrees,
+and Lorentzian probability 0.1.
 """
 
 from __future__ import annotations
@@ -25,6 +27,9 @@ from numpy.typing import NDArray
 
 WAVELENGTH_A = 1.540592925
 WAVE_NUMBER_AINV = 2.0 * math.pi / WAVELENGTH_A
+GAUSSIAN_SIGMA_DEG = 2.0
+LORENTZIAN_HWHM_DEG = 0.2
+LORENTZIAN_PROBABILITY = 0.1
 GLOBAL_LOG_MIN = -10.500151371945972
 GLOBAL_LOG_MAX = -1.5001513719459711
 TEXTURE_SHAPE = (96, 192)
@@ -578,17 +583,16 @@ class EwaldCase:
     material: str
     lattice_a_A: float
     incidence_deg: float
-    log_max: float
     texture_index: int
 
 
 CASES = (
-    EwaldCase("Bi2Se3", 4.143, 5.0, -2.5435566400182315, 0),
-    EwaldCase("Bi2Se3", 4.143, 10.0, -2.332494993346455, 1),
-    EwaldCase("Bi2Se3", 4.143, 15.0, -1.788306297359463, 2),
-    EwaldCase("Bi2Te3", 4.386, 5.0, -2.009756843028878, 3),
-    EwaldCase("Bi2Te3", 4.386, 10.0, -2.085877587602414, 4),
-    EwaldCase("Bi2Te3", 4.386, 15.0, -1.5001513719459711, 5),
+    EwaldCase("Bi2Se3", 4.143, 5.0, 0),
+    EwaldCase("Bi2Se3", 4.143, 10.0, 1),
+    EwaldCase("Bi2Se3", 4.143, 15.0, 2),
+    EwaldCase("Bi2Te3", 4.386, 5.0, 3),
+    EwaldCase("Bi2Te3", 4.386, 10.0, 4),
+    EwaldCase("Bi2Te3", 4.386, 15.0, 5),
 )
 
 
@@ -920,7 +924,10 @@ def run_viewer(*, initial_mode: str = "intensity", stride: int = 2) -> None:
         color_axis.set_visible(state["mode"] == "intensity")
         if state["mode"] == "intensity":
             figure.suptitle(
-                "Continuous SF ⊗ mosaic intensity · positive z · kᵢ-aligned sphere coordinates"
+                "Continuous SF ⊗ mosaic · "
+                f"Gaussian={GAUSSIAN_SIGMA_DEG:g}° · "
+                f"Lorentzian HWHM={LORENTZIAN_HWHM_DEG:g}° · "
+                f"eta={LORENTZIAN_PROBABILITY:g} · +z · kᵢ-aligned sphere coordinates"
             )
         else:
             figure.suptitle(

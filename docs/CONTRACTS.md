@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **10**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **12**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -32,6 +32,7 @@ and ordering are validated eagerly.
 | `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
+| `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared nine-coordinate correction pack, with fixed-coordinate provenance, per-image metrics, and rank diagnostics |
 | `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
@@ -87,12 +88,25 @@ geometry-only continuous Ewald-section authority.
 Immutable one-incident-state model. It requires the canonical transported film-phase `ki`, matching
 air wavelength, strict root classification, material optics, and compiled instrument.
 
+- `evaluate_intrinsic_ewald_directions(outgoing_direction_sample, rods, branch=None)` evaluates
+  arbitrary broadcast sample-frame unit internal-film `kf` directions. It excludes `m=0`, sums both
+  analytic roots when `branch=None`, and returns the exact almost-everywhere
+  `intrinsic_ewald_direction_density_A2_per_sr.v1` with per-rod inverse counts and caustic flags.
+  Detector visibility, exit optics, source/phase/polarization weights, and detector solid angle are
+  absent. All returned arrays are copied to read-only storage.
+- `evaluate_detector_visible_ewald_directions(column_px, row_px, rods)` uses the configured active
+  detector coordinates only to select internal-film outgoing directions, then returns
+  `detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1`. It sums every regular inverse
+  preimage, including nonzero `m=0`, with the same intrinsic `k_film^2 / |J_latent|` density. It
+  applies no source, optical, attenuation, detector Jacobian, or solid-angle factor and carries the
+  strict positive detector-visible `m=0` Q-gap certificate.
 - `evaluate_detector_geometry(column_px, row_px, *, include_surface_jacobian=True)` performs detector
   point → outgoing ray → exit refraction → film `kf` → sample-frame `Q` and reports
   validity and elastic residual. The ray is valid only on the active front face,
   `n_D dot kf_hat > 1e-14`; back-side and tangent approaches are rejected before optical or
   reciprocal work. Passing `False` skips derivative work and returns a zero Jacobian when only ray
-  validity or `Q` is needed.
+  geometry is needed. `evaluate_detector_visible_geometry(...)` additionally performs the canonical
+  exit-refraction round-trip validation without attaching optical intensity.
 - `evaluate_detector_coordinates(column_px, row_px, rods, branch)` returns the almost-everywhere
   `raw_detector_coordinate_density_A2_per_px2.v1`, per-rod contributions, inverse-branch counts, and
   caustic flags.
@@ -629,6 +643,7 @@ bounds without activating frozen coordinates.
 | CIF/finite-stack structure strength | ordered strength model |
 | wrapped mosaic probability | `MosaicBraggSpace` |
 | Ewald restriction / inverse-map determinant | Ewald or detector pushforward, by declared route |
+| internal-film Ewald solid-angle `k^2` | intrinsic direction pushforward only |
 | exit amplitude and uniform-depth attenuation | detector optical mapping |
 | phase and polarization weights | detector measure construction |
 | source-state sum | source-averaged detector measure |
@@ -638,9 +653,11 @@ The two Ewald routes are equivalent proof views and are never multiplied togethe
 
 ## Removed API
 
-Contract version 11 retains no compatibility shims for mosaic-orientation batch APIs, candidate
+Contract version 12 retains no compatibility shims for mosaic-orientation batch APIs, candidate
 selection, scattering-event batches, outgoing-wave batches, detector-hit batches, event transport,
 general point deposition, discrete Ewald painters, sphere textures, or raster grids. The optional
 terminal stochastic estimator is not one of those retired runtimes: it exposes no intermediate
 sample/event object and streams weighted roots into its declared final pixel-mass estimate. Callers
 must use the continuous reciprocal and detector contracts above.
+The callable intrinsic solid-angle density added in v12 is a continuous function result; it does
+not restore a retained sphere mesh or texture as model state.
