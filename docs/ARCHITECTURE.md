@@ -83,7 +83,9 @@ contributing rod/orientation branches on the active detector panel.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, the full finite-pixel angle
   projector, and an exact cropped physical-pixel projector for fully panel-contained measured
-  profiles; never part of raw rendering.
+  profiles. It also owns material-neutral layered reciprocal frames, immutable `Qr/L` profile
+  regions, sample membership, and separate finite-bin signal/measure accumulation used equally by
+  measured pixel centers and continuous detector cubature; never part of raw rendering.
 - `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
 
 ## Public runtime layers

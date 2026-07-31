@@ -41,6 +41,11 @@ size_bytes = 4816096
 sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
 
 [[file]]
+path = "examples/bi2se3/experiment/figure7_recreation.toml"
+size_bytes = 3246
+sha256 = "67952b08a181b2abc3429cc4bc09b72f559afdeb71e3054e9de80a88d254af6a"
+
+[[file]]
 path = "examples/bi2se3/experiment/forward_case.toml"
 size_bytes = 1229
 sha256 = "1d01c18580886bbbceaeb0eb3d030de98909a93cbe4fd609fb592b948141af81"

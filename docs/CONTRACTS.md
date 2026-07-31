@@ -38,6 +38,8 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta, with fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
 | `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
+| `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
+| `ReciprocalProfileMembership` / `BinnedSampleIntegral` | measurement | immutable sample-to-bin identities and separately accumulated signal/measure vectors; division occurs only after finite-bin integration |
 
 `axis_rotation_transform(rotation)` is the authoritative conversion of one `AxisRotation` into an
 active LAB-to-LAB rigid transform about its declared LAB pivot. `compile_instrument` uses the same
@@ -58,6 +60,16 @@ folded alpha/full beta and integrates to one.
 ### `Rod`
 
 Owns exact `(h,k)`, family metadata, and population. Rod identity is never a floating radial value.
+
+### Reciprocal profile regions
+
+`LayeredReciprocalFrame.coordinates` maps arbitrary continuous sample-frame wavevectors into radial
+distance from a declared reciprocal axis and its fractional axial coordinate. A
+`ReciprocalProfileRegion` then owns the finite `L` edges, radial signal width, explicit detector
+column interval, and radial sidebands. `reciprocal_profile_membership` applies that same immutable
+region to detector-pixel centers or continuous cubature nodes. `accumulate_binned_samples` always
+returns signal and measure separately; its `mean` is the only division. These functions do not own
+background policy, material family labels, intensity scaling, rendering, or detector rasterization.
 
 ### `MosaicBraggSpace`
 

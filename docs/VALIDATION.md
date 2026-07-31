@@ -1481,3 +1481,82 @@ A branch is not proven when the fixture is insensitive to likely mistakes. Run t
 mutations from [ERROR_INJECTION.md](ERROR_INJECTION.md) and record the expected and observed first
 failing stage. The integration proof covers factor omission/duplication, rod/source identity,
 Ewald-root sign, OSC orientation, detector tilts, and row/column mutations.
+## Bi2Se3 fitted Figure-7 recreation (2026-07-30)
+
+The Figure-7 replacement consumes the verified geometry-through-ordered-intensity replay at
+`bi2se3_positions_theta_delta_v2_final`. It preserves one common incidence correction,
+`delta_theta_i = 0.007325503018138858 rad = +0.419720405749703 degrees`, giving effective incident
+angles `5.419720405749703`, `10.419720405749703`, and `15.419720405749703` degrees. The frozen mosaic
+is `(Gaussian sigma, Lorentzian HWHM, Lorentzian probability) = (1.322875655532295 degrees,
+0.4898979485566357 degrees, 0.4480961988893445)`. The structure representative uses
+`Se1/Bi = 1.1900789235455336`, `Se2/Bi = 1.1323307343772355`, `Uradial =
+4.449496989858026e-25 A2`, and `Unormal = 1.0373717318417977e-27 A2`. Both displacement parameters
+are on their lower bounds. This remains the unqualified
+`MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE`; the normalized occupancy representative is
+not an absolute occupancy determination.
+
+The displayed detector is the unchanged native `[row,column]` 1596 by 3000 crop with row zero at
+the top. Numerical profile preparation admits the full 3000 by 3000 native detector, while the
+fitted distribution is never pixelized. The seven frozen regions are `m=1-/+`, `m=3-/+`,
+`m=4-/+` over `2 <= L <= 17` in width-0.2 bins and `m=0` over `0 <= L <= 8` in width-0.1 bins.
+The off-specular radial half-width is `0.2125 A^-1`; `m=0` uses `0.05 A^-1`. Measured values are
+native-pixel-center signal means minus separately reduced radial-sideband means. Model values are
+continuous detector-coordinate Gaussian cubatures of density times area divided by cubature area
+over the same regions. The plotted model uses only the saved 5-degree fit scale; no profile or
+family is renormalized, smoothed, or detector-rasterized.
+
+The CUDA preparation produced 530 profile bins, of which 455 have both measured and model support.
+The frozen convergence limits are relative profile L2 `<= 0.15` and integrated-mass relative error
+`<= 0.10`:
+
+| profile | initial relative L2 | initial mass error | accepted refinement | final state |
+|---|---:|---:|---|---|
+| `m1_minus` | 0.1023410390 | 0.0029598160 | none | pass |
+| `m1_plus` | 0.0601084244 | 0.0022082461 | none | pass |
+| `m3_minus` | 0.0682239805 | 0.0098561387 | none | pass |
+| `m3_plus` | 0.2238997143 | 0.0270095991 | 2-pixel/order-4: L2 0.1027716030, mass 0.0213562370 | pass |
+| `m4_minus` | 0.0124882703 | 0.0002251032 | none | pass |
+| `m4_plus` | 0.0144670246 | 0.0020494249 | none | pass |
+| `m0` | 0.1701555317 | 0.0278271634 | 2-pixel/order-4 failed; 1-pixel/order-4: L2 0.0864839856, mass 0.0001609521 | pass |
+
+Execution used `numba_cuda_source_averaged.v1` on an NVIDIA GeForce RTX 3060 with 250 source states
+and at most eight state blocks. The coarse 4-pixel/order-2 pass evaluated 522,500 candidate
+coordinates in 68.4028 s. The fine 4-pixel/order-4 pass evaluated 2,090,000 candidates in 251.7471 s.
+The 2-pixel refinement evaluated 2,772,304 candidates in 148.8596 s, and the final 1-pixel `m=0`
+refinement evaluated 42,928 in 1.0192 s. Total diagnostic preparation was 493.5802 s. External
+monitoring observed 100% GPU utilization, a 7,135 MiB global-device-memory peak under Windows WDDM,
+and a 2,330,140,672-byte (2.170 GiB) peak working set for the active Python process. The post-run
+device baseline was 5,775 MiB, so the global-device value is not claimed as process-exclusive.
+
+The retained external proof artifacts are:
+
+- diagnostic `bi2se3_figure7_inputs.ra_diag.npz`: 34,166,923 bytes, SHA-256
+  `a529099ea94d911d6cb2518f2f08284df99807a1837c21de6845f3b69c31804d`;
+- PNG `bi2se3_figure7_recreated.png`: 4,275,061 bytes, SHA-256
+  `eea6f3a88b3001601fa4743fb60f865bf6d11d625230a46b7dbbe6bcd74962da`;
+- PDF `bi2se3_figure7_recreated.pdf`: 585,293 bytes, SHA-256
+  `8f76e94a18bcefe9ef5e4c8840b132328e2a96d5f754387c73ca95aac6be5b19`;
+- JSON render manifest `bi2se3_figure7_recreated.json`, which binds both outputs to the diagnostic
+  and renderer SHA-256 `57f158e77dafb2aa0fbdd542308addcf2efde5e7b906fa3b8dfd314b06fc61f3`.
+
+All 22 non-manifest diagnostic arrays are bitwise identical to the independently reviewed
+pre-format run. The rerun changes only timing/provenance metadata and binds the exact formatted
+renderer source retained by the repository.
+
+The PNG was inspected at native resolution. The PDF was independently rasterized from its single
+961.09 by 1218.00 point page and inspected. Both retain the detector-native top-origin rows, all
+seven region labels, the original 3 by 2 plus full-width profile layout, paired linear
+off-specular limits, logarithmic `m=0`, invalid-bin gaps, and the large visible model/data mismatch.
+The final repository gate reported 210 passing tests in 669.68 seconds; its ten warnings were the
+expected Numba low-occupancy notices from deliberately small CUDA proof cases. Ruff format, Ruff
+lint, documentation validation, lockfile validation, compilation, and diff-integrity checks also
+passed.
+
+The legacy classification is `CORRECTED`. Layout is the only retained comparison. The named first
+divergent stage is curve construction: the surviving original-RASIM generator plotted a smoothed
+measured trace, whereas this figure integrates the fitted continuous physical model. Therefore the
+legacy curves are not a numerical oracle. The `m=3` and `m=4` curves are extrapolations because only
+`m=0` and `m=1` entered the fitted structure response. The fixed state is a 52-layer nearly-perfect
+2H model with shared disorder epsilon `0.001`, no 4H/6H component, and no stacking refinement. The
+measured pixel-center sideband reduction and saved nuisance scale are declared estimators, not an
+independent count calibration; visible disagreement must not be interpreted as an adequate fit.

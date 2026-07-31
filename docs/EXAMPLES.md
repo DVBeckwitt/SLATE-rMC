@@ -606,6 +606,53 @@ The present result is deliberately fail-closed as
 `(Bi,Se1,Se2)=(0.84028,1,0.95148)` representative as absolute occupancy; it is only the admissible
 gauge representation of the two fitted ratios.
 
+## Recreate the Bi2Se3 Figure 7 view from the measured fit
+
+Once the verified geometry-through-ordered-intensity checkpoint exists, prepare the reusable
+numeric diagnostic and render the publication view with one command:
+
+```powershell
+uv run --frozen --extra visualization python `
+  scripts/figures/render_bi2se3_fitted_figure7.py all `
+  --checkpoint C:\external\bi2se3-replay `
+  --backend cuda `
+  --output-directory C:\external\bi2se3-figure7
+```
+
+The optional `--case` and `--config` arguments default to the tracked Bi2Se3 staged replay and
+`figure7_recreation.toml`. The output directory must be outside the repository. The `prepare`
+subcommand can be run by itself to create `bi2se3_figure7_inputs.ra_diag.npz`; later `render` calls
+consume that diagnostic without reopening the OSC files, remapping detector coordinates, or
+repeating any fit. This split makes numerical preparation and presentation independently
+reproducible.
+
+The upper panel preserves the raw detector-native 5-degree OSC crop and top-origin row convention.
+Its colored masks are pixel images only because they are displayed on that detector. Their
+boundaries come from the verified fitted geometry, including the one common incidence-angle delta,
+and the explicitly frozen `Qr` and `L` bounds in the recipe. The seven lower panels retain the
+original order: `m=1-/+`, `m=3-/+`, `m=4-/+`, then full-width `m=0`. Measured curves are
+background-subtracted finite-bin means from the full native area detector; signal and declared
+radial sidebands are reduced separately before subtraction. Connecting segments are visual guides
+between bin centers, not smoothing.
+
+The fitted curves are evaluated independently from the actual staged physical model. The
+material-neutral reciprocal-profile contract maps continuous detector coordinates into one declared
+layered reciprocal frame, assigns the same `Qr/L` regions, and integrates model density times area
+and area separately before division. The preparation command compares coarse and fine Gaussian
+cubature and adaptively refines failed profiles. It never creates a simulated detector raster. One
+saved 5-degree nuisance scale from the accepted structure fit is applied without per-panel or
+per-family renormalization. The off-specular panels therefore remain linear and preserve negative
+background-subtracted data; only `m=0` is logarithmic.
+
+This is a scientifically regenerated Figure-7 layout, not a numerical reproduction of the old
+RA-SIM curves. The first divergent stage is explicit: the surviving legacy generator drew a
+smoothed copy of its measured trace, whereas this replacement draws converged continuous
+physical-model cubature. The old layout is retained, but it is not a numerical oracle. The `m=3`
+and `m=4` curves are honest extrapolations because only `m=0` and `m=1` entered the nearly-perfect-2H
+structure fit. The rendered caption and manifest state that the fixed model is a 52-layer 2H
+structure with shared disorder epsilon `0.001`, no 4H/6H component, and no stacking refinement.
+The visible disagreement is retained; this model-limited structure estimate remains unqualified.
+
 ## Run the synthetic fixed-position Bi2Se3 structure proof
 
 After accepting the geometry and mosaic stages, run the deterministic three-incidence structure

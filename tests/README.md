@@ -19,6 +19,12 @@ The compact suite is organized by scientific boundary:
 - `test_integration.py`: continuous detector inverse mapping, caustics, native-pixel integration,
   source averaging, YAML construction, compiled kernels, CUDA parity, and end-to-end factor
   ownership.
+- `test_reciprocal_profiles.py`: material-neutral layered reciprocal coordinates, explicit
+  detector-side/sideband membership, immutable payloads, and separate finite-bin signal/measure
+  accumulation.
+- `test_bi2se3_fitted_figure7.py`: the frozen Bi2Se3 Figure-7 recipe, real fitted-observable
+  identity transfer, detector-region boundaries, strict configuration types, and bounded continuous
+  detector cubature nodes.
 
 Retain a test only when it protects a distinct scientific invariant, public contract, accepted
 reference comparison, or integration boundary. Broad parameter sweeps, image snapshots, benchmarks,
