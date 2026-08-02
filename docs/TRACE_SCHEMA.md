@@ -114,9 +114,10 @@ fitting.held_out_metric
 fitting.invalidation_summary
 ```
 
-The additive `rasim-osc-geometry-fit-result-v5` typed proof envelope carries its series manifest,
+The additive `rasim-osc-geometry-fit-result-v6` typed proof envelope carries its series manifest,
 image IDs and commanded angles, parameterization, canonical fitted/fixed coordinate names, shared
-corrections, the optional one common incidence-angle delta and per-image effective angles, combined
+corrections, the optional one common incidence-angle delta, canonical zero-sum trim contrasts,
+per-image trims and effective angles, combined
 Jacobian parameter names, scaled singular spectrum and weakest direction, active bounds,
 per-image native errors, the direct-root and frozen-candidate acceptance audits, the
 frozen-reindexing lineage, optional data-specific qualification profile, and the separate
@@ -127,7 +128,7 @@ map to the existing `selection.manifest_hash`, `fitting.detector_parameters`,
 `fitting.held_out_metric`, and `fitting.invalidation_summary` stages; they do not extend or renumber
 frozen trace schema v4.
 
-The additive `rasim-staged-fit-replay-certificate-v2` envelope is an orchestration proof, not a new
+The historical `rasim-staged-fit-replay-certificate-v2` envelope is an orchestration proof, not a new
 physics trace stage. It carries the exact case SHA-256, material, requested backend and terminal
 stage, a `verification_runtime` with the case-bound lock hash and actual
 interpreter/platform/package identity, the ordered
@@ -146,6 +147,54 @@ path-dependent JSON container hashes, timings, device labels,
 and memory measurements do not enter a scientific revision. Decoded render identities do. Missing
 stages cannot be hidden: verification always covers every stage through the requested terminal
 boundary.
+
+The current additive matched-region chain is independent of frozen trace-stage numbering:
+
+- `rasim-osc-lattice-sensitivity-v2` binds one verified completed position artifact, preserving
+  whether its status is qualified or model-limited, and compares tightly
+  regularized hexagonal in-plane and normal log strains with the reference CIF basis. It serializes
+  the constrained result as a full direct basis and records separate data-only and
+  penalized sensitivities and declares either `RETAIN_CIF_LATTICE` or
+  `ACCEPT_FITTED_LATTICE`; only a data-only full-rank, well-conditioned, in-bounds result with the
+  required improvement may promote the fitted basis.
+- `rasim-fixed-mosaic-state-v1` records a provided Gaussian/Lorentzian mixture and nonempty
+  provenance. `rasim-fixed-experiment-state-v2` composes that strict mosaic state with the complete
+  v6 position state and `rasim-fixed-lattice-state-v1`; it binds ordered image IDs, commanded/shared/
+  trim/effective angles, source-state count, detector shape, and every input hash.
+- `rasim-layered-quintuple-matched-regions-v2` freezes preparation/display row discovery state,
+  mixed phi/2theta and Qr/L row identities, selected native-pixel ordering, exact fixed-experiment
+  state, chart rectangles, recipe hash, and every input hash. Its center-selected count masses and
+  support are not the fit observable; fit-v11 reprojects the verified raw OSC continuously.
+- `rasim-shared-radial-background-v2` freezes one independently calibrated rise-decay radial halo
+  with shared shape, per-OSC amplitude and pedestal, covariance, held-out cells, and exact input
+  identities. It binds the fit plan and beam center and excludes every native pixel touched by the
+  oracle continuous projection. Its empirical-native-pixel method flags, adapter, and complete
+  numerical implementation are hash-bound and reverified on load.
+- `rasim-layered-quintuple-matched-fit-progress-v9` atomically records the last complete stage-specific model
+  evaluation and binds diagnostic, recipe, fit plan, full numerical implementation, backend,
+  cubature, block, rod-scope, optimizer-start, and stopping-budget identities.
+  `rasim-layered-quintuple-matched-region-fit-v11` records the five-coordinate A -> B -> C -> joint chain,
+  exact active/frozen names, child starts, direct and recursive predecessor hashes, one finite
+  positive scale per recipe-ordered OSC, the exact fitted rod roster, frozen radial-background
+  identity, residuals, convergence, and separate parameter-scaled
+  data-only and penalized sensitivity. Practical data-only rank and condition determine
+  admissibility; priors cannot create rank. Its objective uses full projected count covariance and
+  records its hash and projection revisions. `COMPLETE` projection/cubature status, tolerance, and
+  fit/oracle orders are bound to the hash-verified recipe. Joint model cubature gates the actual
+  anchor-conditioned `(I-A)m` observable by family plus raw anchor rows. Every stage must share the
+  same background, data projection, and rod roster. Only the joint artifact is eligible downstream,
+  and its qualification state is preserved.
+- `rasim-layered-quintuple-matched-profile-progress-v6` reports each completed continuous-profile pass for
+  monitoring but is not a resume source. `rasim-layered-quintuple-matched-figure-profiles-v10` is the atomic
+  completed diagnostic with
+  full detector-visible profiles in both L and physical Qz, continuous-support edge exclusions,
+  measured/model profiles, the exact fit-bound rod roster, content hashes for every render-critical
+  array, and the full verified upstream/predecessor hash chain. Its
+  only current evidence level is `FIT_CONDITIONED`; it sets `publication_ready=false` and makes no
+  all-configured-rod or full-profile-oracle claim.
+- `rasim-layered-quintuple-peak-alignment-v3` reports m=0 offsets in two-theta and nonzero-family offsets in L.
+  `rasim-layered-quintuple-matched-figure-output-v1` is promoted last and binds the PNG, PDF, alignment JSON,
+  renderer, and profile diagnostic hashes; its presence is the transaction commit marker.
 
 ## Required metadata
 

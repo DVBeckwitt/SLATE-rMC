@@ -703,7 +703,7 @@ def _positive_log_bounds(values: Sequence[FloatArray], *, decades: float) -> tup
 
 def _configured_structure_label(inputs: ConfiguredSimulationInputs) -> str:
     model_id = inputs.config.structure_factor.model_id
-    model_label = "finite-2H" if model_id == "bi2se3_finite_2h.v1" else model_id
+    model_label = "finite-2H" if model_id == "r3m_quintuple_finite_2h.v1" else model_id
     return f"{inputs.config.structure_factor.layers}-layer {model_label}"
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -17,6 +18,7 @@ import numpy as np
 from rasim_next.fitting import (
     INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    FixedPositionState,
     IncidenceAngleDeltaBounds,
     IndexedGeometryImage,
     SharedGeometryCorrectionBounds,
@@ -52,6 +54,28 @@ _BI2SE3_INDEXED_MANIFEST_HASH = (
 )
 
 
+def _write_external_json(destination: Path, payload: dict[str, object]) -> Path:
+    path = destination.resolve()
+    if path == ROOT or path.is_relative_to(ROOT):
+        raise ValueError("position artifact must be written outside the repository")
+    if path.exists():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    if temporary.exists():
+        raise FileExistsError(temporary)
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path
+
+
 def _subset_images(
     images: tuple[IndexedGeometryImage, ...],
     integer_l: set[int],
@@ -85,6 +109,17 @@ def _metrics_payload(metrics: object) -> dict[str, object]:
     }
 
 
+def _trim_by_image_id(result: object) -> dict[str, float]:
+    return {
+        image_id: float(value)
+        for image_id, value in zip(
+            result.image_ids,
+            result.incidence_angle_trim_by_image_id_rad,
+            strict=True,
+        )
+    }
+
+
 def _fit_payload(result: object) -> dict[str, object]:
     return {
         "success": result.success,
@@ -96,8 +131,24 @@ def _fit_payload(result: object) -> dict[str, object]:
         "corrections": asdict(result.corrections),
         "incidence_angle_delta_rad": result.incidence_angle_delta_rad,
         "incidence_angle_delta_fitted": result.incidence_angle_delta_fitted,
+        "incidence_angle_trim_fitted": result.incidence_angle_trim_fitted,
+        "incidence_angle_trim_contrast_rad": (result.incidence_angle_trim_contrast_rad.tolist()),
+        "incidence_angle_trim_by_image_id_rad": {
+            image_id: float(value)
+            for image_id, value in zip(
+                result.image_ids,
+                result.incidence_angle_trim_by_image_id_rad,
+                strict=True,
+            )
+        },
+        "incidence_angle_trim_prior_sigma_rad": result.incidence_angle_trim_prior_sigma_rad,
+        "incidence_angle_trim_contrast_half_span_rad": (
+            result.incidence_angle_trim_contrast_half_span_rad
+        ),
         "jacobian_rank": result.jacobian_rank,
         "jacobian_condition": result.jacobian_condition,
+        "posterior_jacobian_rank": result.posterior_jacobian_rank,
+        "posterior_jacobian_condition": result.posterior_jacobian_condition,
         "scaled_jacobian_singular_values": result.scaled_jacobian_singular_values.tolist(),
         "scaled_jacobian_weakest_direction": (result.scaled_jacobian_weakest_direction.tolist()),
         "active_bounds": result.active_bounds.tolist(),
@@ -125,6 +176,7 @@ def _prediction_payload(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
     incidence_angle_delta_rad: float,
+    incidence_angle_trim_by_image_id_rad: dict[str, float] | None = None,
 ) -> tuple[dict[str, object], ...]:
     payload = []
     for image in sorted(images, key=lambda item: item.image_id):
@@ -132,6 +184,9 @@ def _prediction_payload(
             image.observations.keys,
             corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
+            incidence_angle_trim_rad=(incidence_angle_trim_by_image_id_rad or {}).get(
+                image.image_id, 0.0
+            ),
         )
         entries = []
         for index, key in enumerate(image.observations.keys):
@@ -152,12 +207,18 @@ def _prediction_payload(
 def _incidence_angle_payload(
     images: tuple[IndexedGeometryImage, ...],
     incidence_angle_delta_rad: float,
+    incidence_angle_trim_by_image_id_rad: dict[str, float],
 ) -> tuple[dict[str, object], ...]:
     return tuple(
         {
             "image_id": image.image_id,
             "commanded_angle_rad": image.commanded_angle_rad,
-            "effective_angle_rad": image.commanded_angle_rad + incidence_angle_delta_rad,
+            "trim_rad": incidence_angle_trim_by_image_id_rad[image.image_id],
+            "effective_angle_rad": (
+                image.commanded_angle_rad
+                + incidence_angle_delta_rad
+                + incidence_angle_trim_by_image_id_rad[image.image_id]
+            ),
         }
         for image in sorted(images, key=lambda item: (item.commanded_angle_rad, item.image_id))
     )
@@ -200,8 +261,10 @@ def _maximum_prediction_separation_px(
     images: tuple[IndexedGeometryImage, ...],
     first: SharedGeometryCorrections,
     first_incidence_angle_delta_rad: float,
+    first_incidence_angle_trim_by_image_id_rad: dict[str, float],
     second: SharedGeometryCorrections,
     second_incidence_angle_delta_rad: float,
+    second_incidence_angle_trim_by_image_id_rad: dict[str, float],
 ) -> float:
     maximum = 0.0
     for image in images:
@@ -209,11 +272,13 @@ def _maximum_prediction_separation_px(
             image.observations.keys,
             first,
             incidence_angle_delta_rad=first_incidence_angle_delta_rad,
+            incidence_angle_trim_rad=first_incidence_angle_trim_by_image_id_rad[image.image_id],
         )
         right = image.predict_integer_l_tags(
             image.observations.keys,
             second,
             incidence_angle_delta_rad=second_incidence_angle_delta_rad,
+            incidence_angle_trim_rad=second_incidence_angle_trim_by_image_id_rad[image.image_id],
         )
         maximum = max(
             maximum,
@@ -243,18 +308,34 @@ def fit_osc_geometry_series(
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
     fit_incidence_angle_delta: bool = False,
     incidence_angle_delta_half_span_deg: float = 0.5,
+    fit_incidence_angle_trim: bool = False,
+    incidence_angle_trim_contrast_half_span_deg: float = 0.5,
+    incidence_angle_trim_prior_sigma_deg: float = 0.25,
     initial: SharedGeometryCorrections | None = None,
     initial_incidence_angle_delta_rad: float = 0.0,
 ) -> dict[str, object]:
     """Index once, fit frozen observations jointly, and audit without reassignment."""
 
-    if not fitted_parameter_names and not fit_incidence_angle_delta:
+    if (
+        not fitted_parameter_names
+        and not fit_incidence_angle_delta
+        and not fit_incidence_angle_trim
+    ):
         raise ValueError("at least one geometry parameter must remain fitted")
     if fit_incidence_angle_delta and "sample_normal_x_tilt_rad" in fitted_parameter_names:
         raise ValueError("fit_incidence_angle_delta requires sample_normal_x_tilt_rad to be frozen")
     delta_half_span_deg = float(incidence_angle_delta_half_span_deg)
     if not math.isfinite(delta_half_span_deg) or delta_half_span_deg <= 0.0:
         raise ValueError("incidence_angle_delta_half_span_deg must be positive and finite")
+    trim_half_span_deg = float(incidence_angle_trim_contrast_half_span_deg)
+    trim_prior_sigma_deg = float(incidence_angle_trim_prior_sigma_deg)
+    if fit_incidence_angle_trim and (
+        not math.isfinite(trim_half_span_deg)
+        or trim_half_span_deg <= 0.0
+        or not math.isfinite(trim_prior_sigma_deg)
+        or trim_prior_sigma_deg <= 0.0
+    ):
+        raise ValueError("incidence-angle trim half-span and prior sigma must be positive")
     series = load_osc_geometry_series(manifest_path)
     if series.qualification_profile not in {None, _BI2SE3_QUALIFICATION_PROFILE}:
         raise ValueError(f"unsupported qualification profile {series.qualification_profile!r}")
@@ -266,10 +347,13 @@ def fit_osc_geometry_series(
         initial_corrections.sample_normal_x_tilt_rad != 0.0
         or not fit_incidence_angle_delta
         or delta_half_span_deg != 0.5
+        or not fit_incidence_angle_trim
+        or trim_half_span_deg != 0.5
+        or trim_prior_sigma_deg != 0.25
     ):
         raise ValueError(
             "the Bi2Se3 qualification requires sample_normal_x_tilt_rad fixed at zero "
-            "and one common incidence-angle delta bounded by exactly +/-0.5 degrees"
+            "with one common delta and zero-sum trims using the qualified bounds/prior"
         )
     indexing = index_osc_geometry_series(series)
     bounds = SharedGeometryCorrectionBounds.rasim_multi_angle_pose()
@@ -281,6 +365,8 @@ def fit_osc_geometry_series(
         if fit_incidence_angle_delta
         else None
     )
+    trim_half_span_rad = math.radians(trim_half_span_deg) if fit_incidence_angle_trim else None
+    trim_prior_sigma_rad = math.radians(trim_prior_sigma_deg) if fit_incidence_angle_trim else None
     if indexing.indexed_images is None:
         raise RuntimeError("the initial indexing run did not retain fit-ready geometry models")
     images = indexing.indexed_images
@@ -305,15 +391,19 @@ def fit_osc_geometry_series(
                 fitted_parameter_names=fitted_parameter_names,
                 initial_incidence_angle_delta_rad=initial_delta,
                 incidence_angle_delta_bounds=incidence_bounds,
+                incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
+                incidence_angle_trim_prior_sigma_rad=trim_prior_sigma_rad,
             )
         )
         fit_wall_times.append(perf_counter() - started)
     fit_objective_sums = []
     for candidate in fit_results:
+        candidate_trims = _trim_by_image_id(candidate)
         residual = evaluate_indexed_geometry_series_residual(
             images,
             candidate.corrections,
             incidence_angle_delta_rad=candidate.incidence_angle_delta_rad,
+            incidence_angle_trim_by_image_id_rad=candidate_trims,
         )
         fit_objective_sums.append(float(np.dot(residual, residual)))
     selected_start_index = min(
@@ -321,10 +411,12 @@ def fit_osc_geometry_series(
         key=lambda index: (not fit_results[index].success, fit_objective_sums[index]),
     )
     result = fit_results[selected_start_index]
+    result_trims = _trim_by_image_id(result)
     post_fit = evaluate_indexed_geometry_series_metrics(
         images,
         result.corrections,
         incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+        incidence_angle_trim_by_image_id_rad=result_trims,
     )
     multi_start = tuple(
         {
@@ -347,8 +439,10 @@ def fit_osc_geometry_series(
                     images,
                     result.corrections,
                     result.incidence_angle_delta_rad,
+                    result_trims,
                     candidate.corrections,
                     candidate.incidence_angle_delta_rad,
+                    _trim_by_image_id(candidate),
                 )
             ),
             "objective_sum_squares": objective_sum,
@@ -363,6 +457,7 @@ def fit_osc_geometry_series(
         images,
         result.corrections,
         incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+        incidence_angle_trim_by_image_id_rad=result_trims,
     )
     if root_audit.classification != "SAME":
         raise RuntimeError("the independent fitted-root audit changed a frozen marker")
@@ -372,6 +467,7 @@ def fit_osc_geometry_series(
         image.image_id: image.corrected_instrument(
             result.corrections,
             incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+            incidence_angle_trim_rad=result_trims[image.image_id],
         )
         for image in images
     }
@@ -450,6 +546,8 @@ def fit_osc_geometry_series(
             fitted_parameter_names=fitted_parameter_names,
             initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
             incidence_angle_delta_bounds=incidence_bounds,
+            incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
+            incidence_angle_trim_prior_sigma_rad=trim_prior_sigma_rad,
         )
         cross_validation_fit_succeeded = cross_fit.success
         cross_validation = {
@@ -460,12 +558,14 @@ def fit_osc_geometry_series(
                     heldout_images,
                     cross_fit.corrections,
                     incidence_angle_delta_rad=cross_fit.incidence_angle_delta_rad,
+                    incidence_angle_trim_by_image_id_rad=_trim_by_image_id(cross_fit),
                 )
             ),
             "heldout_predictions": _prediction_payload(
                 heldout_images,
                 cross_fit.corrections,
                 cross_fit.incidence_angle_delta_rad,
+                _trim_by_image_id(cross_fit),
             ),
             "wall_time_seconds": perf_counter() - started,
         }
@@ -480,6 +580,7 @@ def fit_osc_geometry_series(
                 images,
                 result.corrections,
                 incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+                incidence_angle_trim_by_image_id_rad=result_trims,
             )
             residual_times.append(perf_counter() - started)
         warm_residual_median_seconds = float(np.median(residual_times))
@@ -491,6 +592,8 @@ def fit_osc_geometry_series(
             fitted_parameter_names=fitted_parameter_names,
             initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
             incidence_angle_delta_bounds=incidence_bounds,
+            incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
+            incidence_angle_trim_prior_sigma_rad=trim_prior_sigma_rad,
         )
         _, fit_peak_memory_bytes = tracemalloc.get_traced_memory()
         tracemalloc.stop()
@@ -507,8 +610,10 @@ def fit_osc_geometry_series(
                 images,
                 fit_results[left].corrections,
                 fit_results[left].incidence_angle_delta_rad,
+                _trim_by_image_id(fit_results[left]),
                 fit_results[right].corrections,
                 fit_results[right].incidence_angle_delta_rad,
+                _trim_by_image_id(fit_results[right]),
             ),
         }
         for left, right in combinations(range(len(fit_results)), 2)
@@ -562,8 +667,10 @@ def fit_osc_geometry_series(
         and incidence_bounds is not None
         and incidence_bounds.lower_rad == -math.radians(0.5)
         and incidence_bounds.upper_rad == math.radians(0.5)
-        and result.jacobian_parameter_names
-        == (*_BI2SE3_FITTED_SHARED_PARAMETER_NAMES, INCIDENCE_ANGLE_DELTA_PARAMETER_NAME)
+        and result.incidence_angle_trim_fitted
+        and result.incidence_angle_trim_contrast_half_span_rad == math.radians(0.5)
+        and result.incidence_angle_trim_prior_sigma_rad == math.radians(0.25)
+        and len(result.incidence_angle_trim_contrast_rad) == len(images) - 1
     )
     accepted = all(
         (
@@ -578,12 +685,63 @@ def fit_osc_geometry_series(
             qualification_parameterization_matches,
         )
     )
+    position_revision_payload = {
+        "indexed_manifest_hash": indexing.selection.manifest_hash,
+        "corrections": asdict(result.corrections),
+        "incidence_angle_delta_rad": result.incidence_angle_delta_rad,
+        "incidence_angle_image_ids": image_ids,
+        "incidence_angle_trim_by_image_id_rad": result_trims,
+    }
+    position_revision = (
+        "sha256-"
+        + hashlib.sha256(
+            json.dumps(
+                position_revision_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    fixed_position = FixedPositionState(
+        artifact_revision=position_revision,
+        corrections=result.corrections,
+        incidence_angle_delta_rad=result.incidence_angle_delta_rad,
+        commanded_incidence_angles_rad=tuple(image.commanded_angle_rad for image in images),
+        beam_center_column_row_px=tuple(
+            float(value)
+            for value in images[0].model.inputs.instrument.detector_reference_coordinate_px
+        ),
+        incidence_angle_image_ids=image_ids if result.incidence_angle_trim_fitted else (),
+        incidence_angle_trim_rad=(
+            tuple(result_trims[image_id] for image_id in image_ids)
+            if result.incidence_angle_trim_fitted
+            else ()
+        ),
+        incidence_angle_trim_contrast_rad=(
+            tuple(float(value) for value in result.incidence_angle_trim_contrast_rad)
+            if result.incidence_angle_trim_fitted
+            else ()
+        ),
+        incidence_angle_trim_prior_sigma_rad=(
+            result.incidence_angle_trim_prior_sigma_rad
+            if result.incidence_angle_trim_fitted
+            else None
+        ),
+        incidence_angle_trim_contrast_half_span_rad=(
+            result.incidence_angle_trim_contrast_half_span_rad
+            if result.incidence_angle_trim_fitted
+            else None
+        ),
+    ).to_record()
 
     return {
-        "schema": "rasim-osc-geometry-fit-result-v5",
+        "schema": "rasim-osc-geometry-fit-result-v6",
         "manifest_path": str(Path(manifest_path).resolve()),
+        "manifest_sha256": hashlib.sha256(Path(manifest_path).resolve().read_bytes()).hexdigest(),
         "indexed_manifest_hash": indexing.selection.manifest_hash,
         "run_completed": run_completed,
+        "fixed_position": fixed_position,
         "indexing_wall_time_seconds": math.fsum(indexing_wall_times),
         "indexing_pass_wall_times_seconds": tuple(indexing_wall_times),
         "geometry_setup_wall_time_seconds": indexing.geometry_setup_seconds,
@@ -599,10 +757,19 @@ def fit_osc_geometry_series(
         "cross_validation": cross_validation,
         "fit": _fit_payload(result),
         "incidence_angle_correction": {
-            "model_id": "commanded_angle_plus_common_delta.v1",
+            "model_id": "commanded_plus_common_delta_plus_zero_sum_trim.helmert.v1",
             "parameter_name": INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
             "delta_rad": result.incidence_angle_delta_rad,
-            "images": _incidence_angle_payload(images, result.incidence_angle_delta_rad),
+            "trim_parameterization": "orthonormal_helmert_zero_sum.v1",
+            "trim_contrast_rad": result.incidence_angle_trim_contrast_rad.tolist(),
+            "trim_prior_sigma_rad": result.incidence_angle_trim_prior_sigma_rad,
+            "trim_contrast_half_span_rad": (result.incidence_angle_trim_contrast_half_span_rad),
+            "trim_sum_rad": math.fsum(result_trims.values()),
+            "images": _incidence_angle_payload(
+                images,
+                result.incidence_angle_delta_rad,
+                result_trims,
+            ),
         },
         "post_fit": _metrics_payload(post_fit),
         "selected_start_index": selected_start_index,
@@ -681,6 +848,28 @@ def _parser() -> argparse.ArgumentParser:
         default=0.5,
         help="symmetric bound in degrees for the one shared incidence-angle delta",
     )
+    parser.add_argument(
+        "--fit-incidence-angle-trim",
+        action="store_true",
+        help="fit zero-sum per-image incidence trims in an orthonormal Helmert basis",
+    )
+    parser.add_argument(
+        "--incidence-angle-trim-contrast-half-span-deg",
+        type=float,
+        default=0.5,
+        help="symmetric bound for each zero-sum Helmert contrast",
+    )
+    parser.add_argument(
+        "--incidence-angle-trim-prior-sigma-deg",
+        type=float,
+        default=0.25,
+        help="Gaussian prior sigma for each zero-sum Helmert contrast",
+    )
+    parser.add_argument(
+        "--destination",
+        type=Path,
+        help="persist the raw JSON position artifact outside the repository",
+    )
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -692,7 +881,11 @@ def main(argv: list[str] | None = None) -> int:
         name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in frozen
     )
     try:
-        if not fitted_parameter_names and not arguments.fit_incidence_angle_delta:
+        if (
+            not fitted_parameter_names
+            and not arguments.fit_incidence_angle_delta
+            and not arguments.fit_incidence_angle_trim
+        ):
             raise ValueError("at least one shared geometry parameter must remain fitted")
         payload = fit_osc_geometry_series(
             arguments.manifest,
@@ -701,7 +894,14 @@ def main(argv: list[str] | None = None) -> int:
             fitted_parameter_names=fitted_parameter_names,
             fit_incidence_angle_delta=arguments.fit_incidence_angle_delta,
             incidence_angle_delta_half_span_deg=(arguments.incidence_angle_delta_half_span_deg),
+            fit_incidence_angle_trim=arguments.fit_incidence_angle_trim,
+            incidence_angle_trim_contrast_half_span_deg=(
+                arguments.incidence_angle_trim_contrast_half_span_deg
+            ),
+            incidence_angle_trim_prior_sigma_deg=(arguments.incidence_angle_trim_prior_sigma_deg),
         )
+        if arguments.destination is not None:
+            _write_external_json(arguments.destination, payload)
     except (OSError, ValueError, RuntimeError) as error:
         if arguments.json:
             json.dump(
@@ -751,6 +951,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"{item['image_id']}: commanded_theta_i_deg="
             f"{math.degrees(item['commanded_angle_rad']):.12g} "
+            "trim_theta_i_deg="
+            f"{math.degrees(item['trim_rad']):.12g} "
             "effective_theta_i_deg="
             f"{math.degrees(item['effective_angle_rad']):.12g}"
         )

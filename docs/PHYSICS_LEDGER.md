@@ -95,7 +95,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-ORD-005 | atomic `f0(Q)` | structure-factor modules | `eq:structure_factor` | ordered | MATCH after data decision |
 | PHY-ORD-006 | anomalous `f' + i f''` | VESTA/package modes | `eq:structure_factor` | ordered | CORRECTED |
 | PHY-ORD-007 | isotropic displacement | motif form factor | `eq:structure_factor` | ordered | MATCH |
-| PHY-ORD-008 | anisotropic `Uij` | incomplete old support | `eq:structure_factor` | ordered | PARTIAL active shared transverse-isotropic `Ur/Uz`; general per-site `Uij` DEFERRED |
+| PHY-ORD-008 | anisotropic `Uij` | incomplete old support | `eq:structure_factor` | ordered | PARTIAL active shared and site-resolved transverse-isotropic `Ur/Uz` profiles; general per-site `Uij` DEFERRED |
 | PHY-ORD-009 | complex structure amplitude | `motif_form_factor.py:473-543` | `eq:structure_factor` | ordered | MATCH |
 | PHY-ORD-010 | remove normalization to 100 and rounding | `diffraction_tools.py:135-207` | none | ordered | CORRECTED |
 | PHY-ORD-011 | distinct `(h,k)` rods with family metadata | Miller/grouping paths | Methods lines 64-78 | ordered | CORRECTED |
@@ -103,7 +103,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-ORD-013 | finite ordered stack | structure and stacking helpers | finite thickness discussion | ordered | MATCH/analytic |
 | PHY-ORD-014 | arbitrary complex depth-field weights in ordered amplitudes | no exact old equivalent | future distorted-wave model | none | DEFERRED |
 | PHY-ORD-015 | systematic absences from amplitude | old pruning/generation | crystallographic invariant | ordered | NEW proof |
-| PHY-ORD-016 | global anisotropic Q damping | `diffraction.py:2314-2315` | not derived | integration | CORRECTED, off by default |
+| PHY-ORD-016 | global anisotropic event-intensity envelope `exp(-U_r Q_r^2-U_z Q_z^2)` in fixed sample Q after mosaic rotation, distinct from crystallite-local site ADPs inside amplitude | `diffraction.py:2314-2315` | not derived | detector integration | CORRECTED, off by default |
 
 ## Reflectivity
 
@@ -148,13 +148,13 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-MEA-002 | solid-angle correction for later caking/analysis | caking helper `exact_cake_portable.py:866-874` | SI lines 523-527 | analysis | CORRECTED, excluded from raw rendering |
 | PHY-MEA-003 | scattering polarization distinct from Fresnel fields | no consistent native path | SI preprocessing and interface notes | integration | NEW explicit model, data-corrected unity, or declared approximation |
 | PHY-MEA-003A | reciprocal event Jacobian versus separate Lorentz factor | implicit old `I_Q` and powder paths | SI event measure | mosaic/integration | CORRECTED, no duplicate factor |
-| PHY-MEA-004 | deterministic detector pixel-box integration | point/bilinear events | detector measurement | integration | CORRECTED with convergence proof |
+| PHY-MEA-004 | deterministic detector pixel-box integration with grouped exact-`x` inverse-fold replacement | point/bilinear events | detector measurement | integration | CORRECTED with regular/fold convergence proof |
 | PHY-MEA-005 | point/bilinear event deposition | diffraction accumulation helpers | numerical | none | RETIRED by pixel-box integration |
 | PHY-MEA-005A | weighted forward Monte Carlo detector-pixel mass estimate | no accepted equivalent | latent pushforward and detector measurement | integration | NEW optional API-v11 estimator, execution-extended in API v12; exact hard bins, no retained events or calibrated counts; deterministic latent oracle required |
 | PHY-MEA-006 | detector PSF/resolution | bilinear was not a PSF | ordered-results resolution discussion | none | DEFERRED normalized operator |
 | PHY-MEA-007 | detector efficiency | not explicit | absolute-count requirement | none | DEFERRED unless calibrated |
 | PHY-MEA-008 | masks, beamstop, saturation, bad pixels | GUI/data paths | experimental handling | none | DEFERRED from forward core |
-| PHY-MEA-009 | background | GUI/fitting paths | later comparison | none | DEFERRED |
+| PHY-MEA-009 | empirical shared radial detector background | GUI/fitting paths | later comparison | fitting/measurement | CORRECTED active for matched-region fits; rise-times-decay shape shared across OSCs, per-OSC amplitude/pedestal, background-only azimuth holdouts, frozen before SF; model-limited without matched blank/dark |
 | PHY-MEA-010 | multiple scattering and extinction | absent | not claimed | none | DEFERRED |
 | PHY-MEA-011 | internal-film outgoing-direction Ewald density | no declared equivalent | Ewald surface measure | mosaic/integration | NO_ORACLE; NEW `intrinsic_ewald_direction_density_A2_per_sr.v1`; full sphere diagnostic, not detector solid angle |
 | PHY-MEA-012 | configured detector-visible internal-film Ewald direction density | no declared equivalent | Ewald surface measure with named support | mosaic/integration | NO_ORACLE; NEW `detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1`; regular `m=0` included, detector optics/Jacobian absent |
@@ -174,6 +174,7 @@ Every non-deferred row must have one proof case or a documented reason that it i
 | PHY-ORD-017 | remove injected fractional reflections | `utils/diffraction_tools.py:210-228` | continuous rods | ordered | CORRECTED |
 | PHY-ORD-018 | reflection pruning disabled in proof | `gui/structure_factor_pruning.py`; `controllers.py:691-891` | none | ordered/integration | CORRECTED |
 | PHY-ORD-019 | production pruning with detector-error bound | same | numerical approximation | integration | DEFERRED until profiled |
+| PHY-ORD-020 | explicit fault-free R-centered three-registry finite parent | implicit conventional-cell centering and legacy stacking paths | `eq:structure_factor` plus crystallographic centering | ordered/stacking | CORRECTED active CPU/CUDA; exact `(0F+,2F+,1F+)` registry sequence and `2h+k+L=3n` extinction oracle |
 | PHY-MAT-005 | charged and neutral species resolution | `utils/calculations.py` label parsing | `eq:structure_factor` | ordered | CORRECTED explicit |
 | PHY-MOT-001 | layer/block extraction from expanded CIF | `stacking/motif_validation.py` | layer-amplitude construction | ordered | CORRECTED explicit |
 | PHY-MOT-002 | stoichiometry and complete site coverage | same | motif definition | ordered | NEW proof |
@@ -192,9 +193,10 @@ Every non-deferred row must have one proof case or a documented reason that it i
 
 ## Selection and staged fitting
 
-Position-free measured peak discovery, frozen reciprocal association, cross-incidence branch
-selection, and the exact integer-L multi-angle geometry fit are active. Intensity fitting remains
-future work.
+Position-free discovery, shared-incidence geometry, measured mosaic, fixed-position ordered
+response, and the detector-native mixed-chart layered-Bi2X3 adapter for Bi2Se3 and Bi2Te3 are
+active. Arbitrary-material raw-OSC structure recovery and raw-OSC stacking-disorder fitting remain
+deferred.
 
 | ID | Operation | Original RASIM source | Manuscript source | Owner | Treatment |
 |---|---|---|---|---|---|
@@ -213,10 +215,11 @@ future work.
 | PHY-FIT-003 | fixed branch/rod association during geometry optimization | `caked_geometry_objective.py` locked targets | alignment stage | fitting | MATCH active principle, analytic root sign added |
 | PHY-FIT-003A | explicit outer re-index audit after geometry changes | distributed GUI selection behavior | indexing requirement | fitting/selection | NEW active direct fixed-L root oracle plus corrected-geometry relabeling of unchanged selected native candidates; fresh global search is diagnostic only |
 | PHY-FIT-003B | exact-L m=0 minimum-tilt geometry landmark (`tag_branch=0`) with signed inverse orientations collapsed by positive `|L|` | no legacy point identity for the m=0 orientation curve | constrained Ewald geometry | fitting/mosaic | NEW active; deterministic geometry landmark, not claimed intensity maximum or exhaustive visible-circle scan |
-| PHY-FIT-003C | strict arbitrary-length OSC-series schema and provenance-bound image-ID join | hard-coded GUI/script image lists | repeatable staged fitting | fitting/selection | NEW active; explicit commanded motor angles, one optional series-level delta, no per-image offsets, and one material/mount per fit group |
-| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active single-image and 5/10/15-degree exact-marker proofs; Bi2Se3 fits eight shared coordinates plus one common delta at rank 9/9 |
+| PHY-FIT-003C | strict arbitrary-length OSC-series schema and provenance-bound image-ID join | hard-coded GUI/script image lists | repeatable staged fitting | fitting/selection | NEW active; explicit commanded motor angles, one optional shared delta plus zero-sum Helmert trims, and one material/mount per fit group |
+| PHY-FIT-004 | geometry synthetic recovery and held-out peaks | no compact old proof | refinement workflow | fitting | NEW active arbitrary-series proof; scaled-rank diagnostics cover the selected shared corrections, common delta, and trim contrasts without granting independent per-image offsets |
+| PHY-FIT-004A | tightly conditioned lattice sensitivity after accepted position | no isolated legacy stage | refinement workflow | fitting/materials | NEW active; log-scaled in-plane/normal candidate, separate data/posterior sensitivity, data-only promotion gate, otherwise exact CIF retention |
 | PHY-FIT-005 | finite-bin mosaic-profile objective with integrate-`S/N`-before-divide and exact per-profile nuisance amplitudes | `optimization_mosaic_profiles.py` | refinement step 4 | fitting | CORRECTED active deterministic synthetic proof and model-limited three-OSC estimate; absolute and cross-peak intensities excluded from weighting |
-| PHY-FIT-005A | detector-native OSC projection by exact cropped physical-pixel overlap plus frozen whole-profile weak/secondary selection | no single legacy owner | refinement step 4 | fitting/measurement | NEW active Bi2Se3 measured slice; projector and fitter material-neutral, tracked runner material-specific |
+| PHY-FIT-005A | detector-native OSC projection by exact cropped physical-pixel overlap plus frozen whole-profile weak/secondary selection | no single legacy owner | refinement step 4 | fitting/measurement | RETAINED legacy proof/input preparation; current mixed-chart fitting consumes a strict provided-mosaic checkpoint |
 | PHY-FIT-006 | separate Gaussian width, Lorentzian width, and mixture with exact faces and finite centered-logit audit | old pseudo-Voigt workflows | `eq:mosaic_two_component_maintext` | fitting | CORRECTED active deterministic synthetic proof and model-limited three-OSC estimate |
 | PHY-FIT-007 | frozen geometry/source/material/profile revisions during mosaic fitting | staged old workflow | refinement workflow lines 53-59 | fitting | MATCH principle; active deterministic synthetic proof and model-limited three-OSC estimate consume an explicit position revision, corrections, common incidence delta, and effective angles |
 | PHY-FIT-008 | detector-native ordered selected-group ROI component-mass objective | `gui/ordered_structure_fit.py:322-540` | refinement step 5 and SI detector objectives | fitting | CORRECTED active deterministic 5/10/15-degree slice; raw-OSC component extraction DEFERRED |
@@ -227,10 +230,13 @@ future work.
 | PHY-FIT-012 | signal and normalization summed before division in future caking | `fitting/rod_profiles.py:91-308` | SI selected-rod profile equation | fitting | MATCH when caking is added |
 | PHY-FIT-013 | upstream parameters frozen before stacking fit | staged runtime | refinement step 6 | fitting | MATCH principle |
 | PHY-FIT-014 | stage-specific synthetic parameter recovery | absent as one system | scientific validation | fitting | NEW active for geometry, mosaic, and fixed-position ordered intensity |
-| PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | DEFERRED beyond exact nuisance scales and signed low-rank detrending; no stochastic or physical noise/background/covariance model |
+| PHY-FIT-017 | mixed-chart detector-native structure fit across three OSCs | separate caked/specular and reciprocal profile paths | refinement step 5 | fitting/measurement | CORRECTED active; `m=0` phi/2theta and `m!=0` signed-side Qr/L regions, one shared structure vector, one scale per OSC across all families, continuous chart-region model integration with no model raster, and a converged piecewise-constant native-count projection over the identical rectangles |
+| PHY-FIT-017A | mandatory A/B/C initializer chain followed by joint five-coordinate structure refinement | staged old workflow | refinement step 5 | fitting/materials | CORRECTED active; Wyckoff z, full-occupancy outer-site Bi antisite fraction, and sample-Q envelope coordinates are isolated diagnostically while crystallographic site ADPs remain fixed; exact predecessor/background/frozen state is enforced and only the joint result is authoritative |
+| PHY-FIT-018 | fitted-scope full-Qz profile | legacy pruning/grouping paths | numerical approximation | fitting/integration | NEW active `FIT_CONDITIONED` terminal; exact fitted rod roster and cubature are retained, no all-rod or publication claim is made, and `publication_ready=false` |
+| PHY-FIT-014A | explicit likelihood, variance, mask, background, scale, and data/model correction ledger | distributed fit paths | SI lines 109-134 and detector-derived objectives | fitting | PARTIAL active for matched regions: full piecewise-constant native-count projection covariance plus propagated frozen radial-background covariance, transformed by the same anchor operator, and one OSC scale; acquisition-matched dark/blank, PSF, and full detector-noise calibration remain DEFERRED |
 | PHY-FIT-015 | dependency-aware cache invalidation | distributed runtime caches | performance requirement | fitting | NEW active response/observable/structure/mosaic/source/material revision boundaries |
-| PHY-FIT-016 | optional final joint polish after staged stability | global old optimization paths | refinement discussion | fitting | FUTURE with safeguards |
-| PHY-MAP-001B | finite `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | none | DEFERRED until native fits pass |
+| PHY-FIT-016 | optional global polish across geometry, lattice, mosaic, and structure stages | global old optimization paths | refinement discussion | fitting | FUTURE with safeguards; distinct from the mandatory within-structure five-coordinate joint stage |
+| PHY-MAP-001B | finite `2theta/phi` caking and reciprocal remapping | exact-cake and exact-qspace modules | SI selected-profile workflow | measurement/fitting | PARTIAL selected continuous mixed-chart pullbacks are active through PHY-FIT-017; general or full-image caking remains DEFERRED |
 
 ## Coverage rule
 

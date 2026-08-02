@@ -18,8 +18,9 @@ from rasim_next.core.contracts import (
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 from rasim_next.materials import CrystalStructure
 from rasim_next.ordered import (
-    Bi2Se3QuintupleLayerParameters,
-    bi2se3_ql_amplitudes,
+    Bi2X3QuintupleLayerParameters,
+    SiteDisplacementProfile,
+    bi2x3_quintuple_layer_amplitudes,
     quintuple_layer_site_labels,
     uniform_finite_stack,
 )
@@ -117,21 +118,22 @@ def _physical_rod_id(rod: Rod) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class Bi2Se3TwoHStrength:
-    """Finite parent-2H strength from a CIF-derived Bi2-chalcogen3 layer.
+class Bi2X3FiniteStackStrength:
+    """Finite-stack strength from a CIF-derived Bi2-chalcogen3 layer.
 
-    ``Parent.TWO_H`` is the registry-fixed AA sequence. The source R-3m CIF
-    supplies the internal quintuple-layer motif but its native registry-cycling
-    3R sequence is intentionally not selected by this model. A nonzero shared
-    disorder epsilon assigns ``1-epsilon`` to the 2H parent transition and
-    ``epsilon/4`` to each of the four alternative transitions.
+    The parent is explicit: ``Parent.TWO_H`` is registry-fixed AA, while
+    ``Parent.THREE_R`` is the native R-centered registry cycle.  A nonzero
+    shared disorder epsilon assigns ``1-epsilon`` to the selected parent
+    transition and ``epsilon/4`` to each alternative transition.
     """
 
     crystal: CrystalStructure
     layers: int
     normalization: EventIntensityNormalization = EventIntensityNormalization.FINITE_PER_LAYER
+    parent: Parent = Parent.TWO_H
     shared_disorder_epsilon: float = 0.0
-    structure_parameters: Bi2Se3QuintupleLayerParameters | None = None
+    structure_parameters: Bi2X3QuintupleLayerParameters | None = None
+    site_displacement_profile: SiteDisplacementProfile | None = None
     _lattice: ReciprocalLattice = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -146,19 +148,35 @@ class Bi2Se3TwoHStrength:
         normalization = EventIntensityNormalization(self.normalization)
         if normalization is EventIntensityNormalization.UNIT_CELL:
             raise ValueError("2H stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
-        epsilon = RichEpsilonModel(
-            Parent.TWO_H,
-            self.shared_disorder_epsilon,
-        ).epsilon
+        parent = Parent(self.parent)
+        epsilon = RichEpsilonModel(parent, self.shared_disorder_epsilon).epsilon
+        if parent is Parent.THREE_R and epsilon != 0.0:
+            raise ValueError(
+                "the R-centered 3R parent is currently fault-free; "
+                "shared_disorder_epsilon must be zero"
+            )
         parameters = (
-            Bi2Se3QuintupleLayerParameters.from_crystal(self.crystal)
+            Bi2X3QuintupleLayerParameters.from_crystal(self.crystal)
             if self.structure_parameters is None
             else self.structure_parameters
         )
-        if not isinstance(parameters, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        if not isinstance(parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("structure_parameters must be Bi2X3QuintupleLayerParameters")
+        profile = self.site_displacement_profile
+        if profile is not None and not isinstance(profile, SiteDisplacementProfile):
+            raise TypeError("site_displacement_profile must be a SiteDisplacementProfile")
+        if profile is not None:
+            expected_labels = set(self.site_labels)
+            actual_labels = {site.source_label for site in profile.sites}
+            if actual_labels != expected_labels:
+                raise ValueError("site displacement profile must cover each quintuple-layer orbit")
+            if parameters.u_radial_A2 != 0.0 or parameters.u_normal_A2 != 0.0:
+                raise ValueError(
+                    "site-resolved and shared quintuple-layer displacements are mutually exclusive"
+                )
         object.__setattr__(self, "layers", layers)
         object.__setattr__(self, "normalization", normalization)
+        object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "shared_disorder_epsilon", epsilon)
         object.__setattr__(self, "structure_parameters", parameters)
         object.__setattr__(self, "_lattice", ReciprocalLattice.from_crystal(self.crystal))
@@ -204,22 +222,23 @@ class Bi2Se3TwoHStrength:
     ) -> FloatArray:
         """Vectorize the authoritative strength over mixed physical rods and exact L."""
 
-        shape, query, layer_normal_q = self._hkl_query(
+        shape, query, layer_normal_q, _ = self._hkl_query(
             h=h,
             k=k,
             L=L,
             k_norm_Ainv=k_norm_Ainv,
         )
-        amplitudes = bi2se3_ql_amplitudes(
+        amplitudes = bi2x3_quintuple_layer_amplitudes(
             self.crystal,
             query,
             structure_parameters=self.structure_parameters,
+            site_displacement_profile=self.site_displacement_profile,
         )
         law = (
-            TransitionLaw.for_parent(Parent.TWO_H)
+            TransitionLaw.for_parent(self.parent)
             if self.shared_disorder_epsilon == 0.0
             else RichEpsilonModel(
-                Parent.TWO_H,
+                self.parent,
                 self.shared_disorder_epsilon,
             ).transition_law()
         )
@@ -236,7 +255,7 @@ class Bi2Se3TwoHStrength:
             ),
             layers=self.layers,
             initial=InitialPopulation.plus_only(),
-            model_component_id="2H",
+            model_component_id=self.parent.value,
             population_group_id=None,
             normalization=self.normalization,
         )
@@ -249,7 +268,7 @@ class Bi2Se3TwoHStrength:
         k: ArrayLike,
         L: ArrayLike,
         k_norm_Ainv: float,
-    ) -> tuple[tuple[int, ...], RodQueryBatch, FloatArray]:
+    ) -> tuple[tuple[int, ...], RodQueryBatch, FloatArray, FloatArray]:
         """Validate mixed indices once and build the virtual-normal query."""
 
         reject_complex(h, "h")
@@ -299,6 +318,10 @@ class Bi2Se3TwoHStrength:
         if np.dot(layer_normal, self.crystal.direct_basis_A[:, 2]) < 0.0:
             layer_normal = -layer_normal
         layer_normal_q = q_crystal @ layer_normal
+        q_radial_squared = np.maximum(
+            np.einsum("ij,ij->i", q_crystal, q_crystal) - layer_normal_q**2,
+            0.0,
+        )
         event_id = np.arange(ell_flat.size, dtype=np.int64)
         unique_rod_hk, inverse_rod = np.unique(
             np.column_stack((h_flat, k_flat)),
@@ -324,7 +347,7 @@ class Bi2Se3TwoHStrength:
             l_coordinate=ell_flat,
             wavelength_A=np.full(ell_flat.size, wavelength_A),
         )
-        return shape, query, layer_normal_q
+        return shape, query, layer_normal_q, q_radial_squared
 
     def fixed_position_occupancy_quadratic(
         self,
@@ -336,15 +359,15 @@ class Bi2Se3TwoHStrength:
     ) -> FloatArray:
         """Compile six occupancy coefficients with coordinates and stacking fixed."""
 
-        shape, query, layer_normal_q = self._hkl_query(
+        shape, query, layer_normal_q, _ = self._hkl_query(
             h=h,
             k=k,
             L=L,
             k_norm_Ainv=k_norm_Ainv,
         )
         fixed = self.structure_parameters
-        if not isinstance(fixed, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("Bi2Se3 strength requires resolved structure parameters")
+        if not isinstance(fixed, Bi2X3QuintupleLayerParameters):
+            raise TypeError("layered-quintuple strength requires resolved structure parameters")
         reference = replace(
             fixed,
             bi_occupancy=0.0,
@@ -355,7 +378,7 @@ class Bi2Se3TwoHStrength:
         )
 
         amplitude_basis = tuple(
-            bi2se3_ql_amplitudes(
+            bi2x3_quintuple_layer_amplitudes(
                 self.crystal,
                 query,
                 structure_parameters=replace(
@@ -364,6 +387,7 @@ class Bi2Se3TwoHStrength:
                     se1_occupancy=occupancies[1],
                     se2_occupancy=occupancies[2],
                 ),
+                site_displacement_profile=self.site_displacement_profile,
             )
             for occupancies in (
                 (1.0, 0.0, 0.0),
@@ -393,7 +417,7 @@ class Bi2Se3TwoHStrength:
                 )
             )
             law = RichEpsilonModel(
-                Parent.TWO_H,
+                self.parent,
                 self.shared_disorder_epsilon,
             ).transition_law()
             raw = finite_intensity_reduced(
@@ -416,47 +440,75 @@ class Bi2Se3TwoHStrength:
                     strength_mixture[:, 5] - strength_mixture[:, 1] - strength_mixture[:, 2],
                 )
             )
-            return _nearest_physical_occupancy_quadratic(
+            result = _nearest_physical_occupancy_quadratic(
                 np.asarray(quadratic.reshape((*shape, 6)), dtype=np.float64),
                 plus_basis_e=plus_basis,
                 minus_basis_e=minus_basis,
                 layers=self.layers,
                 normalization=self.normalization,
             )
+            return result
 
-        def ordered_strength(amplitude_e: NDArray[np.complex128]) -> FloatArray:
-            result = uniform_finite_stack(
-                query.event_id,
-                layer_normal_q,
-                amplitude_e,
-                repeat_spacing_A,
-                self.layers,
-            ).scattering_strength_A2
+        parent_law = TransitionLaw.for_parent(self.parent)
+        registry = np.asarray(registry_phase(query.h, query.k))[:, None]
+        vertical = np.exp(1.0j * layer_normal_q * repeat_spacing_A)[:, None]
+
+        def ordered_strength(
+            plus_amplitude_e: NDArray[np.complex128],
+            minus_amplitude_e: NDArray[np.complex128],
+        ) -> FloatArray:
+            if self.parent is Parent.TWO_H:
+                result = uniform_finite_stack(
+                    query.event_id,
+                    layer_normal_q,
+                    plus_amplitude_e,
+                    repeat_spacing_A,
+                    self.layers,
+                ).scattering_strength_A2
+            else:
+                raw = finite_intensity_reduced(
+                    self.layers,
+                    plus_amplitude_e[:, None],
+                    minus_amplitude_e[:, None],
+                    registry,
+                    vertical,
+                    parent_law,
+                    InitialPopulation.plus_only(),
+                )[:, 0]
+                result = electron_squared_to_scattering_strength_A2(raw)
             if self.normalization is EventIntensityNormalization.FINITE_PER_LAYER:
                 result = result / float(self.layers)
             return np.asarray(result, dtype=np.float64)
 
-        bi_amplitude, se1_amplitude, se2_amplitude = (item.f_plus_e for item in amplitude_basis)
-        bi_strength = ordered_strength(bi_amplitude)
-        se1_strength = ordered_strength(se1_amplitude)
-        se2_strength = ordered_strength(se2_amplitude)
+        bi_plus, se1_plus, se2_plus = (item.f_plus_e for item in amplitude_basis)
+        bi_minus, se1_minus, se2_minus = (item.f_minus_e for item in amplitude_basis)
+        bi_strength = ordered_strength(bi_plus, bi_minus)
+        se1_strength = ordered_strength(se1_plus, se1_minus)
+        se2_strength = ordered_strength(se2_plus, se2_minus)
         quadratic = np.column_stack(
             (
                 bi_strength,
                 se1_strength,
                 se2_strength,
-                ordered_strength(bi_amplitude + se1_amplitude) - bi_strength - se1_strength,
-                ordered_strength(bi_amplitude + se2_amplitude) - bi_strength - se2_strength,
-                ordered_strength(se1_amplitude + se2_amplitude) - se1_strength - se2_strength,
+                ordered_strength(bi_plus + se1_plus, bi_minus + se1_minus)
+                - bi_strength
+                - se1_strength,
+                ordered_strength(bi_plus + se2_plus, bi_minus + se2_minus)
+                - bi_strength
+                - se2_strength,
+                ordered_strength(se1_plus + se2_plus, se1_minus + se2_minus)
+                - se1_strength
+                - se2_strength,
             )
         )
-        return _nearest_physical_occupancy_quadratic(
+        result = _nearest_physical_occupancy_quadratic(
             np.asarray(quadratic.reshape((*shape, 6)), dtype=np.float64),
             plus_basis_e=plus_basis,
             minus_basis_e=minus_basis,
             layers=self.layers,
             normalization=self.normalization,
         )
+        return result
 
     def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
         """Implement the scalar painted-Ewald strength protocol."""
@@ -464,4 +516,4 @@ class Bi2Se3TwoHStrength:
         return float(self.evaluate_profile(rod=rod, L=L, k_norm_Ainv=k_norm_Ainv))
 
 
-__all__ = ["Bi2Se3TwoHStrength"]
+__all__ = ["Bi2X3FiniteStackStrength"]

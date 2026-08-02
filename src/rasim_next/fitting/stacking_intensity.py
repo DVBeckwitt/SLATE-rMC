@@ -30,6 +30,13 @@ BoolArray = NDArray[np.bool_]
 
 STACKING_COMPONENT_IDS = ("2H", "4H+", "4H-", "6H+", "6H-")
 STACKING_PHASE_IDS = ("2H", "4H", "6H")
+_PBI2_PARENTS = (
+    Parent.TWO_H,
+    Parent.FOUR_H_PLUS,
+    Parent.FOUR_H_MINUS,
+    Parent.SIX_H_PLUS,
+    Parent.SIX_H_MINUS,
+)
 _PBI2_EPSILON = 0.001
 _PHASE_AGGREGATION = np.asarray(
     ((1.0, 0.0, 0.0, 0.0, 0.0), (0.0, 1.0, 1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0, 1.0))
@@ -139,7 +146,7 @@ def _parent_populations() -> tuple[StackingPopulation, ...]:
             model=RichEpsilonModel(parent, _PBI2_EPSILON).transition_law(),
             initial=InitialPopulation.plus_only(),
         )
-        for parent in Parent
+        for parent in _PBI2_PARENTS
     )
 
 

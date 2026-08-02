@@ -10,6 +10,7 @@ from scipy.special import ndtr
 from painted_ewald import (
     BraggSpaceConfig,
     ContinuousEwaldCoating,
+    EwaldLatentGeometry,
     MosaicBraggSpace,
     MosaicParameters,
     Rod,
@@ -27,6 +28,28 @@ BI2SE3_RECIPROCAL_BASIS_AINV = np.array(
         [0.0, 0.0, 0.2194156064806393],
     ]
 )
+
+
+def test_latent_geometry_accepts_numpy_string_root_statuses() -> None:
+    status = np.asarray(
+        [RootStatus.REGULAR.value, RootStatus.NO_ROOT.value],
+        dtype="U32",
+    )
+    geometry = EwaldLatentGeometry(
+        rod=Rod(1, 0),
+        branch=0,
+        alpha_rad=np.array([0.1, 0.2]),
+        beta_rad=np.array([0.3, 0.4]),
+        u_Ainv=np.zeros(2),
+        L=np.zeros(2),
+        q_sample_Ainv=np.zeros((2, 3)),
+        kf_sample_Ainv=np.zeros((2, 3)),
+        ewald_residual_Ainv=np.zeros(2),
+        status=status,
+    )
+
+    np.testing.assert_array_equal(geometry.status, status)
+    np.testing.assert_array_equal(geometry.valid, [True, False])
 
 
 class _UnequalSameFamilyStrength:

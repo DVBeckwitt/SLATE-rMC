@@ -42,12 +42,42 @@ from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorState,
     pack_bi2se3_two_h_structure,
 )
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+from rasim_next.stacking import Parent
 
 FloatArray = NDArray[np.float64]
 ComplexArray = NDArray[np.complex128]
 BoolArray = NDArray[np.bool_]
 IntArray = NDArray[np.int64]
+
+
+@dataclass(frozen=True, slots=True)
+class SampleQIntensityEnvelope:
+    """Directional event-intensity damping in the fixed sample frame."""
+
+    u_radial_A2: float = 0.0
+    u_normal_A2: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name in ("u_radial_A2", "u_normal_A2"):
+            value = float(getattr(self, name))
+            if not isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+            object.__setattr__(self, name, value)
+
+    def evaluate(self, q_sample_Ainv: ArrayLike) -> FloatArray:
+        """Return ``exp(-U_r Q_r^2 - U_z Q_z^2)`` for sample-frame events."""
+
+        supplied = np.asarray(q_sample_Ainv)
+        if np.iscomplexobj(supplied) and np.any(supplied.imag != 0.0):
+            raise ValueError("q_sample_Ainv must be real")
+        q_sample = np.asarray(supplied.real, dtype=np.float64)
+        if q_sample.ndim < 1 or q_sample.shape[-1] != 3 or not np.all(np.isfinite(q_sample)):
+            raise ValueError("q_sample_Ainv must contain finite sample-frame vectors")
+        return np.exp(
+            -self.u_radial_A2 * (q_sample[..., 0] ** 2 + q_sample[..., 1] ** 2)
+            - self.u_normal_A2 * q_sample[..., 2] ** 2
+        )
 
 
 class IntensityStatus(StrEnum):
@@ -144,10 +174,10 @@ def _status_array(value: ArrayLike, shape: tuple[int, ...], name: str) -> NDArra
     supplied = np.asarray(value)
     if supplied.shape != shape:
         raise ValueError(f"{name} must have shape {shape}")
-    result = np.asarray(
-        [ValidityCode(item).value for item in supplied.flat],
-        dtype="U32",
-    ).reshape(shape)
+    result = np.array(supplied, dtype="U32", copy=True, order="C")
+    allowed = np.asarray(tuple(code.value for code in ValidityCode), dtype="U32")
+    if not np.all(np.isin(result, allowed)):
+        raise ValueError(f"{name} contains an unknown validity code")
     result.setflags(write=False)
     return result
 
@@ -693,6 +723,7 @@ class DetectorLatentIntensity:
     attenuation_weight: FloatArray
     optical_weight: FloatArray
     coating_intensity_density_A2_rad2_inv: FloatArray
+    event_intensity_envelope: FloatArray
     source_phase_weight: float
     postoptical_density_A2_rad2_inv: FloatArray
 
@@ -714,6 +745,11 @@ class DetectorLatentIntensity:
                 shape,
                 "coating_intensity_density_A2_rad2_inv",
             ),
+            "event_intensity_envelope": _float_array(
+                self.event_intensity_envelope,
+                shape,
+                "event_intensity_envelope",
+            ),
             "postoptical_density_A2_rad2_inv": _float_array(
                 self.postoptical_density_A2_rad2_inv,
                 shape,
@@ -727,6 +763,7 @@ class DetectorLatentIntensity:
             raise ValueError("source_phase_weight must be finite and nonnegative")
         expected = (
             arrays["coating_intensity_density_A2_rad2_inv"]
+            * arrays["event_intensity_envelope"]
             * arrays["optical_weight"]
             * source_phase_weight
         )
@@ -1219,7 +1256,7 @@ def map_ewald_geometry_to_detector(
 def _compile_detector_state(
     *,
     bragg_config: BraggSpaceConfig,
-    strength_model: Bi2Se3TwoHStrength,
+    strength_model: Bi2X3FiniteStackStrength,
     ki_sample_Ainv: ArrayLike,
     incident: IncidentTransportResult,
     material: MaterialOptics,
@@ -1227,6 +1264,7 @@ def _compile_detector_state(
     rods: tuple[Rod, ...],
     incident_state_index: int,
     source_phase_weight: float,
+    intensity_envelope: SampleQIntensityEnvelope,
     packed_structure: tuple[
         FloatArray,
         FloatArray,
@@ -1249,8 +1287,17 @@ def _compile_detector_state(
         raise ValueError("the compiled incident state must be valid")
     if not isinstance(bragg_config, BraggSpaceConfig):
         raise TypeError("bragg_config must be BraggSpaceConfig")
-    if not isinstance(strength_model, Bi2Se3TwoHStrength):
-        raise TypeError("compiled integration requires the accepted Bi2Se3TwoHStrength model")
+    if not isinstance(strength_model, Bi2X3FiniteStackStrength):
+        raise TypeError("compiled integration requires the accepted Bi2X3FiniteStackStrength model")
+    if not isinstance(intensity_envelope, SampleQIntensityEnvelope):
+        raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
+    parent_codes = {Parent.TWO_H: 0, Parent.THREE_R: 1}
+    try:
+        stacking_parent_code = parent_codes[strength_model.parent]
+    except KeyError as error:
+        raise ValueError(
+            f"compiled integration does not implement stacking parent {strength_model.parent.value}"
+        ) from error
     basis_scale = max(float(np.linalg.norm(bragg_config.reciprocal_basis_Ainv)), 1.0)
     if not np.allclose(
         strength_model.reciprocal_basis_Ainv,
@@ -1394,9 +1441,12 @@ def _compile_detector_state(
         rod_atom_inplane_factor=rod_atom_inplane_factor,
         u_radial_A2=u_radial_A2,
         u_normal_A2=u_normal_A2,
+        intensity_envelope_u_radial_A2=intensity_envelope.u_radial_A2,
+        intensity_envelope_u_normal_A2=intensity_envelope.u_normal_A2,
         f0_parameters=f0_parameters,
         anomalous_factor_e=anomalous,
         layers=layers,
+        stacking_parent_code=stacking_parent_code,
         shared_disorder_epsilon=strength_model.shared_disorder_epsilon,
         normalization_divisor=normalization_divisor,
     )
@@ -1417,6 +1467,7 @@ class DetectorEwaldMeasure:
         "_crystal_to_sample",
         "_incident",
         "_instrument",
+        "_intensity_envelope",
         "_material",
         "_rod_catalog_revision",
         "_source_phase_weight",
@@ -1432,6 +1483,7 @@ class DetectorEwaldMeasure:
         rod_catalog_revision: str | None = None,
         phase_population_weight: float = 1.0,
         polarization_weight: float = 1.0,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
     ) -> None:
         if not isinstance(coating, ContinuousEwaldCoating):
             raise TypeError("coating must be ContinuousEwaldCoating")
@@ -1441,6 +1493,9 @@ class DetectorEwaldMeasure:
             raise TypeError("material must be MaterialOptics")
         if not isinstance(instrument, CompiledInstrument):
             raise TypeError("instrument must be CompiledInstrument")
+        envelope = SampleQIntensityEnvelope() if intensity_envelope is None else intensity_envelope
+        if not isinstance(envelope, SampleQIntensityEnvelope):
+            raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
         if rod_catalog_revision is not None and (
             not isinstance(rod_catalog_revision, str) or not rod_catalog_revision
         ):
@@ -1490,6 +1545,7 @@ class DetectorEwaldMeasure:
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_material", material)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_intensity_envelope", envelope)
         object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
         object.__setattr__(self, "_air_k0_Ainv", air_k0_Ainv)
         object.__setattr__(self, "_crystal_from_local", crystal_from_local)
@@ -1515,10 +1571,19 @@ class DetectorEwaldMeasure:
         return self._instrument
 
     @property
+    def intensity_envelope(self) -> SampleQIntensityEnvelope:
+        return self._intensity_envelope
+
+    @property
     def rod_catalog_revision(self) -> str | None:
         """Configured physical-rod authority, when this low-level measure has one."""
 
         return self._rod_catalog_revision
+
+    def map_ewald_geometry(self, geometry: EwaldLatentGeometry) -> DetectorMappedGeometry:
+        """Map already constructed exact Ewald geometry to the active detector."""
+
+        return self._map_geometry(geometry).geometry
 
     def _map_geometry(self, geometry: EwaldLatentGeometry) -> _MappedArrays:
         return _map_ewald_geometry_arrays(
@@ -1569,8 +1634,12 @@ class DetectorEwaldMeasure:
                 mapped.exit_amplitude[exit_valid],
                 attenuation[exit_valid],
             )
+        event_envelope = self._intensity_envelope.evaluate(intensity.geometry.q_sample_Ainv)
         postoptical = (
-            intensity.coating_intensity_density_A2_rad2_inv * optical * self._source_phase_weight
+            intensity.coating_intensity_density_A2_rad2_inv
+            * event_envelope
+            * optical
+            * self._source_phase_weight
         )
         postoptical = np.where(mapped.geometry.valid, postoptical, 0.0)
         return DetectorLatentIntensity(
@@ -1580,6 +1649,7 @@ class DetectorEwaldMeasure:
             attenuation_weight=attenuation,
             optical_weight=optical,
             coating_intensity_density_A2_rad2_inv=(intensity.coating_intensity_density_A2_rad2_inv),
+            event_intensity_envelope=event_envelope,
             source_phase_weight=self._source_phase_weight,
             postoptical_density_A2_rad2_inv=postoptical,
         )
@@ -1795,6 +1865,7 @@ class DetectorEwaldMeasure:
             return density, inverse_count, caustic
 
         q_sample = q_sample_Ainv.reshape(-1, 3)[valid_rows]
+        event_envelope = self._intensity_envelope.evaluate(q_sample)
         kf_sample = kf_sample_Ainv.reshape(-1, 3)[valid_rows]
         q_crystal = q_sample @ self._crystal_to_sample
         q_local = q_crystal @ self._crystal_from_local
@@ -1908,6 +1979,7 @@ class DetectorEwaldMeasure:
                             & (singular_latent.rod_strength_A2 > 0.0)
                             & (area_jacobian[singular] > 0.0)
                             & (optical[singular] > 0.0)
+                            & (event_envelope[singular] > 0.0)
                         )
                         infinite_density[valid_rows[singular][positive_numerator]] = True
                 regular = folded & (jacobian > 0.0)
@@ -1926,6 +1998,7 @@ class DetectorEwaldMeasure:
                         * rod.population
                         * area_jacobian[regular]
                         * optical[regular]
+                        * event_envelope[regular]
                         * source_phase_weight
                         / jacobian[regular]
                     )
@@ -1950,6 +2023,7 @@ class DetectorEwaldMeasure:
                     * rod.population
                     * area_jacobian[regular]
                     * optical[regular]
+                    * event_envelope[regular]
                     * source_phase_weight
                     / jacobian[regular]
                 )
@@ -2290,9 +2364,9 @@ class DetectorEwaldMeasure:
         """Pack one reusable evaluator for the accepted finite parent-2H model."""
 
         strength = self._coating.bragg_space.strength_model
-        if not isinstance(strength, Bi2Se3TwoHStrength):
+        if not isinstance(strength, Bi2X3FiniteStackStrength):
             raise TypeError(
-                "adaptive_compiled integration requires the accepted Bi2Se3TwoHStrength model"
+                "adaptive_compiled integration requires the accepted Bi2X3FiniteStackStrength model"
             )
         state = _compile_detector_state(
             bragg_config=self._coating.bragg_space.config,
@@ -2304,6 +2378,7 @@ class DetectorEwaldMeasure:
             rods=rods,
             incident_state_index=0,
             source_phase_weight=self._source_phase_weight,
+            intensity_envelope=self._intensity_envelope,
         )
         return CompiledDetectorEvaluator(state, self._instrument.detector_shape_rc)
 
@@ -2952,6 +3027,7 @@ __all__ = [
     "EwaldDirectionIntensity",
     "IntensityStatus",
     "PixelIntegrationMethod",
+    "SampleQIntensityEnvelope",
     "SpecularDetectorGeometry",
     "evaluate_detector_coordinates_geometry",
     "map_ewald_geometry_to_detector",

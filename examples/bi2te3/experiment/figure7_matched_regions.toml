@@ -1,0 +1,190 @@
+schema_version = "rasim-fitted-figure7-recreation-v3"
+material_id = "Bi2Te3"
+simulation_config = "../../../configs/bi2te3_r3_simulation.yaml"
+dataset_ids = ["Bi2Te3-5deg", "Bi2Te3-10deg", "Bi2Te3-15deg"]
+display_dataset_id = "Bi2Te3-5deg"
+
+[detector]
+native_shape_rc = [3000, 3000]
+display_rows = 1596
+low_percentile = 1.0
+high_percentile = 99.7
+
+[model_cubature]
+fit_gauss_order = 3
+oracle_gauss_order = 4
+fold_fit_subdivisions = 4
+fold_oracle_subdivisions = 8
+cuda_coordinate_chunk_size = 200000
+maximum_state_block_count = 8
+maximum_oracle_relative_l2 = 0.03
+
+[profile_cubature]
+fit_gauss_order = 3
+fold_fit_subdivisions = 4
+minimum_valid_bins_per_profile = 3
+
+[horizon_gate]
+air_exit_guard_deg = 1.0
+maximum_sub_guard_model_mass_fraction = 0.005
+selection_center_cutoff_deg = 2.4108442262
+selection_rule = "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
+
+[m0_region]
+two_theta_minimum_deg = 0.0
+two_theta_maximum_deg = 31.0
+two_theta_bin_width_deg = 0.1
+phi_signal_interval_deg = [-9.0, 7.0]
+phi_background_intervals_deg = [[-15.0, -11.0], [9.0, 13.0]]
+color = "#56B4E9"
+
+[[offspecular_group]]
+identity = "m1"
+families_m = [1]
+signal_bands_Ainv = [[1.44167, 1.86667]]
+background_intervals_Ainv = [[1.17917, 1.39167], [1.91667, 2.12917]]
+L_minimum = 2.0
+L_maximum = 17.0
+L_bin_width = 0.2
+color = "#0072B2"
+
+[[offspecular_group]]
+identity = "m34"
+families_m = [3, 4]
+signal_bands_Ainv = [[2.65261, 3.07761], [3.09584, 3.52084]]
+background_intervals_Ainv = [[2.39011, 2.60261], [3.57084, 3.78334]]
+L_minimum = 2.0
+L_maximum = 17.0
+L_bin_width = 0.2
+color = "#E69F00"
+
+[[fit_peak]]
+identity = "5deg-m0-003"
+dataset_id = "Bi2Te3-5deg"
+profile_identity = "m0"
+family_m = 0
+coordinate_kind = "two_theta_deg"
+center = 8.6880766999
+half_width = 0.6
+
+[[fit_peak]]
+identity = "5deg-m0-006"
+dataset_id = "Bi2Te3-5deg"
+profile_identity = "m0"
+family_m = 0
+coordinate_kind = "two_theta_deg"
+center = 17.3947679380
+half_width = 0.6
+
+[[fit_peak]]
+identity = "10deg-m0-006"
+dataset_id = "Bi2Te3-10deg"
+profile_identity = "m0"
+family_m = 0
+coordinate_kind = "two_theta_deg"
+center = 17.4381006478
+half_width = 0.6
+
+[[fit_peak]]
+identity = "5deg-m1"
+dataset_id = "Bi2Te3-5deg"
+profile_identity = "m1"
+family_m = 1
+coordinate_kind = "L"
+centers = [5.0]
+half_width = 0.4
+
+[[fit_peak]]
+identity = "10deg-m1"
+dataset_id = "Bi2Te3-10deg"
+profile_identity = "m1"
+family_m = 1
+coordinate_kind = "L"
+centers = [5.0, 8.0, 10.0, 11.0, 13.0, 16.0]
+half_width = 0.4
+
+[[fit_peak]]
+identity = "15deg-m1"
+dataset_id = "Bi2Te3-15deg"
+profile_identity = "m1"
+family_m = 1
+coordinate_kind = "L"
+centers = [8.0, 10.0, 11.0, 13.0, 16.0]
+half_width = 0.4
+
+[[fit_peak]]
+identity = "10deg-m3-006"
+dataset_id = "Bi2Te3-10deg"
+profile_identity = "m3"
+family_m = 3
+coordinate_kind = "L"
+center = 6.0
+half_width = 0.4
+
+[[fit_peak]]
+identity = "10deg-m4-005"
+dataset_id = "Bi2Te3-10deg"
+profile_identity = "m4"
+family_m = 4
+coordinate_kind = "L"
+center = 5.0
+half_width = 0.4
+
+[[excluded_peak]]
+dataset_id = "Bi2Te3-10deg"
+identity = "m0-003"
+center_exit_angle_deg = -1.312
+reason = "below exit horizon"
+
+[[excluded_peak]]
+dataset_id = "Bi2Te3-15deg"
+identity = "m0-003"
+center_exit_angle_deg = -6.312
+reason = "below exit horizon"
+
+[[excluded_peak]]
+dataset_id = "Bi2Te3-15deg"
+identity = "m0-006"
+center_exit_angle_deg = 2.427
+reason = "horizon-clearance gate"
+
+[[excluded_peak]]
+dataset_id = "Bi2Te3-15deg"
+identity = "m3-006"
+center_exit_angle_deg = 2.531
+reason = "horizon-clearance gate"
+
+[[label]]
+text = "m = 4 +"
+column_px = 536.3334147532975
+row_px = 1530.306301905227
+
+[[label]]
+text = "m = 3 +"
+column_px = 850.0405471421592
+row_px = 1502.6126038104542
+
+[[label]]
+text = "m = 1 +"
+column_px = 1121.8468490473865
+row_px = 1538.9594528578405
+
+[[label]]
+text = "m = 0"
+column_px = 1457.1323722546097
+row_px = 1161.9745183859136
+
+[[label]]
+text = "m = 1 -"
+column_px = 1847.2567171470444
+row_px = 1536.9594528578405
+
+[[label]]
+text = "m = 3 -"
+column_px = 2123.531509526136
+row_px = 1500.265754763068
+
+[[label]]
+text = "m = 4 -"
+column_px = 2419.319736199316
+row_px = 1538.265754763068

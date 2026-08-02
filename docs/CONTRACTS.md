@@ -36,7 +36,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
-| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta, with fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
+| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
 | `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 | `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
 | `ReciprocalProfileMembership` / `BinnedSampleIntegral` | measurement | immutable sample-to-bin identities and separately accumulated signal/measure vectors; division occurs only after finite-bin integration |
@@ -314,7 +314,7 @@ complement. This first phase permits only the three occupancies and `Ur/Uz`; att
 either Wyckoff coordinate fails explicitly. Absolute-calibrated data may fit all three occupancies.
 With one analytic scale per image, their common multiplier is an exact gauge, so one occupancy must
 be fixed as a positive ratio reference and only occupancy ratios may be interpreted. Ratio
-coordinates are nonnegative and may exceed one. The returned Bi2Se3 parameter object is merely the
+coordinates are nonnegative and may exceed one. The returned layered-quintuple parameter object is merely the
 admissible representative obtained by dividing all ratios by their maximum; frozen occupancy names
 refer to the optimizer's ratio coordinates, not to the representative's numeric fields. Mixed
 nonzero-`m` radial families are required to distinguish `Ur` from a common intensity scale. Within
@@ -408,7 +408,8 @@ nominal one-state landmark alone from establishing intensity support.
 - `load_simulation_config(path, repository_root=...)` accepts one strict
   `rasim-simulation-v2` YAML document. Unknown, duplicate, aliased, or missing fields fail.
 - `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
-  material, rods, finite-2H strength, and Bragg space once.
+  material, rods, the configured finite ordered-parent strength including R-centered 3R, and Bragg
+  space once.
 - `build_configured_geometry_inputs(config)` creates only source rows, material, reciprocal basis,
   rods, and compiled instrument. `build_geometry_only_ewald_context(...)` adds one nominal incident
   state. Neither boundary constructs structure strength or mosaic probability.
@@ -589,23 +590,30 @@ axial-powder gauge, and detector center/distance/pitch remain calibration-owned.
 The hard half-spans are `(10 deg, 10 deg, 5 deg, 5 deg, 5 deg, 5 deg, 0.1 mm, 0.1 mm, 0.1 mm)` in
 the declared parameter order.
 
-An optional `IncidenceAngleDeltaBounds` activates exactly one additional series-level coordinate,
-`incidence_angle_delta_rad`. It is additive and common:
-`effective_angle[j] = commanded_angle[j] + incidence_angle_delta_rad` for every image. There is no
-per-image incidence correction API. The delta is applied once by rebinding each image's configured
-axis angle before the remaining shared corrections. At the nominal x incidence axis it occupies the
-same gauge as `sample_normal_x_tilt_rad`, so activating both fails before optimization. The accepted
-Bi2Se3 parameterization fixes that sample-x coordinate at zero, fits the other eight shared
-coordinates plus the common delta, and bounds the delta to `+/-0.5 deg`.
+An optional `IncidenceAngleDeltaBounds` activates one common series-level coordinate,
+`incidence_angle_delta_rad`, and may pair it with zero-sum per-image trims represented in a
+canonical Helmert basis. Thus
+`effective_angle[j] = commanded_angle[j] + incidence_angle_delta_rad + trim[j]`, with
+`sum(trim)=0`. The common delta remains the mean calibration correction; the trims can absorb small
+commanded-angle errors without letting three independent offsets replace it. Both are applied once
+by rebinding each image's configured axis angle before the remaining shared corrections. At the
+nominal x incidence axis the common delta occupies the same gauge as
+`sample_normal_x_tilt_rad`, so activating both fails before optimization. The accepted Bi2X3
+parameterization fixes that sample-x coordinate at zero, bounds the common delta to `+/-0.5 deg`,
+and tightly bounds the two independent trim contrasts.
 
 The actual bound-scaled Jacobian must have rank equal to the selected coordinate count with
 condition at most `1e8` before optimization. Singular values, weakest direction, and active-bound
 flags have that same combined-coordinate length; the result explicitly reports canonical shared
 fitted/fixed names and `jacobian_parameter_names`, whose last entry is the common delta when active.
-For the qualifying Bi2Se3 eight-shared-plus-delta pack the rank ladder is 5/9 for 5 degrees, 7/9
-after adding 10 degrees, and 9/9 only after adding 15 degrees. Full rank does not imply precise
-pivot recovery; the weakest direction must be reported. Beam center and lattice constants are not
-members of this pack and cannot be activated accidentally.
+Full rank does not imply precise pivot recovery; the weakest direction must be reported. Beam
+center and lattice constants are not members of this pack and cannot be activated accidentally. A
+separate lattice-sensitivity command
+may consume only a qualified completed position artifact. It fits near-CIF hexagonal in-plane and
+normal log strains, serializes their constrained full basis, reports data-only and penalized
+sensitivities separately, and promotes the candidate only
+when the data-only scaled rank, condition, improvement, bounds, prior-pull, selection, and root gates
+all pass. Otherwise downstream construction receives no basis override and follows the CIF path.
 
 `audit_indexed_geometry_series_roots(...)` brackets
 `F(beta)=q(beta) dot (q(beta)+2 ki)` on its two monotone arcs without calling the production
@@ -626,7 +634,11 @@ A complete corrected-geometry `index_osc_geometry_series(...)` pass is a separat
 diagnostic because its cake grid and same-key candidate ownership change with geometry. Newly
 visible or differently selected unfitted lobes are reported but never censor or replace frozen data.
 
-### Portable staged-fit replay
+### Historical portable staged-fit replay
+
+This contract documents the retained baseline replay and is not the current layered-quintuple
+workflow. New fits compose the strict fixed position, optional accepted lattice, and provided
+mosaic checkpoints described below, then use the mixed-chart matched-region pipeline.
 
 `rasim-staged-fit-replay-v2` is a strict, material-case manifest for geometry, mosaic,
 ordered-intensity, and optional render stages. Every path is case-relative and must remain inside
@@ -660,8 +672,12 @@ stage. The replay CLI resumes from
 the complete verified predecessor chain in the same output directory; direct external-artifact
 ingestion is not yet a replay CLI option. A later fit never infers, silently recomputes, or
 substitutes an earlier result. The measured mosaic CLI requires one verified position artifact and
-atomically extracts its revision, all nine corrections, and one common incidence delta; its output
-and the ordered/SF consumer both retain and exact-check the complete state.
+may additionally consume its bound lattice-decision artifact. It atomically extracts the position
+revision, all nine corrections, and one common incidence delta, and records complete fixed-position
+and fixed-lattice states. The ordered/SF consumer accepts the lattice only through that mosaic
+checkpoint and exact-checks both states, including source and rod-catalogue revisions.
+`RETAIN_CIF_LATTICE` passes no explicit matrix override; an accepted full basis rebuilds the nominal
+and source-averaged material, optical, reciprocal, rod, and detector state.
 The Bi2Se3 geometry state records the commanded image angles, the one common fitted delta, all three
 effective angles, and the fixed sample-x gauge so mosaic and ordered/SF construction reproduce the
 same transforms exactly.
@@ -717,5 +733,82 @@ general point deposition, discrete Ewald painters, sphere textures, or raster gr
 terminal stochastic estimator is not one of those retired runtimes: it exposes no intermediate
 sample/event object and streams weighted roots into its declared final pixel-mass estimate. Callers
 must use the continuous reciprocal and detector contracts above.
+
+## Mixed-chart matched-region fit
+
+`rasim-fixed-experiment-state-v2` is the modular handoff into this fit. It binds the ordered image
+IDs, commanded angles, one shared incidence delta, zero-sum trims, resulting effective angles,
+all shared rigid corrections, the exact position artifact, a `rasim-fixed-mosaic-state-v1`
+provided prior, and a `rasim-fixed-lattice-state-v1` decision. The lattice decision is either the
+unchanged CIF basis or a basis promoted by the public data-only lattice gate; rejected candidates
+cannot leak into construction. Source/material/reciprocal state is built once and immutably reused
+while only each view's commanded incidence is rebound. Any one of position, lattice, mosaic,
+prepare, background, A, B, C, joint, profiles, or render may be run separately when every required
+predecessor is supplied. The current generalized path validates a separately supplied mosaic
+checkpoint; it does not claim a generalized mosaic-fit CLI.
+
+`SpecularAngularProfileRegion` assigns `m=0` native pixels by `phi` and `2theta` and bins them in
+`2theta`. `OffSpecularBandLayout` assigns nonzero families jointly by signed detector side, `Qr`,
+and `L`. Every fitted block retains one or more signal rows and exactly two disjoint background
+anchors.
+Pixel-center signal and anchor memberships are frozen only for row discovery, background-exclusion
+seeding, and detector display. The authoritative measured fit observable is reprojected from the
+verified raw OSC over the declared continuous chart regions.
+
+`MatchedRegionObservations` contains projected count mass, continuous detector-area support, full
+projected count covariance, background coordinate, dataset ID, family, and complete-block identity.
+A separate `RadialBackgroundState` is calibrated from background-only radial-by-azimuth detector
+cells, with held-out azimuth sectors, and frozen before structure fitting. Calibration excludes
+every pixel touched by the oracle continuous-region projection and binds the exact fit plan,
+projection revisions, beam center, parameter vector, and covariance. `fit_matched_regions` accepts
+an arbitrary continuous-region model callable and
+fits one parameter vector across every dataset and family. One nonnegative scale is profiled per
+dataset and shared by all of that dataset's families; only signal rows enter the fixed-background
+objective, whose covariance includes the shared background-parameter covariance. A later stage is
+admissible only when its diagnostic, background artifact, and every
+predecessor hash match. No family scale, smoothed-data model, simulated raster, or bin-center
+structure-factor substitution is permitted.
+
+The layered Bi2X3 adapter declares five coordinates in one immutable fit plan:
+`bi_delta_z_fractional`, `outer_chalcogen_delta_z_fractional`, `outer_bi_antisite_fraction`,
+`intensity_envelope_u_radial_A2`, and `intensity_envelope_u_normal_A2`. The crystallographic
+Wyckoff-site ADPs remain fixed inside the atomic amplitude; the last two coordinates instead apply
+the separate `SampleQIntensityEnvelope` factor `exp(-U_r Q_r^2-U_z Q_z^2)` once to each
+event intensity using the fixed-sample-frame Q after mosaic rotation and before source summation. Bi and
+central-chalcogen occupancies are fixed at one; the outer site is the full-occupancy mixture
+`(1-x) X + x Bi`, never a chalcogen vacancy. Stage A activates the two z offsets, B activates `x`,
+C activates the two global intensity-envelope parameters, and
+`joint` activates all five.
+A/B/C are diagnostic initializers, not reportable alternatives to the joint fit. B, C, and joint
+must start exactly from A, B, and C respectively; recursive predecessor hashes and all frozen
+coordinates compare exactly. A completed stage can be supplied only as a predecessor, while a
+same-stage progress artifact is the sole resume source.
+
+The fit plan fixes parameter scales, bounds, practical sensitivity tolerance, and maximum condition.
+Admissibility uses the parameter-scaled data-only Jacobian and requires full practical rank and
+finite condition within the plan limit. `FIT` additionally requires convergence with no active
+bound. A declared bound-limited `MODEL_LIMITED_FIT` joint may feed only `FIT_CONDITIONED` profiles
+when optimizer, rank, trusted-recipe data projection, and anchor-conditioned cubature gates all
+pass; its limitation and `publication_ready=false` state are preserved. Penalized sensitivity is
+reported separately; near-CIF priors are numerical trust regularization and cannot manufacture
+identifiability.
+
+The diffraction observable is continuous density integrated directly over each declared
+phi/two-theta or signed-side Qr/L region. Verified finite native-pixel counts define a
+piecewise-constant measured field; a data-only sparse projector integrates it over those same
+rectangles and propagates the full count covariance when a pixel contributes fractionally to more
+than one row. The declared plug-in variance is `max(count, 1)`, so the one-count floor is explicit
+and revision-bound rather than described as exact Poisson variance. Display profiles use the frozen radial state and adjacent anchors to condition the
+measured background, and apply the same frozen anchor projection to the continuous diffraction
+model before the per-dataset scale. Data and model therefore use the same conditioned region and
+covariance measure without smoothing or pixelizing the model.
+
+A declared rod scope keeps the inverse problem bounded while preserving every fitted family. The
+current terminal is explicitly `FIT_CONDITIONED`: it renders full-Qz branches with the same fitted
+rod scope and fit-order cubature, records that scope, and sets `publication_ready=false`. Rendering
+does not imply an all-configured-rod or publication oracle.
+Resume artifacts bind the exact diagnostic, recipe, fit plan, numerical implementation, full
+A/B/C/joint chain, source, backend, device, cubature, chunk, state-block, pixel ordering, and rod
+scope; a mismatch fails rather than resumes.
 The callable intrinsic solid-angle density added in v12 is a continuous function result; it does
 not restore a retained sphere mesh or texture as model state.

@@ -41,8 +41,13 @@ from rasim_next.geometry.instrument import (
     compose_intrinsic_xy_rotation,
 )
 from rasim_next.geometry.transport import IncidentTransportResult
-from rasim_next.materials import CrystalStructure, material_optics, read_crystal
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.materials import (
+    CrystalStructure,
+    crystal_with_direct_basis,
+    material_optics,
+    read_crystal,
+)
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.continuous_detector import (
     DetectorCoordinateGeometry,
     DetectorEwaldMeasure,
@@ -53,6 +58,7 @@ from rasim_next.pipeline.continuous_detector import (
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.sampling.source import sample_gaussian_source_rays
+from rasim_next.stacking import Parent
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -1065,6 +1071,8 @@ def build_geometry_only_ewald_context(
 
 def build_configured_geometry_inputs(
     config: SimulationConfiguration,
+    *,
+    direct_basis_A: ArrayLike | None = None,
 ) -> ConfiguredGeometryInputs:
     """Build the one-ray material and reciprocal state needed by exact geometry tags."""
 
@@ -1077,6 +1085,12 @@ def build_configured_geometry_inputs(
         phase_id=config.material.phase_id,
         expected_sha256=config.cif_sha256,
     )
+    if direct_basis_A is not None:
+        crystal = crystal_with_direct_basis(
+            crystal,
+            np.asarray(direct_basis_A, dtype=np.float64),
+            provenance="explicit configured direct-basis override",
+        )
     material = material_optics(crystal, samples.wavelength_A)
     reciprocal = ReciprocalLattice.from_crystal(crystal)
     air_k_Ainv = 2.0 * np.pi / float(samples.wavelength_A[0])
@@ -1091,6 +1105,38 @@ def build_configured_geometry_inputs(
         config=config,
         samples=samples,
         instrument=instrument,
+        crystal=crystal,
+        material=material,
+        reciprocal=reciprocal,
+        rods=rods,
+    )
+
+
+def rebind_configured_geometry_direct_basis(
+    inputs: ConfiguredGeometryInputs,
+    direct_basis_A: ArrayLike,
+) -> ConfiguredGeometryInputs:
+    """Rebuild every lattice-dependent geometry input for one explicit direct basis."""
+
+    if not isinstance(inputs, ConfiguredGeometryInputs):
+        raise TypeError("inputs must be ConfiguredGeometryInputs")
+    crystal = crystal_with_direct_basis(
+        inputs.crystal,
+        np.asarray(direct_basis_A, dtype=np.float64),
+        provenance="regularized fitted direct basis",
+    )
+    material = material_optics(crystal, inputs.samples.wavelength_A)
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    air_k_Ainv = 2.0 * np.pi / float(inputs.samples.wavelength_A[0])
+    rods = enumerate_rods_within_ewald_sphere(
+        reciprocal_basis_Ainv=reciprocal.basis_Ainv,
+        k_norm_Ainv=air_k_Ainv,
+        population=inputs.config.bragg.rod_population,
+    )
+    if not inputs.config.bragg.include_detector_visible_m0:
+        rods = tuple(rod for rod in rods if rod.family_m != 0)
+    return replace(
+        inputs,
         crystal=crystal,
         material=material,
         reciprocal=reciprocal,
@@ -1145,37 +1191,47 @@ class ConfiguredSimulationInputs:
     reciprocal: ReciprocalLattice
     rods: tuple[Rod, ...]
     mosaic: MosaicParameters
-    strength: Bi2Se3TwoHStrength
+    strength: Bi2X3FiniteStackStrength
     bragg_space: MosaicBraggSpace
     material: MaterialOptics
+    commanded_instrument_rebindable: bool = True
 
 
-def configured_rod_catalog_revision(inputs: ConfiguredSimulationInputs) -> str:
+def configured_rod_catalog_revision(
+    inputs: ConfiguredSimulationInputs,
+    *,
+    rods: tuple[Rod, ...] | None = None,
+) -> str:
     """Return the material-, lattice-, and order-bound physical rod catalog revision."""
 
     if not isinstance(inputs, ConfiguredSimulationInputs):
         raise TypeError("inputs must be ConfiguredSimulationInputs")
+    active_rods = inputs.rods if rods is None else tuple(rods)
+    if not active_rods or any(rod not in inputs.rods for rod in active_rods):
+        raise ValueError("rod revision requires a nonempty configured subset")
     return canonical_revision_sha256(
         ("definition_id", "configured_physical_rods.v1"),
         ("phase_id", inputs.config.material.phase_id),
         ("cif_sha256", inputs.config.cif_sha256),
         ("reciprocal_basis_Ainv", inputs.reciprocal.basis_Ainv),
-        ("rod_h", np.asarray([rod.h for rod in inputs.rods], dtype=np.int64)),
-        ("rod_k", np.asarray([rod.k for rod in inputs.rods], dtype=np.int64)),
-        ("rod_population", np.asarray([rod.population for rod in inputs.rods], dtype=np.float64)),
+        ("rod_h", np.asarray([rod.h for rod in active_rods], dtype=np.int64)),
+        ("rod_k", np.asarray([rod.k for rod in active_rods], dtype=np.int64)),
+        ("rod_population", np.asarray([rod.population for rod in active_rods], dtype=np.float64)),
     )
 
 
 def build_configured_simulation_inputs(
     config: SimulationConfiguration,
+    *,
+    direct_basis_A: ArrayLike | None = None,
 ) -> ConfiguredSimulationInputs:
     """Build shared immutable physics once, without allocating any rendered field."""
 
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
     if config.structure_factor.model_id not in {
-        "bi2se3_finite_2h.v1",
         "r3m_quintuple_finite_2h.v1",
+        "r3m_quintuple_finite_3r.v1",
     }:
         raise ValueError(
             "structure_factor.model_id must select the finite R-3m quintuple-layer model "
@@ -1186,6 +1242,16 @@ def build_configured_simulation_inputs(
     if not 0.0 <= config.structure_factor.shared_disorder_epsilon <= 1.0:
         raise ValueError(
             "structure_factor.shared_disorder_epsilon must lie in [0, 1] for intensity"
+        )
+    stacking_parent = (
+        Parent.THREE_R
+        if config.structure_factor.model_id == "r3m_quintuple_finite_3r.v1"
+        else Parent.TWO_H
+    )
+    if stacking_parent is Parent.THREE_R and config.structure_factor.shared_disorder_epsilon != 0.0:
+        raise ValueError(
+            "r3m_quintuple_finite_3r.v1 is a deterministic fault-free parent; "
+            "shared_disorder_epsilon must be zero"
         )
     if config.mosaic.lorentzian_probability < 1.0 and config.mosaic.gaussian_sigma_deg == 0.0:
         raise ValueError("active Gaussian mosaic width must be nonzero for intensity")
@@ -1198,13 +1264,22 @@ def build_configured_simulation_inputs(
         phase_id=config.material.phase_id,
         expected_sha256=config.cif_sha256,
     )
+    if direct_basis_A is not None:
+        crystal = crystal_with_direct_basis(
+            crystal,
+            np.asarray(direct_basis_A, dtype=np.float64),
+            provenance="explicit configured direct-basis override",
+        )
     material = material_optics(crystal, samples.wavelength_A)
     incident = build_incident_states(samples, material, instrument)
     valid_index = np.flatnonzero(incident.states.valid)
     if not valid_index.size:
         raise ValueError("configured source produced no valid incident state")
     reciprocal = ReciprocalLattice.from_crystal(crystal)
-    maximum_air_k = 2.0 * np.pi / float(np.min(incident.states.wavelength_A[valid_index]))
+    # Commanded-angle rebinding may change which sampled rays intersect the film.  Build the
+    # immutable catalog for every sampled wavelength so a later valid ray cannot require a rod
+    # omitted by the base view.
+    maximum_air_k = 2.0 * np.pi / float(np.min(incident.states.wavelength_A))
     rods = enumerate_rods_within_ewald_sphere(
         reciprocal_basis_Ainv=reciprocal.basis_Ainv,
         k_norm_Ainv=maximum_air_k,
@@ -1213,10 +1288,11 @@ def build_configured_simulation_inputs(
     if not config.bragg.include_detector_visible_m0:
         rods = tuple(rod for rod in rods if rod.family_m != 0)
     mosaic = _mosaic(config.mosaic)
-    strength = Bi2Se3TwoHStrength(
+    strength = Bi2X3FiniteStackStrength(
         crystal=crystal,
         layers=config.structure_factor.layers,
         normalization=EventIntensityNormalization.FINITE_TOTAL,
+        parent=stacking_parent,
         shared_disorder_epsilon=config.structure_factor.shared_disorder_epsilon,
     )
     nominal_air_k = 2.0 * np.pi / config.source.mean_wavelength_A
@@ -1254,16 +1330,75 @@ def build_configured_simulation_inputs(
     )
 
 
+def rebind_configured_simulation_instrument(
+    inputs: ConfiguredSimulationInputs,
+    config: SimulationConfiguration,
+) -> ConfiguredSimulationInputs:
+    """Reuse immutable physics when only commanded instrument-axis angles change."""
+
+    if not isinstance(inputs, ConfiguredSimulationInputs):
+        raise TypeError("inputs must be ConfiguredSimulationInputs")
+    if not isinstance(config, SimulationConfiguration):
+        raise TypeError("config must be SimulationConfiguration")
+    if inputs.commanded_instrument_rebindable is not True:
+        raise ValueError("instrument rebinding is disabled after fixed geometry corrections")
+
+    def without_commanded_angles(value: SimulationConfiguration) -> SimulationConfiguration:
+        return replace(
+            value,
+            instrument=replace(
+                value.instrument,
+                axis_rotations=tuple(
+                    replace(axis, angle_deg=0.0) for axis in value.instrument.axis_rotations
+                ),
+            ),
+        )
+
+    if without_commanded_angles(config) != without_commanded_angles(inputs.config):
+        raise ValueError(
+            "simulation reuse requires identical configuration apart from commanded axis angles"
+        )
+    instrument = _compile_instrument(config.instrument)
+    incident = build_incident_states(inputs.samples, inputs.material, instrument)
+    if not bool(np.any(incident.states.valid)):
+        raise ValueError("rebound simulation produced no valid incident state")
+    bragg_space = MosaicBraggSpace(
+        replace(
+            inputs.bragg_space.config,
+            crystal_to_sample=instrument.sample_from_crystal.rotation,
+        ),
+        inputs.strength,
+    )
+    return replace(
+        inputs,
+        config=config,
+        instrument=instrument,
+        incident=incident,
+        bragg_space=bragg_space,
+    )
+
+
 def build_source_averaged_detector(
     inputs: ConfiguredSimulationInputs,
 ) -> SourceAveragedDetectorEwaldMeasure:
     """Compile the continuous all-state detector pullback only when requested."""
 
+    valid_index = np.flatnonzero(inputs.incident.states.valid)
+    maximum_air_k = 2.0 * np.pi / float(np.min(inputs.incident.states.wavelength_A[valid_index]))
+    reachable_keys = {
+        (rod.h, rod.k)
+        for rod in enumerate_rods_within_ewald_sphere(
+            reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+            k_norm_Ainv=maximum_air_k,
+            population=inputs.config.bragg.rod_population,
+        )
+    }
+    reachable_rods = tuple(rod for rod in inputs.rods if (rod.h, rod.k) in reachable_keys)
     return SourceAveragedDetectorEwaldMeasure(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
-        rods=inputs.rods,
-        rod_catalog_revision=configured_rod_catalog_revision(inputs),
+        rods=reachable_rods,
+        rod_catalog_revision=configured_rod_catalog_revision(inputs, rods=reachable_rods),
         mosaic=inputs.mosaic,
         strength_model=inputs.strength,
         incident=inputs.incident,
@@ -2376,7 +2511,9 @@ __all__ = [
     "integrate_detector_macrobins",
     "load_simulation_config",
     "load_strict_yaml_mapping",
+    "rebind_configured_geometry_direct_basis",
     "rebind_configured_geometry_instrument",
+    "rebind_configured_simulation_instrument",
     "sample_detector_pixel_center_density",
     "sample_reciprocal_space",
 ]

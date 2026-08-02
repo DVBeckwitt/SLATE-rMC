@@ -13,7 +13,7 @@ from numpy.typing import ArrayLike, NDArray
 from painted_ewald import BraggSpaceConfig, MosaicParameters, Rod
 from painted_ewald.rotations import mosaic_axes
 from painted_ewald.validation import integer, positive_integer
-from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.optics import mode_decay_constant
@@ -22,11 +22,12 @@ from rasim_next.pipeline._continuous_detector_kernel import (
     _compile_detector_projection,
     pack_bi2se3_two_h_structures,
 )
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.continuous_detector import (
     DetectorPixelMass,
     DetectorQuadrature,
     PixelIntegrationMethod,
+    SampleQIntensityEnvelope,
     _compile_detector_state,
     _float_array,
     _subdivided_legendre_rule,
@@ -36,6 +37,69 @@ FloatArray = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
 BoolArray = NDArray[np.bool_]
 _ARRAY_OWNERSHIP_TOKEN = object()
+
+
+def source_averaged_detector_instrument_revision(
+    detector: SourceAveragedDetectorEwaldMeasure,
+) -> str:
+    """Return the complete immutable instrument identity used by a detector."""
+
+    instrument = detector.instrument
+    return canonical_revision_sha256(
+        ("definition_id", "source_averaged_detector_instrument.v1"),
+        ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
+        ("lab_from_sample_translation_m", instrument.lab_from_sample.translation_m),
+        ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
+        ("sample_from_crystal_translation_m", instrument.sample_from_crystal.translation_m),
+        ("lab_from_detector_rotation", instrument.lab_from_detector.rotation),
+        ("lab_from_detector_translation_m", instrument.lab_from_detector.translation_m),
+        ("detector_shape_rc", np.asarray(instrument.detector_shape_rc, dtype=np.int64)),
+        ("detector_row_pitch_m", instrument.detector_row_pitch_m),
+        ("detector_column_pitch_m", instrument.detector_column_pitch_m),
+        (
+            "detector_reference_coordinate_px",
+            np.asarray(instrument.detector_reference_coordinate_px, dtype=np.float64),
+        ),
+        ("sample_support_model_id", instrument.sample_support_model_id),
+        ("sample_width_is_unbounded", int(instrument.sample_width_m is None)),
+        (
+            "sample_width_m",
+            0.0 if instrument.sample_width_m is None else instrument.sample_width_m,
+        ),
+        ("sample_length_is_unbounded", int(instrument.sample_length_m is None)),
+        (
+            "sample_length_m",
+            0.0 if instrument.sample_length_m is None else instrument.sample_length_m,
+        ),
+        ("film_thickness_A", instrument.film_thickness_A),
+    )
+
+
+def source_averaged_detector_geometry_revision(
+    detector: SourceAveragedDetectorEwaldMeasure,
+) -> str:
+    """Bind reusable geometry plans to their exact detector and active rods.
+
+    Mosaic, structure strength, and the sample-Q intensity envelope are
+    intentionally excluded because they are candidate physics rebound during
+    fitting without changing detector geometry.
+    """
+
+    if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
+        raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
+    rods = detector.rods
+    return canonical_revision_sha256(
+        ("definition_id", "source_averaged_detector_geometry.v1"),
+        ("source_revision", detector.incident.states.source_revision),
+        ("material_revision", detector.material.material_revision),
+        ("incident_model_id", detector.incident.states.incident_model_id),
+        ("instrument_revision", source_averaged_detector_instrument_revision(detector)),
+        ("reciprocal_basis_Ainv", detector.strength_model.reciprocal_basis_Ainv),
+        ("rod_catalog_revision", detector.rod_catalog_revision),
+        ("active_rod_h", np.asarray([rod.h for rod in rods], dtype=np.int64)),
+        ("active_rod_k", np.asarray([rod.k for rod in rods], dtype=np.int64)),
+        ("active_rod_population", np.asarray([rod.population for rod in rods], dtype=np.float64)),
+    )
 
 
 def _detector_pose_arrays(
@@ -589,6 +653,69 @@ class _IndexedCompiledEvaluator:
         return rebound
 
 
+def _flatten_evaluators(
+    evaluator_blocks: tuple[tuple[_IndexedCompiledEvaluator, ...], ...],
+) -> tuple[_IndexedCompiledEvaluator, ...]:
+    return tuple(indexed for block in evaluator_blocks for indexed in block)
+
+
+def _inverse_fold_squared_geometry(
+    evaluator: CompiledDetectorEvaluator,
+    column_px: FloatArray,
+    row_px: FloatArray,
+    fold_radius_Ainv: float,
+    parallel_norm_Ainv: float,
+    *,
+    normal_is_column: BoolArray | None = None,
+) -> tuple[FloatArray, FloatArray, FloatArray | None]:
+    """Return the two inverse-root squares and an optional x-fold derivative."""
+
+    state = evaluator.state
+    displacement = (
+        state.detector_zero_lab_m[None, :]
+        + column_px[:, None] * state.detector_column_step_lab_m[None, :]
+        + row_px[:, None] * state.detector_row_step_lab_m[None, :]
+        - state.ray_origin_lab_m[None, :]
+    )
+    distance = np.linalg.norm(displacement, axis=1)
+    direction = displacement / distance[:, None]
+    kf_air_sample = (state.sample_from_lab @ (state.air_k0_Ainv * direction).T).T
+    parallel_squared = np.sum(kf_air_sample[:, :2] ** 2, axis=1)
+    film_normal_squared = state.internal_k_Ainv**2 - parallel_squared
+    if np.any(film_normal_squared <= 0.0):
+        raise FloatingPointError("fold plan encountered an unreachable exit direction")
+    kf_film_z = np.sqrt(film_normal_squared)
+    q_sample = np.column_stack((kf_air_sample[:, :2], kf_film_z))
+    q_sample -= state.ki_film_sample_Ainv[None, :]
+    q_local = q_sample @ state.sample_from_local
+    qr_squared = q_local[:, 0] ** 2 + q_local[:, 1] ** 2
+    fold_squared = qr_squared - fold_radius_Ainv**2
+    w_squared = np.sum(q_local**2, axis=1) - parallel_norm_Ainv**2
+    if normal_is_column is None:
+        return fold_squared, w_squared, None
+
+    detector_step = np.where(
+        normal_is_column[:, None],
+        state.detector_column_step_lab_m[None, :],
+        state.detector_row_step_lab_m[None, :],
+    )
+    direction_step = (
+        detector_step - direction * np.einsum("ij,ij->i", direction, detector_step)[:, None]
+    ) / distance[:, None]
+    kf_air_step = (state.sample_from_lab @ (state.air_k0_Ainv * direction_step).T).T
+    kf_film_z_step = (
+        -np.sum(
+            kf_air_sample[:, :2] * kf_air_step[:, :2],
+            axis=1,
+        )
+        / kf_film_z
+    )
+    q_local_step = np.column_stack((kf_air_step[:, :2], kf_film_z_step))
+    q_local_step = q_local_step @ state.sample_from_local
+    derivative = 2.0 * np.sum(q_local[:, :2] * q_local_step[:, :2], axis=1)
+    return fold_squared, w_squared, derivative
+
+
 @dataclass(frozen=True, slots=True)
 class _ForwardMonteCarloBlockResult:
     raw_image_A2: FloatArray
@@ -726,6 +853,7 @@ class SourceAveragedDetectorEwaldMeasure:
         "_evaluator_blocks",
         "_incident",
         "_instrument",
+        "_intensity_envelope",
         "_material",
         "_mosaic",
         "_phase_polarization_weight",
@@ -749,7 +877,8 @@ class SourceAveragedDetectorEwaldMeasure:
         rods: tuple[Rod, ...],
         rod_catalog_revision: str,
         mosaic: MosaicParameters,
-        strength_model: Bi2Se3TwoHStrength,
+        strength_model: Bi2X3FiniteStackStrength,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
         incident: IncidentTransportResult,
         material: MaterialOptics,
         instrument: CompiledInstrument,
@@ -765,8 +894,11 @@ class SourceAveragedDetectorEwaldMeasure:
             raise TypeError("instrument must be CompiledInstrument")
         if not isinstance(mosaic, MosaicParameters):
             raise TypeError("mosaic must be MosaicParameters")
-        if not isinstance(strength_model, Bi2Se3TwoHStrength):
-            raise TypeError("strength_model must be Bi2Se3TwoHStrength")
+        if not isinstance(strength_model, Bi2X3FiniteStackStrength):
+            raise TypeError("strength_model must be Bi2X3FiniteStackStrength")
+        envelope = SampleQIntensityEnvelope() if intensity_envelope is None else intensity_envelope
+        if not isinstance(envelope, SampleQIntensityEnvelope):
+            raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
         if mosaic.zero_tilt_probability_mass != 0.0:
             raise ValueError("source-averaged integration does not support zero-tilt atoms")
         selected = tuple(rods)
@@ -900,6 +1032,7 @@ class SourceAveragedDetectorEwaldMeasure:
                             rods=active_rods,
                             incident_state_index=int(state_index),
                             source_phase_weight=source_phase_weight,
+                            intensity_envelope=envelope,
                             packed_structure=packed,
                         ),
                         instrument.detector_shape_rc,
@@ -921,6 +1054,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_instrument", instrument)
+        object.__setattr__(self, "_intensity_envelope", envelope)
         object.__setattr__(self, "_material", material)
         object.__setattr__(self, "_mosaic", mosaic)
         object.__setattr__(self, "_phase_polarization_weight", phase_weight * polarization)
@@ -954,7 +1088,11 @@ class SourceAveragedDetectorEwaldMeasure:
         return self._mosaic
 
     @property
-    def strength_model(self) -> Bi2Se3TwoHStrength:
+    def intensity_envelope(self) -> SampleQIntensityEnvelope:
+        return self._intensity_envelope
+
+    @property
+    def strength_model(self) -> Bi2X3FiniteStackStrength:
         return self._strength_model
 
     @property
@@ -1050,6 +1188,7 @@ class SourceAveragedDetectorEwaldMeasure:
             rod_catalog_revision=self._rod_catalog_revision,
             mosaic=self._mosaic,
             strength_model=self._strength_model,
+            intensity_envelope=self._intensity_envelope,
             incident=self._incident,
             material=self._material,
             instrument=self._instrument,
@@ -1062,20 +1201,27 @@ class SourceAveragedDetectorEwaldMeasure:
         self,
         *,
         mosaic: MosaicParameters | None = None,
-        strength_model: Bi2Se3TwoHStrength | None = None,
+        strength_model: Bi2X3FiniteStackStrength | None = None,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
     ) -> SourceAveragedDetectorEwaldMeasure:
         """Replace mosaic/structure arrays while retaining the combined source geometry."""
 
         rebound_mosaic = self._mosaic if mosaic is None else mosaic
         rebound_strength = self._strength_model if strength_model is None else strength_model
+        rebound_envelope = (
+            self._intensity_envelope if intensity_envelope is None else intensity_envelope
+        )
         if not isinstance(rebound_mosaic, MosaicParameters):
             raise TypeError("mosaic must be MosaicParameters")
-        if not isinstance(rebound_strength, Bi2Se3TwoHStrength):
-            raise TypeError("strength_model must be Bi2Se3TwoHStrength")
+        if not isinstance(rebound_strength, Bi2X3FiniteStackStrength):
+            raise TypeError("strength_model must be Bi2X3FiniteStackStrength")
+        if not isinstance(rebound_envelope, SampleQIntensityEnvelope):
+            raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
         reference = self._strength_model
         if (
             rebound_strength.crystal is not reference.crystal
             or rebound_strength.layers != reference.layers
+            or rebound_strength.parent is not reference.parent
             or rebound_strength.normalization != reference.normalization
             or rebound_strength.shared_disorder_epsilon != reference.shared_disorder_epsilon
         ):
@@ -1115,6 +1261,8 @@ class SourceAveragedDetectorEwaldMeasure:
                     normalization_divisor=normalization_divisor,
                     u_radial_A2=u_radial_A2,
                     u_normal_A2=u_normal_A2,
+                    intensity_envelope_u_radial_A2=rebound_envelope.u_radial_A2,
+                    intensity_envelope_u_normal_A2=rebound_envelope.u_normal_A2,
                     shared_disorder_epsilon=rebound_strength.shared_disorder_epsilon,
                 )
                 rebound_block.append(
@@ -1133,6 +1281,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_evaluator_blocks", tuple(rebound_blocks))
         object.__setattr__(rebound, "_mosaic", rebound_mosaic)
         object.__setattr__(rebound, "_strength_model", rebound_strength)
+        object.__setattr__(rebound, "_intensity_envelope", rebound_envelope)
         return rebound
 
     def with_maximum_state_block_count(
@@ -1518,6 +1667,111 @@ class SourceAveragedDetectorEwaldMeasure:
             execution_backend=execution_backend,
             cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
         )
+
+    def evaluate_selected_source_rod_groups_all_roots(
+        self,
+        column_px: ArrayLike,
+        row_px: ArrayLike,
+        evaluator_index_by_coordinate: ArrayLike,
+        rod_group_index_by_coordinate: ArrayLike,
+        group_master_rod_mask: ArrayLike,
+        *,
+        execution_backend: str = "cpu",
+        cuda_coordinate_chunk_size: int | None = None,
+    ) -> tuple[FloatArray, BoolArray, BoolArray, str, str | None]:
+        """Evaluate one source evaluator and master-rod group at each coordinate.
+
+        This narrow reduction is used to replace an affected contribution after
+        a continuous fold change of variables.  Coordinates remain continuous;
+        no native-pixel identity enters this API.
+        """
+
+        column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
+        row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
+        evaluator_index = np.ascontiguousarray(
+            evaluator_index_by_coordinate,
+            dtype=np.int64,
+        ).reshape(-1)
+        group_index = np.ascontiguousarray(
+            rod_group_index_by_coordinate,
+            dtype=np.int64,
+        ).reshape(-1)
+        group_mask = np.ascontiguousarray(group_master_rod_mask, dtype=np.bool_)
+        indexed_evaluators = _flatten_evaluators(self._evaluator_blocks)
+        if (
+            column.shape != row.shape
+            or evaluator_index.shape != column.shape
+            or group_index.shape != column.shape
+            or not np.all(np.isfinite(column))
+            or not np.all(np.isfinite(row))
+            or group_mask.ndim != 2
+            or group_mask.shape[1] != len(self._rods)
+            or not group_mask.shape[0]
+            or np.any((evaluator_index < 0) | (evaluator_index >= len(indexed_evaluators)))
+            or np.any((group_index < 0) | (group_index >= group_mask.shape[0]))
+            or np.any(~np.any(group_mask, axis=1))
+        ):
+            raise ValueError("selected source/rod-group coordinates are inconsistent")
+        for selected_evaluator in np.unique(evaluator_index):
+            indexed = indexed_evaluators[int(selected_evaluator)]
+            selected = evaluator_index == selected_evaluator
+            active_masks = group_mask[group_index[selected]][:, indexed.master_rod_index]
+            if np.any(~np.any(active_masks, axis=1)):
+                raise ValueError("a selected rod group is inactive for its source evaluator")
+        if execution_backend not in {"cpu", "cuda"}:
+            raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        cuda_chunk_size = _validated_cuda_coordinate_chunk_size(
+            execution_backend,
+            cuda_coordinate_chunk_size,
+        )
+        if execution_backend == "cuda":
+            from rasim_next.pipeline._continuous_detector_cuda import (
+                evaluate_selected_source_rod_groups_all_roots_cuda,
+            )
+
+            density, caustic, valid, device = evaluate_selected_source_rod_groups_all_roots_cuda(
+                self._evaluator_blocks,
+                column,
+                row,
+                evaluator_index,
+                group_index,
+                group_mask,
+                detector_shape_rc=self._instrument.detector_shape_rc,
+                master_rod_count=len(self._rods),
+                **({} if cuda_chunk_size is None else {"coordinate_chunk_size": cuda_chunk_size}),
+            )
+            backend_id = "numba_cuda_selected_source_rod_group.v1"
+        else:
+            density = np.zeros(column.size, dtype=np.float64)
+            caustic = np.zeros(column.size, dtype=np.bool_)
+            valid = np.zeros(column.size, dtype=np.bool_)
+            for selected_evaluator in np.unique(evaluator_index):
+                indexed = indexed_evaluators[int(selected_evaluator)]
+                selected_position = np.flatnonzero(evaluator_index == selected_evaluator)
+                evaluated, _, evaluated_caustic, evaluated_valid = (
+                    indexed.evaluator.evaluate_all_roots(
+                        column[selected_position],
+                        row[selected_position],
+                    )
+                )
+                local_masks = group_mask[group_index[selected_position]][
+                    :, indexed.master_rod_index
+                ]
+                density[selected_position] = np.sum(
+                    np.where(local_masks, evaluated, 0.0),
+                    axis=1,
+                    dtype=np.float64,
+                )
+                caustic[selected_position] = np.any(
+                    local_masks & evaluated_caustic,
+                    axis=1,
+                )
+                valid[selected_position] = evaluated_valid
+            device = None
+            backend_id = "numba_cpu_selected_source_rod_group.v1"
+        for value in (density, caustic, valid):
+            value.setflags(write=False)
+        return density, caustic, valid, backend_id, device
 
     def evaluate_detector_density_all_roots(
         self,
@@ -2200,4 +2454,6 @@ __all__ = [
     "SourceAveragedDetectorCoordinateDensity",
     "SourceAveragedDetectorCoordinateIntensity",
     "SourceAveragedDetectorEwaldMeasure",
+    "source_averaged_detector_geometry_revision",
+    "source_averaged_detector_instrument_revision",
 ]

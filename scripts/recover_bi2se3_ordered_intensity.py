@@ -40,7 +40,7 @@ from rasim_next.fitting import (
 )
 from rasim_next.geometry import build_incident_states, detector_coordinates_to_angles
 from rasim_next.io.osc import read_osc
-from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+from rasim_next.ordered import Bi2X3QuintupleLayerParameters
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredSimulationInputs,
     build_configured_simulation_inputs,
@@ -83,7 +83,7 @@ class PreparedMeasuredOrderedInputs:
     source_revision: str
     cif_sha256: str
     fixed_position_record: dict[str, object]
-    baseline_parameters: Bi2Se3QuintupleLayerParameters
+    baseline_parameters: Bi2X3QuintupleLayerParameters
 
 
 def _fixed_position_state(
@@ -767,7 +767,7 @@ def _validate_anchor_catalog_records(
         raise ValueError("ordered-intensity result does not match the frozen anchor catalogs")
 
 
-def _parameter_record(parameters: Bi2Se3QuintupleLayerParameters) -> dict[str, float]:
+def _parameter_record(parameters: Bi2X3QuintupleLayerParameters) -> dict[str, float]:
     return {
         "bi_fractional_z": parameters.bi_fractional_z,
         "se2_fractional_z": parameters.se2_fractional_z,
@@ -823,7 +823,7 @@ def prepare_measured_ordered_inputs(
         source_revision=source_revision,
         cif_sha256=cif_sha256,
         fixed_position_record=_fixed_position_record(fixed_position),
-        baseline_parameters=Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal),
+        baseline_parameters=Bi2X3QuintupleLayerParameters.from_crystal(series[0].crystal),
     )
 
 
@@ -886,7 +886,7 @@ def run_recovery(
     current_cif_sha256 = hashlib.sha256(series[0].config.material.cif_path.read_bytes()).hexdigest()
     if required_cif_sha256 is not None and current_cif_sha256 != required_cif_sha256:
         raise ValueError("mosaic result CIF revision does not match the rebuilt structure")
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(series[0].crystal)
     truth_config = case["truth"]
     truth = replace(
         baseline,
@@ -1430,7 +1430,7 @@ def render_recovered_images(
         mosaic_parameters=mosaic_parameters,
         fixed_position=fixed_position,
     )
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(series[0].crystal)
     ordered_provenance = ordered_result.get("provenance")
     expected_ordered_provenance = {
         "ordered_case_sha256": hashlib.sha256(case_path.read_bytes()).hexdigest(),
@@ -1475,7 +1475,7 @@ def render_recovered_images(
         ):
             raise ValueError(f"{label} result does not match the requested source realization")
     fitted_parameters = replace(
-        Bi2Se3QuintupleLayerParameters.from_crystal(series[0].crystal),
+        Bi2X3QuintupleLayerParameters.from_crystal(series[0].crystal),
         bi_fractional_z=float(fitted_record["bi_fractional_z"]),
         se2_fractional_z=float(fitted_record["se2_fractional_z"]),
         bi_occupancy=float(fitted_record["bi_occupancy"]),

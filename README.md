@@ -37,28 +37,32 @@ For a one-incident-state, native-pixel convergence diagnostic, use
 `scripts/generate_bi2se3_continuous_detector.py`. Its omitted physical options inherit the same YAML
 fixture, so there is only one default authority.
 
-The accepted Bi2Se3 and Bi2Te3 5/10/15-degree staged fits are portable, hash-bound examples. Check
-their inputs without fitting, or replay through each currently qualified checkpoint into an
-external directory:
+The current real-OSC workflow is modular and resumable. It fits positions first, optionally tests a
+tightly bounded lattice change, combines that result with an explicitly provided mosaic state, and
+then calibrates background and runs the A/B/C/joint structure fit. The same adapter and state
+contracts serve the tracked Bi2Se3 and Bi2Te3 layered-quintuple recipes. Model evaluation stays
+continuous; only measured OSC data and detector displays are pixel arrays. The measured pixels are
+a piecewise-constant count field projected over the same continuous mixed-chart rectangles as the
+model, with fractional-pixel covariance retained.
 
 ```powershell
-uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml --inputs-only
-uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml --inputs-only
-uv run --frozen python scripts/replay_staged_fit.py examples/bi2se3/experiment/staged_fit_replay.toml `
-  --output-directory C:\path\outside\the\repository\bi2se3-replay --backend cuda --through ordered_intensity
-uv run --frozen python scripts/replay_staged_fit.py examples/bi2te3/experiment/staged_fit_replay.toml `
-  --output-directory C:\path\outside\the\repository\bi2te3-replay --backend cuda
+uv run --frozen python scripts/compose_fixed_experiment.py `
+  --position C:\external\fit\position.json `
+  --geometry-manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
+  --mosaic-state examples/bi2se3/experiment/fixed_mosaic.json `
+  --destination C:\external\fit\fixed_experiment.json
+
+uv run --frozen python scripts/fit_layered_quintuple_regions.py prepare `
+  --fixed-state C:\external\fit\fixed_experiment.json `
+  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
+  --destination C:\external\fit\matched_regions.ra_diag.npz
 ```
 
-Geometry uses one ideal source state. Mosaic and ordered intensity reduce all 250 source states
-into one detector function per incidence before comparison. See `docs/EXAMPLES.md` for result and
-render qualifications.
-
-Use `--frozen` for these replays: each case hashes `uv.lock`, and the frozen invocation installs
-and executes its complete locked numerical dependency closure. Every stage records that execution
-runtime and resume requires an exact runtime match; fit values remain tolerance-based across fresh
-interpreter, operating-system, and CUDA executions. The optional historical render oracle has a
-separate qualification boundary described in `docs/VALIDATION.md`.
+The tracked material-specific mosaic file uses `rasim-fixed-mosaic-state-v1` and is hash-bound into
+the checkpoint; its values are never duplicated on the command line. See `docs/EXAMPLES.md` for the complete
+position-to-figure sequence, stage dependencies, and result qualifications. Historical replay
+examples remain available for reference but are not the current fitting path.
 
 ## Interactive tools
 

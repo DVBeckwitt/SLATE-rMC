@@ -1,4 +1,4 @@
-"""Compiled point evaluator for the accepted finite parent-2H Bi2Se3 fixture."""
+"""Compiled point evaluator for a finite Bi2-chalcogen3 layer stack."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.materials.optics import HC_EV_A, _f0_species
 from rasim_next.ordered.motifs import _parameterized_bi2se3_quintuple_layer
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -64,9 +64,12 @@ class _ForwardDetectorState(NamedTuple):
     rod_atom_inplane_factor: NDArray[np.complex128]
     u_radial_A2: float
     u_normal_A2: float
+    intensity_envelope_u_radial_A2: float
+    intensity_envelope_u_normal_A2: float
     f0_parameters: FloatArray
     anomalous_factor_e: NDArray[np.complex128]
     layers: int
+    stacking_parent_code: int
     shared_disorder_epsilon: float
     normalization_divisor: float
 
@@ -112,9 +115,12 @@ class CompiledDetectorState:
     rod_atom_inplane_factor: NDArray[np.complex128]
     u_radial_A2: float
     u_normal_A2: float
+    intensity_envelope_u_radial_A2: float
+    intensity_envelope_u_normal_A2: float
     f0_parameters: FloatArray
     anomalous_factor_e: NDArray[np.complex128]
     layers: int
+    stacking_parent_code: int
     shared_disorder_epsilon: float
     normalization_divisor: float
 
@@ -135,7 +141,7 @@ class CompiledDetectorState:
             "rod_u_bounds_Ainv": (rod_count, 2),
             "rod_inverse_constants": (rod_count, 4),
             "atom_fractional_offset": (atom_count, 3),
-            "atom_occupancy_element": (atom_count, 2),
+            "atom_occupancy_element": (atom_count, 4),
             "f0_parameters": (2, 11),
         }
         if rod_count == 0 or atom_count == 0:
@@ -178,6 +184,8 @@ class CompiledDetectorState:
             "lorentzian_probability",
             "u_radial_A2",
             "u_normal_A2",
+            "intensity_envelope_u_radial_A2",
+            "intensity_envelope_u_normal_A2",
             "shared_disorder_epsilon",
             "normalization_divisor",
         )
@@ -196,6 +204,12 @@ class CompiledDetectorState:
             raise ValueError("shared_disorder_epsilon must lie in [0, 1]")
         if self.layers < 1:
             raise ValueError("layers must be positive")
+        parent_code = int(self.stacking_parent_code)
+        if isinstance(self.stacking_parent_code, bool) or parent_code not in {0, 1}:
+            raise ValueError("stacking_parent_code must be 0 (2H-AA) or 1 (R-centered 3R)")
+        if parent_code == 1 and self.shared_disorder_epsilon != 0.0:
+            raise ValueError("R-centered 3R compiled state must be fault-free")
+        object.__setattr__(self, "stacking_parent_code", parent_code)
         for name in ("refractive_index", "entrance_amplitude"):
             value = complex(getattr(self, name))
             if not math.isfinite(value.real) or not math.isfinite(value.imag):
@@ -311,6 +325,8 @@ class CompiledDetectorState:
         normalization_divisor: float,
         u_radial_A2: float,
         u_normal_A2: float,
+        intensity_envelope_u_radial_A2: float,
+        intensity_envelope_u_normal_A2: float,
         shared_disorder_epsilon: float,
     ) -> CompiledDetectorState:
         """Replace mosaic and fixed-geometry structure state without rebuilding geometry."""
@@ -339,6 +355,8 @@ class CompiledDetectorState:
             "normalization_divisor": float(normalization_divisor),
             "u_radial_A2": float(u_radial_A2),
             "u_normal_A2": float(u_normal_A2),
+            "intensity_envelope_u_radial_A2": float(intensity_envelope_u_radial_A2),
+            "intensity_envelope_u_normal_A2": float(intensity_envelope_u_normal_A2),
             "shared_disorder_epsilon": float(shared_disorder_epsilon),
         }
         if not all(math.isfinite(value) and value >= 0.0 for value in scalar_values.values()):
@@ -370,7 +388,7 @@ class CompiledDetectorState:
 
 
 def pack_bi2se3_two_h_structure(
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
     *,
     wavelength_A: float,
 ) -> tuple[FloatArray, FloatArray, FloatArray, NDArray[np.complex128], int, float, float, float]:
@@ -385,7 +403,7 @@ def pack_bi2se3_two_h_structure(
 
 
 def pack_bi2se3_two_h_structures(
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
     *,
     wavelength_A: NDArray[np.float64],
 ) -> tuple[
@@ -400,8 +418,8 @@ def pack_bi2se3_two_h_structures(
 ]:
     """Pack shared structure data and vectorized anomalous factors for many wavelengths."""
 
-    if not isinstance(strength, Bi2Se3TwoHStrength):
-        raise TypeError("compiled detector integration requires Bi2Se3TwoHStrength")
+    if not isinstance(strength, Bi2X3FiniteStackStrength):
+        raise TypeError("compiled detector integration requires Bi2X3FiniteStackStrength")
     wavelength = np.asarray(wavelength_A, dtype=np.float64)
     if wavelength.ndim != 1 or not wavelength.size or not np.all(np.isfinite(wavelength)):
         raise ValueError("wavelength_A must be a finite nonempty one-dimensional array")
@@ -418,8 +436,16 @@ def pack_bi2se3_two_h_structures(
         raise ValueError("compiled quintuple-layer integration requires Bi and one chalcogen")
     element_index = {element: position for position, element in enumerate(elements)}
     offsets = np.asarray([atom.fractional_offset for atom in atoms], dtype=np.float64)
+    profile = strength.site_displacement_profile
     properties = np.asarray(
-        [(atom.occupancy, element_index[atom.element]) for atom in atoms],
+        [
+            (
+                atom.occupancy,
+                element_index[atom.element],
+                *(profile.components_A2(atom.source_label) if profile is not None else (0.0, 0.0)),
+            )
+            for atom in atoms
+        ],
         dtype=np.float64,
     )
 
@@ -472,8 +498,8 @@ def pack_bi2se3_two_h_structures(
         anomalous,
         strength.layers,
         divisor,
-        structure.u_radial_A2,
-        structure.u_normal_A2,
+        0.0 if profile is not None else structure.u_radial_A2,
+        0.0 if profile is not None else structure.u_normal_A2,
     )
 
 
@@ -589,16 +615,19 @@ def _wrapped_mosaic_density(
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
-def _two_h_strength_A2(
+def _finite_stack_strength_A2(
     rod_index: int,
     ell: float,
     common_damping: float,
+    parallel_norm_Ainv: float,
+    w_value_Ainv: float,
     element_factor_0: complex,
     element_factor_1: complex,
     rod_atom_inplane_factor: NDArray[np.complex128],
     atom_fractional_offset: FloatArray,
     atom_occupancy_element: FloatArray,
     layers: int,
+    stacking_parent_code: int,
     shared_disorder_epsilon: float,
     rod_hk_population: FloatArray,
     normalization_divisor: float,
@@ -608,17 +637,32 @@ def _two_h_strength_A2(
     for atom in range(atom_fractional_offset.shape[0]):
         occupancy = atom_occupancy_element[atom, 0]
         element = int(atom_occupancy_element[atom, 1])
+        site_damping = math.exp(
+            -0.5
+            * (
+                atom_occupancy_element[atom, 2] * parallel_norm_Ainv * parallel_norm_Ainv
+                + atom_occupancy_element[atom, 3] * w_value_Ainv * w_value_Ainv
+            )
+        )
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
         phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
         element_factor = element_factor_0 if element == 0 else element_factor_1
-        amplitude_plus += occupancy * element_factor * phase_plus
-        amplitude_minus += occupancy * element_factor * phase_minus
+        amplitude_plus += occupancy * site_damping * element_factor * phase_plus
+        amplitude_minus += occupancy * site_damping * element_factor * phase_minus
 
     vertical_phase_angle = 2.0 * math.pi * ell / 3.0
     vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
     if shared_disorder_epsilon == 0.0:
+        if stacking_parent_code == 1:
+            h = int(rod_hk_population[rod_index, 0])
+            k = int(rod_hk_population[rod_index, 1])
+            registry_index = (h + 2 * k) % 3
+            if registry_index == 1:
+                vertical_phase *= complex(-0.5, -0.5 * math.sqrt(3.0))
+            elif registry_index == 2:
+                vertical_phase *= complex(-0.5, 0.5 * math.sqrt(3.0))
         phase_power = 1.0 + 0.0j
         stack_sum = 1.0 + 0.0j
         for _ in range(1, layers):
@@ -747,9 +791,12 @@ def _evaluate_point_into(
     rod_atom_inplane_factor: NDArray[np.complex128],
     u_radial_A2: float,
     u_normal_A2: float,
+    intensity_envelope_u_radial_A2: float,
+    intensity_envelope_u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    stacking_parent_code: int,
     shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
@@ -840,6 +887,10 @@ def _evaluate_point_into(
     q_sample_x = kf_film_x - ki_film_sample_Ainv[0]
     q_sample_y = kf_film_y - ki_film_sample_Ainv[1]
     q_sample_z = kf_film_z - ki_film_sample_Ainv[2]
+    event_intensity_envelope = math.exp(
+        -intensity_envelope_u_radial_A2 * (q_sample_x * q_sample_x + q_sample_y * q_sample_y)
+        - intensity_envelope_u_normal_A2 * q_sample_z * q_sample_z
+    )
 
     pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
     area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
@@ -944,16 +995,19 @@ def _evaluate_point_into(
                     u_radial_A2,
                     u_normal_A2,
                 )
-                strength = _two_h_strength_A2(
+                strength = _finite_stack_strength_A2(
                     rod_index,
                     ell,
                     common_damping,
+                    parallel_norm,
+                    w_value,
                     element_factor_0,
                     element_factor_1,
                     rod_atom_inplane_factor,
                     atom_fractional_offset,
                     atom_occupancy_element,
                     layers,
+                    stacking_parent_code,
                     shared_disorder_epsilon,
                     rod_hk_population,
                     normalization_divisor,
@@ -1005,6 +1059,7 @@ def _evaluate_point_into(
                         and optical_weight > 0.0
                         and strength > 0.0
                         and mosaic_density > 0.0
+                        and event_intensity_envelope > 0.0
                     ):
                         density[rod_index] = np.inf
                     continue
@@ -1015,6 +1070,7 @@ def _evaluate_point_into(
                     * area_jacobian
                     * optical_weight
                     * source_phase_weight
+                    * event_intensity_envelope
                     / jacobian
                 )
                 inverse_count[rod_index] += 1
@@ -1054,9 +1110,12 @@ def _evaluate_points_kernel(
     rod_atom_inplane_factor: NDArray[np.complex128],
     u_radial_A2: float,
     u_normal_A2: float,
+    intensity_envelope_u_radial_A2: float,
+    intensity_envelope_u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    stacking_parent_code: int,
     shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
@@ -1116,9 +1175,12 @@ def _evaluate_points_kernel(
             rod_atom_inplane_factor,
             u_radial_A2,
             u_normal_A2,
+            intensity_envelope_u_radial_A2,
+            intensity_envelope_u_normal_A2,
             f0_parameters,
             anomalous_factor_e,
             layers,
+            stacking_parent_code,
             shared_disorder_epsilon,
             normalization_divisor,
             branch,
@@ -1220,19 +1282,26 @@ def _forward_root_pixel(
         state.u_radial_A2,
         state.u_normal_A2,
     )
-    strength = _two_h_strength_A2(
+    strength = _finite_stack_strength_A2(
         rod_index,
         u_Ainv / state.b3_norm_Ainv,
         common_damping,
+        parallel_norm,
+        w_value,
         element_factor_0,
         element_factor_1,
         state.rod_atom_inplane_factor,
         state.atom_fractional_offset,
         state.atom_occupancy_element,
         state.layers,
+        state.stacking_parent_code,
         state.shared_disorder_epsilon,
         state.rod_hk_population,
         state.normalization_divisor,
+    )
+    event_intensity_envelope = math.exp(
+        -state.intensity_envelope_u_radial_A2 * (q_x * q_x + q_y * q_y)
+        - state.intensity_envelope_u_normal_A2 * q_z * q_z
     )
     importance_weight = (
         state.source_phase_weight
@@ -1240,6 +1309,7 @@ def _forward_root_pixel(
         * strength
         * coarea_jacobian
         * optical_weight
+        * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):
         return -1, 0.0, True
@@ -1460,9 +1530,12 @@ def _integrate_pixel_boxes_kernel(
     rod_atom_inplane_factor: NDArray[np.complex128],
     u_radial_A2: float,
     u_normal_A2: float,
+    intensity_envelope_u_radial_A2: float,
+    intensity_envelope_u_normal_A2: float,
     f0_parameters: FloatArray,
     anomalous_factor_e: NDArray[np.complex128],
     layers: int,
+    stacking_parent_code: int,
     shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
@@ -1549,9 +1622,12 @@ def _integrate_pixel_boxes_kernel(
                     rod_atom_inplane_factor,
                     u_radial_A2,
                     u_normal_A2,
+                    intensity_envelope_u_radial_A2,
+                    intensity_envelope_u_normal_A2,
                     f0_parameters,
                     anomalous_factor_e,
                     layers,
+                    stacking_parent_code,
                     shared_disorder_epsilon,
                     normalization_divisor,
                     branch,
@@ -1615,9 +1691,12 @@ def _integrate_pixel_boxes_kernel(
                 rod_atom_inplane_factor,
                 u_radial_A2,
                 u_normal_A2,
+                intensity_envelope_u_radial_A2,
+                intensity_envelope_u_normal_A2,
                 f0_parameters,
                 anomalous_factor_e,
                 layers,
+                stacking_parent_code,
                 shared_disorder_epsilon,
                 normalization_divisor,
                 branch,
@@ -1790,9 +1869,12 @@ class CompiledDetectorEvaluator:
             state.rod_atom_inplane_factor,
             state.u_radial_A2,
             state.u_normal_A2,
+            state.intensity_envelope_u_radial_A2,
+            state.intensity_envelope_u_normal_A2,
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
+            state.stacking_parent_code,
             state.shared_disorder_epsilon,
             state.normalization_divisor,
             root_selector,
@@ -1898,9 +1980,12 @@ class CompiledDetectorEvaluator:
             state.rod_atom_inplane_factor,
             state.u_radial_A2,
             state.u_normal_A2,
+            state.intensity_envelope_u_radial_A2,
+            state.intensity_envelope_u_normal_A2,
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
+            state.stacking_parent_code,
             state.shared_disorder_epsilon,
             state.normalization_divisor,
         )
@@ -1973,9 +2058,12 @@ class CompiledDetectorEvaluator:
             state.rod_atom_inplane_factor,
             state.u_radial_A2,
             state.u_normal_A2,
+            state.intensity_envelope_u_radial_A2,
+            state.intensity_envelope_u_normal_A2,
             state.f0_parameters,
             state.anomalous_factor_e,
             state.layers,
+            state.stacking_parent_code,
             state.shared_disorder_epsilon,
             state.normalization_divisor,
             branch,

@@ -1,0 +1,67 @@
+schema_version = "rasim-layered-quintuple-structure-fit-plan-v5"
+material_id = "Bi2Se3"
+parameter_names = [
+  "bi_delta_z_fractional",
+  "outer_chalcogen_delta_z_fractional",
+  "outer_bi_antisite_fraction",
+  "intensity_envelope_u_radial_A2",
+  "intensity_envelope_u_normal_A2",
+]
+baseline_parameters = [0.0, 0.0, 0.012, 0.0, 0.0]
+lower_bounds = [-0.005, -0.005, 0.0, 0.0, 0.0]
+upper_bounds = [0.005, 0.005, 0.03, 0.02, 0.02]
+parameter_scales = [0.001, 0.001, 0.01, 0.005, 0.005]
+prior_mean = [0.0, 0.0, 0.012, 0.0, 0.0]
+prior_sigma = [0.001, 0.001, 0.005, 0.005, 0.005]
+prior_interpretation = "Near-CIF coordinates, Callaert outer-site Bi antisite x=0.012+/-0.005, fixed literature anisotropic site ADPs inside the atomic amplitude, and tightly regularized nonnegative global radial/normal intensity-envelope variances in A^2."
+sensitivity_relative_tolerance = 1.0e-5
+maximum_sensitivity_condition = 1.0e5
+bound_proximity_in_parameter_scales = 1.0e-6
+
+[site_displacement_profile]
+model_id = "transverse_isotropic_site_reference_fixed.v1"
+provenance = "Callaert et al. Bi2Se3 anisotropic refinement as tracked in reference/manuscript/2D_Supplemental/SI_ordered_structure_parameters.tex; fixed during this fit to separate crystallographic site ADPs from the global intensity envelope."
+
+[[site_displacement_profile.site]]
+role = "bi"
+u_radial_A2 = 0.0036
+u_normal_A2 = 0.0264
+
+[[site_displacement_profile.site]]
+role = "central_chalcogen"
+u_radial_A2 = 0.0046
+u_normal_A2 = 0.0485
+
+[[site_displacement_profile.site]]
+role = "outer_chalcogen"
+u_radial_A2 = 0.0046
+u_normal_A2 = 0.0485
+
+[continuous_quadrature]
+offspecular_axial_refinement = 3
+offspecular_radial_transform = "squared_fold_coordinate.v1"
+offspecular_signal_minimum_radial_nodes_per_side = 24
+
+[stage.A]
+active_parameters = ["bi_delta_z_fractional", "outer_chalcogen_delta_z_fractional"]
+
+[stage.B]
+active_parameters = ["outer_bi_antisite_fraction"]
+predecessor = "A"
+
+[stage.C]
+active_parameters = [
+  "intensity_envelope_u_radial_A2",
+  "intensity_envelope_u_normal_A2",
+]
+predecessor = "B"
+
+[stage.joint]
+active_parameters = [
+  "bi_delta_z_fractional",
+  "outer_chalcogen_delta_z_fractional",
+  "outer_bi_antisite_fraction",
+  "intensity_envelope_u_radial_A2",
+  "intensity_envelope_u_normal_A2",
+]
+predecessor = "C"

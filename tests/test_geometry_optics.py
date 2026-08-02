@@ -38,7 +38,7 @@ from rasim_next.geometry import (
 )
 from rasim_next.io.orientation import detector_native_to_raw
 from rasim_next.io.osc import OscFormatError, read_osc
-from rasim_next.materials import material_optics, read_crystal
+from rasim_next.materials import crystal_with_direct_basis, material_optics, read_crystal
 from rasim_next.optics import (
     path_attenuation,
     scalar_optical_weight,
@@ -49,6 +49,30 @@ from rasim_next.optics import (
 from rasim_next.sampling.source import sample_gaussian_source_rays
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_crystal_direct_basis_rebuild_preserves_fractional_structure_and_recomputes_volume() -> (
+    None
+):
+    crystal = read_crystal(
+        ROOT / "examples" / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    deformation = np.diag(np.exp((5.0e-4, 5.0e-4, -2.0e-4)))
+    direct_basis = crystal.direct_basis_A @ deformation
+
+    rebuilt = crystal_with_direct_basis(
+        crystal,
+        direct_basis,
+        provenance="regularized lattice sensitivity",
+    )
+
+    np.testing.assert_array_equal(rebuilt.direct_basis_A, direct_basis)
+    assert rebuilt.volume_A3 == pytest.approx(float(np.linalg.det(direct_basis)), abs=1.0e-12)
+    assert rebuilt.sites == crystal.sites
+    assert rebuilt.phase_id == crystal.phase_id
+    assert rebuilt.source_path == crystal.source_path
+    assert rebuilt.provenance.endswith("regularized lattice sensitivity")
 
 
 def _configuration() -> InstrumentConfiguration:

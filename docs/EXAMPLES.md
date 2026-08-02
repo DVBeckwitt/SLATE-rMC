@@ -224,7 +224,10 @@ calibration values; its 250 source states are reduced incoherently into one dete
 before any mosaic profile, ordered-intensity comparison, or image display. The exact compressed
 Bi2Te3 OSC inputs and frozen catalog used by the accepted model-limited fit are tracked.
 
-## Portable Bi2Se3 and Bi2Te3 staged-fit replay
+## Historical: portable Bi2Se3 and Bi2Te3 staged-fit replay
+
+This retained replay demonstrates the former staged baseline; it is not the current
+fixed-experiment/mixed-chart workflow documented below.
 
 The two `staged_fit_replay.toml` cases bind every input by repository-relative path, file SHA-256,
 and decoded detector-native OSC-array SHA-256. Validate a clean clone without running a fit:
@@ -257,7 +260,7 @@ disabled because the available images bind a retired mosaic gate.
 
 The frozen replay targets are:
 
-- Bi2Se3 current verified terminal, ordered intensity. Geometry has eight shared corrections plus one common
+- The retained Bi2Se3 replay's verified terminal is ordered intensity. Geometry has eight shared corrections plus one common
   incidence delta, RMS/max `1.55894/5.65079 px`; `delta_theta_i=0.4197204 deg` gives effective angles
   `5.4197204/10.4197204/15.4197204 deg`. The measured mosaic fit recovered
   `(sigma_G, HWHM_L, eta)=(1.3228757 deg, 0.48989795 deg, 0.44809620)` with objective
@@ -474,9 +477,11 @@ separate timing/memory evidence:
 uv run --frozen python scripts/fit_osc_geometry.py `
   configs/bi2se3_osc_geometry_fit.yaml `
   --fit-incidence-angle-delta `
+  --fit-incidence-angle-trim `
   --freeze-parameter sample_normal_x_tilt_rad `
   --heldout-integer-l 4 11 `
   --benchmark `
+  --destination C:\path\outside\the\repository\position\geometry.json `
   --json
 ```
 
@@ -505,16 +510,38 @@ uv run --frozen python scripts/fit_osc_geometry.py `
 ```
 
 The JSON fit record lists canonical `fitted_parameter_names`, `fixed_parameter_names`, combined
-`jacobian_parameter_names`, the common delta, and every commanded/effective incidence pair. Beam
-center and lattice constants are calibration/material inputs, not switchable fit coordinates.
-The objective evaluates one ideal nominal incident state and no mosaic, structure intensity,
+`jacobian_parameter_names`, the common delta, two canonical Helmert trim contrasts, three
+zero-sum per-image trims, and every commanded/effective incidence pair. The common delta controls
+the mean incidence correction; the bounded trims describe only deviations around that mean. Beam
+center and lattice constants are not switchable coordinates inside the position fit. A separate
+near-CIF lattice-sensitivity stage may follow an accepted position artifact:
+
+```powershell
+uv run --frozen python scripts/fit_osc_lattice.py `
+  --manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --position C:\path\outside\the\repository\position\geometry.json `
+  --destination C:\path\outside\the\repository\lattice.json
+```
+
+That two-coordinate stage fits log-scaled in-plane and normal lattice changes with tight trust
+regularization, but admits a change only when the data-only scaled Jacobian is full-rank and
+well-conditioned and the improvement, bound, prior-pull, selection, and root gates all pass. A
+rejected candidate records `RETAIN_CIF_LATTICE` and preserves the original builder path; an accepted
+full basis is bound beside the independently provided mosaic state in the immutable fixed-experiment
+checkpoint and propagated into every downstream optical, reciprocal, rod, and structure calculation.
+
+For clarity, the preceding position fit that supplies this lattice stage evaluates one ideal nominal
+incident state and no mosaic, structure intensity,
 raster, or pixel integration. JSON reports the frozen manifest, pooled/per-image metrics, rank and
 weak direction, active bounds, held-out predictions, independent-root audit, and frozen-candidate
 measured audit. Acceptance relabels the unchanged selected native candidates; the separately
 reported fresh global rediscovery is an operational chart/candidate-stability diagnostic and cannot
 replace fitted observations.
 
-## Recover the Bi2Se3 mosaic distribution without pixelizing the fit
+## Historical: recover the Bi2Se3 mosaic distribution
+
+This model-limited extractor is retained as proof/input preparation. New mixed-chart runs consume a
+strict `rasim-fixed-mosaic-state-v1` provided checkpoint.
 
 Run the tracked deterministic 5, 10, and 15 degree synthetic recovery into a directory outside the
 repository:
@@ -527,7 +554,8 @@ uv run --frozen python scripts/recover_bi2se3_mosaic.py `
 The default standalone case fixes its legacy nine-coordinate geometry, beam center, and lattice.
 The staged replay instead passes its verified `geometry.json` into this same runner, which extracts
 the bound position revision, shared corrections, common incidence delta, and effective angles
-atomically. Geometry marker
+atomically. It may also pass the corresponding `lattice.json` with `--lattice-artifact`; the mosaic
+artifact then becomes the only lattice handoff accepted by later structure stages. Geometry marker
 centers use one exact source-center, zero-divergence, mean-wavelength companion state, but that state
 contributes no detector intensity. By default each incidence instead reduces the same 250 sampled
 positions, directions, and wavelengths into one detector function before profile comparison. The
@@ -555,6 +583,7 @@ To fit the same fixed geometry to the three detector-native Bi2Se3 OSC images, r
 uv run --frozen python scripts/recover_bi2se3_mosaic.py `
   --observation-mode osc `
   --position-artifact C:\path\outside\the\repository\positions\geometry.json `
+  --lattice-artifact C:\path\outside\the\repository\lattice.json `
   --source-sample-count 250 `
   --skip-images `
   --output-directory C:\path\outside\the\repository\bi2se3-real-mosaic
@@ -573,7 +602,10 @@ intensity. The output is an effective common radial envelope: uncalibrated detec
 resolution and remaining forward-model disagreement prevent interpreting it as a unique intrinsic
 mosaic distribution or a statistical confidence interval.
 
-## Fit real-OSC Bi2Se3 relative structure parameters
+## Historical: transferred-amplitude Bi2Se3 relative structure fit
+
+This earlier relative-structure estimator is not the current separated site-ADP/sample-Q-envelope
+model.
 
 After the verified position and mosaic stages, resume the portable case through ordered intensity:
 
@@ -597,63 +629,129 @@ The implementation keeps preparation and fitting as separate callable boundaries
 `prepare_measured_ordered_inputs` validates and constructs the fixed upstream state, while
 `fit_prepared_bi2se3_measured_ordered_document` consumes that prepared state and returns the
 standalone fit artifact. The response compiler and inverse solver remain reusable core functions.
-The present end-to-end parameter mapping is intentionally Bi2Se3 quintuple-layer-specific; a
+The retained historical end-to-end parameter mapping is intentionally Bi2Se3 quintuple-layer-specific; a
 material-neutral structural-coordinate interface is later work, not an implied result of this fit.
 
-The present result is deliberately fail-closed as
+The retained historical result is deliberately fail-closed as
 `MODEL_LIMITED_REAL_OSC_STRUCTURE_ESTIMATE_NO_ORACLE` with adequacy
 `UNQUALIFIED_BOUNDARY_HIGH_RESIDUAL`. Do not interpret its normalized
 `(Bi,Se1,Se2)=(0.84028,1,0.95148)` representative as absolute occupancy; it is only the admissible
 gauge representation of the two fitted ratios.
 
-## Recreate the Bi2Se3 Figure 7 view from the measured fit
+## Jointly fit and recreate a layered-quintuple Figure 7 view
 
-Once the verified geometry-through-ordered-intensity checkpoint exists, prepare the reusable
-numeric diagnostic and render the publication view with one command:
+First compose the independently supplied position, optional accepted lattice, and mosaic states.
+The tracked material-specific mosaic JSON has schema `rasim-fixed-mosaic-state-v1`, status
+`PROVIDED_MOSAIC_PRIOR`, the three continuous-mixture values, and a nonempty provenance string. For
+example:
 
 ```powershell
-uv run --frozen --extra visualization python `
-  scripts/figures/render_bi2se3_fitted_figure7.py all `
-  --checkpoint C:\external\bi2se3-replay `
-  --backend cuda `
-  --output-directory C:\external\bi2se3-figure7
+uv run --frozen python scripts/compose_fixed_experiment.py `
+  --position C:\external\bi2se3-fit\position.json `
+  --geometry-manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
+  --mosaic-state examples/bi2se3/experiment/fixed_mosaic.json `
+  --lattice C:\external\bi2se3-fit\lattice.json `
+  --source-state-count 250 `
+  --destination C:\external\bi2se3-fit\fixed_experiment.json
 ```
 
-The optional `--case` and `--config` arguments default to the tracked Bi2Se3 staged replay and
-`figure7_recreation.toml`. The output directory must be outside the repository. The `prepare`
-subcommand can be run by itself to create `bi2se3_figure7_inputs.ra_diag.npz`; later `render` calls
-consume that diagnostic without reopening the OSC files, remapping detector coordinates, or
-repeating any fit. This split makes numerical preparation and presentation independently
-reproducible.
+Omit `--lattice` to retain the CIF basis. The position artifact contains one common incidence-angle
+delta plus zero-sum per-image trims; the composer binds them to image IDs and reuses all immutable
+physics across the three views. Then freeze the measured mixed-chart observations into one external
+numeric diagnostic:
 
-The upper panel preserves the raw detector-native 5-degree OSC crop and top-origin row convention.
-Its colored masks are pixel images only because they are displayed on that detector. Their
-boundaries come from the verified fitted geometry, including the one common incidence-angle delta,
-and the explicitly frozen `Qr` and `L` bounds in the recipe. The seven lower panels retain the
-original order: `m=1-/+`, `m=3-/+`, `m=4-/+`, then full-width `m=0`. Measured curves are
-background-subtracted finite-bin means from the full native area detector; signal and declared
-radial sidebands are reduced separately before subtraction. Connecting segments are visual guides
-between bin centers, not smoothing.
+```powershell
+uv run --frozen python scripts/fit_layered_quintuple_regions.py prepare `
+  --fixed-state C:\external\bi2se3-fit\fixed_experiment.json `
+  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
+  --destination C:\external\bi2se3-figure7\matched_regions.ra_diag.npz
+```
 
-The fitted curves are evaluated independently from the actual staged physical model. The
-material-neutral reciprocal-profile contract maps continuous detector coordinates into one declared
-layered reciprocal frame, assigns the same `Qr/L` regions, and integrates model density times area
-and area separately before division. The preparation command compares coarse and fine Gaussian
-cubature and adaptively refines failed profiles. It never creates a simulated detector raster. One
-saved 5-degree nuisance scale from the accepted structure fit is applied without per-panel or
-per-family renormalization. The off-specular panels therefore remain linear and preserve negative
-background-subtracted data; only `m=0` is logarithmic.
+`m=0` rows are selected and binned in phi/2theta. Nonzero families use signed detector side and
+`Qr/L`. The measured image remains pixels, but every candidate model is integrated directly over
+the corresponding continuous chart region. Fit one structure vector jointly to all retained peaks
+and all three OSCs; one scale per OSC is shared by every family in that image.
 
-This is a scientifically regenerated Figure-7 layout, not a numerical reproduction of the old
-RA-SIM curves. The first divergent stage is explicit: the surviving legacy generator drew a
-smoothed copy of its measured trace, whereas this replacement draws converged continuous
-physical-model cubature. The old layout is retained, but it is not a numerical oracle. The `m=3`
-and `m=4` curves are honest extrapolations because only `m=0` and `m=1` entered the nearly-perfect-2H
-structure fit. The rendered caption and manifest state that the fixed model is a 52-layer 2H
-structure with shared disorder epsilon `0.001`, no 4H/6H component, and no stacking refinement.
-The visible disagreement is retained; this model-limited structure estimate remains unqualified.
+The fixed structural state is a 52-layer, fault-free R-centered three-registry parent with no
+4H/6H population and no stacking-disorder fit. The `3R` implementation name expresses the native
+Bi2Se3 R-centering sequence; it does not introduce an additional fitted phase. The recipe freezes
+the approved peak whitelist and its horizon-exclusion provenance. Every selected native pixel must
+additionally clear the one-degree air-exit guard; the adapter does not rediscover peaks during
+fitting.
 
-## Run the synthetic fixed-position Bi2Se3 structure proof
+Stages A, B, and C are modular initializers; the mandatory joint stage is the sole downstream
+structure result. Each later stage requires the exact accepted predecessor:
+
+```powershell
+uv run --frozen python scripts/fit_layered_quintuple_regions.py background `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --fit-plan examples/bi2se3/experiment/figure7_structure_fit.toml `
+  --destination C:\external\bi2se3-figure7\radial_background.ra_diag.npz
+
+uv run --frozen python scripts/fit_layered_quintuple_regions.py fit `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --background C:\external\bi2se3-figure7\radial_background.ra_diag.npz `
+  --fit-plan examples/bi2se3/experiment/figure7_structure_fit.toml `
+  --destination C:\external\bi2se3-figure7\stage_A.json `
+  --stage A --backend cuda
+
+uv run --frozen python scripts/fit_layered_quintuple_regions.py fit `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --background C:\external\bi2se3-figure7\radial_background.ra_diag.npz `
+  --fit-plan examples/bi2se3/experiment/figure7_structure_fit.toml `
+  --predecessor C:\external\bi2se3-figure7\stage_A.json `
+  --destination C:\external\bi2se3-figure7\stage_B.json `
+  --stage B --backend cuda
+
+uv run --frozen python scripts/fit_layered_quintuple_regions.py fit `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --background C:\external\bi2se3-figure7\radial_background.ra_diag.npz `
+  --fit-plan examples/bi2se3/experiment/figure7_structure_fit.toml `
+  --predecessor C:\external\bi2se3-figure7\stage_B.json `
+  --destination C:\external\bi2se3-figure7\stage_C.json `
+  --stage C --backend cuda
+
+uv run --frozen python scripts/fit_layered_quintuple_regions.py fit `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --background C:\external\bi2se3-figure7\radial_background.ra_diag.npz `
+  --fit-plan examples/bi2se3/experiment/figure7_structure_fit.toml `
+  --predecessor C:\external\bi2se3-figure7\stage_C.json `
+  --destination C:\external\bi2se3-figure7\joint.json `
+  --stage joint --backend cuda
+```
+
+Each fit writes an atomic `.progress.json` after every complete model evaluation. Restart an
+interrupted stage by choosing a new final destination and passing that same-stage progress artifact
+with `--resume`. A completed stage is immutable and is supplied to its child with `--predecessor`.
+After the joint fit, evaluate continuous display profiles over the same declared fitted rod scope:
+
+```powershell
+uv run --frozen python scripts/fit_layered_quintuple_regions.py profiles `
+  --diagnostic C:\external\bi2se3-figure7\matched_regions.ra_diag.npz `
+  --background C:\external\bi2se3-figure7\radial_background.ra_diag.npz `
+  --fit C:\external\bi2se3-figure7\joint.json `
+  --destination C:\external\bi2se3-figure7\figure7_fit_conditioned.ra_diag.npz `
+  --backend cuda
+```
+
+This terminal is labeled `FIT_CONDITIONED`, records the exact fitted rod roster, sets
+`publication_ready=false`, and makes no all-rod publication claim.
+
+```powershell
+uv run --frozen --extra visualization python scripts/fit_layered_quintuple_regions.py render `
+  --profile-diagnostic C:\external\bi2se3-figure7\figure7_fit_conditioned.ra_diag.npz `
+  --output-directory C:\external\bi2se3-figure7\rendered
+```
+
+The detector panel is the unchanged top-origin native 5-degree OSC view. Thin masks show the full
+profile-integration regions; bold masks show the peak windows that entered the joint fit. The lower
+panels preserve separate signed branches for `m=1,3,4` and a full-width logarithmic `m=0` panel.
+The measured curve has the same frozen shared radial background removed as in the fit; the dashed
+curve is the unsmoothed continuous diffraction model. There is no family renormalization. The old
+RA-SIM trace remains a layout oracle only because it smoothed measured data.
+
+## Historical: synthetic fixed-position Bi2Se3 structure proof
 
 After accepting the geometry and mosaic stages, run the deterministic three-incidence structure
 recovery with the accepted external mosaic result:

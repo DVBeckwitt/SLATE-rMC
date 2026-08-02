@@ -874,6 +874,12 @@ fixture monkeypatches Bi2Se3 strength and `MosaicBraggSpace` construction to fai
 both exact-tag prediction and discovery-to-indexing, proving that geometry work does not depend on
 intensity or mosaic quadrature.
 
+That 9-coordinate case remains the no-trim base proof. The current three-image proof additionally
+activates two canonical Helmert trim contrasts, requires scaled rank 11/11, reconstructs per-image
+trims whose sum is numerically zero, and independently recovers the common incidence delta. This
+separates the mean calibration shift from small commanded-angle deviations without introducing
+three independent incidence offsets.
+
 The same hidden-truth fixture also removes both detector tilts from the active pack, recovers the
 remaining seven coordinates at rank 7/7, and requires the fixed tilt values to remain bit-exact. A
 second reordered, noncontiguous three-coordinate request proves that caller order is canonicalized,
@@ -1398,7 +1404,10 @@ PSF, component deblending, model discrepancy, calibrated uncertainty, general pe
 motion, and arbitrary-material structure bases. The four interpolation points and local
 correlations are not substitutes for independent data validation or statistical uncertainty.
 
-## Portable Bi2Se3/Bi2Te3 staged-fit replay
+## Historical portable Bi2Se3/Bi2Te3 staged-fit replay
+
+This is retained baseline evidence for the former transferred-amplitude workflow. It is not the
+current strict fixed-experiment plus mixed-chart structure-fitting pipeline.
 
 The two tracked `rasim-staged-fit-replay-v2` cases make the accepted 5/10/15-degree results
 repeatable from a clean clone. Exact checks cover every input hash and decoded OSC array, source
@@ -1408,7 +1417,7 @@ in each case. The runner validates the complete transitive numerical dependency 
 hash-checked `uv.lock` read immediately before execution; resume rejects a stage from a different
 runtime even though runtime provenance is deliberately excluded from its scientific revision.
 
-Bi2Se3 now has a verified geometry-through-ordered-intensity replay checkpoint. Geometry contains
+The retained Bi2Se3 replay has a verified geometry-through-ordered-intensity checkpoint. Geometry contains
 eight shared corrections plus one common incidence delta and one pivot bound, so
 geometry-parameter precision remains unqualified. Its stage-case SHA-256 is
 `c87e86f00372e7a3eaf84e71f1315eda9d55381d2513c04d5e494639cd29d6df` and its scientific revision
@@ -1440,7 +1449,7 @@ profile residuals `0.69385/1.0` reject a claim of adequate intrinsic-mosaic reco
 contact bounds. It is a transferred-nuisance-amplitude estimate with `NO_ORACLE`, not direct
 count-calibrated structure recovery.
 
-An independent current-worktree CUDA replay recovered mosaic
+An independent worktree CUDA replay at the time recovered mosaic
 `(1.0340984212 deg,0.6600483356 deg,0.3446812734)` with objective `15.460996255` and ordered
 `(1.0,0.8448725522,0.1,0.0)` with objective `24.118711199`. The case tolerances
 `(5e-6,5e-5,1e-5,2e-4)` for mosaic parameters/objective and ordered parameters/objective cover
@@ -1448,13 +1457,13 @@ these observed optimizer-repeat deltas while remaining much smaller than the sta
 residuals. Exact identities, profile membership, bounds, ranks, and source realizations are not
 tolerance-relaxed.
 
-The accepted Bi2Te3 mosaic and ordered stages are CUDA-qualified under the current lock; equivalent
+The retained Bi2Te3 mosaic and ordered stages were CUDA-qualified under that lock; equivalent
 CPU tolerance has not been established, so a CPU request through mosaic or later fails before
 geometry executes or an output directory is created. The optional 250-state 3,000 x 3,000 render has the
 separate historical CUDA qualification described below. Render verification hashes decoded
 grayscale pixels, not PNG container bytes. Paths, timings, peak memory, and device labels are
 excluded from scientific identity. Bi2Se3 rendering is disabled in this replay because available
-images bind a retired mosaic result; its current certificate terminates exactly at ordered
+images bind a retired mosaic result; its retained certificate terminates exactly at ordered
 intensity.
 
 The locked fit-stage qualification replay used Python `3.13.13`, uv `0.11.7`, NumPy `2.4.6`,
@@ -1481,7 +1490,7 @@ A branch is not proven when the fixture is insensitive to likely mistakes. Run t
 mutations from [ERROR_INJECTION.md](ERROR_INJECTION.md) and record the expected and observed first
 failing stage. The integration proof covers factor omission/duplication, rod/source identity,
 Ewald-root sign, OSC orientation, detector tilts, and row/column mutations.
-## Bi2Se3 fitted Figure-7 recreation (2026-07-30)
+## Superseded Bi2Se3 fitted Figure-7 recreation (2026-07-30)
 
 The Figure-7 replacement consumes the verified geometry-through-ordered-intensity replay at
 `bi2se3_positions_theta_delta_v2_final`. It preserves one common incidence correction,
@@ -1540,8 +1549,9 @@ The retained external proof artifacts are:
   and renderer SHA-256 `57f158e77dafb2aa0fbdd542308addcf2efde5e7b906fa3b8dfd314b06fc61f3`.
 
 All 22 non-manifest diagnostic arrays are bitwise identical to the independently reviewed
-pre-format run. The rerun changes only timing/provenance metadata and binds the exact formatted
-renderer source retained by the repository.
+pre-format run. The rerun changed only timing/provenance metadata and bound the exact formatted
+renderer source retained at that time; the superseded one-material renderer was later removed by
+the generalized layered-fit cleanup.
 
 The PNG was inspected at native resolution. The PDF was independently rasterized from its single
 961.09 by 1218.00 point page and inspected. Both retain the detector-native top-origin rows, all
@@ -1560,3 +1570,69 @@ legacy curves are not a numerical oracle. The `m=3` and `m=4` curves are extrapo
 2H model with shared disorder epsilon `0.001`, no 4H/6H component, and no stacking refinement. The
 measured pixel-center sideband reduction and saved nuisance scale are declared estimators, not an
 independent count calibration; visible disagreement must not be interpreted as an adequate fit.
+
+## Historical Bi2Se3 separated-ADP/envelope fit (2026-08-02)
+
+The external `bi2se3_improved_v14_event_envelope` chain is the last pre-cleanup result. It keeps
+crystallographic site ADPs fixed inside each atomic amplitude and fits a distinct sample-Q
+intensity envelope once per event,
+`exp(-U_r Q_r^2 - U_z Q_z^2)`, after mosaic rotation and before source summation. The model is
+never rasterized: `m=0` is integrated in continuous phi/two-theta regions, nonzero families in
+continuous signed-Qr/L regions, and final profiles span the complete fitted Qz branches. The
+measured detector and its displayed masks remain native pixels.
+
+The fixed site ADPs in A2 are Bi `(U_r,U_z)=(0.0036,0.0264)`, Se1
+`(0.0046,0.0485)`, and Se2 `(0.0046,0.0485)`. The joint result is:
+
+| parameter | fitted value |
+|---|---:|
+| Bi Wyckoff `delta z` | `+0.0006920487431590197` |
+| Se2 Wyckoff `delta z` | `+0.0050000000000000` |
+| outer-site Bi antisite fraction | `6.912034498360389e-21` |
+| sample-Q envelope `U_r` | `0.019999999998903607 A2` |
+| sample-Q envelope `U_z` | `0.019999999978681245 A2` |
+
+The position state has common incidence delta
+`0.0075323609906532045 rad = 0.43157249453340835 deg`, zero-sum trims
+`(-0.0520938580,+0.0023598652,+0.0497339928) deg`, and effective angles
+`(5.3794786365,10.4339323598,15.4813064873) deg`. The provided mosaic state is Gaussian sigma
+`1.5193931639374458 deg`, Lorentzian HWHM `0.14093938515799925 deg`, and Lorentzian probability
+`0.37763266115961813`. The lattice decision retains CIF `a=4.143 A`, `c=28.636 A`.
+
+Weighted RMS is `69.22474471459833`, a `2.565972%` reduction from this chain's Stage-B initializer
+(`71.04781184258634`) but only `1.73524e-7%` below the preceding v13 joint result
+(`69.22474483471969`). The separation therefore improves parameter meaning, not detector agreement.
+Data-only scaled sensitivity is rank 5/5 with condition `20.285162669101375`. Family RMS values are
+`m0=109.85919715059866`, `m1=49.465288021017834`, `m3=23.157495495796393`, and
+`m4=35.7895922856971`.
+
+This is `MODEL_LIMITED_FIT`, `FIT_CONDITIONED`, and `publication_ready=false`: four of five joint
+coordinates are on bounds, Se2 `delta z` and both envelope coefficients reach their upper bounds,
+the antisite fraction reaches its lower bound, `m3` cubature relative L2 is `0.0348072` against the
+declared `0.03` limit, mosaic is inherited rather than refitted here, and only 1/15 alignment
+centroids clears the edge-mass reliability gate. The boundary values are not refined
+crystallographic constants.
+
+The chain hashes are A
+`77100ea57189e54d7752f5a1fde0748ce649e382bfd2e6476b74305bd9641111`, B
+`9d966df01f616d4daa489825452f8905743df5acb133a44b3d6fbf80a80735fd`, C
+`f2dc699ca927a35d8aeed233ad82f31e558f8dca08e01d80ece2e0e7def60ce7`, joint
+`8da9b29b2c9bf32b702acef7ba54f00e4265575ccb4d9a04806df25f2bdb897d`, prepared diagnostic
+`cdb1702a580b579b645846ed4b12cf36fe35330c434c4f0d0d93f1ab7ea8db44`, background
+`d5d739e993beb3d913056b781b47e1239675a59e3f02f0cb4ef8ead4ebe9fe77`, and profiles
+`e8506a282a41155803f90a650e59c01d03fbfe2b32ed9c10224ee74f330569f3`. The PNG hash is
+`77bbc86a43274b6f67ddebf4884e40ce8d5f9f9aee68bdd72d93abc4a4661166`, PDF hash
+`1dfb7945f76eaf5dda706248c767a5800f0a454d5742efd13336f72ec3933ddb`, and alignment hash
+`f4a7fd5a7bd5184e29c4a78a81d27b3a5ab386a1bdbbb4d4f8eb59f88ac85e28`.
+
+The v14 chain is historical evidence only and is not admissible under the current fit-v11
+observable. It used center-selected measured count masses while the model used ideal continuous
+rectangles, omitted the induced cross-row count covariance, did not gate anchor-row cubature, and
+also exceeded the declared `m3` cubature limit. Its source paths predate the strict hash-bound
+composer and its transient profile-progress sidecar is absent. A fresh reproduction starts from the
+raw OSCs plus the tracked geometry manifest and configuration, writes a new external v6 position
+artifact, then consumes the tracked mosaic, recipe, and fit-plan inputs. The fit-v11 chain projects
+the verified piecewise-constant OSC field onto the same continuous rectangles as the model, gates
+per-dataset weak rows/support/covariance, excludes every touched boundary pixel from background
+calibration, and tests cubature on the anchor-conditioned `(I-A)m` observable before any new figure
+is called current.

@@ -40,6 +40,7 @@ class RegistryPhaseModel(StrEnum):
 
 class Parent(StrEnum):
     TWO_H = "2H"
+    THREE_R = "3R"
     FOUR_H_PLUS = "4H+"
     FOUR_H_MINUS = "4H-"
     SIX_H_PLUS = "6H+"
@@ -88,6 +89,11 @@ class TransitionLaw:
     def for_parent(cls, parent: Parent) -> TransitionLaw:
         selected = {
             Parent.TWO_H: 0,
+            # In the canonical FORWARD_H_PLUS_2K gauge, the native
+            # R-centering translation (2/3, 1/3, 1/3) advances registry in
+            # the negative direction.  This transition is named explicitly
+            # instead of exposing the numerically equivalent PbI2 6H label.
+            Parent.THREE_R: 2,
             Parent.SIX_H_PLUS: 1,
             Parent.SIX_H_MINUS: 2,
             Parent.FOUR_H_PLUS: 3,

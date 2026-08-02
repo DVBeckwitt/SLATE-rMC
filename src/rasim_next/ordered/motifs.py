@@ -35,7 +35,62 @@ class PbI2Motif:
 
 
 @dataclass(frozen=True, slots=True)
-class Bi2Se3QuintupleLayerParameters:
+class TransverseIsotropicSiteDisplacement:
+    """Reference displacement components for one crystallographic site orbit."""
+
+    source_label: str
+    u_radial_A2: float
+    u_normal_A2: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_label, str) or not self.source_label:
+            raise ValueError("source_label must be a nonempty string")
+        for name in ("u_radial_A2", "u_normal_A2"):
+            value = float(getattr(self, name))
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+            object.__setattr__(self, name, value)
+
+
+@dataclass(frozen=True, slots=True)
+class SiteDisplacementProfile:
+    """Fixed site-resolved ADP shape with one constrained common scale."""
+
+    sites: tuple[TransverseIsotropicSiteDisplacement, ...]
+    scale: float = 1.0
+    provenance: str = "declared"
+
+    def __post_init__(self) -> None:
+        sites = tuple(self.sites)
+        if not sites or any(
+            not isinstance(site, TransverseIsotropicSiteDisplacement) for site in sites
+        ):
+            raise ValueError("sites must contain transverse-isotropic site displacements")
+        labels = tuple(site.source_label for site in sites)
+        if len(set(labels)) != len(labels):
+            raise ValueError("site displacement source labels must be unique")
+        scale = float(self.scale)
+        if not np.isfinite(scale) or scale < 0.0:
+            raise ValueError("site displacement scale must be finite and nonnegative")
+        if not isinstance(self.provenance, str) or not self.provenance:
+            raise ValueError("site displacement provenance must be a nonempty string")
+        object.__setattr__(self, "sites", sites)
+        object.__setattr__(self, "scale", scale)
+
+    def components_A2(self, source_label: str) -> tuple[float, float]:
+        """Return scaled radial and normal components for one source-site label."""
+
+        for site in self.sites:
+            if site.source_label == source_label:
+                return (
+                    self.scale * site.u_radial_A2,
+                    self.scale * site.u_normal_A2,
+                )
+        raise ValueError(f"site displacement profile lacks source label {source_label!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class Bi2X3QuintupleLayerParameters:
     """Symmetry-preserving Bi2-chalcogen3 quintuple-layer parameters.
 
     The historical ``se1`` and ``se2`` field names denote the central and outer
@@ -50,6 +105,7 @@ class Bi2Se3QuintupleLayerParameters:
     se2_occupancy: float
     u_radial_A2: float
     u_normal_A2: float
+    outer_bi_antisite_fraction: float = 0.0
 
     def __post_init__(self) -> None:
         scalar_names = (
@@ -60,6 +116,7 @@ class Bi2Se3QuintupleLayerParameters:
             "se2_occupancy",
             "u_radial_A2",
             "u_normal_A2",
+            "outer_bi_antisite_fraction",
         )
         for name in scalar_names:
             value = float(getattr(self, name))
@@ -77,9 +134,11 @@ class Bi2Se3QuintupleLayerParameters:
                 raise ValueError(f"{name} must lie in [0, 1]")
         if self.u_radial_A2 < 0.0 or self.u_normal_A2 < 0.0:
             raise ValueError("directional displacement parameters must be nonnegative")
+        if not 0.0 <= self.outer_bi_antisite_fraction <= 1.0:
+            raise ValueError("outer_bi_antisite_fraction must lie in [0, 1]")
 
     @classmethod
-    def from_crystal(cls, crystal: CrystalStructure) -> Bi2Se3QuintupleLayerParameters:
+    def from_crystal(cls, crystal: CrystalStructure) -> Bi2X3QuintupleLayerParameters:
         """Derive the accepted seven-parameter baseline from one expanded R-3m CIF."""
 
         atoms = _bi2se3_quintuple_layers(crystal)[0]
@@ -529,12 +588,12 @@ def _bi2se3_quintuple_layers(
 
 def _parameterized_bi2se3_quintuple_layer(
     crystal: CrystalStructure,
-    parameters: Bi2Se3QuintupleLayerParameters,
+    parameters: Bi2X3QuintupleLayerParameters,
 ) -> tuple[MotifAtom, ...]:
     """Apply only the symmetry-allowed coordinates and source-site occupancies."""
 
-    if not isinstance(parameters, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("parameters must be Bi2Se3QuintupleLayerParameters")
+    if not isinstance(parameters, Bi2X3QuintupleLayerParameters):
+        raise TypeError("parameters must be Bi2X3QuintupleLayerParameters")
     baseline = _bi2se3_quintuple_layers(crystal)[0]
     bi_label, center_label, outer_label = quintuple_layer_site_labels(crystal)
     occupancy_by_label = {
@@ -547,6 +606,7 @@ def _parameterized_bi2se3_quintuple_layer(
         center_label: 0.0,
         outer_label: 1.0 / 3.0 - parameters.se2_fractional_z,
     }
+    bi_template = next(atom for atom in baseline if atom.source_label == bi_label)
     atoms: list[MotifAtom] = []
     for atom in baseline:
         try:
@@ -556,25 +616,39 @@ def _parameterized_bi2se3_quintuple_layer(
             raise ValueError("quintuple-layer motif contains an unsupported source site") from error
         baseline_z = atom.fractional_offset[2]
         fractional_z = 0.0 if normal_distance == 0.0 else np.copysign(normal_distance, baseline_z)
-        atoms.append(
-            replace(
-                atom,
-                occupancy=occupancy,
-                fractional_offset=(
-                    atom.fractional_offset[0],
-                    atom.fractional_offset[1],
-                    float(fractional_z),
-                ),
-            )
+        positioned = replace(
+            atom,
+            occupancy=(
+                occupancy * (1.0 - parameters.outer_bi_antisite_fraction)
+                if atom.source_label == outer_label
+                else occupancy
+            ),
+            fractional_offset=(
+                atom.fractional_offset[0],
+                atom.fractional_offset[1],
+                float(fractional_z),
+            ),
         )
+        atoms.append(positioned)
+        if atom.source_label == outer_label:
+            atoms.append(
+                replace(
+                    positioned,
+                    species=bi_template.species,
+                    element=bi_template.element,
+                    charge=bi_template.charge,
+                    occupancy=occupancy * parameters.outer_bi_antisite_fraction,
+                )
+            )
     return tuple(atoms)
 
 
-def bi2se3_ql_amplitudes(
+def bi2x3_quintuple_layer_amplitudes(
     crystal: CrystalStructure,
     query: RodQueryBatch,
     *,
-    structure_parameters: Bi2Se3QuintupleLayerParameters | None = None,
+    structure_parameters: Bi2X3QuintupleLayerParameters | None = None,
+    site_displacement_profile: SiteDisplacementProfile | None = None,
 ) -> LayerAmplitudeResult:
     """Return central-chalcogen-centered quintuple-layer F+ and F- in electron units.
 
@@ -584,7 +658,7 @@ def bi2se3_ql_amplitudes(
 
     if any(phase_id != crystal.phase_id for phase_id in query.phase_id):
         raise ValueError("query phase does not match the quintuple-layer crystal")
-    baseline_parameters = Bi2Se3QuintupleLayerParameters.from_crystal(crystal)
+    baseline_parameters = Bi2X3QuintupleLayerParameters.from_crystal(crystal)
     parameters = baseline_parameters if structure_parameters is None else structure_parameters
     baseline_unchanged = parameters == baseline_parameters
     plus_atoms = (
@@ -598,27 +672,55 @@ def bi2se3_ql_amplitudes(
     layer_normal /= np.linalg.norm(layer_normal)
     if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
         layer_normal = -layer_normal
-    if baseline_unchanged:
+    if site_displacement_profile is not None and not isinstance(
+        site_displacement_profile, SiteDisplacementProfile
+    ):
+        raise TypeError("site_displacement_profile must be a SiteDisplacementProfile")
+    if baseline_unchanged and site_displacement_profile is None:
+        displacement_tensor = None
+        site_displacement_tensors = None
+    elif site_displacement_profile is not None:
+        if parameters.u_radial_A2 != 0.0 or parameters.u_normal_A2 != 0.0:
+            raise ValueError(
+                "site-resolved and shared quintuple-layer displacements are mutually exclusive"
+            )
+        normal_projector = np.outer(layer_normal, layer_normal)
+        radial_projector = np.eye(3) - normal_projector
+        site_displacement_tensors = np.asarray(
+            [
+                (
+                    site_displacement_profile.components_A2(atom.source_label)[0] * radial_projector
+                    + site_displacement_profile.components_A2(atom.source_label)[1]
+                    * normal_projector
+                )
+                for atom in plus_atoms
+            ],
+            dtype=np.float64,
+        )
         displacement_tensor = None
     elif parameters.u_radial_A2 == parameters.u_normal_A2:
         displacement_tensor = parameters.u_radial_A2 * np.eye(3)
+        site_displacement_tensors = None
     else:
         normal_projector = np.outer(layer_normal, layer_normal)
         displacement_tensor = (
             parameters.u_radial_A2 * (np.eye(3) - normal_projector)
             + parameters.u_normal_A2 * normal_projector
         )
+        site_displacement_tensors = None
     f_plus = unit_cell_amplitude(
         _motif_crystal(crystal, plus_atoms, f"{crystal.phase_id}:ql-plus"),
         hkl,
         query.wavelength_A,
         shared_displacement_tensor_A2=displacement_tensor,
+        site_displacement_tensors_A2=site_displacement_tensors,
     ).amplitude_e
     f_minus = unit_cell_amplitude(
         _motif_crystal(crystal, minus_atoms, f"{crystal.phase_id}:ql-minus"),
         hkl,
         query.wavelength_A,
         shared_displacement_tensor_A2=displacement_tensor,
+        site_displacement_tensors_A2=site_displacement_tensors,
     ).amplitude_e
     return LayerAmplitudeResult(
         event_id=query.event_id,
@@ -628,7 +730,7 @@ def bi2se3_ql_amplitudes(
         f_minus_e=f_minus,
         normalization="ONE_REGISTRY_FREE_LAYER",
         phase_sign="POSITIVE_Q_DOT_R",
-        gauge_id="bi2se3.se1_centered_ql.v1",
+        gauge_id="bi2x3.central_chalcogen_centered_ql.v1",
         layer_normal_crystal=layer_normal,
         layer_repeat_A=float(np.dot(crystal.direct_basis_A[:, 2], layer_normal) / 3.0),
     )

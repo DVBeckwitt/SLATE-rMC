@@ -10,21 +10,25 @@ from rasim_next.ordered.finite_stack import (
     uniform_finite_stack,
 )
 from rasim_next.ordered.motifs import (
-    Bi2Se3QuintupleLayerParameters,
+    Bi2X3QuintupleLayerParameters,
     MotifAtom,
     PbI2Motif,
-    bi2se3_ql_amplitudes,
+    SiteDisplacementProfile,
+    TransverseIsotropicSiteDisplacement,
+    bi2x3_quintuple_layer_amplitudes,
     extract_pbi2_motifs,
     pbi2_layer_amplitudes,
     quintuple_layer_site_labels,
 )
 
 __all__ = [
-    "Bi2Se3QuintupleLayerParameters",
+    "Bi2X3QuintupleLayerParameters",
     "MotifAtom",
     "PbI2Motif",
+    "SiteDisplacementProfile",
     "StructureAmplitudeResult",
-    "bi2se3_ql_amplitudes",
+    "TransverseIsotropicSiteDisplacement",
+    "bi2x3_quintuple_layer_amplitudes",
     "coherent_finite_stack",
     "extract_pbi2_motifs",
     "ordered_event_result",

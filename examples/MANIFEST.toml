@@ -41,9 +41,14 @@ size_bytes = 4816096
 sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
 
 [[file]]
-path = "examples/bi2se3/experiment/figure7_recreation.toml"
-size_bytes = 3246
-sha256 = "67952b08a181b2abc3429cc4bc09b72f559afdeb71e3054e9de80a88d254af6a"
+path = "examples/bi2se3/experiment/figure7_matched_regions.toml"
+size_bytes = 4440
+sha256 = "c8b23e2627a75f895bca71283327a8f8101d862b02a738bf3c7250a8651962c7"
+
+[[file]]
+path = "examples/bi2se3/experiment/figure7_structure_fit.toml"
+size_bytes = 2283
+sha256 = "2912ebe3d4c4d085b7a1655d9ee0581796864b8c31b2b4509f11ae53e63741d7"
 
 [[file]]
 path = "examples/bi2se3/experiment/forward_case.toml"
@@ -73,7 +78,7 @@ sha256 = "9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3"
 [[file]]
 path = "examples/bi2se3/experiment/staged_fit_replay.toml"
 size_bytes = 9348
-sha256 = "0239dbb4cfc302fe70e1bae2199bb002f58c9ef997cd1fb91244f0ceba380f92"
+sha256 = "644750a3fec1879b5948ba7b65d1e7ece4644a6eb99fba8e3b0a9015586f7942"
 
 [[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
@@ -161,6 +166,26 @@ size_bytes = 17149
 sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
 
 [[file]]
+path = "examples/bi2te3/experiment/figure7_matched_regions.toml"
+size_bytes = 4062
+sha256 = "2ffce3166579c2c7ad1f79a4180eb6089d27a54fdc656da094a67bb5cf6d3b9a"
+
+[[file]]
+path = "examples/bi2te3/experiment/figure7_structure_fit.toml"
+size_bytes = 2096
+sha256 = "8b96e40ed24bf88e9e49b4d13ca4e35cfa8c7bc4085fcf224474ff2af5ff1189"
+
+[[file]]
 path = "examples/bi2te3/experiment/staged_fit_replay.toml"
 size_bytes = 11521
 sha256 = "259aa2715fe3542c0293f3fc6ea84e406cb2dfa9361941151124d91bc18dacc9"
+
+[[file]]
+path = "examples/bi2se3/experiment/fixed_mosaic.json"
+size_bytes = 300
+sha256 = "e0ac04b482f994842a2a01f5fd3e145355093bd536ade781ba4d2124be1e8b25"
+
+[[file]]
+path = "examples/bi2te3/experiment/fixed_mosaic.json"
+size_bytes = 300
+sha256 = "9a2b37cb0579ad1778361d68a127075a7090da471e455403a8d0c2c6520f7340"

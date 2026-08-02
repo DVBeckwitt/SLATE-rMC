@@ -267,3 +267,49 @@ choice, and neither execution nor presentation silently falls back.
 distribution that supplies `QOpenGLWidget`, OpenGL functions/textures/shaders, and the Shiboken
 buffer pointer needed by the persistent R32F presenter. It is imported only when OpenGL
 presentation is selected and adds nothing to the core dependency or import path.
+
+## D038: Mixed-chart matched-region fitting and explicit layered-Bi2X3 centering
+
+Specular `m=0` observations are selected and binned in phi/2theta because their detector appearance
+is not a stable finite-width Qr rod. Nonzero families retain signed detector-side Qr/L regions. Both
+become the same raw-count-mass/support/block contract before fitting, so one parameter vector spans
+all families and all OSCs while one nonnegative scale spans every family within an OSC. The model is
+integrated over continuous phi/two-theta or signed-Qr/L chart rectangles and mapped through the
+detector-area measure; it is never fitted as a raster or as a smoothed measured trace. Pixel
+membership belongs only to the measured count image and displayed ROI mask.
+
+The five layered-Bi2X3 fit coordinates are introduced as three initializer stages: A isolates two
+Wyckoff-z shifts, B isolates one outer-site antisite fraction at full site occupancy, and C isolates
+two radial/normal sample-Q event-envelope coefficients. Crystallographic site ADPs remain fixed
+inside the atomic amplitude. This ordering reduces early cross-compensation and exposes which
+physical group the data constrain;
+it does not make the stages independent final models. A mandatory joint refinement starts from C
+and refits all five. Exact predecessor bytes, child starts, and frozen coordinates are part of the
+contract, and only the joint result can feed profiles or a figure. A user may stop after
+any stage and later resume by supplying every verified, completed predecessor with its qualification
+or model-limited status preserved.
+
+The tracked R-3m Bi2X3 adapter uses the explicit fault-free R-centered registry cycle
+`(0F+,2F+,1F+)`. This implements conventional centering and its extinction rule; it does not add a
+4H/6H population or fit
+stacking disorder. A compact declared rod set accelerates the inverse problem. The explicitly
+labeled `FIT_CONDITIONED` terminal renders the same fitted scope over full-Qz branches, is not
+publication-ready, and makes no all-rod/full-profile-oracle claim. Fit stages checkpoint resumably;
+profiles restart atomically. Prepare, background, and render
+publish atomically and restart from their exact predecessor, recipe, source, code, execution, and
+selected-pixel identities.
+
+## D039: Lattice changes are a conditioned material stage, not free detector geometry
+
+The position fit does not activate lattice constants because a broad detector-image fit could trade
+reciprocal scale against pose and incidence. After a verified completed position fit, a separate sensitivity
+stage fits near-CIF in-plane and normal log scales with tight numerical trust regularization. The
+candidate is promoted only when its parameter-scaled data-only Jacobian is full-rank and sufficiently
+well-conditioned and its data improvement, selection identity, root audit, bounds, and prior pulls
+all pass. Otherwise the declared result is `RETAIN_CIF_LATTICE` and downstream builders receive no
+explicit basis override.
+
+An accepted lattice and the independently provided mosaic state are bound together only when the
+immutable fixed-experiment checkpoint is composed. The downstream rebuild regenerates all material
+optics, reciprocal bases, rods, and detector functions from that full basis while preserving the
+separate mosaic provenance, so structure fitting cannot silently mix incompatible states.

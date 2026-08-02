@@ -48,7 +48,8 @@ contributing rod/orientation branches on the active detector panel.
   and separately named specular calculations.
 - `reciprocal`: reciprocal basis and complete physical rod catalogs.
 - `sampling`: deterministic source phase-space sampling only.
-- `pipeline/bragg_space.py`: binds CIF-derived finite-2H strength to rods and mosaic geometry.
+- `pipeline/bragg_space.py`: binds CIF- or adopted-lattice ordered-parent strength, including the
+  supported 2H and R-centered 3R catalogues, to rods and mosaic geometry.
 - `pipeline/continuous_detector.py`: shared inverse latent pushforward to intrinsic internal-film
   solid angle or one-incident-state detector coordinates, plus native-pixel integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
@@ -64,10 +65,10 @@ contributing rod/orientation branches on the active detector panel.
   the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
   fitting, rank diagnostics, and post-fit root re-enumeration.
 - `fitting/indexed_series.py`: exact image-ID joins, one shared nine-coordinate
-  detector/sample/axis/pivot correction pack, and an optional single additive incidence-angle delta
-  across an arbitrary nonempty commanded-angle series. Any nonempty identifiable coordinate subset
-  may be active while the complement remains exactly fixed; the common delta and overlapping
-  sample-x gauge cannot be active together.
+  detector/sample/axis/pivot correction pack, one optional common additive incidence-angle delta,
+  and optional zero-sum image trims represented by Helmert contrasts. Any identifiable subset may
+  be active while the complement remains exactly fixed; the common delta and overlapping sample-x
+  gauge cannot be active together.
 - `fitting/mosaic.py`: immutable finite-bin profile identities and response banks, exact
   per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
   search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
@@ -124,15 +125,17 @@ contributing rod/orientation branches on the active detector panel.
    fitting consumes them.
 10. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
    frozen observations by image ID. The joint fitter concatenates canonical per-image residual
-   blocks while applying one correction vector to every image.
+   blocks while applying one shared rigid correction vector, one common incidence delta, and
+   canonical Helmert trim contrasts whose per-image values sum to zero.
 11. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
-12. Ordered-intensity fitting retains the finite-ROI mass path and a certified source-averaged
+12. The retained historical synthetic ordered-intensity proof uses the finite-ROI mass path and a
+   certified source-averaged
     selected-center path. The latter produces one combined detector function per incidence before
     any dataset scale or residual, retains every weak nonzero anchor and admitted `m=0` anchor, and
-    contracts only occupancy coefficients and directional Debye-Waller factors. Atomic positions,
+    contracts only occupancy coefficients and its historical global Q-damping factors. Atomic positions,
     geometry, mosaic, lattice, optics, and stacking law are immutable. Multi-incidence observations
     join by dataset ID and exact observable-layout digest rather than tuple position. The active
     Unfiltered Bi2Se3 proof mode uses 250 shared-revision source rows and `88/78/72` centers,
@@ -191,3 +194,44 @@ sphere texture, compatibility adapter, or parallel legacy simulator. The optiona
 terminal generates one fixed-width source/draw latent matrix and streams roots directly into the
 final image; it retains no orientation/root/event Cartesian product. Historical equations remain
 only in the immutable reference pack and proof comparisons.
+
+## Detector-native matched-region fitting
+
+`measurement.region_observations` owns material-neutral angular and reciprocal region definitions
+and center-membership used only for preparation/display. `measurement.continuous_regions` owns
+chart-rectangle quadrature and the data-only sparse projection of piecewise-constant native counts
+onto those same rectangles. `fitting.radial_background` owns a shared
+rise-times-decay detector halo with per-dataset amplitude and pedestal; `fitting.matched_regions`
+owns the covariance-conditioned joint residual and one scale per dataset. None of these modules
+knows a material or Figure 7.
+
+`fitting.fixed_experiment` is the modular handoff between position, optional lattice, supplied
+mosaic, and intensity stages. It rebuilds one immutable source/material/reciprocal state, rebinds
+only the commanded incidence geometry for each image, and rejects incomplete predecessor state.
+The current adapter covers the tracked R-3m Bi2X3 layered-quintuple family. Material recipes freeze
+measured regions and site-specific constants; the common numerical path refines five shared
+coordinates against all three OSCs: Stage A fits two Wyckoff-z offsets, Stage B one full-occupancy
+outer-site cation antisite fraction, Stage C the radial and normal sample-Q intensity envelope, and
+the mandatory joint stage refits all five. Crystallographic site ADPs are a separate fixed profile
+inside the atomic amplitude. The sample-Q envelope is applied once from sample-frame Q after mosaic
+rotation and is never folded into site ADPs.
+
+A/B/C are initializers only. Every child binds the exact predecessor bytes, starts from that
+predecessor, and keeps all inactive coordinates unchanged. Fit stages checkpoint resumably;
+profiles publish atomically and restart as a whole. Completed stages are immutable predecessors.
+Prepare, background calibration, and render
+publish atomically. Pixel-center membership is only preparation/display discovery state. The fit
+integrates the verified piecewise-constant native count field over the same continuous
+phi/two-theta or signed-side Qr/L chart rectangles as the continuous model and propagates the full
+fractional-pixel count covariance.
+Adjacent anchors condition measured background and model with the same projection but do not become
+extra fitted signal rows. Only measured counts and the displayed area-detector image remain pixel
+arrays.
+
+The terminal profile is explicitly `FIT_CONDITIONED`: it evaluates complete Qz branches with the
+fitted rod roster, records cubature evidence, remains `publication_ready=false`, and makes no
+all-configured-rod claim. The detector panel still shows the actual integration regions. The
+fault-free R-centered parent is explicit CPU/CUDA finite-stack state, not a fitted 4H/6H population.
+If the optional lattice stage accepts a changed basis, every lattice-dependent material,
+reciprocal, rod, optical, and detector object is rebuilt before downstream fitting; otherwise the
+CIF basis is retained exactly.

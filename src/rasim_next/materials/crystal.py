@@ -83,6 +83,35 @@ class CrystalStructure:
         object.__setattr__(self, "source_path", Path(self.source_path))
 
 
+def crystal_with_direct_basis(
+    crystal: CrystalStructure,
+    direct_basis_A: NDArray[np.float64],
+    *,
+    provenance: str,
+) -> CrystalStructure:
+    """Return the same fractional structure in an explicitly supplied direct basis."""
+
+    if not isinstance(crystal, CrystalStructure):
+        raise TypeError("crystal must be CrystalStructure")
+    if not isinstance(provenance, str) or not provenance.strip():
+        raise ValueError("provenance must be nonempty")
+    basis = np.asarray(direct_basis_A, dtype=np.float64)
+    if basis.shape != (3, 3) or not np.all(np.isfinite(basis)):
+        raise ValueError("direct_basis_A must be a finite 3 by 3 matrix")
+    volume_A3 = float(np.linalg.det(basis))
+    if volume_A3 <= 0.0:
+        raise ValueError("direct_basis_A must be right-handed")
+    return CrystalStructure(
+        phase_id=crystal.phase_id,
+        spacegroup_hm=crystal.spacegroup_hm,
+        direct_basis_A=basis,
+        volume_A3=volume_A3,
+        sites=crystal.sites,
+        source_path=crystal.source_path,
+        provenance=f"{crystal.provenance}; {provenance.strip()}",
+    )
+
+
 def _direct_basis(cell: gemmi.UnitCell) -> NDArray[np.float64]:
     vectors = (
         cell.orthogonalize(gemmi.Fractional(1.0, 0.0, 0.0)),

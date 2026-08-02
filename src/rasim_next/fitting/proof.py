@@ -18,8 +18,8 @@ from rasim_next.fitting.ordered_intensity import (
     fit_ordered_intensity_series,
     ordered_intensity_structure_model_revision,
 )
-from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.ordered import Bi2X3QuintupleLayerParameters
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
     load_simulation_config,
@@ -31,9 +31,9 @@ def _compact_response(
     dataset_id: str,
     incidence_deg: float,
     scale: float,
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
     k_norm_Ainv: float,
-    fixed: Bi2Se3QuintupleLayerParameters,
+    fixed: Bi2X3QuintupleLayerParameters,
 ) -> OrderedIntensityDatasetResponse:
     rods = (Rod(-1, 0), Rod(-1, -1))
     term_rod = np.asarray((0, 0, 0, 1, 1), dtype=np.int64)
@@ -105,7 +105,7 @@ def _compact_response(
     )
 
 
-def _parameter_values(parameters: Bi2Se3QuintupleLayerParameters) -> np.ndarray:
+def _parameter_values(parameters: Bi2X3QuintupleLayerParameters) -> np.ndarray:
     return np.asarray(
         (
             parameters.bi_occupancy,
@@ -129,7 +129,7 @@ def run_ordered_intensity_proof(*, allow_missing_pack: bool = False) -> dict[str
         )
     )
     strength = inputs.strength
-    fixed = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    fixed = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     responses = tuple(
         _compact_response(
             dataset_id=f"ordered-proof-{incidence_deg:g}",

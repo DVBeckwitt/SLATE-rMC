@@ -21,10 +21,18 @@ The compact suite is organized by scientific boundary:
   ownership.
 - `test_reciprocal_profiles.py`: material-neutral layered reciprocal coordinates, explicit
   detector-side/sideband membership, immutable payloads, and separate finite-bin signal/measure
-  accumulation.
-- `test_bi2se3_fitted_figure7.py`: the frozen Bi2Se3 Figure-7 recipe, real fitted-observable
-  identity transfer, detector-region boundaries, strict configuration types, and bounded continuous
-  detector cubature nodes.
+  accumulation, plus continuous chart cubature, native-count projection with full covariance, and
+  fixed-background anchor conditioning.
+- `test_matched_regions.py`: material-neutral joint matched-region nuisance profiling and structure
+  recovery with one dataset scale shared across families.
+- `test_fixed_experiment.py` and `test_compose_fixed_experiment_cli.py`: strict modular position,
+  lattice, and provided-mosaic composition, exact image/angle binding, and immutable physics reuse
+  across incidence views.
+- `test_layered_quintuple_regions_cli.py`: exact A/B/C/joint lineage, implementation/cache identity,
+  parameter-scaled identifiability, fit-conditioned policy, checkpoint integrity, and render
+  publication contracts for the material adapter.
+- `test_osc_lattice_cli.py` and `test_fixed_lattice.py`: data-only lattice promotion gates and the
+  immutable retained/accepted full-basis handoff into mosaic and structure construction.
 
 Retain a test only when it protects a distinct scientific invariant, public contract, accepted
 reference comparison, or integration boundary. Broad parameter sweeps, image snapshots, benchmarks,

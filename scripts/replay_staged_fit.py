@@ -2395,7 +2395,7 @@ def _bi2te3_ordered_intensity(
         fit_ordered_intensity_series,
     )
     from rasim_next.io.osc import read_osc
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import Bi2X3QuintupleLayerParameters
 
     mosaic_runner = _load_script_module(
         "staged_fit_bi2te3_ordered_physics", "recover_bi2se3_mosaic.py"
@@ -2473,7 +2473,7 @@ def _bi2te3_ordered_intensity(
         context=physics,
     )
     detectors = mosaic_runner._detector_series(physics, profile_geometry, mosaic_parameters)
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base.crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(base.crystal)
     if tuple(base.strength.site_labels) != ("Bi", "Te1", "Te2"):
         raise RuntimeError(f"unexpected Bi2Te3 site roles: {base.strength.site_labels}")
     responses = []
@@ -2641,7 +2641,7 @@ def _bi2te3_render(
     from PIL import Image
 
     from rasim_next.io.osc import read_osc
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import Bi2X3QuintupleLayerParameters
     from rasim_next.pipeline.configured_simulation import sample_detector_pixel_center_density
 
     render = case.stage_config["render"]
@@ -2660,7 +2660,7 @@ def _bi2te3_render(
         lorentzian_probability=float(state["mosaic_parameters"][2]),
         context=physics,
     )
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base.crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(base.crystal)
     structure = state["structure_representative"]
     fitted = replace(
         baseline,

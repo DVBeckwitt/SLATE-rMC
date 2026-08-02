@@ -71,7 +71,7 @@ mosaic:
   azimuth_phase_deg: 21.25673419935354
 
 structure_factor:
-  model_id: bi2se3_finite_2h.v1
+  model_id: r3m_quintuple_finite_2h.v1
   layers: 52
   normalization: FINITE_TOTAL
   shared_disorder_epsilon: 0.001

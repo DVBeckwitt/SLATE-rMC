@@ -9,7 +9,7 @@ incidence_angles_deg = [5.0, 10.0, 15.0]
 [[files]]
 role = "simulation_config"
 path = "../../../configs/bi2se3_simulation.yaml"
-sha256 = "917d27852d07f07af7291c689d762ae359d7c2c7edb0fe5e0f094168f6aa2a03"
+sha256 = "e9c261c87b2379ec43a64a202fe6c3b99b7f56c0c47ab84a3747ca24ae4c4867"
 
 [[files]]
 role = "geometry_series"

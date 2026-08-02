@@ -63,7 +63,7 @@ from rasim_next.geometry import (
     build_incident_states,
     detector_coordinates_to_angles,
 )
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_geometry_inputs,
     build_configured_simulation_inputs,
@@ -1200,6 +1200,74 @@ def test_three_incidence_hidden_shared_geometry_recovery(
     assert result.training_site_max_px < 5.0e-3
     assert result.training_chord_angle_rms_rad < 1.0e-7
 
+    truth_trim_by_id = {
+        "osc-05": math.radians(0.12),
+        "osc-10": math.radians(-0.08),
+        "osc-15": math.radians(-0.04),
+    }
+    trimmed_images = tuple(
+        replace(
+            image,
+            observations=IntegerLMarkerObservations.from_prediction(
+                image.model.predict_integer_l_tags(
+                    image.observations.keys,
+                    instrument=_shared_truth_instrument(
+                        image.model.inputs,
+                        truth,
+                        incidence_angle_delta_rad=(
+                            truth_incidence_angle_delta_rad + truth_trim_by_id[image.image_id]
+                        ),
+                    ),
+                ),
+                reference_wavelength_A=image.model.reference_wavelength_A,
+                sigma_px=0.25,
+            ),
+        )
+        for image in images
+    )
+    trimmed = fit_indexed_geometry_series(
+        trimmed_images,
+        initial=SharedGeometryCorrections.zero(),
+        bounds=bounds,
+        fitted_parameter_names=fitted_with_incidence_delta,
+        initial_incidence_angle_delta_rad=math.radians(0.1),
+        incidence_angle_delta_bounds=incidence_bounds,
+        incidence_angle_trim_contrast_half_span_rad=math.radians(0.5),
+        incidence_angle_trim_prior_sigma_rad=math.radians(0.25),
+    )
+    assert trimmed.success, trimmed.message
+    assert trimmed.jacobian_rank == 11
+    assert trimmed.posterior_jacobian_rank == 11
+    assert trimmed.jacobian_parameter_names[-2:] == (
+        "incidence_angle_trim_helmert_1_rad",
+        "incidence_angle_trim_helmert_2_rad",
+    )
+    recovered_trim_by_id = dict(
+        zip(
+            trimmed.image_ids,
+            trimmed.incidence_angle_trim_by_image_id_rad,
+            strict=True,
+        )
+    )
+    assert math.fsum(recovered_trim_by_id.values()) == pytest.approx(0.0, abs=1.0e-14)
+    for image_id, expected_trim in truth_trim_by_id.items():
+        assert recovered_trim_by_id[image_id] == pytest.approx(
+            expected_trim,
+            abs=math.radians(3.0e-3),
+        )
+    assert trimmed.incidence_angle_delta_rad == pytest.approx(
+        truth_incidence_angle_delta_rad,
+        abs=math.radians(3.0e-3),
+    )
+    assert (
+        math.degrees(
+            trimmed_images[2].commanded_angle_rad
+            + trimmed.incidence_angle_delta_rad
+            + recovered_trim_by_id[trimmed_images[2].image_id]
+        )
+        > 13.9
+    )
+
     fitted_without_detector_tilts = (
         "sample_normal_y_tilt_rad",
         "goniometer_axis_pitch_rad",
@@ -1394,7 +1462,7 @@ def test_exact_tag_geometry_context_is_material_generic_and_mosaic_free(
             (root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif").as_posix(),
         )
         .replace("phase_id: bi2se3", "phase_id: pbi2")
-        .replace("model_id: bi2se3_finite_2h.v1", "model_id: geometry_only.unused.v1")
+        .replace("model_id: r3m_quintuple_finite_2h.v1", "model_id: geometry_only.unused.v1")
         .replace("normalization: FINITE_TOTAL", "normalization: UNUSED_BY_GEOMETRY")
         .replace("shared_disorder_epsilon: 0.001", "shared_disorder_epsilon: -1.0")
         .replace("gaussian_sigma_deg: 1.0", "gaussian_sigma_deg: 0.0")
@@ -1430,7 +1498,7 @@ def test_exact_tag_geometry_context_is_material_generic_and_mosaic_free(
     def reject_intensity_or_mosaic(*args: object, **kwargs: object) -> None:
         raise AssertionError("exact-tag geometry must not build strength or mosaic space")
 
-    monkeypatch.setattr(Bi2Se3TwoHStrength, "__init__", reject_intensity_or_mosaic)
+    monkeypatch.setattr(Bi2X3FiniteStackStrength, "__init__", reject_intensity_or_mosaic)
     monkeypatch.setattr(MosaicBraggSpace, "__init__", reject_intensity_or_mosaic)
     inputs = build_configured_geometry_inputs(config)
     assert not hasattr(inputs, "strength")
@@ -2418,7 +2486,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
         fit_ordered_intensity_series,
         probe_ordered_intensity_inverse_boundary_bins,
     )
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import Bi2X3QuintupleLayerParameters
     from rasim_next.pipeline.configured_simulation import configured_rod_catalog_revision
 
     base = load_simulation_config(
@@ -2543,7 +2611,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     assert response.excluded_phi_bin_indices == ((), (6, 8, 9, 10, 11, 12, 13))
     assert response.topology_probe_revision == "inverse_root_signature_grid_17x17.v1"
 
-    def direct(strength: Bi2Se3TwoHStrength) -> np.ndarray:
+    def direct(strength: Bi2X3FiniteStackStrength) -> np.ndarray:
         candidate_inputs = replace(
             inputs,
             strength=strength,
@@ -2559,7 +2627,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
 
     baseline_predicted = response.predict_mass_A2(inputs.strength.structure_parameters)
     np.testing.assert_allclose(baseline_predicted, direct(inputs.strength), rtol=5.0e-11)
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     candidate = replace(
         inputs.strength,
         structure_parameters=replace(
@@ -2597,7 +2665,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
         execution_backend="cpu",
     )
 
-    def distributed_direct(strength: Bi2Se3TwoHStrength) -> np.ndarray:
+    def distributed_direct(strength: Bi2X3FiniteStackStrength) -> np.ndarray:
         from rasim_next.measurement import evaluate_continuous_per_rod_angle_signal
 
         points = evaluate_continuous_per_rod_angle_signal(
@@ -2728,14 +2796,14 @@ def test_ordered_intensity_fit_enforces_freeze_gauge_revision_and_rank_contracts
         fit_ordered_intensity_series,
         ordered_intensity_structure_model_revision,
     )
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import Bi2X3QuintupleLayerParameters
 
     config = load_simulation_config(
         Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
     )
     inputs = build_configured_simulation_inputs(config)
     strength = inputs.strength
-    fixed = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    fixed = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     rods = (Rod(-1, 0),)
     term_l = np.arange(1.0, 9.0)
     amplitude_basis = np.asarray(
@@ -3282,6 +3350,21 @@ def test_bi2te3_config_builds_material_generic_quintuple_layer_strength() -> Non
     assert density.density_A2_per_px2[0] >= 0.0
 
 
+def test_bi2te3_figure7_config_selects_fault_free_three_r_parent() -> None:
+    from rasim_next.stacking import Parent
+
+    config = load_simulation_config(
+        Path(__file__).resolve().parents[1] / "configs" / "bi2te3_r3_simulation.yaml"
+    )
+    inputs = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=1))
+    )
+
+    assert config.structure_factor.model_id == "r3m_quintuple_finite_3r.v1"
+    assert inputs.strength.parent is Parent.THREE_R
+    assert inputs.strength.shared_disorder_epsilon == 0.0
+
+
 def _synthetic_stacking_response(matrix: np.ndarray) -> CompiledStackingResponse:
     row_count = matrix.shape[0]
     return CompiledStackingResponse(
@@ -3438,7 +3521,13 @@ def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m
                     ]
                 )
                 / layers
-                for parent in Parent
+                for parent in (
+                    Parent.TWO_H,
+                    Parent.FOUR_H_PLUS,
+                    Parent.FOUR_H_MINUS,
+                    Parent.SIX_H_PLUS,
+                    Parent.SIX_H_MINUS,
+                )
             )
         )
     )

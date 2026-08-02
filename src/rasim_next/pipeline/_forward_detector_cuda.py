@@ -11,9 +11,9 @@ from numpy.typing import NDArray
 
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.pipeline._continuous_detector_cuda import (
+    _finite_stack_strength_A2,
     _pack_source_average,
     _positive_normal_root,
-    _two_h_strength_A2,
     require_cuda_available,
 )
 from rasim_next.pipeline._continuous_detector_kernel import _DetectorProjection
@@ -135,6 +135,9 @@ def _pack_forward_geometry(
                     math.sqrt(float(state.ki_film_sample_Ainv @ state.ki_film_sample_Ainv)),
                     1.0,
                 ),
+                float(state.stacking_parent_code),
+                state.intensity_envelope_u_radial_A2,
+                state.intensity_envelope_u_normal_A2,
             )
             for state in states
         ],
@@ -282,19 +285,26 @@ def _forward_root_pixel(
         common_damping = math.exp(
             -0.5 * (u_radial_A2 * parallel_norm * parallel_norm + u_normal_A2 * w_value * w_value)
         )
-    strength = _two_h_strength_A2(
+    strength = _finite_stack_strength_A2(
         rod_index,
         u_Ainv / state_real[state_index, 5],
         common_damping,
+        parallel_norm,
+        w_value,
         element_factor_0,
         element_factor_1,
         rod_atom_inplane_factor,
         atom_fractional_offset,
         atom_occupancy_element,
         layers,
+        int(state_real[state_index, 14]),
         state_real[state_index, 11],
         rod_hk_population,
         state_real[state_index, 12],
+    )
+    event_intensity_envelope = math.exp(
+        -state_real[state_index, 15] * (q_x * q_x + q_y * q_y)
+        - state_real[state_index, 16] * q_z * q_z
     )
     importance_weight = (
         source_phase_weight
@@ -302,6 +312,7 @@ def _forward_root_pixel(
         * strength
         * coarea_jacobian
         * optical_weight
+        * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):
         return -1, 0.0, True

@@ -268,4 +268,23 @@ not a pixel-box mass, macrobin mass, calibrated count expectation, or raw OSC co
 
 No undeclared or unweighted histogram, general point-deposition API, pixel supersampling claim,
 per-reflection normalization, or image maximum normalization belongs to the physical result. Masks,
-background, saturation, detector efficiency, and detector PSF remain separate future operators.
+saturation, detector efficiency, detector PSF, and general acquisition-matched backgrounds remain
+separate future operators; the matched-region comparison below has one explicit frozen radial halo.
+
+## Matched-region count comparison
+
+For row `r`, verified native OSC pixels define a piecewise-constant measured count-density field.
+A sparse data-only operator integrates that field over the declared phi/two-theta or signed-Qr/L
+rectangle. Its weights are detector areas of pixel/region overlap under independently refined
+continuous cubature, so `C_r` and its support use the same rectangle as the model without smoothing.
+Fractional sharing propagates the full regularized plug-in count covariance
+`W diag(max(c,1)) W^T`; the declared one-count variance floor is revision-bound. Model mass `M_r` is
+the continuous detector density integrated directly over that rectangle with the detector-area
+Jacobian. It is never sampled or aggregated as a model raster.
+Dataset scale `s_d` multiplies every family in dataset `d` once.
+The frozen radial calibration supplies background mass `B_r` and covariance. Active fitting uses
+only signal rows of `C_r - B_r - s_d M_r`, with one nonnegative `s_d` per dataset. The identical
+two-anchor projection transforms the full measured-count and radial-background covariance before
+whitening. Division by support occurs only for displayed density profiles. Where a
+continuous region crosses the inverse-map fold, fixed-rule mass from the complete same-`|b|` rod
+group is removed and replaced by exact-`x` cubature with `x^2 = Qr^2 - b^2`.

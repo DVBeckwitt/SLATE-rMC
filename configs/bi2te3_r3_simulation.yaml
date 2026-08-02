@@ -1,0 +1,110 @@
+schema_version: rasim-simulation-v2
+
+material:
+  cif_path: ../examples/bi2te3/structures/Bi2Te3_cod_9011962.cif
+  phase_id: bi2te3
+
+source:
+  mean_origin_lab_m: [0.0, -0.020, 0.0]
+  mean_direction_lab: [0.0, 1.0, 0.0]
+  transverse_axes_lab:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  spatial_sigma_m: [2.123304500720048e-05, 2.123304500720048e-05]
+  divergence_sigma_rad: [0.0003705865455997914, 0.0003705865455997914]
+  mean_wavelength_A: 1.54
+  wavelength_sigma_A: 0.01078
+  sample_count: 250
+  seed: 1729
+  polarization_state_id: UNITY_APPROXIMATION
+
+instrument:
+  axis_rotations:
+    - axis_lab: [1.0, 0.0, 0.0]
+      angle_deg: 5.0
+      pivot_lab_m: [0.0, 0.0, 0.0]
+  lab_from_goniometer_zero:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  goniometer_from_sample:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  sample_from_crystal:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  lab_from_detector:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0]
+      - [0.0, -1.0, 0.0]
+    translation_m: [0.0, 0.075, 0.0]
+  detector_tilt:
+    about_column_axis_deg: -0.3935210372
+    about_row_axis_deg: -0.1480545344
+  detector_shape_rc: [3000, 3000]
+  detector_row_pitch_m: 0.0001
+  detector_column_pitch_m: 0.0001
+  detector_reference_coordinate_px: [1453.12, 1596.422]
+  sample_support_model_id: unbounded_plane.v1
+  sample_width_m: null
+  sample_length_m: null
+  film_thickness_A: 500.0
+
+mosaic:
+  gaussian_sigma_deg: 1.0
+  lorentzian_hwhm_deg: 0.5
+  lorentzian_probability: 0.0
+  alpha_panel_count: 8
+  alpha_gauss_order: 12
+  azimuth_count: 32
+  azimuth_phase_deg: 21.25673419935354
+
+structure_factor:
+  model_id: r3m_quintuple_finite_3r.v1
+  layers: 50
+  normalization: FINITE_TOTAL
+  shared_disorder_epsilon: 0.0
+
+bragg:
+  selection_model: all_elastic_reachable.v1
+  rod_population: 1.0
+  include_detector_visible_m0: true
+  root_policy: all_retained_roots.v1
+
+weights:
+  phase_population: 1.0
+  polarization: 1.0
+
+numerics:
+  worker_count: 32
+  detector_execution_backend: cuda
+  detector_macrobin_size_px: 60
+  detector_gauss_order: 2
+  reciprocal_alpha_count: 3
+  reciprocal_beta_count: 12
+  reciprocal_u_count: 48
+  reciprocal_alpha_max_deg: 5.0
+  ewald_alpha_count: 16
+  ewald_beta_count: 72
+  ewald_alpha_max_deg: 5.0
+
+outputs:
+  output_directory: ~/.rasim-next/configured-output
+  reciprocal_space:
+    enabled: true
+    filename: reciprocal-space.png
+  ewald_surface:
+    enabled: true
+    filename: ewald-surface.png
+  detector:
+    enabled: true
+    filename: detector.png

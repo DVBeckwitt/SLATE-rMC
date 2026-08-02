@@ -1,5 +1,28 @@
-"""Geometric and intensity-fitting interfaces."""
+"""Geometry, mosaic, and detector-region fitting interfaces."""
 
+from rasim_next.fitting.fixed_experiment import (
+    FIXED_EXPERIMENT_STATE_SCHEMA_VERSION,
+    FIXED_MOSAIC_STATE_SCHEMA_VERSION,
+    POSITION_FIT_RESULT_SCHEMA_VERSION,
+    FixedMosaicState,
+    FixedPositionState,
+    build_fixed_experiment_series,
+    fixed_position_from_fit_record,
+)
+from rasim_next.fitting.fixed_lattice import (
+    LATTICE_FIT_SCHEMA_VERSION,
+    LATTICE_MAXIMUM_ABSOLUTE_LOG_STRAIN,
+    LATTICE_MAXIMUM_ABSOLUTE_PRIOR_PULL,
+    LATTICE_MAXIMUM_DATA_CONDITION,
+    LATTICE_MAXIMUM_PRIOR_SIGMA_LOG_STRAIN,
+    LATTICE_MINIMUM_DATA_IMPROVEMENT_FRACTION,
+    LATTICE_PARAMETER_NAMES,
+    LATTICE_REQUIRED_DATA_PRACTICAL_RANK,
+    LATTICE_SENSITIVITY_RELATIVE_TOLERANCE,
+    FixedLatticeState,
+    fixed_lattice_from_fit_record,
+    hexagonal_direct_basis,
+)
 from rasim_next.fitting.geometry import (
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
@@ -37,6 +60,16 @@ from rasim_next.fitting.indexed_series import (
     evaluate_indexed_geometry_series_metrics,
     evaluate_indexed_geometry_series_residual,
     fit_indexed_geometry_series,
+    zero_sum_helmert_basis,
+)
+from rasim_next.fitting.matched_regions import (
+    FixedMatchedRegionBackground,
+    MatchedRegionFitResult,
+    MatchedRegionObservations,
+    condition_matched_region_background_from_anchors,
+    condition_matched_region_model_from_anchors,
+    fit_matched_regions,
+    profile_matched_region_nuisance,
 )
 from rasim_next.fitting.mosaic import (
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
@@ -75,6 +108,12 @@ from rasim_next.fitting.ordered_intensity import (
     probe_ordered_intensity_inverse_boundary_bins,
     source_averaged_detector_instrument_revision,
 )
+from rasim_next.fitting.radial_background import (
+    RadialBackgroundFitResult,
+    RadialBackgroundProfiles,
+    RadialBackgroundState,
+    fit_shared_radial_background,
+)
 from rasim_next.fitting.stacking_intensity import (
     STACKING_COMPONENT_IDS,
     STACKING_PHASE_IDS,
@@ -86,7 +125,19 @@ from rasim_next.fitting.stacking_intensity import (
 )
 
 __all__ = [
+    "FIXED_EXPERIMENT_STATE_SCHEMA_VERSION",
+    "FIXED_MOSAIC_STATE_SCHEMA_VERSION",
     "INCIDENCE_ANGLE_DELTA_PARAMETER_NAME",
+    "LATTICE_FIT_SCHEMA_VERSION",
+    "LATTICE_MAXIMUM_ABSOLUTE_LOG_STRAIN",
+    "LATTICE_MAXIMUM_ABSOLUTE_PRIOR_PULL",
+    "LATTICE_MAXIMUM_DATA_CONDITION",
+    "LATTICE_MAXIMUM_PRIOR_SIGMA_LOG_STRAIN",
+    "LATTICE_MINIMUM_DATA_IMPROVEMENT_FRACTION",
+    "LATTICE_PARAMETER_NAMES",
+    "LATTICE_REQUIRED_DATA_PRACTICAL_RANK",
+    "LATTICE_SENSITIVITY_RELATIVE_TOLERANCE",
+    "POSITION_FIT_RESULT_SCHEMA_VERSION",
     "SHARED_GEOMETRY_PARAMETER_NAMES",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION",
     "SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR",
@@ -98,6 +149,10 @@ __all__ = [
     "ContinuousDetectorFunction",
     "ContinuousDetectorGeometryModel",
     "ExactTagGeometryModel",
+    "FixedLatticeState",
+    "FixedMatchedRegionBackground",
+    "FixedMosaicState",
+    "FixedPositionState",
     "GeometryCorrectionBounds",
     "GeometryCorrections",
     "GeometryFitResult",
@@ -116,6 +171,8 @@ __all__ = [
     "IntegerLSelectionAudit",
     "M0IntegerLObservations",
     "M0IntegerLPrediction",
+    "MatchedRegionFitResult",
+    "MatchedRegionObservations",
     "MosaicComponentProfile",
     "MosaicComponentProfileBank",
     "MosaicIdentifiabilityError",
@@ -132,6 +189,9 @@ __all__ = [
     "OrderedIntensityIdentifiabilityError",
     "OrderedIntensityObservations",
     "OrderedIntensityPeakCenterObservations",
+    "RadialBackgroundFitResult",
+    "RadialBackgroundProfiles",
+    "RadialBackgroundState",
     "SharedGeometryCorrectionBounds",
     "SharedGeometryCorrections",
     "SourceAveragedOrderedIntensityDatasetResponse",
@@ -141,23 +201,33 @@ __all__ = [
     "audit_exact_tag_geometry_roots",
     "audit_indexed_geometry_series_roots",
     "audit_integer_l_marker_selection",
+    "build_fixed_experiment_series",
     "compile_ordered_intensity_response",
     "compile_pbi2_stacking_profile_response",
     "compile_source_averaged_ordered_intensity_response",
+    "condition_matched_region_background_from_anchors",
+    "condition_matched_region_model_from_anchors",
     "evaluate_continuous_mosaic_profiles",
     "evaluate_indexed_geometry_series_metrics",
     "evaluate_indexed_geometry_series_residual",
     "evaluate_source_averaged_ordered_intensity_point_signal",
     "evaluate_tagged_geometry_objective_residual",
     "fit_indexed_geometry_series",
+    "fit_matched_regions",
     "fit_mosaic_component_profiles",
     "fit_ordered_intensity_series",
     "fit_refined_mosaic_component_profiles",
+    "fit_shared_radial_background",
     "fit_stacking_phase_totals",
     "fit_tagged_detector_function_geometry",
+    "fixed_lattice_from_fit_record",
+    "fixed_position_from_fit_record",
+    "hexagonal_direct_basis",
     "ordered_intensity_profile_catalog_revision",
     "ordered_intensity_structure_model_revision",
     "probe_ordered_intensity_inverse_boundary_bins",
+    "profile_matched_region_nuisance",
     "source_averaged_detector_instrument_revision",
     "source_averaged_profile_has_support",
+    "zero_sum_helmert_basis",
 ]

@@ -19,7 +19,7 @@ from painted_ewald import (
     ContinuousEwaldCoating,
     Rod,
 )
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
     load_simulation_config,
@@ -41,7 +41,7 @@ class _MosaicInputError(ValueError):
 
 def _validate_reference_strength(
     reference_path: Path,
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
 ) -> None:
     """Require reference and active finite-stack strength fixtures to match."""
 
@@ -395,8 +395,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(str(error))
     fixture_elapsed = perf_counter() - fixture_start
     strength_model = detector.coating.bragg_space.strength_model
-    if not isinstance(strength_model, Bi2Se3TwoHStrength):
-        raise TypeError("the default fixture must use Bi2Se3TwoHStrength")
+    if not isinstance(strength_model, Bi2X3FiniteStackStrength):
+        raise TypeError("the default fixture must use Bi2X3FiniteStackStrength")
     reference_path = (
         args.reference_diagnostic.resolve() if args.reference_diagnostic is not None else None
     )

@@ -283,6 +283,40 @@ Expected detection: strict case loading, container/native-array hashes, exact id
 stage-aware tolerance verification, recomputed scientific revisions, envelope/backend/source
 validation, and external-artifact content hashes.
 
+### Mixed-chart matched-region fitting
+
+- Assign `m=0` by `Qr/L`, assign a nonzero family by phi/2theta, or apply a downstream OSC flip or
+  transpose before membership.
+- Give each family or incidence its own structure vector, give each family a separate intensity
+  scale, or replace the physical model with a smoothed measured profile.
+- Evaluate the model only at pixel centers, rasterize it before fitting, change the measured
+  piecewise-constant pixel projector between candidates, discard its cross-row covariance, alter a
+  declared chart rectangle, omit its detector-area Jacobian, or apply a detector solid-angle
+  correction.
+- Reverse the R-centered registry sequence, alias it to 2H, or omit the centering extinction while
+  retaining the conventional three-quintuple-layer cell.
+- Change the declared fitted rod roster between stages or silently label a fitted-scope result as an
+  all-rod/publication result.
+- Skip or reorder A/B/C, substitute a stale predecessor, change a child's exact start or frozen
+  coordinates, or feed any initializer rather than the mandatory joint result downstream.
+- Permute parameter scales, let priors create apparent rank, accept a practically rank-deficient or
+  ill-conditioned data Jacobian, or accept a structure coordinate on its active bound.
+- Reuse model mass across an implementation/runtime change, alter a profile-checkpoint prefix or
+  cubature identity, or report a structure representative different from the simulated vector.
+- Promote a lattice candidate with deficient data-only rank/condition or insufficient improvement,
+  change its bound position hash, or fail to propagate an accepted full basis through the
+  fixed-experiment rebuild into structure physics while independently binding the mosaic state.
+- Swap a fixed crystallographic site ADP with the sample-Q envelope, apply either twice, vary a site
+  ADP in the five-coordinate joint fit, or omit the event-frame Q rotation before the envelope.
+- Substitute independent incidence offsets for the shared delta plus zero-sum trims, reorder image
+  IDs, or use an unbound mosaic record instead of the strict provided-mosaic checkpoint.
+
+Expected detection: mixed-chart membership invariants, shared-scale synthetic recovery, continuous
+chart quadrature and detector-area-Jacobian checks, expanded-CIF/explicit-registry parity including
+wrong-hand injection, CPU/CUDA fault-free-parent parity, exact recursive lineage/cache/checkpoint
+identities, parameter-scaled data-only sensitivity gates, strict fixed position/mosaic/lattice
+handoffs, and separate site-ADP/sample-Q-envelope tests.
+
 ## Control record
 
 Each proof mutation records `mutation_id`, fixture, expected first stage, expected metric, observed

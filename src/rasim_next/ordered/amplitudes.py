@@ -37,6 +37,7 @@ def unit_cell_amplitude(
     *,
     unknown_u_iso_A2: float | None = None,
     shared_displacement_tensor_A2: ArrayLike | None = None,
+    site_displacement_tensors_A2: ArrayLike | None = None,
 ) -> StructureAmplitudeResult:
     """Evaluate the positive-phase structure sum at arbitrary Miller coordinates."""
 
@@ -54,10 +55,18 @@ def unit_cell_amplitude(
         not np.isfinite(unknown_u_iso_A2) or unknown_u_iso_A2 < 0.0
     ):
         raise ValueError("unknown_u_iso_A2 must be finite and nonnegative")
-    if unknown_u_iso_A2 is not None and shared_displacement_tensor_A2 is not None:
-        raise ValueError(
-            "unknown_u_iso_A2 and shared_displacement_tensor_A2 are mutually exclusive"
+    if (
+        sum(
+            value is not None
+            for value in (
+                unknown_u_iso_A2,
+                shared_displacement_tensor_A2,
+                site_displacement_tensors_A2,
+            )
         )
+        > 1
+    ):
+        raise ValueError("unknown, shared, and site displacement overrides are mutually exclusive")
     displacement_tensor = None
     if shared_displacement_tensor_A2 is not None:
         displacement_tensor = np.asarray(shared_displacement_tensor_A2, dtype=np.float64)
@@ -78,8 +87,41 @@ def unit_cell_amplitude(
                 "shared_displacement_tensor_A2 must be symmetric positive semidefinite"
             )
         displacement_tensor = 0.5 * (displacement_tensor + displacement_tensor.T)
+    site_displacement_tensors = None
+    if site_displacement_tensors_A2 is not None:
+        site_displacement_tensors = np.asarray(site_displacement_tensors_A2, dtype=np.float64)
+        expected_shape = (len(crystal.sites), 3, 3)
+        if site_displacement_tensors.shape != expected_shape or not np.all(
+            np.isfinite(site_displacement_tensors)
+        ):
+            raise ValueError(
+                "site_displacement_tensors_A2 must be finite with shape (site_count, 3, 3)"
+            )
+        scale = max(
+            float(np.linalg.norm(site_displacement_tensors, ord=2, axis=(1, 2)).max()),
+            1.0,
+        )
+        tolerance = 256.0 * np.finfo(np.float64).eps * scale
+        if (
+            not np.allclose(
+                site_displacement_tensors,
+                np.swapaxes(site_displacement_tensors, 1, 2),
+                rtol=0.0,
+                atol=tolerance,
+            )
+            or np.min(np.linalg.eigvalsh(site_displacement_tensors)) < -tolerance
+        ):
+            raise ValueError("site_displacement_tensors_A2 must be symmetric positive semidefinite")
+        site_displacement_tensors = 0.5 * (
+            site_displacement_tensors + np.swapaxes(site_displacement_tensors, 1, 2)
+        )
     has_unknown_u_iso = any(site.u_iso_A2 is None for site in crystal.sites)
-    if displacement_tensor is None and unknown_u_iso_A2 is None and has_unknown_u_iso:
+    if (
+        displacement_tensor is None
+        and site_displacement_tensors is None
+        and unknown_u_iso_A2 is None
+        and has_unknown_u_iso
+    ):
         raise ValueError("unknown isotropic displacement requires an explicit calculation value")
 
     lattice = ReciprocalLattice.from_crystal(crystal)
@@ -89,7 +131,7 @@ def unit_cell_amplitude(
     fractional = np.asarray([site.fractional for site in crystal.sites], dtype=np.float64)
     positions_A = fractional @ crystal.direct_basis_A.T
     phase = np.exp(1.0j * (q_vectors @ positions_A.T))
-    if displacement_tensor is None:
+    if displacement_tensor is None and site_displacement_tensors is None:
         u_iso = np.asarray(
             [
                 unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2
@@ -98,7 +140,7 @@ def unit_cell_amplitude(
             dtype=np.float64,
         )
         damping = np.exp(-0.5 * q_magnitude[:, None] ** 2 * u_iso[None, :])
-    else:
+    elif displacement_tensor is not None:
         isotropic_u_A2 = float(displacement_tensor[0, 0])
         if np.array_equal(displacement_tensor, isotropic_u_A2 * np.eye(3)):
             exponent = q_magnitude**2 * isotropic_u_A2
@@ -111,6 +153,15 @@ def unit_cell_amplitude(
                 optimize=True,
             )
         damping = np.exp(-0.5 * np.maximum(exponent, 0.0))[:, None]
+    else:
+        exponent = np.einsum(
+            "ni,sij,nj->ns",
+            q_vectors,
+            site_displacement_tensors,
+            q_vectors,
+            optimize=True,
+        )
+        damping = np.exp(-0.5 * np.maximum(exponent, 0.0))
     occupancy = np.asarray([site.occupancy for site in crystal.sites], dtype=np.float64)
     site_sum = phase * damping * occupancy[None, :]
 
@@ -145,7 +196,14 @@ def unit_cell_amplitude(
             f"species={','.join(mappings)}"
             + (
                 f"; unknown_u_iso_A2={unknown_u_iso_A2:g}"
-                if has_unknown_u_iso and displacement_tensor is None
+                if has_unknown_u_iso
+                and displacement_tensor is None
+                and site_displacement_tensors is None
+                else ""
+            )
+            + (
+                "; site_displacement_tensors_A2=declared"
+                if site_displacement_tensors is not None
                 else ""
             )
             + (

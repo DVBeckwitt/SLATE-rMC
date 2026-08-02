@@ -37,12 +37,23 @@ detector geometry.
   detector-tilt and effective sample-normal correction pack.
 - Strict OSC-series manifests and geometry-only exact-tag contexts for repeatable fitting across
   varying layered-hexagonal materials in separate material/mount groups.
-- Full-rank shared 5/10/15-degree decomposition of detector tilt, sample normal, goniometer-axis,
-  signed sample-plane offset, and axis-perpendicular pivot offsets, with frozen-key outer audits.
-- Fixed-position simultaneous ordered-intensity recovery for Bi2Se3 using cached occupancy
-  quadratics and directional `Ur/Uz` damping on either frozen selected-group angular component
-  masses or certified source-averaged selected-center densities. The distributed proof reduces all
-  source states to one detector function per incidence before one joint fit.
+- Shared arbitrary-series decomposition of detector tilt, sample normal, goniometer-axis, signed
+  sample-plane offset, and axis-perpendicular pivot offsets, with one common incidence delta,
+  optional zero-sum per-image trims, and frozen-key outer audits.
+- A separate tightly regularized near-CIF lattice-sensitivity stage with data-only identifiability
+  gates and one full-basis handoff into every downstream lattice-dependent calculation.
+- A strict fixed-experiment checkpoint that composes position, optional accepted lattice, and
+  provided mosaic states while reusing immutable material/source/reciprocal physics across views.
+- Material-neutral matched-region observations that combine angular `m=0` and signed-side
+  reciprocal `m!=0` charts, continuous chart-region cubature, one scale per image across
+  families, an independently frozen radial-background calibration, and staged hash-bound
+  fit/profile artifacts. The Bi2X3 layered-quintuple adapter runs modular Wyckoff-z, physical
+  outer-site Bi-antisite, and sample-Q intensity-envelope initializer fits followed by one mandatory
+  joint five-coordinate refinement. Crystallographic site ADPs remain separate and fixed; only the
+  joint result is authoritative.
+- Explicit fault-free R-centered three-registry finite stacks in the proof, compiled CPU, and CUDA
+  detector paths. This is the tracked R-3m Bi2X3 conventional-cell centering law, not a fitted
+  4H/6H mixture or stacking-disorder population.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 
@@ -71,7 +82,8 @@ observable, and any sphere mesh or raster is only a display sample of that funct
 
 ## Deferred work
 
-- Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and background.
+- Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and
+  acquisition-matched/general backgrounds beyond the implemented frozen radial halo.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
 - General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and raw-image
@@ -84,6 +96,8 @@ observable, and any sphere mesh or raster is only a display sample of that funct
 - General-material structure-parameter bases and profile identity catalogs, per-site anisotropic
   `Uij`, raw-OSC ordered-component extraction/deblending, and ordered-intensity
   noise/background/uncertainty models.
+- Structure-parameter bases beyond the tracked Bi2Se3/Bi2Te3 layered-quintuple adapter, with
+  user-declared site/occupancy constraints mapped into the generic detector callable.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
 
 ## Phase discipline

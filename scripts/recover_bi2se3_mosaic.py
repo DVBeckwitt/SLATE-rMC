@@ -53,7 +53,7 @@ from rasim_next.measurement import (
     compile_detector_profile_projector,
     project_detector_profiles,
 )
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredGeometryInputs,
     ConfiguredSimulationInputs,
@@ -128,7 +128,7 @@ class _ProfilePhysicsContext:
     crystal_to_sample: FloatArray
     rods: tuple[Rod, ...]
     rod_catalog_revision: str
-    strength: Bi2Se3TwoHStrength
+    strength: Bi2X3FiniteStackStrength
     material: MaterialOptics
     phase_population_weight: float
     polarization_weight: float
@@ -829,9 +829,7 @@ def _position_artifact_state(
     commanded_deg = tuple(float(value) for value in case["incidence_angles_deg"])
     if not isinstance(incidence_records, list) or len(incidence_records) != len(commanded_deg):
         raise ValueError("position artifact has an incomplete incidence-angle series")
-    for index, (record, angle_deg) in enumerate(
-        zip(incidence_records, commanded_deg, strict=True)
-    ):
+    for index, (record, angle_deg) in enumerate(zip(incidence_records, commanded_deg, strict=True)):
         if not isinstance(record, dict) or set(record) != {
             "commanded_angle_rad",
             "effective_angle_rad",
@@ -849,8 +847,7 @@ def _position_artifact_state(
     if (
         not isinstance(qualification, dict)
         or not bool(qualification.get("accepted"))
-        or fit_evidence.get("indexed_manifest_hash")
-        != f"sha256-{case['geometry_manifest_sha256']}"
+        or fit_evidence.get("indexed_manifest_hash") != f"sha256-{case['geometry_manifest_sha256']}"
     ):
         raise ValueError("position artifact is not qualified for downstream fitting")
     summary = document.get("scientific_summary")

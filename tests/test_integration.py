@@ -40,6 +40,7 @@ from rasim_next.pipeline.configured_simulation import (
     build_nominal_ewald_context,
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
+    rebind_configured_simulation_instrument,
 )
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
@@ -61,6 +62,36 @@ def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> o
             source=replace(config.source, sample_count=sample_count),
             instrument=replace(config.instrument, axis_rotations=rotations),
         )
+    )
+
+
+def test_commanded_angle_rebind_retains_every_sample_wavelength_rod() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    broad_source = replace(
+        config.source,
+        sample_count=40,
+        seed=1,
+        wavelength_sigma_A=0.25,
+    )
+
+    def at_angle(angle_deg: float) -> object:
+        rotations = (
+            replace(config.instrument.axis_rotations[0], angle_deg=angle_deg),
+            *config.instrument.axis_rotations[1:],
+        )
+        return replace(
+            config,
+            source=broad_source,
+            instrument=replace(config.instrument, axis_rotations=rotations),
+        )
+
+    base = build_configured_simulation_inputs(at_angle(0.0))
+    rebound = rebind_configured_simulation_instrument(base, at_angle(5.0))
+    fresh = build_configured_simulation_inputs(at_angle(5.0))
+
+    assert tuple((rod.h, rod.k) for rod in rebound.rods) == tuple(
+        (rod.h, rod.k) for rod in fresh.rods
     )
 
 
@@ -465,7 +496,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         uniform_depth_attenuation,
     )
     from rasim_next.optics.refraction import solve_exit_mode
-    from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+    from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
     from rasim_next.pipeline.continuous_detector import (
         DetectorEwaldMeasure,
         DetectorQuadrature,
@@ -511,7 +542,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
             ),
             k_norm_Ainv=air_k0_Ainv,
         ),
-        Bi2Se3TwoHStrength(
+        Bi2X3FiniteStackStrength(
             crystal=crystal,
             layers=7,
             normalization=EventIntensityNormalization.FINITE_TOTAL,
@@ -1361,6 +1392,126 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     assert zero_pixels.fold_refinement_centroid_shift_px == 0.0
 
 
+def test_detector_event_envelope_uses_sample_q_after_mosaic_rotation() -> None:
+    from painted_ewald import (
+        BraggSpaceConfig,
+        ContinuousEwaldCoating,
+        MosaicBraggSpace,
+        MosaicParameters,
+        Rod,
+    )
+    from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+    from rasim_next.pipeline.continuous_detector import (
+        DetectorEwaldMeasure,
+        SampleQIntensityEnvelope,
+    )
+
+    inputs = _configured_inputs(sample_count=1)
+    rod = Rod(-1, 1)
+    rods = (rod,)
+    strength = Bi2X3FiniteStackStrength(
+        crystal=inputs.crystal,
+        layers=7,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+    )
+    bragg = MosaicBraggSpace(
+        BraggSpaceConfig(
+            reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+            crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
+            rods=rods,
+            mosaic=MosaicParameters(
+                gaussian_sigma_rad=math.radians(5.0),
+                lorentzian_half_width_rad=math.radians(2.0),
+                lorentzian_probability=0.1,
+            ),
+            k_norm_Ainv=2.0 * np.pi / inputs.samples.wavelength_A[0],
+        ),
+        strength,
+    )
+    coating = ContinuousEwaldCoating(
+        bragg,
+        ki_sample_Ainv=inputs.incident.states.k_film_phase_sample_Ainv[0],
+    )
+    baseline = DetectorEwaldMeasure(
+        coating=coating,
+        incident=inputs.incident,
+        material=inputs.material,
+        instrument=inputs.instrument,
+    )
+    envelope = SampleQIntensityEnvelope(
+        u_radial_A2=0.017,
+        u_normal_A2=0.031,
+    )
+    damped = DetectorEwaldMeasure(
+        coating=coating,
+        incident=inputs.incident,
+        material=inputs.material,
+        instrument=inputs.instrument,
+        intensity_envelope=envelope,
+    )
+    mapped = baseline.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=math.radians(10.0),
+        beta_rad=2.0,
+    )
+    damped_mapped = damped.map_latent(
+        rod=rod,
+        branch=2,
+        alpha_rad=math.radians(10.0),
+        beta_rad=2.0,
+    )
+    latent_envelope = envelope.evaluate(mapped.geometry.ewald_geometry.q_sample_Ainv)
+    np.testing.assert_allclose(
+        damped_mapped.event_intensity_envelope,
+        latent_envelope,
+    )
+    np.testing.assert_allclose(
+        damped_mapped.postoptical_density_A2_rad2_inv,
+        mapped.postoptical_density_A2_rad2_inv * latent_envelope,
+    )
+    column_px = np.asarray([float(mapped.geometry.column_px)])
+    row_px = np.asarray([float(mapped.geometry.row_px)])
+    baseline_result = baseline.evaluate_detector_coordinates(
+        column_px,
+        row_px,
+        rods=rods,
+        branch=2,
+    )
+    damped_result = damped.evaluate_detector_coordinates(
+        column_px,
+        row_px,
+        rods=rods,
+        branch=2,
+    )
+    assert not bool(baseline_result.caustic[0, 0])
+    assert baseline_result.per_rod_density_A2_per_px2[0, 0] > 0.0
+    q_sample = baseline_result.geometry.q_sample_Ainv[0]
+    expected = math.exp(
+        -envelope.u_radial_A2 * float(q_sample[0] ** 2 + q_sample[1] ** 2)
+        - envelope.u_normal_A2 * float(q_sample[2] ** 2)
+    )
+    actual = (
+        damped_result.per_rod_density_A2_per_px2[0, 0]
+        / baseline_result.per_rod_density_A2_per_px2[0, 0]
+    )
+    assert actual == pytest.approx(expected, rel=3.0e-13, abs=0.0)
+    baseline_compiled, _, _ = baseline._evaluate_compiled_coordinates_for_proof(
+        column_px,
+        row_px,
+        rods=rods,
+        branch=2,
+    )
+    damped_compiled, _, _ = damped._evaluate_compiled_coordinates_for_proof(
+        column_px,
+        row_px,
+        rods=rods,
+        branch=2,
+    )
+    np.testing.assert_allclose(baseline_compiled, baseline_result.per_rod_density_A2_per_px2)
+    np.testing.assert_allclose(damped_compiled, damped_result.per_rod_density_A2_per_px2)
+
+
 def _two_state_source_averaged_detector_fixture(
     *,
     detector_shape_rc: tuple[int, int] | None = None,
@@ -1373,7 +1524,7 @@ def _two_state_source_averaged_detector_fixture(
         Rod,
     )
     from rasim_next.core.contracts import IncidentSampleBatch
-    from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+    from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
     from rasim_next.pipeline.continuous_detector import (
         DetectorEwaldMeasure,
     )
@@ -1392,7 +1543,7 @@ def _two_state_source_averaged_detector_fixture(
         lorentzian_half_width_rad=math.radians(2.0),
         lorentzian_probability=0.1,
     )
-    strength = Bi2Se3TwoHStrength(
+    strength = Bi2X3FiniteStackStrength(
         crystal=crystal,
         layers=7,
         normalization=EventIntensityNormalization.FINITE_TOTAL,
@@ -1481,6 +1632,11 @@ def _two_state_source_averaged_detector_fixture(
 
 
 def test_source_averaged_detector_density_equals_independent_state_sum() -> None:
+    from rasim_next.pipeline.continuous_detector import (
+        DetectorEwaldMeasure,
+        SampleQIntensityEnvelope,
+    )
+
     averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
     rods = averaged.rods
     seed_rod = rods[1]
@@ -1531,9 +1687,121 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
             atol=4.0e-15,
         )
 
+    envelope = SampleQIntensityEnvelope(u_radial_A2=0.017, u_normal_A2=0.031)
+    enveloped = averaged.rebind_physics(intensity_envelope=envelope)
+    enveloped_scalar_detectors = tuple(
+        DetectorEwaldMeasure(
+            coating=detector.coating,
+            incident=detector.incident,
+            material=averaged.material,
+            instrument=detector.instrument,
+            intensity_envelope=envelope,
+        )
+        for detector in scalar_detectors
+    )
+    enveloped_result = enveloped.evaluate_detector_coordinates(column_px, row_px, branch=2)
+    enveloped_scalar = tuple(
+        detector.evaluate_detector_coordinates(column_px, row_px, rods=rods, branch=2)
+        for detector in enveloped_scalar_detectors
+    )
+    expected_enveloped = 0.5 * (
+        enveloped_scalar[0].per_rod_density_A2_per_px2
+        + enveloped_scalar[1].per_rod_density_A2_per_px2
+    )
+    np.testing.assert_allclose(
+        enveloped_result.per_rod_density_A2_per_px2,
+        expected_enveloped,
+        rtol=3.0e-11,
+        atol=2.0e-24,
+    )
+
+
+def test_continuous_fold_plan_binds_full_detector_geometry_and_active_rods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rasim_next.pipeline.continuous_fold import (
+        ContinuousFoldCorrectionPlan,
+        apply_continuous_fold_correction_plan,
+    )
+    from rasim_next.pipeline.source_averaged_detector import (
+        SourceAveragedDetectorEwaldMeasure,
+        source_averaged_detector_geometry_revision,
+    )
+
+    averaged, _ = _two_state_source_averaged_detector_fixture()
+    first = averaged.restrict_rods(averaged.rods[:3])
+    second = averaged.restrict_rods(averaged.rods[3:])
+    assert first.rod_catalog_revision == second.rod_catalog_revision
+    first_revision = source_averaged_detector_geometry_revision(first)
+    assert source_averaged_detector_geometry_revision(second) != first_revision
+
+    detector_pose = averaged.instrument.lab_from_detector
+    changed_pose = replace(
+        detector_pose,
+        translation_m=detector_pose.translation_m + np.asarray((1.0e-6, 0.0, 0.0)),
+    )
+    pose_rebound = first.rebind_geometry(
+        incident=first.incident,
+        instrument=replace(first.instrument, lab_from_detector=changed_pose),
+    )
+    assert source_averaged_detector_geometry_revision(pose_rebound) != first_revision
+
+    physics_rebound = first.rebind_physics(
+        mosaic=replace(
+            first.mosaic,
+            gaussian_sigma_rad=0.9 * first.mosaic.gaussian_sigma_rad,
+        )
+    )
+    assert source_averaged_detector_geometry_revision(physics_rebound) == first_revision
+
+    plan = ContinuousFoldCorrectionPlan(
+        column_px=np.asarray((0.0, 0.0)),
+        row_px=np.asarray((0.0, 0.0)),
+        signed_detector_area_weight_px2=np.asarray((-1.0, 1.0)),
+        observation_row=np.asarray((0, 0)),
+        evaluator_index_by_coordinate=np.asarray((0, 0)),
+        rod_group_index_by_coordinate=np.asarray((0, 0)),
+        group_master_rod_mask=np.asarray(((True, False, False),)),
+        transformed_node=np.asarray((False, True)),
+        observation_count=1,
+        detector_geometry_revision=first_revision,
+        plan_sha256="0" * 64,
+        crossing_entry_count=1,
+    )
+    evaluation_count = 0
+
+    def evaluate_stub(self: object, *args: object, **kwargs: object) -> tuple[object, ...]:
+        nonlocal evaluation_count
+        evaluation_count += 1
+        return (
+            np.ones(2, dtype=np.float64),
+            np.zeros(2, dtype=np.bool_),
+            np.ones(2, dtype=np.bool_),
+            "cpu",
+            None,
+        )
+
+    monkeypatch.setattr(
+        SourceAveragedDetectorEwaldMeasure,
+        "evaluate_selected_source_rod_groups_all_roots",
+        evaluate_stub,
+    )
+    for incompatible in (second, pose_rebound):
+        with pytest.raises(ValueError, match="does not match"):
+            apply_continuous_fold_correction_plan(incompatible, plan)
+    assert evaluation_count == 0
+    correction = apply_continuous_fold_correction_plan(physics_rebound, plan)
+    assert evaluation_count == 1
+    np.testing.assert_array_equal(correction.correction_A2, 0.0)
+
 
 def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_parity() -> None:
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import (
+        Bi2X3QuintupleLayerParameters,
+        SiteDisplacementProfile,
+        TransverseIsotropicSiteDisplacement,
+    )
+    from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
     from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 
     averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
@@ -1553,20 +1821,33 @@ def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_par
         lorentzian_half_width_rad=math.radians(0.4),
         lorentzian_probability=0.27,
     )
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(
         reference.coating.bragg_space.strength_model.crystal
     )
     changed_strength = replace(
         reference.coating.bragg_space.strength_model,
         structure_parameters=replace(
             baseline,
+            bi_fractional_z=baseline.bi_fractional_z + 0.001,
+            se2_fractional_z=baseline.se2_fractional_z - 0.002,
             bi_occupancy=0.91,
             se1_occupancy=0.79,
             se2_occupancy=0.84,
-            u_radial_A2=0.008,
-            u_normal_A2=0.031,
+            u_radial_A2=0.0,
+            u_normal_A2=0.0,
+            outer_bi_antisite_fraction=0.012,
+        ),
+        site_displacement_profile=SiteDisplacementProfile(
+            sites=(
+                TransverseIsotropicSiteDisplacement("Bi", 0.008, 0.031),
+                TransverseIsotropicSiteDisplacement("Se1", 0.014, 0.019),
+                TransverseIsotropicSiteDisplacement("Se2", 0.027, 0.011),
+            ),
+            scale=1.3,
+            provenance="test site profile",
         ),
     )
+    changed_envelope = SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013)
     geometry_rebound = averaged.rebind_geometry(
         incident=averaged.incident,
         instrument=averaged.instrument,
@@ -1585,6 +1866,7 @@ def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_par
     rebound = geometry_rebound.rebind_physics(
         mosaic=changed_mosaic,
         strength_model=changed_strength,
+        intensity_envelope=changed_envelope,
     )
     fresh = SourceAveragedDetectorEwaldMeasure(
         reciprocal_basis_Ainv=reference.coating.bragg_space.config.reciprocal_basis_Ainv,
@@ -1593,6 +1875,7 @@ def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_par
         rod_catalog_revision=averaged.rod_catalog_revision,
         mosaic=changed_mosaic,
         strength_model=changed_strength,
+        intensity_envelope=changed_envelope,
         incident=averaged.incident,
         material=averaged.material,
         instrument=averaged.instrument,
@@ -2274,10 +2557,15 @@ def test_cuda_forward_monte_carlo_matches_cpu_and_progressive_prefix(
 ) -> None:
     from numba import cuda
 
+    from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
+
     if not cuda.is_available():
         pytest.skip("requires a CUDA device")
 
     _, _, detector = _forward_monte_carlo_fixture(source_count=3, worker_count=4)
+    detector = detector.rebind_physics(
+        intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013)
+    )
     seed = 3565
     draws = 5
     cpu = detector.sample_native_pixel_mass(
@@ -2515,7 +2803,7 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
         pytest.skip("requires a CUDA device")
 
     from painted_ewald import MosaicBraggSpace
-    from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
+    from rasim_next.ordered import Bi2X3QuintupleLayerParameters
     from rasim_next.pipeline.configured_simulation import (
         build_configured_simulation_inputs,
         build_source_averaged_detector,
@@ -2529,11 +2817,13 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
         repository_root=root,
     )
     inputs = build_configured_simulation_inputs(config)
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     candidate_strength = replace(
         inputs.strength,
         structure_parameters=replace(
             baseline,
+            bi_fractional_z=baseline.bi_fractional_z + 0.001,
+            se2_fractional_z=baseline.se2_fractional_z - 0.002,
             bi_occupancy=0.91,
             se1_occupancy=0.83,
             se2_occupancy=0.74,
@@ -2698,6 +2988,88 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
     assert chunked_total.execution_backend == gpu_total.execution_backend
     assert chunked_total.execution_device == gpu_total.execution_device
     assert np.all(gpu.per_rod_density_A2_per_px2[3:] == 0.0)
+
+
+def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
+    from numba import cuda
+
+    from painted_ewald import MosaicBraggSpace
+    from rasim_next.ordered import (
+        Bi2X3QuintupleLayerParameters,
+        SiteDisplacementProfile,
+        TransverseIsotropicSiteDisplacement,
+    )
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+    from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
+    from rasim_next.stacking import Parent
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_r3_simulation.yaml",
+        repository_root=root,
+    )
+    inputs = build_configured_simulation_inputs(config)
+    assert config.structure_factor.model_id == "r3m_quintuple_finite_3r.v1"
+    assert inputs.strength.parent is Parent.THREE_R
+    assert inputs.strength.shared_disorder_epsilon == 0.0
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
+    candidate_strength = replace(
+        inputs.strength,
+        structure_parameters=replace(
+            baseline,
+            bi_occupancy=0.82,
+            se1_occupancy=0.97,
+            se2_occupancy=0.76,
+            u_radial_A2=0.0,
+            u_normal_A2=0.0,
+        ),
+        site_displacement_profile=SiteDisplacementProfile(
+            sites=(
+                TransverseIsotropicSiteDisplacement("Bi", 0.031, 0.067),
+                TransverseIsotropicSiteDisplacement("Se1", 0.012, 0.024),
+                TransverseIsotropicSiteDisplacement("Se2", 0.043, 0.018),
+            ),
+            scale=0.8,
+            provenance="test site profile",
+        ),
+    )
+    inputs = replace(
+        inputs,
+        strength=candidate_strength,
+        bragg_space=MosaicBraggSpace(inputs.bragg_space.config, candidate_strength),
+    )
+    detector = build_source_averaged_detector(inputs).rebind_physics(
+        strength_model=candidate_strength,
+        intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013),
+    )
+    if not cuda.is_available():
+        pytest.skip("requires a CUDA device")
+    column_px = np.asarray((1109.5, 1469.5, 2206.820508075689))
+    row_px = np.asarray((1349.5, 1469.5, 1272.1794919243112))
+
+    cpu = detector.evaluate_detector_density_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
+    gpu = detector.evaluate_detector_density_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+
+    np.testing.assert_allclose(
+        gpu.density_A2_per_px2,
+        cpu.density_A2_per_px2,
+        rtol=6.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
+    np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
 
 
 def test_cuda_compound_detector_tilt_matches_cpu() -> None:
@@ -5479,7 +5851,7 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
         k_norm_Ainv=2.0 * np.pi / base_minimum_wavelength_A,
         population=config.bragg.rod_population,
     )
-    assert bundle.inputs.rods == base_rods
+    assert bundle.detector.rods == base_rods
 
     deltas = viewer["GeometryDeltas"](
         goniometer_axis_pitch_offset_deg=0.4,
@@ -5506,6 +5878,9 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
     )
     assert changed_minimum_wavelength_A < base_minimum_wavelength_A
     assert len(changed_rods) > len(base_rods)
+    assert {(rod.h, rod.k) for rod in changed_rods} <= {
+        (rod.h, rod.k) for rod in bundle.inputs.rods
+    }
 
     evaluate_bundle = viewer["_evaluate_bundle"]
     evaluate_bundle.__globals__["sample_detector_raster"] = lambda detector, **_kwargs: len(

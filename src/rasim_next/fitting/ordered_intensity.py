@@ -19,10 +19,13 @@ from rasim_next.fitting.mosaic import (
 )
 from rasim_next.geometry.angles import AngleFrame, angles_to_detector_coordinate_area_measure
 from rasim_next.measurement.continuous_angle import evaluate_continuous_per_rod_angle_signal
-from rasim_next.ordered import Bi2Se3QuintupleLayerParameters
-from rasim_next.pipeline.bragg_space import Bi2Se3TwoHStrength
+from rasim_next.ordered import Bi2X3QuintupleLayerParameters
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure
-from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_detector import (
+    SourceAveragedDetectorEwaldMeasure,
+    source_averaged_detector_instrument_revision,
+)
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -164,14 +167,14 @@ def _ordered_intensity_point_observable_revision(
     )
 
 
-def ordered_intensity_structure_model_revision(strength: Bi2Se3TwoHStrength) -> str:
+def ordered_intensity_structure_model_revision(strength: Bi2X3FiniteStackStrength) -> str:
     """Hash coefficient-generating structure physics, excluding fitted occupancies/U and wavelength."""
 
-    if not isinstance(strength, Bi2Se3TwoHStrength):
-        raise TypeError("strength must be Bi2Se3TwoHStrength")
+    if not isinstance(strength, Bi2X3FiniteStackStrength):
+        raise TypeError("strength must be Bi2X3FiniteStackStrength")
     parameters = strength.structure_parameters
-    if not isinstance(parameters, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("Bi2Se3 strength requires resolved structure parameters")
+    if not isinstance(parameters, Bi2X3QuintupleLayerParameters):
+        raise TypeError("layered-quintuple strength requires resolved structure parameters")
     crystal = strength.crystal
     sites = crystal.sites
     return canonical_revision_sha256(
@@ -190,7 +193,7 @@ def ordered_intensity_structure_model_revision(strength: Bi2Se3TwoHStrength) -> 
         ),
         ("bi_fractional_z", parameters.bi_fractional_z),
         ("se2_fractional_z", parameters.se2_fractional_z),
-        ("stacking_parent", "2H"),
+        ("stacking_parent", strength.parent.value),
         ("stacking_layers", strength.layers),
         ("stacking_normalization", strength.normalization.value),
         ("shared_disorder_epsilon", strength.shared_disorder_epsilon),
@@ -212,37 +215,6 @@ def _mosaic_parameters_revision(mosaic: MosaicParameters) -> str:
 
 def _mosaic_model_revision(detector: DetectorEwaldMeasure) -> str:
     return _mosaic_parameters_revision(detector.coating.bragg_space.config.mosaic)
-
-
-def source_averaged_detector_instrument_revision(
-    detector: SourceAveragedDetectorEwaldMeasure,
-) -> str:
-    instrument = detector.instrument
-    return canonical_revision_sha256(
-        ("definition_id", "source_averaged_detector_instrument.v1"),
-        ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
-        ("lab_from_sample_translation_m", instrument.lab_from_sample.translation_m),
-        ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
-        ("sample_from_crystal_translation_m", instrument.sample_from_crystal.translation_m),
-        ("lab_from_detector_rotation", instrument.lab_from_detector.rotation),
-        ("lab_from_detector_translation_m", instrument.lab_from_detector.translation_m),
-        ("detector_shape_rc", np.asarray(instrument.detector_shape_rc, dtype=np.int64)),
-        ("detector_row_pitch_m", instrument.detector_row_pitch_m),
-        ("detector_column_pitch_m", instrument.detector_column_pitch_m),
-        (
-            "detector_reference_coordinate_px",
-            np.asarray(instrument.detector_reference_coordinate_px, dtype=np.float64),
-        ),
-        ("sample_support_model_id", instrument.sample_support_model_id),
-        ("sample_width_is_unbounded", int(instrument.sample_width_m is None)),
-        ("sample_width_m", 0.0 if instrument.sample_width_m is None else instrument.sample_width_m),
-        ("sample_length_is_unbounded", int(instrument.sample_length_m is None)),
-        (
-            "sample_length_m",
-            0.0 if instrument.sample_length_m is None else instrument.sample_length_m,
-        ),
-        ("film_thickness_A", instrument.film_thickness_A),
-    )
 
 
 def probe_ordered_intensity_inverse_boundary_bins(
@@ -373,7 +345,7 @@ class OrderedIntensityDatasetResponse:
     normalization_mass_px2: FloatArray
     reciprocal_basis_Ainv: FloatArray
     k_norm_Ainv: float
-    fixed_structure_parameters: Bi2Se3QuintupleLayerParameters
+    fixed_structure_parameters: Bi2X3QuintupleLayerParameters
     rod_catalog_revision: str
     structure_model_revision: str
     mosaic_model_revision: str
@@ -505,8 +477,8 @@ class OrderedIntensityDatasetResponse:
         k_norm = float(self.k_norm_Ainv)
         if not math.isfinite(k_norm) or k_norm <= 0.0:
             raise ValueError("k_norm_Ainv must be finite and positive")
-        if not isinstance(self.fixed_structure_parameters, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("fixed_structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        if not isinstance(self.fixed_structure_parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("fixed_structure_parameters must be Bi2X3QuintupleLayerParameters")
         for value in (
             observation,
             rod_index,
@@ -580,11 +552,11 @@ class OrderedIntensityDatasetResponse:
             ),
         )
 
-    def predict_mass_A2(self, structure_parameters: Bi2Se3QuintupleLayerParameters) -> FloatArray:
+    def predict_mass_A2(self, structure_parameters: Bi2X3QuintupleLayerParameters) -> FloatArray:
         """Apply occupancies and directional damping to the frozen response."""
 
-        if not isinstance(structure_parameters, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        if not isinstance(structure_parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("structure_parameters must be Bi2X3QuintupleLayerParameters")
         fixed = self.fixed_structure_parameters
         if (
             structure_parameters.bi_fractional_z != fixed.bi_fractional_z
@@ -655,11 +627,11 @@ class OrderedIntensityDatasetResponse:
         predicted.setflags(write=False)
         return predicted
 
-    def predict_mass_direct_A2(self, strength: Bi2Se3TwoHStrength) -> FloatArray:
+    def predict_mass_direct_A2(self, strength: Bi2X3FiniteStackStrength) -> FloatArray:
         """Evaluate the full strength model once as an independent response oracle."""
 
-        if not isinstance(strength, Bi2Se3TwoHStrength):
-            raise TypeError("strength must be Bi2Se3TwoHStrength")
+        if not isinstance(strength, Bi2X3FiniteStackStrength):
+            raise TypeError("strength must be Bi2X3FiniteStackStrength")
         if ordered_intensity_structure_model_revision(strength) != self.structure_model_revision:
             raise ValueError("candidate strength changed the compiled structure model")
         scale = max(float(np.linalg.norm(self.reciprocal_basis_Ainv)), 1.0)
@@ -672,7 +644,7 @@ class OrderedIntensityDatasetResponse:
             raise ValueError("candidate strength changed the frozen reciprocal lattice")
         parameters = strength.structure_parameters
         fixed = self.fixed_structure_parameters
-        if not isinstance(parameters, Bi2Se3QuintupleLayerParameters) or (
+        if not isinstance(parameters, Bi2X3QuintupleLayerParameters) or (
             parameters.bi_fractional_z != fixed.bi_fractional_z
             or parameters.se2_fractional_z != fixed.se2_fractional_z
         ):
@@ -710,7 +682,7 @@ class SourceAveragedOrderedIntensityDatasetResponse:
     center_phi_rad: FloatArray
     normalization_density_px2_per_rad2: FloatArray
     reciprocal_basis_Ainv: FloatArray
-    fixed_structure_parameters: Bi2Se3QuintupleLayerParameters
+    fixed_structure_parameters: Bi2X3QuintupleLayerParameters
     rod_catalog_revision: str
     structure_model_revision: str
     mosaic_model_revision: str
@@ -869,8 +841,8 @@ class SourceAveragedOrderedIntensityDatasetResponse:
         basis = np.array(self.reciprocal_basis_Ainv, dtype=np.float64, copy=True, order="C")
         if basis.shape != (3, 3) or not np.all(np.isfinite(basis)):
             raise ValueError("reciprocal_basis_Ainv must be finite with shape (3, 3)")
-        if not isinstance(self.fixed_structure_parameters, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("fixed_structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        if not isinstance(self.fixed_structure_parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("fixed_structure_parameters must be Bi2X3QuintupleLayerParameters")
         for value in (
             coefficients,
             q_radial_squared,
@@ -958,10 +930,10 @@ class SourceAveragedOrderedIntensityDatasetResponse:
 
     def predict_signal_density_A2_per_rad2(
         self,
-        structure_parameters: Bi2Se3QuintupleLayerParameters,
+        structure_parameters: Bi2X3QuintupleLayerParameters,
     ) -> FloatArray:
-        if not isinstance(structure_parameters, Bi2Se3QuintupleLayerParameters):
-            raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+        if not isinstance(structure_parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("structure_parameters must be Bi2X3QuintupleLayerParameters")
         fixed = self.fixed_structure_parameters
         if (
             structure_parameters.bi_fractional_z != fixed.bi_fractional_z
@@ -1033,18 +1005,18 @@ class SourceAveragedOrderedIntensityDatasetResponse:
 
 
 def _compile_fixed_position_structure_kernel(
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
     *,
     rods: tuple[Rod, ...],
     term_rod_index: IntArray,
     term_L: FloatArray,
     k_norm_Ainv: float,
-) -> tuple[FloatArray, FloatArray, FloatArray, Bi2Se3QuintupleLayerParameters]:
+) -> tuple[FloatArray, FloatArray, FloatArray, Bi2X3QuintupleLayerParameters]:
     """Compile the occupancy quadratic and reciprocal damping coordinates once."""
 
     fixed = strength.structure_parameters
-    if not isinstance(fixed, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("Bi2Se3 strength requires resolved structure parameters")
+    if not isinstance(fixed, Bi2X3QuintupleLayerParameters):
+        raise TypeError("layered-quintuple strength requires resolved structure parameters")
     rod_h = np.fromiter((rod.h for rod in rods), dtype=np.int32, count=len(rods))
     rod_k = np.fromiter((rod.k for rod in rods), dtype=np.int32, count=len(rods))
     term_h = rod_h[term_rod_index]
@@ -1192,12 +1164,12 @@ def compile_ordered_intensity_response(
     term_fixed = np.concatenate(term_fixed_blocks)
     term_root_sign = np.concatenate(term_root_sign_blocks)
     strength = detector.coating.bragg_space.strength_model
-    if not isinstance(strength, Bi2Se3TwoHStrength):
-        raise TypeError("ordered-intensity fitting currently requires Bi2Se3TwoHStrength")
+    if not isinstance(strength, Bi2X3FiniteStackStrength):
+        raise TypeError("ordered-intensity fitting currently requires Bi2X3FiniteStackStrength")
     occupancy_quadratic_blocks: list[FloatArray] = []
     q_radial_squared_blocks: list[FloatArray] = []
     q_normal_squared_blocks: list[FloatArray] = []
-    fixed_structure: Bi2Se3QuintupleLayerParameters | None = None
+    fixed_structure: Bi2X3QuintupleLayerParameters | None = None
     for start in range(0, term_l.size, _STRUCTURE_KERNEL_TERM_BLOCK_SIZE):
         stop = min(start + _STRUCTURE_KERNEL_TERM_BLOCK_SIZE, term_l.size)
         quadratic_block, q_radial_block, q_normal_block, block_structure = (
@@ -1255,7 +1227,7 @@ def compile_ordered_intensity_response(
 
 
 def _profile_q_radial_squared(
-    strength: Bi2Se3TwoHStrength,
+    strength: Bi2X3FiniteStackStrength,
     definitions: tuple[MosaicProfileDefinition, ...],
 ) -> FloatArray:
     layer_normal = np.cross(
@@ -1329,11 +1301,11 @@ def compile_source_averaged_ordered_intensity_response(
         raise ValueError("profile definitions do not match the detector rod catalog revision")
     configured_rods = {(rod.h, rod.k): rod for rod in detector.rods}
     strength = detector.strength_model
-    if not isinstance(strength, Bi2Se3TwoHStrength):
-        raise TypeError("ordered-intensity fitting currently requires Bi2Se3TwoHStrength")
+    if not isinstance(strength, Bi2X3FiniteStackStrength):
+        raise TypeError("ordered-intensity fitting currently requires Bi2X3FiniteStackStrength")
     fixed = strength.structure_parameters
-    if not isinstance(fixed, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("Bi2Se3 strength requires resolved structure parameters")
+    if not isinstance(fixed, Bi2X3QuintupleLayerParameters):
+        raise TypeError("layered-quintuple strength requires resolved structure parameters")
     q_radial_squared = _profile_q_radial_squared(strength, frozen)
     occupancy_probe = (
         (1.0, 0.0, 0.0),
@@ -1577,7 +1549,7 @@ def evaluate_source_averaged_ordered_intensity_point_signal(
     *,
     angle_frame: AngleFrame,
     definitions: tuple[MosaicProfileDefinition, ...],
-    structure_parameters: Bi2Se3QuintupleLayerParameters,
+    structure_parameters: Bi2X3QuintupleLayerParameters,
     execution_backend: str = "cpu",
 ) -> FloatArray:
     """Evaluate selected-group peak-center signals from a fresh combined detector oracle."""
@@ -1586,8 +1558,8 @@ def evaluate_source_averaged_ordered_intensity_point_signal(
         raise TypeError("detector must be SourceAveragedDetectorEwaldMeasure")
     if not isinstance(angle_frame, AngleFrame):
         raise TypeError("angle_frame must be an AngleFrame")
-    if not isinstance(structure_parameters, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("structure_parameters must be Bi2Se3QuintupleLayerParameters")
+    if not isinstance(structure_parameters, Bi2X3QuintupleLayerParameters):
+        raise TypeError("structure_parameters must be Bi2X3QuintupleLayerParameters")
     if execution_backend not in {"cpu", "cuda"}:
         raise ValueError("execution_backend must be cpu or cuda")
     frozen = tuple(definitions)
@@ -1605,8 +1577,8 @@ def evaluate_source_averaged_ordered_intensity_point_signal(
         raise ValueError("definitions do not match the detector rod catalog revision")
     configured_rods = {(rod.h, rod.k): rod for rod in detector.rods}
     strength = detector.strength_model
-    if not isinstance(strength, Bi2Se3TwoHStrength):
-        raise TypeError("ordered-intensity fitting currently requires Bi2Se3TwoHStrength")
+    if not isinstance(strength, Bi2X3FiniteStackStrength):
+        raise TypeError("ordered-intensity fitting currently requires Bi2X3FiniteStackStrength")
     fixed = strength.structure_parameters
     if (
         structure_parameters.bi_fractional_z != fixed.bi_fractional_z
@@ -1710,7 +1682,7 @@ class OrderedIntensityFitResult:
     relative mode, not to numeric fields of the representative.
     """
 
-    structure_representative: Bi2Se3QuintupleLayerParameters
+    structure_representative: Bi2X3QuintupleLayerParameters
     active_parameter_names: tuple[str, ...]
     frozen_parameter_names: tuple[str, ...]
     relative_scale_mode: bool
@@ -1750,8 +1722,8 @@ class OrderedIntensityFitResult:
 
 
 def _parameter_vector(
-    parameters: Bi2Se3QuintupleLayerParameters,
-    baseline: Bi2Se3QuintupleLayerParameters,
+    parameters: Bi2X3QuintupleLayerParameters,
+    baseline: Bi2X3QuintupleLayerParameters,
 ) -> FloatArray:
     return np.asarray(
         (
@@ -1769,9 +1741,9 @@ def _parameter_vector(
 
 def _structure_from_vector(
     vector: FloatArray,
-    baseline: Bi2Se3QuintupleLayerParameters,
-) -> Bi2Se3QuintupleLayerParameters:
-    return Bi2Se3QuintupleLayerParameters(
+    baseline: Bi2X3QuintupleLayerParameters,
+) -> Bi2X3QuintupleLayerParameters:
+    return Bi2X3QuintupleLayerParameters(
         bi_fractional_z=baseline.bi_fractional_z + float(vector[0]),
         se2_fractional_z=baseline.se2_fractional_z + float(vector[1]),
         bi_occupancy=float(vector[2]),
@@ -1815,9 +1787,9 @@ def fit_ordered_intensity_series(
         ...,
     ],
     *,
-    base_strength: Bi2Se3TwoHStrength,
+    base_strength: Bi2X3FiniteStackStrength,
     active_parameter_names: tuple[str, ...],
-    initial_parameters: Bi2Se3QuintupleLayerParameters | None = None,
+    initial_parameters: Bi2X3QuintupleLayerParameters | None = None,
     relative_scale_mode: bool = True,
     active_parameter_bounds: Mapping[str, tuple[float, float]] | None = None,
     maximum_function_evaluations: int = 400,
@@ -1843,8 +1815,8 @@ def fit_ordered_intensity_series(
         or len({item.dataset_id for item in datasets}) != len(datasets)
     ):
         raise ValueError("responses must contain unique ordered-intensity datasets")
-    if not isinstance(base_strength, Bi2Se3TwoHStrength):
-        raise TypeError("base_strength must be Bi2Se3TwoHStrength")
+    if not isinstance(base_strength, Bi2X3FiniteStackStrength):
+        raise TypeError("base_strength must be Bi2X3FiniteStackStrength")
     expected_structure_revision = ordered_intensity_structure_model_revision(base_strength)
     if any(
         response.structure_model_revision != expected_structure_revision for response in datasets
@@ -1958,12 +1930,12 @@ def fit_ordered_intensity_series(
         frozen_observations_list.append(values)
     frozen_observations = tuple(frozen_observations_list)
 
-    baseline = Bi2Se3QuintupleLayerParameters.from_crystal(base_strength.crystal)
+    baseline = Bi2X3QuintupleLayerParameters.from_crystal(base_strength.crystal)
     initial = (
         base_strength.structure_parameters if initial_parameters is None else initial_parameters
     )
-    if not isinstance(initial, Bi2Se3QuintupleLayerParameters):
-        raise TypeError("initial_parameters must be Bi2Se3QuintupleLayerParameters")
+    if not isinstance(initial, Bi2X3QuintupleLayerParameters):
+        raise TypeError("initial_parameters must be Bi2X3QuintupleLayerParameters")
     for response in datasets:
         fixed = response.fixed_structure_parameters
         if (

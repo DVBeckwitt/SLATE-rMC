@@ -1,0 +1,8 @@
+{
+  "gaussian_sigma_deg": 0.47028140873954066,
+  "lorentzian_hwhm_deg": 0.24226971704867475,
+  "lorentzian_probability": 0.7037378947140746,
+  "provenance": "provided model-limited three-OSC Bi2Te3 mosaic fit",
+  "schema_version": "rasim-fixed-mosaic-state-v1",
+  "status": "PROVIDED_MOSAIC_PRIOR"
+}

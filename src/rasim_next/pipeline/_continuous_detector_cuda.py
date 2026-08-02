@@ -81,7 +81,7 @@ def _pack_source_average(
     state_count = len(indexed_evaluators)
     ray_origin = np.empty((state_count, 3), dtype=np.float64)
     ki_film = np.empty((state_count, 3), dtype=np.float64)
-    state_real = np.empty((state_count, 14), dtype=np.float64)
+    state_real = np.empty((state_count, 17), dtype=np.float64)
     state_complex = np.empty((state_count, 4), dtype=np.complex128)
     state_block_offset = np.concatenate(
         (
@@ -116,8 +116,11 @@ def _pack_source_average(
     )
     shared_scalars = (
         "layers",
+        "stacking_parent_code",
         "u_radial_A2",
         "u_normal_A2",
+        "intensity_envelope_u_radial_A2",
+        "intensity_envelope_u_normal_A2",
         "shared_disorder_epsilon",
         "normalization_divisor",
         "b3_norm_Ainv",
@@ -200,6 +203,9 @@ def _pack_source_average(
             state.shared_disorder_epsilon,
             state.normalization_divisor,
             4096.0 * _FLOAT_EPS * max(ki_norm, 1.0),
+            float(state.stacking_parent_code),
+            state.intensity_envelope_u_radial_A2,
+            state.intensity_envelope_u_normal_A2,
         )
         state_complex[state_index] = (
             state.refractive_index,
@@ -289,16 +295,19 @@ def _wrapped_mosaic_density(
 
 
 @cuda.jit(device=True, inline=True)
-def _two_h_strength_A2(
+def _finite_stack_strength_A2(
     rod_index: int,
     ell: float,
     common_damping: float,
+    parallel_norm_Ainv: float,
+    w_value_Ainv: float,
     element_factor_0: complex,
     element_factor_1: complex,
     rod_atom_inplane_factor: Any,
     atom_fractional_offset: Any,
     atom_occupancy_element: Any,
     layers: int,
+    stacking_parent_code: int,
     shared_disorder_epsilon: float,
     rod_hk_population: Any,
     normalization_divisor: float,
@@ -308,17 +317,32 @@ def _two_h_strength_A2(
     for atom in range(atom_fractional_offset.shape[0]):
         occupancy = atom_occupancy_element[atom, 0]
         element = int(atom_occupancy_element[atom, 1])
+        site_damping = math.exp(
+            -0.5
+            * (
+                atom_occupancy_element[atom, 2] * parallel_norm_Ainv * parallel_norm_Ainv
+                + atom_occupancy_element[atom, 3] * w_value_Ainv * w_value_Ainv
+            )
+        )
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
         phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
         element_factor = element_factor_0 if element == 0 else element_factor_1
-        amplitude_plus += occupancy * element_factor * phase_plus
-        amplitude_minus += occupancy * element_factor * phase_minus
+        amplitude_plus += occupancy * site_damping * element_factor * phase_plus
+        amplitude_minus += occupancy * site_damping * element_factor * phase_minus
 
     vertical_phase_angle = 2.0 * math.pi * ell / 3.0
     vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
     if shared_disorder_epsilon == 0.0:
+        if stacking_parent_code == 1:
+            h = int(rod_hk_population[rod_index, 0])
+            k = int(rod_hk_population[rod_index, 1])
+            registry_index = (h + 2 * k) % 3
+            if registry_index == 1:
+                vertical_phase *= complex(-0.5, -0.5 * math.sqrt(3.0))
+            elif registry_index == 2:
+                vertical_phase *= complex(-0.5, 0.5 * math.sqrt(3.0))
         phase_power = 1.0 + 0.0j
         stack_sum = 1.0 + 0.0j
         for _ in range(1, layers):
@@ -580,6 +604,10 @@ def _prepare_state_block_geometry_kernel(
     point_factor[local_state, point, 1] = optical_weight
     point_factor[local_state, point, 2] = f0_0
     point_factor[local_state, point, 3] = f0_1
+    point_factor[local_state, point, 4] = math.exp(
+        -state_real[state_index, 15] * (q_sample_x * q_sample_x + q_sample_y * q_sample_y)
+        - state_real[state_index, 16] * q_sample_z * q_sample_z
+    )
     valid[local_state, point] = True
 
 
@@ -687,6 +715,7 @@ def _accumulate_state_block_kernel(
         element_factor_1 = point_factor[local_state, point, 3] + state_complex[state_index, 3]
         area_jacobian = point_factor[local_state, point, 0]
         optical_weight = point_factor[local_state, point, 1]
+        event_intensity_envelope = point_factor[local_state, point, 4]
         source_phase_weight = state_real[state_index, 4]
         state_rod_density = 0.0
         state_rod_caustic = False
@@ -718,16 +747,19 @@ def _accumulate_state_block_kernel(
                             + u_normal_A2 * w_value * w_value
                         )
                     )
-                strength = _two_h_strength_A2(
+                strength = _finite_stack_strength_A2(
                     rod_index,
                     u_value / b3_norm_Ainv,
                     common_damping,
+                    parallel_norm,
+                    w_value,
                     element_factor_0,
                     element_factor_1,
                     rod_atom_inplane_factor,
                     atom_fractional_offset,
                     atom_occupancy_element,
                     layers,
+                    int(state_real[state_index, 14]),
                     shared_disorder_epsilon,
                     rod_hk_population,
                     normalization_divisor,
@@ -779,6 +811,7 @@ def _accumulate_state_block_kernel(
                         and optical_weight > 0.0
                         and strength > 0.0
                         and mosaic_density > 0.0
+                        and event_intensity_envelope > 0.0
                     ):
                         state_rod_density = math.inf
                     continue
@@ -789,6 +822,7 @@ def _accumulate_state_block_kernel(
                     * area_jacobian
                     * optical_weight
                     * source_phase_weight
+                    * event_intensity_envelope
                     / jacobian
                 )
         block_rod_density += state_rod_density
@@ -817,6 +851,32 @@ def _reduce_physical_rods_kernel(
         total += per_rod_density[rod_index, point]
         if per_rod_caustic[rod_index, point]:
             singular = True
+    density[point] = total
+    caustic[point] = singular
+
+
+@cuda.jit(fastmath=False)
+def _reduce_selected_rod_group_kernel(
+    per_rod_density: Any,
+    per_rod_caustic: Any,
+    rod_group_index: Any,
+    group_master_rod_mask: Any,
+    density: Any,
+    caustic: Any,
+) -> None:
+    """Reduce the requested master-rod group independently at every point."""
+
+    point = cuda.grid(1)
+    if point >= density.size:
+        return
+    group = rod_group_index[point]
+    total = 0.0
+    singular = False
+    for rod_index in range(per_rod_density.shape[0]):
+        if group_master_rod_mask[group, rod_index]:
+            total += per_rod_density[rod_index, point]
+            if per_rod_caustic[rod_index, point]:
+                singular = True
     density[point] = total
     caustic[point] = singular
 
@@ -918,7 +978,7 @@ def _evaluate_source_averaged_all_roots_cuda(
             dtype=np.float64,
         )
         device_point_factor = cuda.device_array(
-            (maximum_block_size, point_count, 4),
+            (maximum_block_size, point_count, 5),
             dtype=np.float64,
         )
         device_valid = cuda.device_array(
@@ -1012,6 +1072,218 @@ def _evaluate_source_averaged_all_roots_cuda(
     return density, caustic, valid_source_count, device_name
 
 
+def evaluate_selected_source_rod_groups_all_roots_cuda(
+    evaluator_blocks: tuple[tuple[Any, ...], ...],
+    column_px: FloatArray,
+    row_px: FloatArray,
+    evaluator_index_by_coordinate: IntArray,
+    rod_group_index_by_coordinate: IntArray,
+    group_master_rod_mask: BoolArray,
+    *,
+    detector_shape_rc: tuple[int, int],
+    master_rod_count: int,
+    coordinate_chunk_size: int = _DEFAULT_COORDINATE_CHUNK_SIZE,
+) -> tuple[FloatArray, BoolArray, BoolArray, str]:
+    """Evaluate one selected source state and master-rod group per coordinate."""
+
+    if (
+        isinstance(coordinate_chunk_size, bool)
+        or not isinstance(coordinate_chunk_size, (int, np.integer))
+        or int(coordinate_chunk_size) < 1
+    ):
+        raise ValueError("coordinate_chunk_size must be a positive integer")
+    chunk_size = int(coordinate_chunk_size)
+    device_name = require_cuda_available()
+    column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
+    row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
+    evaluator_index = np.ascontiguousarray(
+        evaluator_index_by_coordinate,
+        dtype=np.int64,
+    ).reshape(-1)
+    group_index = np.ascontiguousarray(
+        rod_group_index_by_coordinate,
+        dtype=np.int64,
+    ).reshape(-1)
+    group_mask = np.ascontiguousarray(group_master_rod_mask, dtype=np.bool_)
+    indexed_evaluators = tuple(indexed for block in evaluator_blocks for indexed in block)
+    if (
+        column.shape != row.shape
+        or evaluator_index.shape != column.shape
+        or group_index.shape != column.shape
+        or group_mask.ndim != 2
+        or group_mask.shape[1] != master_rod_count
+        or not group_mask.shape[0]
+        or np.any((evaluator_index < 0) | (evaluator_index >= len(indexed_evaluators)))
+        or np.any((group_index < 0) | (group_index >= group_mask.shape[0]))
+        or np.any(~np.any(group_mask, axis=1))
+    ):
+        raise ValueError("selected CUDA source/rod-group coordinates are inconsistent")
+    if column.size == 0:
+        return (
+            np.zeros(0, dtype=np.float64),
+            np.zeros(0, dtype=np.bool_),
+            np.zeros(0, dtype=np.bool_),
+            device_name,
+        )
+
+    packed = _pack_source_average(
+        evaluator_blocks,
+        detector_shape_rc=detector_shape_rc,
+        master_rod_count=master_rod_count,
+    )
+    device_detector_zero = cuda.to_device(packed.detector_zero_lab_m)
+    device_detector_column_step = cuda.to_device(packed.detector_column_step_lab_m)
+    device_detector_row_step = cuda.to_device(packed.detector_row_step_lab_m)
+    device_detector_pixel_area = cuda.to_device(packed.detector_pixel_area_vector_lab_m2)
+    device_sample_from_lab = cuda.to_device(packed.sample_from_lab)
+    device_sample_from_local = cuda.to_device(packed.sample_from_local)
+    device_ray_origin = cuda.to_device(packed.ray_origin_lab_m)
+    device_ki_film = cuda.to_device(packed.ki_film_sample_Ainv)
+    device_state_real = cuda.to_device(packed.state_real)
+    device_state_complex = cuda.to_device(packed.state_complex)
+    device_active_state_rod = cuda.to_device(packed.active_state_rod)
+    device_rod_u_bounds = cuda.to_device(packed.rod_u_bounds_Ainv)
+    device_rod_u_tolerance = cuda.to_device(packed.rod_u_tolerance_Ainv)
+    device_rod_hk_population = cuda.to_device(packed.rod_hk_population)
+    device_rod_parallel = cuda.to_device(packed.rod_parallel_local_Ainv)
+    device_rod_inverse = cuda.to_device(packed.rod_inverse_constants)
+    device_atom_offset = cuda.to_device(packed.atom_fractional_offset)
+    device_atom_properties = cuda.to_device(packed.atom_occupancy_element)
+    device_rod_inplane = cuda.to_device(packed.rod_atom_inplane_factor)
+    device_f0_parameters = cuda.to_device(packed.f0_parameters)
+    device_group_mask = cuda.to_device(group_mask)
+
+    rows, columns = detector_shape_rc
+    gaussian_sigma_rad = float(packed.state_real[0, 6])
+    lorentzian_hwhm_rad = float(packed.state_real[0, 7])
+    lorentzian_probability = float(packed.state_real[0, 8])
+    gaussian_probability = 1.0 - lorentzian_probability
+    gaussian_normalization = math.sqrt(2.0 * math.pi) * gaussian_sigma_rad
+    lorentzian_rho = math.exp(-lorentzian_hwhm_rad)
+    lorentzian_one_minus_rho = -math.expm1(-lorentzian_hwhm_rad)
+    lorentzian_numerator = -math.expm1(-2.0 * lorentzian_hwhm_rad)
+
+    already_sorted = bool(np.all(evaluator_index[1:] >= evaluator_index[:-1]))
+    order = None if already_sorted else np.argsort(evaluator_index, kind="stable")
+    sorted_column = column if order is None else column[order]
+    sorted_row = row if order is None else row[order]
+    sorted_evaluator = evaluator_index if order is None else evaluator_index[order]
+    sorted_group = group_index if order is None else group_index[order]
+    sorted_density = np.empty(column.size, dtype=np.float64)
+    sorted_caustic = np.empty(column.size, dtype=np.bool_)
+    sorted_valid = np.empty(column.size, dtype=np.bool_)
+    state_edges = np.flatnonzero(np.r_[True, sorted_evaluator[1:] != sorted_evaluator[:-1], True])
+    for state_segment in range(state_edges.size - 1):
+        segment_start = int(state_edges[state_segment])
+        segment_stop = int(state_edges[state_segment + 1])
+        state_index = int(sorted_evaluator[segment_start])
+        for start in range(segment_start, segment_stop, chunk_size):
+            stop = min(start + chunk_size, segment_stop)
+            chunk_column = sorted_column[start:stop]
+            chunk_row = sorted_row[start:stop]
+            chunk_group = sorted_group[start:stop]
+            point_count = chunk_column.size
+            device_column = cuda.to_device(chunk_column)
+            device_row = cuda.to_device(chunk_row)
+            device_group_index = cuda.to_device(chunk_group)
+            device_per_rod_density = cuda.to_device(
+                np.zeros((master_rod_count, point_count), dtype=np.float64)
+            )
+            device_per_rod_caustic = cuda.to_device(
+                np.zeros((master_rod_count, point_count), dtype=np.bool_)
+            )
+            device_valid_count = cuda.to_device(np.zeros(point_count, dtype=np.int64))
+            device_q_geometry = cuda.device_array((1, point_count, 8), dtype=np.float64)
+            device_point_factor = cuda.device_array((1, point_count, 5), dtype=np.float64)
+            device_valid = cuda.device_array((1, point_count), dtype=np.bool_)
+            device_block_valid_count = cuda.device_array(point_count, dtype=np.int64)
+            point_blocks = (point_count + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+            rod_point_work = master_rod_count * point_count
+            rod_point_blocks = (rod_point_work + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
+            _prepare_state_block_geometry_kernel[point_blocks, _THREADS_PER_BLOCK](
+                state_index,
+                state_index + 1,
+                rows,
+                columns,
+                device_column,
+                device_row,
+                device_detector_zero,
+                device_detector_column_step,
+                device_detector_row_step,
+                device_detector_pixel_area,
+                device_sample_from_lab,
+                device_sample_from_local,
+                device_ray_origin,
+                device_ki_film,
+                device_state_real,
+                device_state_complex,
+                device_f0_parameters,
+                device_q_geometry,
+                device_point_factor,
+                device_valid,
+            )
+            _count_valid_state_block_kernel[point_blocks, _THREADS_PER_BLOCK](
+                1,
+                device_valid,
+                device_block_valid_count,
+                device_valid_count,
+            )
+            _accumulate_state_block_kernel[rod_point_blocks, _THREADS_PER_BLOCK](
+                state_index,
+                state_index + 1,
+                point_count,
+                device_sample_from_local,
+                device_state_real,
+                device_state_complex,
+                device_active_state_rod,
+                device_rod_u_bounds,
+                device_rod_u_tolerance,
+                device_rod_hk_population,
+                device_rod_parallel,
+                device_rod_inverse,
+                device_atom_offset,
+                device_atom_properties,
+                device_rod_inplane,
+                packed.layers,
+                gaussian_sigma_rad,
+                gaussian_probability,
+                gaussian_normalization,
+                lorentzian_probability,
+                lorentzian_rho,
+                lorentzian_one_minus_rho,
+                lorentzian_numerator,
+                device_q_geometry,
+                device_point_factor,
+                device_valid,
+                device_block_valid_count,
+                device_per_rod_density,
+                device_per_rod_caustic,
+            )
+            device_density = cuda.device_array(point_count, dtype=np.float64)
+            device_caustic = cuda.device_array(point_count, dtype=np.bool_)
+            _reduce_selected_rod_group_kernel[point_blocks, _THREADS_PER_BLOCK](
+                device_per_rod_density,
+                device_per_rod_caustic,
+                device_group_index,
+                device_group_mask,
+                device_density,
+                device_caustic,
+            )
+            sorted_density[start:stop] = device_density.copy_to_host()
+            sorted_caustic[start:stop] = device_caustic.copy_to_host()
+            sorted_valid[start:stop] = device_valid_count.copy_to_host() == 1
+    if order is None:
+        return sorted_density, sorted_caustic, sorted_valid, device_name
+    inverse_order = np.empty(order.shape, dtype=np.int64)
+    inverse_order[order] = np.arange(order.size, dtype=np.int64)
+    return (
+        sorted_density[inverse_order],
+        sorted_caustic[inverse_order],
+        sorted_valid[inverse_order],
+        device_name,
+    )
+
+
 def evaluate_source_averaged_all_roots_cuda(
     evaluator_blocks: tuple[tuple[Any, ...], ...],
     column_px: FloatArray,
@@ -1057,6 +1329,7 @@ def evaluate_source_averaged_density_all_roots_cuda(
 
 
 __all__ = [
+    "evaluate_selected_source_rod_groups_all_roots_cuda",
     "evaluate_source_averaged_all_roots_cuda",
     "evaluate_source_averaged_density_all_roots_cuda",
     "require_cuda_available",

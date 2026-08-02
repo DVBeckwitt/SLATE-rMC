@@ -54,11 +54,15 @@ class EwaldLatentGeometry:
         }
         q_sample = readonly_float_array(self.q_sample_Ainv, (*shape, 3), "q_sample_Ainv")
         kf_sample = readonly_float_array(self.kf_sample_Ainv, (*shape, 3), "kf_sample_Ainv")
-        supplied_status = np.asarray(self.status)
+        supplied_status = np.asarray(self.status, dtype="U32")
         if supplied_status.shape != shape:
             raise ValueError(f"status must have shape {shape}")
-        status = np.asarray([RootStatus(item).value for item in supplied_status.flat], dtype="U32")
-        status = status.reshape(shape)
+        allowed_status = np.asarray(tuple(item.value for item in RootStatus), dtype="U32")
+        recognized = np.isin(supplied_status, allowed_status)
+        if not np.all(recognized):
+            invalid = np.unique(supplied_status[~recognized]).tolist()
+            raise ValueError(f"status contains unsupported values: {invalid}")
+        status = np.array(supplied_status, dtype="U32", copy=True, order="C")
         valid = status == RootStatus.REGULAR
         if np.any(validated["ewald_residual_Ainv"] < 0.0):
             raise ValueError("ewald_residual_Ainv must be nonnegative")

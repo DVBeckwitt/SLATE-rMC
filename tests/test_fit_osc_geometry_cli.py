@@ -62,7 +62,38 @@ def test_fit_cli_forwards_active_complement_and_rejects_all_frozen(
     assert len(calls) == 1
 
 
-def test_bi2se3_qualification_requires_zero_gauge_and_legacy_delta_bounds(
+def test_fit_cli_persists_the_raw_position_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_fit_cli()
+    payload = {
+        "schema": "rasim-osc-geometry-fit-result-v6",
+        "qualification": {"requested": False, "accepted": False},
+        "run_completed": True,
+    }
+    monkeypatch.setattr(module, "fit_osc_geometry_series", lambda *_args, **_options: payload)
+    destination = tmp_path / "position.json"
+
+    assert (
+        module.main(
+            [
+                "series.yaml",
+                "--fit-incidence-angle-delta",
+                "--json",
+                "--destination",
+                str(destination),
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == payload
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+def test_bi2se3_qualification_requires_zero_gauge_common_delta_and_trim_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_fit_cli()
@@ -85,12 +116,22 @@ def test_bi2se3_qualification_requires_zero_gauge_and_legacy_delta_bounds(
             "series.yaml",
             fitted_parameter_names=fitted,
             fit_incidence_angle_delta=True,
+            fit_incidence_angle_trim=True,
             initial=nonzero_gauge,
         )
-    with pytest.raises(ValueError, match=r"exactly \+/-0\.5 degrees"):
+    with pytest.raises(ValueError, match="qualified bounds/prior"):
         module.fit_osc_geometry_series(
             "series.yaml",
             fitted_parameter_names=fitted,
             fit_incidence_angle_delta=True,
+            fit_incidence_angle_trim=True,
             incidence_angle_delta_half_span_deg=0.4,
+        )
+    with pytest.raises(ValueError, match="qualified bounds/prior"):
+        module.fit_osc_geometry_series(
+            "series.yaml",
+            fitted_parameter_names=fitted,
+            fit_incidence_angle_delta=True,
+            fit_incidence_angle_trim=True,
+            incidence_angle_trim_prior_sigma_deg=0.2,
         )

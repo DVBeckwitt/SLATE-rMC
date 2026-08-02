@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -41,6 +42,7 @@ FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
 
 INCIDENCE_ANGLE_DELTA_PARAMETER_NAME = "incidence_angle_delta_rad"
+INCIDENCE_ANGLE_TRIM_PARAMETER_PREFIX = "incidence_angle_trim_helmert"
 SHARED_GEOMETRY_PARAMETER_NAMES = (
     "detector_column_tilt_rad",
     "detector_row_tilt_rad",
@@ -72,6 +74,40 @@ _OPTIMIZER_SCALE = (
 )
 _INCIDENCE_ANGLE_DELTA_RANK_STEP_RAD = 1.0e-5
 _INCIDENCE_ANGLE_DELTA_OPTIMIZER_SCALE_RAD = math.radians(0.5)
+_INCIDENCE_ANGLE_TRIM_RANK_STEP_RAD = 1.0e-5
+
+
+def zero_sum_helmert_basis(image_count: int) -> FloatArray:
+    """Return a deterministic orthonormal basis for zero-sum image offsets."""
+
+    if isinstance(image_count, bool) or not isinstance(image_count, int) or image_count < 2:
+        raise ValueError("image_count must be an integer of at least two")
+    basis = np.zeros((image_count, image_count - 1), dtype=np.float64)
+    for column in range(image_count - 1):
+        denominator = math.sqrt((column + 1) * (column + 2))
+        basis[: column + 1, column] = 1.0 / denominator
+        basis[column + 1, column] = -(column + 1) / denominator
+    basis.setflags(write=False)
+    return basis
+
+
+def _canonical_incidence_angle_trims(
+    images: tuple[IndexedGeometryImage, ...],
+    value: Mapping[str, float] | None,
+) -> dict[str, float]:
+    image_ids = tuple(image.image_id for image in images)
+    if value is None:
+        return dict.fromkeys(image_ids, 0.0)
+    if not isinstance(value, Mapping):
+        raise TypeError("incidence_angle_trim_by_image_id_rad must be a mapping")
+    if set(value) != set(image_ids):
+        raise ValueError("incidence-angle trims must match the canonical image IDs exactly")
+    trims = {image_id: float(value[image_id]) for image_id in image_ids}
+    if any(not math.isfinite(trim) for trim in trims.values()):
+        raise ValueError("incidence-angle trims must be finite")
+    if not math.isclose(math.fsum(trims.values()), 0.0, rel_tol=0.0, abs_tol=1.0e-14):
+        raise ValueError("incidence-angle trims must sum to zero")
+    return trims
 
 
 def _canonical_fitted_parameter_names(
@@ -408,17 +444,23 @@ class IndexedGeometryImage:
         corrections: SharedGeometryCorrections,
         *,
         incidence_angle_delta_rad: float = 0.0,
+        incidence_angle_trim_rad: float = 0.0,
     ) -> CompiledInstrument:
         delta = float(incidence_angle_delta_rad)
         if not math.isfinite(delta):
             raise ValueError("incidence_angle_delta_rad must be finite")
+        trim = float(incidence_angle_trim_rad)
+        if not math.isfinite(trim):
+            raise ValueError("incidence_angle_trim_rad must be finite")
         config = self.model.inputs.config
         axis = config.instrument.axis_rotations[0]
         shifted_config = replace(
             config,
             instrument=replace(
                 config.instrument,
-                axis_rotations=(replace(axis, angle_deg=axis.angle_deg + math.degrees(delta)),),
+                axis_rotations=(
+                    replace(axis, angle_deg=axis.angle_deg + math.degrees(delta + trim)),
+                ),
             ),
         )
         shifted_inputs = rebind_configured_geometry_instrument(
@@ -437,12 +479,14 @@ class IndexedGeometryImage:
         corrections: SharedGeometryCorrections,
         *,
         incidence_angle_delta_rad: float = 0.0,
+        incidence_angle_trim_rad: float = 0.0,
     ) -> IntegerLMarkerPrediction:
         return self.model.predict_integer_l_tags(
             keys,
             instrument=self.corrected_instrument(
                 corrections,
                 incidence_angle_delta_rad=incidence_angle_delta_rad,
+                incidence_angle_trim_rad=incidence_angle_trim_rad,
             ),
         )
 
@@ -493,18 +537,21 @@ def evaluate_indexed_geometry_series_residual(
     corrections: SharedGeometryCorrections,
     *,
     incidence_angle_delta_rad: float = 0.0,
+    incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> FloatArray:
     """Concatenate canonical per-image detector-native residual blocks."""
 
     if not isinstance(corrections, SharedGeometryCorrections):
         raise TypeError("corrections must be SharedGeometryCorrections")
     ordered = _canonical_images(images)
+    trims = _canonical_incidence_angle_trims(ordered, incidence_angle_trim_by_image_id_rad)
     blocks = []
     for image in ordered:
         prediction = image.predict_integer_l_tags(
             image.observations.keys,
             corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
+            incidence_angle_trim_rad=trims[image.image_id],
         )
         blocks.append(evaluate_tagged_geometry_objective_residual(image.observations, prediction))
     residual = np.concatenate(blocks)
@@ -558,11 +605,28 @@ class IndexedGeometryFitResult:
     parameterization_id: str = _PARAMETERIZATION_ID
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES
     fixed_parameter_names: tuple[str, ...] = ()
+    incidence_angle_trim_contrast_rad: FloatArray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float64)
+    )
+    incidence_angle_trim_by_image_id_rad: FloatArray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float64)
+    )
+    incidence_angle_trim_fitted: bool = False
+    incidence_angle_trim_prior_sigma_rad: float | None = None
+    incidence_angle_trim_contrast_half_span_rad: float | None = None
+    posterior_jacobian_rank: int | None = None
+    posterior_jacobian_condition: float | None = None
 
     @property
     def jacobian_parameter_names(self) -> tuple[str, ...]:
-        return self.fitted_parameter_names + (
-            (INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,) if self.incidence_angle_delta_fitted else ()
+        trim_names = tuple(
+            f"{INCIDENCE_ANGLE_TRIM_PARAMETER_PREFIX}_{index + 1}_rad"
+            for index in range(len(self.incidence_angle_trim_contrast_rad))
+        )
+        return (
+            self.fitted_parameter_names
+            + ((INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,) if self.incidence_angle_delta_fitted else ())
+            + trim_names
         )
 
     def __post_init__(self) -> None:
@@ -574,6 +638,8 @@ class IndexedGeometryFitResult:
             raise ValueError("message must be nonempty")
         if not isinstance(self.incidence_angle_delta_fitted, bool):
             raise TypeError("incidence_angle_delta_fitted must be bool")
+        if not isinstance(self.incidence_angle_trim_fitted, bool):
+            raise TypeError("incidence_angle_trim_fitted must be bool")
         incidence_delta = float(self.incidence_angle_delta_rad)
         if not math.isfinite(incidence_delta):
             raise ValueError("incidence_angle_delta_rad must be finite")
@@ -588,7 +654,31 @@ class IndexedGeometryFitResult:
             raise ValueError("fitted_parameter_names must use canonical parameter order")
         if tuple(self.fixed_parameter_names) != fixed_names:
             raise ValueError("fixed_parameter_names must be the canonical fitted complement")
-        fitted_count = len(fitted_names) + int(self.incidence_angle_delta_fitted)
+        contrast = np.asarray(self.incidence_angle_trim_contrast_rad, dtype=np.float64)
+        trims = np.asarray(self.incidence_angle_trim_by_image_id_rad, dtype=np.float64)
+        expected_contrast_count = len(self.image_ids) - 1 if self.incidence_angle_trim_fitted else 0
+        if contrast.shape != (expected_contrast_count,) or not np.all(np.isfinite(contrast)):
+            raise ValueError("incidence-angle trim contrasts have the wrong shape or values")
+        if trims.shape != (len(self.image_ids),) or not np.all(np.isfinite(trims)):
+            raise ValueError("incidence-angle image trims have the wrong shape or values")
+        if not math.isclose(float(np.sum(trims)), 0.0, rel_tol=0.0, abs_tol=1.0e-14):
+            raise ValueError("incidence-angle image trims must sum to zero")
+        if not self.incidence_angle_trim_fitted and np.any(trims != 0.0):
+            raise ValueError("unfitted incidence-angle trims must be zero")
+        contrast.setflags(write=False)
+        trims.setflags(write=False)
+        trim_prior = self.incidence_angle_trim_prior_sigma_rad
+        trim_half_span = self.incidence_angle_trim_contrast_half_span_rad
+        if self.incidence_angle_trim_fitted:
+            if trim_prior is None or not math.isfinite(trim_prior) or trim_prior <= 0.0:
+                raise ValueError("a fitted incidence-angle trim requires a positive prior sigma")
+            if trim_half_span is None or not math.isfinite(trim_half_span) or trim_half_span <= 0.0:
+                raise ValueError("a fitted incidence-angle trim requires a positive half-span")
+        elif trim_prior is not None or trim_half_span is not None:
+            raise ValueError("unfitted incidence-angle trims cannot declare controls")
+        fitted_count = (
+            len(fitted_names) + int(self.incidence_angle_delta_fitted) + expected_contrast_count
+        )
         if not self.image_ids or len(set(self.image_ids)) != len(self.image_ids):
             raise ValueError("image_ids must contain unique nonempty IDs")
         if any(not isinstance(value, str) or not value for value in self.image_ids):
@@ -649,9 +739,34 @@ class IndexedGeometryFitResult:
             or self.jacobian_condition > _MAXIMUM_JACOBIAN_CONDITION
         ):
             raise ValueError("a successful fit must have a full acceptable Jacobian")
+        posterior_rank = self.posterior_jacobian_rank
+        posterior_condition = self.posterior_jacobian_condition
+        if posterior_rank is None:
+            posterior_rank = self.jacobian_rank
+        if posterior_condition is None:
+            posterior_condition = condition
+        if (
+            isinstance(posterior_rank, bool)
+            or not isinstance(posterior_rank, int)
+            or not 0 <= posterior_rank <= fitted_count
+        ):
+            raise ValueError("posterior_jacobian_rank is invalid")
+        posterior_condition = float(posterior_condition)
+        if not math.isfinite(posterior_condition) or posterior_condition < 1.0:
+            raise ValueError("posterior_jacobian_condition must be finite and at least one")
         object.__setattr__(self, "fitted_parameter_names", fitted_names)
         object.__setattr__(self, "fixed_parameter_names", fixed_names)
         object.__setattr__(self, "incidence_angle_delta_rad", incidence_delta)
+        object.__setattr__(self, "incidence_angle_trim_contrast_rad", contrast)
+        object.__setattr__(self, "incidence_angle_trim_by_image_id_rad", trims)
+        object.__setattr__(self, "incidence_angle_trim_prior_sigma_rad", trim_prior)
+        object.__setattr__(
+            self,
+            "incidence_angle_trim_contrast_half_span_rad",
+            trim_half_span,
+        )
+        object.__setattr__(self, "posterior_jacobian_rank", posterior_rank)
+        object.__setattr__(self, "posterior_jacobian_condition", posterior_condition)
         object.__setattr__(self, "scaled_jacobian_singular_values", singular)
         object.__setattr__(self, "scaled_jacobian_weakest_direction", weakest)
         object.__setattr__(self, "active_bounds", active)
@@ -719,12 +834,14 @@ def audit_indexed_geometry_series_roots(
     corrections: SharedGeometryCorrections,
     *,
     incidence_angle_delta_rad: float = 0.0,
+    incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> IndexedGeometrySeriesRootAudit:
     """Audit every frozen root through the independent continuous-surface solver."""
 
     if not isinstance(corrections, SharedGeometryCorrections):
         raise TypeError("corrections must be SharedGeometryCorrections")
     ordered = _canonical_images(images)
+    trims = _canonical_incidence_angle_trims(ordered, incidence_angle_trim_by_image_id_rad)
     audits = tuple(
         IndexedGeometryRootAuditImage(
             image_id=image.image_id,
@@ -734,6 +851,7 @@ def audit_indexed_geometry_series_roots(
                 instrument=image.corrected_instrument(
                     corrections,
                     incidence_angle_delta_rad=incidence_angle_delta_rad,
+                    incidence_angle_trim_rad=trims[image.image_id],
                 ),
             ),
         )
@@ -751,15 +869,18 @@ def _fit_metrics(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
     incidence_angle_delta_rad: float,
+    incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> tuple[tuple[IndexedGeometryImageMetrics, ...], FloatArray, FloatArray]:
     per_image: list[IndexedGeometryImageMetrics] = []
     all_site_error: list[FloatArray] = []
     all_chord_angle: list[FloatArray] = []
+    trims = _canonical_incidence_angle_trims(images, incidence_angle_trim_by_image_id_rad)
     for image in images:
         prediction = image.predict_integer_l_tags(
             image.observations.keys,
             corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
+            incidence_angle_trim_rad=trims[image.image_id],
         )
         if not np.all(prediction.active_panel):
             raise GeometryPredictionError(
@@ -798,6 +919,7 @@ def evaluate_indexed_geometry_series_metrics(
     corrections: SharedGeometryCorrections,
     *,
     incidence_angle_delta_rad: float = 0.0,
+    incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> IndexedGeometrySeriesMetrics:
     """Report raw detector-pixel and chord metrics without optimizing."""
 
@@ -806,6 +928,7 @@ def evaluate_indexed_geometry_series_metrics(
         ordered,
         corrections,
         incidence_angle_delta_rad,
+        incidence_angle_trim_by_image_id_rad,
     )
     return IndexedGeometrySeriesMetrics(
         image_ids=tuple(image.image_id for image in ordered),
@@ -824,8 +947,11 @@ def fit_indexed_geometry_series(
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
     initial_incidence_angle_delta_rad: float = 0.0,
     incidence_angle_delta_bounds: IncidenceAngleDeltaBounds | None = None,
+    initial_incidence_angle_trim_contrast_rad: ArrayLike | None = None,
+    incidence_angle_trim_contrast_half_span_rad: float | None = None,
+    incidence_angle_trim_prior_sigma_rad: float | None = None,
 ) -> IndexedGeometryFitResult:
-    """Fit selected shared coordinates and an optional common incidence delta."""
+    """Fit shared geometry, a common incidence delta, and optional zero-sum trims."""
 
     ordered = _canonical_images(images)
     if not isinstance(initial, SharedGeometryCorrections):
@@ -833,9 +959,19 @@ def fit_indexed_geometry_series(
     if not isinstance(bounds, SharedGeometryCorrectionBounds):
         raise TypeError("bounds must be SharedGeometryCorrectionBounds")
     incidence_delta_fitted = incidence_angle_delta_bounds is not None
+    trim_fitted = (
+        incidence_angle_trim_contrast_half_span_rad is not None
+        or incidence_angle_trim_prior_sigma_rad is not None
+        or initial_incidence_angle_trim_contrast_rad is not None
+    )
+    if trim_fitted and (
+        incidence_angle_trim_contrast_half_span_rad is None
+        or incidence_angle_trim_prior_sigma_rad is None
+    ):
+        raise ValueError("incidence-angle trims require both a contrast half-span and prior sigma")
     fitted_names = _canonical_fitted_parameter_names(
         fitted_parameter_names,
-        allow_empty=incidence_delta_fitted,
+        allow_empty=incidence_delta_fitted or trim_fitted,
     )
     if incidence_delta_fitted and "sample_normal_x_tilt_rad" in fitted_names:
         raise ValueError(
@@ -864,20 +1000,80 @@ def fit_indexed_geometry_series(
         ):
             raise ValueError("initial incidence-angle delta must lie inside its bounds")
 
+    image_ids = tuple(image.image_id for image in ordered)
+    trim_basis = (
+        zero_sum_helmert_basis(len(ordered)) if trim_fitted else np.empty((len(ordered), 0))
+    )
+    trim_count = trim_basis.shape[1]
+    if trim_fitted:
+        trim_half_span = float(incidence_angle_trim_contrast_half_span_rad)
+        trim_prior_sigma = float(incidence_angle_trim_prior_sigma_rad)
+        if not math.isfinite(trim_half_span) or trim_half_span <= 0.0:
+            raise ValueError("incidence-angle trim contrast half-span must be positive and finite")
+        if not math.isfinite(trim_prior_sigma) or trim_prior_sigma <= 0.0:
+            raise ValueError("incidence-angle trim prior sigma must be positive and finite")
+        initial_trim_contrast = (
+            np.zeros(trim_count, dtype=np.float64)
+            if initial_incidence_angle_trim_contrast_rad is None
+            else np.asarray(initial_incidence_angle_trim_contrast_rad, dtype=np.float64)
+        )
+        if initial_trim_contrast.shape != (trim_count,) or not np.all(
+            np.isfinite(initial_trim_contrast)
+        ):
+            raise ValueError("initial incidence-angle trim contrasts have the wrong shape")
+        if np.any(np.abs(initial_trim_contrast) > trim_half_span):
+            raise ValueError("initial incidence-angle trim contrasts lie outside the bounds")
+    else:
+        trim_half_span = None
+        trim_prior_sigma = None
+        initial_trim_contrast = np.empty(0, dtype=np.float64)
+
     model_evaluation_count = 0
 
-    def residual(value: FloatArray) -> FloatArray:
+    shared_value_count = len(fitted_indices)
+    delta_index = shared_value_count if incidence_delta_fitted else None
+    trim_start = shared_value_count + int(incidence_delta_fitted)
+
+    def unpack(
+        value: FloatArray,
+    ) -> tuple[SharedGeometryCorrections, float, FloatArray, dict[str, float]]:
+        full_value = np.array(initial_values, copy=True)
+        full_value[fitted_indices] = value[:shared_value_count]
+        incidence_delta = (
+            float(value[delta_index]) if delta_index is not None else initial_incidence_delta
+        )
+        contrast = (
+            np.asarray(value[trim_start:], dtype=np.float64)
+            if trim_fitted
+            else initial_trim_contrast
+        )
+        trim_values = trim_basis @ contrast if trim_fitted else np.zeros(len(ordered))
+        trim_by_id = {
+            image_id: float(trim_values[index]) for index, image_id in enumerate(image_ids)
+        }
+        return (
+            SharedGeometryCorrections.from_array(full_value),
+            incidence_delta,
+            contrast,
+            trim_by_id,
+        )
+
+    def data_residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
-        full_value = np.array(initial_values, copy=True)
-        shared_value_count = len(fitted_indices)
-        full_value[fitted_indices] = value[:shared_value_count]
-        incidence_delta = float(value[-1]) if incidence_delta_fitted else initial_incidence_delta
+        corrections, incidence_delta, _, trim_by_id = unpack(value)
         return evaluate_indexed_geometry_series_residual(
             ordered,
-            SharedGeometryCorrections.from_array(full_value),
+            corrections,
             incidence_angle_delta_rad=incidence_delta,
+            incidence_angle_trim_by_image_id_rad=trim_by_id,
         )
+
+    def optimizer_residual(value: FloatArray) -> FloatArray:
+        measured = data_residual(value)
+        if not trim_fitted:
+            return measured
+        return np.concatenate((measured, value[trim_start:] / trim_prior_sigma))
 
     fitted_lower = lower[fitted_indices]
     fitted_upper = upper[fitted_indices]
@@ -901,14 +1097,27 @@ def fit_indexed_geometry_series(
             fitted_optimizer_scale,
             _INCIDENCE_ANGLE_DELTA_OPTIMIZER_SCALE_RAD,
         )
+    if trim_fitted:
+        fitted_lower = np.append(fitted_lower, np.full(trim_count, -trim_half_span))
+        fitted_upper = np.append(fitted_upper, np.full(trim_count, trim_half_span))
+        fitted_initial = np.append(fitted_initial, initial_trim_contrast)
+        fitted_half_span = np.append(fitted_half_span, np.full(trim_count, trim_half_span))
+        fitted_rank_step = np.append(
+            fitted_rank_step,
+            np.full(trim_count, _INCIDENCE_ANGLE_TRIM_RANK_STEP_RAD),
+        )
+        fitted_optimizer_scale = np.append(
+            fitted_optimizer_scale,
+            np.full(trim_count, trim_prior_sigma),
+        )
     preflight = _finite_difference_jacobian(
-        residual,
+        data_residual,
         fitted_initial,
         fitted_lower,
         fitted_upper,
         step_size=fitted_rank_step,
     )
-    fitted_count = len(fitted_names) + int(incidence_delta_fitted)
+    fitted_count = len(fitted_names) + int(incidence_delta_fitted) + trim_count
     rank, condition, _ = _rank_diagnostics(preflight, fitted_half_span)
     if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
@@ -918,7 +1127,7 @@ def fit_indexed_geometry_series(
         )
 
     optimized = least_squares(
-        residual,
+        optimizer_residual,
         fitted_initial,
         bounds=(fitted_lower, fitted_upper),
         method="trf",
@@ -929,20 +1138,23 @@ def fit_indexed_geometry_series(
         gtol=1.0e-12,
         max_nfev=150,
     )
-    fitted_values = np.array(initial_values, copy=True)
-    shared_value_count = len(fitted_indices)
-    fitted_values[fitted_indices] = optimized.x[:shared_value_count]
-    incidence_angle_delta_rad = (
-        float(optimized.x[-1]) if incidence_delta_fitted else initial_incidence_delta
-    )
-    corrections = SharedGeometryCorrections.from_array(fitted_values)
+    corrections, incidence_angle_delta_rad, trim_contrast, trim_by_id = unpack(optimized.x)
+    trim_values = np.asarray(tuple(trim_by_id[image_id] for image_id in image_ids))
     per_image, site_error, chord_angle = _fit_metrics(
         ordered,
         corrections,
         incidence_angle_delta_rad,
+        trim_by_id,
+    )
+    fitted_data_jacobian = _finite_difference_jacobian(
+        data_residual,
+        np.asarray(optimized.x, dtype=np.float64),
+        fitted_lower,
+        fitted_upper,
+        step_size=fitted_rank_step,
     )
     rank, condition, singular = _rank_diagnostics(
-        np.asarray(optimized.jac, dtype=np.float64),
+        fitted_data_jacobian,
         fitted_half_span,
     )
     if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
@@ -951,7 +1163,11 @@ def fit_indexed_geometry_series(
             f"rank={rank}/{fitted_count}, "
             f"condition={condition:.6g}"
         )
-    scaled_jacobian = np.asarray(optimized.jac, dtype=np.float64) * fitted_half_span[None, :]
+    posterior_rank, posterior_condition, _ = _rank_diagnostics(
+        np.asarray(optimized.jac, dtype=np.float64),
+        fitted_half_span,
+    )
+    scaled_jacobian = fitted_data_jacobian * fitted_half_span[None, :]
     weakest = np.linalg.svd(scaled_jacobian, full_matrices=False)[2][-1]
     largest_component = int(np.argmax(np.abs(weakest)))
     if weakest[largest_component] < 0.0:
@@ -967,6 +1183,13 @@ def fit_indexed_geometry_series(
         corrections=corrections,
         incidence_angle_delta_rad=incidence_angle_delta_rad,
         incidence_angle_delta_fitted=incidence_delta_fitted,
+        incidence_angle_trim_contrast_rad=np.array(trim_contrast, copy=True),
+        incidence_angle_trim_by_image_id_rad=np.array(trim_values, copy=True),
+        incidence_angle_trim_fitted=trim_fitted,
+        incidence_angle_trim_prior_sigma_rad=trim_prior_sigma,
+        incidence_angle_trim_contrast_half_span_rad=trim_half_span,
+        posterior_jacobian_rank=posterior_rank,
+        posterior_jacobian_condition=posterior_condition,
         success=bool(optimized.success),
         message=str(optimized.message),
         fitted_parameter_names=fitted_names,
