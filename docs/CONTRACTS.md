@@ -757,6 +757,10 @@ verified raw OSC over the declared continuous chart regions.
 
 `MatchedRegionObservations` contains projected count mass, continuous detector-area support, full
 projected count covariance, background coordinate, dataset ID, family, and complete-block identity.
+A recipe may bind one acquisition dark OSC and nonnegative exposure scale. Raw and dark are
+projected through identical continuous regions before signed subtraction; neither the corrected
+data nor the conditioned background correction is clipped. Reuse of one dark exposure across OSCs
+is represented in the joint covariance rather than treated as independent noise.
 A separate `RadialBackgroundState` is calibrated from background-only radial-by-azimuth detector
 cells, with held-out azimuth sectors, and frozen before structure fitting. Calibration excludes
 every pixel touched by the oracle continuous-region projection and binds the exact fit plan,
@@ -768,6 +772,12 @@ objective, whose covariance includes the shared background-parameter covariance.
 admissible only when its diagnostic, background artifact, and every
 predecessor hash match. No family scale, smoothed-data model, simulated raster, or bin-center
 structure-factor substitution is permitted.
+
+After adjacent-anchor conditioning, `IntegratedPeakAreaProjection` applies one fixed aggregation
+matrix `G` to the measured mass, continuous model, and full covariance. Every signal row belongs to
+exactly one peak, and no peak crosses a dataset or family. Row partitioning therefore cannot change
+the fitted peak mass. The configured detector model also applies the event-wise unpolarized Thomson
+factor `(1 + (ki_hat_air dot kf_hat_air)^2)/2` exactly once, from external-air directions.
 
 The layered Bi2X3 adapter declares five coordinates in one immutable fit plan:
 `bi_delta_z_fractional`, `outer_chalcogen_delta_z_fractional`, `outer_bi_antisite_fraction`,

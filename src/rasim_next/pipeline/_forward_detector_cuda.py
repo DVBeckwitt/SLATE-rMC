@@ -138,6 +138,7 @@ def _pack_forward_geometry(
                 float(state.stacking_parent_code),
                 state.intensity_envelope_u_radial_A2,
                 state.intensity_envelope_u_normal_A2,
+                float(state.polarization_model_code),
             )
             for state in states
         ],
@@ -231,6 +232,28 @@ def _forward_root_pixel(
     direction_sample_x = kf_film_x / air_k0_Ainv
     direction_sample_y = kf_film_y / air_k0_Ainv
     direction_sample_z = kf_air_z / air_k0_Ainv
+    scattering_polarization = 1.0
+    if int(state_real[state_index, 17]) == 1:
+        incident_normal_squared = (
+            air_k0_Ainv * air_k0_Ainv
+            - ki_film_sample_Ainv[state_index, 0] ** 2
+            - ki_film_sample_Ainv[state_index, 1] ** 2
+        )
+        if incident_normal_squared < 0.0:
+            incident_normal_squared = 0.0
+        incident_normal = math.sqrt(incident_normal_squared)
+        if ki_film_sample_Ainv[state_index, 2] < 0.0:
+            incident_normal = -incident_normal
+        cosine = (
+            ki_film_sample_Ainv[state_index, 0] * direction_sample_x
+            + ki_film_sample_Ainv[state_index, 1] * direction_sample_y
+            + incident_normal * direction_sample_z
+        ) / air_k0_Ainv
+        if cosine < -1.0:
+            cosine = -1.0
+        elif cosine > 1.0:
+            cosine = 1.0
+        scattering_polarization = 0.5 * (1.0 + cosine * cosine)
     direction_column_per_m = (
         detector_column_row_covectors_sample_per_m[0, 0] * direction_sample_x
         + detector_column_row_covectors_sample_per_m[0, 1] * direction_sample_y
@@ -312,6 +335,7 @@ def _forward_root_pixel(
         * strength
         * coarea_jacobian
         * optical_weight
+        * scattering_polarization
         * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -290,7 +291,29 @@ class NativePixelRegionProjection:
             or np.any(counts < 0.0)
         ):
             raise ValueError("detector_native_counts must be a finite nonnegative native image")
-        selected_count = counts.reshape(-1)[self.flat_pixel_index]
+        return self.integrate_field(counts, np.maximum(counts, COUNT_VARIANCE_FLOOR_COUNT))
+
+    def integrate_field(
+        self,
+        detector_native_value: ArrayLike,
+        detector_native_variance: ArrayLike,
+    ) -> tuple[FloatArray, FloatArray]:
+        """Project a signed native field with an explicit independent-pixel variance."""
+
+        value = _float_array(
+            detector_native_value,
+            self.detector_shape_rc,
+            "detector_native_value",
+        )
+        variance = _float_array(
+            detector_native_variance,
+            self.detector_shape_rc,
+            "detector_native_variance",
+        )
+        if np.any(variance < 0.0):
+            raise ValueError("detector_native_variance must be nonnegative")
+        selected_value = value.reshape(-1)[self.flat_pixel_index]
+        selected_variance = variance.reshape(-1)[self.flat_pixel_index]
         projector = csr_matrix(
             (
                 self.detector_area_weight_px2,
@@ -298,14 +321,67 @@ class NativePixelRegionProjection:
             ),
             shape=(self.observation_count, self.flat_pixel_index.size),
         )
-        mass = np.asarray(projector @ selected_count, dtype=np.float64)
-        root_variance = np.sqrt(np.maximum(selected_count, COUNT_VARIANCE_FLOOR_COUNT))
+        mass = np.asarray(projector @ selected_value, dtype=np.float64)
+        root_variance = np.sqrt(selected_variance)
         weighted = projector.multiply(root_variance[None, :])
         covariance = np.asarray((weighted @ weighted.T).toarray(), dtype=np.float64)
         covariance = 0.5 * (covariance + covariance.T)
         mass.setflags(write=False)
         covariance.setflags(write=False)
         return mass, covariance
+
+
+def integrate_shared_native_pixel_field(
+    projections: Sequence[NativePixelRegionProjection],
+    detector_native_value: ArrayLike,
+    detector_native_variance: ArrayLike,
+) -> tuple[FloatArray, FloatArray]:
+    """Project one shared native field and retain cross-projection covariance."""
+
+    selected = tuple(projections)
+    if not selected or any(not isinstance(value, NativePixelRegionProjection) for value in selected):
+        raise ValueError("projections must contain at least one native-pixel projection")
+    detector_shape = selected[0].detector_shape_rc
+    if any(value.detector_shape_rc != detector_shape for value in selected[1:]):
+        raise ValueError("shared-field projections must use one detector shape")
+    value = _float_array(detector_native_value, detector_shape, "detector_native_value")
+    variance = _float_array(
+        detector_native_variance,
+        detector_shape,
+        "detector_native_variance",
+    )
+    if np.any(variance < 0.0):
+        raise ValueError("detector_native_variance must be nonnegative")
+
+    shared_flat_pixel = np.unique(
+        np.concatenate([np.asarray(projection.flat_pixel_index) for projection in selected])
+    )
+    observation_offset = 0
+    observation_rows: list[IntArray] = []
+    pixel_columns: list[IntArray] = []
+    weights: list[FloatArray] = []
+    for projection in selected:
+        local_to_shared = np.searchsorted(shared_flat_pixel, projection.flat_pixel_index)
+        observation_rows.append(np.asarray(projection.observation_row) + observation_offset)
+        pixel_columns.append(local_to_shared[np.asarray(projection.pixel_column_index)])
+        weights.append(np.asarray(projection.detector_area_weight_px2))
+        observation_offset += projection.observation_count
+    projector = csr_matrix(
+        (
+            np.concatenate(weights),
+            (np.concatenate(observation_rows), np.concatenate(pixel_columns)),
+        ),
+        shape=(observation_offset, shared_flat_pixel.size),
+    )
+    flat_value = value.reshape(-1)[shared_flat_pixel]
+    flat_variance = variance.reshape(-1)[shared_flat_pixel]
+    mass = np.asarray(projector @ flat_value, dtype=np.float64)
+    weighted = projector.multiply(np.sqrt(flat_variance)[None, :])
+    covariance = np.asarray((weighted @ weighted.T).toarray(), dtype=np.float64)
+    covariance = 0.5 * (covariance + covariance.T)
+    mass.setflags(write=False)
+    covariance.setflags(write=False)
+    return mass, covariance
 
 
 def compile_native_pixel_region_projection(

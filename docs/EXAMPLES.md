@@ -668,10 +668,17 @@ uv run --frozen python scripts/fit_layered_quintuple_regions.py prepare `
   --destination C:\external\bi2se3-figure7\matched_regions.ra_diag.npz
 ```
 
+The recipe binds `darkImg.osc.gz` at scale one. Preparation verifies both its file hash and decoded
+native-array hash, projects raw and dark through identical regions, and preserves signed corrected
+counts with their shared-dark covariance. The configured Bi2X3 detector paths apply the
+unpolarized/unanalysed Thomson factor event by event.
+
 `m=0` rows are selected and binned in phi/2theta. Nonzero families use signed detector side and
 `Qr/L`. The measured image remains pixels, but every candidate model is integrated directly over
 the corresponding continuous chart region. Fit one structure vector jointly to all retained peaks
-and all three OSCs; one scale per OSC is shared by every family in that image.
+and all three OSCs; one scale per OSC is shared by every family in that image. Rows are first
+conditioned by their two adjacent anchors and then summed into declared trusted integrated peak
+areas before full-covariance whitening.
 
 The fixed structural state is a 52-layer, fault-free R-centered three-registry parent with no
 4H/6H population and no stacking-disorder fit. The `3R` implementation name expresses the native

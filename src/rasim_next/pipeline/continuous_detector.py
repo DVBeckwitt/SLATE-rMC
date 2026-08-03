@@ -22,6 +22,10 @@ from painted_ewald import (
 from painted_ewald.rotations import mosaic_axes
 from painted_ewald.validation import positive_integer
 from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.scattering import (
+    polarization_model_code,
+    scattering_polarization_weight,
+)
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.detector import (
     _DETECTOR_INCIDENCE_COSINE_TOL,
@@ -724,6 +728,7 @@ class DetectorLatentIntensity:
     optical_weight: FloatArray
     coating_intensity_density_A2_rad2_inv: FloatArray
     event_intensity_envelope: FloatArray
+    scattering_polarization_weight: FloatArray
     source_phase_weight: float
     postoptical_density_A2_rad2_inv: FloatArray
 
@@ -750,6 +755,11 @@ class DetectorLatentIntensity:
                 shape,
                 "event_intensity_envelope",
             ),
+            "scattering_polarization_weight": _float_array(
+                self.scattering_polarization_weight,
+                shape,
+                "scattering_polarization_weight",
+            ),
             "postoptical_density_A2_rad2_inv": _float_array(
                 self.postoptical_density_A2_rad2_inv,
                 shape,
@@ -764,6 +774,7 @@ class DetectorLatentIntensity:
         expected = (
             arrays["coating_intensity_density_A2_rad2_inv"]
             * arrays["event_intensity_envelope"]
+            * arrays["scattering_polarization_weight"]
             * arrays["optical_weight"]
             * source_phase_weight
         )
@@ -1427,6 +1438,9 @@ def _compile_detector_state(
         incident_decay_Ainv=incident_decay,
         film_thickness_A=instrument.film_thickness_A,
         source_phase_weight=source_phase_weight,
+        polarization_model_code=polarization_model_code(
+            states.polarization_state_id[state_index]
+        ),
         sample_from_local=np.ascontiguousarray(sample_from_local),
         rod_hk_population=rod_hk_population,
         rod_parallel_local_Ainv=rod_parallel_local,
@@ -1469,6 +1483,7 @@ class DetectorEwaldMeasure:
         "_instrument",
         "_intensity_envelope",
         "_material",
+        "_polarization_model_id",
         "_rod_catalog_revision",
         "_source_phase_weight",
     )
@@ -1510,6 +1525,11 @@ class DetectorEwaldMeasure:
             raise ValueError("DetectorEwaldMeasure requires exactly one incident state")
         if not states.valid[0]:
             raise ValueError("the incident state must be valid")
+        polarization_ids = set(states.polarization_state_id)
+        if len(polarization_ids) != 1:
+            raise ValueError("one detector measure requires one polarization model")
+        polarization_model_id = next(iter(polarization_ids))
+        polarization_model_code(polarization_model_id)
         phase_weight = float(phase_population_weight)
         polarization = float(polarization_weight)
         if not isfinite(phase_weight) or phase_weight < 0.0:
@@ -1544,6 +1564,7 @@ class DetectorEwaldMeasure:
         object.__setattr__(self, "_coating", coating)
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_material", material)
+        object.__setattr__(self, "_polarization_model_id", polarization_model_id)
         object.__setattr__(self, "_instrument", instrument)
         object.__setattr__(self, "_intensity_envelope", envelope)
         object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
@@ -1593,6 +1614,21 @@ class DetectorEwaldMeasure:
             instrument=self._instrument,
         )
 
+    def _event_scattering_polarization(
+        self,
+        kf_air_sample_Ainv: FloatArray,
+        valid: BoolArray,
+    ) -> FloatArray:
+        result = np.zeros(valid.shape, dtype=np.float64)
+        if np.any(valid):
+            result[valid] = scattering_polarization_weight(
+                self._incident.states.direction_sample[0],
+                kf_air_sample_Ainv[valid] / self._air_k0_Ainv,
+                model_id=self._polarization_model_id,
+            )
+        result.setflags(write=False)
+        return result
+
     def map_latent(
         self,
         *,
@@ -1635,9 +1671,14 @@ class DetectorEwaldMeasure:
                 attenuation[exit_valid],
             )
         event_envelope = self._intensity_envelope.evaluate(intensity.geometry.q_sample_Ainv)
+        event_polarization = self._event_scattering_polarization(
+            mapped.geometry.kf_air_sample_Ainv,
+            mapped.geometry.valid,
+        )
         postoptical = (
             intensity.coating_intensity_density_A2_rad2_inv
             * event_envelope
+            * event_polarization
             * optical
             * self._source_phase_weight
         )
@@ -1650,6 +1691,7 @@ class DetectorEwaldMeasure:
             optical_weight=optical,
             coating_intensity_density_A2_rad2_inv=(intensity.coating_intensity_density_A2_rad2_inv),
             event_intensity_envelope=event_envelope,
+            scattering_polarization_weight=event_polarization,
             source_phase_weight=self._source_phase_weight,
             postoptical_density_A2_rad2_inv=postoptical,
         )
@@ -1851,6 +1893,7 @@ class DetectorEwaldMeasure:
         response_blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]]
         | None = None,
         rod_index: int | None = None,
+        scattering_polarization: FloatArray | None = None,
     ) -> tuple[FloatArray, NDArray[np.int64], NDArray[np.bool_]]:
         if branch not in {0, 1, 2}:
             raise ValueError("branch must be 0, 1, or 2")
@@ -1903,6 +1946,11 @@ class DetectorEwaldMeasure:
         infinite_density = np.zeros(flat_caustic.shape, dtype=np.bool_)
         area_jacobian = surface_jacobian_Ainv2_per_output.reshape(-1)[valid_rows]
         optical = optical_weight.reshape(-1)[valid_rows]
+        polarization = (
+            np.ones(valid_rows.size, dtype=np.float64)
+            if scattering_polarization is None
+            else scattering_polarization.reshape(-1)[valid_rows]
+        )
         sample_from_local = self._crystal_to_sample @ self._crystal_from_local
         reconstruction_tolerance = (
             4096.0
@@ -1980,6 +2028,7 @@ class DetectorEwaldMeasure:
                             & (area_jacobian[singular] > 0.0)
                             & (optical[singular] > 0.0)
                             & (event_envelope[singular] > 0.0)
+                            & (polarization[singular] > 0.0)
                         )
                         infinite_density[valid_rows[singular][positive_numerator]] = True
                 regular = folded & (jacobian > 0.0)
@@ -1999,6 +2048,7 @@ class DetectorEwaldMeasure:
                         * area_jacobian[regular]
                         * optical[regular]
                         * event_envelope[regular]
+                        * polarization[regular]
                         * source_phase_weight
                         / jacobian[regular]
                     )
@@ -2024,6 +2074,7 @@ class DetectorEwaldMeasure:
                     * area_jacobian[regular]
                     * optical[regular]
                     * event_envelope[regular]
+                    * polarization[regular]
                     * source_phase_weight
                     / jacobian[regular]
                 )
@@ -2199,6 +2250,10 @@ class DetectorEwaldMeasure:
         if branch not in {1, 2}:
             raise ValueError("branch must be 1 or 2")
         geometry, optical = self._detector_coordinate_state(column_px, row_px)
+        polarization = self._event_scattering_polarization(
+            geometry.kf_air_sample_Ainv,
+            geometry.valid,
+        )
         shape = geometry.column_px.shape
         per_rod = np.zeros((*shape, len(selected)), dtype=np.float64)
         counts = np.zeros((*shape, len(selected)), dtype=np.int64)
@@ -2213,6 +2268,7 @@ class DetectorEwaldMeasure:
                 source_phase_weight=self._source_phase_weight,
                 rod=rod,
                 branch=branch,
+                scattering_polarization=polarization,
             )
             per_rod[..., rod_index] = rod_density
             counts[..., rod_index] = rod_count
@@ -2238,6 +2294,10 @@ class DetectorEwaldMeasure:
 
         selected = self._validated_configured_rods(rods)
         geometry, optical = self._detector_coordinate_state(column_px, row_px)
+        polarization = self._event_scattering_polarization(
+            geometry.kf_air_sample_Ainv,
+            geometry.valid,
+        )
         coordinate_count = geometry.column_px.size
         caustic = np.zeros((coordinate_count, len(selected)), dtype=np.bool_)
         blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]] = []
@@ -2253,6 +2313,7 @@ class DetectorEwaldMeasure:
                 branch=0,
                 response_blocks=blocks,
                 rod_index=response_rod_index,
+                scattering_polarization=polarization,
             )
             caustic[:, response_rod_index] = rod_caustic.reshape(-1)
 

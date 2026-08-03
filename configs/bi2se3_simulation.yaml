@@ -16,7 +16,7 @@ source:
   wavelength_sigma_A: 0.010784150474999999
   sample_count: 1000
   seed: 1729
-  polarization_state_id: UNITY_APPROXIMATION
+  polarization_state_id: THOMSON_UNPOLARIZED_UNANALYSED
 
 instrument:
   axis_rotations:

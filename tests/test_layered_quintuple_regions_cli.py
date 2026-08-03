@@ -14,6 +14,7 @@ import pytest
 from rasim_next.fitting import (
     FixedMatchedRegionBackground,
     FixedPositionState,
+    MatchedRegionObservations,
     RadialBackgroundState,
     SharedGeometryCorrections,
 )
@@ -26,12 +27,18 @@ assert SPEC is not None and SPEC.loader is not None
 ADAPTER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ADAPTER)
 
-STRUCTURE_LOWER_BOUNDS = np.asarray((-0.005, -0.005, 0.0, 0.0, 0.0))
-STRUCTURE_UPPER_BOUNDS = np.asarray((0.005, 0.005, 0.03, 0.02, 0.02))
+STRUCTURE_LOWER_BOUNDS = np.asarray((-0.01, -0.01, 0.0, 0.0, 0.0))
+STRUCTURE_UPPER_BOUNDS = np.asarray((0.01, 0.01, 0.03, 0.02, 0.02))
 STRUCTURE_PARAMETER_SCALES = np.asarray((0.001, 0.001, 0.01, 0.005, 0.005))
 TRUSTED_RECIPE = {
     "dataset_ids": ["a", "b", "c"],
     "display_dataset_id": "a",
+    "dark_correction": {
+        "model_id": ADAPTER.DARK_CORRECTION_MODEL,
+        "path": "darkImg.osc.gz",
+        "scale": 1.0,
+        "scale_basis": "matched_exposure_assumed.v1",
+    },
     "model_cubature": {
         "fit_gauss_order": 3,
         "oracle_gauss_order": 5,
@@ -52,6 +59,9 @@ def _projection_refinement(dataset_ids: tuple[str, ...] = ("a", "b", "c")) -> di
         "status": "COMPLETE",
         "converged": True,
         "support_masks_equal": True,
+        "acceptance_measure": "integrated_peak_count_mass_and_support.v1",
+        "covariance_refinement_converged": True,
+        "covariance_policy": "refined_covariance_is_authoritative_for_objective_whitening",
         "maximum_relative_l2": 0.03,
         "by_dataset": {
             dataset_id: {name: 0.01 for name in ADAPTER.PROJECTION_CONVERGENCE_METRICS}
@@ -78,6 +88,132 @@ def test_radial_background_cells_retain_valid_zero_counts() -> None:
     assert density.size == 8
     assert float(np.mean(density)) == pytest.approx(0.5, abs=1.0e-12)
     assert float(np.max(density)) < 0.52
+
+    _, _, signed_density, _ = ADAPTER._robust_radial_cells(
+        counts=2.0 * counts - 1.0,
+        beam_center_column_row_px=(49.5, 49.5),
+        excluded_flat_pixel_index=np.empty(0, dtype=np.int64),
+        sample_stride=1,
+        radial_bin_width_px=100.0,
+        azimuth_sector_count=8,
+        minimum_radius_px=0.0,
+        maximum_radius_px=70.0,
+        border_px=0,
+    )
+    assert signed_density.size == 8
+    assert float(np.mean(signed_density)) == pytest.approx(0.0, abs=1.0e-12)
+    assert float(np.max(np.abs(signed_density))) < 0.04
+
+
+def test_integrated_peak_projection_rejects_silent_declared_peak_pruning() -> None:
+    rows: list[dict[str, object]] = []
+
+    def add_block(group: str, family: int, signal_bands: tuple[str, ...]) -> None:
+        block = len({int(row["block_index"]) for row in rows})
+        for band in (*signal_bands, "background_0", "background_1"):
+            background = band.startswith("background_")
+            rows.append(
+                {
+                    "dataset_id": "image",
+                    "dataset_index": 0,
+                    "block_index": block,
+                    "signal_family_m": -1 if background else family,
+                    "is_background": background,
+                    "count_sum": 10.0,
+                    "support_px2": 1.0,
+                    "coordinate_mean": float(len(rows)),
+                    "group": group,
+                    "band": band,
+                    "bin_index": 0,
+                }
+            )
+
+    add_block("m0", 0, ("signal",))
+    for family in (1, 3, 4):
+        add_block(f"m{family}", family, (f"m{family}_plus", f"m{family}_minus"))
+    arrays = {
+        name: np.asarray([row[name] for row in rows])
+        for name in rows[0]
+    }
+    manifest = {
+        "dataset_ids": ["image"],
+        "fixed_lattice": {"active_direct_basis_A": np.eye(3).tolist()},
+        "m0_region": {"two_theta_bin_edges_rad": np.deg2rad((0.0, 1.0)).tolist()},
+        "offspecular_layouts": [
+            {"group": f"m{family}", "axial_bin_edges": [0.0, 1.0]}
+            for family in (1, 3, 4)
+        ],
+        "fit_peak_catalog": [
+            {
+                "identity": "m0-with-unmapped-peak",
+                "dataset_id": "image",
+                "profile_identity": "m0",
+                "family_m": 0,
+                "coordinate_kind": "two_theta_deg",
+                "centers": [0.5, 10.0],
+                "half_width": 0.4,
+            },
+            *[
+                {
+                    "identity": f"m{family}",
+                    "dataset_id": "image",
+                    "profile_identity": f"m{family}",
+                    "family_m": family,
+                    "coordinate_kind": "L",
+                    "center": 0.5,
+                    "half_width": 0.4,
+                }
+                for family in (1, 3, 4)
+            ],
+        ],
+    }
+
+    with pytest.raises(ValueError, match="no retained signal rows"):
+        ADAPTER._integrated_peak_area_projection(arrays, manifest)
+
+    valid_manifest = copy.deepcopy(manifest)
+    valid_manifest["fit_peak_catalog"][0]["centers"] = [0.5]
+    projection, catalog = ADAPTER._integrated_peak_area_projection(arrays, valid_manifest)
+    prepared_arrays = {
+        **arrays,
+        "source_signal_peak_index": np.asarray(projection.source_signal_peak_index),
+    }
+    prepared_manifest = {
+        **valid_manifest,
+        "integrated_peak_catalog": catalog,
+        "peak_area_projection_revision": projection.revision,
+        "source_signal_peak_index_sha256": ADAPTER._array_sha256(
+            prepared_arrays["source_signal_peak_index"]
+        ),
+    }
+    observations = MatchedRegionObservations(
+        dataset_ids=("image",),
+        dataset_index=arrays["dataset_index"],
+        block_index=arrays["block_index"],
+        signal_family=arrays["signal_family_m"],
+        is_background=arrays["is_background"],
+        count_mass=arrays["count_sum"],
+        support_px2=arrays["support_px2"],
+        background_coordinate=arrays["coordinate_mean"],
+        required_signal_families=ADAPTER.FAMILIES,
+    )
+    ADAPTER._prepared_peak_area_projection(prepared_arrays, prepared_manifest, observations)
+    mutated_arrays = {**prepared_arrays}
+    mutated_mapping = np.array(prepared_arrays["source_signal_peak_index"], copy=True)
+    plus = next(index for index, record in enumerate(catalog) if record["peak_id"] == "m1:plus")
+    minus = next(
+        index for index, record in enumerate(catalog) if record["peak_id"] == "m1:minus"
+    )
+    mutated_mapping[mutated_mapping == plus] = -1
+    mutated_mapping[mutated_mapping == minus] = plus
+    mutated_mapping[mutated_mapping == -1] = minus
+    mutated_arrays["source_signal_peak_index"] = mutated_mapping
+    with pytest.raises(ValueError, match="mapping changed"):
+        ADAPTER._prepared_peak_area_projection(
+            mutated_arrays,
+            prepared_manifest,
+            observations,
+        )
 
 
 def test_radial_background_is_integrated_on_continuous_region_nodes() -> None:
@@ -171,6 +307,19 @@ def test_conditioned_cubature_gate_detects_anchor_cancellation() -> None:
     assert by_family["1"] == pytest.approx(0.5)
     assert by_family["3"] == pytest.approx(0.5)
 
+    integrated, integrated_by_family, _ = ADAPTER._conditioned_model_cubature_errors(
+        candidate,
+        oracle,
+        fixed_background=background,
+        signal_family_m=np.asarray((0, 1, 3, 4, -1, -1)),
+        is_background=np.asarray((False, False, False, False, True, True)),
+        peak_aggregation=np.asarray(((1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 1.0, 0.0))),
+        peak_family_m=np.asarray((0, 1)),
+    )
+    assert integrated == pytest.approx(0.0)
+    assert integrated_by_family["0"] == pytest.approx(0.0)
+    assert integrated_by_family["1"] == pytest.approx(0.0)
+
 
 def test_projection_convergence_catches_weak_rows_support_and_covariance() -> None:
     refined_mass = np.asarray((1000.0, 1.0, 500.0, 2.0))
@@ -209,6 +358,10 @@ def test_projection_convergence_catches_weak_rows_support_and_covariance() -> No
     )
     assert support["converged"] is False
     assert covariance["converged"] is False
+    assert ADAPTER._integrated_area_projection_converged(covariance) is True
+    assert ADAPTER._integrated_area_projection_converged(weak_row) is False
+    assert ADAPTER._display_profile_projection_converged(weak_row) is True
+    assert ADAPTER._display_profile_projection_converged(support) is False
 
 
 def test_position_dataset_binding_preserves_order_and_nonroundtripping_angles() -> None:
@@ -268,6 +421,8 @@ def test_implementation_identity_covers_both_numerical_packages() -> None:
 def _accepted_fit_document() -> dict[str, object]:
     rod_roster = ((0, 0, 0, 1.0), (1, 0, 1, 1.0), (1, 1, 3, 1.0), (2, 0, 4, 1.0))
     rod_roster_sha256 = ADAPTER._rod_roster_sha256(rod_roster)
+    peak_revision = f"sha256-{'d' * 64}.integrated-peak-area.v1"
+    peak_mapping_sha256 = "e" * 64
     return {
         "schema_version": ADAPTER.FIT_SCHEMA,
         "stage": "joint",
@@ -303,6 +458,7 @@ def _accepted_fit_document() -> dict[str, object]:
         "model_rod_count": len(rod_roster),
         "model_rod_roster_h_k_m_population": rod_roster,
         "model_rod_roster_sha256": rod_roster_sha256,
+        "stacking_model": ADAPTER._fault_free_three_r_definition(),
         "cubature_oracle": {
             "performed": True,
             "status": "COMPLETE",
@@ -357,7 +513,7 @@ def _accepted_fit_document() -> dict[str, object]:
                 "offspecular_radial_transform": "squared_fold_coordinate.v1",
                 "offspecular_signal_minimum_radial_nodes_per_side": 24,
                 "background_artifact_sha256": "0" * 64,
-                "radial_background_state_revision": f"sha256-{'1' * 64}",
+                "radial_background_state_revision": "1" * 64,
                 "radial_background_parameter_vector_sha256": "2" * 64,
                 "radial_background_parameter_covariance_sha256": "3" * 64,
                 "radial_background_mass_sha256": "4" * 64,
@@ -376,11 +532,14 @@ def _accepted_fit_document() -> dict[str, object]:
                 "conditioned_background_mass_sha256": "6" * 64,
                 "conditioned_background_covariance_sha256": "7" * 64,
                 "conditioned_model_anchor_projection_sha256": "8" * 64,
+                "objective_measure": ADAPTER.PEAK_AREA_OBJECTIVE,
+                "peak_area_projection_revision": peak_revision,
+                "source_signal_peak_index_sha256": peak_mapping_sha256,
             },
         },
         "background_model": {
             "artifact_sha256": "0" * 64,
-            "state_revision": f"sha256-{'1' * 64}",
+            "state_revision": "1" * 64,
             "parameter_vector_sha256": "2" * 64,
             "parameter_covariance_sha256": "3" * 64,
             "radial_mass_sha256": "4" * 64,
@@ -402,11 +561,46 @@ def _accepted_fit_document() -> dict[str, object]:
             "outer_bi_antisite_fraction": 0.012,
             "intensity_envelope_u_radial_A2": 0.004,
             "intensity_envelope_u_normal_A2": 0.006,
+            "displacement_gauge": {
+                "model_id": "fixed_site_adp_plus_regularized_sample_q_envelope.v1",
+                "site_adp_common_mode": "fixed_reference",
+                "sample_q_envelope_mode": "fit_zero_centered_regularized",
+            },
+            "site_adp_scale": 1.0,
+            "site_adp_refinement_status": "fixed_literature_reference",
+            "site_displacement_profile": {
+                "model_id": "transverse_isotropic_site_reference_fixed.v1",
+                "provenance": "test fixed site displacement profile",
+                "sites": [
+                    {
+                        "source_label": label,
+                        "reference_u_radial_A2": radial,
+                        "reference_u_normal_A2": normal,
+                        "fitted_u_radial_A2": radial,
+                        "fitted_u_normal_A2": normal,
+                    }
+                    for label, radial, normal in (
+                        ("Bi", 0.0036, 0.0264),
+                        ("Se1", 0.0046, 0.0485),
+                        ("Se2", 0.0046, 0.0485),
+                    )
+                ],
+            },
         },
         "full_parameter_vector": [0.001, -0.001, 0.012, 0.004, 0.006],
         "diagnostic_sha256": "diagnostic",
         "dataset_scales": {"a": 2.0, "b": 3.0, "c": 4.0},
         "fitted_model_count": [4.0, 9.0, 16.0],
+        "objective_measure": ADAPTER.PEAK_AREA_OBJECTIVE,
+        "integrated_peak_areas": {
+            "projection_revision": peak_revision,
+            "peak_ids": ["m0", "m1", "m3", "m4"],
+            "dataset_index": [0, 0, 1, 2],
+            "family_m": [0, 1, 3, 4],
+            "observed_background_subtracted_count_mass": [10.0, 20.0, 30.0, 40.0],
+            "fitted_count_mass": [9.0, 19.0, 31.0, 39.0],
+            "source_signal_peak_index_sha256": peak_mapping_sha256,
+        },
         "model_measure": "continuous_detector_chart_area",
         "model_pixelized": False,
         "smoothing_applied": False,
@@ -424,7 +618,6 @@ def _accepted_fit_document() -> dict[str, object]:
         (("numerical_convergence", "cubature_converged_by_family"), False),
         (("cubature_oracle", "relative_l2_background_anchor_rows"), None),
         (("cubature_oracle", "relative_l2_background_anchor_rows"), float("nan")),
-        (("cubature_oracle", "relative_l2_background_anchor_rows"), 0.04),
         (("cubature_oracle", "status"), "PARTIAL"),
         (("cubature_oracle", "maximum_relative_l2"), 1.0),
         (("cubature_oracle", "fit_gauss_order"), 2),
@@ -434,7 +627,6 @@ def _accepted_fit_document() -> dict[str, object]:
         (("data_projection", "by_dataset", "a", "support_relative_l2"), 0.04),
         (("data_projection", "smoothing_applied"), True),
         (("data_projection", "diffraction_model_pixelized"), True),
-        (("data_projection", "relative_l2_background_anchor_rows"), 0.04),
         (("data_projection", "relative_l2_by_family_m", "0"), 0.04),
         (("dataset_scales", "b"), float("nan")),
         (("model_rod_roster_sha256",), "9" * 64),
@@ -493,6 +685,30 @@ def test_fit_document_admissibility_accepts_complete_evidence() -> None:
         bound_proximity_in_parameter_scales=1.0e-6,
         maximum_sensitivity_condition=1.0e5,
     )
+
+
+def test_fit_document_rejects_relaxed_or_changed_fixed_site_adp_gauge() -> None:
+    changed_scale = _accepted_fit_document()
+    changed_scale["structure_representative"]["site_adp_scale"] = 0.9
+    changed_site = _accepted_fit_document()
+    changed_site["structure_representative"]["site_displacement_profile"]["sites"][0][
+        "fitted_u_normal_A2"
+    ] += 0.001
+    for document in (changed_scale, changed_site):
+        assert not ADAPTER.fit_document_is_admissible(
+            document,
+            trusted_recipe=TRUSTED_RECIPE,
+            recipe_sha256="recipe",
+            adapter_sha256="adapter",
+            fit_plan_sha256="fit-plan",
+            implementation_sha256="implementation",
+            lower_bounds=STRUCTURE_LOWER_BOUNDS,
+            upper_bounds=STRUCTURE_UPPER_BOUNDS,
+            parameter_scales=STRUCTURE_PARAMETER_SCALES,
+            sensitivity_relative_tolerance=1.0e-5,
+            bound_proximity_in_parameter_scales=1.0e-6,
+            maximum_sensitivity_condition=1.0e5,
+        )
 
 
 def test_fit_document_cannot_raise_its_own_projection_or_cubature_tolerance() -> None:
@@ -569,6 +785,52 @@ def test_stage_predecessor_contract_fails_closed() -> None:
 
     assert ADAPTER.stage_fit_document_is_admissible(
         document,
+        expected_stage="A",
+        expected_active_parameter_names=ADAPTER.STRUCTURE_PARAMETER_NAMES[:2],
+        diagnostic_sha256="diagnostic",
+        trusted_recipe=TRUSTED_RECIPE,
+        recipe_sha256="recipe",
+        fit_plan_sha256="fit-plan",
+        adapter_sha256="adapter",
+        implementation_sha256="implementation",
+        lower_bounds=STRUCTURE_LOWER_BOUNDS,
+        upper_bounds=STRUCTURE_UPPER_BOUNDS,
+        parameter_scales=STRUCTURE_PARAMETER_SCALES,
+        sensitivity_relative_tolerance=1.0e-5,
+        bound_proximity_in_parameter_scales=1.0e-6,
+        maximum_sensitivity_condition=1.0e5,
+    )
+
+    reordered = copy.deepcopy(document)
+    reordered["dataset_scales"] = {"c": 4.0, "a": 2.0, "b": 3.0}
+    assert ADAPTER.stage_fit_document_is_admissible(
+        reordered,
+        expected_stage="A",
+        expected_active_parameter_names=ADAPTER.STRUCTURE_PARAMETER_NAMES[:2],
+        diagnostic_sha256="diagnostic",
+        trusted_recipe=TRUSTED_RECIPE,
+        recipe_sha256="recipe",
+        fit_plan_sha256="fit-plan",
+        adapter_sha256="adapter",
+        implementation_sha256="implementation",
+        lower_bounds=STRUCTURE_LOWER_BOUNDS,
+        upper_bounds=STRUCTURE_UPPER_BOUNDS,
+        parameter_scales=STRUCTURE_PARAMETER_SCALES,
+        sensitivity_relative_tolerance=1.0e-5,
+        bound_proximity_in_parameter_scales=1.0e-6,
+        maximum_sensitivity_condition=1.0e5,
+    )
+
+    refined_covariance = copy.deepcopy(document)
+    projection = refined_covariance["data_projection"]
+    assert isinstance(projection, dict)
+    projection["covariance_refinement_converged"] = False
+    projection["relative_l2_background_anchor_rows"] = 1.0
+    for metrics in projection["by_dataset"].values():
+        metrics["covariance_relative_frobenius"] = 1.0
+        metrics["maximum_covariance_row_relative_l2"] = 2.0
+    assert ADAPTER.stage_fit_document_is_admissible(
+        refined_covariance,
         expected_stage="A",
         expected_active_parameter_names=ADAPTER.STRUCTURE_PARAMETER_NAMES[:2],
         diagnostic_sha256="diagnostic",
@@ -943,24 +1205,25 @@ def test_fit_conditioned_profile_policy_accepts_declared_bound_limited_joint() -
         )
 
     document["cubature_oracle"]["relative_l2_by_family_m"]["3"] = 0.01
+    document["numerical_convergence"]["cubature_converged_by_family"] = True
     document["cubature_oracle"]["relative_l2_background_anchor_rows"] = 0.04
-    with pytest.raises(ValueError, match="FIT_CONDITIONED"):
-        ADAPTER._profile_evidence_policy(
-            fit_document=document,
-            trusted_recipe=TRUSTED_RECIPE,
-            recipe_sha256="recipe",
-            adapter_sha256="adapter",
-            fit_plan_sha256="fit-plan",
-            implementation_sha256="implementation",
-            lower_bounds=STRUCTURE_LOWER_BOUNDS,
-            upper_bounds=STRUCTURE_UPPER_BOUNDS,
-            parameter_scales=STRUCTURE_PARAMETER_SCALES,
-            sensitivity_relative_tolerance=1.0e-5,
-            bound_proximity_in_parameter_scales=1.0e-6,
-            maximum_sensitivity_condition=1.0e5,
-            expected_dataset_ids=("a", "b", "c"),
-            predecessor_chain_complete=True,
-        )
+    policy = ADAPTER._profile_evidence_policy(
+        fit_document=document,
+        trusted_recipe=TRUSTED_RECIPE,
+        recipe_sha256="recipe",
+        adapter_sha256="adapter",
+        fit_plan_sha256="fit-plan",
+        implementation_sha256="implementation",
+        lower_bounds=STRUCTURE_LOWER_BOUNDS,
+        upper_bounds=STRUCTURE_UPPER_BOUNDS,
+        parameter_scales=STRUCTURE_PARAMETER_SCALES,
+        sensitivity_relative_tolerance=1.0e-5,
+        bound_proximity_in_parameter_scales=1.0e-6,
+        maximum_sensitivity_condition=1.0e5,
+        expected_dataset_ids=("a", "b", "c"),
+        predecessor_chain_complete=True,
+    )
+    assert policy["evidence_level"] == "FIT_CONDITIONED"
 
 
 @pytest.mark.parametrize(
@@ -1024,6 +1287,8 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "fit_plan_sha256": "1" * 64,
             "implementation_sha256": "b" * 64,
             "osc_sha256": "c" * 64,
+            "dark_osc_sha256": "9" * 64,
+            "dark_scale": 1.0,
             "fit_chain_sha256": ["7" * 64],
         }
     )
@@ -1042,6 +1307,21 @@ def _accepted_profile_manifest() -> dict[str, object]:
         "rod_scope_validation_status": "NOT_RUN",
         "model_rod_scope": "fitted_families_m_0_1_3_4",
         "fit_compatibility_replay": None,
+        "structure_representative": copy.deepcopy(
+            fit_document["structure_representative"]
+        ),
+        "stacking_model": ADAPTER._fault_free_three_r_definition(),
+        "dark_correction": {
+            "model_id": ADAPTER.DARK_CORRECTION_MODEL,
+            "file_sha256": "9" * 64,
+            "detector_native_bytes_sha256": "8" * 64,
+            "detector_native_shape_rc": [3000, 3000],
+            "detector_native_dtype": "int32",
+            "scale": 1.0,
+            "negative_values_clipped": False,
+            "smoothing_applied": False,
+            "covariance_model": "shared_independent_poisson_dark_across_datasets.v1",
+        },
         "figure_recipe": copy.deepcopy(TRUSTED_RECIPE),
         "background_model": background_model,
         "profile_cubature": {
@@ -1061,7 +1341,11 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "count_covariance_sha256": "6" * 64,
             "gauss_order": TRUSTED_RECIPE["model_cubature"]["oracle_gauss_order"],
             "subdivision_count": TRUSTED_RECIPE["model_cubature"]["fold_oracle_subdivisions"],
-            "refinement_oracle": _projection_refinement(("a",)),
+            "refinement_oracle": {
+                **_projection_refinement(("a",)),
+                "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
+                "covariance_policy": "refined_covariance_is_authoritative_for_display",
+            },
             "smoothing_applied": False,
         },
         "provenance": {
@@ -1071,6 +1355,7 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "recipe_sha256": "e" * 64,
             "fit_plan": {"sha256": "1" * 64},
             "osc_sha256": "c" * 64,
+            "dark_osc_sha256": "9" * 64,
             "fit_chain": [{"sha256": "7" * 64}],
             "fit_origin_adapter_sha256": "a" * 64,
             "fit_origin_implementation_sha256": "b" * 64,
@@ -1095,13 +1380,15 @@ def _accepted_profile_manifest() -> dict[str, object]:
                 "refinement_oracle",
                 "by_dataset",
                 "a",
-                "maximum_covariance_row_relative_l2",
+                "mass_relative_l2",
             ),
             0.04,
         ),
         (("background_model", "conditioned_covariance_sha256"), "9" * 64),
         (("fit_model_rod_roster_sha256",), "9" * 64),
         (("background_model", "conditioned_revision"), ""),
+        (("dark_correction", "file_sha256"), "7" * 64),
+        (("dark_correction", "covariance_model"), "independent_per_dataset"),
     ),
 )
 def test_profile_manifest_admission_is_bound_to_trusted_evidence(
@@ -1121,6 +1408,18 @@ def test_profile_manifest_admission_is_bound_to_trusted_evidence(
     target[path[-1]] = value
 
     assert not ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=TRUSTED_RECIPE,
+    )
+
+
+def test_profile_manifest_retains_covariance_refinement_as_diagnostic() -> None:
+    accepted = _accepted_profile_manifest()
+    refinement = accepted["measured_data_projection"]["refinement_oracle"]
+    refinement["covariance_refinement_converged"] = False
+    refinement["by_dataset"]["a"]["maximum_covariance_row_relative_l2"] = 8.0
+
+    assert ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
     )

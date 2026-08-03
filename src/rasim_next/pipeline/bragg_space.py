@@ -29,7 +29,6 @@ from rasim_next.stacking import (
     InitialPopulation,
     Parent,
     RichEpsilonModel,
-    TransitionLaw,
     finite_event_intensity,
     registry_phase,
 )
@@ -234,14 +233,10 @@ class Bi2X3FiniteStackStrength:
             structure_parameters=self.structure_parameters,
             site_displacement_profile=self.site_displacement_profile,
         )
-        law = (
-            TransitionLaw.for_parent(self.parent)
-            if self.shared_disorder_epsilon == 0.0
-            else RichEpsilonModel(
-                self.parent,
-                self.shared_disorder_epsilon,
-            ).transition_law()
-        )
+        law = RichEpsilonModel(
+            self.parent,
+            self.shared_disorder_epsilon,
+        ).transition_law()
         result = finite_event_intensity(
             query,
             amplitudes,
@@ -449,7 +444,10 @@ class Bi2X3FiniteStackStrength:
             )
             return result
 
-        parent_law = TransitionLaw.for_parent(self.parent)
+        parent_law = RichEpsilonModel(
+            self.parent,
+            self.shared_disorder_epsilon,
+        ).transition_law()
         registry = np.asarray(registry_phase(query.h, query.k))[:, None]
         vertical = np.exp(1.0j * layer_normal_q * repeat_spacing_A)[:, None]
 

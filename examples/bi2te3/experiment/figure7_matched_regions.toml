@@ -4,6 +4,12 @@ simulation_config = "../../../configs/bi2te3_r3_simulation.yaml"
 dataset_ids = ["Bi2Te3-5deg", "Bi2Te3-10deg", "Bi2Te3-15deg"]
 display_dataset_id = "Bi2Te3-5deg"
 
+[dark_correction]
+model_id = "scaled_dark_subtraction_no_clip.v1"
+path = "../../calibration/hbn/darkImg.osc.gz"
+scale = 1.0
+scale_basis = "matched_exposure_assumed.v1"
+
 [detector]
 native_shape_rc = [3000, 3000]
 display_rows = 1596

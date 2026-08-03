@@ -7,6 +7,7 @@ from rasim_next.measurement.continuous_regions import (
     ContinuousRegionQuadrature,
     compile_continuous_rectangle_quadrature,
     compile_native_pixel_region_projection,
+    integrate_shared_native_pixel_field,
 )
 from rasim_next.measurement.reciprocal_profiles import (
     LayeredReciprocalFrame,
@@ -85,6 +86,33 @@ def test_native_pixel_projection_propagates_fractional_count_covariance() -> Non
     _, empty_covariance = projection.integrate_counts(np.zeros((1, 2)))
     np.testing.assert_allclose(empty_covariance, ((0.25, 0.25), (0.25, 1.25)))
     assert projection.flat_pixel_index.tolist() == [0, 1]
+
+
+def test_native_pixel_projection_preserves_signed_dark_correction_and_shared_covariance() -> None:
+    quadrature = ContinuousRegionQuadrature(
+        column_px=np.asarray((0.0, 0.1, 1.0)),
+        row_px=np.zeros(3),
+        detector_area_weight_px2=np.asarray((0.25, 0.25, 1.0)),
+        observation_row=np.asarray((0, 1, 1)),
+        background_coordinate=np.zeros(3),
+        observation_count=2,
+        chart_revision="shared-dark-projection.test.v1",
+    )
+    projection = compile_native_pixel_region_projection(quadrature, (1, 2))
+    signed = np.asarray(((-3.0, 2.0),))
+    variance = np.asarray(((5.0, 7.0),))
+
+    mass, covariance = projection.integrate_field(signed, variance)
+    np.testing.assert_allclose(mass, (-0.75, 1.25))
+    np.testing.assert_allclose(covariance, ((0.3125, 0.3125), (0.3125, 7.3125)))
+
+    shared_mass, shared_covariance = integrate_shared_native_pixel_field(
+        (projection, projection),
+        signed,
+        variance,
+    )
+    np.testing.assert_allclose(shared_mass, np.tile(mass, 2))
+    np.testing.assert_allclose(shared_covariance, np.tile(covariance, (2, 2)))
 
 
 def test_continuous_rectangle_quadrature_refines_each_chart_axis_independently() -> None:

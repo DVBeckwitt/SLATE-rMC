@@ -63,7 +63,6 @@ class RadialBackgroundProfiles:
             or sector.shape != shape
             or training.shape != shape
             or np.any(radius < 0.0)
-            or np.any(density < 0.0)
             or np.any(support <= 0.0)
             or np.any((dataset < 0) | (dataset >= len(dataset_ids)))
             or np.any(sector < 0)

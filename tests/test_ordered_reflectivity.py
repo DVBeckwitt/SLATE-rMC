@@ -20,7 +20,9 @@ from rasim_next.core.contracts import (
 )
 from rasim_next.core.scattering import (
     CLASSICAL_ELECTRON_RADIUS_A,
+    THOMSON_UNPOLARIZED_UNANALYSED,
     electron_squared_to_scattering_strength_A2,
+    scattering_polarization_weight,
 )
 from rasim_next.materials import (
     CrystalSite,
@@ -57,6 +59,38 @@ from rasim_next.stacking.enumeration import finite_explicit_sequence_intensity
 ROOT = Path(__file__).parents[1]
 STRUCTURES = ROOT / "examples"
 WAVELENGTH_A = 1.540592925
+
+
+def test_unpolarized_thomson_factor_has_the_exact_angular_invariants() -> None:
+    incident = np.array((0.0, 1.0, 0.0))
+    outgoing = np.array(
+        (
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, -1.0, 0.0),
+        )
+    )
+    expected = np.array((1.0, 0.5, 1.0))
+    actual = scattering_polarization_weight(
+        incident,
+        outgoing,
+        model_id=THOMSON_UNPOLARIZED_UNANALYSED,
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+    rotation = np.array(
+        (
+            (0.0, -1.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0),
+        )
+    )
+    rotated = scattering_polarization_weight(
+        rotation @ incident,
+        outgoing @ rotation.T,
+        model_id=THOMSON_UNPOLARIZED_UNANALYSED,
+    )
+    np.testing.assert_array_equal(rotated, expected)
 
 
 def _factor_e(

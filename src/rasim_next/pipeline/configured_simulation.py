@@ -31,6 +31,7 @@ from rasim_next.core.contracts import (
     canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
+from rasim_next.core.scattering import polarization_model_code
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry import build_incident_states
 from rasim_next.geometry.instrument import (
@@ -520,6 +521,7 @@ def load_simulation_config(
             source_data["polarization_state_id"], "source.polarization_state_id"
         ),
     )
+    polarization_model_code(source.polarization_state_id)
     if source.seed < 0:
         raise ValueError("source.seed must be nonnegative")
 

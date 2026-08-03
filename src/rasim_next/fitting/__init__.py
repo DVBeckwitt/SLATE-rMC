@@ -64,6 +64,7 @@ from rasim_next.fitting.indexed_series import (
 )
 from rasim_next.fitting.matched_regions import (
     FixedMatchedRegionBackground,
+    IntegratedPeakAreaProjection,
     MatchedRegionFitResult,
     MatchedRegionObservations,
     condition_matched_region_background_from_anchors,
@@ -169,6 +170,7 @@ __all__ = [
     "IntegerLMarkerObservations",
     "IntegerLMarkerPrediction",
     "IntegerLSelectionAudit",
+    "IntegratedPeakAreaProjection",
     "M0IntegerLObservations",
     "M0IntegerLPrediction",
     "MatchedRegionFitResult",

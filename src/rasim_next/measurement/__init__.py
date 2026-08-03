@@ -27,6 +27,7 @@ from rasim_next.measurement.continuous_regions import (
     NativePixelRegionProjection,
     compile_continuous_rectangle_quadrature,
     compile_native_pixel_region_projection,
+    integrate_shared_native_pixel_field,
 )
 from rasim_next.measurement.reciprocal_profiles import (
     BinnedSampleIntegral,
@@ -76,6 +77,7 @@ __all__ = [
     "compile_detector_profile_projector",
     "compile_native_pixel_region_projection",
     "evaluate_continuous_per_rod_angle_signal",
+    "integrate_shared_native_pixel_field",
     "offspecular_region_membership",
     "project_detector_profiles",
     "project_normalized_angle_field",

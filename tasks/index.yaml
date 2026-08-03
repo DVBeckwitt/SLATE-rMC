@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: fluid_detector_viewer
+current_phase: detector_corrected_integrated_sf
 
 tasks:
   - id: T00
@@ -97,3 +97,8 @@ tasks:
     branch: codex/fluid-detector-viewer
     status: READY
     depends_on: [T07]
+  - id: T20
+    file: tasks/20_detector_corrected_integrated_sf.md
+    branch: codex/dark-thomson-integrated-sf
+    status: READY_MODEL_LIMITED_FIT_CONDITIONED
+    depends_on: [T05, T12, T13, T17, T18]

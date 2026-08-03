@@ -81,7 +81,7 @@ def _pack_source_average(
     state_count = len(indexed_evaluators)
     ray_origin = np.empty((state_count, 3), dtype=np.float64)
     ki_film = np.empty((state_count, 3), dtype=np.float64)
-    state_real = np.empty((state_count, 17), dtype=np.float64)
+    state_real = np.empty((state_count, 18), dtype=np.float64)
     state_complex = np.empty((state_count, 4), dtype=np.complex128)
     state_block_offset = np.concatenate(
         (
@@ -206,6 +206,7 @@ def _pack_source_average(
             float(state.stacking_parent_code),
             state.intensity_envelope_u_radial_A2,
             state.intensity_envelope_u_normal_A2,
+            float(state.polarization_model_code),
         )
         state_complex[state_index] = (
             state.refractive_index,
@@ -563,6 +564,27 @@ def _prepare_state_block_geometry_kernel(
     optical_weight = (
         entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
     )
+    if int(state_real[state_index, 17]) == 1:
+        incident_normal_squared = (
+            air_k0_Ainv * air_k0_Ainv
+            - ki_film_sample_Ainv[state_index, 0] ** 2
+            - ki_film_sample_Ainv[state_index, 1] ** 2
+        )
+        if incident_normal_squared < 0.0:
+            incident_normal_squared = 0.0
+        incident_normal = math.sqrt(incident_normal_squared)
+        if ki_film_sample_Ainv[state_index, 2] < 0.0:
+            incident_normal = -incident_normal
+        cosine = (
+            ki_film_sample_Ainv[state_index, 0] * kf_air_x
+            + ki_film_sample_Ainv[state_index, 1] * kf_air_y
+            + incident_normal * kf_air_z
+        ) / (air_k0_Ainv * air_k0_Ainv)
+        if cosine < -1.0:
+            cosine = -1.0
+        elif cosine > 1.0:
+            cosine = 1.0
+        optical_weight *= 0.5 * (1.0 + cosine * cosine)
 
     q_local_x = (
         q_sample_x * sample_from_local[0, 0]

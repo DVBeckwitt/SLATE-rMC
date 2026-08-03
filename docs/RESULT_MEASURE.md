@@ -269,11 +269,17 @@ not a pixel-box mass, macrobin mass, calibrated count expectation, or raw OSC co
 No undeclared or unweighted histogram, general point-deposition API, pixel supersampling claim,
 per-reflection normalization, or image maximum normalization belongs to the physical result. Masks,
 saturation, detector efficiency, detector PSF, and general acquisition-matched backgrounds remain
-separate future operators; the matched-region comparison below has one explicit frozen radial halo.
+separate future operators. The matched-region comparison below explicitly applies its hash-bound
+acquisition dark and one frozen radial halo.
 
 ## Matched-region count comparison
 
-For row `r`, verified native OSC pixels define a piecewise-constant measured count-density field.
+For row `r`, verified native OSC pixels and the shared dark OSC define the signed field
+`D = raw - s_dark dark`. Raw and dark use the same sparse continuous-region projector `W`; no
+negative value is clipped. Independent raw/dark counting covariance propagates as
+`W diag(max(raw,1) + s_dark^2 max(dark,1)) W^T`, including the cross-OSC covariance induced by
+reusing the same dark exposure. The corrected native pixels define a piecewise-constant measured
+count-density field.
 A sparse data-only operator integrates that field over the declared phi/two-theta or signed-Qr/L
 rectangle. Its weights are detector areas of pixel/region overlap under independently refined
 continuous cubature, so `C_r` and its support use the same rectangle as the model without smoothing.
@@ -282,8 +288,11 @@ Fractional sharing propagates the full regularized plug-in count covariance
 the continuous detector density integrated directly over that rectangle with the detector-area
 Jacobian. It is never sampled or aggregated as a model raster.
 Dataset scale `s_d` multiplies every family in dataset `d` once.
-The frozen radial calibration supplies background mass `B_r` and covariance. Active fitting uses
-only signal rows of `C_r - B_r - s_d M_r`, with one nonnegative `s_d` per dataset. The identical
+The frozen radial calibration supplies background mass `B_r` and covariance. Adjacent-anchor
+conditioning is applied first. A fixed aggregation matrix `G` then sums every conditioned signal
+row exactly once into its declared trusted peak: `y_peak=G y`, `mu_peak=G mu`, and
+`Sigma_peak=G Sigma G.T`. Active fitting uses only these integrated peak masses, with one
+nonnegative `s_d` per dataset. The identical
 two-anchor projection transforms the full measured-count and radial-background covariance before
 whitening. Division by support occurs only for displayed density profiles. Where a
 continuous region crosses the inverse-map fold, fixed-rule mass from the complete same-`|b|` rod

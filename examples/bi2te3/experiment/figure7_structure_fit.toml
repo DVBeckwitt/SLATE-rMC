@@ -18,6 +18,11 @@ sensitivity_relative_tolerance = 1.0e-5
 maximum_sensitivity_condition = 1.0e5
 bound_proximity_in_parameter_scales = 1.0e-6
 
+[displacement_gauge]
+model_id = "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
+site_adp_common_mode = "fixed_reference"
+sample_q_envelope_mode = "fit_zero_centered_regularized"
+
 [site_displacement_profile]
 model_id = "transverse_isotropic_site_reference_fixed.v1"
 provenance = "Mansour and Wong-Ng, J. Appl. Phys. 116, 083513 (2014), doi:10.1063/1.4892441."

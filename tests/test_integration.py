@@ -136,6 +136,7 @@ def _forward_monte_carlo_fixture(
 
 def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
     from painted_ewald import wrapped_mosaic_line_density_rad_inv
+    from rasim_next.core.scattering import scattering_polarization_weight
     from rasim_next.optics.attenuation import (
         mode_decay_constant,
         scalar_optical_weight,
@@ -215,9 +216,16 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
                         exit_mode.exit_amplitude,
                         attenuation,
                     )
+                    polarization = scattering_polarization_weight(
+                        inputs.incident.states.direction_sample[0],
+                        exit_mode.k_air_phase_sample_Ainv
+                        / (2.0 * np.pi / inputs.samples.wavelength_A[0]),
+                        model_id=inputs.incident.states.polarization_state_id[0],
+                    )
                     weight = (
                         float(coating.coating_intensity_density_A2_rad2_inv)
                         * optical
+                        * polarization
                         * source_phase_weight
                         / proposal_density
                     )
@@ -616,7 +624,9 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     assert mapped.attenuation_weight == pytest.approx(attenuation, abs=2.0e-15)
     assert mapped.optical_weight == pytest.approx(optical, abs=2.0e-15)
     assert mapped.postoptical_density_A2_rad2_inv == pytest.approx(
-        latent.coating_intensity_density_A2_rad2_inv * optical,
+        latent.coating_intensity_density_A2_rad2_inv
+        * optical
+        * mapped.scattering_polarization_weight,
         rel=0.0,
         abs=2.0e-20,
     )
@@ -870,6 +880,7 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         * internal_k**2
         / regular_density.geometry.q_surface_jacobian_Ainv2_per_px2
         / regular_mapped.optical_weight
+        / regular_mapped.scattering_polarization_weight
         / regular_mapped.source_phase_weight,
         rel=3.0e-13,
     )
@@ -2339,6 +2350,10 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
                     beta_rad=0.0,
                 )
         geometry, optical = scalar_oracle._detector_coordinate_state(column_px, row_px)
+        scattering_polarization = scalar_oracle._event_scattering_polarization(
+            geometry.kf_air_sample_Ainv,
+            geometry.valid,
+        )
         for branch in (1, 2):
             density, _, _ = scalar_oracle._inverse_rod_density(
                 q_sample_Ainv=geometry.q_sample_Ainv,
@@ -2349,6 +2364,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
                 source_phase_weight=scalar_oracle._source_phase_weight,
                 rod=rods[0],
                 branch=branch,
+                scattering_polarization=scattering_polarization,
             )
             expected_m0 += 0.5 * density
     np.testing.assert_allclose(
@@ -2994,6 +3010,12 @@ def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
     from numba import cuda
 
     from painted_ewald import MosaicBraggSpace
+    from rasim_next.core.scattering import (
+        THOMSON_UNPOLARIZED_UNANALYSED,
+        UNITY_APPROXIMATION,
+        scattering_polarization_weight,
+    )
+    from rasim_next.geometry import build_incident_states, detector_coordinate_to_ray
     from rasim_next.ordered import (
         Bi2X3QuintupleLayerParameters,
         SiteDisplacementProfile,
@@ -3070,6 +3092,65 @@ def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
     )
     np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
     np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
+
+    state_index = int(np.flatnonzero(inputs.incident.states.valid)[0])
+
+    def single_state_inputs(polarization_model_id: str):
+        samples = replace(
+            inputs.samples,
+            incident_sample_id=inputs.samples.incident_sample_id[state_index : state_index + 1],
+            origin_lab_m=inputs.samples.origin_lab_m[state_index : state_index + 1],
+            direction_lab=inputs.samples.direction_lab[state_index : state_index + 1],
+            wavelength_A=inputs.samples.wavelength_A[state_index : state_index + 1],
+            source_weight=np.ones(1, dtype=np.float64),
+            polarization_state_id=(polarization_model_id,),
+        )
+        incident = build_incident_states(samples, inputs.material, inputs.instrument)
+        return replace(inputs, samples=samples, incident=incident)
+
+    thomson_inputs = single_state_inputs(THOMSON_UNPOLARIZED_UNANALYSED)
+    unity_inputs = single_state_inputs(UNITY_APPROXIMATION)
+    thomson = build_source_averaged_detector(thomson_inputs).rebind_physics(
+        strength_model=candidate_strength,
+        intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013),
+    )
+    unity = build_source_averaged_detector(unity_inputs).rebind_physics(
+        strength_model=candidate_strength,
+        intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013),
+    )
+    thomson_density = thomson.evaluate_detector_density_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    ).density_A2_per_px2
+    unity_density = unity.evaluate_detector_density_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    ).density_A2_per_px2
+    expected = np.asarray(
+        [
+            scattering_polarization_weight(
+                thomson_inputs.samples.direction_lab[0],
+                detector_coordinate_to_ray(
+                    float(column),
+                    float(row),
+                    origin_lab_m=thomson_inputs.incident.states.sample_intersection_lab_m[0],
+                    instrument=thomson_inputs.instrument,
+                ).direction_lab,
+                model_id=THOMSON_UNPOLARIZED_UNANALYSED,
+            )
+            for column, row in zip(column_px, row_px, strict=True)
+        ]
+    )
+    nonzero = unity_density > np.finfo(np.float64).tiny
+    assert np.any(nonzero)
+    np.testing.assert_allclose(
+        thomson_density[nonzero] / unity_density[nonzero],
+        expected[nonzero],
+        rtol=8.0e-13,
+        atol=8.0e-15,
+    )
 
 
 def test_cuda_compound_detector_tilt_matches_cpu() -> None:

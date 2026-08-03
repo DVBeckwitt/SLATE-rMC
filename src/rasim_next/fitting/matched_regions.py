@@ -13,12 +13,17 @@ from scipy.linalg import cholesky, solve_triangular
 from scipy.optimize import least_squares, nnls
 
 FloatArray = NDArray[np.float64]
+IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 
 
 @dataclass(frozen=True, slots=True)
 class FixedMatchedRegionBackground:
-    """Frozen background mass, uncertainty, and anchor interpolation operator."""
+    """Frozen background correction, uncertainty, and anchor interpolation operator.
+
+    The correction may be signed after dark subtraction and adjacent-anchor
+    conditioning; it is never clipped before subtraction from the observation.
+    """
 
     count_mass: ArrayLike
     covariance_count2: ArrayLike
@@ -49,7 +54,6 @@ class FixedMatchedRegionBackground:
             or covariance.shape != (mass.size, mass.size)
             or projection.shape != (mass.size, mass.size)
             or np.any(~np.isfinite(mass))
-            or np.any(mass < 0.0)
             or np.any(~np.isfinite(covariance))
             or np.any(~np.isfinite(projection))
             or not np.allclose(covariance, covariance.T, rtol=0.0, atol=1.0e-10)
@@ -110,6 +114,7 @@ class MatchedRegionObservations:
             order="C",
         )
         shape = count.shape
+        covariance_was_supplied = self.count_covariance_count2 is not None
         count_covariance = (
             np.diag(np.maximum(count, 1.0))
             if self.count_covariance_count2 is None
@@ -140,7 +145,6 @@ class MatchedRegionObservations:
         if (
             np.any((dataset < 0) | (dataset >= len(dataset_ids)))
             or np.any(block < 0)
-            or np.any(count < 0.0)
             or np.any(~np.isfinite(count))
             or np.any(~np.isfinite(support))
             or np.any(support <= 0.0)
@@ -151,6 +155,7 @@ class MatchedRegionObservations:
             < -1.0e-10 * max(float(np.max(np.abs(covariance_eigenvalue))), 1.0)
             or np.any(background & (family != -1))
             or np.any((~background) & ~np.isin(family, required))
+            or (not covariance_was_supplied and np.any(count < 0.0))
         ):
             raise ValueError("matched-region observations contain invalid values")
         unique_blocks = np.unique(block)
@@ -193,6 +198,77 @@ class MatchedRegionObservations:
 
 
 @dataclass(frozen=True, slots=True)
+class IntegratedPeakAreaProjection:
+    """Fixed sum from conditioned signal bins to trusted detector-peak areas."""
+
+    peak_ids: tuple[str, ...]
+    peak_dataset_index: ArrayLike
+    peak_signal_family: ArrayLike
+    source_signal_peak_index: ArrayLike
+    revision: str
+
+    def __post_init__(self) -> None:
+        peak_ids = tuple(self.peak_ids)
+        dataset = np.array(self.peak_dataset_index, dtype=np.int64, copy=True, order="C")
+        family = np.array(self.peak_signal_family, dtype=np.int64, copy=True, order="C")
+        source_peak = np.array(
+            self.source_signal_peak_index,
+            dtype=np.int64,
+            copy=True,
+            order="C",
+        )
+        peak_count = len(peak_ids)
+        if (
+            not peak_ids
+            or len(set(peak_ids)) != peak_count
+            or any(not isinstance(value, str) or not value for value in peak_ids)
+            or dataset.shape != (peak_count,)
+            or family.shape != (peak_count,)
+            or source_peak.ndim != 1
+            or not source_peak.size
+            or np.any(dataset < 0)
+            or np.any(family < 0)
+            or np.any((source_peak < 0) | (source_peak >= peak_count))
+            or not np.array_equal(np.unique(source_peak), np.arange(peak_count))
+            or not isinstance(self.revision, str)
+            or not self.revision
+        ):
+            raise ValueError("integrated peak-area projection is invalid")
+        for value in (dataset, family, source_peak):
+            value.setflags(write=False)
+        object.__setattr__(self, "peak_ids", peak_ids)
+        object.__setattr__(self, "peak_dataset_index", dataset)
+        object.__setattr__(self, "peak_signal_family", family)
+        object.__setattr__(self, "source_signal_peak_index", source_peak)
+
+    def aggregation_matrix(self, observations: MatchedRegionObservations) -> FloatArray:
+        """Return the validated Boolean sum matrix in canonical signal-row order."""
+
+        if not isinstance(observations, MatchedRegionObservations):
+            raise TypeError("observations must be MatchedRegionObservations")
+        signal = ~np.asarray(observations.is_background)
+        source_peak = np.asarray(self.source_signal_peak_index)
+        if source_peak.size != int(np.count_nonzero(signal)):
+            raise ValueError("peak-area mapping does not cover every signal row exactly once")
+        source_dataset = np.asarray(observations.dataset_index)[signal]
+        source_family = np.asarray(observations.signal_family)[signal]
+        peak_count = len(self.peak_ids)
+        if np.any(np.asarray(self.peak_dataset_index) >= len(observations.dataset_ids)):
+            raise ValueError("peak-area dataset index lies outside the observations")
+        for peak_index in range(peak_count):
+            selected = source_peak == peak_index
+            if (
+                np.any(source_dataset[selected] != self.peak_dataset_index[peak_index])
+                or np.any(source_family[selected] != self.peak_signal_family[peak_index])
+            ):
+                raise ValueError("one integrated peak cannot cross datasets or signal families")
+        matrix = np.zeros((peak_count, source_peak.size), dtype=np.float64)
+        matrix[source_peak, np.arange(source_peak.size)] = 1.0
+        matrix.setflags(write=False)
+        return matrix
+
+
+@dataclass(frozen=True, slots=True)
 class MatchedRegionFitResult:
     """One joint solution with dataset scales and affine block backgrounds."""
 
@@ -204,6 +280,9 @@ class MatchedRegionFitResult:
     fitted_background_mass: FloatArray
     fitted_signal_row: BoolArray
     weighted_residual: FloatArray
+    objective_ids: tuple[str, ...]
+    objective_dataset_index: IntArray
+    objective_signal_family: IntArray
     prior_weighted_residual: FloatArray
     objective_half_chi_squared: float
     data_objective_half_chi_squared: float
@@ -317,6 +396,8 @@ def profile_matched_region_nuisance(
     model_mass: ArrayLike,
     observations: MatchedRegionObservations,
     fixed_background: FixedMatchedRegionBackground,
+    *,
+    peak_area_projection: IntegratedPeakAreaProjection | None = None,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Profile dataset scales against one frozen conditioned background."""
 
@@ -342,14 +423,23 @@ def profile_matched_region_nuisance(
     )
     covariance = covariance[np.ix_(signal_index, signal_index)]
     covariance = 0.5 * (covariance + covariance.T)
-    root_covariance = cholesky(covariance, lower=True, check_finite=False)
     conditioned_model = condition_matched_region_model_from_anchors(fixed_background, model)
     corrected = count[signal] - fixed_background.count_mass[signal]
-    design = np.zeros((signal_index.size, len(observations.dataset_ids)), dtype=np.float64)
-    design[
-        np.arange(signal_index.size),
-        np.asarray(observations.dataset_index)[signal],
-    ] = conditioned_model[signal]
+    model_signal = conditioned_model[signal]
+    if peak_area_projection is None:
+        objective_dataset = np.asarray(observations.dataset_index)[signal]
+    else:
+        if not isinstance(peak_area_projection, IntegratedPeakAreaProjection):
+            raise TypeError("peak_area_projection must be IntegratedPeakAreaProjection")
+        aggregation = peak_area_projection.aggregation_matrix(observations)
+        corrected = aggregation @ corrected
+        model_signal = aggregation @ model_signal
+        covariance = aggregation @ covariance @ aggregation.T
+        covariance = 0.5 * (covariance + covariance.T)
+        objective_dataset = np.asarray(peak_area_projection.peak_dataset_index)
+    root_covariance = cholesky(covariance, lower=True, check_finite=False)
+    design = np.zeros((corrected.size, len(observations.dataset_ids)), dtype=np.float64)
+    design[np.arange(corrected.size), objective_dataset] = model_signal
     whitened_count = solve_triangular(
         root_covariance,
         corrected,
@@ -365,8 +455,12 @@ def profile_matched_region_nuisance(
     if np.any(np.linalg.norm(whitened_design, axis=0) <= np.finfo(np.float64).tiny):
         raise ValueError("candidate model has no scale-identifying signal in one dataset")
     scales, _ = nnls(whitened_design, whitened_count)
-    residual = np.zeros_like(count)
-    residual[signal] = whitened_count - whitened_design @ scales
+    objective_residual = whitened_count - whitened_design @ scales
+    if peak_area_projection is None:
+        residual = np.zeros_like(count)
+        residual[signal] = objective_residual
+    else:
+        residual = objective_residual
     return residual, scales, np.array(fixed_background.count_mass, copy=True)
 
 
@@ -381,6 +475,7 @@ def fit_matched_regions(
     upper_bounds: ArrayLike,
     parameter_scales: ArrayLike | None = None,
     prior_residual: Callable[[FloatArray], ArrayLike] | None = None,
+    peak_area_projection: IntegratedPeakAreaProjection | None = None,
     sensitivity_relative_tolerance: float = 1.0e-5,
     maximum_function_evaluations: int = 200,
 ) -> MatchedRegionFitResult:
@@ -448,8 +543,9 @@ def fit_matched_regions(
             model,
             observations,
             fixed_background,
+            peak_area_projection=peak_area_projection,
         )
-        return values[~observations.is_background]
+        return values[~observations.is_background] if peak_area_projection is None else values
 
     def residual(parameters: FloatArray) -> FloatArray:
         return np.concatenate((data_residual(parameters), evaluated_prior(parameters)))
@@ -470,9 +566,13 @@ def fit_matched_regions(
         model,
         observations,
         fixed_background,
+        peak_area_projection=peak_area_projection,
     )
     signal_row = ~np.asarray(observations.is_background)
-    data_row_count = int(np.count_nonzero(signal_row))
+    data_weighted_residual = (
+        weighted_residual[signal_row] if peak_area_projection is None else weighted_residual
+    )
+    data_row_count = data_weighted_residual.size
     data_jacobian = (
         np.asarray(selected.jac[:data_row_count], dtype=np.float64)
         * parameter_coordinate_scales[None, :]
@@ -512,7 +612,7 @@ def fit_matched_regions(
     else:
         correlation = np.full((len(names), len(names)), np.nan, dtype=np.float64)
     prior_weighted_residual = evaluated_prior(np.asarray(selected.x, dtype=np.float64))
-    data_objective = 0.5 * float(weighted_residual[signal_row] @ weighted_residual[signal_row])
+    data_objective = 0.5 * float(data_weighted_residual @ data_weighted_residual)
     prior_objective = 0.5 * float(prior_weighted_residual @ prior_weighted_residual)
     frozen = (
         np.array(selected.x, copy=True),
@@ -524,12 +624,29 @@ def fit_matched_regions(
             copy=True,
         ),
         np.array(background, copy=True),
-        np.array(signal_row, copy=True),
+        np.array(
+            signal_row
+            if peak_area_projection is None
+            else np.ones(len(peak_area_projection.peak_ids), dtype=np.bool_),
+            copy=True,
+        ),
         np.array(weighted_residual, copy=True),
         np.array(prior_weighted_residual, copy=True),
         np.array(singular_values, copy=True),
         np.array(penalized_singular, copy=True),
         np.array(correlation, copy=True),
+        np.array(
+            np.asarray(observations.dataset_index)[signal_row]
+            if peak_area_projection is None
+            else peak_area_projection.peak_dataset_index,
+            copy=True,
+        ),
+        np.array(
+            np.asarray(observations.signal_family)[signal_row]
+            if peak_area_projection is None
+            else peak_area_projection.peak_signal_family,
+            copy=True,
+        ),
     )
     for value in frozen:
         value.setflags(write=False)
@@ -542,6 +659,13 @@ def fit_matched_regions(
         fitted_background_mass=frozen[4],
         fitted_signal_row=frozen[5],
         weighted_residual=frozen[6],
+        objective_ids=(
+            tuple(f"signal-row:{index}" for index in np.flatnonzero(signal_row))
+            if peak_area_projection is None
+            else peak_area_projection.peak_ids
+        ),
+        objective_dataset_index=frozen[11],
+        objective_signal_family=frozen[12],
         prior_weighted_residual=frozen[7],
         objective_half_chi_squared=data_objective + prior_objective,
         data_objective_half_chi_squared=data_objective,
@@ -564,6 +688,7 @@ def fit_matched_regions(
 
 __all__ = [
     "FixedMatchedRegionBackground",
+    "IntegratedPeakAreaProjection",
     "MatchedRegionFitResult",
     "MatchedRegionObservations",
     "condition_matched_region_background_from_anchors",

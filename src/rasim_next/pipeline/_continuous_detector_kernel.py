@@ -53,6 +53,7 @@ class _ForwardDetectorState(NamedTuple):
     incident_decay_Ainv: float
     film_thickness_A: float
     source_phase_weight: float
+    polarization_model_code: int
     sample_from_local: FloatArray
     rod_hk_population: FloatArray
     rod_parallel_local_Ainv: FloatArray
@@ -101,6 +102,7 @@ class CompiledDetectorState:
     incident_decay_Ainv: float
     film_thickness_A: float
     source_phase_weight: float
+    polarization_model_code: int
     sample_from_local: FloatArray
     rod_hk_population: FloatArray
     rod_parallel_local_Ainv: FloatArray
@@ -210,6 +212,10 @@ class CompiledDetectorState:
         if parent_code == 1 and self.shared_disorder_epsilon != 0.0:
             raise ValueError("R-centered 3R compiled state must be fault-free")
         object.__setattr__(self, "stacking_parent_code", parent_code)
+        polarization_code = int(self.polarization_model_code)
+        if isinstance(self.polarization_model_code, bool) or polarization_code not in {0, 1}:
+            raise ValueError("polarization_model_code must be 0 (unity) or 1 (Thomson)")
+        object.__setattr__(self, "polarization_model_code", polarization_code)
         for name in ("refractive_index", "entrance_amplitude"):
             value = complex(getattr(self, name))
             if not math.isfinite(value.real) or not math.isfinite(value.imag):
@@ -754,6 +760,36 @@ def _finite_stack_strength_A2(
     )
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
+def _scattering_polarization_weight(
+    ki_film_sample_Ainv: FloatArray,
+    air_k0_Ainv: float,
+    outgoing_air_direction_x: float,
+    outgoing_air_direction_y: float,
+    outgoing_air_direction_z: float,
+    polarization_model_code: int,
+) -> float:
+    if polarization_model_code == 0:
+        return 1.0
+    incident_normal_squared = max(
+        air_k0_Ainv * air_k0_Ainv
+        - ki_film_sample_Ainv[0] * ki_film_sample_Ainv[0]
+        - ki_film_sample_Ainv[1] * ki_film_sample_Ainv[1],
+        0.0,
+    )
+    incident_normal = math.copysign(
+        math.sqrt(incident_normal_squared),
+        ki_film_sample_Ainv[2],
+    )
+    cosine = (
+        ki_film_sample_Ainv[0] * outgoing_air_direction_x
+        + ki_film_sample_Ainv[1] * outgoing_air_direction_y
+        + incident_normal * outgoing_air_direction_z
+    ) / air_k0_Ainv
+    cosine = min(max(cosine, -1.0), 1.0)
+    return 0.5 * (1.0 + cosine * cosine)
+
+
 @numba.njit(nogil=True, fastmath=False, cache=False)
 def _evaluate_point_into(
     column: float,
@@ -773,6 +809,7 @@ def _evaluate_point_into(
     incident_decay_Ainv: float,
     film_thickness_A: float,
     source_phase_weight: float,
+    polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
     rod_parallel_local_Ainv: FloatArray,
@@ -901,6 +938,14 @@ def _evaluate_point_into(
         entrance_power,
         incident_decay_Ainv,
         film_thickness_A,
+    )
+    optical_weight *= _scattering_polarization_weight(
+        ki_film_sample_Ainv,
+        air_k0_Ainv,
+        kf_air_x / air_k0_Ainv,
+        kf_air_y / air_k0_Ainv,
+        kf_air_z / air_k0_Ainv,
+        polarization_model_code,
     )
 
     q_local_x = (
@@ -1096,6 +1141,7 @@ def _evaluate_points_kernel(
     incident_decay_Ainv: float,
     film_thickness_A: float,
     source_phase_weight: float,
+    polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
     rod_parallel_local_Ainv: FloatArray,
@@ -1157,6 +1203,7 @@ def _evaluate_points_kernel(
             incident_decay_Ainv,
             film_thickness_A,
             source_phase_weight,
+            polarization_model_code,
             sample_from_local,
             rod_hk_population,
             rod_parallel_local_Ainv,
@@ -1238,6 +1285,14 @@ def _forward_root_pixel(
     direction_sample_x = kf_film_x / state.air_k0_Ainv
     direction_sample_y = kf_film_y / state.air_k0_Ainv
     direction_sample_z = kf_air_z / state.air_k0_Ainv
+    scattering_polarization = _scattering_polarization_weight(
+        state.ki_film_sample_Ainv,
+        state.air_k0_Ainv,
+        direction_sample_x,
+        direction_sample_y,
+        direction_sample_z,
+        state.polarization_model_code,
+    )
     direction_column_per_m = (
         state.detector_column_row_covectors_sample_per_m[0, 0] * direction_sample_x
         + state.detector_column_row_covectors_sample_per_m[0, 1] * direction_sample_y
@@ -1309,6 +1364,7 @@ def _forward_root_pixel(
         * strength
         * coarea_jacobian
         * optical_weight
+        * scattering_polarization
         * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):
@@ -1516,6 +1572,7 @@ def _integrate_pixel_boxes_kernel(
     incident_decay_Ainv: float,
     film_thickness_A: float,
     source_phase_weight: float,
+    polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
     rod_parallel_local_Ainv: FloatArray,
@@ -1604,6 +1661,7 @@ def _integrate_pixel_boxes_kernel(
                     incident_decay_Ainv,
                     film_thickness_A,
                     source_phase_weight,
+                    polarization_model_code,
                     sample_from_local,
                     rod_hk_population,
                     rod_parallel_local_Ainv,
@@ -1673,6 +1731,7 @@ def _integrate_pixel_boxes_kernel(
                 incident_decay_Ainv,
                 film_thickness_A,
                 source_phase_weight,
+                polarization_model_code,
                 sample_from_local,
                 rod_hk_population,
                 rod_parallel_local_Ainv,
@@ -1855,6 +1914,7 @@ class CompiledDetectorEvaluator:
             state.incident_decay_Ainv,
             state.film_thickness_A,
             state.source_phase_weight,
+            state.polarization_model_code,
             state.sample_from_local,
             state.rod_hk_population,
             state.rod_parallel_local_Ainv,
@@ -1969,6 +2029,7 @@ class CompiledDetectorEvaluator:
             state.incident_decay_Ainv,
             state.film_thickness_A,
             state.source_phase_weight,
+            state.polarization_model_code,
             state.sample_from_local,
             state.rod_hk_population,
             state.rod_parallel_local_Ainv,
@@ -2044,6 +2105,7 @@ class CompiledDetectorEvaluator:
             state.incident_decay_Ainv,
             state.film_thickness_A,
             state.source_phase_weight,
+            state.polarization_model_code,
             state.sample_from_local,
             state.rod_hk_population,
             state.rod_parallel_local_Ainv,

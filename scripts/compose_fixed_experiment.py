@@ -67,6 +67,22 @@ def _position_state(
 ) -> tuple[FixedPositionState, str]:
     document = _mapping_file(path, format_name="json")
     expected_manifest = geometry_manifest_path.resolve()
+    if document.get("schema_version") == "rasim-layered-position-fit-v2":
+        manifest_identity = document.get("provenance", {}).get("manifest", {})
+        if (
+            document.get("accepted") is not True
+            or document.get("intensity_evaluated") is not False
+            or document.get("model_pixelized") is not False
+            or manifest_identity.get("sha256") != _sha256(expected_manifest)
+        ):
+            raise ValueError("provided modular position artifact is not qualified")
+        position = FixedPositionState.from_record(document.get("fixed_position"))
+        if document.get("scientific_revision") != position.artifact_revision:
+            raise ValueError("modular position artifact revision changed")
+        status = str(document.get("status", ""))
+        if status not in {"POSITION_FIT", "POSITION_MODEL_LIMITED"}:
+            raise ValueError("modular position artifact status is invalid")
+        return position, status
     position, status, _ = fixed_position_from_fit_record(
         document,
         expected_manifest_path=expected_manifest,

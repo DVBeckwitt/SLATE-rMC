@@ -8,8 +8,8 @@ parameter_names = [
   "intensity_envelope_u_normal_A2",
 ]
 baseline_parameters = [0.0, 0.0, 0.012, 0.0, 0.0]
-lower_bounds = [-0.005, -0.005, 0.0, 0.0, 0.0]
-upper_bounds = [0.005, 0.005, 0.03, 0.02, 0.02]
+lower_bounds = [-0.01, -0.01, 0.0, 0.0, 0.0]
+upper_bounds = [0.01, 0.01, 0.03, 0.02, 0.02]
 parameter_scales = [0.001, 0.001, 0.01, 0.005, 0.005]
 prior_mean = [0.0, 0.0, 0.012, 0.0, 0.0]
 prior_sigma = [0.001, 0.001, 0.005, 0.005, 0.005]
@@ -17,6 +17,11 @@ prior_interpretation = "Near-CIF coordinates, Callaert outer-site Bi antisite x=
 sensitivity_relative_tolerance = 1.0e-5
 maximum_sensitivity_condition = 1.0e5
 bound_proximity_in_parameter_scales = 1.0e-6
+
+[displacement_gauge]
+model_id = "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
+site_adp_common_mode = "fixed_reference"
+sample_q_envelope_mode = "fit_zero_centered_regularized"
 
 [site_displacement_profile]
 model_id = "transverse_isotropic_site_reference_fixed.v1"

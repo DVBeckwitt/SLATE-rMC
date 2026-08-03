@@ -7,6 +7,7 @@ import pytest
 
 from rasim_next.fitting import (
     FixedMatchedRegionBackground,
+    IntegratedPeakAreaProjection,
     MatchedRegionObservations,
     RadialBackgroundProfiles,
     RadialBackgroundState,
@@ -82,6 +83,17 @@ def _synthetic_observations() -> tuple[
     return observations, fixed_background, feature_array, truth
 
 
+def test_fixed_background_preserves_signed_dark_correction() -> None:
+    correction = np.asarray((-2.0, 1.0, -0.5))
+    background = FixedMatchedRegionBackground(
+        count_mass=correction,
+        covariance_count2=np.eye(3),
+        revision="signed-dark-corrected-background.v1",
+    )
+
+    np.testing.assert_array_equal(background.count_mass, correction)
+
+
 def test_joint_matched_region_fit_recovers_one_vector_with_dataset_scales() -> None:
     observations, fixed_background, features, truth = _synthetic_observations()
 
@@ -107,6 +119,141 @@ def test_joint_matched_region_fit_recovers_one_vector_with_dataset_scales() -> N
         0.0,
         rtol=0.0,
         atol=0.0,
+    )
+
+
+def test_integrated_peak_area_fit_sums_conditioned_bins_with_one_scale_per_dataset() -> None:
+    observations, fixed_background, features, truth = _synthetic_observations()
+    signal = ~np.asarray(observations.is_background)
+    signal_dataset = np.asarray(observations.dataset_index)[signal]
+    signal_family = np.asarray(observations.signal_family)[signal]
+    families = tuple(observations.required_signal_families)
+    peak_index = np.asarray(
+        [dataset * len(families) + families.index(int(family)) for dataset, family in zip(
+            signal_dataset,
+            signal_family,
+            strict=True,
+        )],
+        dtype=np.int64,
+    )
+    projection = IntegratedPeakAreaProjection(
+        peak_ids=tuple(f"d{dataset}:m{family}" for dataset in range(3) for family in families),
+        peak_dataset_index=np.repeat(np.arange(3), len(families)),
+        peak_signal_family=np.tile(families, 3),
+        source_signal_peak_index=peak_index,
+        revision="synthetic-integrated-peak-areas.v1",
+    )
+
+    result = fit_matched_regions(
+        observations,
+        lambda parameters: np.exp(features @ parameters) * signal,
+        fixed_background=fixed_background,
+        peak_area_projection=projection,
+        parameter_names=("p0", "p1", "p2", "p3"),
+        initial_parameters=(truth,),
+        lower_bounds=np.full(4, -1.0),
+        upper_bounds=np.full(4, 1.0),
+    )
+
+    np.testing.assert_allclose(result.parameters, truth, rtol=0.0, atol=2.0e-8)
+    np.testing.assert_allclose(result.dataset_scales, (2.0, 3.0, 4.0), rtol=0.0, atol=2.0e-8)
+    assert result.weighted_residual.shape == (12,)
+    np.testing.assert_array_equal(result.fitted_signal_row, np.ones(12, dtype=np.bool_))
+    np.testing.assert_array_equal(result.objective_dataset_index, projection.peak_dataset_index)
+    np.testing.assert_array_equal(result.objective_signal_family, projection.peak_signal_family)
+
+
+def test_integrated_peak_covariance_and_residual_are_partition_invariant() -> None:
+    signal_covariance = np.asarray(
+        (
+            (4.0, 0.8, 0.3, 0.1),
+            (0.8, 3.0, 0.2, 0.4),
+            (0.3, 0.2, 5.0, 1.1),
+            (0.1, 0.4, 1.1, 4.0),
+        )
+    )
+    split_covariance = np.zeros((6, 6), dtype=np.float64)
+    split_covariance[:4, :4] = signal_covariance
+    split_covariance[4:, 4:] = np.diag((7.0, 8.0))
+    split_count = np.asarray((8.0, 5.0, 10.0, 4.0, 20.0, 21.0))
+    split_model = np.asarray((1.0, 2.0, 2.0, 1.0, 0.0, 0.0))
+    split = MatchedRegionObservations(
+        dataset_ids=("image",),
+        dataset_index=np.zeros(6, dtype=np.int64),
+        block_index=np.zeros(6, dtype=np.int64),
+        signal_family=(0, 0, 1, 1, -1, -1),
+        is_background=(False, False, False, False, True, True),
+        count_mass=split_count,
+        support_px2=np.ones(6),
+        background_coordinate=(0.0, 0.0, 0.0, 0.0, -1.0, 1.0),
+        required_signal_families=(0, 1),
+        count_covariance_count2=split_covariance,
+    )
+    background = FixedMatchedRegionBackground(
+        count_mass=np.zeros(6),
+        covariance_count2=np.zeros((6, 6)),
+        revision="zero-background.v1",
+    )
+    projection = IntegratedPeakAreaProjection(
+        peak_ids=("m0", "m1"),
+        peak_dataset_index=(0, 0),
+        peak_signal_family=(0, 1),
+        source_signal_peak_index=(0, 0, 1, 1),
+        revision="partition-invariance.v1",
+    )
+    aggregation = projection.aggregation_matrix(split)
+    expected_count = aggregation @ split_count[:4]
+    expected_model = aggregation @ split_model[:4]
+    expected_covariance = aggregation @ signal_covariance @ aggregation.T
+    root = np.linalg.cholesky(expected_covariance)
+    whitened_count = np.linalg.solve(root, expected_count)
+    whitened_model = np.linalg.solve(root, expected_model)
+    expected_scale = float(whitened_model @ whitened_count) / float(
+        whitened_model @ whitened_model
+    )
+    expected_residual = whitened_count - expected_scale * whitened_model
+
+    split_residual, split_scale, _ = profile_matched_region_nuisance(
+        split_model,
+        split,
+        background,
+        peak_area_projection=projection,
+    )
+    assert np.linalg.norm(expected_residual) > 1.0e-3
+    np.testing.assert_allclose(split_scale, (expected_scale,), rtol=0.0, atol=1.0e-14)
+    np.testing.assert_allclose(split_residual, expected_residual, rtol=0.0, atol=1.0e-14)
+
+    unsplit_covariance = np.zeros((4, 4), dtype=np.float64)
+    unsplit_covariance[:2, :2] = expected_covariance
+    unsplit_covariance[2:, 2:] = np.diag((7.0, 8.0))
+    unsplit = MatchedRegionObservations(
+        dataset_ids=("image",),
+        dataset_index=np.zeros(4, dtype=np.int64),
+        block_index=np.zeros(4, dtype=np.int64),
+        signal_family=(0, 1, -1, -1),
+        is_background=(False, False, True, True),
+        count_mass=(*expected_count, 20.0, 21.0),
+        support_px2=(2.0, 2.0, 1.0, 1.0),
+        background_coordinate=(0.0, 0.0, -1.0, 1.0),
+        required_signal_families=(0, 1),
+        count_covariance_count2=unsplit_covariance,
+    )
+    unsplit_background = FixedMatchedRegionBackground(
+        count_mass=np.zeros(4),
+        covariance_count2=np.zeros((4, 4)),
+        revision="zero-background-unsplit.v1",
+    )
+    unsplit_residual, unsplit_scale, _ = profile_matched_region_nuisance(
+        np.asarray((*expected_model, 0.0, 0.0)),
+        unsplit,
+        unsplit_background,
+    )
+    np.testing.assert_allclose(unsplit_scale, split_scale, rtol=0.0, atol=1.0e-14)
+    np.testing.assert_allclose(
+        unsplit_residual[:2],
+        split_residual,
+        rtol=0.0,
+        atol=1.0e-14,
     )
 
 

@@ -32,6 +32,7 @@ from rasim_next.fitting import (
     FixedMatchedRegionBackground,
     FixedMosaicState,
     FixedPositionState,
+    IntegratedPeakAreaProjection,
     MatchedRegionObservations,
     RadialBackgroundProfiles,
     RadialBackgroundState,
@@ -55,6 +56,7 @@ from rasim_next.measurement import (
     SpecularAngularProfileRegion,
     compile_continuous_rectangle_quadrature,
     compile_native_pixel_region_projection,
+    integrate_shared_native_pixel_field,
     offspecular_region_membership,
     specular_angular_membership,
 )
@@ -81,6 +83,7 @@ from rasim_next.pipeline.reciprocal_detector_chart import (
 )
 from rasim_next.proof.diagnostics import write_diagnostic
 from rasim_next.selection import build_osc_angle_frame
+from rasim_next.stacking import Parent, RichEpsilonModel
 
 FAMILIES = (0, 1, 3, 4)
 STRUCTURE_PARAMETER_NAMES = (
@@ -106,12 +109,12 @@ PROJECTION_CONVERGENCE_METRICS = (
     "maximum_covariance_row_relative_l2",
 )
 MEASURED_PROJECTION_METHOD = "piecewise_constant_native_pixel_field_continuous_chart_projection.v2"
-PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v2"
-BACKGROUND_SCHEMA = "rasim-shared-radial-background-v2"
-FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v11"
-FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v9"
-PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v10"
-PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v6"
+PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v3"
+BACKGROUND_SCHEMA = "rasim-shared-radial-background-v3"
+FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v12"
+FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v10"
+PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v11"
+PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v7"
 PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_identity",
     "profile_valid",
@@ -132,6 +135,9 @@ RADIAL_BACKGROUND_MODEL = (
     "C_d + A_d * (1-exp(-(r/r_in)^p_in)) * exp(-(r/r_out)^p_out); "
     "shared r_in,p_in,r_out,p_out and per-dataset A_d,C_d"
 )
+DARK_CORRECTION_MODEL = "scaled_dark_subtraction_no_clip.v1"
+PEAK_AREA_OBJECTIVE = "background_conditioned_integrated_peak_count_mass.v1"
+FAULT_FREE_THREE_R_MODEL = "rich_epsilon_parent_3r_exact_zero_fault.v1"
 FIXED_EXPERIMENT_SCHEMA = FIXED_EXPERIMENT_STATE_SCHEMA_VERSION
 
 
@@ -279,6 +285,173 @@ def _manifest_fit_intervals(
             interval = (float(center) - half_width, float(center) + half_width)
             intervals.append(tuple(np.deg2rad(interval)) if angular else interval)
     return tuple(intervals)
+
+
+def _peak_area_projection_revision(
+    catalog: Sequence[dict[str, Any]],
+    source_signal_peak_index: np.ndarray,
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"background-conditioned-integrated-peak-area-projection.v1\0")
+    digest.update(json.dumps(catalog, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    digest.update(np.ascontiguousarray(source_signal_peak_index, dtype=np.int64).tobytes())
+    return f"sha256-{digest.hexdigest()}.integrated-peak-area.v1"
+
+
+def _integrated_peak_area_projection(
+    arrays: dict[str, np.ndarray],
+    manifest: dict[str, Any],
+) -> tuple[IntegratedPeakAreaProjection, list[dict[str, Any]]]:
+    """Map every conditioned signal bin to one declared trusted peak area."""
+
+    candidates: list[dict[str, Any]] = []
+    dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
+    reciprocal = 2.0 * np.pi * np.linalg.inv(
+        np.asarray(manifest["fixed_lattice"]["active_direct_basis_A"], dtype=np.float64)
+    ).T
+    b3_norm_Ainv = float(np.linalg.norm(reciprocal[:, 2]))
+    for peak in manifest["fit_peak_catalog"]:
+        family = int(peak["family_m"])
+        centers = tuple(float(value) for value in peak.get("centers", (peak.get("center"),)))
+        for center in centers:
+            expanded_identity = str(peak["identity"])
+            if len(centers) > 1:
+                expanded_identity += f"@{center:.12g}"
+            for side in (("center",) if family == 0 else ("plus", "minus")):
+                peak_id = expanded_identity if family == 0 else f"{expanded_identity}:{side}"
+                half_width = float(peak["half_width"])
+                bounds = (center - half_width, center + half_width)
+                candidates.append(
+                    {
+                        "peak_id": peak_id,
+                        "source_recipe_identity": str(peak["identity"]),
+                        "dataset_id": str(peak["dataset_id"]),
+                        "dataset_index": dataset_ids.index(str(peak["dataset_id"])),
+                        "family_m": family,
+                        "profile_identity": str(peak["profile_identity"]),
+                        "side": side,
+                        "coordinate_kind": str(peak["coordinate_kind"]),
+                        "center": center,
+                        "half_width": half_width,
+                        "coordinate_bounds": bounds,
+                        "qz_bounds_Ainv": (
+                            None if family == 0 else [b3_norm_Ainv * value for value in bounds]
+                        ),
+                    }
+                )
+
+    m0_edges = np.asarray(manifest["m0_region"]["two_theta_bin_edges_rad"], dtype=np.float64)
+    layout_by_group = {
+        str(record["group"]): record for record in manifest["offspecular_layouts"]
+    }
+    signal_rows = np.flatnonzero(~np.asarray(arrays["is_background"]))
+    source_candidate = np.empty(signal_rows.size, dtype=np.int64)
+    for source_index, row in enumerate(signal_rows):
+        dataset_id = str(arrays["dataset_id"][row])
+        family = int(arrays["signal_family_m"][row])
+        group = str(arrays["group"][row])
+        band = str(arrays["band"][row])
+        bin_index = int(arrays["bin_index"][row])
+        if family == 0:
+            row_bounds = tuple(np.rad2deg(m0_edges[bin_index : bin_index + 2]))
+            side = "center"
+        else:
+            axial_edges = np.asarray(layout_by_group[group]["axial_bin_edges"], dtype=np.float64)
+            row_bounds = tuple(float(value) for value in axial_edges[bin_index : bin_index + 2])
+            side = band.rsplit("_", 1)[-1]
+            if side not in {"plus", "minus"}:
+                raise ValueError("off-specular signal band lacks its signed detector side")
+        matched = [
+            index
+            for index, candidate in enumerate(candidates)
+            if candidate["dataset_id"] == dataset_id
+            and candidate["family_m"] == family
+            and candidate["side"] == side
+            and max(row_bounds[0], candidate["coordinate_bounds"][0])
+            < min(row_bounds[1], candidate["coordinate_bounds"][1])
+        ]
+        if len(matched) != 1:
+            raise ValueError(
+                f"signal row {int(row)} maps to {len(matched)} integrated peak areas"
+            )
+        source_candidate[source_index] = matched[0]
+
+    used_candidate = set(int(value) for value in source_candidate)
+    missing_candidate = [
+        candidates[index]["peak_id"]
+        for index in range(len(candidates))
+        if index not in used_candidate
+    ]
+    if missing_candidate:
+        raise ValueError(
+            "declared integrated peak areas have no retained signal rows: "
+            + ", ".join(missing_candidate)
+        )
+    source_peak = source_candidate
+    catalog = []
+    for peak_index, candidate in enumerate(candidates):
+        record = dict(candidate)
+        record["source_signal_rows"] = signal_rows[source_peak == peak_index].tolist()
+        record["coordinate_bounds"] = list(record["coordinate_bounds"])
+        catalog.append(record)
+    revision = _peak_area_projection_revision(catalog, source_peak)
+    projection = IntegratedPeakAreaProjection(
+        peak_ids=tuple(record["peak_id"] for record in catalog),
+        peak_dataset_index=np.asarray(
+            [record["dataset_index"] for record in catalog], dtype=np.int64
+        ),
+        peak_signal_family=np.asarray([record["family_m"] for record in catalog], dtype=np.int64),
+        source_signal_peak_index=source_peak,
+        revision=revision,
+    )
+    projection.aggregation_matrix(
+        MatchedRegionObservations(
+            dataset_ids=dataset_ids,
+            dataset_index=arrays["dataset_index"],
+            block_index=arrays["block_index"],
+            signal_family=arrays["signal_family_m"],
+            is_background=arrays["is_background"],
+            count_mass=arrays["count_sum"],
+            support_px2=arrays["support_px2"],
+            background_coordinate=arrays["coordinate_mean"],
+            required_signal_families=FAMILIES,
+        )
+    )
+    return projection, catalog
+
+
+def _prepared_peak_area_projection(
+    arrays: dict[str, np.ndarray],
+    manifest: dict[str, Any],
+    observations: MatchedRegionObservations,
+) -> IntegratedPeakAreaProjection:
+    catalog = manifest.get("integrated_peak_catalog")
+    if not isinstance(catalog, list) or not catalog:
+        raise ValueError("prepared diagnostic lacks integrated peak areas")
+    source_peak = np.asarray(arrays["source_signal_peak_index"], dtype=np.int64)
+    signal_rows = np.flatnonzero(~np.asarray(observations.is_background))
+    if (
+        manifest.get("source_signal_peak_index_sha256") != _array_sha256(source_peak)
+        or manifest.get("peak_area_projection_revision")
+        != _peak_area_projection_revision(catalog, source_peak)
+        or any(
+            record.get("source_signal_rows")
+            != signal_rows[source_peak == peak_index].tolist()
+            for peak_index, record in enumerate(catalog)
+        )
+    ):
+        raise ValueError("prepared integrated peak-area mapping changed")
+    projection = IntegratedPeakAreaProjection(
+        peak_ids=tuple(str(record["peak_id"]) for record in catalog),
+        peak_dataset_index=np.asarray(
+            [record["dataset_index"] for record in catalog], dtype=np.int64
+        ),
+        peak_signal_family=np.asarray([record["family_m"] for record in catalog], dtype=np.int64),
+        source_signal_peak_index=source_peak,
+        revision=str(manifest.get("peak_area_projection_revision", "")),
+    )
+    projection.aggregation_matrix(observations)
+    return projection
 
 
 def _compile_dataset_continuous_region_plan(
@@ -699,7 +872,7 @@ def _background_model_identity_is_admissible(
             for dataset_id in dataset_ids
         )
         and all(_is_sha256(hash_by_dataset[dataset_id]) for dataset_id in dataset_ids)
-        and _is_canonical_revision(background_model.get("state_revision"))
+        and _is_sha256(background_model.get("state_revision"))
         and _is_canonical_revision(background_model.get("conditioned_revision"))
         and all(
             _is_sha256(background_model.get(name))
@@ -837,6 +1010,46 @@ def _native_projection_convergence(
     }
 
 
+def _integrated_area_projection_converged(summary: dict[str, Any]) -> bool:
+    """Accept refinement when integrated masses and their supports have converged.
+
+    Covariance refinement remains reported, while the refined covariance itself is
+    authoritative for whitening the fit objective.
+    """
+
+    required_metrics = (
+        "mass_relative_l2",
+        "support_relative_l2",
+        "maximum_row_mass_standardized_error",
+        "maximum_row_support_relative_error",
+    )
+    limit = float(summary["maximum_relative_l2"])
+    return bool(summary["support_masks_equal"]) and all(
+        math.isfinite(value) and 0.0 <= value <= limit
+        for metrics in summary["by_dataset"].values()
+        for name in required_metrics
+        for value in (float(metrics[name]),)
+    )
+
+
+def _display_profile_projection_converged(summary: dict[str, Any]) -> bool:
+    """Accept a display projection from its pooled count mass and support.
+
+    Full-branch displays contain weak edge bins whose individual relative errors
+    are intentionally retained as diagnostics.  They do not define the fitted
+    integrated-peak observable.
+    """
+
+    required_metrics = ("mass_relative_l2", "support_relative_l2")
+    limit = float(summary["maximum_relative_l2"])
+    return bool(summary["support_masks_equal"]) and all(
+        math.isfinite(value) and 0.0 <= value <= limit
+        for metrics in summary["by_dataset"].values()
+        for name in required_metrics
+        for value in (float(metrics[name]),)
+    )
+
+
 def _projection_convergence_is_admissible(
     evidence: Any,
     *,
@@ -855,18 +1068,30 @@ def _projection_convergence_is_admissible(
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return False
     expected_ids = tuple(str(value) for value in expected_dataset_ids)
+    acceptance_measure = evidence.get("acceptance_measure")
+    if acceptance_measure == "integrated_peak_count_mass_and_support.v1":
+        covariance_policy = "refined_covariance_is_authoritative_for_objective_whitening"
+        accepted = _integrated_area_projection_converged(evidence)
+    elif acceptance_measure == "display_profile_pooled_count_mass_and_support.v1":
+        covariance_policy = "refined_covariance_is_authoritative_for_display"
+        accepted = _display_profile_projection_converged(evidence)
+    else:
+        return False
     return bool(
         evidence.get("status") == "COMPLETE"
         and evidence.get("converged") is True
         and evidence.get("support_masks_equal") is True
+        and isinstance(evidence.get("covariance_refinement_converged"), bool)
+        and evidence.get("covariance_policy") == covariance_policy
         and limit == float(expected_limit)
         and set(values) == set(expected_ids)
         and all(set(metrics) == set(PROJECTION_CONVERGENCE_METRICS) for metrics in values.values())
         and all(
-            math.isfinite(value) and 0.0 <= value <= float(expected_limit)
+            math.isfinite(value) and value >= 0.0
             for metrics in values.values()
             for value in metrics.values()
         )
+        and accepted
     )
 
 
@@ -877,6 +1102,8 @@ def _conditioned_model_cubature_errors(
     fixed_background: FixedMatchedRegionBackground,
     signal_family_m: np.ndarray,
     is_background: np.ndarray,
+    peak_aggregation: np.ndarray | None = None,
+    peak_family_m: np.ndarray | None = None,
 ) -> tuple[float, dict[str, float], float]:
     """Compare cubature at the exact anchor-conditioned objective measure."""
 
@@ -899,16 +1126,34 @@ def _conditioned_model_cubature_errors(
         denominator = max(np.linalg.norm(reference[selected]), np.finfo(np.float64).tiny)
         return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
 
+    if peak_aggregation is None:
+        fit_objective = fit_conditioned
+        oracle_objective = oracle_conditioned
+        objective_family = family_by_row
+        objective_row = ~background
+    else:
+        aggregation = np.asarray(peak_aggregation, dtype=np.float64)
+        objective_family = np.asarray(peak_family_m, dtype=np.int64)
+        if (
+            aggregation.ndim != 2
+            or aggregation.shape[1] != int(np.count_nonzero(~background))
+            or objective_family.shape != (aggregation.shape[0],)
+        ):
+            raise ValueError("integrated peak cubature projection is misaligned")
+        fit_objective = aggregation @ fit_conditioned[~background]
+        oracle_objective = aggregation @ oracle_conditioned[~background]
+        objective_row = np.ones(aggregation.shape[0], dtype=np.bool_)
+
     by_family = {
         str(family): relative_l2(
-            oracle_conditioned,
-            fit_conditioned,
-            family_by_row == family,
+            oracle_objective,
+            fit_objective,
+            objective_family == family,
         )
         for family in FAMILIES
     }
     return (
-        relative_l2(oracle_conditioned, fit_conditioned, ~background),
+        relative_l2(oracle_objective, fit_objective, objective_row),
         by_family,
         relative_l2(
             np.asarray(oracle_model_mass, dtype=np.float64),
@@ -921,6 +1166,63 @@ def _conditioned_model_cubature_errors(
 def _file_identity(path: Path) -> dict[str, str]:
     resolved = path.resolve()
     return {"path": str(resolved), "sha256": _sha256(resolved)}
+
+
+def _dark_correction_from_recipe(
+    recipe_path: Path,
+    recipe: dict[str, Any],
+    *,
+    detector_shape_rc: tuple[int, int],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    settings = recipe["dark_correction"]
+    path = (recipe_path.parent / str(settings["path"])).resolve()
+    identity = _file_identity(path)
+    counts = read_osc(path).detector_native_counts
+    if counts.shape != detector_shape_rc:
+        raise ValueError("dark OSC shape differs from the fitted detector")
+    native_sha256 = hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+    record = {
+        "model_id": DARK_CORRECTION_MODEL,
+        "path": str(path),
+        "file_sha256": identity["sha256"],
+        "detector_native_bytes_sha256": native_sha256,
+        "detector_native_shape_rc": list(counts.shape),
+        "detector_native_dtype": str(counts.dtype),
+        "scale": float(settings["scale"]),
+        "scale_basis": str(settings["scale_basis"]),
+        "negative_values_clipped": False,
+        "smoothing_applied": False,
+        "covariance_model": "shared_independent_poisson_dark_across_datasets.v1",
+    }
+    return counts, record
+
+
+def _verified_dark_counts(manifest: dict[str, Any]) -> tuple[np.ndarray, float]:
+    record = manifest.get("dark_correction")
+    if (
+        not isinstance(record, dict)
+        or record.get("model_id") != DARK_CORRECTION_MODEL
+        or record.get("negative_values_clipped") is not False
+        or record.get("smoothing_applied") is not False
+        or record.get("covariance_model")
+        != "shared_independent_poisson_dark_across_datasets.v1"
+    ):
+        raise ValueError("prepared diagnostic lacks its declared dark correction")
+    path = Path(str(record.get("path"))).resolve()
+    if _sha256(path) != record.get("file_sha256"):
+        raise ValueError("dark OSC changed after preparation")
+    counts = read_osc(path).detector_native_counts
+    if (
+        list(counts.shape) != record.get("detector_native_shape_rc")
+        or str(counts.dtype) != record.get("detector_native_dtype")
+        or hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+        != record.get("detector_native_bytes_sha256")
+    ):
+        raise ValueError("decoded dark OSC changed after preparation")
+    scale = float(record.get("scale", math.nan))
+    if not math.isfinite(scale) or scale < 0.0:
+        raise ValueError("dark scale is invalid")
+    return counts, scale
 
 
 def _implementation_identity() -> dict[str, Any]:
@@ -1003,6 +1305,17 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Figure-7 recipe requires three distinct datasets")
     if document.get("display_dataset_id") not in dataset_ids:
         raise ValueError("display_dataset_id must name one fitted dataset")
+    dark = document.get("dark_correction")
+    if (
+        not isinstance(dark, dict)
+        or dark.get("model_id") != DARK_CORRECTION_MODEL
+        or not isinstance(dark.get("path"), str)
+        or not dark["path"]
+        or not math.isfinite(float(dark.get("scale", math.nan)))
+        or float(dark["scale"]) < 0.0
+        or dark.get("scale_basis") != "matched_exposure_assumed.v1"
+    ):
+        raise ValueError("Figure-7 recipe requires an explicit no-clip dark correction")
     peaks = document.get("fit_peak")
     if not isinstance(peaks, list) or not peaks:
         raise ValueError("Figure-7 recipe requires a frozen fit_peak catalog")
@@ -1025,6 +1338,21 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
             )
         if not identity or (dataset_id, identity) in peak_identities:
             raise ValueError("fit_peak identities must be nonempty and unique per dataset")
+        centers = peak.get("centers", (peak.get("center"),))
+        try:
+            center_values = np.asarray(tuple(centers), dtype=np.float64)
+            half_width = float(peak.get("half_width"))
+        except (TypeError, ValueError):
+            raise ValueError("fit_peak centers and half_width must be finite") from None
+        if (
+            center_values.ndim != 1
+            or not center_values.size
+            or np.any(~np.isfinite(center_values))
+            or len(np.unique(center_values)) != center_values.size
+            or not math.isfinite(half_width)
+            or half_width <= 0.0
+        ):
+            raise ValueError("fit_peak centers must be unique and finite with positive half_width")
         peak_identities.add((dataset_id, identity))
     for excluded in document.get("excluded_peak", ()):
         if excluded.get("dataset_id") not in dataset_ids:
@@ -1108,8 +1436,10 @@ def _joint_cubature_is_admissible(
         and set(family_errors) == {str(value) for value in FAMILIES}
         and all(
             math.isfinite(value) and 0.0 <= value <= maximum
-            for value in (global_error, anchor_error, *family_errors.values())
+            for value in (global_error, *family_errors.values())
         )
+        and math.isfinite(anchor_error)
+        and anchor_error >= 0.0
     )
 
 
@@ -1141,8 +1471,10 @@ def _data_projection_is_admissible(
         and set(family_errors) == {str(value) for value in FAMILIES}
         and all(
             math.isfinite(value) and 0.0 <= value <= maximum
-            for value in (*family_errors.values(), anchor_error)
+            for value in family_errors.values()
         )
+        and math.isfinite(anchor_error)
+        and anchor_error >= 0.0
         and _projection_convergence_is_admissible(
             evidence,
             expected_dataset_ids=dataset_ids,
@@ -1154,6 +1486,90 @@ def _data_projection_is_admissible(
             isinstance(value, str) and len(value) == 64
             for value in (*fit_revisions, *oracle_revisions)
         )
+    )
+
+
+def _integrated_peak_objective_is_admissible(
+    document: dict[str, Any],
+    execution: dict[str, Any],
+) -> bool:
+    evidence = document.get("integrated_peak_areas", {})
+    try:
+        peak_ids = tuple(str(value) for value in evidence["peak_ids"])
+        dataset = np.asarray(evidence["dataset_index"], dtype=np.int64)
+        family = np.asarray(evidence["family_m"], dtype=np.int64)
+        observed = np.asarray(
+            evidence["observed_background_subtracted_count_mass"],
+            dtype=np.float64,
+        )
+        fitted = np.asarray(evidence["fitted_count_mass"], dtype=np.float64)
+        revision = str(evidence["projection_revision"])
+        mapping_sha256 = str(evidence["source_signal_peak_index_sha256"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    shape = (len(peak_ids),)
+    dataset_count = len(document.get("dataset_scales", {}))
+    return bool(
+        document.get("objective_measure") == PEAK_AREA_OBJECTIVE
+        and peak_ids
+        and len(set(peak_ids)) == len(peak_ids)
+        and dataset.shape == shape
+        and family.shape == shape
+        and observed.shape == shape
+        and fitted.shape == shape
+        and dataset_count > 0
+        and np.all((dataset >= 0) & (dataset < dataset_count))
+        and set(family.tolist()) == set(FAMILIES)
+        and np.all(np.isfinite(observed))
+        and np.all(np.isfinite(fitted))
+        and revision.startswith("sha256-")
+        and revision.endswith(".integrated-peak-area.v1")
+        and _is_sha256(mapping_sha256)
+        and execution.get("objective_measure") == PEAK_AREA_OBJECTIVE
+        and execution.get("peak_area_projection_revision") == revision
+        and execution.get("source_signal_peak_index_sha256") == mapping_sha256
+    )
+
+
+def _fixed_displacement_gauge_is_admissible(structure: Any) -> bool:
+    if not isinstance(structure, dict):
+        return False
+    profile = structure.get("site_displacement_profile", {})
+    sites = profile.get("sites") if isinstance(profile, dict) else None
+    try:
+        scale = float(structure["site_adp_scale"])
+        site_values = np.asarray(
+            [
+                (
+                    site["reference_u_radial_A2"],
+                    site["reference_u_normal_A2"],
+                    site["fitted_u_radial_A2"],
+                    site["fitted_u_normal_A2"],
+                )
+                for site in sites
+            ],
+            dtype=np.float64,
+        )
+        labels = tuple(str(site["source_label"]) for site in sites)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return bool(
+        scale == 1.0
+        and structure.get("site_adp_refinement_status") == "fixed_literature_reference"
+        and structure.get("displacement_gauge")
+        == {
+            "model_id": "fixed_site_adp_plus_regularized_sample_q_envelope.v1",
+            "site_adp_common_mode": "fixed_reference",
+            "sample_q_envelope_mode": "fit_zero_centered_regularized",
+        }
+        and profile.get("model_id") == "transverse_isotropic_site_reference_fixed.v1"
+        and isinstance(profile.get("provenance"), str)
+        and bool(profile["provenance"])
+        and site_values.shape == (3, 4)
+        and len(set(labels)) == 3
+        and np.all(np.isfinite(site_values))
+        and np.all(site_values >= 0.0)
+        and np.array_equal(site_values[:, :2], site_values[:, 2:])
     )
 
 
@@ -1219,7 +1635,9 @@ def stage_fit_document_is_admissible(
         dataset_scales = document["dataset_scales"]
         if not isinstance(dataset_scales, dict):
             raise TypeError("dataset scales must be a mapping")
-        dataset_ids = tuple(dataset_scales)
+        if set(dataset_scales) != set(trusted_dataset_ids):
+            raise ValueError("dataset scales differ from the trusted dataset roster")
+        dataset_ids = trusted_dataset_ids
         dataset_scale_values = tuple(float(dataset_scales[value]) for value in dataset_ids)
         rod_roster = tuple(tuple(value) for value in document["model_rod_roster_h_k_m_population"])
         rod_roster_sha256 = _rod_roster_sha256(rod_roster)
@@ -1290,6 +1708,8 @@ def stage_fit_document_is_admissible(
         and document.get("model_rod_scope") == "fitted_families_m_0_1_3_4"
         and document.get("model_rod_roster_sha256") == rod_roster_sha256
         and rod_families == set(FAMILIES)
+        and document.get("stacking_model") == _fault_free_three_r_definition()
+        and _fixed_displacement_gauge_is_admissible(structure)
         and execution.get("rod_scope") == "families_m_0_1_3_4"
         and execution.get("rod_count") == len(rod_roster)
         and execution.get("rod_roster_sha256") == rod_roster_sha256
@@ -1383,6 +1803,7 @@ def stage_fit_document_is_admissible(
         and document.get("model_pixelized") is False
         and document.get("model_measure") == "continuous_detector_chart_area"
         and document.get("smoothing_applied") is False
+        and _integrated_peak_objective_is_admissible(document, execution)
         and _data_projection_is_admissible(
             data_projection,
             trusted_recipe=trusted_recipe,
@@ -1919,6 +2340,17 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
         )
         if values.shape != (2,) or np.any(~np.isfinite(values)) or np.any(values < 0.0):
             raise ValueError("site displacement components must be finite and nonnegative")
+    gauge = document.get("displacement_gauge")
+    if (
+        not isinstance(gauge, dict)
+        or gauge.get("model_id")
+        != "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
+        or gauge.get("site_adp_common_mode") != "fixed_reference"
+        or gauge.get("sample_q_envelope_mode") != "fit_zero_centered_regularized"
+        or not np.array_equal(vectors["prior_mean"][3:], np.zeros(2))
+        or np.any(vectors["prior_sigma"][3:] <= 0.0)
+    ):
+        raise ValueError("structure fit plan has an invalid site-ADP/global-envelope gauge")
     sensitivity_relative_tolerance = float(document.get("sensitivity_relative_tolerance", 0.0))
     maximum_sensitivity_condition = float(document.get("maximum_sensitivity_condition", 0.0))
     bound_proximity = float(document.get("bound_proximity_in_parameter_scales", 0.0))
@@ -2469,6 +2901,11 @@ def prepare(
     coordinate_sum = np.zeros(row_count, dtype=np.float64)
     axial_sum = np.zeros(row_count, dtype=np.float64)
     native_shape = tuple(int(value) for value in recipe["detector"]["native_shape_rc"])
+    dark_counts, dark_correction = _dark_correction_from_recipe(
+        recipe_path,
+        recipe,
+        detector_shape_rc=native_shape,
+    )
     display_counts: np.ndarray | None = None
     display_code = np.zeros(math.prod(native_shape), dtype=np.uint8)
     selected_dataset_blocks: list[np.ndarray] = []
@@ -2493,7 +2930,10 @@ def prepare(
         ):
             raise ValueError(f"decoded OSC data changed for {dataset_ids[dataset_index]!r}")
         if dataset_ids[dataset_index] == display_dataset_id:
-            display_counts = np.asarray(counts[:display_rows], dtype=np.int32)
+            display_counts = (
+                counts[:display_rows].astype(np.float64)
+                - dark_correction["scale"] * dark_counts[:display_rows]
+            )
         selected_pixel, selected_row = _prepare_dataset_membership(
             inputs,
             counts,
@@ -2614,10 +3054,29 @@ def prepare(
         required_signal_families=FAMILIES,
     )
     m0_record, layout_records = _serialized_regions(m0, layouts)
+    peak_projection, peak_catalog = _integrated_peak_area_projection(
+        arrays,
+        {
+            "dataset_ids": dataset_ids,
+            "fit_peak_catalog": recipe["fit_peak"],
+            "m0_region": m0_record,
+            "offspecular_layouts": layout_records,
+            "fixed_lattice": fixed_lattice.to_record(),
+        },
+    )
+    arrays["source_signal_peak_index"] = np.asarray(
+        peak_projection.source_signal_peak_index,
+        dtype=np.int64,
+    )
+    stacking_model = _fault_free_three_r_record(series)
     guarded_identities = {
         "preparation adapter": adapter_identity,
         "recipe": recipe_identity,
         "simulation configuration": simulation_config_identity,
+        "dark OSC": {
+            "path": dark_correction["path"],
+            "sha256": dark_correction["file_sha256"],
+        },
         **{name.replace("_", " "): value for name, value in model_input_identities.items()},
     }
     for role, identity in guarded_identities.items():
@@ -2644,12 +3103,20 @@ def prepare(
         "fixed_position": fixed_position.to_record(),
         "fixed_lattice": fixed_lattice.to_record(),
         "rod_catalog_revision": rod_catalog_revision,
+        "stacking_model": stacking_model,
         "mosaic": mosaic_parameters,
         "m0_region": m0_record,
         "offspecular_layouts": layout_records,
         "fit_peak_catalog": recipe["fit_peak"],
+        "objective_measure": PEAK_AREA_OBJECTIVE,
+        "integrated_peak_catalog": peak_catalog,
+        "peak_area_projection_revision": peak_projection.revision,
+        "source_signal_peak_index_sha256": _array_sha256(
+            arrays["source_signal_peak_index"]
+        ),
         "excluded_peak_catalog": recipe.get("excluded_peak", []),
         "horizon_gate": recipe["horizon_gate"],
+        "dark_correction": dark_correction,
         "incomplete_blocks_excluded": incomplete_blocks,
         "observation_contract": (
             "native-pixel-center membership is frozen only for row discovery, conservative "
@@ -2770,7 +3237,6 @@ def _robust_radial_cells(
         (radius >= minimum_radius_px)
         & (radius < maximum_radius_px)
         & np.isfinite(value)
-        & (value >= 0.0)
         & ~selected_region
     )
     radius = radius[valid]
@@ -2836,6 +3302,7 @@ def calibrate_radial_background(
     implementation_identity = _implementation_identity()
     diagnostic_identity = _file_identity(diagnostic_path)
     arrays, manifest = _load_prepared(diagnostic_path)
+    dark_counts, dark_scale = _verified_dark_counts(manifest)
     dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
     fit_plan_identity = _file_identity(fit_plan_path)
     fit_plan = _load_fit_plan(fit_plan_path)
@@ -2895,7 +3362,7 @@ def calibrate_radial_background(
             projection.flat_pixel_index,
         )
         radius, sector, density, support = _robust_radial_cells(
-            counts=counts,
+            counts=counts.astype(np.float64) - dark_scale * dark_counts,
             beam_center_column_row_px=beam_center,
             excluded_flat_pixel_index=selected,
             sample_stride=sample_stride,
@@ -2958,6 +3425,10 @@ def calibrate_radial_background(
         "prepared diagnostic": diagnostic_identity,
         "fit plan": fit_plan_identity,
         "recipe": recipe_identity,
+        "dark OSC": {
+            "path": str(manifest["dark_correction"]["path"]),
+            "sha256": str(manifest["dark_correction"]["file_sha256"]),
+        },
         **{
             f"OSC dataset {dataset_id}": identity
             for dataset_id, identity in zip(dataset_ids, osc_identities, strict=True)
@@ -3003,7 +3474,8 @@ def calibrate_radial_background(
         "background_measure": "empirical_detector_native_counts_per_pixel",
         "background_calibration_uses_native_pixels": True,
         "diffraction_model_pixelized": False,
-        "dark_applied": False,
+        "dark_applied": True,
+        "dark_correction": manifest["dark_correction"],
         "smoothing_applied": False,
         "provenance": {
             "prepared_diagnostic": diagnostic_identity,
@@ -3079,7 +3551,9 @@ def _load_radial_background(
         or manifest.get("background_measure") != "empirical_detector_native_counts_per_pixel"
         or manifest.get("background_calibration_uses_native_pixels") is not True
         or manifest.get("diffraction_model_pixelized") is not False
-        or manifest.get("dark_applied") is not False
+        or manifest.get("dark_applied") is not True
+        or manifest.get("dark_correction")
+        != _load_prepared(Path(diagnostic_identity["path"]))[1].get("dark_correction")
         or manifest.get("smoothing_applied") is not False
         or tuple(manifest.get("beam_center_column_row_px", ()))
         != tuple(float(value) for value in beam_center_column_row_px)
@@ -3258,6 +3732,7 @@ def _profile_manifest_is_admissible(
         trusted_model = _trusted_model_cubature(trusted_recipe)
         expected_dataset_ids = tuple(str(value) for value in trusted_recipe["dataset_ids"])
         display_dataset_id = str(trusted_recipe["display_dataset_id"])
+        dark = manifest["dark_correction"]
     except (AttributeError, KeyError, TypeError, ValueError):
         return False
     common = bool(
@@ -3273,6 +3748,27 @@ def _profile_manifest_is_admissible(
         and fit_origin_implementation == profile_implementation
         and manifest.get("fit_compatibility_replay") is None
         and manifest.get("figure_recipe") == trusted_recipe
+        and manifest.get("stacking_model") == _fault_free_three_r_definition()
+        and _fixed_displacement_gauge_is_admissible(
+            manifest.get("structure_representative")
+        )
+        and dark.get("model_id") == DARK_CORRECTION_MODEL
+        and dark.get("negative_values_clipped") is False
+        and dark.get("smoothing_applied") is False
+        and dark.get("covariance_model")
+        == "shared_independent_poisson_dark_across_datasets.v1"
+        and _is_sha256(dark.get("file_sha256"))
+        and _is_sha256(dark.get("detector_native_bytes_sha256"))
+        and isinstance(dark.get("detector_native_shape_rc"), list)
+        and len(dark["detector_native_shape_rc"]) == 2
+        and all(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+            for value in dark["detector_native_shape_rc"]
+        )
+        and isinstance(dark.get("detector_native_dtype"), str)
+        and bool(dark["detector_native_dtype"])
+        and float(dark.get("scale", math.nan))
+        == float(trusted_recipe["dark_correction"]["scale"])
         and cubature.get("settings") == trusted_recipe["profile_cubature"]
         and execution.get("fit_gauss_order")
         == int(trusted_recipe["profile_cubature"]["fit_gauss_order"])
@@ -3287,6 +3783,10 @@ def _profile_manifest_is_admissible(
         and execution.get("fit_plan_sha256") == provenance_fit_plan_sha256
         and execution.get("implementation_sha256") == provenance_implementation_sha256
         and execution.get("osc_sha256") == provenance.get("osc_sha256")
+        and execution.get("dark_osc_sha256")
+        == provenance.get("dark_osc_sha256")
+        == dark.get("file_sha256")
+        and execution.get("dark_scale") == float(dark["scale"])
         and execution.get("fit_chain_sha256") == provenance_fit_chain_sha256
         and _joint_cubature_is_admissible(
             fitted_region_cubature,
@@ -3375,6 +3875,7 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         ("radial background", "background", "background_sha256"),
         ("display OSC", "osc", "osc_sha256"),
         ("profile adapter", "profile_adapter", "profile_adapter_sha256"),
+        ("dark OSC", "dark_osc", "dark_osc_sha256"),
     ):
         verified_inputs[role] = _verified_recorded_file_identity(
             {"path": provenance.get(path_name), "sha256": provenance.get(hash_name)},
@@ -3390,8 +3891,14 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     fit_document = json.loads(
         Path(verified_inputs["fit artifact"]["path"]).read_text(encoding="utf-8")
     )
-    if fit_document.get("model_rod_roster_sha256") != manifest.get("fit_model_rod_roster_sha256"):
-        raise ValueError("profile rod roster does not match its fit artifact")
+    if (
+        fit_document.get("model_rod_roster_sha256")
+        != manifest.get("fit_model_rod_roster_sha256")
+        or fit_document.get("structure_representative")
+        != manifest.get("structure_representative")
+        or fit_document.get("stacking_model") != manifest.get("stacking_model")
+    ):
+        raise ValueError("profile scientific state does not match its fit artifact")
     trusted_recipe = _load_recipe(recipe_path)
     missing = [name for name in PROFILE_RENDER_ARRAY_NAMES if name not in arrays]
     if missing:
@@ -3515,6 +4022,37 @@ def _qualified_prepared_lattice(
 MODEL_INPUT_NAMES = ("fixed_state", "simulation_config")
 
 
+def _fault_free_three_r_definition() -> dict[str, Any]:
+    return {
+        "model_id": FAULT_FREE_THREE_R_MODEL,
+        "parent": Parent.THREE_R.value,
+        "shared_disorder_epsilon": 0.0,
+        "transition_probabilities": [0.0, 0.0, 1.0, 0.0, 0.0],
+        "initial_population": "plus_only",
+        "evaluation": "generalized_transition_law_with_exact_one_hot_optimized_limit",
+    }
+
+
+def _fault_free_three_r_record(series: Sequence[Any]) -> dict[str, Any]:
+    """Prove that every dataset uses the exact 3R limit of the stacking model."""
+
+    laws: list[np.ndarray] = []
+    for inputs in series:
+        strength = inputs.strength
+        if strength.parent is not Parent.THREE_R or strength.shared_disorder_epsilon != 0.0:
+            raise ValueError("this fit requires fault-free 3R through the stacking model")
+        laws.append(
+            RichEpsilonModel(
+                Parent.THREE_R,
+                strength.shared_disorder_epsilon,
+            ).transition_law().as_array()
+        )
+    expected = np.asarray((0.0, 0.0, 1.0, 0.0, 0.0), dtype=np.float64)
+    if any(not np.array_equal(law, expected) for law in laws):
+        raise RuntimeError("fault-free 3R transition law changed")
+    return _fault_free_three_r_definition()
+
+
 def _rebuilt_series(manifest: dict[str, Any]) -> tuple[Any, ...]:
     for name in (*MODEL_INPUT_NAMES, "recipe"):
         _verified_provenance_path(manifest, name)
@@ -3544,6 +4082,8 @@ def _rebuilt_series(manifest: dict[str, Any]) -> tuple[Any, ...]:
     ):
         raise ValueError("rebuilt fixed experiment differs from the prepared observation")
     _qualified_prepared_lattice(manifest, fixed_lattice, rod_catalog_revision)
+    if manifest.get("stacking_model") != _fault_free_three_r_record(series):
+        raise ValueError("rebuilt stacking model differs from the prepared observation")
     return series
 
 
@@ -3593,6 +4133,7 @@ def _continuous_matched_observations(
     covered = np.zeros(row_count, dtype=np.bool_)
     projection_revisions: list[str] = []
     projection_pixels: list[np.ndarray] = []
+    projections = []
     for plan in plans:
         global_row = np.asarray(plan.global_observation_row, dtype=np.int64)
         counts = counts_by_dataset[plan.dataset_id]
@@ -3605,6 +4146,22 @@ def _continuous_matched_observations(
         covered[global_row] = True
         projection_revisions.append(projection.projection_revision)
         projection_pixels.append(np.asarray(projection.flat_pixel_index, dtype=np.int64))
+        projections.append(projection)
+    dark_counts, dark_scale = _verified_dark_counts(manifest)
+    dark_local_mass, dark_local_covariance = integrate_shared_native_pixel_field(
+        projections,
+        dark_counts,
+        np.maximum(dark_counts, 1.0),
+    )
+    global_order = np.concatenate(
+        [np.asarray(plan.global_observation_row, dtype=np.int64) for plan in plans]
+    )
+    if not np.array_equal(np.sort(global_order), np.arange(row_count)):
+        raise ValueError("continuous dataset plans do not partition the observation rows")
+    count_mass[global_order] -= dark_scale * dark_local_mass
+    count_covariance[np.ix_(global_order, global_order)] += (
+        dark_scale * dark_scale * dark_local_covariance
+    )
     if not np.all(covered) or np.any(support <= 0.0):
         raise ValueError("continuous quadrature must positively cover every fitted observation")
     return (
@@ -3950,30 +4507,51 @@ def fit(
         oracle_region_plans,
         counts_by_dataset,
     )
+    peak_area_projection = _prepared_peak_area_projection(arrays, manifest, observations)
+    peak_aggregation = peak_area_projection.aggregation_matrix(observations)
+    peak_area_projection.aggregation_matrix(fit_observations)
+    signal_row = ~np.asarray(observations.is_background)
+    signal_index = np.flatnonzero(signal_row)
+    fit_peak_count = peak_aggregation @ np.asarray(fit_observations.count_mass)[signal_row]
+    oracle_peak_count = peak_aggregation @ np.asarray(observations.count_mass)[signal_row]
+    fit_peak_support = peak_aggregation @ np.asarray(fit_observations.support_px2)[signal_row]
+    oracle_peak_support = peak_aggregation @ np.asarray(observations.support_px2)[signal_row]
+    fit_peak_covariance = (
+        peak_aggregation
+        @ np.asarray(fit_observations.count_covariance_count2)[
+            np.ix_(signal_index, signal_index)
+        ]
+        @ peak_aggregation.T
+    )
+    oracle_peak_covariance = (
+        peak_aggregation
+        @ np.asarray(observations.count_covariance_count2)[
+            np.ix_(signal_index, signal_index)
+        ]
+        @ peak_aggregation.T
+    )
     data_projection_relative_l2_by_family: dict[str, float] = {}
 
-    def data_projection_relative_l2(selected: np.ndarray) -> float:
+    def relative_l2(reference: np.ndarray, candidate: np.ndarray, selected: np.ndarray) -> float:
         denominator = max(
-            np.linalg.norm(np.asarray(observations.count_mass)[selected]),
+            np.linalg.norm(reference[selected]),
             np.finfo(np.float64).tiny,
         )
-        return float(
-            np.linalg.norm(
-                np.asarray(observations.count_mass)[selected]
-                - np.asarray(fit_observations.count_mass)[selected]
-            )
-            / denominator
-        )
+        return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
 
     for family in FAMILIES:
-        data_projection_relative_l2_by_family[str(family)] = data_projection_relative_l2(
-            arrays["signal_family_m"] == family
+        data_projection_relative_l2_by_family[str(family)] = relative_l2(
+            oracle_peak_count,
+            fit_peak_count,
+            np.asarray(peak_area_projection.peak_signal_family) == family,
         )
-    data_projection_relative_l2_background_anchor_rows = data_projection_relative_l2(
-        np.asarray(arrays["is_background"], dtype=np.bool_)
+    data_projection_relative_l2_background_anchor_rows = relative_l2(
+        np.asarray(observations.count_mass),
+        np.asarray(fit_observations.count_mass),
+        np.asarray(arrays["is_background"], dtype=np.bool_),
     )
     maximum_data_projection_error = float(recipe["model_cubature"]["maximum_oracle_relative_l2"])
-    data_projection_convergence = _native_projection_convergence(
+    fine_row_data_projection_convergence = _native_projection_convergence(
         coarse_count_mass=np.asarray(fit_observations.count_mass),
         coarse_support_px2=np.asarray(fit_observations.support_px2),
         coarse_count_covariance=np.asarray(fit_observations.count_covariance_count2),
@@ -3984,9 +4562,33 @@ def fit(
         dataset_ids=observations.dataset_ids,
         maximum_relative_l2=maximum_data_projection_error,
     )
+    data_projection_convergence = _native_projection_convergence(
+        coarse_count_mass=fit_peak_count,
+        coarse_support_px2=fit_peak_support,
+        coarse_count_covariance=fit_peak_covariance,
+        refined_count_mass=oracle_peak_count,
+        refined_support_px2=oracle_peak_support,
+        refined_count_covariance=oracle_peak_covariance,
+        dataset_index=np.asarray(peak_area_projection.peak_dataset_index),
+        dataset_ids=observations.dataset_ids,
+        maximum_relative_l2=maximum_data_projection_error,
+    )
+    covariance_refinement_converged = bool(data_projection_convergence["converged"])
+    data_projection_convergence = {
+        **data_projection_convergence,
+        "converged": _integrated_area_projection_converged(
+            data_projection_convergence
+        ),
+        "acceptance_measure": "integrated_peak_count_mass_and_support.v1",
+        "covariance_refinement_converged": covariance_refinement_converged,
+        "covariance_policy": (
+            "refined_covariance_is_authoritative_for_objective_whitening"
+        ),
+    }
     if not data_projection_convergence["converged"]:
         raise FloatingPointError(
-            "native-pixel continuous-region projection did not converge; refine cubature"
+            "native-pixel integrated peak-area projection did not converge; "
+            f"refine cubature: {data_projection_convergence}"
         )
     background_state, background_identity, background_manifest = _load_radial_background(
         background_path,
@@ -4094,6 +4696,11 @@ def fit(
         ),
         "observed_count_mass_sha256": _array_sha256(observations.count_mass),
         "observed_count_covariance_sha256": _array_sha256(observations.count_covariance_count2),
+        "objective_measure": PEAK_AREA_OBJECTIVE,
+        "peak_area_projection_revision": peak_area_projection.revision,
+        "source_signal_peak_index_sha256": _array_sha256(
+            peak_area_projection.source_signal_peak_index
+        ),
         "fit_native_pixel_projection_revision": list(fit_projection_revisions),
         "oracle_native_pixel_projection_revision": list(oracle_projection_revisions),
         "native_pixel_projection_relative_l2_by_family_m": (data_projection_relative_l2_by_family),
@@ -4312,6 +4919,7 @@ def fit(
         sensitivity_relative_tolerance=sensitivity_relative_tolerance,
         maximum_function_evaluations=requested_maximum_evaluations,
         fixed_background=fixed_background,
+        peak_area_projection=peak_area_projection,
     )
     fitted_full = expanded_parameters(result.parameters)
     fit_model_unscaled = evaluate(
@@ -4337,6 +4945,8 @@ def fit(
             fixed_background=fixed_background,
             signal_family_m=arrays["signal_family_m"],
             is_background=arrays["is_background"],
+            peak_aggregation=peak_aggregation,
+            peak_family_m=peak_area_projection.peak_signal_family,
         )
     else:
         oracle_model_unscaled = None
@@ -4362,6 +4972,7 @@ def fit(
         "intensity_envelope_model": "exp(-U_r*Q_r^2-U_z*Q_z^2).v1",
         "site_adp_scale": 1.0,
         "site_adp_refinement_status": "fixed_literature_reference",
+        "displacement_gauge": fit_plan["displacement_gauge"],
         "site_displacement_profile": {
             "model_id": fit_plan["site_displacement_profile"]["model_id"],
             "provenance": fitted_displacement_profile.provenance,
@@ -4383,10 +4994,19 @@ def fit(
     }
     family_residual = {}
     for family in FAMILIES:
-        selected = arrays["signal_family_m"] == family
+        selected = result.objective_signal_family == family
         family_residual[str(family)] = float(
             np.sqrt(np.mean(result.weighted_residual[selected] ** 2))
         )
+    peak_aggregation = peak_area_projection.aggregation_matrix(observations)
+    signal_row = ~np.asarray(observations.is_background)
+    observed_peak_count = peak_aggregation @ (
+        np.asarray(observations.count_mass)[signal_row]
+        - np.asarray(fixed_background.count_mass)[signal_row]
+    )
+    fitted_peak_count = peak_aggregation @ np.asarray(result.fitted_objective_model_mass)[
+        signal_row
+    ]
     parameters_on_bounds = [
         name
         for name, value, minimum, maximum, scale in zip(
@@ -4402,7 +5022,8 @@ def fit(
     cubature_converged = (
         all(value <= maximum_oracle_error for value in cubature_relative_l2_by_family.values())
         and relative_l2_background_anchor_rows is not None
-        and relative_l2_background_anchor_rows <= maximum_oracle_error
+        and math.isfinite(relative_l2_background_anchor_rows)
+        and relative_l2_background_anchor_rows >= 0.0
         if stage == "joint"
         else None
     )
@@ -4427,6 +5048,7 @@ def fit(
         "full_parameter_vector": fitted_full.tolist(),
         "structure_representative": structure,
         "fixed_lattice": fixed_lattice_record,
+        "stacking_model": manifest["stacking_model"],
         "model_rod_scope": "fitted_families_m_0_1_3_4",
         "model_rod_count": len(fit_rod_roster),
         "model_rod_roster_h_k_m_population": fit_rod_roster,
@@ -4443,6 +5065,22 @@ def fit(
             np.sqrt(np.mean(result.weighted_residual[result.fitted_signal_row] ** 2))
         ),
         "weighted_residual_rms_by_family_m": family_residual,
+        "objective_measure": PEAK_AREA_OBJECTIVE,
+        "integrated_peak_areas": {
+            "projection_revision": peak_area_projection.revision,
+            "peak_ids": list(result.objective_ids),
+            "dataset_index": result.objective_dataset_index.tolist(),
+            "family_m": result.objective_signal_family.tolist(),
+            "observed_background_subtracted_count_mass": observed_peak_count.tolist(),
+            "fitted_count_mass": fitted_peak_count.tolist(),
+            "source_signal_peak_index_sha256": _array_sha256(
+                peak_area_projection.source_signal_peak_index
+            ),
+            "conditioning_order": (
+                "dark subtraction, radial baseline plus adjacent-anchor conditioning, "
+                "trusted-peak area sum, full-covariance whitening"
+            ),
+        },
         "sensitivity": {
             "rank": result.sensitivity_rank,
             "numerical_rank": result.sensitivity_numerical_rank,
@@ -4457,9 +5095,9 @@ def fit(
             "data_only": True,
             "parameter_scaled": True,
             "residual_weighting": (
-                "signal rows only; full projected regularized count covariance plus a frozen shared "
-                "radial baseline, both transformed by the fixed adjacent-sideband conditioning in every "
-                "fitted block"
+                "trusted integrated peak count masses; full projected regularized count covariance "
+                "plus a frozen shared radial baseline, both transformed by the fixed adjacent-sideband "
+                "conditioning in every fitted block before peak-area summation"
             ),
         },
         "penalized_sensitivity": {
@@ -4500,6 +5138,8 @@ def fit(
                 data_projection_relative_l2_background_anchor_rows
             ),
             "maximum_relative_l2": maximum_data_projection_error,
+            "objective_measure": PEAK_AREA_OBJECTIVE,
+            "fine_row_refinement": fine_row_data_projection_convergence,
             "smoothing_applied": False,
             "diffraction_model_pixelized": False,
         },
@@ -4560,7 +5200,8 @@ def fit(
             "radial detector baseline calibrated only from "
             "background sectors and conditioned on each block's two adjacent sidebands; the "
             "same fixed adjacent-sideband operator is applied to candidate diffraction before anchor rows "
-            "are excluded, with their uncertainty propagated"
+            "are excluded, with their uncertainty propagated; conditioned fine bins are summed into "
+            "declared trusted peak areas before full-covariance whitening"
         ),
         "background_model": {
             "status": background_manifest["status"],
@@ -4794,6 +5435,13 @@ def prepare_profiles(
         != osc_record["detector_native_bytes_sha256"]
     ):
         raise ValueError("display OSC native counts changed")
+    dark_counts, dark_scale = _verified_dark_counts(manifest)
+    if dark_counts.shape != counts.shape:
+        raise ValueError("display OSC and dark OSC shapes differ")
+    dark_identity = {
+        "path": str(manifest["dark_correction"]["path"]),
+        "sha256": str(manifest["dark_correction"]["file_sha256"]),
+    }
     m0 = _m0_region(recipe)
     beam_center_column_px = float(manifest["fixed_position"]["beam_center_column_row_px"][0])
     layouts = _offspecular_layouts(recipe, beam_center_column_px, counts.shape[1])
@@ -4932,6 +5580,12 @@ def prepare_profiles(
     invalid_fold_observations_by_pass["measured_data"] = _invalid_continuous_fold_observations(
         raw_measured_profile_plan
     )
+    for name, plan in {**raw_profile_plans, "measured_data": raw_measured_profile_plan}.items():
+        for observation in np.flatnonzero(~plan.quadrature.observation_covered):
+            invalid_fold_observations_by_pass[name].setdefault(
+                int(observation),
+                "continuous detector region has zero area",
+            )
     invalid_fold_observations = {
         observation
         for invalid_by_observation in invalid_fold_observations_by_pass.values()
@@ -4943,13 +5597,27 @@ def prepare_profiles(
         if not str(record["band"]).startswith("background_")
         and observation not in invalid_fold_observations
     }
-    unused_anchor_observations = {
+    valid_anchor_bands_by_block: dict[tuple[str, int], set[str]] = {}
+    for observation, record in enumerate(row_records):
+        if (
+            str(record["band"]).startswith("background_")
+            and observation not in invalid_fold_observations
+        ):
+            key = (str(record["group"]), int(record["bin"]))
+            valid_anchor_bands_by_block.setdefault(key, set()).add(str(record["band"]))
+    complete_blocks = {
+        key
+        for key in retained_signal_blocks
+        if {"background_0", "background_1"}.issubset(
+            valid_anchor_bands_by_block.get(key, set())
+        )
+    }
+    incomplete_block_observations = {
         observation
         for observation, record in enumerate(row_records)
-        if str(record["band"]).startswith("background_")
-        and (str(record["group"]), int(record["bin"])) not in retained_signal_blocks
+        if (str(record["group"]), int(record["bin"])) not in complete_blocks
     }
-    unsupported_observations = invalid_fold_observations | unused_anchor_observations
+    unsupported_observations = invalid_fold_observations | incomplete_block_observations
     profile_plans = {
         name: _drop_continuous_plan_observations(plan, unsupported_observations)
         for name, plan in raw_profile_plans.items()
@@ -4982,13 +5650,29 @@ def prepare_profiles(
         profile_plans["fit"].quadrature,
         counts.shape,
     )
-    coarse_count_sum, coarse_count_covariance = coarse_measured_projection.integrate_counts(counts)
+
+    def project_dark_corrected_counts(
+        projection: Any,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        raw_mass, raw_covariance = projection.integrate_counts(counts)
+        dark_mass, dark_covariance = projection.integrate_field(
+            dark_counts,
+            np.maximum(dark_counts, 1.0),
+        )
+        return (
+            raw_mass - dark_scale * dark_mass,
+            raw_covariance + dark_scale * dark_scale * dark_covariance,
+        )
+
+    coarse_count_sum, coarse_count_covariance = project_dark_corrected_counts(
+        coarse_measured_projection
+    )
     coarse_count_support = coarse_measured_projection.observation_measure_px2
     measured_projection = compile_native_pixel_region_projection(
         measured_profile_plan.quadrature,
         counts.shape,
     )
-    count_sum, count_covariance = measured_projection.integrate_counts(counts)
+    count_sum, count_covariance = project_dark_corrected_counts(measured_projection)
     count_support = measured_projection.observation_measure_px2
     measured_projection_refinement = _native_projection_convergence(
         coarse_count_mass=coarse_count_sum,
@@ -5001,9 +5685,20 @@ def prepare_profiles(
         dataset_ids=(display_dataset_id,),
         maximum_relative_l2=float(recipe["model_cubature"]["maximum_oracle_relative_l2"]),
     )
+    covariance_refinement_converged = bool(measured_projection_refinement["converged"])
+    measured_projection_refinement = {
+        **measured_projection_refinement,
+        "converged": _display_profile_projection_converged(
+            measured_projection_refinement
+        ),
+        "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
+        "covariance_refinement_converged": covariance_refinement_converged,
+        "covariance_policy": "refined_covariance_is_authoritative_for_display",
+    }
     if not measured_projection_refinement["converged"]:
         raise FloatingPointError(
-            "display native-pixel continuous-region projection did not converge"
+            "display native-pixel continuous-region projection did not converge; "
+            f"refine cubature: {measured_projection_refinement}"
         )
     count_coordinate_mass = (
         count_support * measured_profile_plan.quadrature.observation_background_coordinate
@@ -5145,6 +5840,7 @@ def prepare_profiles(
         "recipe": recipe_identity,
         "fit_plan": fit_plan_identity,
         "osc": osc_identity,
+        "dark_osc": dark_identity,
         **model_input_identities,
     }
     for stage_document, stage_identity in fit_chain:
@@ -5168,6 +5864,8 @@ def prepare_profiles(
         "fit_origin_adapter_sha256": recorded_adapter_sha256,
         "fit_origin_implementation_sha256": recorded_implementation_sha256,
         "osc_sha256": osc_identity["sha256"],
+        "dark_osc_sha256": dark_identity["sha256"],
+        "dark_scale": dark_scale,
         "selected_pixel_sha256": _array_sha256(selected_pixel),
         "selected_observation_row_sha256": _array_sha256(selected_row),
         "selected_pixel_count": int(selected_pixel.size),
@@ -5381,7 +6079,10 @@ def prepare_profiles(
         "row_count_qz_mass": count_qz_mass,
         "selected_flat_pixel_index": selected_pixel,
         "selected_observation_row": selected_row,
-        "display_detector_counts": np.asarray(counts[:display_rows], dtype=np.int32),
+        "display_detector_counts": (
+            counts[:display_rows].astype(np.float64)
+            - dark_scale * dark_counts[:display_rows]
+        ),
         "display_full_region_code": full_region_code.reshape(counts.shape)[:display_rows],
         "display_fit_region_code": display_fit_code.reshape(counts.shape)[:display_rows],
     }
@@ -5414,9 +6115,12 @@ def prepare_profiles(
         "fixed_position": manifest["fixed_position"],
         "fixed_lattice": fixed_lattice_record,
         "structure_representative": structure,
+        "stacking_model": manifest["stacking_model"],
+        "dark_correction": manifest["dark_correction"],
         "figure_recipe": recipe,
         "profile_contract": (
-            "verified native-pixel counts define a piecewise-constant measured field integrated "
+            "verified raw-minus-scaled-dark native-pixel counts define a signed piecewise-constant "
+            "measured field integrated "
             "over the same continuous phi/two-theta or signed-side Qr/L chart rectangles as the "
             "unrasterized model; a data-only frozen radial detector baseline conditioned on the two "
             "adjacent sidebands is subtracted from measured signal regions, and the identical "
@@ -5513,6 +6217,8 @@ def prepare_profiles(
             "completed_progress": completed_progress_identity,
             "osc": osc_identity["path"],
             "osc_sha256": osc_identity["sha256"],
+            "dark_osc": dark_identity["path"],
+            "dark_osc_sha256": dark_identity["sha256"],
             "profile_adapter": adapter_identity["path"],
             "profile_adapter_sha256": adapter_identity["sha256"],
             "execution_identity": execution_identity,

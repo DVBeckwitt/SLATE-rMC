@@ -193,6 +193,34 @@ def test_compose_fixed_experiment_writes_resumable_checkpoint(
             "Bi2Se3-15deg",
         ]
 
+        modular_position_path = workspace / "modular-position.json"
+        modular_position_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "rasim-layered-position-fit-v2",
+                    "accepted": True,
+                    "intensity_evaluated": False,
+                    "model_pixelized": False,
+                    "status": "POSITION_MODEL_LIMITED",
+                    "scientific_revision": _position().artifact_revision,
+                    "fixed_position": _position().to_record(),
+                    "provenance": {
+                        "manifest": {
+                            "path": str(manifest_path),
+                            "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        modular_position, modular_status = ADAPTER._position_state(
+            modular_position_path,
+            geometry_manifest_path=manifest_path,
+        )
+        assert modular_position.to_record() == _position().to_record()
+        assert modular_status == "POSITION_MODEL_LIMITED"
+
         position_document = json.loads(position_path.read_text(encoding="utf-8"))
         position_document["qualification"] = {"requested": True, "accepted": False}
         position_path.write_text(json.dumps(position_document), encoding="utf-8")
