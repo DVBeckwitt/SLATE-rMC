@@ -32,11 +32,76 @@ from rasim_next.pipeline.continuous_detector import (
     _float_array,
     _subdivided_legendre_rule,
 )
+from rasim_next.reflectivity import (
+    CompiledParrattStitch,
+    ParrattStitchStack,
+    compile_parratt_stitch,
+)
 
 FloatArray = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
 BoolArray = NDArray[np.bool_]
 _ARRAY_OWNERSHIP_TOKEN = object()
+
+
+def _compile_source_parratt_stitch(
+    stack: ParrattStitchStack | None,
+    strength: Bi2X3FiniteStackStrength,
+    rods: tuple[Rod, ...],
+    *,
+    wavelength_A: float,
+    film_refractive_index: complex,
+    film_thickness_A: float,
+) -> CompiledParrattStitch | None:
+    if stack is None:
+        return None
+    m0_rod = next((rod for rod in rods if rod.h == 0 and rod.k == 0), None)
+    if m0_rod is None:
+        return None
+    k_norm = 2.0 * np.pi / float(wavelength_A)
+    b3_norm = float(np.linalg.norm(strength.reciprocal_basis_Ainv[:, 2]))
+    c_A = 2.0 * np.pi / b3_norm
+    return compile_parratt_stitch(
+        stack,
+        lambda layer: strength.evaluate_profile(
+            rod=m0_rod,
+            L=layer,
+            k_norm_Ainv=k_norm,
+        ),
+        wavelength_A=wavelength_A,
+        film_refractive_index=film_refractive_index,
+        film_thickness_A=film_thickness_A,
+        c_A=c_A,
+    )
+
+
+def _retained_source_parratt_stitch(state: object) -> CompiledParrattStitch | None:
+    """Keep the source-wavelength overlap normalization frozen during structure fitting."""
+
+    if int(state.specular_stitch_code) == 0:
+        return None
+    return CompiledParrattStitch(
+        film_refractive_index=state.refractive_index,
+        substrate_refractive_index=state.specular_substrate_refractive_index,
+        film_thickness_A=state.film_thickness_A,
+        top_roughness_A=state.specular_top_roughness_A,
+        bottom_roughness_A=state.specular_bottom_roughness_A,
+        qc_Ainv=state.specular_qc_Ainv,
+        zero_strength_A2=state.specular_zero_strength_A2,
+        dimensionless_scale_factor=state.specular_scale_factor,
+        blend_bounds_q_over_qc=(
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
+        ),
+        blend_selection=(
+            "fallback"
+            if (
+                state.specular_blend_lower_q_over_qc == 3.0
+                and state.specular_blend_upper_q_over_qc == 6.0
+            )
+            else "automatic"
+        ),
+    )
 
 
 def source_averaged_detector_instrument_revision(
@@ -860,6 +925,7 @@ class SourceAveragedDetectorEwaldMeasure:
         "_reachable_rod_count_per_source_state",
         "_rod_catalog_revision",
         "_rods",
+        "_specular_stitch_stack",
         "_strength_model",
         "_valid_state_count",
         "_worker_count",
@@ -885,6 +951,7 @@ class SourceAveragedDetectorEwaldMeasure:
         phase_population_weight: float = 1.0,
         polarization_weight: float = 1.0,
         worker_count: int = 1,
+        specular_stitch_stack: ParrattStitchStack | None = None,
     ) -> None:
         if not isinstance(incident, IncidentTransportResult):
             raise TypeError("incident must be IncidentTransportResult")
@@ -896,6 +963,10 @@ class SourceAveragedDetectorEwaldMeasure:
             raise TypeError("mosaic must be MosaicParameters")
         if not isinstance(strength_model, Bi2X3FiniteStackStrength):
             raise TypeError("strength_model must be Bi2X3FiniteStackStrength")
+        if specular_stitch_stack is not None and not isinstance(
+            specular_stitch_stack, ParrattStitchStack
+        ):
+            raise TypeError("specular_stitch_stack must be ParrattStitchStack")
         envelope = SampleQIntensityEnvelope() if intensity_envelope is None else intensity_envelope
         if not isinstance(envelope, SampleQIntensityEnvelope):
             raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
@@ -972,6 +1043,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
         reachable_count = np.zeros(states.incident_state_id.size, dtype=np.int64)
         evaluators: list[_IndexedCompiledEvaluator] = []
+        stitch_by_wavelength: dict[float, CompiledParrattStitch | None] = {}
         (
             atom_offsets,
             atom_properties,
@@ -1019,6 +1091,22 @@ class SourceAveragedDetectorEwaldMeasure:
                 u_radial_A2,
                 u_normal_A2,
             )
+            material_index = int(np.searchsorted(material.wavelength_A, wavelength_A))
+            if (
+                material_index >= material.wavelength_A.size
+                or material.wavelength_A[material_index] != wavelength_A
+            ):
+                raise ValueError("material does not contain the exact incident wavelength")
+            if wavelength_A not in stitch_by_wavelength:
+                stitch_by_wavelength[wavelength_A] = _compile_source_parratt_stitch(
+                    specular_stitch_stack,
+                    strength_model,
+                    active_rods,
+                    wavelength_A=wavelength_A,
+                    film_refractive_index=complex(material.n_complex[material_index]),
+                    film_thickness_A=instrument.film_thickness_A,
+                )
+            compiled_stitch = stitch_by_wavelength[wavelength_A]
             evaluators.append(
                 _IndexedCompiledEvaluator(
                     evaluator=CompiledDetectorEvaluator(
@@ -1033,6 +1121,7 @@ class SourceAveragedDetectorEwaldMeasure:
                             incident_state_index=int(state_index),
                             source_phase_weight=source_phase_weight,
                             intensity_envelope=envelope,
+                            specular_stitch=compiled_stitch,
                             packed_structure=packed,
                         ),
                         instrument.detector_shape_rc,
@@ -1062,6 +1151,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_rod_catalog_revision", rod_catalog_revision)
         object.__setattr__(self, "_rods", selected)
         object.__setattr__(self, "_strength_model", strength_model)
+        object.__setattr__(self, "_specular_stitch_stack", specular_stitch_stack)
         object.__setattr__(self, "_valid_state_count", len(evaluators))
         object.__setattr__(self, "_worker_count", workers)
 
@@ -1094,6 +1184,10 @@ class SourceAveragedDetectorEwaldMeasure:
     @property
     def strength_model(self) -> Bi2X3FiniteStackStrength:
         return self._strength_model
+
+    @property
+    def specular_stitch_stack(self) -> ParrattStitchStack | None:
+        return self._specular_stitch_stack
 
     @property
     def rods(self) -> tuple[Rod, ...]:
@@ -1195,6 +1289,7 @@ class SourceAveragedDetectorEwaldMeasure:
             phase_population_weight=self._phase_polarization_weight,
             polarization_weight=1.0,
             worker_count=self._worker_count,
+            specular_stitch_stack=self._specular_stitch_stack,
         )
 
     def rebind_physics(
@@ -1264,6 +1359,7 @@ class SourceAveragedDetectorEwaldMeasure:
                     intensity_envelope_u_radial_A2=rebound_envelope.u_radial_A2,
                     intensity_envelope_u_normal_A2=rebound_envelope.u_normal_A2,
                     shared_disorder_epsilon=rebound_strength.shared_disorder_epsilon,
+                    specular_stitch=_retained_source_parratt_stitch(indexed.evaluator.state),
                 )
                 rebound_block.append(
                     indexed.with_evaluator(
@@ -1283,6 +1379,33 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_strength_model", rebound_strength)
         object.__setattr__(rebound, "_intensity_envelope", rebound_envelope)
         return rebound
+
+    def with_specular_stitch(
+        self,
+        stack: ParrattStitchStack | None,
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Return a detector with an explicit empirical `m=0` optical stack."""
+
+        if stack is self._specular_stitch_stack or stack == self._specular_stitch_stack:
+            return self
+        if stack is not None and not isinstance(stack, ParrattStitchStack):
+            raise TypeError("stack must be ParrattStitchStack")
+        return type(self)(
+            reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
+            crystal_to_sample=self._instrument.sample_from_crystal.rotation,
+            rods=self._rods,
+            rod_catalog_revision=self._rod_catalog_revision,
+            mosaic=self._mosaic,
+            strength_model=self._strength_model,
+            intensity_envelope=self._intensity_envelope,
+            incident=self._incident,
+            material=self._material,
+            instrument=self._instrument,
+            phase_population_weight=self._phase_polarization_weight,
+            polarization_weight=1.0,
+            worker_count=self._worker_count,
+            specular_stitch_stack=stack,
+        )
 
     def with_maximum_state_block_count(
         self,

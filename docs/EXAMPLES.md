@@ -673,6 +673,13 @@ native-array hash, projects raw and dark through identical regions, and preserve
 counts with their shared-dark covariance. The configured Bi2X3 detector paths apply the
 unpolarized/unanalysed Thomson factor event by event.
 
+If the recipe contains `[parratt_stitch]`, it must declare the fixed substrate index, both
+interface roughnesses, `m0_only` scope, and local-lamella interface assumption. Film optics remain
+wavelength-resolved material values and thickness remains the compiled instrument value. The
+stitch introduces no fit coordinate: it is compiled once per source wavelength, replaces only the
+continuous `(0,0)` strength below its frozen handoff, and is exactly the pre-existing kinematic
+branch above it.
+
 `m=0` rows are selected and binned in phi/2theta. Nonzero families use signed detector side and
 `Qr/L`. The measured image remains pixels, but every candidate model is integrated directly over
 the corresponding continuous chart region. Fit one structure vector jointly to all retained peaks
@@ -757,6 +764,25 @@ panels preserve separate signed branches for `m=1,3,4` and a full-width logarith
 The measured curve has the same frozen shared radial background removed as in the fit; the dashed
 curve is the unsmoothed continuous diffraction model. There is no family renormalization. The old
 RA-SIM trace remains a layout oracle only because it smoothed measured data.
+
+### Optional Parratt-to-kinematic `m=0` stitch
+
+Set `[specular_stitch].enabled = true` in the matched-region recipe and declare the substrate
+complex index plus both interface roughnesses.  The source-averaged detector then compiles the
+named empirical Parratt handoff independently for each source wavelength.  It replaces only the
+regular `(0,0)` finite-stack strength below the automatically selected overlap, returns exactly to
+the existing refracted kinematic strength above it, and never changes a nonzero-`m` rod.  The same
+continuous detector function feeds fitting and profiles; no new low-angle scale or model pixels are
+introduced.
+
+For the 2026-08-03 Bi2Se3 qualification, the declared legacy-compatible SiO2 substrate and zero
+roughness selected the fallback `3--6 Qc` window for every checked wavelength.  Its upper edge is
+at most `Qz=0.304025 A^-1`, below the retained profile start at `Qz=0.459319 A^-1`.  The resulting
+Figure 7 is therefore visually and numerically unchanged over its displayed support: weighted RMS
+changed only from `20.84361406300731` to `20.843613947573456`.  This is a valid
+`FIT_CONDITIONED`, `publication_ready=false` result, not evidence that Parratt fixes the observed
+`6.55--7.15 deg` shoulder.  Do not widen the blend after inspecting the data; that shoulder needs
+a different, independently declared physical or background model if it is to change.
 
 ## Historical: synthetic fixed-position Bi2Se3 structure proof
 

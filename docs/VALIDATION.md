@@ -1636,3 +1636,21 @@ the verified piecewise-constant OSC field onto the same continuous rectangles as
 per-dataset weak rows/support/covariance, excludes every touched boundary pixel from background
 calibration, and tests cubature on the anchor-conditioned `(I-A)m` observable before any new figure
 is called current.
+
+## Parratt stitch qualification (2026-08-03)
+
+The T21 implementation has separate scalar, continuous-detector CPU/CUDA, inverse-density, and
+forward-image proofs for active low-`Qz` stitching, strict nonzero-`m` exclusion, immutable rebind,
+and exact high-branch recovery.  The full Bi2Se3 rerun used one fixed SiO2 compatibility substrate,
+zero interface roughness, the accepted position and mosaic checkpoints, the fault-free ordered
+parent, 19 fitted rods, one shared incidence delta, continuous phi/two-theta `m=0` regions, and
+continuous signed-Qr/L nonzero-`m` regions.  It applied neither smoothing nor model pixelization.
+
+All checked source wavelengths selected fallback bounds `(3,6) Qz/Qc`; the complete handoff lies
+below `0.304025 A^-1`, whereas the measured profile begins at `0.459319 A^-1`.  Consequently the
+data objective changed by only `-6.97757e-5`, weighted RMS by `-1.15434e-7`, and the low-angle
+summed model/data ratio by `-6.47076e-9`.  The 003 model/data ratio changed by only
+`-1.378e-9`.  These are numerical-noise-sized changes, so the qualification is
+`READY_MODEL_LIMITED_FIT_CONDITIONED_NO_OBSERVED_HANDOFF_OVERLAP`, not an improved fit.  The
+rendered full Qz branches and detector ROI overlay were inspected, and the output manifest hashes
+the PNG, PDF, alignment report, fitted profile arrays, and their strict upstream artifacts.

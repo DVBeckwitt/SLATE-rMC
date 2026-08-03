@@ -47,6 +47,7 @@ from rasim_next.pipeline._continuous_detector_kernel import (
     pack_bi2se3_two_h_structure,
 )
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+from rasim_next.reflectivity import CompiledParrattStitch
 from rasim_next.stacking import Parent
 
 FloatArray = NDArray[np.float64]
@@ -1276,6 +1277,7 @@ def _compile_detector_state(
     incident_state_index: int,
     source_phase_weight: float,
     intensity_envelope: SampleQIntensityEnvelope,
+    specular_stitch: CompiledParrattStitch | None = None,
     packed_structure: tuple[
         FloatArray,
         FloatArray,
@@ -1421,6 +1423,38 @@ def _compile_detector_state(
             incident_direction,
         )
     )
+    if specular_stitch is not None and not isinstance(specular_stitch, CompiledParrattStitch):
+        raise TypeError("specular_stitch must be CompiledParrattStitch")
+    if specular_stitch is not None and (
+        specular_stitch.film_refractive_index != complex(material.n_complex[material_index])
+        or specular_stitch.film_thickness_A != instrument.film_thickness_A
+    ):
+        raise ValueError("compiled Parratt stitch disagrees with detector film optics or thickness")
+    stitch_values = (
+        {
+            "specular_stitch_code": 0,
+            "specular_substrate_refractive_index": 1.0 + 0.0j,
+            "specular_top_roughness_A": 0.0,
+            "specular_bottom_roughness_A": 0.0,
+            "specular_qc_Ainv": 0.0,
+            "specular_zero_strength_A2": 0.0,
+            "specular_scale_factor": 0.0,
+            "specular_blend_lower_q_over_qc": 0.0,
+            "specular_blend_upper_q_over_qc": 0.0,
+        }
+        if specular_stitch is None
+        else {
+            "specular_stitch_code": 1,
+            "specular_substrate_refractive_index": (specular_stitch.substrate_refractive_index),
+            "specular_top_roughness_A": specular_stitch.top_roughness_A,
+            "specular_bottom_roughness_A": specular_stitch.bottom_roughness_A,
+            "specular_qc_Ainv": specular_stitch.qc_Ainv,
+            "specular_zero_strength_A2": specular_stitch.zero_strength_A2,
+            "specular_scale_factor": specular_stitch.dimensionless_scale_factor,
+            "specular_blend_lower_q_over_qc": specular_stitch.blend_bounds_q_over_qc[0],
+            "specular_blend_upper_q_over_qc": specular_stitch.blend_bounds_q_over_qc[1],
+        }
+    )
     return CompiledDetectorState(
         detector_zero_lab_m=np.ascontiguousarray(detector_zero_lab),
         detector_column_step_lab_m=np.ascontiguousarray(column_step_lab),
@@ -1437,10 +1471,9 @@ def _compile_detector_state(
         entrance_amplitude=complex(states.entrance_amplitude[state_index]),
         incident_decay_Ainv=incident_decay,
         film_thickness_A=instrument.film_thickness_A,
+        **stitch_values,
         source_phase_weight=source_phase_weight,
-        polarization_model_code=polarization_model_code(
-            states.polarization_state_id[state_index]
-        ),
+        polarization_model_code=polarization_model_code(states.polarization_state_id[state_index]),
         sample_from_local=np.ascontiguousarray(sample_from_local),
         rod_hk_population=rod_hk_population,
         rod_parallel_local_Ainv=rod_parallel_local,

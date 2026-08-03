@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: detector_corrected_integrated_sf
+current_phase: parratt_specular_stitch_complete
 
 tasks:
   - id: T00
@@ -102,3 +102,8 @@ tasks:
     branch: codex/dark-thomson-integrated-sf
     status: READY_MODEL_LIMITED_FIT_CONDITIONED
     depends_on: [T05, T12, T13, T17, T18]
+  - id: T21
+    file: tasks/21_parratt_specular_stitch.md
+    branch: codex/parratt-specular-stitch
+    status: READY_MODEL_LIMITED_FIT_CONDITIONED_NO_OBSERVED_HANDOFF_OVERLAP
+    depends_on: [T04, T20]

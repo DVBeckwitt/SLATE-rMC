@@ -9,7 +9,7 @@ from operator import index
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.reflectivity.parratt import ParrattResult
+from rasim_next.reflectivity.parratt import ParrattResult, parratt_reflectivity
 
 KinematicEvaluator = Callable[[NDArray[np.float64]], ArrayLike]
 
@@ -81,6 +81,169 @@ class SpecularResult:
         object.__setattr__(self, "scaled_high_branch", high)
         object.__setattr__(self, "composite_reflectivity", composite)
         object.__setattr__(self, "scale_factor", float(self.scale_factor))
+        object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
+
+
+@dataclass(frozen=True, slots=True)
+class KinematicScaleSpecularResult:
+    """Named empirical handoff expressed in finite-stack strength units."""
+
+    qz_Ainv: NDArray[np.float64]
+    phase_l_coordinate: NDArray[np.float64]
+    phase_kinematic_strength_A2: NDArray[np.float64]
+    scaled_parratt_strength_A2: NDArray[np.float64]
+    composite_strength_A2: NDArray[np.float64]
+    strength_ratio: NDArray[np.float64]
+    dimensionless_scale_factor: float
+    blend_bounds_q_over_qc: tuple[float, float]
+    blend_selection: str
+    parratt_normalization: str = "dimensionless pure Parratt reflectivity"
+    composite_normalization: str = "kinematic finite-stack strength A2"
+
+    def __post_init__(self) -> None:
+        arrays = tuple(
+            np.array(value, dtype=np.float64, copy=True, order="C")
+            for value in (
+                self.qz_Ainv,
+                self.phase_l_coordinate,
+                self.phase_kinematic_strength_A2,
+                self.scaled_parratt_strength_A2,
+                self.composite_strength_A2,
+                self.strength_ratio,
+            )
+        )
+        if arrays[0].ndim != 1 or any(value.shape != arrays[0].shape for value in arrays[1:]):
+            raise ValueError("kinematic-scale specular outputs must align on one qz grid")
+        if not all(np.all(np.isfinite(value)) and np.all(value >= 0.0) for value in arrays):
+            raise ValueError("kinematic-scale specular outputs must be finite and nonnegative")
+        scale = float(self.dimensionless_scale_factor)
+        bounds = tuple(float(value) for value in self.blend_bounds_q_over_qc)
+        if (
+            not np.isfinite(scale)
+            or scale <= 0.0
+            or len(bounds) != 2
+            or not 0.0 <= bounds[0] < bounds[1]
+            or self.blend_selection not in {"automatic", "fallback"}
+            or not self.parratt_normalization
+            or not self.composite_normalization
+        ):
+            raise ValueError("kinematic-scale stitch metadata are invalid")
+        for value in arrays:
+            value.setflags(write=False)
+        (
+            qz,
+            phase_l,
+            phase_strength,
+            scaled_parratt,
+            composite,
+            ratio,
+        ) = arrays
+        object.__setattr__(self, "qz_Ainv", qz)
+        object.__setattr__(self, "phase_l_coordinate", phase_l)
+        object.__setattr__(self, "phase_kinematic_strength_A2", phase_strength)
+        object.__setattr__(self, "scaled_parratt_strength_A2", scaled_parratt)
+        object.__setattr__(self, "composite_strength_A2", composite)
+        object.__setattr__(self, "strength_ratio", ratio)
+        object.__setattr__(self, "dimensionless_scale_factor", scale)
+        object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
+
+
+@dataclass(frozen=True, slots=True)
+class ParrattStitchStack:
+    """Fixed substrate and interface inputs for the empirical `m=0` handoff."""
+
+    substrate_refractive_index: complex
+    top_roughness_A: float = 0.0
+    bottom_roughness_A: float = 0.0
+    model_id: str = "empirical_parratt_kinematic_strength.v1"
+
+    def __post_init__(self) -> None:
+        index_value = complex(self.substrate_refractive_index)
+        roughness = (float(self.top_roughness_A), float(self.bottom_roughness_A))
+        if (
+            not np.isfinite(index_value.real)
+            or not np.isfinite(index_value.imag)
+            or index_value.real <= 0.0
+            or index_value.imag < 0.0
+        ):
+            raise ValueError("substrate_refractive_index must be finite, positive, and passive")
+        if not all(np.isfinite(value) and value >= 0.0 for value in roughness):
+            raise ValueError("interface roughnesses must be finite and nonnegative")
+        if self.model_id != "empirical_parratt_kinematic_strength.v1":
+            raise ValueError("unsupported Parratt stitch model_id")
+        object.__setattr__(self, "substrate_refractive_index", index_value)
+        object.__setattr__(self, "top_roughness_A", roughness[0])
+        object.__setattr__(self, "bottom_roughness_A", roughness[1])
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledParrattStitch:
+    """Source-wavelength scalar state consumed by detector evaluators."""
+
+    film_refractive_index: complex
+    substrate_refractive_index: complex
+    film_thickness_A: float
+    top_roughness_A: float
+    bottom_roughness_A: float
+    qc_Ainv: float
+    zero_strength_A2: float
+    dimensionless_scale_factor: float
+    blend_bounds_q_over_qc: tuple[float, float]
+    blend_selection: str
+    model_id: str = "empirical_parratt_kinematic_strength.v1"
+
+    def __post_init__(self) -> None:
+        film = complex(self.film_refractive_index)
+        substrate = complex(self.substrate_refractive_index)
+        scalars = tuple(
+            float(value)
+            for value in (
+                self.film_thickness_A,
+                self.top_roughness_A,
+                self.bottom_roughness_A,
+                self.qc_Ainv,
+                self.zero_strength_A2,
+                self.dimensionless_scale_factor,
+            )
+        )
+        bounds = tuple(float(value) for value in self.blend_bounds_q_over_qc)
+        if not all(
+            np.isfinite(value.real)
+            and np.isfinite(value.imag)
+            and value.real > 0.0
+            and value.imag >= 0.0
+            for value in (film, substrate)
+        ):
+            raise ValueError(
+                "compiled stitch refractive indices must be finite, positive, and passive"
+            )
+        if (
+            not all(np.isfinite(value) and value >= 0.0 for value in scalars)
+            or scalars[3] == 0.0
+            or scalars[4] == 0.0
+            or scalars[5] == 0.0
+            or len(bounds) != 2
+            or not 0.0 <= bounds[0] < bounds[1]
+            or self.blend_selection not in {"automatic", "fallback"}
+            or self.model_id != "empirical_parratt_kinematic_strength.v1"
+        ):
+            raise ValueError("compiled Parratt stitch state is invalid")
+        object.__setattr__(self, "film_refractive_index", film)
+        object.__setattr__(self, "substrate_refractive_index", substrate)
+        (
+            thickness,
+            top,
+            bottom,
+            qc,
+            zero,
+            scale,
+        ) = scalars
+        object.__setattr__(self, "film_thickness_A", thickness)
+        object.__setattr__(self, "top_roughness_A", top)
+        object.__setattr__(self, "bottom_roughness_A", bottom)
+        object.__setattr__(self, "qc_Ainv", qc)
+        object.__setattr__(self, "zero_strength_A2", zero)
+        object.__setattr__(self, "dimensionless_scale_factor", scale)
         object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
 
 
@@ -200,4 +363,142 @@ def manuscript_specular_composite(
         scale_factor=scale_factor,
         blend_bounds_q_over_qc=bounds,
         blend_selection=selection,
+    )
+
+
+def kinematic_scale_specular_stitch(
+    parratt: ParrattResult,
+    kinematic_at_l: KinematicEvaluator,
+    *,
+    c_A: float,
+    qc_Ainv: float,
+    film_layer_index: int,
+    fit_mask: ArrayLike | None = None,
+) -> KinematicScaleSpecularResult:
+    """Convert the named dimensionless handoff back to finite-stack strength units.
+
+    The conversion is the corrected RA-SIM/manuscript compatibility observable.  It replaces the
+    low-q ``m=0`` strength; it is not an additive reflectivity channel.  Above the selected handoff
+    the result is assigned directly from the continuous internal-phase kinematic evaluator, making
+    recovery exact rather than merely asymptotic.
+    """
+
+    dimensionless = manuscript_specular_composite(
+        parratt,
+        kinematic_at_l,
+        c_A=c_A,
+        qc_Ainv=qc_Ainv,
+        film_layer_index=film_layer_index,
+        fit_mask=fit_mask,
+    )
+    qz = np.asarray(dimensionless.qz_Ainv)
+    phase_strength = _evaluate_kinematic(
+        kinematic_at_l,
+        np.asarray(dimensionless.phase_l_coordinate),
+        "internal-phase",
+    )
+    zero_strength = float(
+        _evaluate_kinematic(
+            kinematic_at_l,
+            np.zeros(1, dtype=np.float64),
+            "zero-phase",
+        )[0]
+    )
+    if zero_strength <= 0.0:
+        raise ValueError("zero-phase kinematic intensity must be positive")
+    conversion = qz**2 * zero_strength / dimensionless.scale_factor
+    scaled_parratt = conversion * dimensionless.parratt_reflectivity
+    composite = conversion * dimensionless.composite_reflectivity
+    _, upper = dimensionless.blend_bounds_q_over_qc
+    above = qz / float(qc_Ainv) >= upper
+    composite[above] = phase_strength[above]
+    ratio = np.ones(qz.shape, dtype=np.float64)
+    positive = phase_strength > 0.0
+    ratio[positive] = composite[positive] / phase_strength[positive]
+    ratio[above] = 1.0
+    if np.any(~positive & (composite > 0.0)):
+        raise ValueError("positive stitched strength cannot replace a zero kinematic branch")
+    return KinematicScaleSpecularResult(
+        qz_Ainv=qz,
+        phase_l_coordinate=dimensionless.phase_l_coordinate,
+        phase_kinematic_strength_A2=phase_strength,
+        scaled_parratt_strength_A2=scaled_parratt,
+        composite_strength_A2=composite,
+        strength_ratio=ratio,
+        dimensionless_scale_factor=dimensionless.scale_factor,
+        blend_bounds_q_over_qc=dimensionless.blend_bounds_q_over_qc,
+        blend_selection=dimensionless.blend_selection,
+    )
+
+
+def compile_parratt_stitch(
+    stack: ParrattStitchStack,
+    kinematic_at_l: KinematicEvaluator,
+    *,
+    wavelength_A: float,
+    film_refractive_index: complex,
+    film_thickness_A: float,
+    c_A: float,
+    grid_size: int = 513,
+) -> CompiledParrattStitch:
+    """Compile the overlap scale and handoff once for one incoherent source wavelength."""
+
+    if not isinstance(stack, ParrattStitchStack):
+        raise TypeError("stack must be ParrattStitchStack")
+    wavelength = float(wavelength_A)
+    film_index = complex(film_refractive_index)
+    thickness = float(film_thickness_A)
+    c_value = float(c_A)
+    if (
+        not np.isfinite(wavelength)
+        or wavelength <= 0.0
+        or not np.isfinite(film_index.real)
+        or not np.isfinite(film_index.imag)
+        or film_index.real <= 0.0
+        or film_index.imag < 0.0
+        or not np.isfinite(thickness)
+        or thickness < 0.0
+        or not np.isfinite(c_value)
+        or c_value <= 0.0
+    ):
+        raise ValueError("compiled detector stitching requires passive film optics and geometry")
+    if isinstance(grid_size, bool) or int(grid_size) != grid_size or int(grid_size) < 257:
+        raise ValueError("grid_size must be an integer of at least 257")
+    k0 = 2.0 * np.pi / wavelength
+    critical_radicand = max(1.0 - film_index.real**2, 0.0)
+    qc = 2.0 * k0 * np.sqrt(critical_radicand)
+    if qc <= 0.0:
+        raise ValueError("film index does not define a positive external critical wavevector")
+    qz = np.linspace(0.05, 10.25, int(grid_size), dtype=np.float64) * qc
+    pure = parratt_reflectivity(
+        qz,
+        wavelength,
+        refractive_index=(1.0 + 0.0j, film_index, stack.substrate_refractive_index),
+        thickness_A=(None, thickness, None),
+        roughness_A=(stack.top_roughness_A, stack.bottom_roughness_A),
+    )
+    stitched = kinematic_scale_specular_stitch(
+        pure,
+        kinematic_at_l,
+        c_A=c_value,
+        qc_Ainv=qc,
+        film_layer_index=1,
+    )
+    return CompiledParrattStitch(
+        film_refractive_index=film_index,
+        substrate_refractive_index=stack.substrate_refractive_index,
+        film_thickness_A=thickness,
+        top_roughness_A=stack.top_roughness_A,
+        bottom_roughness_A=stack.bottom_roughness_A,
+        qc_Ainv=qc,
+        zero_strength_A2=float(
+            _evaluate_kinematic(
+                kinematic_at_l,
+                np.zeros(1, dtype=np.float64),
+                "zero-phase",
+            )[0]
+        ),
+        dimensionless_scale_factor=stitched.dimensionless_scale_factor,
+        blend_bounds_q_over_qc=stitched.blend_bounds_q_over_qc,
+        blend_selection=stitched.blend_selection,
     )

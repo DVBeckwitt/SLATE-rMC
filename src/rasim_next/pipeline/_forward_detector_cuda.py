@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.pipeline._continuous_detector_cuda import (
+    _empirical_parratt_strength_A2,
     _finite_stack_strength_A2,
     _pack_source_average,
     _positive_normal_root,
@@ -139,6 +140,14 @@ def _pack_forward_geometry(
                 state.intensity_envelope_u_radial_A2,
                 state.intensity_envelope_u_normal_A2,
                 float(state.polarization_model_code),
+                float(state.specular_stitch_code),
+                state.specular_top_roughness_A,
+                state.specular_bottom_roughness_A,
+                state.specular_qc_Ainv,
+                state.specular_zero_strength_A2,
+                state.specular_scale_factor,
+                state.specular_blend_lower_q_over_qc,
+                state.specular_blend_upper_q_over_qc,
             )
             for state in states
         ],
@@ -151,6 +160,7 @@ def _pack_forward_geometry(
                 state.entrance_amplitude,
                 state.anomalous_factor_e[0],
                 state.anomalous_factor_e[1],
+                state.specular_substrate_refractive_index,
             )
             for state in states
         ],
@@ -325,6 +335,42 @@ def _forward_root_pixel(
         rod_hk_population,
         state_real[state_index, 12],
     )
+    if (
+        int(state_real[state_index, 18]) == 1
+        and rod_hk_population[rod_index, 0] == 0.0
+        and rod_hk_population[rod_index, 1] == 0.0
+    ):
+        q_norm = math.sqrt(q_norm_squared)
+        incident_air_normal_squared = (
+            state_real[state_index, 1] ** 2
+            - ki_film_sample_Ainv[state_index, 0] ** 2
+            - ki_film_sample_Ainv[state_index, 1] ** 2
+        )
+        if incident_air_normal_squared < 0.0:
+            incident_air_normal_squared = 0.0
+        incident_air_normal = math.sqrt(incident_air_normal_squared)
+        if ki_film_sample_Ainv[state_index, 2] < 0.0:
+            incident_air_normal = -incident_air_normal
+        external_qz = 0.0
+        if q_norm > 0.0:
+            external_qz = abs(
+                (q_x * q_x + q_y * q_y + q_z * (kf_air_z - incident_air_normal)) / q_norm
+            )
+        strength = _empirical_parratt_strength_A2(
+            strength,
+            external_qz,
+            state_real[state_index, 1],
+            state_complex[state_index, 0],
+            state_complex[state_index, 4],
+            state_real[state_index, 3],
+            state_real[state_index, 19],
+            state_real[state_index, 20],
+            state_real[state_index, 21],
+            state_real[state_index, 22],
+            state_real[state_index, 23],
+            state_real[state_index, 24],
+            state_real[state_index, 25],
+        )
     event_intensity_envelope = math.exp(
         -state_real[state_index, 15] * (q_x * q_x + q_y * q_y)
         - state_real[state_index, 16] * q_z * q_z

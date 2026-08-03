@@ -8,7 +8,6 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.core.interfaces import scalar_interface_amplitude
 from rasim_next.core.wave_modes import select_normal_wavevector
 
 
@@ -126,15 +125,12 @@ def parratt_reflectivity(
     upper_kz = kz[..., :-1]
     lower_kz = kz[..., 1:]
     equal_zero_limit = (upper_kz == 0.0) & (lower_kz == 0.0)
-    interface = (
-        np.asarray(
-            scalar_interface_amplitude(
-                np.where(equal_zero_limit, 1.0 + 0.0j, upper_kz),
-                np.where(equal_zero_limit, 1.0 + 0.0j, lower_kz),
-            ),
-            dtype=np.complex128,
-        )
-        - 1.0
+    denominator = np.where(equal_zero_limit, 1.0 + 0.0j, upper_kz + lower_kz)
+    if np.any(denominator == 0.0):
+        raise FloatingPointError("Parratt interface has a zero Fresnel denominator")
+    interface = np.asarray(
+        np.where(equal_zero_limit, 0.0 + 0.0j, (upper_kz - lower_kz) / denominator),
+        dtype=np.complex128,
     )
     with np.errstate(over="ignore", invalid="ignore"):
         interface *= np.exp(-2.0 * upper_kz * lower_kz * roughness**2)

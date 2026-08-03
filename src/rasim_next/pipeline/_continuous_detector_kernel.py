@@ -20,10 +20,12 @@ from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.materials.optics import HC_EV_A, _f0_species
 from rasim_next.ordered.motifs import _parameterized_bi2se3_quintuple_layer
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+from rasim_next.reflectivity import CompiledParrattStitch
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
+_FLOAT_TINY = float(np.finfo(np.float64).tiny)
 
 
 class CompiledPixelIntegral(NamedTuple):
@@ -52,6 +54,15 @@ class _ForwardDetectorState(NamedTuple):
     entrance_power: float
     incident_decay_Ainv: float
     film_thickness_A: float
+    specular_stitch_code: int
+    specular_substrate_refractive_index: complex
+    specular_top_roughness_A: float
+    specular_bottom_roughness_A: float
+    specular_qc_Ainv: float
+    specular_zero_strength_A2: float
+    specular_scale_factor: float
+    specular_blend_lower_q_over_qc: float
+    specular_blend_upper_q_over_qc: float
     source_phase_weight: float
     polarization_model_code: int
     sample_from_local: FloatArray
@@ -101,6 +112,15 @@ class CompiledDetectorState:
     entrance_amplitude: complex
     incident_decay_Ainv: float
     film_thickness_A: float
+    specular_stitch_code: int
+    specular_substrate_refractive_index: complex
+    specular_top_roughness_A: float
+    specular_bottom_roughness_A: float
+    specular_qc_Ainv: float
+    specular_zero_strength_A2: float
+    specular_scale_factor: float
+    specular_blend_lower_q_over_qc: float
+    specular_blend_upper_q_over_qc: float
     source_phase_weight: float
     polarization_model_code: int
     sample_from_local: FloatArray
@@ -179,6 +199,13 @@ class CompiledDetectorState:
             "air_k0_Ainv",
             "incident_decay_Ainv",
             "film_thickness_A",
+            "specular_top_roughness_A",
+            "specular_bottom_roughness_A",
+            "specular_qc_Ainv",
+            "specular_zero_strength_A2",
+            "specular_scale_factor",
+            "specular_blend_lower_q_over_qc",
+            "specular_blend_upper_q_over_qc",
             "source_phase_weight",
             "b3_norm_Ainv",
             "gaussian_sigma_rad",
@@ -216,7 +243,22 @@ class CompiledDetectorState:
         if isinstance(self.polarization_model_code, bool) or polarization_code not in {0, 1}:
             raise ValueError("polarization_model_code must be 0 (unity) or 1 (Thomson)")
         object.__setattr__(self, "polarization_model_code", polarization_code)
-        for name in ("refractive_index", "entrance_amplitude"):
+        stitch_code = int(self.specular_stitch_code)
+        if isinstance(self.specular_stitch_code, bool) or stitch_code not in {0, 1}:
+            raise ValueError("specular_stitch_code must be zero or one")
+        if stitch_code == 1 and (
+            self.specular_qc_Ainv == 0.0
+            or self.specular_zero_strength_A2 == 0.0
+            or self.specular_scale_factor == 0.0
+            or self.specular_blend_upper_q_over_qc <= self.specular_blend_lower_q_over_qc
+        ):
+            raise ValueError("enabled specular stitch requires positive ordered scalar state")
+        object.__setattr__(self, "specular_stitch_code", stitch_code)
+        for name in (
+            "refractive_index",
+            "entrance_amplitude",
+            "specular_substrate_refractive_index",
+        ):
             value = complex(getattr(self, name))
             if not math.isfinite(value.real) or not math.isfinite(value.imag):
                 raise ValueError(f"{name} must be finite")
@@ -334,6 +376,7 @@ class CompiledDetectorState:
         intensity_envelope_u_radial_A2: float,
         intensity_envelope_u_normal_A2: float,
         shared_disorder_epsilon: float,
+        specular_stitch: CompiledParrattStitch | None = None,
     ) -> CompiledDetectorState:
         """Replace mosaic and fixed-geometry structure state without rebuilding geometry."""
 
@@ -389,6 +432,34 @@ class CompiledDetectorState:
         object.__setattr__(rebound, "anomalous_factor_e", anomalous)
         object.__setattr__(rebound, "layers", rebound_layers)
         for name, value in scalar_values.items():
+            object.__setattr__(rebound, name, value)
+        if specular_stitch is None:
+            stitch_values = {
+                "specular_stitch_code": 0,
+                "specular_substrate_refractive_index": 1.0 + 0.0j,
+                "specular_top_roughness_A": 0.0,
+                "specular_bottom_roughness_A": 0.0,
+                "specular_qc_Ainv": 0.0,
+                "specular_zero_strength_A2": 0.0,
+                "specular_scale_factor": 0.0,
+                "specular_blend_lower_q_over_qc": 0.0,
+                "specular_blend_upper_q_over_qc": 0.0,
+            }
+        else:
+            if not isinstance(specular_stitch, CompiledParrattStitch):
+                raise TypeError("specular_stitch must be CompiledParrattStitch")
+            stitch_values = {
+                "specular_stitch_code": 1,
+                "specular_substrate_refractive_index": (specular_stitch.substrate_refractive_index),
+                "specular_top_roughness_A": specular_stitch.top_roughness_A,
+                "specular_bottom_roughness_A": specular_stitch.bottom_roughness_A,
+                "specular_qc_Ainv": specular_stitch.qc_Ainv,
+                "specular_zero_strength_A2": specular_stitch.zero_strength_A2,
+                "specular_scale_factor": specular_stitch.dimensionless_scale_factor,
+                "specular_blend_lower_q_over_qc": (specular_stitch.blend_bounds_q_over_qc[0]),
+                "specular_blend_upper_q_over_qc": (specular_stitch.blend_bounds_q_over_qc[1]),
+            }
+        for name, value in stitch_values.items():
             object.__setattr__(rebound, name, value)
         return rebound
 
@@ -518,6 +589,66 @@ def _positive_normal_root(radicand: complex) -> complex:
     elif root.real < 0.0:
         root = -root
     return root
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _empirical_parratt_strength_A2(
+    phase_strength_A2: float,
+    external_qz_Ainv: float,
+    air_k0_Ainv: float,
+    film_refractive_index: complex,
+    substrate_refractive_index: complex,
+    film_thickness_A: float,
+    top_roughness_A: float,
+    bottom_roughness_A: float,
+    qc_Ainv: float,
+    zero_strength_A2: float,
+    dimensionless_scale_factor: float,
+    blend_lower_q_over_qc: float,
+    blend_upper_q_over_qc: float,
+) -> float:
+    """Return the corrected empirical stitch in the input kinematic-strength units."""
+
+    film_offset = (film_refractive_index * air_k0_Ainv) ** 2 - air_k0_Ainv**2
+    external_qz = abs(external_qz_Ainv)
+    external_half_squared = 0.25 * external_qz * external_qz
+    q_over_qc = external_qz / qc_Ainv
+    if q_over_qc >= blend_upper_q_over_qc:
+        return phase_strength_A2
+
+    external_half = 0.5 * external_qz
+    film_kz = _positive_normal_root(film_offset + external_half_squared)
+    substrate_kz = _positive_normal_root(
+        (substrate_refractive_index * air_k0_Ainv) ** 2 - air_k0_Ainv**2 + external_half_squared
+    )
+    top_denominator = complex(external_half, 0.0) + film_kz
+    bottom_denominator = film_kz + substrate_kz
+    if top_denominator == 0.0 or bottom_denominator == 0.0:
+        return phase_strength_A2
+    top = (complex(external_half, 0.0) - film_kz) / top_denominator
+    bottom = (film_kz - substrate_kz) / bottom_denominator
+    if top_roughness_A != 0.0:
+        top *= cmath.exp(-2.0 * complex(external_half, 0.0) * film_kz * top_roughness_A**2)
+    if bottom_roughness_A != 0.0:
+        bottom *= cmath.exp(-2.0 * film_kz * substrate_kz * bottom_roughness_A**2)
+    propagated = bottom * cmath.exp(2.0j * film_kz * film_thickness_A)
+    recursion_denominator = 1.0 + top * propagated
+    if recursion_denominator == 0.0:
+        return phase_strength_A2
+    amplitude = (top + propagated) / recursion_denominator
+    reflectivity = amplitude.real * amplitude.real + amplitude.imag * amplitude.imag
+    low_strength = (
+        external_qz * external_qz * reflectivity * zero_strength_A2 / dimensionless_scale_factor
+    )
+    if q_over_qc <= blend_lower_q_over_qc:
+        return low_strength
+    coordinate = (q_over_qc - blend_lower_q_over_qc) / (
+        blend_upper_q_over_qc - blend_lower_q_over_qc
+    )
+    weight = 6.0 * coordinate**5 - 15.0 * coordinate**4 + 10.0 * coordinate**3
+    low_for_log = low_strength if low_strength > _FLOAT_TINY else _FLOAT_TINY
+    phase_for_log = phase_strength_A2 if phase_strength_A2 > _FLOAT_TINY else _FLOAT_TINY
+    return math.exp((1.0 - weight) * math.log(low_for_log) + weight * math.log(phase_for_log))
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
@@ -806,8 +937,18 @@ def _evaluate_point_into(
     internal_k_squared_Ainv2: float,
     air_k0_Ainv: float,
     refractive_air_k_squared_Ainv2: complex,
+    film_refractive_index: complex,
     incident_decay_Ainv: float,
     film_thickness_A: float,
+    specular_stitch_code: int,
+    specular_substrate_refractive_index: complex,
+    specular_top_roughness_A: float,
+    specular_bottom_roughness_A: float,
+    specular_qc_Ainv: float,
+    specular_zero_strength_A2: float,
+    specular_scale_factor: float,
+    specular_blend_lower_q_over_qc: float,
+    specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
@@ -1057,6 +1198,46 @@ def _evaluate_point_into(
                     rod_hk_population,
                     normalization_divisor,
                 )
+                if (
+                    specular_stitch_code == 1
+                    and rod_hk_population[rod_index, 0] == 0.0
+                    and rod_hk_population[rod_index, 1] == 0.0
+                ):
+                    incident_air_normal_squared = (
+                        air_k0_Ainv * air_k0_Ainv
+                        - ki_film_sample_Ainv[0] ** 2
+                        - ki_film_sample_Ainv[1] ** 2
+                    )
+                    incident_air_normal = math.sqrt(
+                        incident_air_normal_squared if incident_air_normal_squared > 0.0 else 0.0
+                    )
+                    if ki_film_sample_Ainv[2] < 0.0:
+                        incident_air_normal = -incident_air_normal
+                    external_qz = 0.0
+                    if q_norm > 0.0:
+                        external_qz = abs(
+                            (
+                                q_sample_x * q_sample_x
+                                + q_sample_y * q_sample_y
+                                + q_sample_z * (kf_air_z - incident_air_normal)
+                            )
+                            / q_norm
+                        )
+                    strength = _empirical_parratt_strength_A2(
+                        strength,
+                        external_qz,
+                        air_k0_Ainv,
+                        film_refractive_index,
+                        specular_substrate_refractive_index,
+                        film_thickness_A,
+                        specular_top_roughness_A,
+                        specular_bottom_roughness_A,
+                        specular_qc_Ainv,
+                        specular_zero_strength_A2,
+                        specular_scale_factor,
+                        specular_blend_lower_q_over_qc,
+                        specular_blend_upper_q_over_qc,
+                    )
                 mosaic_density = _wrapped_mosaic_density(
                     alpha,
                     gaussian_sigma_rad,
@@ -1140,6 +1321,15 @@ def _evaluate_points_kernel(
     entrance_amplitude: complex,
     incident_decay_Ainv: float,
     film_thickness_A: float,
+    specular_stitch_code: int,
+    specular_substrate_refractive_index: complex,
+    specular_top_roughness_A: float,
+    specular_bottom_roughness_A: float,
+    specular_qc_Ainv: float,
+    specular_zero_strength_A2: float,
+    specular_scale_factor: float,
+    specular_blend_lower_q_over_qc: float,
+    specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
@@ -1200,8 +1390,18 @@ def _evaluate_points_kernel(
             internal_k_squared_Ainv2,
             air_k0_Ainv,
             refractive_air_k_squared_Ainv2,
+            refractive_index,
             incident_decay_Ainv,
             film_thickness_A,
+            specular_stitch_code,
+            specular_substrate_refractive_index,
+            specular_top_roughness_A,
+            specular_bottom_roughness_A,
+            specular_qc_Ainv,
+            specular_zero_strength_A2,
+            specular_scale_factor,
+            specular_blend_lower_q_over_qc,
+            specular_blend_upper_q_over_qc,
             source_phase_weight,
             polarization_model_code,
             sample_from_local,
@@ -1354,6 +1554,42 @@ def _forward_root_pixel(
         state.rod_hk_population,
         state.normalization_divisor,
     )
+    if (
+        state.specular_stitch_code == 1
+        and state.rod_hk_population[rod_index, 0] == 0.0
+        and state.rod_hk_population[rod_index, 1] == 0.0
+    ):
+        q_norm = math.sqrt(q_norm_squared)
+        incident_air_normal_squared = (
+            state.air_k0_Ainv * state.air_k0_Ainv
+            - state.ki_film_sample_Ainv[0] ** 2
+            - state.ki_film_sample_Ainv[1] ** 2
+        )
+        incident_air_normal = math.sqrt(
+            incident_air_normal_squared if incident_air_normal_squared > 0.0 else 0.0
+        )
+        if state.ki_film_sample_Ainv[2] < 0.0:
+            incident_air_normal = -incident_air_normal
+        external_qz = 0.0
+        if q_norm > 0.0:
+            external_qz = abs(
+                (q_x * q_x + q_y * q_y + q_z * (kf_air_z - incident_air_normal)) / q_norm
+            )
+        strength = _empirical_parratt_strength_A2(
+            strength,
+            external_qz,
+            state.air_k0_Ainv,
+            state.refractive_index,
+            state.specular_substrate_refractive_index,
+            state.film_thickness_A,
+            state.specular_top_roughness_A,
+            state.specular_bottom_roughness_A,
+            state.specular_qc_Ainv,
+            state.specular_zero_strength_A2,
+            state.specular_scale_factor,
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
+        )
     event_intensity_envelope = math.exp(
         -state.intensity_envelope_u_radial_A2 * (q_x * q_x + q_y * q_y)
         - state.intensity_envelope_u_normal_A2 * q_z * q_z
@@ -1571,6 +1807,15 @@ def _integrate_pixel_boxes_kernel(
     entrance_amplitude: complex,
     incident_decay_Ainv: float,
     film_thickness_A: float,
+    specular_stitch_code: int,
+    specular_substrate_refractive_index: complex,
+    specular_top_roughness_A: float,
+    specular_bottom_roughness_A: float,
+    specular_qc_Ainv: float,
+    specular_zero_strength_A2: float,
+    specular_scale_factor: float,
+    specular_blend_lower_q_over_qc: float,
+    specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
@@ -1658,8 +1903,18 @@ def _integrate_pixel_boxes_kernel(
                     internal_k_squared_Ainv2,
                     air_k0_Ainv,
                     refractive_air_k_squared_Ainv2,
+                    refractive_index,
                     incident_decay_Ainv,
                     film_thickness_A,
+                    specular_stitch_code,
+                    specular_substrate_refractive_index,
+                    specular_top_roughness_A,
+                    specular_bottom_roughness_A,
+                    specular_qc_Ainv,
+                    specular_zero_strength_A2,
+                    specular_scale_factor,
+                    specular_blend_lower_q_over_qc,
+                    specular_blend_upper_q_over_qc,
                     source_phase_weight,
                     polarization_model_code,
                     sample_from_local,
@@ -1728,8 +1983,18 @@ def _integrate_pixel_boxes_kernel(
                 internal_k_squared_Ainv2,
                 air_k0_Ainv,
                 refractive_air_k_squared_Ainv2,
+                refractive_index,
                 incident_decay_Ainv,
                 film_thickness_A,
+                specular_stitch_code,
+                specular_substrate_refractive_index,
+                specular_top_roughness_A,
+                specular_bottom_roughness_A,
+                specular_qc_Ainv,
+                specular_zero_strength_A2,
+                specular_scale_factor,
+                specular_blend_lower_q_over_qc,
+                specular_blend_upper_q_over_qc,
                 source_phase_weight,
                 polarization_model_code,
                 sample_from_local,
@@ -1913,6 +2178,15 @@ class CompiledDetectorEvaluator:
             state.entrance_amplitude,
             state.incident_decay_Ainv,
             state.film_thickness_A,
+            state.specular_stitch_code,
+            state.specular_substrate_refractive_index,
+            state.specular_top_roughness_A,
+            state.specular_bottom_roughness_A,
+            state.specular_qc_Ainv,
+            state.specular_zero_strength_A2,
+            state.specular_scale_factor,
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
             state.source_phase_weight,
             state.polarization_model_code,
             state.sample_from_local,
@@ -2028,6 +2302,15 @@ class CompiledDetectorEvaluator:
             state.entrance_amplitude.real**2 + state.entrance_amplitude.imag**2,
             state.incident_decay_Ainv,
             state.film_thickness_A,
+            state.specular_stitch_code,
+            state.specular_substrate_refractive_index,
+            state.specular_top_roughness_A,
+            state.specular_bottom_roughness_A,
+            state.specular_qc_Ainv,
+            state.specular_zero_strength_A2,
+            state.specular_scale_factor,
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
             state.source_phase_weight,
             state.polarization_model_code,
             state.sample_from_local,
@@ -2104,6 +2387,15 @@ class CompiledDetectorEvaluator:
             state.entrance_amplitude,
             state.incident_decay_Ainv,
             state.film_thickness_A,
+            state.specular_stitch_code,
+            state.specular_substrate_refractive_index,
+            state.specular_top_roughness_A,
+            state.specular_bottom_roughness_A,
+            state.specular_qc_Ainv,
+            state.specular_zero_strength_A2,
+            state.specular_scale_factor,
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
             state.source_phase_weight,
             state.polarization_model_code,
             state.sample_from_local,

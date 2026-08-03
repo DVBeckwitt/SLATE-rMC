@@ -115,6 +115,13 @@ preimages. With incident `ki_z < 0` and visible top-exit `kf_z > 0`, every selec
 is part of the result contract. The direct/specular contribution remains owned by the separately
 named Parratt, kinematic, and composite specular models.
 
+An explicitly configured empirical Parratt stitch may replace only the regular `(h,k)=(0,0)`
+strength in this same continuous `A2` detector measure. Its low branch converts dimensionless
+Parratt reflectivity into finite-stack strength units; its high branch is assigned exactly from the
+existing internal-phase kinematic strength. It neither creates the excluded direct `Q=0` root nor
+changes a nonzero-`m` rod. The external normal transfer is taken from the detector event, not
+reconstructed from internal phase.
+
 ## Detector-coordinate measure
 
 A floating-point detector coordinate `(c,r)` determines one outgoing air ray. Exit refraction is

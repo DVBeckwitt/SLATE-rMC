@@ -31,7 +31,8 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `RodCatalog` | reciprocal | every physical `(h,k)` rod and exact family metadata |
 | `RodQueryBatch` | ordered/stacking | rod-aligned `L` queries with stable IDs |
 | `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
-| `ParrattResult` / `SpecularResult` | reflectivity | separately named Parratt, kinematic, and composite specular outputs |
+| `ParrattResult` / `SpecularResult` / `KinematicScaleSpecularResult` | reflectivity | separately named pure and unit-preserving composite specular outputs |
+| `ParrattStitchStack` / `CompiledParrattStitch` | reflectivity / detector pipeline | immutable substrate/interface inputs and one source-wavelength overlap state for the optional empirical `(0,0)` detector binding |
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |

@@ -19,6 +19,7 @@ BoolArray = NDArray[np.bool_]
 IntArray = NDArray[np.int64]
 
 _FLOAT_EPS = float(np.finfo(np.float64).eps)
+_FLOAT_TINY = float(np.finfo(np.float64).tiny)
 _ANGULAR_TOLERANCE = 2048.0 * _FLOAT_EPS
 _THREADS_PER_BLOCK = 128
 _DEFAULT_COORDINATE_CHUNK_SIZE = 50_000
@@ -81,8 +82,8 @@ def _pack_source_average(
     state_count = len(indexed_evaluators)
     ray_origin = np.empty((state_count, 3), dtype=np.float64)
     ki_film = np.empty((state_count, 3), dtype=np.float64)
-    state_real = np.empty((state_count, 18), dtype=np.float64)
-    state_complex = np.empty((state_count, 4), dtype=np.complex128)
+    state_real = np.empty((state_count, 26), dtype=np.float64)
+    state_complex = np.empty((state_count, 5), dtype=np.complex128)
     state_block_offset = np.concatenate(
         (
             np.asarray([0], dtype=np.int64),
@@ -207,12 +208,21 @@ def _pack_source_average(
             state.intensity_envelope_u_radial_A2,
             state.intensity_envelope_u_normal_A2,
             float(state.polarization_model_code),
+            float(state.specular_stitch_code),
+            state.specular_top_roughness_A,
+            state.specular_bottom_roughness_A,
+            state.specular_qc_Ainv,
+            state.specular_zero_strength_A2,
+            state.specular_scale_factor,
+            state.specular_blend_lower_q_over_qc,
+            state.specular_blend_upper_q_over_qc,
         )
         state_complex[state_index] = (
             state.refractive_index,
             state.entrance_amplitude,
             state.anomalous_factor_e[0],
             state.anomalous_factor_e[1],
+            state.specular_substrate_refractive_index,
         )
 
     return _PackedSourceAverage(
@@ -252,6 +262,71 @@ def _positive_normal_root(radicand: complex) -> complex:
     elif root.real < 0.0:
         root = -root
     return root
+
+
+@cuda.jit(device=True, inline=True)
+def _complex_exponential(value: complex) -> complex:
+    magnitude = math.exp(value.real)
+    return complex(magnitude * math.cos(value.imag), magnitude * math.sin(value.imag))
+
+
+@cuda.jit(device=True, inline=True)
+def _empirical_parratt_strength_A2(
+    phase_strength_A2: float,
+    external_qz_Ainv: float,
+    air_k0_Ainv: float,
+    film_refractive_index: complex,
+    substrate_refractive_index: complex,
+    film_thickness_A: float,
+    top_roughness_A: float,
+    bottom_roughness_A: float,
+    qc_Ainv: float,
+    zero_strength_A2: float,
+    dimensionless_scale_factor: float,
+    blend_lower_q_over_qc: float,
+    blend_upper_q_over_qc: float,
+) -> float:
+    film_offset = (film_refractive_index * air_k0_Ainv) ** 2 - air_k0_Ainv**2
+    external_qz = abs(external_qz_Ainv)
+    external_half_squared = 0.25 * external_qz * external_qz
+    q_over_qc = external_qz / qc_Ainv
+    if q_over_qc >= blend_upper_q_over_qc:
+        return phase_strength_A2
+    external_half = 0.5 * external_qz
+    film_kz = _positive_normal_root(film_offset + external_half_squared)
+    substrate_kz = _positive_normal_root(
+        (substrate_refractive_index * air_k0_Ainv) ** 2 - air_k0_Ainv**2 + external_half_squared
+    )
+    top_denominator = complex(external_half, 0.0) + film_kz
+    bottom_denominator = film_kz + substrate_kz
+    if top_denominator == 0.0 or bottom_denominator == 0.0:
+        return phase_strength_A2
+    top = (complex(external_half, 0.0) - film_kz) / top_denominator
+    bottom = (film_kz - substrate_kz) / bottom_denominator
+    if top_roughness_A != 0.0:
+        top *= _complex_exponential(
+            -2.0 * complex(external_half, 0.0) * film_kz * top_roughness_A**2
+        )
+    if bottom_roughness_A != 0.0:
+        bottom *= _complex_exponential(-2.0 * film_kz * substrate_kz * bottom_roughness_A**2)
+    propagated = bottom * _complex_exponential(2.0j * film_kz * film_thickness_A)
+    recursion_denominator = 1.0 + top * propagated
+    if recursion_denominator == 0.0:
+        return phase_strength_A2
+    amplitude = (top + propagated) / recursion_denominator
+    reflectivity = amplitude.real * amplitude.real + amplitude.imag * amplitude.imag
+    low_strength = (
+        external_qz * external_qz * reflectivity * zero_strength_A2 / dimensionless_scale_factor
+    )
+    if q_over_qc <= blend_lower_q_over_qc:
+        return low_strength
+    coordinate = (q_over_qc - blend_lower_q_over_qc) / (
+        blend_upper_q_over_qc - blend_lower_q_over_qc
+    )
+    weight = 6.0 * coordinate**5 - 15.0 * coordinate**4 + 10.0 * coordinate**3
+    low_for_log = low_strength if low_strength > _FLOAT_TINY else _FLOAT_TINY
+    phase_for_log = phase_strength_A2 if phase_strength_A2 > _FLOAT_TINY else _FLOAT_TINY
+    return math.exp((1.0 - weight) * math.log(low_for_log) + weight * math.log(phase_for_log))
 
 
 @cuda.jit(device=True, inline=True)
@@ -564,17 +639,17 @@ def _prepare_state_block_geometry_kernel(
     optical_weight = (
         entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
     )
+    incident_normal_squared = (
+        air_k0_Ainv * air_k0_Ainv
+        - ki_film_sample_Ainv[state_index, 0] ** 2
+        - ki_film_sample_Ainv[state_index, 1] ** 2
+    )
+    if incident_normal_squared < 0.0:
+        incident_normal_squared = 0.0
+    incident_normal = math.sqrt(incident_normal_squared)
+    if ki_film_sample_Ainv[state_index, 2] < 0.0:
+        incident_normal = -incident_normal
     if int(state_real[state_index, 17]) == 1:
-        incident_normal_squared = (
-            air_k0_Ainv * air_k0_Ainv
-            - ki_film_sample_Ainv[state_index, 0] ** 2
-            - ki_film_sample_Ainv[state_index, 1] ** 2
-        )
-        if incident_normal_squared < 0.0:
-            incident_normal_squared = 0.0
-        incident_normal = math.sqrt(incident_normal_squared)
-        if ki_film_sample_Ainv[state_index, 2] < 0.0:
-            incident_normal = -incident_normal
         cosine = (
             ki_film_sample_Ainv[state_index, 0] * kf_air_x
             + ki_film_sample_Ainv[state_index, 1] * kf_air_y
@@ -622,6 +697,18 @@ def _prepare_state_block_geometry_kernel(
     q_geometry[local_state, point, 5] = q_norm
     q_geometry[local_state, point, 6] = math.hypot(q_local_x, q_local_y)
     q_geometry[local_state, point, 7] = math.atan2(q_local_y, q_local_x)
+    q_geometry[local_state, point, 8] = (
+        0.0
+        if q_norm == 0.0
+        else abs(
+            (
+                q_sample_x * q_sample_x
+                + q_sample_y * q_sample_y
+                + q_sample_z * (kf_air_z - incident_normal)
+            )
+            / q_norm
+        )
+    )
     point_factor[local_state, point, 0] = area_jacobian
     point_factor[local_state, point, 1] = optical_weight
     point_factor[local_state, point, 2] = f0_0
@@ -786,6 +873,26 @@ def _accumulate_state_block_kernel(
                     rod_hk_population,
                     normalization_divisor,
                 )
+                if (
+                    int(state_real[state_index, 18]) == 1
+                    and rod_hk_population[rod_index, 0] == 0.0
+                    and rod_hk_population[rod_index, 1] == 0.0
+                ):
+                    strength = _empirical_parratt_strength_A2(
+                        strength,
+                        q_geometry[local_state, point, 8],
+                        state_real[state_index, 1],
+                        state_complex[state_index, 0],
+                        state_complex[state_index, 4],
+                        state_real[state_index, 3],
+                        state_real[state_index, 19],
+                        state_real[state_index, 20],
+                        state_real[state_index, 21],
+                        state_real[state_index, 22],
+                        state_real[state_index, 23],
+                        state_real[state_index, 24],
+                        state_real[state_index, 25],
+                    )
                 mosaic_density = _wrapped_mosaic_density(
                     alpha,
                     gaussian_sigma_rad,
@@ -996,7 +1103,7 @@ def _evaluate_source_averaged_all_roots_cuda(
         )
         device_valid_count = cuda.to_device(np.zeros(point_count, dtype=np.int64))
         device_q_geometry = cuda.device_array(
-            (maximum_block_size, point_count, 8),
+            (maximum_block_size, point_count, 9),
             dtype=np.float64,
         )
         device_point_factor = cuda.device_array(
@@ -1215,7 +1322,7 @@ def evaluate_selected_source_rod_groups_all_roots_cuda(
                 np.zeros((master_rod_count, point_count), dtype=np.bool_)
             )
             device_valid_count = cuda.to_device(np.zeros(point_count, dtype=np.int64))
-            device_q_geometry = cuda.device_array((1, point_count, 8), dtype=np.float64)
+            device_q_geometry = cuda.device_array((1, point_count, 9), dtype=np.float64)
             device_point_factor = cuda.device_array((1, point_count, 5), dtype=np.float64)
             device_valid = cuda.device_array((1, point_count), dtype=np.bool_)
             device_block_valid_count = cuda.device_array(point_count, dtype=np.int64)

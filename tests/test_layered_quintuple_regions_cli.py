@@ -131,17 +131,13 @@ def test_integrated_peak_projection_rejects_silent_declared_peak_pruning() -> No
     add_block("m0", 0, ("signal",))
     for family in (1, 3, 4):
         add_block(f"m{family}", family, (f"m{family}_plus", f"m{family}_minus"))
-    arrays = {
-        name: np.asarray([row[name] for row in rows])
-        for name in rows[0]
-    }
+    arrays = {name: np.asarray([row[name] for row in rows]) for name in rows[0]}
     manifest = {
         "dataset_ids": ["image"],
         "fixed_lattice": {"active_direct_basis_A": np.eye(3).tolist()},
         "m0_region": {"two_theta_bin_edges_rad": np.deg2rad((0.0, 1.0)).tolist()},
         "offspecular_layouts": [
-            {"group": f"m{family}", "axial_bin_edges": [0.0, 1.0]}
-            for family in (1, 3, 4)
+            {"group": f"m{family}", "axial_bin_edges": [0.0, 1.0]} for family in (1, 3, 4)
         ],
         "fit_peak_catalog": [
             {
@@ -201,9 +197,7 @@ def test_integrated_peak_projection_rejects_silent_declared_peak_pruning() -> No
     mutated_arrays = {**prepared_arrays}
     mutated_mapping = np.array(prepared_arrays["source_signal_peak_index"], copy=True)
     plus = next(index for index, record in enumerate(catalog) if record["peak_id"] == "m1:plus")
-    minus = next(
-        index for index, record in enumerate(catalog) if record["peak_id"] == "m1:minus"
-    )
+    minus = next(index for index, record in enumerate(catalog) if record["peak_id"] == "m1:minus")
     mutated_mapping[mutated_mapping == plus] = -1
     mutated_mapping[mutated_mapping == minus] = plus
     mutated_mapping[mutated_mapping == -1] = minus
@@ -1064,6 +1058,19 @@ def test_stage_chain_requires_exact_ordered_predecessors() -> None:
     assert tuple(document["stage"] for document, _ in chain) == ("joint", "C", "B", "A")
 
 
+def test_stage_chain_allows_recorded_active_warm_start_only() -> None:
+    plan, records = _in_memory_stage_chain()
+    stage_b = records["B"][0]
+    warm = np.asarray(stage_b["optimizer"]["fit_start"]["initial_full_parameters"])
+    warm[2] += 0.001
+    stage_b["optimizer"]["fit_start"]["initial_full_parameters"] = warm.tolist()
+    stage_b["optimizer"]["fit_start"]["initial_parameters"] = [float(warm[2])]
+
+    chain = _qualify_in_memory_chain(plan, records)
+
+    assert tuple(document["stage"] for document, _ in chain) == ("joint", "C", "B", "A")
+
+
 def test_stage_chain_rejects_changed_child_start_and_stale_ancestor() -> None:
     plan, records = _in_memory_stage_chain()
     joint = records["joint"][0]
@@ -1307,9 +1314,7 @@ def _accepted_profile_manifest() -> dict[str, object]:
         "rod_scope_validation_status": "NOT_RUN",
         "model_rod_scope": "fitted_families_m_0_1_3_4",
         "fit_compatibility_replay": None,
-        "structure_representative": copy.deepcopy(
-            fit_document["structure_representative"]
-        ),
+        "structure_representative": copy.deepcopy(fit_document["structure_representative"]),
         "stacking_model": ADAPTER._fault_free_three_r_definition(),
         "dark_correction": {
             "model_id": ADAPTER.DARK_CORRECTION_MODEL,

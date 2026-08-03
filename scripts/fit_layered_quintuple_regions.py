@@ -82,6 +82,7 @@ from rasim_next.pipeline.reciprocal_detector_chart import (
     LayeredReciprocalDetectorAreaChart,
 )
 from rasim_next.proof.diagnostics import write_diagnostic
+from rasim_next.reflectivity import ParrattStitchStack
 from rasim_next.selection import build_osc_angle_frame
 from rasim_next.stacking import Parent, RichEpsilonModel
 
@@ -306,9 +307,13 @@ def _integrated_peak_area_projection(
 
     candidates: list[dict[str, Any]] = []
     dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
-    reciprocal = 2.0 * np.pi * np.linalg.inv(
-        np.asarray(manifest["fixed_lattice"]["active_direct_basis_A"], dtype=np.float64)
-    ).T
+    reciprocal = (
+        2.0
+        * np.pi
+        * np.linalg.inv(
+            np.asarray(manifest["fixed_lattice"]["active_direct_basis_A"], dtype=np.float64)
+        ).T
+    )
     b3_norm_Ainv = float(np.linalg.norm(reciprocal[:, 2]))
     for peak in manifest["fit_peak_catalog"]:
         family = int(peak["family_m"])
@@ -317,7 +322,7 @@ def _integrated_peak_area_projection(
             expanded_identity = str(peak["identity"])
             if len(centers) > 1:
                 expanded_identity += f"@{center:.12g}"
-            for side in (("center",) if family == 0 else ("plus", "minus")):
+            for side in ("center",) if family == 0 else ("plus", "minus"):
                 peak_id = expanded_identity if family == 0 else f"{expanded_identity}:{side}"
                 half_width = float(peak["half_width"])
                 bounds = (center - half_width, center + half_width)
@@ -341,9 +346,7 @@ def _integrated_peak_area_projection(
                 )
 
     m0_edges = np.asarray(manifest["m0_region"]["two_theta_bin_edges_rad"], dtype=np.float64)
-    layout_by_group = {
-        str(record["group"]): record for record in manifest["offspecular_layouts"]
-    }
+    layout_by_group = {str(record["group"]): record for record in manifest["offspecular_layouts"]}
     signal_rows = np.flatnonzero(~np.asarray(arrays["is_background"]))
     source_candidate = np.empty(signal_rows.size, dtype=np.int64)
     for source_index, row in enumerate(signal_rows):
@@ -371,9 +374,7 @@ def _integrated_peak_area_projection(
             < min(row_bounds[1], candidate["coordinate_bounds"][1])
         ]
         if len(matched) != 1:
-            raise ValueError(
-                f"signal row {int(row)} maps to {len(matched)} integrated peak areas"
-            )
+            raise ValueError(f"signal row {int(row)} maps to {len(matched)} integrated peak areas")
         source_candidate[source_index] = matched[0]
 
     used_candidate = set(int(value) for value in source_candidate)
@@ -435,8 +436,7 @@ def _prepared_peak_area_projection(
         or manifest.get("peak_area_projection_revision")
         != _peak_area_projection_revision(catalog, source_peak)
         or any(
-            record.get("source_signal_rows")
-            != signal_rows[source_peak == peak_index].tolist()
+            record.get("source_signal_rows") != signal_rows[source_peak == peak_index].tolist()
             for peak_index, record in enumerate(catalog)
         )
     ):
@@ -1204,8 +1204,7 @@ def _verified_dark_counts(manifest: dict[str, Any]) -> tuple[np.ndarray, float]:
         or record.get("model_id") != DARK_CORRECTION_MODEL
         or record.get("negative_values_clipped") is not False
         or record.get("smoothing_applied") is not False
-        or record.get("covariance_model")
-        != "shared_independent_poisson_dark_across_datasets.v1"
+        or record.get("covariance_model") != "shared_independent_poisson_dark_across_datasets.v1"
     ):
         raise ValueError("prepared diagnostic lacks its declared dark correction")
     path = Path(str(record.get("path"))).resolve()
@@ -1305,6 +1304,29 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Figure-7 recipe requires three distinct datasets")
     if document.get("display_dataset_id") not in dataset_ids:
         raise ValueError("display_dataset_id must name one fitted dataset")
+    stitch = document.get("parratt_stitch")
+    if stitch is not None:
+        if (
+            not isinstance(stitch, dict)
+            or stitch.get("model_id") != "empirical_parratt_kinematic_strength.v1"
+            or stitch.get("scope") != "m0_only"
+            or stitch.get("interface_assumption") != "local_lamella_follows_mosaic.v1"
+        ):
+            raise ValueError("Parratt stitch requires the named m=0 local-lamella model")
+        try:
+            substrate = complex(
+                float(stitch["substrate_refractive_index_real"]),
+                float(stitch["substrate_refractive_index_imag"]),
+            )
+            top = float(stitch["top_roughness_A"])
+            bottom = float(stitch["bottom_roughness_A"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Parratt stitch optical-stack values must be explicit") from None
+        ParrattStitchStack(
+            substrate_refractive_index=substrate,
+            top_roughness_A=top,
+            bottom_roughness_A=bottom,
+        )
     dark = document.get("dark_correction")
     if (
         not isinstance(dark, dict)
@@ -1470,8 +1492,7 @@ def _data_projection_is_admissible(
         and all(evidence.get(name) == value for name, value in trusted.items())
         and set(family_errors) == {str(value) for value in FAMILIES}
         and all(
-            math.isfinite(value) and 0.0 <= value <= maximum
-            for value in family_errors.values()
+            math.isfinite(value) and 0.0 <= value <= maximum for value in family_errors.values()
         )
         and math.isfinite(anchor_error)
         and anchor_error >= 0.0
@@ -1928,10 +1949,16 @@ def _qualify_stage_chain_documents(
                 )
             except (KeyError, TypeError, ValueError) as error:
                 raise ValueError("structure fit child start is missing") from error
-            if not np.array_equal(child_start, _fit_structure_vector(current_document)):
-                raise ValueError("structure fit child did not start from its predecessor state")
             child_stage = str(child_document.get("stage"))
             child_active = set(fit_plan["stage"][child_stage]["active_parameters"])
+            child_active_index = np.asarray(
+                [
+                    index
+                    for index, name in enumerate(STRUCTURE_PARAMETER_NAMES)
+                    if name in child_active
+                ],
+                dtype=np.int64,
+            )
             child_frozen_index = np.asarray(
                 [
                     index
@@ -1940,6 +1967,21 @@ def _qualify_stage_chain_documents(
                 ],
                 dtype=np.int64,
             )
+            predecessor_parameters = _fit_structure_vector(current_document)
+            if not np.array_equal(
+                child_start[child_frozen_index],
+                predecessor_parameters[child_frozen_index],
+            ):
+                raise ValueError("structure fit child did not inherit its frozen predecessor state")
+            recorded_active_start = child_document["optimizer"]["fit_start"].get(
+                "initial_parameters"
+            )
+            if recorded_active_start is None:
+                expected_active_start = predecessor_parameters[child_active_index]
+            else:
+                expected_active_start = np.asarray(recorded_active_start, dtype=np.float64)
+            if not np.array_equal(child_start[child_active_index], expected_active_start):
+                raise ValueError("structure fit child did not start from its recorded active state")
             child_final = _fit_structure_vector(child_document)
             if not np.array_equal(
                 child_final[child_frozen_index],
@@ -2113,6 +2155,21 @@ def _profile_evidence_policy(
 def _load_recipe(path: Path) -> dict[str, Any]:
     recipe_path = path.resolve()
     return _validated_recipe(tomllib.loads(recipe_path.read_text(encoding="utf-8")))
+
+
+def _recipe_parratt_stitch(recipe: dict[str, Any]) -> ParrattStitchStack | None:
+    values = recipe.get("parratt_stitch")
+    if values is None:
+        return None
+    return ParrattStitchStack(
+        substrate_refractive_index=complex(
+            float(values["substrate_refractive_index_real"]),
+            float(values["substrate_refractive_index_imag"]),
+        ),
+        top_roughness_A=float(values["top_roughness_A"]),
+        bottom_roughness_A=float(values["bottom_roughness_A"]),
+        model_id=str(values["model_id"]),
+    )
 
 
 def _validate_position_dataset_binding(
@@ -2343,8 +2400,7 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
     gauge = document.get("displacement_gauge")
     if (
         not isinstance(gauge, dict)
-        or gauge.get("model_id")
-        != "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
+        or gauge.get("model_id") != "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
         or gauge.get("site_adp_common_mode") != "fixed_reference"
         or gauge.get("sample_q_envelope_mode") != "fit_zero_centered_regularized"
         or not np.array_equal(vectors["prior_mean"][3:], np.zeros(2))
@@ -3111,9 +3167,7 @@ def prepare(
         "objective_measure": PEAK_AREA_OBJECTIVE,
         "integrated_peak_catalog": peak_catalog,
         "peak_area_projection_revision": peak_projection.revision,
-        "source_signal_peak_index_sha256": _array_sha256(
-            arrays["source_signal_peak_index"]
-        ),
+        "source_signal_peak_index_sha256": _array_sha256(arrays["source_signal_peak_index"]),
         "excluded_peak_catalog": recipe.get("excluded_peak", []),
         "horizon_gate": recipe["horizon_gate"],
         "dark_correction": dark_correction,
@@ -3749,14 +3803,11 @@ def _profile_manifest_is_admissible(
         and manifest.get("fit_compatibility_replay") is None
         and manifest.get("figure_recipe") == trusted_recipe
         and manifest.get("stacking_model") == _fault_free_three_r_definition()
-        and _fixed_displacement_gauge_is_admissible(
-            manifest.get("structure_representative")
-        )
+        and _fixed_displacement_gauge_is_admissible(manifest.get("structure_representative"))
         and dark.get("model_id") == DARK_CORRECTION_MODEL
         and dark.get("negative_values_clipped") is False
         and dark.get("smoothing_applied") is False
-        and dark.get("covariance_model")
-        == "shared_independent_poisson_dark_across_datasets.v1"
+        and dark.get("covariance_model") == "shared_independent_poisson_dark_across_datasets.v1"
         and _is_sha256(dark.get("file_sha256"))
         and _is_sha256(dark.get("detector_native_bytes_sha256"))
         and isinstance(dark.get("detector_native_shape_rc"), list)
@@ -3767,8 +3818,7 @@ def _profile_manifest_is_admissible(
         )
         and isinstance(dark.get("detector_native_dtype"), str)
         and bool(dark["detector_native_dtype"])
-        and float(dark.get("scale", math.nan))
-        == float(trusted_recipe["dark_correction"]["scale"])
+        and float(dark.get("scale", math.nan)) == float(trusted_recipe["dark_correction"]["scale"])
         and cubature.get("settings") == trusted_recipe["profile_cubature"]
         and execution.get("fit_gauss_order")
         == int(trusted_recipe["profile_cubature"]["fit_gauss_order"])
@@ -3892,10 +3942,8 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         Path(verified_inputs["fit artifact"]["path"]).read_text(encoding="utf-8")
     )
     if (
-        fit_document.get("model_rod_roster_sha256")
-        != manifest.get("fit_model_rod_roster_sha256")
-        or fit_document.get("structure_representative")
-        != manifest.get("structure_representative")
+        fit_document.get("model_rod_roster_sha256") != manifest.get("fit_model_rod_roster_sha256")
+        or fit_document.get("structure_representative") != manifest.get("structure_representative")
         or fit_document.get("stacking_model") != manifest.get("stacking_model")
     ):
         raise ValueError("profile scientific state does not match its fit artifact")
@@ -4045,7 +4093,9 @@ def _fault_free_three_r_record(series: Sequence[Any]) -> dict[str, Any]:
             RichEpsilonModel(
                 Parent.THREE_R,
                 strength.shared_disorder_epsilon,
-            ).transition_law().as_array()
+            )
+            .transition_law()
+            .as_array()
         )
     expected = np.asarray((0.0, 0.0, 1.0, 0.0, 0.0), dtype=np.float64)
     if any(not np.array_equal(law, expected) for law in laws):
@@ -4429,6 +4479,7 @@ def fit(
     fit_rod_roster_sha256 = _rod_roster_sha256(fit_rod_roster)
     fixed_lattice_record = _prepared_lattice_record(manifest, series)
     recipe = _load_recipe(recipe_path)
+    specular_stitch = _recipe_parratt_stitch(recipe)
     model_input_identities = {
         name: _file_identity(_verified_provenance_path(manifest, name))
         for name in MODEL_INPUT_NAMES
@@ -4437,6 +4488,7 @@ def fit(
     detectors = tuple(
         build_source_averaged_detector(inputs)
         .restrict_rods(tuple(rod for rod in inputs.rods if rod.family_m in FAMILIES))
+        .with_specular_stitch(specular_stitch)
         .with_maximum_state_block_count(maximum_blocks)
         for inputs in series
     )
@@ -4518,16 +4570,12 @@ def fit(
     oracle_peak_support = peak_aggregation @ np.asarray(observations.support_px2)[signal_row]
     fit_peak_covariance = (
         peak_aggregation
-        @ np.asarray(fit_observations.count_covariance_count2)[
-            np.ix_(signal_index, signal_index)
-        ]
+        @ np.asarray(fit_observations.count_covariance_count2)[np.ix_(signal_index, signal_index)]
         @ peak_aggregation.T
     )
     oracle_peak_covariance = (
         peak_aggregation
-        @ np.asarray(observations.count_covariance_count2)[
-            np.ix_(signal_index, signal_index)
-        ]
+        @ np.asarray(observations.count_covariance_count2)[np.ix_(signal_index, signal_index)]
         @ peak_aggregation.T
     )
     data_projection_relative_l2_by_family: dict[str, float] = {}
@@ -4576,14 +4624,10 @@ def fit(
     covariance_refinement_converged = bool(data_projection_convergence["converged"])
     data_projection_convergence = {
         **data_projection_convergence,
-        "converged": _integrated_area_projection_converged(
-            data_projection_convergence
-        ),
+        "converged": _integrated_area_projection_converged(data_projection_convergence),
         "acceptance_measure": "integrated_peak_count_mass_and_support.v1",
         "covariance_refinement_converged": covariance_refinement_converged,
-        "covariance_policy": (
-            "refined_covariance_is_authoritative_for_objective_whitening"
-        ),
+        "covariance_policy": ("refined_covariance_is_authoritative_for_objective_whitening"),
     }
     if not data_projection_convergence["converged"]:
         raise FloatingPointError(
@@ -5004,9 +5048,9 @@ def fit(
         np.asarray(observations.count_mass)[signal_row]
         - np.asarray(fixed_background.count_mass)[signal_row]
     )
-    fitted_peak_count = peak_aggregation @ np.asarray(result.fitted_objective_model_mass)[
-        signal_row
-    ]
+    fitted_peak_count = (
+        peak_aggregation @ np.asarray(result.fitted_objective_model_mass)[signal_row]
+    )
     parameters_on_bounds = [
         name
         for name, value, minimum, maximum, scale in zip(
@@ -5049,6 +5093,7 @@ def fit(
         "structure_representative": structure,
         "fixed_lattice": fixed_lattice_record,
         "stacking_model": manifest["stacking_model"],
+        "specular_stitch": recipe.get("parratt_stitch"),
         "model_rod_scope": "fitted_families_m_0_1_3_4",
         "model_rod_count": len(fit_rod_roster),
         "model_rod_roster_h_k_m_population": fit_rod_roster,
@@ -5518,6 +5563,7 @@ def prepare_profiles(
     detector = build_source_averaged_detector(inputs)
     if len(profile_rods) != len(inputs.rods):
         detector = detector.restrict_rods(profile_rods)
+    detector = detector.with_specular_stitch(_recipe_parratt_stitch(recipe))
     detector = detector.with_maximum_state_block_count(maximum_blocks)
     detector = detector.rebind_physics(
         strength_model=_candidate_strength(
@@ -5608,9 +5654,7 @@ def prepare_profiles(
     complete_blocks = {
         key
         for key in retained_signal_blocks
-        if {"background_0", "background_1"}.issubset(
-            valid_anchor_bands_by_block.get(key, set())
-        )
+        if {"background_0", "background_1"}.issubset(valid_anchor_bands_by_block.get(key, set()))
     }
     incomplete_block_observations = {
         observation
@@ -5688,9 +5732,7 @@ def prepare_profiles(
     covariance_refinement_converged = bool(measured_projection_refinement["converged"])
     measured_projection_refinement = {
         **measured_projection_refinement,
-        "converged": _display_profile_projection_converged(
-            measured_projection_refinement
-        ),
+        "converged": _display_profile_projection_converged(measured_projection_refinement),
         "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
         "covariance_refinement_converged": covariance_refinement_converged,
         "covariance_policy": "refined_covariance_is_authoritative_for_display",
@@ -6080,8 +6122,7 @@ def prepare_profiles(
         "selected_flat_pixel_index": selected_pixel,
         "selected_observation_row": selected_row,
         "display_detector_counts": (
-            counts[:display_rows].astype(np.float64)
-            - dark_scale * dark_counts[:display_rows]
+            counts[:display_rows].astype(np.float64) - dark_scale * dark_counts[:display_rows]
         ),
         "display_full_region_code": full_region_code.reshape(counts.shape)[:display_rows],
         "display_fit_region_code": display_fit_code.reshape(counts.shape)[:display_rows],

@@ -46,7 +46,13 @@ from rasim_next.ordered import (
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
-from rasim_next.reflectivity import manuscript_specular_composite, parratt_reflectivity
+from rasim_next.reflectivity import (
+    ParrattStitchStack,
+    compile_parratt_stitch,
+    kinematic_scale_specular_stitch,
+    manuscript_specular_composite,
+    parratt_reflectivity,
+)
 from rasim_next.stacking import (
     InitialPopulation,
     Parent,
@@ -1221,3 +1227,106 @@ def test_corrected_specular_keeps_named_outputs_separate() -> None:
     assert result.parratt_normalization == "dimensionless pure Parratt reflectivity"
     assert result.composite_normalization == "dimensionless manuscript specular composite"
     assert not result.composite_reflectivity.flags.writeable
+
+
+def test_kinematic_scale_stitch_recovers_the_high_branch_exactly() -> None:
+    qc_Ainv = 0.0528619975
+    qz_Ainv = np.linspace(0.5, 12.0, 257) * qc_Ainv
+    pure = parratt_reflectivity(
+        qz_Ainv,
+        WAVELENGTH_A,
+        refractive_index=(1.0 + 0.0j, 0.999979 + 3.2e-7j, 0.99999 + 1.0e-8j),
+        thickness_A=(None, 500.0, None),
+        roughness_A=(0.0, 0.0),
+    )
+
+    def kinematic(layer: NDArray[np.float64]) -> NDArray[np.float64]:
+        return 7.0 + 0.3 * layer**2 + 0.01 * layer**4
+
+    result = kinematic_scale_specular_stitch(
+        pure,
+        kinematic,
+        c_A=28.636,
+        qc_Ainv=qc_Ainv,
+        film_layer_index=1,
+    )
+    lower, upper = result.blend_bounds_q_over_qc
+    below = qz_Ainv / qc_Ainv <= lower
+    above = qz_Ainv / qc_Ainv >= upper
+    expected_low = (
+        qz_Ainv**2
+        * pure.reflectivity
+        * float(kinematic(np.zeros(1, dtype=np.float64))[0])
+        / result.dimensionless_scale_factor
+    )
+    np.testing.assert_allclose(result.scaled_parratt_strength_A2[below], expected_low[below])
+    np.testing.assert_array_equal(
+        result.composite_strength_A2[above],
+        result.phase_kinematic_strength_A2[above],
+    )
+    np.testing.assert_array_equal(result.strength_ratio[above], np.ones(np.count_nonzero(above)))
+    assert result.parratt_normalization == "dimensionless pure Parratt reflectivity"
+    assert result.composite_normalization == "kinematic finite-stack strength A2"
+
+
+@pytest.mark.parametrize("film_index", (0.999979 + 3.2e-7j, 0.999979 + 0.0j))
+def test_compiled_parratt_strength_matches_the_continuous_proof_path(
+    film_index: complex,
+) -> None:
+    from rasim_next.pipeline._continuous_detector_kernel import (
+        _empirical_parratt_strength_A2,
+    )
+
+    substrate_index = 0.99999 + 1.0e-8j
+
+    def kinematic(layer: NDArray[np.float64]) -> NDArray[np.float64]:
+        return 7.0 + 0.3 * layer**2
+
+    compiled = compile_parratt_stitch(
+        ParrattStitchStack(substrate_index),
+        kinematic,
+        wavelength_A=WAVELENGTH_A,
+        film_refractive_index=film_index,
+        film_thickness_A=500.0,
+        c_A=28.636,
+    )
+    qz = np.asarray((0.02, 0.08, 0.20, 0.40), dtype=np.float64)
+    pure = parratt_reflectivity(
+        qz,
+        WAVELENGTH_A,
+        refractive_index=(1.0 + 0.0j, film_index, substrate_index),
+        thickness_A=(None, 500.0, None),
+        roughness_A=(0.0, 0.0),
+    )
+    phase_l = 2.0 * pure.kz_Ainv[:, 1].real * 28.636 / (2.0 * np.pi)
+    high = kinematic(phase_l)
+    low = (
+        qz**2 * pure.reflectivity * compiled.zero_strength_A2 / compiled.dimensionless_scale_factor
+    )
+    lower, upper = compiled.blend_bounds_q_over_qc
+    coordinate = np.clip((qz / compiled.qc_Ainv - lower) / (upper - lower), 0.0, 1.0)
+    weight = 6.0 * coordinate**5 - 15.0 * coordinate**4 + 10.0 * coordinate**3
+    expected = np.exp((1.0 - weight) * np.log(low) + weight * np.log(high))
+    expected[qz / compiled.qc_Ainv <= lower] = low[qz / compiled.qc_Ainv <= lower]
+    expected[qz / compiled.qc_Ainv >= upper] = high[qz / compiled.qc_Ainv >= upper]
+    actual = np.asarray(
+        [
+            _empirical_parratt_strength_A2(
+                float(strength),
+                float(qz[index]),
+                2.0 * np.pi / WAVELENGTH_A,
+                film_index,
+                substrate_index,
+                500.0,
+                0.0,
+                0.0,
+                compiled.qc_Ainv,
+                compiled.zero_strength_A2,
+                compiled.dimensionless_scale_factor,
+                lower,
+                upper,
+            )
+            for index, strength in enumerate(high)
+        ]
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1.0e-10, atol=0.0)

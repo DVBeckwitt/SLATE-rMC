@@ -45,7 +45,7 @@ contributing rod/orientation branches on the active detector panel.
 - `materials` and `optics`: CIF-derived material data, shared complex-normal mode selection,
   refraction, Fresnel amplitudes, and uniform-depth attenuation.
 - `ordered`, `stacking`, and `reflectivity`: structure amplitudes, finite stacks, stacking models,
-  and separately named specular calculations.
+  separately named specular calculations, and the immutable optional Parratt handoff state.
 - `reciprocal`: reciprocal basis and complete physical rod catalogs.
 - `sampling`: deterministic source phase-space sampling only.
 - `pipeline/bragg_space.py`: binds CIF- or adopted-lattice ordered-parent strength, including the
@@ -53,8 +53,9 @@ contributing rod/orientation branches on the active detector panel.
 - `pipeline/continuous_detector.py`: shared inverse latent pushforward to intrinsic internal-film
   solid angle or one-incident-state detector coordinates, plus native-pixel integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
-  fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and the optional
-  progressive CPU/CUDA Monte Carlo pixel-mass estimator.
+  fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, an optional
+  wavelength-resolved `(0,0)` stitch frozen across structure rebinds, and the progressive CPU/CUDA
+  Monte Carlo pixel-mass estimator.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   quantitative pixel integration or display-only native-center density sampling. Its geometry-only
   input/context builders stop before structure strength or mosaic construction.
