@@ -176,6 +176,29 @@ the required coordinate-change Jacobian, so solid angle is not multiplied a seco
 acceptance or efficiency factor. Any later area-normalized or caked observable must be separately
 named and apply its correction once.
 
+## Unified local-lamella `m=0` detector measure
+
+When a `ParrattStitchStack` is supplied, the local-lamella inverse-reflection map owns the complete
+nonzero `(0,0)` detector field. For each sampled incident direction and detector ray, their external
+momentum-transfer direction defines the unoriented local normal. The internal film normal mode gives
+`L = 2 Re(kz_film) / |b3|`. The roughened Parratt--kinematic crossover is evaluated as one strength
+`S_stitch(L)` in `A2`; it is not drawn or scaled as a separate curve. The per-source density is
+
+```text
+d_m0(c,r) = p_plane(alpha) * population_00 * S_stitch(L)
+            * k0^2 * pixel_solid_angle_sr(c,r)
+            * source_phase_weight * Thomson * sample_Q_envelope
+            / (|Q_air|^2 * sin(alpha)).
+```
+
+The source phase weight already contains source probability, footprint acceptance, and phase
+population. Parratt contains the applicable interface optics, so entrance/exit transmission is not
+multiplied again. Every actual sampled direction and wavelength is evaluated before incoherent
+reduction. Exact direct-beam `Q=0` is rejected; positive mirror-map caustics remain explicit and are
+resolved by later finite-bin integration. The output stays in the same
+`raw_detector_coordinate_density_A2_per_px2.v1` measure as every other rod. There is no second
+count scale, horizontal shift, detector raster, smoothing, or resolution convolution.
+
 ## Continuous angle-coordinate measure
 
 Let `t = 2theta` and let the fixed `AngleFrame` define canonical `phi`. The inverse geometry gives

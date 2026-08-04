@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from math import fsum, isfinite, pi, tanh
 
 import numpy as np
@@ -318,23 +318,26 @@ class SourceAveragedDetectorCoordinateIntensity:
         if self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
+            "hybrid_cuda_cpu_local_m0.v1",
         }:
             raise ValueError("unsupported detector-coordinate execution backend")
         if self.execution_device is not None and (
             not isinstance(self.execution_device, str) or not self.execution_device
         ):
             raise ValueError("execution_device must be None or a nonempty string")
-        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
-            self.execution_device is not None
-        ):
-            raise ValueError("execution_device must identify exactly the CUDA backend")
+        device_backend = self.execution_backend in {
+            "numba_cuda_source_averaged.v1",
+            "hybrid_cuda_cpu_local_m0.v1",
+        }
+        if device_backend != (self.execution_device is not None):
+            raise ValueError("execution_device must identify every CUDA-backed result")
         m0_gap = self.detector_visible_m0_q_gap_Ainv
         has_m0 = any(rod.family_m == 0 for rod in rods)
         if has_m0:
             if self.branch is not None:
                 raise ValueError("m=0 is available only in an all-root result")
-            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) <= 0.0:
-                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) < 0.0:
+                raise ValueError("detector-visible m=0 requires a nonnegative support gap")
             m0_gap = float(m0_gap)
         elif m0_gap is not None:
             raise ValueError("an m=0 support gap requires an m=0 rod")
@@ -412,21 +415,24 @@ class SourceAveragedDetectorCoordinateDensity:
         if self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
+            "hybrid_cuda_cpu_local_m0.v1",
         }:
             raise ValueError("unsupported detector-coordinate execution backend")
         if self.execution_device is not None and (
             not isinstance(self.execution_device, str) or not self.execution_device
         ):
             raise ValueError("execution_device must be None or a nonempty string")
-        if (self.execution_backend == "numba_cuda_source_averaged.v1") != (
-            self.execution_device is not None
-        ):
-            raise ValueError("execution_device must identify exactly the CUDA backend")
+        device_backend = self.execution_backend in {
+            "numba_cuda_source_averaged.v1",
+            "hybrid_cuda_cpu_local_m0.v1",
+        }
+        if device_backend != (self.execution_device is not None):
+            raise ValueError("execution_device must identify every CUDA-backed result")
         m0_gap = self.detector_visible_m0_q_gap_Ainv
         has_m0 = any(rod.family_m == 0 for rod in rods)
         if has_m0:
-            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) <= 0.0:
-                raise ValueError("detector-visible m=0 requires a positive reciprocal support gap")
+            if m0_gap is None or not isfinite(float(m0_gap)) or float(m0_gap) < 0.0:
+                raise ValueError("detector-visible m=0 requires a nonnegative support gap")
             m0_gap = float(m0_gap)
         elif m0_gap is not None:
             raise ValueError("an m=0 support gap requires an m=0 rod")
@@ -1037,9 +1043,13 @@ class SourceAveragedDetectorEwaldMeasure:
                     "detector-visible m=0 requires every valid incident state to enter "
                     "through the negative sample-normal half-space"
                 )
-            m0_gap = float(np.min(-incident_normal))
-            if not isfinite(m0_gap) or m0_gap <= 0.0:
-                raise ValueError("detector-visible m=0 reciprocal support gap must be positive")
+            m0_gap = (
+                0.0
+                if specular_stitch_stack is not None
+                else float(np.min(-incident_normal))
+            )
+            if not isfinite(m0_gap) or m0_gap < 0.0:
+                raise ValueError("detector-visible m=0 reciprocal support gap is invalid")
 
         reachable_count = np.zeros(states.incident_state_id.size, dtype=np.int64)
         evaluators: list[_IndexedCompiledEvaluator] = []
@@ -1213,7 +1223,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
     @property
     def detector_visible_m0_q_gap_Ainv(self) -> float | None:
-        """Physical lower bound on ``|Q|`` for included top-exit m=0 rays."""
+        """Infimum of supported ``|Q|``; zero for local-lamella stitched m=0."""
 
         return self._detector_visible_m0_q_gap_Ainv
 
@@ -1250,6 +1260,13 @@ class SourceAveragedDetectorEwaldMeasure:
     ) -> CompiledMonteCarloDetectorSampler:
         """Compile a mutable progressive execution resource for this immutable detector."""
 
+        if self._specular_stitch_stack is not None and any(
+            rod.family_m == 0 for rod in self._rods
+        ):
+            raise ValueError(
+                "forward pixel sampling does not implement local-lamella stitched m=0"
+            )
+
         return CompiledMonteCarloDetectorSampler(
             self,
             execution_backend=execution_backend,
@@ -1260,12 +1277,15 @@ class SourceAveragedDetectorEwaldMeasure:
         self,
         rods: tuple[Rod, ...],
     ) -> SourceAveragedDetectorEwaldMeasure:
-        """Compile an exact source-averaged view over a physical rod subset."""
+        """Return an exact view of the compiled source physics over a rod subset."""
 
         requested = tuple(rods)
         if not requested or any(not isinstance(rod, Rod) for rod in requested):
             raise ValueError("rods must contain at least one Rod")
         configured_by_hk = {(rod.h, rod.k): rod for rod in self._rods}
+        configured_index_by_hk = {
+            (rod.h, rod.k): index for index, rod in enumerate(self._rods)
+        }
         requested_hk = tuple((rod.h, rod.k) for rod in requested)
         if len(set(requested_hk)) != len(requested_hk):
             raise ValueError("rods must not repeat a physical rod")
@@ -1275,22 +1295,102 @@ class SourceAveragedDetectorEwaldMeasure:
             raise ValueError(f"rod subset contains unconfigured rod {error.args[0]}") from error
         if selected == self._rods:
             return self
-        return type(self)(
-            reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
-            crystal_to_sample=self._instrument.sample_from_crystal.rotation,
-            rods=selected,
-            rod_catalog_revision=self._rod_catalog_revision,
-            mosaic=self._mosaic,
-            strength_model=self._strength_model,
-            intensity_envelope=self._intensity_envelope,
-            incident=self._incident,
-            material=self._material,
-            instrument=self._instrument,
-            phase_population_weight=self._phase_polarization_weight,
-            polarization_weight=1.0,
-            worker_count=self._worker_count,
-            specular_stitch_stack=self._specular_stitch_stack,
+        contains_m0 = any(rod.family_m == 0 for rod in selected)
+        selected_master_index = tuple(configured_index_by_hk[key] for key in requested_hk)
+        new_index_by_master = {
+            master_index: new_index
+            for new_index, master_index in enumerate(selected_master_index)
+        }
+        reachable_count = np.zeros_like(self._reachable_rod_count_per_source_state)
+        restricted_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
+        for block in self._evaluator_blocks:
+            restricted_block: list[_IndexedCompiledEvaluator] = []
+            for indexed in block:
+                local_index_by_master = {
+                    int(master_index): local_index
+                    for local_index, master_index in enumerate(indexed.master_rod_index)
+                }
+                retained_master_index = tuple(
+                    master_index
+                    for master_index in selected_master_index
+                    if master_index in local_index_by_master
+                )
+                if not retained_master_index:
+                    continue
+                local_index = np.asarray(
+                    [local_index_by_master[index] for index in retained_master_index],
+                    dtype=np.int64,
+                )
+                new_master_index = np.asarray(
+                    [new_index_by_master[index] for index in retained_master_index],
+                    dtype=np.int64,
+                )
+                state = indexed.evaluator.state
+                if not contains_m0 and state.specular_stitch_code:
+                    state = replace(
+                        state,
+                        specular_stitch_code=0,
+                        specular_substrate_refractive_index=1.0 + 0.0j,
+                        specular_top_roughness_A=0.0,
+                        specular_bottom_roughness_A=0.0,
+                        specular_qc_Ainv=0.0,
+                        specular_zero_strength_A2=0.0,
+                        specular_scale_factor=0.0,
+                        specular_blend_lower_q_over_qc=0.0,
+                        specular_blend_upper_q_over_qc=0.0,
+                    )
+                restricted_state = replace(
+                    state,
+                    rod_hk_population=state.rod_hk_population[local_index],
+                    rod_parallel_local_Ainv=state.rod_parallel_local_Ainv[local_index],
+                    rod_u_bounds_Ainv=state.rod_u_bounds_Ainv[local_index],
+                    rod_inverse_constants=state.rod_inverse_constants[local_index],
+                    rod_atom_inplane_factor=state.rod_atom_inplane_factor[local_index],
+                )
+                restricted_block.append(
+                    _IndexedCompiledEvaluator(
+                        evaluator=CompiledDetectorEvaluator(
+                            restricted_state,
+                            self._instrument.detector_shape_rc,
+                        ),
+                        master_rod_index=new_master_index,
+                        incident_state_index=indexed.incident_state_index,
+                    )
+                )
+                reachable_count[indexed.incident_state_index] = local_index.size
+            if restricted_block:
+                restricted_blocks.append(tuple(restricted_block))
+        reachable_count.setflags(write=False)
+        restricted = object.__new__(type(self))
+        for slot in self.__slots__:
+            object.__setattr__(restricted, slot, getattr(self, slot))
+        object.__setattr__(restricted, "_evaluator_blocks", tuple(restricted_blocks))
+        object.__setattr__(
+            restricted,
+            "_detector_visible_m0_q_gap_Ainv",
+            (
+                self._detector_visible_m0_q_gap_Ainv
+                if contains_m0
+                else None
+            ),
         )
+        object.__setattr__(
+            restricted,
+            "_specular_stitch_stack",
+            self._specular_stitch_stack if contains_m0 else None,
+        )
+        object.__setattr__(
+            restricted,
+            "_reachable_rod_count_per_source_state",
+            reachable_count,
+        )
+        object.__setattr__(restricted, "_rods", selected)
+        object.__setattr__(
+            restricted,
+            "_valid_state_count",
+            sum(len(block) for block in restricted_blocks),
+        )
+        return restricted
 
     def rebind_physics(
         self,
@@ -1544,7 +1644,11 @@ class SourceAveragedDetectorEwaldMeasure:
             incident_normal = new_states.k_film_phase_sample_Ainv[new_states.valid, 2]
             if not incident_normal.size or np.any(incident_normal >= 0.0):
                 raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
-            m0_gap = float(np.min(-incident_normal))
+            m0_gap = (
+                0.0
+                if self._specular_stitch_stack is not None
+                else float(np.min(-incident_normal))
+            )
         rebound = object.__new__(type(self))
         for slot in self.__slots__:
             object.__setattr__(rebound, slot, getattr(self, slot))
@@ -1704,7 +1808,27 @@ class SourceAveragedDetectorEwaldMeasure:
                     ),
                 )
             )
-            backend_id = "numba_cuda_source_averaged.v1"
+            if self._specular_stitch_stack is not None and any(
+                rod.family_m == 0 for rod in self._rods
+            ):
+                m0_index, m0_rod = next(
+                    (index, rod)
+                    for index, rod in enumerate(self._rods)
+                    if rod.family_m == 0
+                )
+                local_m0 = self.restrict_rods((m0_rod,)).evaluate_detector_coordinates_all_roots(
+                    flat_column,
+                    flat_row,
+                    execution_backend="cpu",
+                )
+                per_rod[:, m0_index] = np.asarray(
+                    local_m0.per_rod_density_A2_per_px2
+                ).reshape(-1)
+                caustic[:, m0_index] = np.asarray(local_m0.caustic).reshape(-1)
+                valid_source_count = np.asarray(local_m0.valid_source_count).reshape(-1)
+                backend_id = "hybrid_cuda_cpu_local_m0.v1"
+            else:
+                backend_id = "numba_cuda_source_averaged.v1"
         else:
             if self._evaluator_blocks and flat_column.size:
                 first = self._evaluator_blocks[0][0].evaluator
@@ -1843,6 +1967,18 @@ class SourceAveragedDetectorEwaldMeasure:
                 raise ValueError("a selected rod group is inactive for its source evaluator")
         if execution_backend not in {"cpu", "cuda"}:
             raise ValueError("execution_backend must be 'cpu' or 'cuda'")
+        if execution_backend == "cuda" and self._specular_stitch_stack is not None:
+            m0_index = next(
+                (index for index, rod in enumerate(self._rods) if rod.family_m == 0),
+                None,
+            )
+            if m0_index is not None and np.any(
+                group_mask[np.unique(group_index), m0_index]
+            ):
+                raise ValueError(
+                    "CUDA selected source/rod-group evaluation does not implement "
+                    "local-lamella stitched m=0"
+                )
         cuda_chunk_size = _validated_cuda_coordinate_chunk_size(
             execution_backend,
             cuda_coordinate_chunk_size,
@@ -1928,25 +2064,42 @@ class SourceAveragedDetectorEwaldMeasure:
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
         if execution_backend == "cuda":
-            from rasim_next.pipeline._continuous_detector_cuda import (
-                evaluate_source_averaged_density_all_roots_cuda,
-            )
-
-            density, caustic, valid_source_count, execution_device = (
-                evaluate_source_averaged_density_all_roots_cuda(
-                    self._evaluator_blocks,
-                    flat_column,
-                    flat_row,
-                    detector_shape_rc=self._instrument.detector_shape_rc,
-                    master_rod_count=len(self._rods),
-                    **(
-                        {}
-                        if cuda_chunk_size is None
-                        else {"coordinate_chunk_size": cuda_chunk_size}
-                    ),
+            if self._specular_stitch_stack is not None and any(
+                rod.family_m == 0 for rod in self._rods
+            ):
+                detailed = self._evaluate_detector_coordinates(
+                    column,
+                    row,
+                    branch=None,
+                    execution_backend="cuda",
+                    cuda_coordinate_chunk_size=cuda_chunk_size,
                 )
-            )
-            backend_id = "numba_cuda_source_averaged.v1"
+                per_rod = np.asarray(detailed.per_rod_density_A2_per_px2)
+                density = np.sum(per_rod, axis=-1, dtype=np.float64).reshape(-1)
+                caustic = np.any(np.asarray(detailed.caustic), axis=-1).reshape(-1)
+                valid_source_count = np.asarray(detailed.valid_source_count).reshape(-1)
+                execution_device = detailed.execution_device
+                backend_id = detailed.execution_backend
+            else:
+                from rasim_next.pipeline._continuous_detector_cuda import (
+                    evaluate_source_averaged_density_all_roots_cuda,
+                )
+
+                density, caustic, valid_source_count, execution_device = (
+                    evaluate_source_averaged_density_all_roots_cuda(
+                        self._evaluator_blocks,
+                        flat_column,
+                        flat_row,
+                        detector_shape_rc=self._instrument.detector_shape_rc,
+                        master_rod_count=len(self._rods),
+                        **(
+                            {}
+                            if cuda_chunk_size is None
+                            else {"coordinate_chunk_size": cuda_chunk_size}
+                        ),
+                    )
+                )
+                backend_id = "numba_cuda_source_averaged.v1"
         else:
             if self._evaluator_blocks and flat_column.size:
                 self._evaluator_blocks[0][0].evaluator.evaluate_all_roots(

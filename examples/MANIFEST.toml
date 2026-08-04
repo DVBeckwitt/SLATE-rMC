@@ -42,8 +42,8 @@ sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
 
 [[file]]
 path = "examples/bi2se3/experiment/figure7_matched_regions.toml"
-size_bytes = 4609
-sha256 = "82a271c59f3d2e2fe521b11cc22b83ef624b1ede5829fb600988eb56b03d82ce"
+size_bytes = 5114
+sha256 = "94aa322cd8ac33872eca6b84b5fa81c272e69a68804ab85e1e576c558a882fc8"
 
 [[file]]
 path = "examples/bi2se3/experiment/figure7_structure_fit.toml"
@@ -167,8 +167,8 @@ sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_matched_regions.toml"
-size_bytes = 4231
-sha256 = "388c53af5d6f58edb108011fc3bfe4e99eea96105db9e743f840ddbe5478d5c4"
+size_bytes = 4319
+sha256 = "191fad8a452efa599c2de1fb970fa1b2263c2f7c454c9e29dfea62542f672c84"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_structure_fit.toml"

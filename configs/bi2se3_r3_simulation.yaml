@@ -57,7 +57,8 @@ instrument:
   sample_support_model_id: unbounded_plane.v1
   sample_width_m: null
   sample_length_m: null
-  film_thickness_A: 500.0
+  # 50 quintuple layers at c/3 = 9.545333333333333 A per layer.
+  film_thickness_A: 477.26666666666665
 
 mosaic:
   gaussian_sigma_deg: 1.0
@@ -70,7 +71,7 @@ mosaic:
 
 structure_factor:
   model_id: r3m_quintuple_finite_3r.v1
-  layers: 52
+  layers: 50
   normalization: FINITE_TOTAL
   shared_disorder_epsilon: 0.0
 

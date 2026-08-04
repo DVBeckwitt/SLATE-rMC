@@ -10,6 +10,7 @@ import math
 import sys
 import tomllib
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -98,7 +99,7 @@ def _geometry_contract(config: Any) -> tuple[object, ...]:
         config.cif_sha256,
         config.material,
         config.source,
-        config.instrument,
+        replace(config.instrument, film_thickness_A=0.0),
         config.bragg,
     )
 

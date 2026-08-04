@@ -82,7 +82,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-REC-008 | complete-pool inverse-CDF event selection | event resampling paths | n/a | none | RETIRED by contract-v9 continuous pushforward |
 | PHY-REC-009 | external versus internal Q | inconsistent helper paths | refraction section | bootstrap/mosaic | CORRECTED |
 | PHY-REC-011 | exact intrinsic Ewald solid-angle inverse pushforward | absent; legacy paints sampled intersections | continuous change of variables | mosaic/integration | NO_ORACLE; NEW API-v12 `k_film^2 / |J_latent|`, all regular non-specular preimages, no repeated coarea |
-| PHY-REC-012 | detector-visible intrinsic Ewald solid-angle patch with regular nonzero `m=0` | absent | continuous change of variables plus canonical detector support | mosaic/integration | NO_ORACLE; same `k_film^2 / |J_latent|` density, panel selection only, positive Q-gap certificate, no direct `Q=0` |
+| PHY-REC-012 | detector-visible `m=0` field | absent | continuous change of variables plus canonical detector support | mosaic/integration | NO_ORACLE; plain kinematic mode has a positive Q-gap, while optional local-lamella Parratt--kinematic mode owns all nonzero Q and declares gap zero; direct `Q=0` remains excluded |
 
 ## Ordered structure and rods
 
@@ -115,11 +115,12 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-REF-004 | substrate and finite film | `calculations.py:432-480` | Parratt section | ordered | MATCH/generalized |
 | PHY-REF-005 | external Qz, internal phase Qz, and L | `calculations.py:462-478` | `eq:si_internal_phase_coordinate` | ordered | CORRECTED named |
 | PHY-REF-006 | pure kinematic specular rod | helper internals | `eq:si_ht_normalized_structure` | ordered | CORRECTED raw |
-| PHY-REF-007 | empirical smooth handoff | `calculations.py:591-803` | `eq:si_handoff_x_l`, `eq:si_handoff_unscaled_structure`, `eq:si_handoff_scale`, `eq:si_handoff_scaled_structure`, `eq:si_handoff_log_ratio`, `eq:si_handoff_smoothstep`, and `eq:si_handoff_blend` | ordered/detector | MATCH as named compatibility; optional `(0,0)` detector binding converts back to finite-stack `A2`, uses event-native external normal transfer, freezes wavelength-resolved overlap state, and recovers the internal-phase high branch exactly |
+| PHY-REF-007 | empirical smooth handoff inside the continuous `(0,0)` strength | `calculations.py:591-803` | `eq:si_handoff_x_l`, `eq:si_handoff_unscaled_structure`, `eq:si_handoff_scale`, `eq:si_handoff_scaled_structure`, `eq:si_handoff_log_ratio`, `eq:si_handoff_smoothstep`, and `eq:si_handoff_blend` | ordered/detector | MATCH as named compatibility; the local-lamella field converts Parratt reflectivity to finite-stack `A2`, evaluates that strength at internal phase `L`, and recovers the kinematic high branch exactly |
 | PHY-REF-008 | scalar multilayer incident and reciprocal-exit field profiles | UI says DWBA but event path is single-pass | future distorted-wave model | none | DEFERRED |
 | PHY-REF-009 | amplitude-level optical weighting inside ordered and stacking sums | no old equivalent | future distorted-wave model | none | DEFERRED |
 | PHY-REF-010 | single-pass scalar entrance/exit field weighting | `diffraction.py:1917-1946`, `2223-2316` | `eq:si_scalar_transmission` through `eq:si_full_optical_weight_lambda` | geometry/integration | CORRECTED, current reference |
 | PHY-REF-011 | roughness-consistent off-specular local fields | Parratt roughness exists, event local fields do not | future distorted-wave model | none | DEFERRED |
+| PHY-REF-012 | unified source-averaged local-lamella `(0,0)` detector density | no declared detector-measure equivalent | specular reflection change of variables | ordered/detector | NEW; actual sampled incident directions and wavelengths sum as intensities, the stitched strength is one function of internal phase `L`, nonzero rods are unchanged, and there is no separate detector curve, scale, shift, raster, or smoothing |
 
 ## Stacking disorder
 

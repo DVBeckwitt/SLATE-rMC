@@ -11,8 +11,8 @@ interface_assumption = "local_lamella_follows_mosaic.v1"
 substrate_material_label = "SiO2 legacy-compatibility assumption; sample provenance unavailable"
 substrate_refractive_index_real = 0.9999929532364343
 substrate_refractive_index_imag = 9.672907455164902e-8
-top_roughness_A = 0.0
-bottom_roughness_A = 0.0
+top_roughness_A = 5.2372513900
+bottom_roughness_A = 10.0000000000
 
 [dark_correction]
 model_id = "scaled_dark_subtraction_no_clip.v1"
@@ -41,10 +41,11 @@ fold_fit_subdivisions = 4
 minimum_valid_bins_per_profile = 3
 
 [horizon_gate]
-air_exit_guard_deg = 1.0
+offspecular_air_exit_guard_deg = 1.0
+diffraction_peak_air_exit_guard_deg = 1.0
 maximum_sub_guard_model_mass_fraction = 0.005
-selection_center_cutoff_deg = 5.5581794918
-selection_rule = "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
+diffraction_peak_selection_center_cutoff_deg = 5.5581794918
+diffraction_peak_selection_rule = "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
 
 [m0_region]
 two_theta_minimum_deg = 0.0

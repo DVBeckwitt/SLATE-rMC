@@ -23,6 +23,7 @@ from rasim_next.geometry import (
     build_incident_states,
     compile_instrument,
     detector_coordinates_to_angles,
+    project_detector_ray,
     project_detector_rays,
 )
 from rasim_next.materials import material_optics
@@ -1728,7 +1729,7 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
     )
 
 
-def test_parratt_stitch_is_m0_only_and_preserves_the_high_branch(
+def test_parratt_stitch_is_m0_only_and_uses_one_local_lamella_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import rasim_next.pipeline.source_averaged_detector as source_detector_module
@@ -1752,9 +1753,9 @@ def test_parratt_stitch_is_m0_only_and_preserves_the_high_branch(
         candidate.per_rod_density_A2_per_px2[:, nonzero_rod],
         baseline.per_rod_density_A2_per_px2[:, nonzero_rod],
     )
-    np.testing.assert_array_equal(
-        candidate.per_rod_density_A2_per_px2[:, ~nonzero_rod],
-        baseline.per_rod_density_A2_per_px2[:, ~nonzero_rod],
+    assert np.any(
+        candidate.per_rod_density_A2_per_px2[:, ~nonzero_rod]
+        != baseline.per_rod_density_A2_per_px2[:, ~nonzero_rod]
     )
     assert stitched.specular_stitch_stack is not None
 
@@ -1808,6 +1809,16 @@ def test_parratt_stitch_is_m0_only_and_preserves_the_high_branch(
         rebound_values.per_rod_density_A2_per_px2,
         active_values.per_rod_density_A2_per_px2,
     )
+    assert active.detector_visible_m0_q_gap_Ainv == 0.0
+    with pytest.raises(
+        ValueError,
+        match="forward pixel sampling does not implement local-lamella stitched m=0",
+    ):
+        active.sample_native_pixel_mass(
+            draws_per_source_state=8,
+            seed=4381,
+            execution_backend="cpu",
+        )
     from numba import cuda
 
     if cuda.is_available():
@@ -1822,23 +1833,179 @@ def test_parratt_stitch_is_m0_only_and_preserves_the_high_branch(
             rtol=2.0e-11,
             atol=2.0e-24,
         )
-        cpu_image = active.sample_native_pixel_mass(
-            draws_per_source_state=8,
-            seed=4381,
-            execution_backend="cpu",
+        np.testing.assert_array_equal(
+            gpu.valid_source_count,
+            active_values.valid_source_count,
         )
-        plain_image = plain.sample_native_pixel_mass(
-            draws_per_source_state=8,
-            seed=4381,
-            execution_backend="cpu",
+        assert gpu.execution_backend == "hybrid_cuda_cpu_local_m0.v1"
+        m0_group = np.asarray(
+            [[rod.family_m == 0 for rod in active.rods]],
+            dtype=np.bool_,
         )
-        assert np.any(cpu_image.image_A2 != plain_image.image_A2)
-        gpu_image = active.sample_native_pixel_mass(
-            draws_per_source_state=8,
-            seed=4381,
+        with pytest.raises(
+            ValueError,
+            match="CUDA selected source/rod-group evaluation does not implement",
+        ):
+            active.evaluate_selected_source_rod_groups_all_roots(
+                column_px[:1],
+                row_px[:1],
+                np.zeros(1, dtype=np.int64),
+                np.zeros(1, dtype=np.int64),
+                m0_group,
+                execution_backend="cuda",
+            )
+        with pytest.raises(
+            ValueError,
+            match="forward pixel sampling does not implement local-lamella stitched m=0",
+        ):
+            active.sample_native_pixel_mass(
+                draws_per_source_state=8,
+                seed=4381,
+                execution_backend="cuda",
+            )
+
+
+def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
+    from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
+
+    inputs = _configured_inputs(sample_count=1)
+    m0_rods = tuple(rod for rod in inputs.rods if rod.family_m == 0)
+    plain = build_source_averaged_detector(inputs).restrict_rods(m0_rods)
+    stack = ParrattStitchStack(
+        substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+        bottom_roughness_A=10.0,
+    )
+    stitched = plain.with_specular_stitch(stack)
+    full_stitched = build_source_averaged_detector(inputs).with_specular_stitch(stack)
+    non_m0_rod = next(rod for rod in full_stitched.rods if rod.family_m != 0)
+    non_m0_only = full_stitched.restrict_rods((non_m0_rod,))
+    assert non_m0_only.specular_stitch_stack is None
+    non_m0_only.compile_monte_carlo_sampler(execution_backend="cpu", seed=4381)
+
+    beta = math.radians(70.0)
+    incident_sample = np.asarray(plain.incident.states.direction_sample[0])
+
+    def local_reflection_coordinate(alpha_deg: float) -> tuple[float, float]:
+        alpha = math.radians(alpha_deg)
+        local_normal_sample = np.asarray(
+            (
+                math.sin(alpha) * math.cos(beta),
+                math.sin(alpha) * math.sin(beta),
+                math.cos(alpha),
+            )
+        )
+        outgoing_sample = (
+            incident_sample
+            - 2.0 * float(np.dot(incident_sample, local_normal_sample)) * local_normal_sample
+        )
+        projection = project_detector_ray(
+            np.asarray(plain.incident.states.sample_intersection_lab_m[0]),
+            plain.instrument.lab_from_sample.apply_vector(outgoing_sample),
+            plain.instrument,
+        )
+        assert projection.status.value == "VALID"
+        return projection.column_px, projection.row_px
+
+    low_parratt = local_reflection_coordinate(5.0)
+    evanescent_mean_exit = local_reflection_coordinate(2.65414)
+    direct_beam = project_detector_ray(
+        np.asarray(plain.incident.states.sample_intersection_lab_m[0]),
+        plain.instrument.lab_from_sample.apply_vector(incident_sample),
+        plain.instrument,
+    )
+    assert direct_beam.status.value == "VALID"
+    column_px = np.asarray(
+        (low_parratt[0], evanescent_mean_exit[0], 1448.2, direct_beam.column_px),
+        dtype=np.float64,
+    )
+    row_px = np.asarray(
+        (low_parratt[1], evanescent_mean_exit[1], 1400.0, direct_beam.row_px),
+        dtype=np.float64,
+    )
+
+    baseline = plain.evaluate_detector_density_all_roots(column_px, row_px)
+    candidate = stitched.evaluate_detector_density_all_roots(column_px, row_px)
+
+    np.testing.assert_array_equal(baseline.density_A2_per_px2[:2], np.zeros(2))
+    assert np.all(np.isfinite(candidate.density_A2_per_px2))
+    assert np.all(candidate.density_A2_per_px2[:3] > 0.0)
+    assert candidate.density_A2_per_px2[3] == 0.0
+    np.testing.assert_array_equal(candidate.valid_source_count, np.asarray((1, 1, 1, 0)))
+    smooth = plain.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=stack.substrate_refractive_index,
+            bottom_roughness_A=0.0,
+        )
+    ).evaluate_detector_density_all_roots(column_px[:3], row_px[:3])
+    assert not np.isclose(
+        candidate.density_A2_per_px2[0],
+        smooth.density_A2_per_px2[0],
+        rtol=1.0e-2,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        candidate.density_A2_per_px2[1:3],
+        smooth.density_A2_per_px2[1:3],
+        rtol=2.0e-11,
+        atol=2.0e-24,
+    )
+    structure = full_stitched.strength_model.structure_parameters
+    assert structure is not None
+    changed_strength = replace(
+        full_stitched.strength_model,
+        structure_parameters=replace(
+            structure,
+            bi_occupancy=0.71,
+            se1_occupancy=0.83,
+            se2_occupancy=0.77,
+        ),
+    )
+    rebound = full_stitched.rebind_physics(strength_model=changed_strength)
+    m0_index = next(index for index, rod in enumerate(rebound.rods) if rod.family_m == 0)
+    rebound_full = rebound.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    rebind_then_restrict = rebound.restrict_rods(
+        (rebound.rods[m0_index],)
+    ).evaluate_detector_coordinates_all_roots(column_px, row_px)
+    restrict_then_rebind = full_stitched.restrict_rods(
+        (full_stitched.rods[m0_index],)
+    ).rebind_physics(strength_model=changed_strength).evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+    )
+    np.testing.assert_allclose(
+        rebind_then_restrict.per_rod_density_A2_per_px2[:, 0],
+        rebound_full.per_rod_density_A2_per_px2[:, m0_index],
+        rtol=4.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_allclose(
+        rebind_then_restrict.per_rod_density_A2_per_px2,
+        restrict_then_rebind.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(rebind_then_restrict.caustic, restrict_then_rebind.caustic)
+    np.testing.assert_array_equal(
+        rebind_then_restrict.valid_source_count,
+        restrict_then_rebind.valid_source_count,
+    )
+    from numba import cuda
+
+    if cuda.is_available():
+        cpu = rebound.evaluate_detector_density_all_roots(column_px, row_px)
+        gpu = rebound.evaluate_detector_density_all_roots(
+            column_px,
+            row_px,
             execution_backend="cuda",
         )
-        np.testing.assert_allclose(gpu_image.image_A2, cpu_image.image_A2, rtol=8.0e-11)
+        np.testing.assert_allclose(
+            gpu.density_A2_per_px2,
+            cpu.density_A2_per_px2,
+            rtol=2.0e-11,
+            atol=2.0e-24,
+        )
+        np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
+        assert gpu.execution_backend == "hybrid_cuda_cpu_local_m0.v1"
 
 
 def test_continuous_fold_plan_binds_full_detector_geometry_and_active_rods(
@@ -2025,6 +2192,18 @@ def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_par
         atol=3.0e-24,
     )
     np.testing.assert_array_equal(restricted_value.caustic[:, 0], rebound_value.caustic[:, 1])
+    reordered = rebound.restrict_rods((rebound.rods[2], rebound.rods[0]))
+    reordered_value = reordered.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        reordered_value.per_rod_density_A2_per_px2,
+        rebound_value.per_rod_density_A2_per_px2[:, (2, 0)],
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(
+        reordered_value.caustic,
+        rebound_value.caustic[:, (2, 0)],
+    )
     assert restricted.incident is rebound.incident
     assert restricted.instrument is rebound.instrument
     assert rebound.incident is averaged.incident
@@ -2385,9 +2564,9 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
             density_A2_per_px2=np.full(column_px.shape, np.inf),
             caustic=np.zeros(column_px.shape, dtype=np.bool_),
         )
-    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+    with pytest.raises(ValueError, match="identify every CUDA-backed result"):
         replace(all_roots, execution_device="unexpected device")
-    with pytest.raises(ValueError, match="identify exactly the CUDA backend"):
+    with pytest.raises(ValueError, match="identify every CUDA-backed result"):
         replace(all_roots, execution_backend="numba_cuda_source_averaged.v1")
     with pytest.raises(ValueError, match="execution_backend"):
         detector.evaluate_detector_coordinates_all_roots(

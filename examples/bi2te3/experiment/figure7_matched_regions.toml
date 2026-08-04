@@ -31,10 +31,11 @@ fold_fit_subdivisions = 4
 minimum_valid_bins_per_profile = 3
 
 [horizon_gate]
-air_exit_guard_deg = 1.0
+offspecular_air_exit_guard_deg = 1.0
+diffraction_peak_air_exit_guard_deg = 1.0
 maximum_sub_guard_model_mass_fraction = 0.005
-selection_center_cutoff_deg = 2.4108442262
-selection_rule = "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
+diffraction_peak_selection_center_cutoff_deg = 2.4108442262
+diffraction_peak_selection_rule = "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
 
 [m0_region]
 two_theta_minimum_deg = 0.0

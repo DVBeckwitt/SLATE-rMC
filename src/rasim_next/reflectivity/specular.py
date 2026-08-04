@@ -150,12 +150,13 @@ class KinematicScaleSpecularResult:
 
 @dataclass(frozen=True, slots=True)
 class ParrattStitchStack:
-    """Fixed substrate and interface inputs for the empirical `m=0` handoff."""
+    """Fixed local-lamella substrate and interface inputs for the `m=0` handoff."""
 
     substrate_refractive_index: complex
     top_roughness_A: float = 0.0
     bottom_roughness_A: float = 0.0
     model_id: str = "empirical_parratt_kinematic_strength.v1"
+    interface_assumption: str = "local_lamella_follows_mosaic.v1"
 
     def __post_init__(self) -> None:
         index_value = complex(self.substrate_refractive_index)
@@ -171,6 +172,8 @@ class ParrattStitchStack:
             raise ValueError("interface roughnesses must be finite and nonnegative")
         if self.model_id != "empirical_parratt_kinematic_strength.v1":
             raise ValueError("unsupported Parratt stitch model_id")
+        if self.interface_assumption != "local_lamella_follows_mosaic.v1":
+            raise ValueError("unsupported Parratt stitch interface assumption")
         object.__setattr__(self, "substrate_refractive_index", index_value)
         object.__setattr__(self, "top_roughness_A", roughness[0])
         object.__setattr__(self, "bottom_roughness_A", roughness[1])

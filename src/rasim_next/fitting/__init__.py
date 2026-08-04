@@ -115,6 +115,7 @@ from rasim_next.fitting.radial_background import (
     RadialBackgroundState,
     fit_shared_radial_background,
 )
+from rasim_next.fitting.specular import DetectorHorizonAcceptance
 from rasim_next.fitting.stacking_intensity import (
     STACKING_COMPONENT_IDS,
     STACKING_PHASE_IDS,
@@ -149,6 +150,7 @@ __all__ = [
     "CompiledStackingResponse",
     "ContinuousDetectorFunction",
     "ContinuousDetectorGeometryModel",
+    "DetectorHorizonAcceptance",
     "ExactTagGeometryModel",
     "FixedLatticeState",
     "FixedMatchedRegionBackground",

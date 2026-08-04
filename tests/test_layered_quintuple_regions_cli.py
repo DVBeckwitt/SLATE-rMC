@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import inspect
 import json
 import math
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -52,6 +54,43 @@ TRUSTED_RECIPE = {
         "minimum_valid_bins_per_profile": 3,
     },
 }
+
+
+def test_specular_angle_chart_does_not_require_a_propagating_diffraction_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinates = SimpleNamespace(
+        column_px=np.array([10.0]),
+        row_px=np.array([20.0]),
+        valid=np.array([True]),
+    )
+    monkeypatch.setattr(
+        ADAPTER,
+        "angles_to_detector_coordinate_area_measure",
+        lambda *args, **kwargs: SimpleNamespace(
+            coordinates=coordinates,
+            detector_area_jacobian_px2_per_rad2=np.array([2.0]),
+        ),
+    )
+    chart = ADAPTER._OscAngleDetectorAreaChart(
+        instrument=object(),
+        angle_frame=object(),
+        nominal_context=SimpleNamespace(
+            evaluate_detector_geometry=lambda *args, **kwargs: SimpleNamespace(
+                kf_air_sample_Ainv=np.array([[1.0, 0.0, 0.01]]),
+                valid=np.array([False]),
+            )
+        ),
+        horizon_acceptance=ADAPTER.DetectorHorizonAcceptance(
+            offspecular_air_exit_guard_rad=np.deg2rad(1.0),
+        ),
+        revision="external-air-specular-test.v1",
+    )
+
+    mapped = chart.map_detector_area(np.array([0.1]), np.array([0.0]))
+
+    np.testing.assert_array_equal(mapped.valid, np.array([True]))
+    np.testing.assert_allclose(mapped.detector_area_jacobian_px2_per_chart2, np.array([2.0]))
 
 
 def _projection_refinement(dataset_ids: tuple[str, ...] = ("a", "b", "c")) -> dict[str, object]:
@@ -208,6 +247,30 @@ def test_integrated_peak_projection_rejects_silent_declared_peak_pruning() -> No
             prepared_manifest,
             observations,
         )
+
+
+def test_optional_continuous_plan_can_become_empty_after_support_screening() -> None:
+    quadrature = ContinuousRegionQuadrature(
+        column_px=np.asarray((0.0, 2.0, 3.0)),
+        row_px=np.asarray((0.0, 0.0, 4.0)),
+        detector_area_weight_px2=np.asarray((0.25, 0.75, 1.5)),
+        observation_row=np.asarray((0, 0, 1)),
+        background_coordinate=np.asarray((0.0, 0.0, 1.0)),
+        observation_count=2,
+        chart_revision="continuous-background.test.v1",
+    )
+    plan = ADAPTER._DatasetContinuousRegionPlan(
+        dataset_index=0,
+        dataset_id="image",
+        global_observation_row=np.asarray((0, 1)),
+        quadrature=quadrature,
+        fold_bands=(),
+        rectangle_count=2,
+    )
+    assert ADAPTER._drop_optional_continuous_plan_observations(plan, {0, 1}) is None
+    retained = ADAPTER._drop_optional_continuous_plan_observations(plan, {1})
+    assert retained is not None
+    np.testing.assert_array_equal(retained.quadrature.observation_row, np.asarray((0, 0)))
 
 
 def test_radial_background_is_integrated_on_continuous_region_nodes() -> None:
@@ -1117,6 +1180,11 @@ def test_recipe_peak_coordinates_and_horizon_catalog_are_consistent() -> None:
     recipe = tomllib.loads(path.read_text(encoding="utf-8"))
 
     validated = ADAPTER._validated_recipe(recipe)
+    horizon = ADAPTER._detector_horizon_acceptance(validated["horizon_gate"])
+    assert math.degrees(horizon.offspecular_air_exit_guard_rad) == pytest.approx(1.0)
+    assert validated["horizon_gate"]["diffraction_peak_air_exit_guard_deg"] == 1.0
+    assert validated["parratt_stitch"]["top_roughness_A"] == pytest.approx(5.23725139)
+    assert validated["parratt_stitch"]["bottom_roughness_A"] == pytest.approx(10.0)
     exclusions = {
         (item["dataset_id"], item["identity"]): item["reason"]
         for item in validated["excluded_peak"]
@@ -1133,7 +1201,6 @@ def test_recipe_peak_coordinates_and_horizon_catalog_are_consistent() -> None:
     invalid["fit_peak"][0]["dataset_id"] = "unknown"
     with pytest.raises(ValueError, match="dataset_id"):
         ADAPTER._validated_recipe(invalid)
-
 
 def test_fit_conditioned_profile_policy_accepts_complete_fit_evidence() -> None:
     policy = ADAPTER._profile_evidence_policy(
@@ -1283,6 +1350,9 @@ def _accepted_profile_manifest() -> dict[str, object]:
     execution = copy.deepcopy(fit_document["provenance"]["execution_identity"])
     execution["fit_gauss_order"] = TRUSTED_RECIPE["profile_cubature"]["fit_gauss_order"]
     execution["fit_subdivision_count"] = TRUSTED_RECIPE["profile_cubature"]["fold_fit_subdivisions"]
+    execution["m0_model_phi_subdivision_count"] = TRUSTED_RECIPE["profile_cubature"][
+        "fold_fit_subdivisions"
+    ]
     execution.update(
         {
             "rod_scope": "fitted_families_m_0_1_3_4",
@@ -1297,6 +1367,14 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "dark_osc_sha256": "9" * 64,
             "dark_scale": 1.0,
             "fit_chain_sha256": ["7" * 64],
+            "m0_signal_only_projection_revision": "a" * 64,
+            "m0_signal_only_measured_quadrature_revision": "b" * 64,
+            "m0_signal_only_model_quadrature_revision": "0" * 64,
+            "m0_signal_only_bin_count": 2,
+            "m0_signal_only_count_mass_sha256": "c" * 64,
+            "m0_signal_only_count_covariance_sha256": "d" * 64,
+            "m0_signal_only_radial_background_mass_sha256": "e" * 64,
+            "m0_signal_only_model_mass_sha256": "f" * 64,
         }
     )
     return {
@@ -1313,7 +1391,6 @@ def _accepted_profile_manifest() -> dict[str, object]:
         "all_rod_validation": "NOT_REQUIRED_FOR_RENDER",
         "rod_scope_validation_status": "NOT_RUN",
         "model_rod_scope": "fitted_families_m_0_1_3_4",
-        "fit_compatibility_replay": None,
         "structure_representative": copy.deepcopy(fit_document["structure_representative"]),
         "stacking_model": ADAPTER._fault_free_three_r_definition(),
         "dark_correction": {
@@ -1328,9 +1405,43 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "covariance_model": "shared_independent_poisson_dark_across_datasets.v1",
         },
         "figure_recipe": copy.deepcopy(TRUSTED_RECIPE),
+        "m0_signal_only_display": {
+            "status": "DISPLAY_ONLY_INCOMPLETE_SIDEBAND_SUPPLEMENT",
+            "supplemental_bin_count": 2,
+            "fit_role": "not_used_in_fit_objective_or_parameter_estimation",
+            "background_conditioning": "fixed_radial_only_no_adjacent_sideband_conditioning",
+            "projection_method": ADAPTER.MEASURED_PROJECTION_METHOD,
+            "projection_revision": "a" * 64,
+            "measured_quadrature_revision": "b" * 64,
+            "model_quadrature_revision": "0" * 64,
+            "gauss_order": TRUSTED_RECIPE["model_cubature"]["oracle_gauss_order"],
+            "subdivision_count": TRUSTED_RECIPE["model_cubature"][
+                "fold_oracle_subdivisions"
+            ],
+            "measured_phi_subdivision_count": TRUSTED_RECIPE["model_cubature"][
+                "fold_oracle_subdivisions"
+            ],
+            "model_phi_subdivision_count": TRUSTED_RECIPE["model_cubature"][
+                "fold_oracle_subdivisions"
+            ],
+            "measured_continuous_node_count": 32,
+            "model_continuous_node_count": 32,
+            "count_mass_sha256": "c" * 64,
+            "count_covariance_sha256": "d" * 64,
+            "radial_background_mass_sha256": "e" * 64,
+            "model_mass_sha256": "f" * 64,
+            "detector_overlay_flat_pixel_count": 10,
+            "detector_overlay_flat_pixel_sha256": "7" * 64,
+            "execution": {"model_measure": "continuous_detector_chart_area"},
+            "smoothing_applied": False,
+            "model_pixelized": False,
+        },
         "background_model": background_model,
         "profile_cubature": {
             "settings": copy.deepcopy(TRUSTED_RECIPE["profile_cubature"]),
+            "m0_model_phi_subdivision_count": TRUSTED_RECIPE["profile_cubature"][
+                "fold_fit_subdivisions"
+            ],
             "evaluated_passes": ["fit"],
             "full_profile_oracle_performed": False,
             "fit_artifact_fitted_region_oracle": copy.deepcopy(fit_document["cubature_oracle"]),
@@ -1346,6 +1457,9 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "count_covariance_sha256": "6" * 64,
             "gauss_order": TRUSTED_RECIPE["model_cubature"]["oracle_gauss_order"],
             "subdivision_count": TRUSTED_RECIPE["model_cubature"]["fold_oracle_subdivisions"],
+            "m0_phi_subdivision_count": TRUSTED_RECIPE["model_cubature"][
+                "fold_oracle_subdivisions"
+            ],
             "refinement_oracle": {
                 **_projection_refinement(("a",)),
                 "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
@@ -1394,6 +1508,7 @@ def _accepted_profile_manifest() -> dict[str, object]:
         (("background_model", "conditioned_revision"), ""),
         (("dark_correction", "file_sha256"), "7" * 64),
         (("dark_correction", "covariance_model"), "independent_per_dataset"),
+        (("m0_signal_only_display", "background_conditioning"), "sideband-subtracted"),
     ),
 )
 def test_profile_manifest_admission_is_bound_to_trusted_evidence(
@@ -1430,6 +1545,44 @@ def test_profile_manifest_retains_covariance_refinement_as_diagnostic() -> None:
     )
 
 
+def test_profile_manifest_accepts_an_empty_m0_signal_only_supplement() -> None:
+    accepted = _accepted_profile_manifest()
+    supplement = accepted["m0_signal_only_display"]
+    supplement.update(
+        {
+            "status": "NOT_REQUIRED_ALL_M0_BINS_CONDITIONED",
+            "supplemental_bin_count": 0,
+            "projection_method": None,
+            "projection_revision": None,
+            "measured_quadrature_revision": None,
+            "model_quadrature_revision": None,
+            "measured_continuous_node_count": 0,
+            "model_continuous_node_count": 0,
+            "detector_overlay_flat_pixel_count": 0,
+            "execution": None,
+        }
+    )
+    execution = accepted["provenance"]["execution_identity"]
+    execution.update(
+        {
+            "m0_signal_only_bin_count": 0,
+            "m0_signal_only_projection_revision": None,
+            "m0_signal_only_measured_quadrature_revision": None,
+            "m0_signal_only_model_quadrature_revision": None,
+        }
+    )
+
+    assert ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=TRUSTED_RECIPE,
+    )
+    supplement["execution"] = {}
+    assert not ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=TRUSTED_RECIPE,
+    )
+
+
 def test_profiles_cli_is_explicitly_fit_conditioned() -> None:
     arguments = ADAPTER._parser().parse_args(
         [
@@ -1447,6 +1600,8 @@ def test_profiles_cli_is_explicitly_fit_conditioned() -> None:
 
     assert arguments.command == "profiles"
     assert arguments.destination == Path("profiles.ra_diag.npz")
+    assert not hasattr(arguments, "reuse_fit_parameters")
+    assert not hasattr(arguments, "reuse_profile_diagnostic")
 
 
 def test_background_cli_requires_the_exact_structure_fit_plan() -> None:
@@ -1489,6 +1644,47 @@ def test_pixel_cell_boundary_segments_follow_exact_native_pixel_edges() -> None:
         2,
     )
 
+
+def test_m0_is_rendered_only_from_unified_profile_field() -> None:
+    parser = ADAPTER._parser()
+    subparser_action = next(
+        action
+        for action in parser._actions
+        if action.__class__.__name__ == "_SubParsersAction"
+    )
+    assert "m0-low-angle" not in subparser_action.choices
+    render_options = {
+        option
+        for action in subparser_action.choices["render"]._actions
+        for option in action.option_strings
+    }
+    assert "--m0-count-calibration" not in render_options
+    assert "--m0-low-angle-comparison" not in render_options
+    assert tuple(inspect.signature(ADAPTER.render).parameters) == (
+        "profile_diagnostic_path",
+        "output_directory",
+    )
+
+
+def test_m0_signal_only_display_fills_only_conditioning_gaps() -> None:
+    selected = ADAPTER._m0_signal_only_display_mask(
+        np.asarray((0, 1, 2, 3, 4)),
+        np.asarray((True, True, True, False, True)),
+        np.asarray(("m0", "m0", "m1_plus")),
+        np.asarray((1, 2, 4)),
+        np.asarray((True, False, True)),
+    )
+
+    np.testing.assert_array_equal(selected, np.asarray((True, False, True, False, True)))
+    empty = ADAPTER._m0_signal_only_display_mask(
+        np.empty(0, dtype=np.int64),
+        np.empty(0, dtype=np.bool_),
+        np.asarray(("m0",)),
+        np.asarray((0,), dtype=np.int64),
+        np.asarray((True,), dtype=np.bool_),
+    )
+    assert empty.dtype == np.bool_
+    assert empty.shape == (0,)
 
 def test_five_coordinate_structure_adapter_separates_site_adps_and_intensity_envelope() -> None:
     from rasim_next.pipeline.configured_simulation import (

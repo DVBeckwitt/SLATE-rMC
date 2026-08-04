@@ -1637,20 +1637,23 @@ per-dataset weak rows/support/covariance, excludes every touched boundary pixel 
 calibration, and tests cubature on the anchor-conditioned `(I-A)m` observable before any new figure
 is called current.
 
-## Parratt stitch qualification (2026-08-03)
+## Unified Parratt--kinematic `m=0` qualification (2026-08-04)
 
-The T21 implementation has separate scalar, continuous-detector CPU/CUDA, inverse-density, and
-forward-image proofs for active low-`Qz` stitching, strict nonzero-`m` exclusion, immutable rebind,
-and exact high-branch recovery.  The full Bi2Se3 rerun used one fixed SiO2 compatibility substrate,
-zero interface roughness, the accepted position and mosaic checkpoints, the fault-free ordered
-parent, 19 fitted rods, one shared incidence delta, continuous phi/two-theta `m=0` regions, and
-continuous signed-Qr/L nonzero-`m` regions.  It applied neither smoothing nor model pixelization.
+The optional crossover now lives inside one continuous local-lamella `(0,0)` detector field. Its
+source-wavelength overlap state is compiled once and retained across candidate structure rebinding;
+the field owns all nonzero `(0,0)` transfer and uses internal phase `L` for the stitched strength.
+The regular nonzero-`m` field is unchanged. Exact direct beam is rejected,
+local-only support below the mean-plane horizon is retained, the stitched support-gap certificate is
+zero, and positive caustics remain explicit for finite-bin integration.
 
-All checked source wavelengths selected fallback bounds `(3,6) Qz/Qc`; the complete handoff lies
-below `0.304025 A^-1`, whereas the measured profile begins at `0.459319 A^-1`.  Consequently the
-data objective changed by only `-6.97757e-5`, weighted RMS by `-1.15434e-7`, and the low-angle
-summed model/data ratio by `-6.47076e-9`.  The 003 model/data ratio changed by only
-`-1.378e-9`.  These are numerical-noise-sized changes, so the qualification is
-`READY_MODEL_LIMITED_FIT_CONDITIONED_NO_OBSERVED_HANDOFF_OVERLAP`, not an improved fit.  The
-rendered full Qz branches and detector ROI overlay were inspected, and the output manifest hashes
-the PNG, PDF, alignment report, fitted profile arrays, and their strict upstream artifacts.
+Permanent focused proofs cover low, crossover, and high transfer; roughness dependence below the
+handoff; roughness independence after exact high-branch recovery; nonzero-`m` invariance; CPU/CUDA
+density and valid-state parity; direct-beam rejection; and the absence of a forward-pixel fallback.
+The current CUDA profile route is truthfully reported as a hybrid continuous evaluator: regular rods
+run on CUDA and the complete `(0,0)` field is replaced by its CPU continuous-coordinate result. A
+CUDA selected-source subgroup that asks for stitched `(0,0)` fails closed; present profile fold
+corrections request only nonzero families.
+
+The old standalone mirror plot and fitted amplitude are retired. Figure generation integrates the
+unified field over the same phi/2theta detector rectangles as the data, displays the result against
+`2theta`, and applies no model rasterization, smoothing, shift, or second count scale.

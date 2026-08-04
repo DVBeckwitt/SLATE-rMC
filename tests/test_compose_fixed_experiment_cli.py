@@ -51,6 +51,14 @@ def _position() -> FixedPositionState:
     )
 
 
+def test_geometry_contract_excludes_non_geometric_film_thickness() -> None:
+    geometry = ADAPTER.load_simulation_config(ROOT / "configs" / "bi2se3_simulation.yaml")
+    intensity = ADAPTER.load_simulation_config(ROOT / "configs" / "bi2se3_r3_simulation.yaml")
+
+    assert geometry.instrument.film_thickness_A != intensity.instrument.film_thickness_A
+    assert ADAPTER._geometry_contract(geometry) == ADAPTER._geometry_contract(intensity)
+
+
 def test_compose_fixed_experiment_writes_resumable_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -54,6 +54,10 @@ detector geometry.
 - Explicit fault-free R-centered three-registry finite stacks in the proof, compiled CPU, and CUDA
   detector paths. This is the tracked R-3m Bi2X3 conventional-cell centering law, not a fitted
   4H/6H mixture or stacking-disorder population.
+- An optional unified local-lamella `(0,0)` detector field that evaluates the Parratt--kinematic
+  strength at internal phase `L` for every actual sampled incident direction and wavelength.
+  Interface roughness is physical Nevot--Croce roughness; no auxiliary count scale, model raster,
+  smoothing, or detector-resolution convolution is implied.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 

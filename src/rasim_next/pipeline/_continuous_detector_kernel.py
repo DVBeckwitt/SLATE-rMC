@@ -921,6 +921,225 @@ def _scattering_polarization_weight(
     return 0.5 * (1.0 + cosine * cosine)
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="never")
+def _local_stitched_m0_density_A2_per_px2(
+    outgoing_air_direction_sample: FloatArray,
+    pixel_solid_angle_sr: float,
+    ki_film_sample_Ainv: FloatArray,
+    air_k0_Ainv: float,
+    film_refractive_index: complex,
+    film_thickness_A: float,
+    specular_substrate_refractive_index: complex,
+    specular_top_roughness_A: float,
+    specular_bottom_roughness_A: float,
+    specular_qc_Ainv: float,
+    specular_zero_strength_A2: float,
+    specular_scale_factor: float,
+    specular_blend_lower_q_over_qc: float,
+    specular_blend_upper_q_over_qc: float,
+    source_phase_weight: float,
+    polarization_model_code: int,
+    sample_from_local: FloatArray,
+    rod_hk_population: FloatArray,
+    rod_u_bounds_Ainv: FloatArray,
+    b3_norm_Ainv: float,
+    gaussian_sigma_rad: float,
+    gaussian_probability: float,
+    gaussian_normalization: float,
+    lorentzian_probability: float,
+    lorentzian_rho: float,
+    lorentzian_one_minus_rho: float,
+    lorentzian_numerator: float,
+    atom_fractional_offset: FloatArray,
+    atom_occupancy_element: FloatArray,
+    rod_atom_inplane_factor: NDArray[np.complex128],
+    u_radial_A2: float,
+    u_normal_A2: float,
+    intensity_envelope_u_radial_A2: float,
+    intensity_envelope_u_normal_A2: float,
+    f0_parameters: FloatArray,
+    anomalous_factor_e: NDArray[np.complex128],
+    layers: int,
+    stacking_parent_code: int,
+    shared_disorder_epsilon: float,
+    normalization_divisor: float,
+) -> tuple[int, float, bool, bool]:
+    """Evaluate the stitched ``(0,0)`` strength on its local-lamella air Ewald chart."""
+
+    m0_index = -1
+    for rod_index in range(rod_hk_population.shape[0]):
+        if rod_hk_population[rod_index, 0] == 0.0 and rod_hk_population[rod_index, 1] == 0.0:
+            m0_index = rod_index
+            break
+    if m0_index < 0 or pixel_solid_angle_sr <= 0.0 or source_phase_weight <= 0.0:
+        return m0_index, 0.0, False, False
+
+    incident_air_normal_squared = (
+        air_k0_Ainv * air_k0_Ainv
+        - ki_film_sample_Ainv[0] * ki_film_sample_Ainv[0]
+        - ki_film_sample_Ainv[1] * ki_film_sample_Ainv[1]
+    )
+    if incident_air_normal_squared < 0.0:
+        return m0_index, 0.0, False, False
+    incident_air_z = math.copysign(
+        math.sqrt(incident_air_normal_squared),
+        ki_film_sample_Ainv[2],
+    )
+    outgoing_air_x = air_k0_Ainv * outgoing_air_direction_sample[0]
+    outgoing_air_y = air_k0_Ainv * outgoing_air_direction_sample[1]
+    outgoing_air_z = air_k0_Ainv * outgoing_air_direction_sample[2]
+    delta_x = outgoing_air_x - ki_film_sample_Ainv[0]
+    delta_y = outgoing_air_y - ki_film_sample_Ainv[1]
+    delta_z = outgoing_air_z - incident_air_z
+    external_q = math.sqrt(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z)
+    direction_tolerance = 1.0e-14 * max(air_k0_Ainv, 1.0)
+    if external_q <= direction_tolerance:
+        return m0_index, 0.0, False, False
+
+    normal_x = delta_x / external_q
+    normal_y = delta_y / external_q
+    normal_z = delta_z / external_q
+    mean_x = sample_from_local[0, 2]
+    mean_y = sample_from_local[1, 2]
+    mean_z = sample_from_local[2, 2]
+    if normal_x * mean_x + normal_y * mean_y + normal_z * mean_z < 0.0:
+        normal_x = -normal_x
+        normal_y = -normal_y
+        normal_z = -normal_z
+    mean_cosine = min(
+        max(normal_x * mean_x + normal_y * mean_y + normal_z * mean_z, 0.0),
+        1.0,
+    )
+    alpha = math.acos(mean_cosine)
+    sin_alpha = math.sin(alpha)
+    incident_air_normal = -(
+        ki_film_sample_Ainv[0] * normal_x
+        + ki_film_sample_Ainv[1] * normal_y
+        + incident_air_z * normal_z
+    )
+    exit_air_normal = (
+        outgoing_air_x * normal_x + outgoing_air_y * normal_y + outgoing_air_z * normal_z
+    )
+    if incident_air_normal <= direction_tolerance or exit_air_normal <= direction_tolerance:
+        return m0_index, 0.0, False, False
+
+    tangential_squared = max(air_k0_Ainv * air_k0_Ainv - incident_air_normal**2, 0.0)
+    film_normal = _positive_normal_root(
+        (film_refractive_index * air_k0_Ainv) ** 2 - tangential_squared
+    )
+    phase_q = 2.0 * max(film_normal.real, 0.0)
+    lower_u = rod_u_bounds_Ainv[m0_index, 0]
+    upper_u = rod_u_bounds_Ainv[m0_index, 1]
+    u_tolerance = 1024.0 * np.finfo(np.float64).eps * max(
+        abs(lower_u), abs(upper_u), 1.0
+    )
+    if phase_q < lower_u - u_tolerance or phase_q > upper_u + u_tolerance:
+        return m0_index, 0.0, False, False
+
+    ell = phase_q / b3_norm_Ainv
+    element_factor_0, element_factor_1 = _element_factors(
+        phase_q * phase_q,
+        f0_parameters,
+        anomalous_factor_e,
+    )
+    common_damping = _common_damping(
+        phase_q * phase_q,
+        0.0,
+        phase_q,
+        u_radial_A2,
+        u_normal_A2,
+    )
+    phase_strength = _finite_stack_strength_A2(
+        m0_index,
+        ell,
+        common_damping,
+        0.0,
+        phase_q,
+        element_factor_0,
+        element_factor_1,
+        rod_atom_inplane_factor,
+        atom_fractional_offset,
+        atom_occupancy_element,
+        layers,
+        stacking_parent_code,
+        shared_disorder_epsilon,
+        rod_hk_population,
+        normalization_divisor,
+    )
+    strength = _empirical_parratt_strength_A2(
+        phase_strength,
+        external_q,
+        air_k0_Ainv,
+        film_refractive_index,
+        specular_substrate_refractive_index,
+        film_thickness_A,
+        specular_top_roughness_A,
+        specular_bottom_roughness_A,
+        specular_qc_Ainv,
+        specular_zero_strength_A2,
+        specular_scale_factor,
+        specular_blend_lower_q_over_qc,
+        specular_blend_upper_q_over_qc,
+    )
+    plane_density = _wrapped_mosaic_density(
+        alpha,
+        gaussian_sigma_rad,
+        gaussian_probability,
+        gaussian_normalization,
+        lorentzian_probability,
+        lorentzian_rho,
+        lorentzian_one_minus_rho,
+        lorentzian_numerator,
+    ) + _wrapped_mosaic_density(
+        math.pi - alpha,
+        gaussian_sigma_rad,
+        gaussian_probability,
+        gaussian_normalization,
+        lorentzian_probability,
+        lorentzian_rho,
+        lorentzian_one_minus_rho,
+        lorentzian_numerator,
+    )
+    event_envelope = math.exp(
+        -intensity_envelope_u_radial_A2
+        * phase_q
+        * phase_q
+        * (normal_x * normal_x + normal_y * normal_y)
+        - intensity_envelope_u_normal_A2 * phase_q * phase_q * normal_z * normal_z
+    )
+    polarization = _scattering_polarization_weight(
+        ki_film_sample_Ainv,
+        air_k0_Ainv,
+        outgoing_air_direction_sample[0],
+        outgoing_air_direction_sample[1],
+        outgoing_air_direction_sample[2],
+        polarization_model_code,
+    )
+    denominator = external_q * external_q * sin_alpha
+    positive = (
+        rod_hk_population[m0_index, 2] > 0.0
+        and strength > 0.0
+        and plane_density > 0.0
+        and event_envelope > 0.0
+        and polarization > 0.0
+    )
+    if denominator == 0.0:
+        return m0_index, np.inf if positive else 0.0, positive, True
+    density = (
+        plane_density
+        * rod_hk_population[m0_index, 2]
+        * strength
+        * air_k0_Ainv
+        * air_k0_Ainv
+        * pixel_solid_angle_sr
+        * source_phase_weight
+        * polarization
+        * event_envelope
+        / denominator
+    )
+    return m0_index, density, False, True
+
+
 @numba.njit(nogil=True, fastmath=False, cache=False)
 def _evaluate_point_into(
     column: float,
@@ -1053,12 +1272,77 @@ def _evaluate_point_into(
         + sample_from_lab[2, 1] * scaled_direction_y
         + sample_from_lab[2, 2] * scaled_direction_z
     )
+    pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
+    local_m0_index = -1
+    local_m0_density = 0.0
+    local_m0_caustic = False
+    local_m0_valid = False
+    if specular_stitch_code == 1:
+        outgoing_air_direction_sample = np.empty(3, dtype=np.float64)
+        outgoing_air_direction_sample[0] = kf_air_x / air_k0_Ainv
+        outgoing_air_direction_sample[1] = kf_air_y / air_k0_Ainv
+        outgoing_air_direction_sample[2] = kf_air_z / air_k0_Ainv
+        (
+            local_m0_index,
+            local_m0_density,
+            local_m0_caustic,
+            local_m0_valid,
+        ) = _local_stitched_m0_density_A2_per_px2(
+            outgoing_air_direction_sample,
+            pixel_solid_angle,
+            ki_film_sample_Ainv,
+            air_k0_Ainv,
+            film_refractive_index,
+            film_thickness_A,
+            specular_substrate_refractive_index,
+            specular_top_roughness_A,
+            specular_bottom_roughness_A,
+            specular_qc_Ainv,
+            specular_zero_strength_A2,
+            specular_scale_factor,
+            specular_blend_lower_q_over_qc,
+            specular_blend_upper_q_over_qc,
+            source_phase_weight,
+            polarization_model_code,
+            sample_from_local,
+            rod_hk_population,
+            rod_u_bounds_Ainv,
+            b3_norm_Ainv,
+            gaussian_sigma_rad,
+            gaussian_probability,
+            gaussian_normalization,
+            lorentzian_probability,
+            lorentzian_rho,
+            lorentzian_one_minus_rho,
+            lorentzian_numerator,
+            atom_fractional_offset,
+            atom_occupancy_element,
+            rod_atom_inplane_factor,
+            u_radial_A2,
+            u_normal_A2,
+            intensity_envelope_u_radial_A2,
+            intensity_envelope_u_normal_A2,
+            f0_parameters,
+            anomalous_factor_e,
+            layers,
+            stacking_parent_code,
+            shared_disorder_epsilon,
+            normalization_divisor,
+        )
     if kf_air_z <= 0.0:
-        return False
+        if local_m0_valid:
+            density[local_m0_index] = local_m0_density
+            caustic[local_m0_index] = local_m0_caustic
+            inverse_count[local_m0_index] = 0 if local_m0_caustic else 1
+        return local_m0_valid
     parallel_squared = kf_air_x * kf_air_x + kf_air_y * kf_air_y
     normal_squared = internal_k_squared_Ainv2 - parallel_squared
     if normal_squared <= 0.0:
-        return False
+        if local_m0_valid:
+            density[local_m0_index] = local_m0_density
+            caustic[local_m0_index] = local_m0_caustic
+            inverse_count[local_m0_index] = 0 if local_m0_caustic else 1
+        return local_m0_valid
     kf_film_x = kf_air_x
     kf_film_y = kf_air_y
     kf_film_z = math.sqrt(normal_squared)
@@ -1070,7 +1354,6 @@ def _evaluate_point_into(
         - intensity_envelope_u_normal_A2 * q_sample_z * q_sample_z
     )
 
-    pixel_solid_angle = signed_pixel_area_projection / (distance * distance)
     area_jacobian = internal_k_Ainv * air_k0_Ainv * kf_air_z * pixel_solid_angle / kf_film_z
 
     optical_weight = _exit_optical_weight(
@@ -1114,6 +1397,8 @@ def _evaluate_point_into(
     transverse_norm = math.hypot(q_local_x, q_local_y)
     azimuth_q = math.atan2(q_local_y, q_local_x)
     for rod_index in range(rod_count):
+        if rod_index == local_m0_index:
+            continue
         a = rod_parallel_local_Ainv[rod_index, 0]
         b = rod_parallel_local_Ainv[rod_index, 1]
         c0 = rod_parallel_local_Ainv[rod_index, 2]
@@ -1198,46 +1483,6 @@ def _evaluate_point_into(
                     rod_hk_population,
                     normalization_divisor,
                 )
-                if (
-                    specular_stitch_code == 1
-                    and rod_hk_population[rod_index, 0] == 0.0
-                    and rod_hk_population[rod_index, 1] == 0.0
-                ):
-                    incident_air_normal_squared = (
-                        air_k0_Ainv * air_k0_Ainv
-                        - ki_film_sample_Ainv[0] ** 2
-                        - ki_film_sample_Ainv[1] ** 2
-                    )
-                    incident_air_normal = math.sqrt(
-                        incident_air_normal_squared if incident_air_normal_squared > 0.0 else 0.0
-                    )
-                    if ki_film_sample_Ainv[2] < 0.0:
-                        incident_air_normal = -incident_air_normal
-                    external_qz = 0.0
-                    if q_norm > 0.0:
-                        external_qz = abs(
-                            (
-                                q_sample_x * q_sample_x
-                                + q_sample_y * q_sample_y
-                                + q_sample_z * (kf_air_z - incident_air_normal)
-                            )
-                            / q_norm
-                        )
-                    strength = _empirical_parratt_strength_A2(
-                        strength,
-                        external_qz,
-                        air_k0_Ainv,
-                        film_refractive_index,
-                        specular_substrate_refractive_index,
-                        film_thickness_A,
-                        specular_top_roughness_A,
-                        specular_bottom_roughness_A,
-                        specular_qc_Ainv,
-                        specular_zero_strength_A2,
-                        specular_scale_factor,
-                        specular_blend_lower_q_over_qc,
-                        specular_blend_upper_q_over_qc,
-                    )
                 mosaic_density = _wrapped_mosaic_density(
                     alpha,
                     gaussian_sigma_rad,
@@ -1300,6 +1545,12 @@ def _evaluate_point_into(
                     / jacobian
                 )
                 inverse_count[rod_index] += 1
+    if local_m0_index >= 0:
+        density[local_m0_index] = local_m0_density if local_m0_valid else 0.0
+        caustic[local_m0_index] = local_m0_caustic if local_m0_valid else False
+        inverse_count[local_m0_index] = (
+            0 if local_m0_caustic or not local_m0_valid else 1
+        )
     return True
 
 

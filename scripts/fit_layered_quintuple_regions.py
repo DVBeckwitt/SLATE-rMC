@@ -28,6 +28,7 @@ for import_root in (ROOT / "src",):
 
 from rasim_next.fitting import (
     FIXED_EXPERIMENT_STATE_SCHEMA_VERSION,
+    DetectorHorizonAcceptance,
     FixedLatticeState,
     FixedMatchedRegionBackground,
     FixedMosaicState,
@@ -114,10 +115,11 @@ PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v3"
 BACKGROUND_SCHEMA = "rasim-shared-radial-background-v3"
 FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v12"
 FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v10"
-PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v11"
+PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v12"
 PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v7"
 PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_identity",
+    "profile_bin_index",
     "profile_valid",
     "profile_display_L",
     "profile_display_qz_Ainv",
@@ -126,8 +128,17 @@ PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_measured_radial_signal_density",
     "profile_model_signal_density",
 )
+M0_SIGNAL_ONLY_ARRAY_NAMES = (
+    "m0_signal_only_bin_index",
+    "m0_signal_only_two_theta_deg",
+    "m0_signal_only_measured_density",
+    "m0_signal_only_model_plus_background_density",
+    "m0_signal_only_support_px2",
+    "m0_signal_only_valid",
+)
 PROFILE_RENDER_ARRAY_NAMES = (
     *PROFILE_VECTOR_ARRAY_NAMES,
+    *M0_SIGNAL_ONLY_ARRAY_NAMES,
     "display_detector_counts",
     "display_full_region_code",
     "display_fit_region_code",
@@ -142,10 +153,41 @@ FAULT_FREE_THREE_R_MODEL = "rich_epsilon_parent_3r_exact_zero_fault.v1"
 FIXED_EXPERIMENT_SCHEMA = FIXED_EXPERIMENT_STATE_SCHEMA_VERSION
 
 
+def _detector_horizon_acceptance(policy: Any) -> DetectorHorizonAcceptance:
+    """Resolve the explicit off-specular detector horizon policy."""
+
+    if not isinstance(policy, dict):
+        raise ValueError("horizon_gate must be a mapping")
+    try:
+        return DetectorHorizonAcceptance(
+            offspecular_air_exit_guard_rad=math.radians(
+                float(policy["offspecular_air_exit_guard_deg"])
+            )
+        )
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("horizon_gate requires a finite nonnegative off-specular guard") from None
+
+
+def _diffraction_peak_horizon_policy(policy: Any) -> tuple[float, float, float, str]:
+    """Resolve the explicit diffraction-peak clearance policy."""
+
+    if not isinstance(policy, dict):
+        raise ValueError("horizon_gate must be a mapping")
+    try:
+        return (
+            float(policy["diffraction_peak_air_exit_guard_deg"]),
+            float(policy["diffraction_peak_selection_center_cutoff_deg"]),
+            float(policy["maximum_sub_guard_model_mass_fraction"]),
+            str(policy["diffraction_peak_selection_rule"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("horizon_gate requires an explicit diffraction-peak policy") from None
+
+
 class _OscAngleDetectorAreaChart:
     __slots__ = (
-        "air_exit_guard_rad",
         "angle_frame",
+        "horizon_acceptance",
         "instrument",
         "nominal_context",
         "revision",
@@ -157,13 +199,13 @@ class _OscAngleDetectorAreaChart:
         instrument: Any,
         angle_frame: Any,
         nominal_context: Any,
-        air_exit_guard_rad: float,
+        horizon_acceptance: DetectorHorizonAcceptance,
         revision: str,
     ) -> None:
         self.instrument = instrument
         self.angle_frame = angle_frame
         self.nominal_context = nominal_context
-        self.air_exit_guard_rad = float(air_exit_guard_rad)
+        self.horizon_acceptance = horizon_acceptance
         self.revision = str(revision)
 
     def map_detector_area(
@@ -185,7 +227,8 @@ class _OscAngleDetectorAreaChart:
         )
         kf_air = np.asarray(geometry.kf_air_sample_Ainv)
         air_exit = np.arctan2(kf_air[..., 2], np.hypot(kf_air[..., 0], kf_air[..., 1]))
-        valid = coordinates.valid & geometry.valid & (air_exit >= self.air_exit_guard_rad)
+        horizon_valid = self.horizon_acceptance.m0_detector_mask(air_exit)
+        valid = coordinates.valid & horizon_valid
         return ContinuousDetectorChartAreaMeasure(
             column_px=coordinates.column_px,
             row_px=coordinates.row_px,
@@ -465,6 +508,7 @@ def _compile_dataset_continuous_region_plan(
     offspecular_axial_refinement: int,
     offspecular_radial_transform: str,
     offspecular_signal_minimum_radial_nodes_per_side: int,
+    m0_phi_subdivision_count: int,
     apply_fit_windows: bool = True,
 ) -> _DatasetContinuousRegionPlan:
     if (
@@ -473,9 +517,12 @@ def _compile_dataset_continuous_region_plan(
         or offspecular_radial_transform != "squared_fold_coordinate.v1"
         or isinstance(offspecular_signal_minimum_radial_nodes_per_side, bool)
         or int(offspecular_signal_minimum_radial_nodes_per_side) < 1
+        or isinstance(m0_phi_subdivision_count, bool)
+        or int(m0_phi_subdivision_count) < 1
     ):
         raise ValueError("off-specular continuous quadrature settings are invalid")
     offspecular_axial_refinement = int(offspecular_axial_refinement)
+    m0_phi_subdivision_count = int(m0_phi_subdivision_count)
     signal_radial_subdivisions = max(
         int(subdivision_count),
         math.ceil(int(offspecular_signal_minimum_radial_nodes_per_side) / int(gauss_order)),
@@ -497,12 +544,12 @@ def _compile_dataset_continuous_region_plan(
         sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
         revision=f"continuous-matched-regions-{dataset_index}.v1",
     )
-    guard_rad = float(np.deg2rad(manifest["horizon_gate"]["air_exit_guard_deg"]))
+    horizon_acceptance = _detector_horizon_acceptance(manifest["horizon_gate"])
     angle_chart = _OscAngleDetectorAreaChart(
         instrument=inputs.instrument,
         angle_frame=angle_frame,
         nominal_context=context,
-        air_exit_guard_rad=guard_rad,
+        horizon_acceptance=horizon_acceptance,
         revision=(
             f"continuous-osc-angle-area.{dataset_index}."
             f"{inputs.instrument.sample_geometry_revision}.{angle_frame.revision}"
@@ -616,7 +663,7 @@ def _compile_dataset_continuous_region_plan(
         second_bounds=m0_second,
         global_observation_rows=m0_rows,
         background_coordinate_axis=1,
-        subdivision_count_by_axis=(subdivision_count, subdivision_count),
+        subdivision_count_by_axis=(subdivision_count, m0_phi_subdivision_count),
     )
 
     for group, layout in layout_by_group.items():
@@ -629,7 +676,7 @@ def _compile_dataset_continuous_region_plan(
             detector_column_interval_px=tuple(
                 float(value) for value in layout["detector_column_interval_px"]
             ),
-            air_exit_guard_rad=guard_rad,
+            air_exit_guard_rad=horizon_acceptance.offspecular_air_exit_guard_rad,
         )
         axial_edges = np.asarray(layout["axial_bin_edges"], dtype=np.float64)
         signal_intervals = {
@@ -1392,6 +1439,24 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
         len(group.get("background_intervals_Ainv", ())) != 2 for group in offspecular_groups
     ):
         raise ValueError("each offspecular group requires exactly two affine anchors")
+    horizon_gate = document.get("horizon_gate")
+    _detector_horizon_acceptance(horizon_gate)
+    (
+        diffraction_peak_guard,
+        selection_cutoff,
+        maximum_sub_guard_fraction,
+        selection_rule,
+    ) = _diffraction_peak_horizon_policy(horizon_gate)
+    if (
+        not math.isfinite(diffraction_peak_guard)
+        or diffraction_peak_guard < 0.0
+        or not math.isfinite(selection_cutoff)
+        or selection_cutoff <= diffraction_peak_guard
+        or not math.isfinite(maximum_sub_guard_fraction)
+        or not 0.0 <= maximum_sub_guard_fraction < 1.0
+        or selection_rule != "alpha_f_center_minus_3_gaussian_sigma_at_least_guard.v1"
+    ):
+        raise ValueError("horizon_gate diffraction-peak policy is invalid")
     profile_cubature = document.get("profile_cubature")
     if (
         not isinstance(profile_cubature, dict)
@@ -2169,6 +2234,7 @@ def _recipe_parratt_stitch(recipe: dict[str, Any]) -> ParrattStitchStack | None:
         top_roughness_A=float(values["top_roughness_A"]),
         bottom_roughness_A=float(values["bottom_roughness_A"]),
         model_id=str(values["model_id"]),
+        interface_assumption=str(values["interface_assumption"]),
     )
 
 
@@ -2254,10 +2320,11 @@ def _fixed_experiment_inputs(
     config_record = document.get("simulation_config")
     if not isinstance(config_record, dict) or set(config_record) != {"path", "sha256"}:
         raise ValueError("fixed-experiment simulation configuration identity is invalid")
-    simulation_config_path = Path(str(config_record["path"])).resolve()
-    simulation_identity = _file_identity(simulation_config_path)
-    if simulation_identity["sha256"] != config_record["sha256"]:
-        raise ValueError("fixed-experiment simulation configuration changed")
+    simulation_identity = _verified_recorded_file_identity(
+        config_record,
+        role="fixed-experiment simulation configuration",
+    )
+    simulation_config_path = Path(simulation_identity["path"])
 
     datasets = document.get("datasets")
     if (
@@ -2274,9 +2341,11 @@ def _fixed_experiment_inputs(
         osc = item.get("osc")
         if not isinstance(osc, dict) or set(osc) != {"path", "sha256"}:
             raise ValueError("fixed-experiment OSC identity is invalid")
-        osc_path = Path(str(osc["path"])).resolve()
-        if _sha256(osc_path) != osc["sha256"]:
-            raise ValueError("fixed-experiment OSC file changed")
+        osc_identity = _verified_recorded_file_identity(
+            osc,
+            role=f"fixed-experiment OSC {item['dataset_id']}",
+        )
+        osc_path = Path(osc_identity["path"])
         observations.append(
             {
                 "dataset_id": str(item["dataset_id"]),
@@ -2702,6 +2771,11 @@ def _prepare_dataset_membership(
         sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
         revision=f"matched-regions-{dataset_index}.v1",
     )
+    horizon_acceptance = _detector_horizon_acceptance(recipe["horizon_gate"])
+    mean_wavelength_A = float(inputs.config.source.mean_wavelength_A)
+    axial_basis_magnitude_Ainv = float(
+        np.linalg.norm(np.asarray(inputs.reciprocal.basis_Ainv, dtype=np.float64)[:, 2])
+    )
     rows, columns = counts.shape
     column = np.arange(columns, dtype=np.float64)
     selected_pixels: list[np.ndarray] = []
@@ -2723,13 +2797,16 @@ def _prepare_dataset_membership(
             angle_frame=angle_frame,
         )
         kf_air = np.asarray(geometry.kf_air_sample_Ainv)
-        air_exit_angle_deg = np.rad2deg(
-            np.arctan2(kf_air[..., 2], np.hypot(kf_air[..., 0], kf_air[..., 1]))
+        air_exit_angle_rad = np.arctan2(
+            kf_air[..., 2],
+            np.hypot(kf_air[..., 0], kf_air[..., 1]),
         )
-        above_horizon_guard = air_exit_angle_deg >= float(
-            recipe["horizon_gate"]["air_exit_guard_deg"]
+        angular_valid = angles.valid & angles.azimuth_valid
+        specular_horizon_valid = horizon_acceptance.m0_detector_mask(air_exit_angle_rad)
+        specular_valid = angular_valid & specular_horizon_valid
+        offspecular_valid = (
+            geometry.valid & angular_valid & horizon_acceptance.offspecular_mask(air_exit_angle_rad)
         )
-        valid = geometry.valid & angles.valid & angles.azimuth_valid & above_horizon_guard
         flat_pixel = (
             row_grid.astype(np.int64, copy=False) * columns
             + column_grid.astype(np.int64, copy=False)
@@ -2740,6 +2817,11 @@ def _prepare_dataset_membership(
         flat_qr = np.asarray(qr_Ainv).reshape(-1)
         flat_phi = np.asarray(angles.phi_rad).reshape(-1)
         flat_two_theta_deg = np.rad2deg(np.asarray(angles.two_theta_rad).reshape(-1))
+        flat_local_m0_qz_Ainv = (
+            (4.0 * np.pi / mean_wavelength_A)
+            * np.sin(0.5 * np.asarray(angles.two_theta_rad).reshape(-1))
+        )
+        flat_local_m0_L = flat_local_m0_qz_Ainv / axial_basis_magnitude_Ainv
         m0_fit_window = (
             _fit_window_mask(
                 recipe,
@@ -2753,7 +2835,7 @@ def _prepare_dataset_membership(
         m0_membership = specular_angular_membership(
             two_theta_rad=np.asarray(angles.two_theta_rad).reshape(-1),
             phi_rad=flat_phi,
-            valid=np.asarray(valid).reshape(-1),
+            valid=np.asarray(specular_valid).reshape(-1),
             region=m0,
         )
         _add_members(
@@ -2765,8 +2847,8 @@ def _prepare_dataset_membership(
             flat_pixel=flat_pixel,
             counts=flat_counts,
             coordinate=flat_phi,
-            axial_L=flat_L,
-            qz_Ainv=flat_qz_Ainv,
+            axial_L=flat_local_m0_L,
+            qz_Ainv=flat_local_m0_qz_Ainv,
             count_sum=count_sum,
             support=support,
             coordinate_sum=coordinate_sum,
@@ -2795,8 +2877,8 @@ def _prepare_dataset_membership(
                 flat_pixel=flat_pixel,
                 counts=flat_counts,
                 coordinate=flat_phi,
-                axial_L=flat_L,
-                qz_Ainv=flat_qz_Ainv,
+                axial_L=flat_local_m0_L,
+                qz_Ainv=flat_local_m0_qz_Ainv,
                 count_sum=count_sum,
                 support=support,
                 coordinate_sum=coordinate_sum,
@@ -2808,7 +2890,7 @@ def _prepare_dataset_membership(
                 code=2,
             )
         flat_column = column_grid.reshape(-1)
-        flat_valid = np.asarray(valid).reshape(-1)
+        flat_valid = np.asarray(offspecular_valid).reshape(-1)
         for group, layout in layouts:
             membership = offspecular_region_membership(
                 qr_Ainv=flat_qr,
@@ -3380,6 +3462,9 @@ def calibrate_radial_background(
             offspecular_signal_minimum_radial_nodes_per_side=int(
                 continuous_quadrature["offspecular_signal_minimum_radial_nodes_per_side"]
             ),
+            m0_phi_subdivision_count=int(
+                recipe["model_cubature"]["fold_oracle_subdivisions"]
+            ),
         )
         for dataset_index, inputs in enumerate(series)
     )
@@ -3706,6 +3791,8 @@ def _fixed_background_from_continuous_plans(
 def _continuous_plan_reciprocal_coordinate_moments(
     inputs: Any,
     plan: _DatasetContinuousRegionPlan,
+    *,
+    m0_observation: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     context = build_nominal_ewald_context(inputs)
     geometry = context.evaluate_detector_geometry(
@@ -3713,16 +3800,46 @@ def _continuous_plan_reciprocal_coordinate_moments(
         plan.quadrature.row_px,
         include_surface_jacobian=False,
     )
-    if not np.all(geometry.valid):
-        raise FloatingPointError("continuous profile nodes left valid detector geometry")
+    observation_is_m0 = np.asarray(m0_observation, dtype=np.bool_)
+    if observation_is_m0.shape != (plan.quadrature.observation_count,):
+        raise ValueError("m=0 observation mask must align with the continuous plan")
+    row = np.asarray(plan.quadrature.observation_row)
+    node_is_m0 = observation_is_m0[row]
+    if np.any(~node_is_m0 & ~np.asarray(geometry.valid)):
+        raise FloatingPointError("off-specular profile nodes left valid detector geometry")
     frame = LayeredReciprocalFrame(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         sample_from_crystal_rotation=inputs.instrument.sample_from_crystal.rotation,
         axial_basis_index=2,
     )
     _, axial_L = frame.coordinates(geometry.q_sample_Ainv)
-    qz_Ainv = np.asarray(geometry.q_sample_Ainv)[..., 2]
-    row = np.asarray(plan.quadrature.observation_row)
+    axial_L = np.asarray(axial_L, dtype=np.float64)
+    qz_Ainv = np.asarray(geometry.q_sample_Ainv, dtype=np.float64)[..., 2].copy()
+    if np.any(node_is_m0):
+        angle_frame = build_osc_angle_frame(
+            mean_direction_lab=inputs.config.source.mean_direction_lab,
+            instrument=inputs.instrument,
+            sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
+            revision=f"continuous-profile-m0-{plan.dataset_index}.v1",
+        )
+        angles = detector_coordinates_to_angles(
+            plan.quadrature.column_px,
+            plan.quadrature.row_px,
+            instrument=inputs.instrument,
+            angle_frame=angle_frame,
+        )
+        if np.any(node_is_m0 & ~(angles.valid & angles.azimuth_valid)):
+            raise FloatingPointError("m=0 profile nodes left the detector angle chart")
+        local_qz_Ainv = (
+            (4.0 * np.pi / float(inputs.config.source.mean_wavelength_A))
+            * np.sin(0.5 * np.asarray(angles.two_theta_rad))
+        )
+        axial_basis_magnitude_Ainv = float(
+            np.linalg.norm(np.asarray(inputs.reciprocal.basis_Ainv, dtype=np.float64)[:, 2])
+        )
+        axial_L = np.array(axial_L, copy=True)
+        axial_L[node_is_m0] = local_qz_Ainv[node_is_m0] / axial_basis_magnitude_Ainv
+        qz_Ainv[node_is_m0] = local_qz_Ainv[node_is_m0]
     weight = np.asarray(plan.quadrature.detector_area_weight_px2)
     axial_mass = np.bincount(
         row,
@@ -3764,7 +3881,6 @@ def _profile_manifest_is_admissible(
         fitted_region_cubature = cubature["fit_artifact_fitted_region_oracle"]
         fitted_data_projection = cubature["fit_artifact_data_projection"]
         refinement_oracle = measured_projection["refinement_oracle"]
-        evidence = str(manifest["evidence_level"])
         provenance = manifest["provenance"]
         execution = provenance["execution_identity"]
         provenance_fit_plan_sha256 = str(provenance["fit_plan"]["sha256"])
@@ -3787,8 +3903,101 @@ def _profile_manifest_is_admissible(
         expected_dataset_ids = tuple(str(value) for value in trusted_recipe["dataset_ids"])
         display_dataset_id = str(trusted_recipe["display_dataset_id"])
         dark = manifest["dark_correction"]
+        m0_signal_only = manifest["m0_signal_only_display"]
+        supplemental_bin_count = m0_signal_only["supplemental_bin_count"]
     except (AttributeError, KeyError, TypeError, ValueError):
         return False
+    if (
+        isinstance(supplemental_bin_count, bool)
+        or not isinstance(supplemental_bin_count, int)
+        or supplemental_bin_count < 0
+    ):
+        return False
+    native_fit_binding = bool(
+        fit_origin_adapter == profile_adapter
+        and fit_origin_implementation == profile_implementation
+    )
+    m0_signal_only_hashes_admissible = all(
+        _is_sha256(m0_signal_only.get(name))
+        for name in (
+            "count_mass_sha256",
+            "count_covariance_sha256",
+            "radial_background_mass_sha256",
+            "model_mass_sha256",
+            "detector_overlay_flat_pixel_sha256",
+        )
+    )
+    m0_signal_only_common = bool(
+        m0_signal_only.get("fit_role")
+        == "not_used_in_fit_objective_or_parameter_estimation"
+        and m0_signal_only.get("background_conditioning")
+        == "fixed_radial_only_no_adjacent_sideband_conditioning"
+        and m0_signal_only.get("gauss_order") == trusted_model["oracle_gauss_order"]
+        and m0_signal_only.get("subdivision_count")
+        == trusted_model["oracle_subdivision_count"]
+        and m0_signal_only.get("measured_phi_subdivision_count")
+        == trusted_model["oracle_subdivision_count"]
+        and m0_signal_only.get("model_phi_subdivision_count")
+        == trusted_model["oracle_subdivision_count"]
+        and m0_signal_only.get("smoothing_applied") is False
+        and m0_signal_only.get("model_pixelized") is False
+        and m0_signal_only_hashes_admissible
+        and execution.get("m0_signal_only_bin_count") == supplemental_bin_count
+        and execution.get("m0_signal_only_projection_revision")
+        == m0_signal_only.get("projection_revision")
+        and execution.get("m0_signal_only_measured_quadrature_revision")
+        == m0_signal_only.get("measured_quadrature_revision")
+        and execution.get("m0_signal_only_model_quadrature_revision")
+        == m0_signal_only.get("model_quadrature_revision")
+        and execution.get("m0_signal_only_count_mass_sha256")
+        == m0_signal_only.get("count_mass_sha256")
+        and execution.get("m0_signal_only_count_covariance_sha256")
+        == m0_signal_only.get("count_covariance_sha256")
+        and execution.get("m0_signal_only_radial_background_mass_sha256")
+        == m0_signal_only.get("radial_background_mass_sha256")
+        and execution.get("m0_signal_only_model_mass_sha256")
+        == m0_signal_only.get("model_mass_sha256")
+    )
+    if supplemental_bin_count:
+        m0_signal_only_admissible = bool(
+            m0_signal_only_common
+            and m0_signal_only.get("status")
+            == "DISPLAY_ONLY_INCOMPLETE_SIDEBAND_SUPPLEMENT"
+            and m0_signal_only.get("projection_method") == MEASURED_PROJECTION_METHOD
+            and all(
+                _is_sha256(m0_signal_only.get(name))
+                for name in (
+                    "projection_revision",
+                    "measured_quadrature_revision",
+                    "model_quadrature_revision",
+                )
+            )
+            and isinstance(m0_signal_only.get("measured_continuous_node_count"), int)
+            and not isinstance(m0_signal_only.get("measured_continuous_node_count"), bool)
+            and m0_signal_only["measured_continuous_node_count"] > 0
+            and isinstance(m0_signal_only.get("model_continuous_node_count"), int)
+            and not isinstance(m0_signal_only.get("model_continuous_node_count"), bool)
+            and m0_signal_only["model_continuous_node_count"] > 0
+            and isinstance(m0_signal_only.get("detector_overlay_flat_pixel_count"), int)
+            and not isinstance(m0_signal_only.get("detector_overlay_flat_pixel_count"), bool)
+            and m0_signal_only["detector_overlay_flat_pixel_count"] > 0
+            and isinstance(m0_signal_only.get("execution"), dict)
+            and m0_signal_only["execution"].get("model_measure")
+            == "continuous_detector_chart_area"
+        )
+    else:
+        m0_signal_only_admissible = bool(
+            m0_signal_only_common
+            and m0_signal_only.get("status") == "NOT_REQUIRED_ALL_M0_BINS_CONDITIONED"
+            and m0_signal_only.get("projection_method") is None
+            and m0_signal_only.get("projection_revision") is None
+            and m0_signal_only.get("measured_quadrature_revision") is None
+            and m0_signal_only.get("model_quadrature_revision") is None
+            and m0_signal_only.get("measured_continuous_node_count") == 0
+            and m0_signal_only.get("model_continuous_node_count") == 0
+            and m0_signal_only.get("detector_overlay_flat_pixel_count") == 0
+            and m0_signal_only.get("execution") is None
+        )
     common = bool(
         manifest.get("computationally_valid") is True
         and manifest.get("model_pixelized") is False
@@ -3798,9 +4007,7 @@ def _profile_manifest_is_admissible(
         and manifest.get("fit_model_rod_roster_sha256") == roster_sha256
         and families == set(FAMILIES)
         and all(_is_sha256(value) for value in evaluator_hashes)
-        and fit_origin_adapter == profile_adapter
-        and fit_origin_implementation == profile_implementation
-        and manifest.get("fit_compatibility_replay") is None
+        and native_fit_binding
         and manifest.get("figure_recipe") == trusted_recipe
         and manifest.get("stacking_model") == _fault_free_three_r_definition()
         and _fixed_displacement_gauge_is_admissible(manifest.get("structure_representative"))
@@ -3823,6 +4030,8 @@ def _profile_manifest_is_admissible(
         and execution.get("fit_gauss_order")
         == int(trusted_recipe["profile_cubature"]["fit_gauss_order"])
         and execution.get("fit_subdivision_count")
+        == int(trusted_recipe["profile_cubature"]["fold_fit_subdivisions"])
+        and execution.get("m0_model_phi_subdivision_count")
         == int(trusted_recipe["profile_cubature"]["fold_fit_subdivisions"])
         and execution.get("rod_scope") == "fitted_families_m_0_1_3_4"
         and execution.get("rod_count") == len(roster)
@@ -3852,6 +4061,11 @@ def _profile_manifest_is_admissible(
         and measured_projection.get("gauss_order") == trusted_model["oracle_gauss_order"]
         and measured_projection.get("subdivision_count")
         == trusted_model["oracle_subdivision_count"]
+        and measured_projection.get("m0_phi_subdivision_count")
+        == trusted_model["oracle_subdivision_count"]
+        and cubature.get("m0_model_phi_subdivision_count")
+        == int(trusted_recipe["profile_cubature"]["fold_fit_subdivisions"])
+        and m0_signal_only_admissible
         and _projection_convergence_is_admissible(
             refinement_oracle,
             expected_dataset_ids=(display_dataset_id,),
@@ -3897,27 +4111,25 @@ def _profile_manifest_is_admissible(
         and execution.get("conditioned_model_anchor_projection_sha256")
         == background_model.get("anchor_projection_sha256")
     )
-    if evidence == "FIT_CONDITIONED":
-        return bool(
-            common
-            and manifest.get("publication_ready") is False
-            and manifest.get("fit_status") in {"FIT", "MODEL_LIMITED_FIT"}
-            and manifest.get("all_rod_validation") == "NOT_REQUIRED_FOR_RENDER"
-            and manifest.get("rod_scope_validation_status") == "NOT_RUN"
-            and manifest.get("model_rod_scope") == "fitted_families_m_0_1_3_4"
-            and cubature.get("evaluated_passes") == ["fit"]
-            and cubature.get("full_profile_oracle_performed") is False
-        )
-    return False
+    return bool(
+        common
+        and manifest.get("evidence_level") == "FIT_CONDITIONED"
+        and manifest.get("publication_ready") is False
+        and manifest.get("fit_status") in {"FIT", "MODEL_LIMITED_FIT"}
+        and manifest.get("all_rod_validation") == "NOT_REQUIRED_FOR_RENDER"
+        and manifest.get("rod_scope_validation_status") == "NOT_RUN"
+        and manifest.get("model_rod_scope") == "fitted_families_m_0_1_3_4"
+        and cubature.get("evaluated_passes") == ["fit"]
+        and cubature.get("full_profile_oracle_performed") is False
+    )
 
 
 def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     arrays, manifest = _load_diagnostic(path, expected_schema=PROFILE_SCHEMA)
-    recipe_path = _verified_provenance_path(manifest, "recipe")
-    recipe_identity = _file_identity(recipe_path)
-    if recipe_identity["sha256"] != manifest.get("provenance", {}).get("recipe_sha256"):
-        raise ValueError("profile recipe changed after profile generation")
     provenance = manifest.get("provenance", {})
+    recipe_path = _verified_provenance_path(manifest, "recipe")
+    if _sha256(recipe_path) != provenance.get("recipe_sha256"):
+        raise ValueError("profile recipe changed after profile generation")
     verified_inputs: dict[str, dict[str, str]] = {}
     for role, path_name, hash_name in (
         ("prepared diagnostic", "fit_diagnostic", "fit_diagnostic_sha256"),
@@ -3943,7 +4155,8 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     )
     if (
         fit_document.get("model_rod_roster_sha256") != manifest.get("fit_model_rod_roster_sha256")
-        or fit_document.get("structure_representative") != manifest.get("structure_representative")
+        or fit_document.get("structure_representative")
+        != manifest.get("structure_representative")
         or fit_document.get("stacking_model") != manifest.get("stacking_model")
     ):
         raise ValueError("profile scientific state does not match its fit artifact")
@@ -3952,10 +4165,17 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     if missing:
         raise ValueError(f"profile diagnostic lacks required arrays {missing}")
     vector_shape = arrays[PROFILE_VECTOR_ARRAY_NAMES[0]].shape
+    m0_signal_only_shape = arrays[M0_SIGNAL_ONLY_ARRAY_NAMES[0]].shape
     render_hashes = manifest.get("render_array_sha256")
     if (
         len(vector_shape) != 1
         or any(arrays[name].shape != vector_shape for name in PROFILE_VECTOR_ARRAY_NAMES)
+        or len(m0_signal_only_shape) != 1
+        or any(
+            arrays[name].shape != m0_signal_only_shape for name in M0_SIGNAL_ONLY_ARRAY_NAMES
+        )
+        or manifest.get("m0_signal_only_display", {}).get("supplemental_bin_count")
+        != m0_signal_only_shape[0]
         or arrays["display_detector_counts"].ndim != 2
         or arrays["display_full_region_code"].shape != arrays["display_detector_counts"].shape
         or arrays["display_fit_region_code"].shape != arrays["display_detector_counts"].shape
@@ -4042,7 +4262,10 @@ def _fit_structure_vector(document: dict[str, Any]) -> np.ndarray:
     return values
 
 
-def _verified_provenance_path(manifest: dict[str, Any], name: str) -> Path:
+def _verified_provenance_path(
+    manifest: dict[str, Any],
+    name: str,
+) -> Path:
     provenance = manifest["provenance"]
     expected_sha256 = str(provenance[f"{name}_sha256"])
     path = Path(provenance[name]).resolve()
@@ -4413,6 +4636,15 @@ def _drop_continuous_plan_observations(
     )
 
 
+def _drop_optional_continuous_plan_observations(
+    plan: _DatasetContinuousRegionPlan,
+    invalid_observations: set[int],
+) -> _DatasetContinuousRegionPlan | None:
+    if not set(range(plan.quadrature.observation_count)).difference(invalid_observations):
+        return None
+    return _drop_continuous_plan_observations(plan, invalid_observations)
+
+
 def fit(
     *,
     diagnostic_path: Path,
@@ -4511,6 +4743,7 @@ def fit(
             offspecular_signal_minimum_radial_nodes_per_side=(
                 offspecular_signal_minimum_radial_nodes_per_side
             ),
+            m0_phi_subdivision_count=fit_subdivisions,
         )
         for dataset_index, inputs in enumerate(series)
     )
@@ -4527,6 +4760,7 @@ def fit(
             offspecular_signal_minimum_radial_nodes_per_side=(
                 offspecular_signal_minimum_radial_nodes_per_side
             ),
+            m0_phi_subdivision_count=oracle_subdivisions,
         )
         for dataset_index, inputs in enumerate(series)
     )
@@ -5373,6 +5607,32 @@ def _project_full_profiles(
     }
 
 
+def _m0_signal_only_display_mask(
+    signal_only_bin_index: np.ndarray,
+    signal_only_valid: np.ndarray,
+    profile_identity: np.ndarray,
+    profile_bin_index: np.ndarray,
+    profile_valid: np.ndarray,
+) -> np.ndarray:
+    """Select signal-only m=0 bins only where conditioned comparison is unavailable."""
+
+    signal_bins = np.asarray(signal_only_bin_index, dtype=np.int64)
+    signal_valid = np.asarray(signal_only_valid, dtype=np.bool_)
+    identities = np.asarray(profile_identity)
+    profile_bins = np.asarray(profile_bin_index, dtype=np.int64)
+    conditioned_valid = np.asarray(profile_valid, dtype=np.bool_)
+    if signal_bins.ndim != 1 or signal_valid.shape != signal_bins.shape:
+        raise ValueError("m=0 signal-only arrays must be aligned one-dimensional vectors")
+    if not (
+        identities.ndim == 1
+        and profile_bins.shape == identities.shape
+        and conditioned_valid.shape == identities.shape
+    ):
+        raise ValueError("conditioned profile arrays must be aligned one-dimensional vectors")
+    conditioned_m0_bins = profile_bins[(identities == "m0") & conditioned_valid]
+    return signal_valid & ~np.isin(signal_bins, conditioned_m0_bins)
+
+
 def prepare_profiles(
     *,
     diagnostic_path: Path,
@@ -5398,11 +5658,16 @@ def prepare_profiles(
     recipe_path = _verified_provenance_path(manifest, "recipe")
     recipe_identity = _file_identity(recipe_path)
     recipe = _load_recipe(recipe_path)
+    fit_provenance = fit_document.get("provenance", {})
     fit_plan_identity = _verified_recorded_file_identity(
         fit_document.get("provenance", {}).get("fit_plan"),
         role="structure fit plan",
     )
     fit_plan = _load_fit_plan(Path(fit_plan_identity["path"]))
+    series = _rebuilt_series(manifest)
+    oracle_projection_revisions = fit_document.get("data_projection", {}).get(
+        "oracle_projection_revisions", ()
+    )
     background_state, background_identity, background_manifest = _load_radial_background(
         background_path,
         diagnostic_identity=diagnostic_identity,
@@ -5411,10 +5676,7 @@ def prepare_profiles(
             float(value) for value in manifest["fixed_position"]["beam_center_column_row_px"]
         ),
         fit_plan_identity=fit_plan_identity,
-        oracle_projection_revisions=fit_document.get("data_projection", {}).get(
-            "oracle_projection_revisions",
-            (),
-        ),
+        oracle_projection_revisions=oracle_projection_revisions,
     )
     if fit_document.get("provenance", {}).get("background") != background_identity:
         raise ValueError("fit artifact used a different radial background")
@@ -5430,7 +5692,6 @@ def prepare_profiles(
     sensitivity_relative_tolerance = float(fit_plan["sensitivity_relative_tolerance"])
     bound_proximity = float(fit_plan["bound_proximity_in_parameter_scales"])
     maximum_sensitivity_condition = float(fit_plan["maximum_sensitivity_condition"])
-    fit_provenance = fit_document.get("provenance", {})
     recorded_adapter_sha256 = fit_provenance.get("fit_adapter", {}).get("sha256")
     recorded_implementation_sha256 = fit_provenance.get("implementation", {}).get("sha256")
     fit_chain = _load_qualified_stage_chain(
@@ -5461,7 +5722,6 @@ def prepare_profiles(
         expected_dataset_ids=manifest["dataset_ids"],
         predecessor_chain_complete=len(fit_chain) == 4,
     )
-    series = _rebuilt_series(manifest)
     fixed_lattice_record = _prepared_lattice_record(manifest, series)
     dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
     display_dataset_id = str(recipe["display_dataset_id"])
@@ -5491,6 +5751,13 @@ def prepare_profiles(
     beam_center_column_px = float(manifest["fixed_position"]["beam_center_column_row_px"][0])
     layouts = _offspecular_layouts(recipe, beam_center_column_px, counts.shape[1])
     row_records, lookup = _row_catalog(1, m0, layouts)
+    m0_signal_catalog = tuple(
+        dict(record)
+        for record in row_records
+        if str(record["group"]) == "m0" and str(record["band"]) == "signal"
+    )
+    if not m0_signal_catalog:
+        raise RuntimeError("display profile catalog lacks m=0 signal bins")
     row_count = len(row_records)
     count_sum = np.zeros(row_count, dtype=np.float64)
     count_support = np.zeros(row_count, dtype=np.float64)
@@ -5560,10 +5827,10 @@ def prepare_profiles(
     rod_roster_sha256 = _rod_roster_sha256(rod_roster)
     if rod_roster_sha256 != fit_document.get("model_rod_roster_sha256"):
         raise RuntimeError("profile rod roster differs from the qualified fit")
+    specular_stitch = _recipe_parratt_stitch(recipe)
     detector = build_source_averaged_detector(inputs)
     if len(profile_rods) != len(inputs.rods):
         detector = detector.restrict_rods(profile_rods)
-    detector = detector.with_specular_stitch(_recipe_parratt_stitch(recipe))
     detector = detector.with_maximum_state_block_count(maximum_blocks)
     detector = detector.rebind_physics(
         strength_model=_candidate_strength(
@@ -5573,6 +5840,7 @@ def prepare_profiles(
         ),
         intensity_envelope=_candidate_intensity_envelope(parameters),
     )
+    detector = detector.with_specular_stitch(specular_stitch)
     profile_cubature = recipe["profile_cubature"]
     cuda_chunk_size = int(recipe["model_cubature"]["cuda_coordinate_chunk_size"])
     profile_row_arrays = {
@@ -5601,6 +5869,7 @@ def prepare_profiles(
             offspecular_signal_minimum_radial_nodes_per_side=(
                 offspecular_signal_minimum_radial_nodes_per_side
             ),
+            m0_phi_subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
             apply_fit_windows=False,
         )
         for name in policy["pass_names"]
@@ -5617,6 +5886,22 @@ def prepare_profiles(
         offspecular_signal_minimum_radial_nodes_per_side=(
             offspecular_signal_minimum_radial_nodes_per_side
         ),
+        m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+        apply_fit_windows=False,
+    )
+    raw_coarse_measured_profile_plan = _compile_dataset_continuous_region_plan(
+        inputs,
+        profile_row_arrays,
+        profile_plan_manifest,
+        dataset_index=0,
+        gauss_order=int(profile_cubature["fit_gauss_order"]),
+        subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
+        offspecular_axial_refinement=offspecular_axial_refinement,
+        offspecular_radial_transform=offspecular_radial_transform,
+        offspecular_signal_minimum_radial_nodes_per_side=(
+            offspecular_signal_minimum_radial_nodes_per_side
+        ),
+        m0_phi_subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
         apply_fit_windows=False,
     )
     invalid_fold_observations_by_pass = {
@@ -5626,7 +5911,14 @@ def prepare_profiles(
     invalid_fold_observations_by_pass["measured_data"] = _invalid_continuous_fold_observations(
         raw_measured_profile_plan
     )
-    for name, plan in {**raw_profile_plans, "measured_data": raw_measured_profile_plan}.items():
+    invalid_fold_observations_by_pass["coarse_measured_data"] = (
+        _invalid_continuous_fold_observations(raw_coarse_measured_profile_plan)
+    )
+    for name, plan in {
+        **raw_profile_plans,
+        "measured_data": raw_measured_profile_plan,
+        "coarse_measured_data": raw_coarse_measured_profile_plan,
+    }.items():
         for observation in np.flatnonzero(~plan.quadrature.observation_covered):
             invalid_fold_observations_by_pass[name].setdefault(
                 int(observation),
@@ -5656,6 +5948,58 @@ def prepare_profiles(
         for key in retained_signal_blocks
         if {"background_0", "background_1"}.issubset(valid_anchor_bands_by_block.get(key, set()))
     }
+    conditioned_m0_bins = {
+        bin_index for group, bin_index in complete_blocks if group == "m0"
+    }
+    m0_signal_only_records = tuple(
+        record
+        for record in m0_signal_catalog
+        if int(record["bin"]) not in conditioned_m0_bins
+    )
+    m0_signal_only_row_count = len(m0_signal_only_records)
+    m0_signal_only_plan: _DatasetContinuousRegionPlan | None = None
+    if m0_signal_only_records:
+        m0_signal_only_row_arrays = {
+            "dataset_index": np.zeros(m0_signal_only_row_count, dtype=np.int64),
+            "group": np.asarray([record["group"] for record in m0_signal_only_records]),
+            "band": np.asarray([record["band"] for record in m0_signal_only_records]),
+            "bin_index": np.asarray(
+                [record["bin"] for record in m0_signal_only_records],
+                dtype=np.int64,
+            ),
+        }
+        raw_m0_signal_only_plan = _compile_dataset_continuous_region_plan(
+            inputs,
+            m0_signal_only_row_arrays,
+            profile_plan_manifest,
+            dataset_index=0,
+            gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
+            subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            offspecular_axial_refinement=offspecular_axial_refinement,
+            offspecular_radial_transform=offspecular_radial_transform,
+            offspecular_signal_minimum_radial_nodes_per_side=(
+                offspecular_signal_minimum_radial_nodes_per_side
+            ),
+            m0_phi_subdivision_count=int(
+                recipe["model_cubature"]["fold_oracle_subdivisions"]
+            ),
+            apply_fit_windows=False,
+        )
+        invalid_m0_signal_only_observations = set(
+            _invalid_continuous_fold_observations(raw_m0_signal_only_plan)
+        ) | set(
+            int(value)
+            for value in np.flatnonzero(
+                ~raw_m0_signal_only_plan.quadrature.observation_covered
+            )
+        )
+        m0_signal_only_plan = _drop_optional_continuous_plan_observations(
+            raw_m0_signal_only_plan,
+            invalid_m0_signal_only_observations,
+        )
+        if m0_signal_only_plan is None:
+            m0_signal_only_records = ()
+            m0_signal_only_row_count = 0
     incomplete_block_observations = {
         observation
         for observation, record in enumerate(row_records)
@@ -5668,6 +6012,10 @@ def prepare_profiles(
     }
     measured_profile_plan = _drop_continuous_plan_observations(
         raw_measured_profile_plan,
+        unsupported_observations,
+    )
+    coarse_measured_profile_plan = _drop_continuous_plan_observations(
+        raw_coarse_measured_profile_plan,
         unsupported_observations,
     )
     profile_fold_plans = {
@@ -5691,7 +6039,7 @@ def prepare_profiles(
             }
         )
     coarse_measured_projection = compile_native_pixel_region_projection(
-        profile_plans["fit"].quadrature,
+        coarse_measured_profile_plan.quadrature,
         counts.shape,
     )
 
@@ -5718,6 +6066,25 @@ def prepare_profiles(
     )
     count_sum, count_covariance = project_dark_corrected_counts(measured_projection)
     count_support = measured_projection.observation_measure_px2
+    m0_signal_only_projection = None
+    m0_signal_only_count_mass = np.empty(0, dtype=np.float64)
+    m0_signal_only_count_covariance = np.empty((0, 0), dtype=np.float64)
+    m0_signal_only_support = np.empty(0, dtype=np.float64)
+    m0_signal_only_flat_pixel = np.empty(0, dtype=np.int64)
+    if m0_signal_only_plan is not None:
+        m0_signal_only_projection = compile_native_pixel_region_projection(
+            m0_signal_only_plan.quadrature,
+            counts.shape,
+        )
+        m0_signal_only_count_mass, m0_signal_only_count_covariance = (
+            project_dark_corrected_counts(m0_signal_only_projection)
+        )
+        m0_signal_only_support = m0_signal_only_projection.observation_measure_px2
+        m0_signal_only_flat_pixel = np.unique(
+            np.asarray(m0_signal_only_projection.flat_pixel_index, dtype=np.int64)[
+                np.asarray(m0_signal_only_projection.pixel_column_index, dtype=np.int64)
+            ]
+        )
     measured_projection_refinement = _native_projection_convergence(
         coarse_count_mass=coarse_count_sum,
         coarse_support_px2=coarse_count_support,
@@ -5748,6 +6115,10 @@ def prepare_profiles(
     count_axial_mass, count_qz_mass = _continuous_plan_reciprocal_coordinate_moments(
         inputs,
         measured_profile_plan,
+        m0_observation=np.asarray(
+            [str(record["group"]) == "m0" for record in row_records],
+            dtype=np.bool_,
+        ),
     )
     selected_row = np.asarray(measured_projection.observation_row, dtype=np.int64)
     selected_pixel = np.asarray(measured_projection.flat_pixel_index)[
@@ -5766,6 +6137,7 @@ def prepare_profiles(
     )
     full_region_code.fill(0)
     np.maximum.at(full_region_code, selected_pixel, region_code_by_row[selected_row])
+    np.maximum.at(full_region_code, m0_signal_only_flat_pixel, np.uint8(1))
     display_fit_plan = _compile_dataset_continuous_region_plan(
         inputs,
         fit_arrays,
@@ -5778,6 +6150,7 @@ def prepare_profiles(
         offspecular_signal_minimum_radial_nodes_per_side=(
             offspecular_signal_minimum_radial_nodes_per_side
         ),
+        m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
     )
     display_fit_projection = compile_native_pixel_region_projection(
         display_fit_plan.quadrature,
@@ -5813,6 +6186,16 @@ def prepare_profiles(
         observation_count=row_count,
         beam_center_column_row_px=tuple(manifest["fixed_position"]["beam_center_column_row_px"]),
     )
+    m0_signal_only_background_mass = np.empty(0, dtype=np.float64)
+    if m0_signal_only_plan is not None:
+        m0_signal_only_background_mass = _fixed_background_from_continuous_plans(
+            state=background_state,
+            plans=(m0_signal_only_plan,),
+            observation_count=m0_signal_only_row_count,
+            beam_center_column_row_px=tuple(
+                manifest["fixed_position"]["beam_center_column_row_px"]
+            ),
+        ).count_mass
     supported_row = np.flatnonzero(count_support > 0.0)
     supported_records = [row_records[index] for index in supported_row]
     block_by_key: dict[tuple[str, int], int] = {}
@@ -5919,6 +6302,29 @@ def prepare_profiles(
         "display_fit_projection_revision": display_fit_projection.projection_revision,
         "measured_count_mass_sha256": _array_sha256(count_sum),
         "measured_count_covariance_sha256": _array_sha256(count_covariance),
+        "m0_signal_only_projection_revision": (
+            None
+            if m0_signal_only_projection is None
+            else m0_signal_only_projection.projection_revision
+        ),
+        "m0_signal_only_measured_quadrature_revision": (
+            None
+            if m0_signal_only_plan is None
+            else m0_signal_only_plan.quadrature.quadrature_revision
+        ),
+        "m0_signal_only_model_quadrature_revision": (
+            None
+            if m0_signal_only_plan is None
+            else m0_signal_only_plan.quadrature.quadrature_revision
+        ),
+        "m0_signal_only_bin_count": m0_signal_only_row_count,
+        "m0_signal_only_count_mass_sha256": _array_sha256(m0_signal_only_count_mass),
+        "m0_signal_only_count_covariance_sha256": _array_sha256(
+            m0_signal_only_count_covariance
+        ),
+        "m0_signal_only_radial_background_mass_sha256": _array_sha256(
+            m0_signal_only_background_mass
+        ),
         "row_count": row_count,
         "background_artifact_sha256": background_identity["sha256"],
         "radial_background_state_revision": background_state.revision,
@@ -5952,6 +6358,7 @@ def prepare_profiles(
         "model_measure": "continuous_detector_chart_area",
         "fit_gauss_order": int(profile_cubature["fit_gauss_order"]),
         "fit_subdivision_count": int(profile_cubature["fold_fit_subdivisions"]),
+        "m0_model_phi_subdivision_count": int(profile_cubature["fold_fit_subdivisions"]),
         "quadrature_revision": {
             name: plan.quadrature.quadrature_revision for name, plan in profile_plans.items()
         },
@@ -5991,15 +6398,15 @@ def prepare_profiles(
     executions: dict[str, dict[str, Any]] = {}
     for name in policy["pass_names"]:
         verify_inputs()
+        plan = profile_plans[name]
         model_mass, executions[name] = _integrate_continuous_region_mass(
             detector,
-            profile_plans[name],
+            plan,
             profile_fold_plans[name],
             row_count=row_count,
             execution_backend=execution_backend,
             cuda_coordinate_chunk_size=cuda_chunk_size,
         )
-        plan = profile_plans[name]
         support = plan.quadrature.observation_measure_px2
         coordinate_mass = support * plan.quadrature.observation_background_coordinate
         objective_model_mass = model_mass.copy()
@@ -6007,6 +6414,7 @@ def prepare_profiles(
             conditioned_profile_background,
             model_mass[supported_row],
         )
+        progress_plan = plan
         pass_results[name] = {
             "model_mass": objective_model_mass,
             "physical_model_mass": model_mass,
@@ -6030,13 +6438,45 @@ def prepare_profiles(
         progress_document["devices"] = current_devices
         progress_document["evaluated_backends"] = current_backends
         progress_document["completed_passes"][name] = {
-            "quadrature_revision": plan.quadrature.quadrature_revision,
-            "continuous_node_count": int(plan.quadrature.column_px.size),
+            "quadrature_revision": progress_plan.quadrature.quadrature_revision,
+            "continuous_node_count": int(progress_plan.quadrature.column_px.size),
             "model_mass_sha256": _array_sha256(model_mass),
         }
         progress_document["active_pass"] = None
         verify_inputs()
         _write_json_atomic(progress_path, progress_document)
+    m0_signal_only_model_mass = np.empty(0, dtype=np.float64)
+    m0_signal_only_execution: dict[str, Any] | None = None
+    if m0_signal_only_plan is not None:
+        if m0_signal_only_plan.fold_bands:
+            raise RuntimeError("m=0 signal-only display unexpectedly compiled fold corrections")
+        verify_inputs()
+        m0_signal_only_model_mass, m0_signal_only_execution = (
+            _integrate_continuous_region_mass(
+                detector,
+                m0_signal_only_plan,
+                None,
+                row_count=m0_signal_only_row_count,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_chunk_size,
+            )
+        )
+        if (
+            sorted(set(m0_signal_only_execution["devices"])) != progress_document["devices"]
+            or sorted(set(m0_signal_only_execution["evaluated_backends"]))
+            != progress_document["evaluated_backends"]
+        ):
+            raise RuntimeError("m=0 signal-only display execution changed device or backend")
+        progress_document["completed_passes"]["m0_signal_only_display"] = {
+            "quadrature_revision": m0_signal_only_plan.quadrature.quadrature_revision,
+            "continuous_node_count": int(m0_signal_only_plan.quadrature.column_px.size),
+            "model_mass_sha256": _array_sha256(m0_signal_only_model_mass),
+        }
+    execution_identity["m0_signal_only_model_mass_sha256"] = _array_sha256(
+        m0_signal_only_model_mass
+    )
+    verify_inputs()
+    _write_json_atomic(progress_path, progress_document)
     projected = {
         name: _project_full_profiles(
             row_records,
@@ -6101,7 +6541,52 @@ def prepare_profiles(
     )
     if not math.isfinite(axial_reciprocal_magnitude_Ainv) or axial_reciprocal_magnitude_Ainv <= 0.0:
         raise RuntimeError("accepted lattice has an invalid axial reciprocal-basis magnitude")
-    display_rows = int(recipe["detector"]["display_rows"])
+    m0_signal_only_bin_index = np.asarray(
+        [record["bin"] for record in m0_signal_only_records],
+        dtype=np.int64,
+    )
+    m0_edges_rad = np.asarray(m0.two_theta_bin_edges_rad, dtype=np.float64)
+    m0_signal_only_two_theta_deg = np.rad2deg(
+        0.5
+        * (
+            m0_edges_rad[m0_signal_only_bin_index]
+            + m0_edges_rad[m0_signal_only_bin_index + 1]
+        )
+    )
+    m0_signal_only_measured_density = np.full(
+        m0_signal_only_row_count,
+        np.nan,
+        dtype=np.float64,
+    )
+    m0_signal_only_model_plus_background_density = np.full(
+        m0_signal_only_row_count,
+        np.nan,
+        dtype=np.float64,
+    )
+    m0_signal_only_valid = (
+        (m0_signal_only_support > 0.0)
+        & np.isfinite(m0_signal_only_count_mass)
+        & np.isfinite(m0_signal_only_model_mass)
+        & np.isfinite(m0_signal_only_background_mass)
+    )
+    m0_signal_only_measured_density[m0_signal_only_valid] = (
+        m0_signal_only_count_mass[m0_signal_only_valid]
+        / m0_signal_only_support[m0_signal_only_valid]
+    )
+    m0_signal_only_model_plus_background_density[m0_signal_only_valid] = (
+        dataset_scale * m0_signal_only_model_mass[m0_signal_only_valid]
+        + m0_signal_only_background_mass[m0_signal_only_valid]
+    ) / m0_signal_only_support[m0_signal_only_valid]
+    configured_display_rows = int(recipe["detector"]["display_rows"])
+    supplemental_display_rows = (
+        int(np.max(m0_signal_only_flat_pixel) // counts.shape[1]) + 1
+        if m0_signal_only_flat_pixel.size
+        else 0
+    )
+    display_rows = min(
+        counts.shape[0],
+        max(configured_display_rows, supplemental_display_rows),
+    )
     arrays = {
         **{f"profile_{name}": value for name, value in profile_arrays.items()},
         "profile_measured_radial_signal_density": radial_projected[policy["result_pass_name"]][
@@ -6121,6 +6606,14 @@ def prepare_profiles(
         "row_count_qz_mass": count_qz_mass,
         "selected_flat_pixel_index": selected_pixel,
         "selected_observation_row": selected_row,
+        "m0_signal_only_bin_index": m0_signal_only_bin_index,
+        "m0_signal_only_two_theta_deg": m0_signal_only_two_theta_deg,
+        "m0_signal_only_measured_density": m0_signal_only_measured_density,
+        "m0_signal_only_model_plus_background_density": (
+            m0_signal_only_model_plus_background_density
+        ),
+        "m0_signal_only_support_px2": m0_signal_only_support,
+        "m0_signal_only_valid": m0_signal_only_valid,
         "display_detector_counts": (
             counts[:display_rows].astype(np.float64) - dark_scale * dark_counts[:display_rows]
         ),
@@ -6166,13 +6659,93 @@ def prepare_profiles(
             "unrasterized model; a data-only frozen radial detector baseline conditioned on the two "
             "adjacent sidebands is subtracted from measured signal regions, and the identical "
             "fixed sideband-conditioning operator is applied to the model before comparison; no family or "
-            "panel renormalization"
+            "panel renormalization; "
+            "m=0 bins lacking complete sidebands are retained only as a separately declared, "
+            "display-only signal-region measurement"
         ),
         "display_projection_relation_to_fit": (
             "The plotted background-corrected signal uses the same detector-native affine "
             "sideband conditioner as the fit over the wider display catalog, and the plotted "
             "model has the same anchor projection; anchor rows do not enter either result."
         ),
+        "m0_signal_only_display": {
+            "status": (
+                "DISPLAY_ONLY_INCOMPLETE_SIDEBAND_SUPPLEMENT"
+                if m0_signal_only_row_count
+                else "NOT_REQUIRED_ALL_M0_BINS_CONDITIONED"
+            ),
+            "supplemental_bin_count": m0_signal_only_row_count,
+            "fit_role": "not_used_in_fit_objective_or_parameter_estimation",
+            "selection_rule": (
+                "render only valid m=0 bins without a valid two-sideband-conditioned comparison"
+            ),
+            "data_measure": (
+                "raw-minus-scaled-dark signal-region count mass per continuous detector area"
+            ),
+            "model_measure": (
+                "dataset-scaled unified m=0 model plus fixed radial-background count mass per "
+                "continuous detector area"
+            ),
+            "background_conditioning": "fixed_radial_only_no_adjacent_sideband_conditioning",
+            "radial_background_calibration_radius_px": [
+                float(background_manifest["sampling"]["minimum_radius_px"]),
+                float(background_manifest["sampling"]["maximum_radius_px"]),
+            ],
+            "inside_calibration_radius_policy": (
+                "radial background is extrapolated; direct-beam, beamstop, and air-scatter "
+                "contributions are not separately identified"
+            ),
+            "native_pixel_overlap_covariance_retained": True,
+            "projection_method": (
+                MEASURED_PROJECTION_METHOD if m0_signal_only_projection is not None else None
+            ),
+            "projection_revision": (
+                None
+                if m0_signal_only_projection is None
+                else m0_signal_only_projection.projection_revision
+            ),
+            "measured_quadrature_revision": (
+                None
+                if m0_signal_only_plan is None
+                else m0_signal_only_plan.quadrature.quadrature_revision
+            ),
+            "model_quadrature_revision": (
+                None
+                if m0_signal_only_plan is None
+                else m0_signal_only_plan.quadrature.quadrature_revision
+            ),
+            "measured_phi_subdivision_count": int(
+                recipe["model_cubature"]["fold_oracle_subdivisions"]
+            ),
+            "model_phi_subdivision_count": int(
+                recipe["model_cubature"]["fold_oracle_subdivisions"]
+            ),
+            "gauss_order": int(recipe["model_cubature"]["oracle_gauss_order"]),
+            "subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            "measured_continuous_node_count": int(
+                0
+                if m0_signal_only_plan is None
+                else m0_signal_only_plan.quadrature.column_px.size
+            ),
+            "model_continuous_node_count": int(
+                0
+                if m0_signal_only_plan is None
+                else m0_signal_only_plan.quadrature.column_px.size
+            ),
+            "count_mass_sha256": _array_sha256(m0_signal_only_count_mass),
+            "count_covariance_sha256": _array_sha256(m0_signal_only_count_covariance),
+            "radial_background_mass_sha256": _array_sha256(
+                m0_signal_only_background_mass
+            ),
+            "model_mass_sha256": _array_sha256(m0_signal_only_model_mass),
+            "detector_overlay_flat_pixel_count": int(m0_signal_only_flat_pixel.size),
+            "detector_overlay_flat_pixel_sha256": _array_sha256(m0_signal_only_flat_pixel),
+            "configured_display_rows": configured_display_rows,
+            "actual_display_rows": display_rows,
+            "execution": m0_signal_only_execution,
+            "smoothing_applied": False,
+            "model_pixelized": False,
+        },
         "background_model": {
             "status": background_manifest["status"],
             "artifact_sha256": background_identity["sha256"],
@@ -6200,15 +6773,14 @@ def prepare_profiles(
             "parameter_vector": background_state.parameter_vector.tolist(),
             "metrics": background_manifest["metrics"],
         },
-        "m0_display_coordinate": (
-            "continuous-area mean sample-normal physical Qz of the angular region; fitting and "
-            "alignment remain in two_theta"
-        ),
+        "m0_display_coordinate": "two_theta bin center in degrees",
         "axial_reciprocal_magnitude_Ainv": axial_reciprocal_magnitude_Ainv,
-        "fit_compatibility_replay": None,
         "continuous_support_exclusions": support_exclusions,
         "profile_cubature": {
             "settings": profile_cubature,
+            "m0_model_phi_subdivision_count": int(
+                profile_cubature["fold_fit_subdivisions"]
+            ),
             "offspecular_axial_refinement": offspecular_axial_refinement,
             "offspecular_radial_transform": offspecular_radial_transform,
             "offspecular_signal_minimum_radial_nodes_per_side": (
@@ -6231,6 +6803,9 @@ def prepare_profiles(
             "quadrature_revision": measured_profile_plan.quadrature.quadrature_revision,
             "gauss_order": int(recipe["model_cubature"]["oracle_gauss_order"]),
             "subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            "m0_phi_subdivision_count": int(
+                recipe["model_cubature"]["fold_oracle_subdivisions"]
+            ),
             "continuous_node_count": int(measured_profile_plan.quadrature.column_px.size),
             "refinement_oracle": measured_projection_refinement,
             "smoothing_applied": False,
@@ -6401,6 +6976,8 @@ def _pixel_cell_boundary_segments(mask: np.ndarray) -> np.ndarray:
     return np.asarray(segments, dtype=np.float64)
 
 
+
+
 def render(
     *,
     profile_diagnostic_path: Path,
@@ -6420,6 +6997,7 @@ def render(
     )
     recipe = _validated_recipe(dict(manifest["figure_recipe"]))
     material_id = str(manifest["material_id"])
+    model_label = "Fitted model"
     material_slug = "".join(
         character.lower() if character.isalnum() else "_" for character in material_id
     ).strip("_")
@@ -6604,7 +7182,15 @@ def render(
     identities = arrays["profile_identity"]
     valid = arrays["profile_valid"]
     display_qz_Ainv = arrays["profile_display_qz_Ainv"]
+    selection_coordinate = arrays["profile_selection_coordinate"]
     bin_index = arrays["profile_bin_index"]
+    m0_signal_only_selected = _m0_signal_only_display_mask(
+        arrays["m0_signal_only_bin_index"],
+        arrays["m0_signal_only_valid"],
+        identities,
+        bin_index,
+        valid,
+    )
 
     def plot_contiguous_profile(
         axis: Any,
@@ -6614,6 +7200,8 @@ def render(
         bins: np.ndarray,
         *,
         logarithmic: bool,
+        observed_label: str,
+        modeled_label: str,
     ) -> None:
         order = np.argsort(x)
         x = x[order]
@@ -6638,7 +7226,7 @@ def render(
                 observed_line,
                 color="black",
                 linewidth=1.0,
-                label="Data" if segment_index == 0 else None,
+                label=observed_label if segment_index == 0 else None,
             )
             axis.plot(
                 x[segment],
@@ -6646,21 +7234,82 @@ def render(
                 color="#D55E00",
                 linestyle="--",
                 linewidth=1.3,
-                label="Fitted model" if segment_index == 0 else None,
+                label=modeled_label if segment_index == 0 else None,
+            )
+
+    def plot_m0_signal_only_supplement(axis: Any) -> None:
+        x = arrays["m0_signal_only_two_theta_deg"][m0_signal_only_selected]
+        observed = arrays["m0_signal_only_measured_density"][m0_signal_only_selected]
+        modeled = arrays["m0_signal_only_model_plus_background_density"][
+            m0_signal_only_selected
+        ]
+        bins = arrays["m0_signal_only_bin_index"][m0_signal_only_selected]
+        order = np.argsort(x)
+        x = x[order]
+        observed = observed[order]
+        modeled = modeled[order]
+        bins = bins[order]
+        breaks = np.flatnonzero(np.diff(bins) != 1) + 1
+        for segment_index, segment in enumerate(np.split(np.arange(x.size), breaks)):
+            if not segment.size:
+                continue
+            axis.plot(
+                x[segment],
+                observed[segment],
+                color="#666666",
+                linestyle=":",
+                marker="o",
+                markersize=2.8,
+                linewidth=0.9,
+                label=(
+                    "Signal-only data (no sidebands)" if segment_index == 0 else None
+                ),
+            )
+            axis.plot(
+                x[segment],
+                modeled[segment],
+                color="#D55E00",
+                linestyle=":",
+                marker="x",
+                markersize=3.0,
+                linewidth=1.0,
+                label=(
+                    "Unified model + extrapolated radial BG" if segment_index == 0 else None
+                ),
             )
 
     for identity, axis in axes.items():
         selected = (identities == identity) & valid
-        x = display_qz_Ainv[selected]
+        x = selection_coordinate[selected] if identity == "m0" else display_qz_Ainv[selected]
         observed = displayed_measured[selected]
         modeled = arrays["profile_model_signal_density"][selected]
         bins = bin_index[selected]
         if identity == "m0":
-            plot_contiguous_profile(axis, x, observed, modeled, bins, logarithmic=False)
+            plot_contiguous_profile(
+                axis,
+                x,
+                observed,
+                modeled,
+                bins,
+                logarithmic=False,
+                observed_label="Sideband-conditioned data",
+                modeled_label=model_label,
+            )
+            plot_m0_signal_only_supplement(axis)
             axis.set_yscale("symlog", linthresh=1.0)
-            axis.set_title(r"m = 0 (fitted in $\phi$-$2\theta$; displayed versus mean $Q_z$)")
+            suffix = "; signal-only gaps marked" if np.any(m0_signal_only_selected) else ""
+            axis.set_title(rf"m = 0 (integrated in $\phi$-$2\theta$${suffix})")
         else:
-            plot_contiguous_profile(axis, x, observed, modeled, bins, logarithmic=False)
+            plot_contiguous_profile(
+                axis,
+                x,
+                observed,
+                modeled,
+                bins,
+                logarithmic=False,
+                observed_label="Background-subtracted data",
+                modeled_label=model_label,
+            )
             family, side = identity.split("_", 1)
             side_label = {"minus": "-", "plus": "+"}[side]
             axis.set_title(f"{family.replace('m', 'm = ')} {side_label}")
@@ -6668,8 +7317,11 @@ def render(
             half_step = (
                 0.5 * float(np.median(np.diff(np.unique(np.sort(x))))) if x.size > 1 else 0.0
             )
-            axis.set_xlim(float(np.min(x) - half_step), float(np.max(x) + half_step))
-        if identity == "m0" or identity.endswith("_minus"):
+            lower_bound = 0.0 if identity == "m0" else float(np.min(x) - half_step)
+            axis.set_xlim(lower_bound, float(np.max(x) + half_step))
+        if identity == "m0":
+            axis.set_ylabel("counts / pixel")
+        elif identity.endswith("_minus"):
             axis.set_ylabel("background-subtracted counts / pixel")
         axis.grid(color="#D9D9D9", linewidth=0.5, alpha=0.7)
     for pair in identity_rows:
@@ -6701,16 +7353,18 @@ def render(
                 axes[identity].set_ylim(*limits)
                 if pair_xlim is not None:
                     axes[identity].set_xlim(*pair_xlim)
-    for identity in ("m4_plus", "m4_minus", "m0"):
+    for identity in ("m4_plus", "m4_minus"):
         axes[identity].set_xlabel(r"$Q_z$ ($\AA^{-1}$)")
+    axes["m0"].set_xlabel(r"$2\theta$ (deg)")
     axes["m1_minus"].legend(
         handles=(
             Line2D((), (), color="black", label="Background-subtracted data"),
-            Line2D((), (), color="#D55E00", linestyle="--", label="Fitted model"),
+            Line2D((), (), color="#D55E00", linestyle="--", label=model_label),
         ),
         frameon=False,
         loc="upper right",
     )
+    axes["m0"].legend(frameon=False, loc="upper right", fontsize=7, ncol=2)
     fixed = manifest["fixed_position"]
     structure = manifest["structure_representative"]
     figure.suptitle(
@@ -6757,15 +7411,20 @@ def render(
         "fit_status": manifest.get("fit_status"),
         "computationally_valid": manifest.get("computationally_valid"),
         "evidence_level": manifest.get("evidence_level"),
-        "publication_ready": manifest.get("publication_ready"),
+        "publication_ready": bool(manifest.get("publication_ready")),
         "all_rod_validation": manifest.get("all_rod_validation"),
         "model_rod_scope": manifest.get("model_rod_scope"),
         "model_pixelized": manifest.get("model_pixelized"),
         "smoothing_applied": manifest.get("smoothing_applied"),
         "display_background_subtraction": {
-            "mode": "radial-plus-sideband",
+            "mode": (
+                "conditioned-primary-plus-declared-m0-signal-only-gaps"
+                if np.any(m0_signal_only_selected)
+                else "conditioned-primary"
+            ),
             "radial_background_from_profile_fit": True,
             "residual_sideband_subtracted": True,
+            "residual_sideband_subtraction_scope": "primary conditioned profiles only",
             "residual_sideband_model": (
                 "per-bin affine density in phi for m=0 and Qr for m!=0, determined only "
                 "from the two adjacent detector sidebands by the same core conditioner used "
@@ -6778,6 +7437,21 @@ def render(
                 float(np.nanmin(residual_sideband_density)),
                 float(np.nanmax(residual_sideband_density)),
             ],
+            "m0_signal_only_supplement": {
+                "fit_role": "display only",
+                "bin_index": arrays["m0_signal_only_bin_index"][
+                    m0_signal_only_selected
+                ].tolist(),
+                "two_theta_deg": arrays["m0_signal_only_two_theta_deg"][
+                    m0_signal_only_selected
+                ].tolist(),
+                "data_measure": "raw-minus-scaled-dark signal-region counts per pixel",
+                "model_measure": "unified physical model plus fixed radial background per pixel",
+                "adjacent_sideband_conditioning": False,
+                "radial_background_extrapolated_inside_radius_px": manifest[
+                    "m0_signal_only_display"
+                ]["radial_background_calibration_radius_px"][0],
+            },
         },
         "outputs": {
             "png": {"name": png.name, "sha256": _sha256(temporary_png)},

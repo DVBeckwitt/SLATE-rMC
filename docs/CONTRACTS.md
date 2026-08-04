@@ -32,7 +32,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `RodQueryBatch` | ordered/stacking | rod-aligned `L` queries with stable IDs |
 | `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
 | `ParrattResult` / `SpecularResult` / `KinematicScaleSpecularResult` | reflectivity | separately named pure and unit-preserving composite specular outputs |
-| `ParrattStitchStack` / `CompiledParrattStitch` | reflectivity / detector pipeline | immutable substrate/interface inputs and one source-wavelength overlap state for the optional empirical `(0,0)` detector binding |
+| `ParrattStitchStack` / `CompiledParrattStitch` | reflectivity / detector pipeline | immutable substrate/interface inputs and one source-wavelength overlap state for the optional unified local-lamella `(0,0)` detector field |
 | `MeasuredPeakDiscovery` / `MeasuredIndexingResult` | selection | hashed image/mask/calibration provenance, native coordinates, reciprocal labels, decisions, and replicated branch tracks |
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |
@@ -114,7 +114,9 @@ air wavelength, strict root classification, material optics, and compiled instru
   `detector_visible_intrinsic_ewald_direction_density_A2_per_sr.v1`. It sums every regular inverse
   preimage, including nonzero `m=0`, with the same intrinsic `k_film^2 / |J_latent|` density. It
   applies no source, optical, attenuation, detector Jacobian, or solid-angle factor and carries the
-  strict positive detector-visible `m=0` Q-gap certificate.
+  detector-visible `m=0` Q-gap certificate. The ordinary mean-plane chart has a strictly positive
+  gap; a compiled local-lamella Parratt stitch declares zero because its accepted detector chart
+  reaches the specular origin.
 - `evaluate_detector_geometry(column_px, row_px, *, include_surface_jacobian=True)` performs detector
   point → outgoing ray → exit refraction → film `kf` → sample-frame `Q` and reports
   validity and elastic residual. The ray is valid only on the active front face,

@@ -676,9 +676,10 @@ unpolarized/unanalysed Thomson factor event by event.
 If the recipe contains `[parratt_stitch]`, it must declare the fixed substrate index, both
 interface roughnesses, `m0_only` scope, and local-lamella interface assumption. Film optics remain
 wavelength-resolved material values and thickness remains the compiled instrument value. The
-stitch introduces no fit coordinate: it is compiled once per source wavelength, replaces only the
-continuous `(0,0)` strength below its frozen handoff, and is exactly the pre-existing kinematic
-branch above it.
+dynamical-kinematic crossover introduces no fit coordinate: it is compiled once per source
+wavelength, replaces only the continuous `(0,0)` strength below its frozen handoff, and is exactly
+the pre-existing kinematic branch above it. The `[parratt_stitch]` key is retained as the recipe
+schema name.
 
 `m=0` rows are selected and binned in phi/2theta. Nonzero families use signed detector side and
 `Qr/L`. The measured image remains pixels, but every candidate model is integrated directly over
@@ -687,12 +688,15 @@ and all three OSCs; one scale per OSC is shared by every family in that image. R
 conditioned by their two adjacent anchors and then summed into declared trusted integrated peak
 areas before full-covariance whitening.
 
-The fixed structural state is a 52-layer, fault-free R-centered three-registry parent with no
+The fixed structural state is a 50-layer, fault-free R-centered three-registry parent with no
 4H/6H population and no stacking-disorder fit. The `3R` implementation name expresses the native
 Bi2Se3 R-centering sequence; it does not introduce an additional fitted phase. The recipe freezes
-the approved peak whitelist and its horizon-exclusion provenance. Every selected native pixel must
-additionally clear the one-degree air-exit guard; the adapter does not rediscover peaks during
-fitting.
+the approved peak whitelist and its horizon-exclusion provenance. The m=0 phi/2theta data chart
+retains every finite detector coordinate; the forward evaluator independently determines physical
+support, including local-lamella reflection below the mean-plane horizon when the crossover is
+enabled. Exact direct-beam `Q=0` has zero model intensity. Nonzero-m diffraction keeps the
+independent one-degree air-exit guard, and the conservative diffraction-peak whitelist keeps its
+separately named one-degree clearance policy. The adapter does not rediscover peaks during fitting.
 
 Stages A, B, and C are modular initializers; the mandatory joint stage is the sole downstream
 structure result. Each later stage requires the exact accepted predecessor:
@@ -760,29 +764,25 @@ uv run --frozen --extra visualization python scripts/fit_layered_quintuple_regio
 
 The detector panel is the unchanged top-origin native 5-degree OSC view. Thin masks show the full
 profile-integration regions; bold masks show the peak windows that entered the joint fit. The lower
-panels preserve separate signed branches for `m=1,3,4` and a full-width logarithmic `m=0` panel.
+panels preserve separate signed branches for `m=1,3,4` and a full-width symlog `m=0` panel.
 The measured curve has the same frozen shared radial background removed as in the fit; the dashed
 curve is the unsmoothed continuous diffraction model. There is no family renormalization. The old
 RA-SIM trace remains a layout oracle only because it smoothed measured data.
 
-### Optional Parratt-to-kinematic `m=0` stitch
+### Optional unified `m=0` dynamical--kinematic crossover
 
-Set `[specular_stitch].enabled = true` in the matched-region recipe and declare the substrate
-complex index plus both interface roughnesses.  The source-averaged detector then compiles the
-named empirical Parratt handoff independently for each source wavelength.  It replaces only the
-regular `(0,0)` finite-stack strength below the automatically selected overlap, returns exactly to
-the existing refracted kinematic strength above it, and never changes a nonzero-`m` rod.  The same
-continuous detector function feeds fitting and profiles; no new low-angle scale or model pixels are
-introduced.
+Set `[parratt_stitch]` in the matched-region recipe and declare the substrate complex index plus
+both interface roughnesses. After the fitted structure strength is rebound, the source-averaged
+detector compiles one crossover for each actual source wavelength. The local-lamella path then owns
+all nonzero `(0,0)` momentum transfer, uses the stitched strength as a function of internal phase
+`L`, and returns exactly to the kinematic finite-stack strength at high transfer. Nonzero-`m` rods
+remain unchanged.
 
-For the 2026-08-03 Bi2Se3 qualification, the declared legacy-compatible SiO2 substrate and zero
-roughness selected the fallback `3--6 Qc` window for every checked wavelength.  Its upper edge is
-at most `Qz=0.304025 A^-1`, below the retained profile start at `Qz=0.459319 A^-1`.  The resulting
-Figure 7 is therefore visually and numerically unchanged over its displayed support: weighted RMS
-changed only from `20.84361406300731` to `20.843613947573456`.  This is a valid
-`FIT_CONDITIONED`, `publication_ready=false` result, not evidence that Parratt fixes the observed
-`6.55--7.15 deg` shoulder.  Do not widen the blend after inspecting the data; that shoulder needs
-a different, independently declared physical or background model if it is to change.
+The Bi2Se3 recipe uses 50 quintuple layers (`477.2666666667 A`), top-interface Nevot--Croce
+roughness `5.2372513900 A`, and buried-interface roughness `10.0 A`. The same continuous detector
+field is integrated over the displayed phi/2theta rectangles and plotted against `2theta`.
+Only the measured detector image remains pixel-valued. There is no auxiliary reflectivity curve,
+second scale, horizontal shift, detector raster for the model, smoothing, or synthetic broadening.
 
 ## Historical: synthetic fixed-position Bi2Se3 structure proof
 
