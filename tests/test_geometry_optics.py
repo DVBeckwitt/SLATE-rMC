@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import xraydb
 
 from rasim_next.core.contracts import (
     SAMPLE_INTERSECTION_MODEL_ID,
@@ -39,6 +40,7 @@ from rasim_next.geometry import (
 from rasim_next.io.orientation import detector_native_to_raw
 from rasim_next.io.osc import OscFormatError, read_osc
 from rasim_next.materials import crystal_with_direct_basis, material_optics, read_crystal
+from rasim_next.materials.optics import HC_EV_A, atomic_scattering_factor_e
 from rasim_next.optics import (
     path_attenuation,
     scalar_optical_weight,
@@ -49,6 +51,68 @@ from rasim_next.optics import (
 from rasim_next.sampling.source import sample_gaussian_source_rays
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_atomic_factors_batch_exactly_within_chantler_intervals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chantler_energy_eV = np.asarray(
+        xraydb.chantler_energies("Bi"),
+        dtype=np.float64,
+    )
+    interval = int(np.searchsorted(chantler_energy_eV, 8047.8, side="right") - 1)
+    left_width = chantler_energy_eV[interval + 1] - chantler_energy_eV[interval]
+    right_width = chantler_energy_eV[interval + 2] - chantler_energy_eV[interval + 1]
+    energy_eV = np.array(
+        [
+            chantler_energy_eV[interval] + 0.2 * left_width,
+            chantler_energy_eV[interval] + 0.6 * left_width,
+            chantler_energy_eV[interval + 1] + 0.2 * right_width,
+        ]
+    )
+    wavelength_A = HC_EV_A / energy_eV
+    evaluated_energy_eV = HC_EV_A / wavelength_A
+    q_magnitude_Ainv = np.array([0.1, 0.2, 0.3])
+
+    scalar_f1 = xraydb.f1_chantler
+    scalar_f2 = xraydb.f2_chantler
+    f0 = np.asarray(
+        xraydb.f0("Bi", q_magnitude_Ainv / (4.0 * np.pi)),
+        dtype=np.float64,
+    )
+    scalar_f1_values = np.asarray(
+        [scalar_f1("Bi", float(energy)) for energy in evaluated_energy_eV], dtype=np.float64
+    )
+    scalar_f2_values = np.asarray(
+        [scalar_f2("Bi", float(energy)) for energy in evaluated_energy_eV], dtype=np.float64
+    )
+    expected = np.asarray(f0 + scalar_f1_values + 1.0j * scalar_f2_values, dtype=np.complex128)
+    f1_batch_sizes: list[int] = []
+    f2_batch_sizes: list[int] = []
+
+    def tracked_f1(element: str, energy: object) -> object:
+        f1_batch_sizes.append(np.asarray(energy).size)
+        return scalar_f1(element, energy)
+
+    def tracked_f2(element: str, energy: object) -> object:
+        f2_batch_sizes.append(np.asarray(energy).size)
+        return scalar_f2(element, energy)
+
+    monkeypatch.setattr(xraydb, "f1_chantler", tracked_f1)
+    monkeypatch.setattr(xraydb, "f2_chantler", tracked_f2)
+
+    actual, mapping = atomic_scattering_factor_e(
+        species="Bi",
+        element="Bi",
+        charge=0,
+        q_magnitude_Ainv=q_magnitude_Ainv,
+        wavelength_A=wavelength_A,
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    assert mapping == "Bi->Bi"
+    assert sorted(f1_batch_sizes) == [1, 2]
+    assert sorted(f2_batch_sizes) == [1, 2]
 
 
 def test_crystal_direct_basis_rebuild_preserves_fractional_structure_and_recomputes_volume() -> (

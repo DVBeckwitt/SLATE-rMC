@@ -1,10 +1,12 @@
 """Interactive full-native Monte Carlo detector viewer."""
+# ruff: noqa: E402  # Direct execution bootstraps the repository source tree below.
 
 from __future__ import annotations
 
 import argparse
 import math
 import queue
+import sys
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
@@ -13,6 +15,10 @@ from time import perf_counter
 
 import numpy as np
 from numpy.typing import NDArray
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from painted_ewald import enumerate_rods_within_ewald_sphere
 from rasim_next.core.transforms import RigidTransform
@@ -39,7 +45,6 @@ from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorEwaldMeasure,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "bi2se3_simulation.yaml"
 DEFAULT_DRAWS_PER_SOURCE_STATE = 49
 DEFAULT_DETECTOR_SEED = 20260728

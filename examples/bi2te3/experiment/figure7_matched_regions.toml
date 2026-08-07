@@ -4,6 +4,16 @@ simulation_config = "../../../configs/bi2te3_r3_simulation.yaml"
 dataset_ids = ["Bi2Te3-5deg", "Bi2Te3-10deg", "Bi2Te3-15deg"]
 display_dataset_id = "Bi2Te3-5deg"
 
+[parratt_stitch]
+model_id = "empirical_parratt_kinematic_strength.v1"
+scope = "m0_only"
+interface_assumption = "local_lamella_follows_mosaic.v1"
+substrate_material_label = "SiO2 legacy-compatibility assumption; sample provenance unavailable"
+substrate_refractive_index_real = 0.9999929532364343
+substrate_refractive_index_imag = 9.672907455164902e-8
+top_roughness_A = 5.2372513900
+bottom_roughness_A = 10.0000000000
+
 [dark_correction]
 model_id = "scaled_dark_subtraction_no_clip.v1"
 path = "../../calibration/hbn/darkImg.osc.gz"
@@ -17,9 +27,9 @@ low_percentile = 1.0
 high_percentile = 99.7
 
 [model_cubature]
-fit_gauss_order = 3
-oracle_gauss_order = 4
-fold_fit_subdivisions = 4
+fit_gauss_order = 4
+oracle_gauss_order = 5
+fold_fit_subdivisions = 7
 fold_oracle_subdivisions = 8
 cuda_coordinate_chunk_size = 200000
 maximum_state_block_count = 8

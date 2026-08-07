@@ -58,14 +58,18 @@ def atomic_scattering_factor_e(
         )
     f0 = np.asarray(xraydb.f0(selected_species, q_xraydb.ravel()), dtype=np.float64).reshape(shape)
     unique_energy_eV, inverse = np.unique(energy_eV.ravel(), return_inverse=True)
-    f1_unique = np.asarray(
-        [xraydb.f1_chantler(element, float(energy)) for energy in unique_energy_eV],
-        dtype=np.float64,
-    )
-    f2_unique = np.asarray(
-        [xraydb.f2_chantler(element, float(energy)) for energy in unique_energy_eV],
-        dtype=np.float64,
-    )
+    interval = np.searchsorted(chantler_energy_eV, unique_energy_eV, side="right") - 1
+    f1_unique = np.empty_like(unique_energy_eV)
+    f2_unique = np.empty_like(unique_energy_eV)
+    for interval_index in np.unique(interval):
+        selected = interval == interval_index
+        selected_energy_eV = unique_energy_eV[selected]
+        f1_unique[selected] = np.asarray(
+            xraydb.f1_chantler(element, selected_energy_eV), dtype=np.float64
+        ).reshape(-1)
+        f2_unique[selected] = np.asarray(
+            xraydb.f2_chantler(element, selected_energy_eV), dtype=np.float64
+        ).reshape(-1)
     f1 = f1_unique[inverse].reshape(shape)
     f2 = f2_unique[inverse].reshape(shape)
     factor = np.asarray(f0 + f1 + 1.0j * f2, dtype=np.complex128)
