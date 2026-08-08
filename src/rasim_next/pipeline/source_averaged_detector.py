@@ -33,15 +33,21 @@ from rasim_next.pipeline.continuous_detector import (
     _subdivided_legendre_rule,
 )
 from rasim_next.reflectivity import (
+    LOCAL_LAMELLA_INTERFACE,
     CompiledParrattStitch,
     ParrattStitchStack,
     compile_parratt_stitch,
+    parratt_stitch_interface_assumption,
 )
 
 FloatArray = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
 BoolArray = NDArray[np.bool_]
 _ARRAY_OWNERSHIP_TOKEN = object()
+
+
+def _uses_local_lamella_stitch(stack: ParrattStitchStack | None) -> bool:
+    return stack is not None and stack.interface_assumption == LOCAL_LAMELLA_INTERFACE
 
 
 def _compile_source_parratt_stitch(
@@ -101,6 +107,7 @@ def _retained_source_parratt_stitch(state: object) -> CompiledParrattStitch | No
             )
             else "automatic"
         ),
+        interface_assumption=parratt_stitch_interface_assumption(int(state.specular_stitch_code)),
     )
 
 
@@ -1045,7 +1052,7 @@ class SourceAveragedDetectorEwaldMeasure:
                 )
             m0_gap = (
                 0.0
-                if specular_stitch_stack is not None
+                if _uses_local_lamella_stitch(specular_stitch_stack)
                 else float(np.min(-incident_normal))
             )
             if not isfinite(m0_gap) or m0_gap < 0.0:
@@ -1223,7 +1230,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
     @property
     def detector_visible_m0_q_gap_Ainv(self) -> float | None:
-        """Infimum of supported ``|Q|``; zero for local-lamella stitched m=0."""
+        """Infimum of supported ``|Q|``; zero only for local-lamella stitched m=0."""
 
         return self._detector_visible_m0_q_gap_Ainv
 
@@ -1260,12 +1267,10 @@ class SourceAveragedDetectorEwaldMeasure:
     ) -> CompiledMonteCarloDetectorSampler:
         """Compile a mutable progressive execution resource for this immutable detector."""
 
-        if self._specular_stitch_stack is not None and any(
+        if _uses_local_lamella_stitch(self._specular_stitch_stack) and any(
             rod.family_m == 0 for rod in self._rods
         ):
-            raise ValueError(
-                "forward pixel sampling does not implement local-lamella stitched m=0"
-            )
+            raise ValueError("forward pixel sampling does not implement local-lamella stitched m=0")
 
         return CompiledMonteCarloDetectorSampler(
             self,
@@ -1283,9 +1288,7 @@ class SourceAveragedDetectorEwaldMeasure:
         if not requested or any(not isinstance(rod, Rod) for rod in requested):
             raise ValueError("rods must contain at least one Rod")
         configured_by_hk = {(rod.h, rod.k): rod for rod in self._rods}
-        configured_index_by_hk = {
-            (rod.h, rod.k): index for index, rod in enumerate(self._rods)
-        }
+        configured_index_by_hk = {(rod.h, rod.k): index for index, rod in enumerate(self._rods)}
         requested_hk = tuple((rod.h, rod.k) for rod in requested)
         if len(set(requested_hk)) != len(requested_hk):
             raise ValueError("rods must not repeat a physical rod")
@@ -1298,8 +1301,7 @@ class SourceAveragedDetectorEwaldMeasure:
         contains_m0 = any(rod.family_m == 0 for rod in selected)
         selected_master_index = tuple(configured_index_by_hk[key] for key in requested_hk)
         new_index_by_master = {
-            master_index: new_index
-            for new_index, master_index in enumerate(selected_master_index)
+            master_index: new_index for new_index, master_index in enumerate(selected_master_index)
         }
         reachable_count = np.zeros_like(self._reachable_rod_count_per_source_state)
         restricted_blocks: list[tuple[_IndexedCompiledEvaluator, ...]] = []
@@ -1368,11 +1370,7 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(
             restricted,
             "_detector_visible_m0_q_gap_Ainv",
-            (
-                self._detector_visible_m0_q_gap_Ainv
-                if contains_m0
-                else None
-            ),
+            (self._detector_visible_m0_q_gap_Ainv if contains_m0 else None),
         )
         object.__setattr__(
             restricted,
@@ -1646,7 +1644,7 @@ class SourceAveragedDetectorEwaldMeasure:
                 raise ValueError("detector-visible m=0 requires negative incident sample-normal k")
             m0_gap = (
                 0.0
-                if self._specular_stitch_stack is not None
+                if _uses_local_lamella_stitch(self._specular_stitch_stack)
                 else float(np.min(-incident_normal))
             )
         rebound = object.__new__(type(self))
@@ -1808,22 +1806,18 @@ class SourceAveragedDetectorEwaldMeasure:
                     ),
                 )
             )
-            if self._specular_stitch_stack is not None and any(
+            if _uses_local_lamella_stitch(self._specular_stitch_stack) and any(
                 rod.family_m == 0 for rod in self._rods
             ):
                 m0_index, m0_rod = next(
-                    (index, rod)
-                    for index, rod in enumerate(self._rods)
-                    if rod.family_m == 0
+                    (index, rod) for index, rod in enumerate(self._rods) if rod.family_m == 0
                 )
                 local_m0 = self.restrict_rods((m0_rod,)).evaluate_detector_coordinates_all_roots(
                     flat_column,
                     flat_row,
                     execution_backend="cpu",
                 )
-                per_rod[:, m0_index] = np.asarray(
-                    local_m0.per_rod_density_A2_per_px2
-                ).reshape(-1)
+                per_rod[:, m0_index] = np.asarray(local_m0.per_rod_density_A2_per_px2).reshape(-1)
                 caustic[:, m0_index] = np.asarray(local_m0.caustic).reshape(-1)
                 valid_source_count = np.asarray(local_m0.valid_source_count).reshape(-1)
                 backend_id = "hybrid_cuda_cpu_local_m0.v1"
@@ -1967,14 +1961,12 @@ class SourceAveragedDetectorEwaldMeasure:
                 raise ValueError("a selected rod group is inactive for its source evaluator")
         if execution_backend not in {"cpu", "cuda"}:
             raise ValueError("execution_backend must be 'cpu' or 'cuda'")
-        if execution_backend == "cuda" and self._specular_stitch_stack is not None:
+        if execution_backend == "cuda" and _uses_local_lamella_stitch(self._specular_stitch_stack):
             m0_index = next(
                 (index for index, rod in enumerate(self._rods) if rod.family_m == 0),
                 None,
             )
-            if m0_index is not None and np.any(
-                group_mask[np.unique(group_index), m0_index]
-            ):
+            if m0_index is not None and np.any(group_mask[np.unique(group_index), m0_index]):
                 raise ValueError(
                     "CUDA selected source/rod-group evaluation does not implement "
                     "local-lamella stitched m=0"
@@ -2064,7 +2056,7 @@ class SourceAveragedDetectorEwaldMeasure:
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
         if execution_backend == "cuda":
-            if self._specular_stitch_stack is not None and any(
+            if _uses_local_lamella_stitch(self._specular_stitch_stack) and any(
                 rod.family_m == 0 for rod in self._rods
             ):
                 detailed = self._evaluate_detector_coordinates(
@@ -2466,6 +2458,7 @@ class CompiledMonteCarloDetectorSampler:
             or detector.rod_catalog_revision != self._detector.rod_catalog_revision
             or detector.mosaic is not self._detector.mosaic
             or detector.strength_model is not self._detector.strength_model
+            or detector._specular_stitch_stack != self._detector._specular_stitch_stack
             or detector.material.material_revision != self._detector.material.material_revision
             or detector.incident.states.source_revision
             != self._detector.incident.states.source_revision

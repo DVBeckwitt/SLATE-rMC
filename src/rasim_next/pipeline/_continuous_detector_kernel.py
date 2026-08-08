@@ -244,9 +244,9 @@ class CompiledDetectorState:
             raise ValueError("polarization_model_code must be 0 (unity) or 1 (Thomson)")
         object.__setattr__(self, "polarization_model_code", polarization_code)
         stitch_code = int(self.specular_stitch_code)
-        if isinstance(self.specular_stitch_code, bool) or stitch_code not in {0, 1}:
-            raise ValueError("specular_stitch_code must be zero or one")
-        if stitch_code == 1 and (
+        if isinstance(self.specular_stitch_code, bool) or stitch_code not in {0, 1, 2}:
+            raise ValueError("specular_stitch_code must be zero, one, or two")
+        if stitch_code != 0 and (
             self.specular_qc_Ainv == 0.0
             or self.specular_zero_strength_A2 == 0.0
             or self.specular_scale_factor == 0.0
@@ -449,7 +449,7 @@ class CompiledDetectorState:
             if not isinstance(specular_stitch, CompiledParrattStitch):
                 raise TypeError("specular_stitch must be CompiledParrattStitch")
             stitch_values = {
-                "specular_stitch_code": 1,
+                "specular_stitch_code": specular_stitch.interface_code,
                 "specular_substrate_refractive_index": (specular_stitch.substrate_refractive_index),
                 "specular_top_roughness_A": specular_stitch.top_roughness_A,
                 "specular_bottom_roughness_A": specular_stitch.bottom_roughness_A,
@@ -1030,9 +1030,7 @@ def _local_stitched_m0_density_A2_per_px2(
     phase_q = 2.0 * max(film_normal.real, 0.0)
     lower_u = rod_u_bounds_Ainv[m0_index, 0]
     upper_u = rod_u_bounds_Ainv[m0_index, 1]
-    u_tolerance = 1024.0 * np.finfo(np.float64).eps * max(
-        abs(lower_u), abs(upper_u), 1.0
-    )
+    u_tolerance = 1024.0 * np.finfo(np.float64).eps * max(abs(lower_u), abs(upper_u), 1.0)
     if phase_q < lower_u - u_tolerance or phase_q > upper_u + u_tolerance:
         return m0_index, 0.0, False, False
 
@@ -1483,6 +1481,46 @@ def _evaluate_point_into(
                     rod_hk_population,
                     normalization_divisor,
                 )
+                if (
+                    specular_stitch_code == 2
+                    and rod_hk_population[rod_index, 0] == 0.0
+                    and rod_hk_population[rod_index, 1] == 0.0
+                ):
+                    incident_air_normal_squared = (
+                        air_k0_Ainv * air_k0_Ainv
+                        - ki_film_sample_Ainv[0] ** 2
+                        - ki_film_sample_Ainv[1] ** 2
+                    )
+                    incident_air_normal = math.sqrt(
+                        incident_air_normal_squared if incident_air_normal_squared > 0.0 else 0.0
+                    )
+                    if ki_film_sample_Ainv[2] < 0.0:
+                        incident_air_normal = -incident_air_normal
+                    external_qz = 0.0
+                    if q_norm > 0.0:
+                        external_qz = abs(
+                            (
+                                q_sample_x * q_sample_x
+                                + q_sample_y * q_sample_y
+                                + q_sample_z * (kf_air_z - incident_air_normal)
+                            )
+                            / q_norm
+                        )
+                    strength = _empirical_parratt_strength_A2(
+                        strength,
+                        external_qz,
+                        air_k0_Ainv,
+                        film_refractive_index,
+                        specular_substrate_refractive_index,
+                        film_thickness_A,
+                        specular_top_roughness_A,
+                        specular_bottom_roughness_A,
+                        specular_qc_Ainv,
+                        specular_zero_strength_A2,
+                        specular_scale_factor,
+                        specular_blend_lower_q_over_qc,
+                        specular_blend_upper_q_over_qc,
+                    )
                 mosaic_density = _wrapped_mosaic_density(
                     alpha,
                     gaussian_sigma_rad,
@@ -1548,9 +1586,7 @@ def _evaluate_point_into(
     if local_m0_index >= 0:
         density[local_m0_index] = local_m0_density if local_m0_valid else 0.0
         caustic[local_m0_index] = local_m0_caustic if local_m0_valid else False
-        inverse_count[local_m0_index] = (
-            0 if local_m0_caustic or not local_m0_valid else 1
-        )
+        inverse_count[local_m0_index] = 0 if local_m0_caustic or not local_m0_valid else 1
     return True
 
 
@@ -1806,7 +1842,7 @@ def _forward_root_pixel(
         state.normalization_divisor,
     )
     if (
-        state.specular_stitch_code == 1
+        state.specular_stitch_code == 2
         and state.rod_hk_population[rod_index, 0] == 0.0
         and state.rod_hk_population[rod_index, 1] == 0.0
     ):

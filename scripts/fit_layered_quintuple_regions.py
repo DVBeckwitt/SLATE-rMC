@@ -52,6 +52,7 @@ from rasim_next.measurement import (
     ContinuousDetectorChartAreaMeasure,
     ContinuousRegionQuadrature,
     LayeredReciprocalFrame,
+    NativePixelRegionProjection,
     OffSpecularBand,
     OffSpecularBandLayout,
     SpecularAngularProfileRegion,
@@ -111,11 +112,12 @@ PROJECTION_CONVERGENCE_METRICS = (
     "maximum_covariance_row_relative_l2",
 )
 MEASURED_PROJECTION_METHOD = "piecewise_constant_native_pixel_field_continuous_chart_projection.v2"
-PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v3"
-BACKGROUND_SCHEMA = "rasim-shared-radial-background-v3"
-FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v12"
+NATIVE_PIXEL_CENTER_METHOD = "frozen_native_pixel_center_raw_minus_scaled_dark.v1"
+PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v4"
+BACKGROUND_SCHEMA = "rasim-shared-radial-background-v4"
+FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v13"
 FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v10"
-PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v12"
+PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v13"
 PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v7"
 PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_identity",
@@ -124,6 +126,7 @@ PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_display_L",
     "profile_display_qz_Ainv",
     "profile_selection_coordinate",
+    "profile_selection_coordinate_kind",
     "profile_measured_signal_density",
     "profile_measured_radial_signal_density",
     "profile_model_signal_density",
@@ -248,6 +251,13 @@ class _DatasetContinuousRegionPlan(NamedTuple):
     quadrature: ContinuousRegionQuadrature
     fold_bands: tuple[ContinuousFoldBand, ...]
     rectangle_count: int
+
+
+class _DatasetNativePixelCenterPlan(NamedTuple):
+    dataset_index: int
+    dataset_id: str
+    global_observation_row: np.ndarray
+    projection: NativePixelRegionProjection
 
 
 def _intersected_intervals(
@@ -1351,15 +1361,20 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Figure-7 recipe requires three distinct datasets")
     if document.get("display_dataset_id") not in dataset_ids:
         raise ValueError("display_dataset_id must name one fitted dataset")
+    _data_projection_qualification_required(document)
     stitch = document.get("parratt_stitch")
     if stitch is not None:
         if (
             not isinstance(stitch, dict)
             or stitch.get("model_id") != "empirical_parratt_kinematic_strength.v1"
             or stitch.get("scope") != "m0_only"
-            or stitch.get("interface_assumption") != "local_lamella_follows_mosaic.v1"
+            or stitch.get("interface_assumption")
+            not in {
+                "local_lamella_follows_mosaic.v1",
+                "fixed_external_qz_m0_strength.v1",
+            }
         ):
-            raise ValueError("Parratt stitch requires the named m=0 local-lamella model")
+            raise ValueError("Parratt stitch interface assumption is unsupported")
         try:
             substrate = complex(
                 float(stitch["substrate_refractive_index_real"]),
@@ -1373,6 +1388,7 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
             substrate_refractive_index=substrate,
             top_roughness_A=top,
             bottom_roughness_A=bottom,
+            interface_assumption=str(stitch["interface_assumption"]),
         )
     dark = document.get("dark_correction")
     if (
@@ -1501,6 +1517,21 @@ def _trusted_model_cubature(recipe: dict[str, Any]) -> dict[str, int | float]:
     }
 
 
+def _data_projection_qualification_required(recipe: dict[str, Any]) -> bool:
+    """Return whether measured counts require a continuous-projection refinement gate."""
+
+    policy = recipe.get("observation_policy", "continuous_projection_required.v1")
+    if policy == "continuous_projection_required.v1":
+        return True
+    if policy == NATIVE_PIXEL_CENTER_METHOD:
+        return False
+    raise ValueError("unsupported measured observation policy")
+
+
+def _uses_native_pixel_center_observations(recipe: dict[str, Any]) -> bool:
+    return recipe.get("observation_policy") == NATIVE_PIXEL_CENTER_METHOD
+
+
 def _joint_cubature_is_admissible(
     evidence: Any,
     *,
@@ -1536,6 +1567,35 @@ def _data_projection_is_admissible(
     trusted_recipe: dict[str, Any],
     expected_dataset_ids: Sequence[str],
 ) -> bool:
+    if _uses_native_pixel_center_observations(trusted_recipe):
+        try:
+            projection_revisions = tuple(evidence["projection_revisions"])
+            selected_pair_count = int(evidence["selected_pixel_region_pair_count"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+        return bool(
+            evidence.get("method") == NATIVE_PIXEL_CENTER_METHOD
+            and evidence.get("qualification_role") == "authoritative_frozen_observation"
+            and evidence.get("status") == "COMPLETE"
+            and evidence.get("projection_performed") is False
+            and evidence.get("refinement_oracle") == "NOT_APPLICABLE_EXACT_MEMBERSHIP"
+            and evidence.get("smoothing_applied") is False
+            and evidence.get("diffraction_model_pixelized") is False
+            and len(projection_revisions) == len(tuple(expected_dataset_ids))
+            and all(_is_sha256(value) for value in projection_revisions)
+            and selected_pair_count > 0
+            and all(
+                _is_sha256(evidence.get(name))
+                for name in (
+                    "selected_dataset_index_sha256",
+                    "selected_flat_pixel_index_sha256",
+                    "selected_observation_row_sha256",
+                    "count_mass_sha256",
+                    "support_px2_sha256",
+                    "count_covariance_sha256",
+                )
+            )
+        )
     try:
         trusted = _trusted_model_cubature(trusted_recipe)
         maximum = float(trusted["maximum_relative_l2"])
@@ -1548,24 +1608,17 @@ def _data_projection_is_admissible(
     except (AttributeError, KeyError, TypeError, ValueError):
         return False
     dataset_ids = tuple(str(value) for value in expected_dataset_ids)
-    return bool(
+    qualification_required = _data_projection_qualification_required(trusted_recipe)
+    common = bool(
         evidence.get("method") == MEASURED_PROJECTION_METHOD
         and evidence.get("status") == "COMPLETE"
-        and evidence.get("converged") is True
         and evidence.get("smoothing_applied") is False
         and evidence.get("diffraction_model_pixelized") is False
         and all(evidence.get(name) == value for name, value in trusted.items())
         and set(family_errors) == {str(value) for value in FAMILIES}
-        and all(
-            math.isfinite(value) and 0.0 <= value <= maximum for value in family_errors.values()
-        )
+        and all(math.isfinite(value) and value >= 0.0 for value in family_errors.values())
         and math.isfinite(anchor_error)
         and anchor_error >= 0.0
-        and _projection_convergence_is_admissible(
-            evidence,
-            expected_dataset_ids=dataset_ids,
-            expected_limit=maximum,
-        )
         and len(fit_revisions) == len(dataset_ids)
         and len(oracle_revisions) == len(dataset_ids)
         and all(
@@ -1573,6 +1626,20 @@ def _data_projection_is_admissible(
             for value in (*fit_revisions, *oracle_revisions)
         )
     )
+    if not common:
+        return False
+    if qualification_required:
+        return bool(
+            evidence.get("qualification_role", "required_release_gate") == "required_release_gate"
+            and evidence.get("converged") is True
+            and all(value <= maximum for value in family_errors.values())
+            and _projection_convergence_is_admissible(
+                evidence,
+                expected_dataset_ids=dataset_ids,
+                expected_limit=maximum,
+            )
+        )
+    return evidence.get("qualification_role") == "diagnostic_only"
 
 
 def _integrated_peak_objective_is_admissible(
@@ -1614,6 +1681,33 @@ def _integrated_peak_objective_is_admissible(
         and execution.get("objective_measure") == PEAK_AREA_OBJECTIVE
         and execution.get("peak_area_projection_revision") == revision
         and execution.get("source_signal_peak_index_sha256") == mapping_sha256
+    )
+
+
+def _native_observation_execution_is_admissible(
+    evidence: Any,
+    execution: Any,
+) -> bool:
+    """Bind exact native-count evidence to the evaluated stage identity."""
+
+    if not isinstance(evidence, dict) or not isinstance(execution, dict):
+        return False
+    return bool(
+        execution.get("measured_observation_method") == evidence.get("method")
+        and execution.get("measured_projection_performed") is False
+        and execution.get("measured_projection_revisions") == evidence.get("projection_revisions")
+        and execution.get("selected_pixel_region_pair_count")
+        == evidence.get("selected_pixel_region_pair_count")
+        and execution.get("selected_dataset_index_sha256")
+        == evidence.get("selected_dataset_index_sha256")
+        and execution.get("selected_flat_pixel_index_sha256")
+        == evidence.get("selected_flat_pixel_index_sha256")
+        and execution.get("selected_observation_row_sha256")
+        == evidence.get("selected_observation_row_sha256")
+        and execution.get("observed_count_mass_sha256") == evidence.get("count_mass_sha256")
+        and execution.get("observed_support_px2_sha256") == evidence.get("support_px2_sha256")
+        and execution.get("observed_count_covariance_sha256")
+        == evidence.get("count_covariance_sha256")
     )
 
 
@@ -1894,6 +1988,10 @@ def stage_fit_document_is_admissible(
             data_projection,
             trusted_recipe=trusted_recipe,
             expected_dataset_ids=dataset_ids,
+        )
+        and (
+            not _uses_native_pixel_center_observations(trusted_recipe)
+            or _native_observation_execution_is_admissible(data_projection, execution)
         )
     )
 
@@ -2412,7 +2510,11 @@ def _fixed_experiment_inputs(
 
 
 def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
-    if document.get("schema_version") != "rasim-layered-quintuple-structure-fit-plan-v5":
+    schema_version = document.get("schema_version")
+    if schema_version not in {
+        "rasim-layered-quintuple-structure-fit-plan-v5",
+        "rasim-layered-quintuple-structure-fit-plan-v6",
+    }:
         raise ValueError("unsupported layered-quintuple structure fit plan")
     if not isinstance(document.get("material_id"), str) or not document["material_id"]:
         raise ValueError("structure fit plan requires a material_id")
@@ -2511,10 +2613,24 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError("continuous_quadrature settings are invalid")
     stages = document.get("stage")
-    expected = STRUCTURE_STAGE_PARAMETERS
-    if not isinstance(stages, dict) or tuple(stages) != tuple(expected):
-        raise ValueError("structure fit stages must be A, B, C, joint in order")
-    predecessors = {"A": None, "B": "A", "C": "B", "joint": "C"}
+    if schema_version == "rasim-layered-quintuple-structure-fit-plan-v5":
+        expected = STRUCTURE_STAGE_PARAMETERS
+        predecessors = {"A": None, "B": "A", "C": "B", "joint": "C"}
+        if (
+            document.get("execution_policy", "staged_A_B_C_joint.v1") != "staged_A_B_C_joint.v1"
+            or not isinstance(stages, dict)
+            or tuple(stages) != tuple(expected)
+        ):
+            raise ValueError("structure fit stages must be A, B, C, joint in order")
+    else:
+        expected = {"joint": STRUCTURE_PARAMETER_NAMES}
+        predecessors = {"joint": None}
+        if (
+            document.get("execution_policy") != "seeded_joint_only.v1"
+            or not isinstance(stages, dict)
+            or tuple(stages) != ("joint",)
+        ):
+            raise ValueError("seeded joint-only fit plan must contain only the joint stage")
     for stage, active in expected.items():
         record = stages.get(stage)
         if (
@@ -2817,9 +2933,8 @@ def _prepare_dataset_membership(
         flat_qr = np.asarray(qr_Ainv).reshape(-1)
         flat_phi = np.asarray(angles.phi_rad).reshape(-1)
         flat_two_theta_deg = np.rad2deg(np.asarray(angles.two_theta_rad).reshape(-1))
-        flat_local_m0_qz_Ainv = (
-            (4.0 * np.pi / mean_wavelength_A)
-            * np.sin(0.5 * np.asarray(angles.two_theta_rad).reshape(-1))
+        flat_local_m0_qz_Ainv = (4.0 * np.pi / mean_wavelength_A) * np.sin(
+            0.5 * np.asarray(angles.two_theta_rad).reshape(-1)
         )
         flat_local_m0_L = flat_local_m0_qz_Ainv / axial_basis_magnitude_Ainv
         m0_fit_window = (
@@ -3255,11 +3370,26 @@ def prepare(
         "dark_correction": dark_correction,
         "incomplete_blocks_excluded": incomplete_blocks,
         "observation_contract": (
-            "native-pixel-center membership is frozen only for row discovery, conservative "
-            "background-calibration exclusion, and display; fitting reprojects the verified "
-            "piecewise-constant raw OSC count field over continuous phi/two-theta or Qr/L "
+            "frozen native-pixel-center raw-minus-scaled-dark count masses with exact "
+            "unit-membership support and full shared-dark overlap covariance; every candidate "
+            "diffraction model remains an unrasterized continuous chart integral"
+            if _uses_native_pixel_center_observations(recipe)
+            else "verified native counts projected over continuous phi/two-theta or Qr/L "
             "rectangles with full count covariance"
         ),
+        "observation_method": (
+            NATIVE_PIXEL_CENTER_METHOD
+            if _uses_native_pixel_center_observations(recipe)
+            else MEASURED_PROJECTION_METHOD
+        ),
+        "native_pixel_membership": {
+            "selected_pixel_region_pair_count": int(arrays["selected_flat_pixel_index"].size),
+            "selected_dataset_index_sha256": _array_sha256(arrays["selected_dataset_index"]),
+            "selected_flat_pixel_index_sha256": _array_sha256(arrays["selected_flat_pixel_index"]),
+            "selected_observation_row_sha256": _array_sha256(arrays["selected_observation_row"]),
+            "raw_count_mass_sha256": _array_sha256(arrays["count_sum"]),
+            "support_px2_sha256": _array_sha256(arrays["support_px2"]),
+        },
         "model_pixelized": False,
         "smoothing_applied": False,
         "osc_provenance": osc_provenance,
@@ -3449,25 +3579,38 @@ def calibrate_radial_background(
     recipe = _load_recipe(recipe_path)
     continuous_quadrature = fit_plan["continuous_quadrature"]
     series = _rebuilt_series(manifest)
-    oracle_region_plans = tuple(
-        _compile_dataset_continuous_region_plan(
-            inputs,
+    native_observations = _uses_native_pixel_center_observations(recipe)
+    if native_observations:
+        detector_shape = tuple(int(value) for value in recipe["detector"]["native_shape_rc"])
+        native_center_plans = _native_pixel_center_plans(
             arrays,
-            manifest,
-            dataset_index=dataset_index,
-            gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
-            subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-            offspecular_axial_refinement=int(continuous_quadrature["offspecular_axial_refinement"]),
-            offspecular_radial_transform=str(continuous_quadrature["offspecular_radial_transform"]),
-            offspecular_signal_minimum_radial_nodes_per_side=int(
-                continuous_quadrature["offspecular_signal_minimum_radial_nodes_per_side"]
-            ),
-            m0_phi_subdivision_count=int(
-                recipe["model_cubature"]["fold_oracle_subdivisions"]
-            ),
+            dataset_ids=dataset_ids,
+            detector_shape_rc=detector_shape,
         )
-        for dataset_index, inputs in enumerate(series)
-    )
+        oracle_region_plans: tuple[_DatasetContinuousRegionPlan, ...] = ()
+    else:
+        native_center_plans = ()
+        oracle_region_plans = tuple(
+            _compile_dataset_continuous_region_plan(
+                inputs,
+                arrays,
+                manifest,
+                dataset_index=dataset_index,
+                gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
+                subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+                offspecular_axial_refinement=int(
+                    continuous_quadrature["offspecular_axial_refinement"]
+                ),
+                offspecular_radial_transform=str(
+                    continuous_quadrature["offspecular_radial_transform"]
+                ),
+                offspecular_signal_minimum_radial_nodes_per_side=int(
+                    continuous_quadrature["offspecular_signal_minimum_radial_nodes_per_side"]
+                ),
+                m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            )
+            for dataset_index, inputs in enumerate(series)
+        )
     beam_center = tuple(
         float(value) for value in manifest["fixed_position"]["beam_center_column_row_px"]
     )
@@ -3477,7 +3620,7 @@ def calibrate_radial_background(
     profile_density: list[np.ndarray] = []
     profile_support: list[np.ndarray] = []
     osc_identities: list[dict[str, str]] = []
-    oracle_projection_revisions: list[str] = []
+    observation_support_revisions: list[str] = []
     excluded_pixel_counts: dict[str, int] = {}
     excluded_pixel_sha256: dict[str, str] = {}
     for dataset_index, provenance in enumerate(manifest["osc_provenance"]):
@@ -3492,14 +3635,18 @@ def calibrate_radial_background(
         center_selected = arrays["selected_flat_pixel_index"][
             arrays["selected_dataset_index"] == dataset_index
         ]
-        projection = compile_native_pixel_region_projection(
-            oracle_region_plans[dataset_index].quadrature,
-            counts.shape,
-        )
-        selected = _background_exclusion_pixel_index(
-            center_selected,
-            projection.flat_pixel_index,
-        )
+        if native_observations:
+            projection = native_center_plans[dataset_index].projection
+            selected = np.unique(center_selected).astype(np.int64, copy=False)
+        else:
+            projection = compile_native_pixel_region_projection(
+                oracle_region_plans[dataset_index].quadrature,
+                counts.shape,
+            )
+            selected = _background_exclusion_pixel_index(
+                center_selected,
+                projection.flat_pixel_index,
+            )
         radius, sector, density, support = _robust_radial_cells(
             counts=counts.astype(np.float64) - dark_scale * dark_counts,
             beam_center_column_row_px=beam_center,
@@ -3517,7 +3664,7 @@ def calibrate_radial_background(
         profile_density.append(density)
         profile_support.append(support)
         osc_identities.append(identity)
-        oracle_projection_revisions.append(projection.projection_revision)
+        observation_support_revisions.append(projection.projection_revision)
         excluded_pixel_counts[dataset_ids[dataset_index]] = int(selected.size)
         excluded_pixel_sha256[dataset_ids[dataset_index]] = _array_sha256(selected)
     dataset_index = np.concatenate(profile_dataset)
@@ -3597,8 +3744,11 @@ def calibrate_radial_background(
             "minimum_radius_px": minimum_radius_px,
             "maximum_radius_px": maximum_radius_px,
             "border_px": border_px,
-            "continuous_signal_and_anchor_overlap_pixels_excluded": True,
-            "oracle_projection_revisions": oracle_projection_revisions,
+            "signal_and_anchor_pixels_excluded": True,
+            "observation_support_method": (
+                NATIVE_PIXEL_CENTER_METHOD if native_observations else MEASURED_PROJECTION_METHOD
+            ),
+            "observation_support_revisions": observation_support_revisions,
             "excluded_flat_pixel_count_by_dataset": excluded_pixel_counts,
             "excluded_flat_pixel_sha256_by_dataset": excluded_pixel_sha256,
             "cell_estimator": "mean_after_symmetric_3.5_sigma_median_MAD_clipping",
@@ -3642,7 +3792,8 @@ def _load_radial_background(
     dataset_ids: Sequence[str],
     beam_center_column_row_px: tuple[float, float],
     fit_plan_identity: dict[str, str],
-    oracle_projection_revisions: Sequence[str],
+    observation_support_revisions: Sequence[str],
+    observation_support_method: str,
     excluded_flat_pixel_index_by_dataset: dict[str, np.ndarray] | None = None,
 ) -> tuple[RadialBackgroundState, dict[str, str], dict[str, Any]]:
     identity = _file_identity(path)
@@ -3696,9 +3847,10 @@ def _load_radial_background(
         or manifest.get("smoothing_applied") is not False
         or tuple(manifest.get("beam_center_column_row_px", ()))
         != tuple(float(value) for value in beam_center_column_row_px)
-        or tuple(sampling.get("oracle_projection_revisions", ()))
-        != tuple(oracle_projection_revisions)
-        or sampling.get("continuous_signal_and_anchor_overlap_pixels_excluded") is not True
+        or tuple(sampling.get("observation_support_revisions", ()))
+        != tuple(observation_support_revisions)
+        or sampling.get("observation_support_method") != observation_support_method
+        or sampling.get("signal_and_anchor_pixels_excluded") is not True
         or set(sampling.get("excluded_flat_pixel_count_by_dataset", {})) != set(expected_ids)
         or set(sampling.get("excluded_flat_pixel_sha256_by_dataset", {})) != set(expected_ids)
         or any(
@@ -3788,6 +3940,67 @@ def _fixed_background_from_continuous_plans(
     )
 
 
+def _fixed_background_from_native_pixel_center_plans(
+    *,
+    state: RadialBackgroundState,
+    plans: Sequence[_DatasetNativePixelCenterPlan],
+    observation_count: int,
+    beam_center_column_row_px: tuple[float, float],
+) -> FixedMatchedRegionBackground:
+    """Evaluate the data-only radial baseline on the exact measured pixel centers."""
+
+    beam_column, beam_row = beam_center_column_row_px
+    parameter_count = state.parameter_vector.size
+    mass = np.zeros(observation_count, dtype=np.float64)
+    mass_jacobian = np.zeros((observation_count, parameter_count), dtype=np.float64)
+    projection_revisions: list[str] = []
+    for plan in plans:
+        projection = plan.projection
+        rows, columns = projection.detector_shape_rc
+        del rows
+        flat_pixel = np.asarray(projection.flat_pixel_index, dtype=np.int64)
+        column = (flat_pixel % columns).astype(np.float64)
+        row = (flat_pixel // columns).astype(np.float64)
+        radius = np.hypot(column - beam_column, row - beam_row)
+        dataset_index = state.dataset_ids.index(plan.dataset_id)
+        node_dataset = np.full(flat_pixel.size, dataset_index, dtype=np.int64)
+        density = state.count_density(node_dataset, radius)
+        density_jacobian = state.count_density_parameter_jacobian(node_dataset, radius)
+        local_row = np.asarray(projection.observation_row, dtype=np.int64)
+        pixel_column = np.asarray(projection.pixel_column_index, dtype=np.int64)
+        weight = np.asarray(projection.detector_area_weight_px2, dtype=np.float64)
+        global_row = np.asarray(plan.global_observation_row, dtype=np.int64)
+        mass[global_row] = np.bincount(
+            local_row,
+            weights=weight * density[pixel_column],
+            minlength=projection.observation_count,
+        )
+        for parameter_index in range(parameter_count):
+            mass_jacobian[global_row, parameter_index] = np.bincount(
+                local_row,
+                weights=weight * density_jacobian[pixel_column, parameter_index],
+                minlength=projection.observation_count,
+            )
+        projection_revisions.append(projection.projection_revision)
+    covariance = mass_jacobian @ state.parameter_covariance @ mass_jacobian.T
+    covariance = 0.5 * (covariance + covariance.T)
+    revision = hashlib.sha256()
+    revision.update(b"native-pixel-center-radial-background.v1\0")
+    revision.update(state.revision.encode("utf-8"))
+    revision.update(np.ascontiguousarray(beam_center_column_row_px, dtype=np.float64).tobytes())
+    for projection_revision in projection_revisions:
+        revision.update(b"\0")
+        revision.update(projection_revision.encode("utf-8"))
+    revision.update(np.ascontiguousarray(mass_jacobian).tobytes())
+    revision.update(np.ascontiguousarray(mass).tobytes())
+    revision.update(np.ascontiguousarray(covariance).tobytes())
+    return FixedMatchedRegionBackground(
+        count_mass=mass,
+        covariance_count2=covariance,
+        revision=f"sha256-{revision.hexdigest()}.native-center-radial.v1",
+    )
+
+
 def _continuous_plan_reciprocal_coordinate_moments(
     inputs: Any,
     plan: _DatasetContinuousRegionPlan,
@@ -3830,9 +4043,8 @@ def _continuous_plan_reciprocal_coordinate_moments(
         )
         if np.any(node_is_m0 & ~(angles.valid & angles.azimuth_valid)):
             raise FloatingPointError("m=0 profile nodes left the detector angle chart")
-        local_qz_Ainv = (
-            (4.0 * np.pi / float(inputs.config.source.mean_wavelength_A))
-            * np.sin(0.5 * np.asarray(angles.two_theta_rad))
+        local_qz_Ainv = (4.0 * np.pi / float(inputs.config.source.mean_wavelength_A)) * np.sin(
+            0.5 * np.asarray(angles.two_theta_rad)
         )
         axial_basis_magnitude_Ainv = float(
             np.linalg.norm(np.asarray(inputs.reciprocal.basis_Ainv, dtype=np.float64)[:, 2])
@@ -3917,6 +4129,81 @@ def _profile_manifest_is_admissible(
         fit_origin_adapter == profile_adapter
         and fit_origin_implementation == profile_implementation
     )
+    native_observation = _uses_native_pixel_center_observations(trusted_recipe)
+    measured_projection_qualification_admissible = bool(
+        (
+            measured_projection.get("qualification_role") == "authoritative_frozen_observation"
+            and measured_projection.get("status") == "COMPLETE"
+            and measured_projection.get("projection_performed") is False
+            and measured_projection.get("refinement_oracle") == "NOT_APPLICABLE_EXACT_MEMBERSHIP"
+        )
+        if native_observation
+        else (
+            measured_projection.get("qualification_role", "required_release_gate")
+            == "required_release_gate"
+            and _projection_convergence_is_admissible(
+                refinement_oracle,
+                expected_dataset_ids=(display_dataset_id,),
+                expected_limit=float(trusted_model["maximum_relative_l2"]),
+            )
+        )
+    )
+    measured_projection_contract_admissible = bool(
+        (
+            measured_projection.get("method") == NATIVE_PIXEL_CENTER_METHOD
+            and measured_projection.get("model_pixelized") is False
+            and _is_sha256(measured_projection.get("projection_revision"))
+            and isinstance(measured_projection.get("selected_pixel_region_pair_count"), int)
+            and not isinstance(measured_projection.get("selected_pixel_region_pair_count"), bool)
+            and measured_projection["selected_pixel_region_pair_count"] > 0
+            and all(
+                _is_sha256(measured_projection.get(name))
+                for name in (
+                    "selected_flat_pixel_index_sha256",
+                    "selected_observation_row_sha256",
+                    "count_mass_sha256",
+                    "support_px2_sha256",
+                    "count_covariance_sha256",
+                )
+            )
+            and execution.get("measured_observation_method") == NATIVE_PIXEL_CENTER_METHOD
+            and execution.get("measured_projection_performed") is False
+            and execution.get("measured_projection_revision")
+            == measured_projection.get("projection_revision")
+            and execution.get("measured_selected_pixel_region_pair_count")
+            == measured_projection.get("selected_pixel_region_pair_count")
+            and execution.get("measured_selected_flat_pixel_index_sha256")
+            == measured_projection.get("selected_flat_pixel_index_sha256")
+            and execution.get("measured_selected_observation_row_sha256")
+            == measured_projection.get("selected_observation_row_sha256")
+            and execution.get("measured_count_mass_sha256")
+            == measured_projection.get("count_mass_sha256")
+            and execution.get("measured_support_px2_sha256")
+            == measured_projection.get("support_px2_sha256")
+            and execution.get("measured_count_covariance_sha256")
+            == measured_projection.get("count_covariance_sha256")
+        )
+        if native_observation
+        else (
+            measured_projection.get("method") == MEASURED_PROJECTION_METHOD
+            and measured_projection.get("gauss_order") == trusted_model["oracle_gauss_order"]
+            and measured_projection.get("subdivision_count")
+            == trusted_model["oracle_subdivision_count"]
+            and measured_projection.get("m0_phi_subdivision_count")
+            == trusted_model["oracle_subdivision_count"]
+            and all(
+                _is_sha256(measured_projection.get(name))
+                for name in (
+                    "coarse_projection_revision",
+                    "projection_revision",
+                    "display_fit_projection_revision",
+                    "quadrature_revision",
+                    "count_mass_sha256",
+                    "count_covariance_sha256",
+                )
+            )
+        )
+    )
     m0_signal_only_hashes_admissible = all(
         _is_sha256(m0_signal_only.get(name))
         for name in (
@@ -3928,15 +4215,17 @@ def _profile_manifest_is_admissible(
         )
     )
     m0_signal_only_common = bool(
-        m0_signal_only.get("fit_role")
-        == "not_used_in_fit_objective_or_parameter_estimation"
+        m0_signal_only.get("fit_role") == "not_used_in_fit_objective_or_parameter_estimation"
         and m0_signal_only.get("background_conditioning")
         == "fixed_radial_only_no_adjacent_sideband_conditioning"
         and m0_signal_only.get("gauss_order") == trusted_model["oracle_gauss_order"]
-        and m0_signal_only.get("subdivision_count")
-        == trusted_model["oracle_subdivision_count"]
-        and m0_signal_only.get("measured_phi_subdivision_count")
-        == trusted_model["oracle_subdivision_count"]
+        and m0_signal_only.get("subdivision_count") == trusted_model["oracle_subdivision_count"]
+        and (
+            m0_signal_only.get("measured_phi_subdivision_count") is None
+            if native_observation
+            else m0_signal_only.get("measured_phi_subdivision_count")
+            == trusted_model["oracle_subdivision_count"]
+        )
         and m0_signal_only.get("model_phi_subdivision_count")
         == trusted_model["oracle_subdivision_count"]
         and m0_signal_only.get("smoothing_applied") is False
@@ -3961,20 +4250,21 @@ def _profile_manifest_is_admissible(
     if supplemental_bin_count:
         m0_signal_only_admissible = bool(
             m0_signal_only_common
-            and m0_signal_only.get("status")
-            == "DISPLAY_ONLY_INCOMPLETE_SIDEBAND_SUPPLEMENT"
-            and m0_signal_only.get("projection_method") == MEASURED_PROJECTION_METHOD
-            and all(
-                _is_sha256(m0_signal_only.get(name))
-                for name in (
-                    "projection_revision",
-                    "measured_quadrature_revision",
-                    "model_quadrature_revision",
-                )
+            and m0_signal_only.get("status") == "DISPLAY_ONLY_INCOMPLETE_SIDEBAND_SUPPLEMENT"
+            and m0_signal_only.get("projection_method")
+            == (NATIVE_PIXEL_CENTER_METHOD if native_observation else MEASURED_PROJECTION_METHOD)
+            and _is_sha256(m0_signal_only.get("projection_revision"))
+            and _is_sha256(m0_signal_only.get("model_quadrature_revision"))
+            and (
+                m0_signal_only.get("measured_quadrature_revision") is None
+                if native_observation
+                else _is_sha256(m0_signal_only.get("measured_quadrature_revision"))
             )
             and isinstance(m0_signal_only.get("measured_continuous_node_count"), int)
             and not isinstance(m0_signal_only.get("measured_continuous_node_count"), bool)
-            and m0_signal_only["measured_continuous_node_count"] > 0
+            and m0_signal_only["measured_continuous_node_count"]
+            == (0 if native_observation else m0_signal_only["measured_continuous_node_count"])
+            and (native_observation or m0_signal_only["measured_continuous_node_count"] > 0)
             and isinstance(m0_signal_only.get("model_continuous_node_count"), int)
             and not isinstance(m0_signal_only.get("model_continuous_node_count"), bool)
             and m0_signal_only["model_continuous_node_count"] > 0
@@ -3982,8 +4272,7 @@ def _profile_manifest_is_admissible(
             and not isinstance(m0_signal_only.get("detector_overlay_flat_pixel_count"), bool)
             and m0_signal_only["detector_overlay_flat_pixel_count"] > 0
             and isinstance(m0_signal_only.get("execution"), dict)
-            and m0_signal_only["execution"].get("model_measure")
-            == "continuous_detector_chart_area"
+            and m0_signal_only["execution"].get("model_measure") == "continuous_detector_chart_area"
         )
     else:
         m0_signal_only_admissible = bool(
@@ -4056,32 +4345,12 @@ def _profile_manifest_is_admissible(
             trusted_recipe=trusted_recipe,
             expected_dataset_ids=expected_dataset_ids,
         )
-        and measured_projection.get("method") == MEASURED_PROJECTION_METHOD
+        and measured_projection_contract_admissible
         and measured_projection.get("smoothing_applied") is False
-        and measured_projection.get("gauss_order") == trusted_model["oracle_gauss_order"]
-        and measured_projection.get("subdivision_count")
-        == trusted_model["oracle_subdivision_count"]
-        and measured_projection.get("m0_phi_subdivision_count")
-        == trusted_model["oracle_subdivision_count"]
         and cubature.get("m0_model_phi_subdivision_count")
         == int(trusted_recipe["profile_cubature"]["fold_fit_subdivisions"])
         and m0_signal_only_admissible
-        and _projection_convergence_is_admissible(
-            refinement_oracle,
-            expected_dataset_ids=(display_dataset_id,),
-            expected_limit=float(trusted_model["maximum_relative_l2"]),
-        )
-        and all(
-            _is_sha256(measured_projection.get(name))
-            for name in (
-                "coarse_projection_revision",
-                "projection_revision",
-                "display_fit_projection_revision",
-                "quadrature_revision",
-                "count_mass_sha256",
-                "count_covariance_sha256",
-            )
-        )
+        and measured_projection_qualification_admissible
         and provenance.get("background_sha256") == background_model.get("artifact_sha256")
         and execution.get("background_artifact_sha256") == background_model.get("artifact_sha256")
         and execution.get("radial_background_state_revision")
@@ -4124,6 +4393,31 @@ def _profile_manifest_is_admissible(
     )
 
 
+def _validate_profile_selection_coordinates(arrays: dict[str, np.ndarray]) -> None:
+    """Require the declared profile abscissa: 2theta for m=0 and L otherwise."""
+
+    try:
+        identities = np.asarray(arrays["profile_identity"])
+        coordinate = np.asarray(arrays["profile_selection_coordinate"])
+        kinds = np.asarray(arrays["profile_selection_coordinate_kind"])
+        valid = np.asarray(arrays["profile_valid"], dtype=np.bool_)
+    except KeyError as error:
+        raise ValueError("profile selection coordinate arrays are incomplete") from error
+    if (
+        identities.ndim != 1
+        or coordinate.shape != identities.shape
+        or kinds.shape != identities.shape
+        or valid.shape != identities.shape
+        or set(np.unique(identities))
+        != {"m0", "m1_minus", "m1_plus", "m3_minus", "m3_plus", "m4_minus", "m4_plus"}
+        or np.any(~np.isfinite(coordinate[valid]))
+    ):
+        raise ValueError("profile selection coordinate arrays are inconsistent")
+    expected = np.where(identities == "m0", "two_theta_deg", "L")
+    if np.any(kinds != expected):
+        raise ValueError("profile selection coordinate kind does not match its family")
+
+
 def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     arrays, manifest = _load_diagnostic(path, expected_schema=PROFILE_SCHEMA)
     provenance = manifest.get("provenance", {})
@@ -4155,8 +4449,7 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     )
     if (
         fit_document.get("model_rod_roster_sha256") != manifest.get("fit_model_rod_roster_sha256")
-        or fit_document.get("structure_representative")
-        != manifest.get("structure_representative")
+        or fit_document.get("structure_representative") != manifest.get("structure_representative")
         or fit_document.get("stacking_model") != manifest.get("stacking_model")
     ):
         raise ValueError("profile scientific state does not match its fit artifact")
@@ -4167,13 +4460,12 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     vector_shape = arrays[PROFILE_VECTOR_ARRAY_NAMES[0]].shape
     m0_signal_only_shape = arrays[M0_SIGNAL_ONLY_ARRAY_NAMES[0]].shape
     render_hashes = manifest.get("render_array_sha256")
+    _validate_profile_selection_coordinates(arrays)
     if (
         len(vector_shape) != 1
         or any(arrays[name].shape != vector_shape for name in PROFILE_VECTOR_ARRAY_NAMES)
         or len(m0_signal_only_shape) != 1
-        or any(
-            arrays[name].shape != m0_signal_only_shape for name in M0_SIGNAL_ONLY_ARRAY_NAMES
-        )
+        or any(arrays[name].shape != m0_signal_only_shape for name in M0_SIGNAL_ONLY_ARRAY_NAMES)
         or manifest.get("m0_signal_only_display", {}).get("supplemental_bin_count")
         != m0_signal_only_shape[0]
         or arrays["display_detector_counts"].ndim != 2
@@ -4390,6 +4682,169 @@ def _verified_osc_counts(manifest: dict[str, Any]) -> dict[str, np.ndarray]:
     if tuple(counts_by_dataset) != expected:
         raise ValueError("OSC provenance order differs from the prepared dataset order")
     return counts_by_dataset
+
+
+def _native_pixel_center_plans(
+    arrays: dict[str, np.ndarray],
+    *,
+    dataset_ids: Sequence[str],
+    detector_shape_rc: tuple[int, int],
+) -> tuple[_DatasetNativePixelCenterPlan, ...]:
+    """Compile the frozen unit-weight native-pixel memberships."""
+
+    dataset_ids = tuple(str(value) for value in dataset_ids)
+    row_dataset = np.asarray(arrays["dataset_index"], dtype=np.int64)
+    member_dataset = np.asarray(arrays["selected_dataset_index"], dtype=np.int64)
+    member_pixel = np.asarray(arrays["selected_flat_pixel_index"], dtype=np.int64)
+    member_row = np.asarray(arrays["selected_observation_row"], dtype=np.int64)
+    row_count = row_dataset.size
+    member_shape = member_dataset.shape
+    if (
+        row_dataset.ndim != 1
+        or member_dataset.ndim != 1
+        or member_pixel.shape != member_shape
+        or member_row.shape != member_shape
+        or np.any((row_dataset < 0) | (row_dataset >= len(dataset_ids)))
+        or np.any((member_dataset < 0) | (member_dataset >= len(dataset_ids)))
+        or np.any((member_row < 0) | (member_row >= row_count))
+        or np.any(member_pixel < 0)
+        or np.any(row_dataset[member_row] != member_dataset)
+    ):
+        raise ValueError("native-pixel-center membership arrays are inconsistent")
+    plans: list[_DatasetNativePixelCenterPlan] = []
+    for dataset_index, dataset_id in enumerate(dataset_ids):
+        global_row = np.flatnonzero(row_dataset == dataset_index)
+        selected = member_dataset == dataset_index
+        if not global_row.size or not np.any(selected):
+            raise ValueError(f"dataset {dataset_id!r} lacks native-pixel-center support")
+        global_to_local = np.full(row_count, -1, dtype=np.int64)
+        global_to_local[global_row] = np.arange(global_row.size, dtype=np.int64)
+        local_row = global_to_local[member_row[selected]]
+        flat_pixel = member_pixel[selected]
+        pair_key = local_row * math.prod(detector_shape_rc) + flat_pixel
+        if (
+            np.unique(pair_key).size != pair_key.size
+            or np.unique(flat_pixel).size != flat_pixel.size
+        ):
+            raise ValueError("native-pixel-center membership contains overlapping fitted regions")
+        used_pixel, pixel_column = np.unique(flat_pixel, return_inverse=True)
+        plans.append(
+            _DatasetNativePixelCenterPlan(
+                dataset_index=dataset_index,
+                dataset_id=dataset_id,
+                global_observation_row=global_row,
+                projection=NativePixelRegionProjection(
+                    detector_shape_rc=detector_shape_rc,
+                    flat_pixel_index=used_pixel,
+                    observation_row=local_row,
+                    pixel_column_index=pixel_column,
+                    detector_area_weight_px2=np.ones(local_row.size, dtype=np.float64),
+                    observation_count=global_row.size,
+                    quadrature_revision=NATIVE_PIXEL_CENTER_METHOD,
+                ),
+            )
+        )
+    global_order = np.concatenate([plan.global_observation_row for plan in plans])
+    if not np.array_equal(np.sort(global_order), np.arange(row_count)):
+        raise ValueError("native-pixel-center plans do not partition the observation rows")
+    return tuple(plans)
+
+
+def _native_pixel_center_count_statistics(
+    arrays: dict[str, np.ndarray],
+    *,
+    dataset_ids: Sequence[str],
+    counts_by_dataset: dict[str, np.ndarray],
+    dark_counts: np.ndarray,
+    dark_scale: float,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    tuple[_DatasetNativePixelCenterPlan, ...],
+]:
+    """Reduce raw-minus-dark counts on the frozen native pixel-center support."""
+
+    dataset_ids = tuple(str(value) for value in dataset_ids)
+    if tuple(counts_by_dataset) != dataset_ids:
+        raise ValueError("native-pixel-center count roster differs from the dataset roster")
+    shapes = {np.asarray(counts_by_dataset[value]).shape for value in dataset_ids}
+    if len(shapes) != 1:
+        raise ValueError("native-pixel-center datasets must share one detector shape")
+    detector_shape = tuple(int(value) for value in next(iter(shapes)))
+    dark = np.asarray(dark_counts, dtype=np.float64)
+    if (
+        len(detector_shape) != 2
+        or dark.shape != detector_shape
+        or np.any(~np.isfinite(dark))
+        or np.any(dark < 0.0)
+        or not math.isfinite(float(dark_scale))
+        or float(dark_scale) < 0.0
+    ):
+        raise ValueError("native-pixel-center dark correction is invalid")
+    plans = _native_pixel_center_plans(
+        arrays,
+        dataset_ids=dataset_ids,
+        detector_shape_rc=detector_shape,
+    )
+    row_count = np.asarray(arrays["dataset_index"]).size
+    raw_mass = np.zeros(row_count, dtype=np.float64)
+    covariance = np.zeros((row_count, row_count), dtype=np.float64)
+    support = np.zeros(row_count, dtype=np.float64)
+    for plan in plans:
+        local_mass, local_covariance = plan.projection.integrate_counts(
+            counts_by_dataset[plan.dataset_id]
+        )
+        global_row = np.asarray(plan.global_observation_row, dtype=np.int64)
+        raw_mass[global_row] = local_mass
+        covariance[np.ix_(global_row, global_row)] = local_covariance
+        support[global_row] = plan.projection.observation_measure_px2
+    expected_raw_mass = np.asarray(arrays["count_sum"], dtype=np.float64)
+    expected_support = np.asarray(arrays["support_px2"], dtype=np.float64)
+    if not np.array_equal(raw_mass, expected_raw_mass):
+        raise ValueError("native-pixel-center raw counts differ from the prepared count sums")
+    if not np.array_equal(support, expected_support):
+        raise ValueError("native-pixel-center support differs from the prepared membership")
+    dark_mass, dark_covariance = integrate_shared_native_pixel_field(
+        [plan.projection for plan in plans],
+        dark,
+        np.maximum(dark, 1.0),
+    )
+    global_order = np.concatenate([plan.global_observation_row for plan in plans])
+    corrected_mass = np.array(raw_mass, copy=True)
+    corrected_mass[global_order] -= float(dark_scale) * dark_mass
+    covariance[np.ix_(global_order, global_order)] += float(dark_scale) ** 2 * dark_covariance
+    return corrected_mass, covariance, support, plans
+
+
+def _native_pixel_center_observations(
+    arrays: dict[str, np.ndarray],
+    manifest: dict[str, Any],
+    counts_by_dataset: dict[str, np.ndarray],
+) -> tuple[MatchedRegionObservations, tuple[_DatasetNativePixelCenterPlan, ...]]:
+    dark_counts, dark_scale = _verified_dark_counts(manifest)
+    count_mass, covariance, support, plans = _native_pixel_center_count_statistics(
+        arrays,
+        dataset_ids=manifest["dataset_ids"],
+        counts_by_dataset=counts_by_dataset,
+        dark_counts=dark_counts,
+        dark_scale=dark_scale,
+    )
+    return (
+        MatchedRegionObservations(
+            dataset_ids=tuple(str(value) for value in manifest["dataset_ids"]),
+            dataset_index=arrays["dataset_index"],
+            block_index=arrays["block_index"],
+            signal_family=arrays["signal_family_m"],
+            is_background=arrays["is_background"],
+            count_mass=count_mass,
+            support_px2=support,
+            background_coordinate=arrays["coordinate_mean"],
+            required_signal_families=FAMILIES,
+            count_covariance_count2=covariance,
+        ),
+        plans,
+    )
 
 
 def _continuous_matched_observations(
@@ -4777,22 +5232,39 @@ def fit(
         else fit_fold_plans
     )
     counts_by_dataset = _verified_osc_counts(manifest)
-    fit_observations, fit_projection_revisions, _ = _continuous_matched_observations(
-        arrays,
-        manifest,
-        fit_region_plans,
-        counts_by_dataset,
-    )
-    (
-        observations,
-        oracle_projection_revisions,
-        oracle_projection_pixels,
-    ) = _continuous_matched_observations(
-        arrays,
-        manifest,
-        oracle_region_plans,
-        counts_by_dataset,
-    )
+    native_observations = _uses_native_pixel_center_observations(recipe)
+    if native_observations:
+        observations, native_center_plans = _native_pixel_center_observations(
+            arrays,
+            manifest,
+            counts_by_dataset,
+        )
+        fit_observations = observations
+        fit_projection_revisions = tuple(
+            plan.projection.projection_revision for plan in native_center_plans
+        )
+        oracle_projection_revisions = fit_projection_revisions
+        oracle_projection_pixels = tuple(
+            np.asarray(plan.projection.flat_pixel_index, dtype=np.int64)
+            for plan in native_center_plans
+        )
+    else:
+        fit_observations, fit_projection_revisions, _ = _continuous_matched_observations(
+            arrays,
+            manifest,
+            fit_region_plans,
+            counts_by_dataset,
+        )
+        (
+            observations,
+            oracle_projection_revisions,
+            oracle_projection_pixels,
+        ) = _continuous_matched_observations(
+            arrays,
+            manifest,
+            oracle_region_plans,
+            counts_by_dataset,
+        )
     peak_area_projection = _prepared_peak_area_projection(arrays, manifest, observations)
     peak_aggregation = peak_area_projection.aggregation_matrix(observations)
     peak_area_projection.aggregation_matrix(fit_observations)
@@ -4813,6 +5285,7 @@ def fit(
         @ peak_aggregation.T
     )
     data_projection_relative_l2_by_family: dict[str, float] = {}
+    data_projection_relative_l2_background_anchor_rows: float | None = None
 
     def relative_l2(reference: np.ndarray, candidate: np.ndarray, selected: np.ndarray) -> float:
         denominator = max(
@@ -4821,53 +5294,97 @@ def fit(
         )
         return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
 
-    for family in FAMILIES:
-        data_projection_relative_l2_by_family[str(family)] = relative_l2(
-            oracle_peak_count,
-            fit_peak_count,
-            np.asarray(peak_area_projection.peak_signal_family) == family,
-        )
-    data_projection_relative_l2_background_anchor_rows = relative_l2(
-        np.asarray(observations.count_mass),
-        np.asarray(fit_observations.count_mass),
-        np.asarray(arrays["is_background"], dtype=np.bool_),
-    )
+    data_projection_qualification_required = _data_projection_qualification_required(recipe)
     maximum_data_projection_error = float(recipe["model_cubature"]["maximum_oracle_relative_l2"])
-    fine_row_data_projection_convergence = _native_projection_convergence(
-        coarse_count_mass=np.asarray(fit_observations.count_mass),
-        coarse_support_px2=np.asarray(fit_observations.support_px2),
-        coarse_count_covariance=np.asarray(fit_observations.count_covariance_count2),
-        refined_count_mass=np.asarray(observations.count_mass),
-        refined_support_px2=np.asarray(observations.support_px2),
-        refined_count_covariance=np.asarray(observations.count_covariance_count2),
-        dataset_index=np.asarray(observations.dataset_index),
-        dataset_ids=observations.dataset_ids,
-        maximum_relative_l2=maximum_data_projection_error,
-    )
-    data_projection_convergence = _native_projection_convergence(
-        coarse_count_mass=fit_peak_count,
-        coarse_support_px2=fit_peak_support,
-        coarse_count_covariance=fit_peak_covariance,
-        refined_count_mass=oracle_peak_count,
-        refined_support_px2=oracle_peak_support,
-        refined_count_covariance=oracle_peak_covariance,
-        dataset_index=np.asarray(peak_area_projection.peak_dataset_index),
-        dataset_ids=observations.dataset_ids,
-        maximum_relative_l2=maximum_data_projection_error,
-    )
-    covariance_refinement_converged = bool(data_projection_convergence["converged"])
-    data_projection_convergence = {
-        **data_projection_convergence,
-        "converged": _integrated_area_projection_converged(data_projection_convergence),
-        "acceptance_measure": "integrated_peak_count_mass_and_support.v1",
-        "covariance_refinement_converged": covariance_refinement_converged,
-        "covariance_policy": ("refined_covariance_is_authoritative_for_objective_whitening"),
-    }
-    if not data_projection_convergence["converged"]:
-        raise FloatingPointError(
-            "native-pixel integrated peak-area projection did not converge; "
-            f"refine cubature: {data_projection_convergence}"
+    if native_observations:
+        data_projection_evidence = {
+            "method": NATIVE_PIXEL_CENTER_METHOD,
+            "qualification_role": "authoritative_frozen_observation",
+            "status": "COMPLETE",
+            "projection_performed": False,
+            "refinement_oracle": "NOT_APPLICABLE_EXACT_MEMBERSHIP",
+            "projection_revisions": list(oracle_projection_revisions),
+            "selected_pixel_region_pair_count": int(arrays["selected_flat_pixel_index"].size),
+            "selected_dataset_index_sha256": _array_sha256(arrays["selected_dataset_index"]),
+            "selected_flat_pixel_index_sha256": _array_sha256(arrays["selected_flat_pixel_index"]),
+            "selected_observation_row_sha256": _array_sha256(arrays["selected_observation_row"]),
+            "raw_count_mass_sha256": _array_sha256(arrays["count_sum"]),
+            "count_mass_sha256": _array_sha256(np.asarray(observations.count_mass)),
+            "support_px2_sha256": _array_sha256(np.asarray(observations.support_px2)),
+            "count_covariance_sha256": _array_sha256(
+                np.asarray(observations.count_covariance_count2)
+            ),
+            "objective_measure": PEAK_AREA_OBJECTIVE,
+            "smoothing_applied": False,
+            "diffraction_model_pixelized": False,
+        }
+    else:
+        for family in FAMILIES:
+            data_projection_relative_l2_by_family[str(family)] = relative_l2(
+                oracle_peak_count,
+                fit_peak_count,
+                np.asarray(peak_area_projection.peak_signal_family) == family,
+            )
+        data_projection_relative_l2_background_anchor_rows = relative_l2(
+            np.asarray(observations.count_mass),
+            np.asarray(fit_observations.count_mass),
+            np.asarray(arrays["is_background"], dtype=np.bool_),
         )
+        fine_row_data_projection_convergence = _native_projection_convergence(
+            coarse_count_mass=np.asarray(fit_observations.count_mass),
+            coarse_support_px2=np.asarray(fit_observations.support_px2),
+            coarse_count_covariance=np.asarray(fit_observations.count_covariance_count2),
+            refined_count_mass=np.asarray(observations.count_mass),
+            refined_support_px2=np.asarray(observations.support_px2),
+            refined_count_covariance=np.asarray(observations.count_covariance_count2),
+            dataset_index=np.asarray(observations.dataset_index),
+            dataset_ids=observations.dataset_ids,
+            maximum_relative_l2=maximum_data_projection_error,
+        )
+        data_projection_convergence = _native_projection_convergence(
+            coarse_count_mass=fit_peak_count,
+            coarse_support_px2=fit_peak_support,
+            coarse_count_covariance=fit_peak_covariance,
+            refined_count_mass=oracle_peak_count,
+            refined_support_px2=oracle_peak_support,
+            refined_count_covariance=oracle_peak_covariance,
+            dataset_index=np.asarray(peak_area_projection.peak_dataset_index),
+            dataset_ids=observations.dataset_ids,
+            maximum_relative_l2=maximum_data_projection_error,
+        )
+        covariance_refinement_converged = bool(data_projection_convergence["converged"])
+        data_projection_convergence = {
+            **data_projection_convergence,
+            "converged": _integrated_area_projection_converged(data_projection_convergence),
+            "acceptance_measure": "integrated_peak_count_mass_and_support.v1",
+            "covariance_refinement_converged": covariance_refinement_converged,
+            "covariance_policy": "refined_covariance_is_authoritative_for_objective_whitening",
+        }
+        if data_projection_qualification_required and not data_projection_convergence["converged"]:
+            raise FloatingPointError(
+                "native-pixel integrated peak-area projection did not converge; "
+                f"refine cubature: {data_projection_convergence}"
+            )
+        data_projection_evidence = {
+            "method": MEASURED_PROJECTION_METHOD,
+            "qualification_role": "required_release_gate",
+            **data_projection_convergence,
+            "fit_projection_revisions": list(fit_projection_revisions),
+            "oracle_projection_revisions": list(oracle_projection_revisions),
+            "fit_gauss_order": fit_order,
+            "oracle_gauss_order": oracle_order,
+            "fit_subdivision_count": fit_subdivisions,
+            "oracle_subdivision_count": oracle_subdivisions,
+            "relative_l2_by_family_m": data_projection_relative_l2_by_family,
+            "relative_l2_background_anchor_rows": (
+                data_projection_relative_l2_background_anchor_rows
+            ),
+            "maximum_relative_l2": maximum_data_projection_error,
+            "objective_measure": PEAK_AREA_OBJECTIVE,
+            "fine_row_refinement": fine_row_data_projection_convergence,
+            "smoothing_applied": False,
+            "diffraction_model_pixelized": False,
+        }
     background_state, background_identity, background_manifest = _load_radial_background(
         background_path,
         diagnostic_identity=diagnostic_identity,
@@ -4876,7 +5393,10 @@ def fit(
             float(value) for value in manifest["fixed_position"]["beam_center_column_row_px"]
         ),
         fit_plan_identity=fit_plan_identity,
-        oracle_projection_revisions=oracle_projection_revisions,
+        observation_support_revisions=oracle_projection_revisions,
+        observation_support_method=(
+            NATIVE_PIXEL_CENTER_METHOD if native_observations else MEASURED_PROJECTION_METHOD
+        ),
         excluded_flat_pixel_index_by_dataset={
             dataset_id: _background_exclusion_pixel_index(
                 arrays["selected_flat_pixel_index"][
@@ -4887,11 +5407,24 @@ def fit(
             for dataset_index, dataset_id in enumerate(manifest["dataset_ids"])
         },
     )
-    radial_background = _fixed_background_from_continuous_plans(
-        state=background_state,
-        plans=oracle_region_plans,
-        observation_count=row_count,
-        beam_center_column_row_px=tuple(manifest["fixed_position"]["beam_center_column_row_px"]),
+    radial_background = (
+        _fixed_background_from_native_pixel_center_plans(
+            state=background_state,
+            plans=native_center_plans,
+            observation_count=row_count,
+            beam_center_column_row_px=tuple(
+                manifest["fixed_position"]["beam_center_column_row_px"]
+            ),
+        )
+        if native_observations
+        else _fixed_background_from_continuous_plans(
+            state=background_state,
+            plans=oracle_region_plans,
+            observation_count=row_count,
+            beam_center_column_row_px=tuple(
+                manifest["fixed_position"]["beam_center_column_row_px"]
+            ),
+        )
     )
     fixed_background = condition_matched_region_background_from_anchors(
         observations,
@@ -4973,7 +5506,30 @@ def fit(
             fixed_background.anchor_projection
         ),
         "observed_count_mass_sha256": _array_sha256(observations.count_mass),
+        "observed_support_px2_sha256": _array_sha256(observations.support_px2),
         "observed_count_covariance_sha256": _array_sha256(observations.count_covariance_count2),
+        "measured_observation_method": data_projection_evidence["method"],
+        "measured_projection_performed": data_projection_evidence.get(
+            "projection_performed",
+            True,
+        ),
+        "measured_projection_revisions": data_projection_evidence.get(
+            "projection_revisions",
+            [],
+        ),
+        "selected_pixel_region_pair_count": data_projection_evidence.get(
+            "selected_pixel_region_pair_count",
+            0,
+        ),
+        "selected_dataset_index_sha256": data_projection_evidence.get(
+            "selected_dataset_index_sha256"
+        ),
+        "selected_flat_pixel_index_sha256": data_projection_evidence.get(
+            "selected_flat_pixel_index_sha256"
+        ),
+        "selected_observation_row_sha256": data_projection_evidence.get(
+            "selected_observation_row_sha256"
+        ),
         "objective_measure": PEAK_AREA_OBJECTIVE,
         "peak_area_projection_revision": peak_area_projection.revision,
         "source_signal_peak_index_sha256": _array_sha256(
@@ -5403,25 +5959,7 @@ def fit(
             "identifiable": result.sensitivity_rank == len(active_parameter_names),
             "cubature_converged_by_family": (cubature_converged if stage == "joint" else "NOT_RUN"),
         },
-        "data_projection": {
-            "method": MEASURED_PROJECTION_METHOD,
-            **data_projection_convergence,
-            "fit_projection_revisions": list(fit_projection_revisions),
-            "oracle_projection_revisions": list(oracle_projection_revisions),
-            "fit_gauss_order": fit_order,
-            "oracle_gauss_order": oracle_order,
-            "fit_subdivision_count": fit_subdivisions,
-            "oracle_subdivision_count": oracle_subdivisions,
-            "relative_l2_by_family_m": data_projection_relative_l2_by_family,
-            "relative_l2_background_anchor_rows": (
-                data_projection_relative_l2_background_anchor_rows
-            ),
-            "maximum_relative_l2": maximum_data_projection_error,
-            "objective_measure": PEAK_AREA_OBJECTIVE,
-            "fine_row_refinement": fine_row_data_projection_convergence,
-            "smoothing_applied": False,
-            "diffraction_model_pixelized": False,
-        },
+        "data_projection": data_projection_evidence,
         "model_adequacy": "reported_by_residuals_not_inferred_from_optimizer_status",
         "fitted_model_count": result.fitted_model_mass.tolist(),
         "fitted_objective_model_count": result.fitted_objective_model_mass.tolist(),
@@ -5474,8 +6012,15 @@ def fit(
             "then joint activation; "
             "one scale per OSC shared across its families; exact candidate-model reevaluation "
             "as continuous detector-chart area integrals in phi/2theta for m=0 and signed-side "
-            "Qr/L for m!=0; verified native-pixel counts are a piecewise-constant measured "
-            "field projected through the same rectangles with no smoothing; one frozen shared "
+            "Qr/L for m!=0; "
+            + (
+                "measured count masses and covariance are exact reductions over frozen "
+                "native-pixel-center memberships with no smoothing;"
+                if native_observations
+                else "verified native-pixel counts are a piecewise-constant measured field "
+                "projected through the same rectangles with no smoothing;"
+            )
+            + " one frozen shared "
             "radial detector baseline calibrated only from "
             "background sectors and conditioned on each block's two adjacent sidebands; the "
             "same fixed adjacent-sideband operator is applied to candidate diffraction before anchor rows "
@@ -5665,8 +6210,11 @@ def prepare_profiles(
     )
     fit_plan = _load_fit_plan(Path(fit_plan_identity["path"]))
     series = _rebuilt_series(manifest)
-    oracle_projection_revisions = fit_document.get("data_projection", {}).get(
-        "oracle_projection_revisions", ()
+    native_observations = _uses_native_pixel_center_observations(recipe)
+    data_projection_record = fit_document.get("data_projection", {})
+    observation_support_revisions = data_projection_record.get(
+        ("projection_revisions" if native_observations else "oracle_projection_revisions"),
+        (),
     )
     background_state, background_identity, background_manifest = _load_radial_background(
         background_path,
@@ -5676,7 +6224,10 @@ def prepare_profiles(
             float(value) for value in manifest["fixed_position"]["beam_center_column_row_px"]
         ),
         fit_plan_identity=fit_plan_identity,
-        oracle_projection_revisions=oracle_projection_revisions,
+        observation_support_revisions=observation_support_revisions,
+        observation_support_method=(
+            NATIVE_PIXEL_CENTER_METHOD if native_observations else MEASURED_PROJECTION_METHOD
+        ),
     )
     if fit_document.get("provenance", {}).get("background") != background_identity:
         raise ValueError("fit artifact used a different radial background")
@@ -5720,7 +6271,7 @@ def prepare_profiles(
         bound_proximity_in_parameter_scales=bound_proximity,
         maximum_sensitivity_condition=maximum_sensitivity_condition,
         expected_dataset_ids=manifest["dataset_ids"],
-        predecessor_chain_complete=len(fit_chain) == 4,
+        predecessor_chain_complete=bool(fit_chain),
     )
     fixed_lattice_record = _prepared_lattice_record(manifest, series)
     dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
@@ -5752,8 +6303,8 @@ def prepare_profiles(
     layouts = _offspecular_layouts(recipe, beam_center_column_px, counts.shape[1])
     row_records, lookup = _row_catalog(1, m0, layouts)
     m0_signal_catalog = tuple(
-        dict(record)
-        for record in row_records
+        {**record, "source_observation_row": row_index}
+        for row_index, record in enumerate(row_records)
         if str(record["group"]) == "m0" and str(record["band"]) == "signal"
     )
     if not m0_signal_catalog:
@@ -5783,6 +6334,10 @@ def prepare_profiles(
         row_chunk_size=row_chunk_size,
         apply_fit_windows=False,
     )
+    full_count_sum = np.array(count_sum, copy=True)
+    full_count_support = np.array(count_support, copy=True)
+    full_selected_pixel = np.array(selected_pixel, copy=True)
+    full_selected_row = np.array(selected_row, copy=True)
     supported = count_support > 0.0
     complete = np.zeros(row_count, dtype=np.bool_)
     grouped_rows: dict[tuple[str, int], list[int]] = {}
@@ -5874,51 +6429,61 @@ def prepare_profiles(
         )
         for name in policy["pass_names"]
     }
-    raw_measured_profile_plan = _compile_dataset_continuous_region_plan(
-        inputs,
-        profile_row_arrays,
-        profile_plan_manifest,
-        dataset_index=0,
-        gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
-        subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-        offspecular_axial_refinement=offspecular_axial_refinement,
-        offspecular_radial_transform=offspecular_radial_transform,
-        offspecular_signal_minimum_radial_nodes_per_side=(
-            offspecular_signal_minimum_radial_nodes_per_side
-        ),
-        m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-        apply_fit_windows=False,
+    raw_measured_profile_plan = (
+        None
+        if native_observations
+        else _compile_dataset_continuous_region_plan(
+            inputs,
+            profile_row_arrays,
+            profile_plan_manifest,
+            dataset_index=0,
+            gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
+            subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            offspecular_axial_refinement=offspecular_axial_refinement,
+            offspecular_radial_transform=offspecular_radial_transform,
+            offspecular_signal_minimum_radial_nodes_per_side=(
+                offspecular_signal_minimum_radial_nodes_per_side
+            ),
+            m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            apply_fit_windows=False,
+        )
     )
-    raw_coarse_measured_profile_plan = _compile_dataset_continuous_region_plan(
-        inputs,
-        profile_row_arrays,
-        profile_plan_manifest,
-        dataset_index=0,
-        gauss_order=int(profile_cubature["fit_gauss_order"]),
-        subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
-        offspecular_axial_refinement=offspecular_axial_refinement,
-        offspecular_radial_transform=offspecular_radial_transform,
-        offspecular_signal_minimum_radial_nodes_per_side=(
-            offspecular_signal_minimum_radial_nodes_per_side
-        ),
-        m0_phi_subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
-        apply_fit_windows=False,
+    raw_coarse_measured_profile_plan = (
+        None
+        if native_observations
+        else _compile_dataset_continuous_region_plan(
+            inputs,
+            profile_row_arrays,
+            profile_plan_manifest,
+            dataset_index=0,
+            gauss_order=int(profile_cubature["fit_gauss_order"]),
+            subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
+            offspecular_axial_refinement=offspecular_axial_refinement,
+            offspecular_radial_transform=offspecular_radial_transform,
+            offspecular_signal_minimum_radial_nodes_per_side=(
+                offspecular_signal_minimum_radial_nodes_per_side
+            ),
+            m0_phi_subdivision_count=int(profile_cubature["fold_fit_subdivisions"]),
+            apply_fit_windows=False,
+        )
     )
     invalid_fold_observations_by_pass = {
         name: _invalid_continuous_fold_observations(plan)
         for name, plan in raw_profile_plans.items()
     }
-    invalid_fold_observations_by_pass["measured_data"] = _invalid_continuous_fold_observations(
-        raw_measured_profile_plan
-    )
-    invalid_fold_observations_by_pass["coarse_measured_data"] = (
-        _invalid_continuous_fold_observations(raw_coarse_measured_profile_plan)
-    )
-    for name, plan in {
-        **raw_profile_plans,
-        "measured_data": raw_measured_profile_plan,
-        "coarse_measured_data": raw_coarse_measured_profile_plan,
-    }.items():
+    plans_for_support_screening = dict(raw_profile_plans)
+    if raw_measured_profile_plan is not None and raw_coarse_measured_profile_plan is not None:
+        invalid_fold_observations_by_pass["measured_data"] = _invalid_continuous_fold_observations(
+            raw_measured_profile_plan
+        )
+        invalid_fold_observations_by_pass["coarse_measured_data"] = (
+            _invalid_continuous_fold_observations(raw_coarse_measured_profile_plan)
+        )
+        plans_for_support_screening.update(
+            measured_data=raw_measured_profile_plan,
+            coarse_measured_data=raw_coarse_measured_profile_plan,
+        )
+    for name, plan in plans_for_support_screening.items():
         for observation in np.flatnonzero(~plan.quadrature.observation_covered):
             invalid_fold_observations_by_pass[name].setdefault(
                 int(observation),
@@ -5948,13 +6513,9 @@ def prepare_profiles(
         for key in retained_signal_blocks
         if {"background_0", "background_1"}.issubset(valid_anchor_bands_by_block.get(key, set()))
     }
-    conditioned_m0_bins = {
-        bin_index for group, bin_index in complete_blocks if group == "m0"
-    }
+    conditioned_m0_bins = {bin_index for group, bin_index in complete_blocks if group == "m0"}
     m0_signal_only_records = tuple(
-        record
-        for record in m0_signal_catalog
-        if int(record["bin"]) not in conditioned_m0_bins
+        record for record in m0_signal_catalog if int(record["bin"]) not in conditioned_m0_bins
     )
     m0_signal_only_row_count = len(m0_signal_only_records)
     m0_signal_only_plan: _DatasetContinuousRegionPlan | None = None
@@ -5980,18 +6541,14 @@ def prepare_profiles(
             offspecular_signal_minimum_radial_nodes_per_side=(
                 offspecular_signal_minimum_radial_nodes_per_side
             ),
-            m0_phi_subdivision_count=int(
-                recipe["model_cubature"]["fold_oracle_subdivisions"]
-            ),
+            m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
             apply_fit_windows=False,
         )
         invalid_m0_signal_only_observations = set(
             _invalid_continuous_fold_observations(raw_m0_signal_only_plan)
         ) | set(
             int(value)
-            for value in np.flatnonzero(
-                ~raw_m0_signal_only_plan.quadrature.observation_covered
-            )
+            for value in np.flatnonzero(~raw_m0_signal_only_plan.quadrature.observation_covered)
         )
         m0_signal_only_plan = _drop_optional_continuous_plan_observations(
             raw_m0_signal_only_plan,
@@ -6010,13 +6567,21 @@ def prepare_profiles(
         name: _drop_continuous_plan_observations(plan, unsupported_observations)
         for name, plan in raw_profile_plans.items()
     }
-    measured_profile_plan = _drop_continuous_plan_observations(
-        raw_measured_profile_plan,
-        unsupported_observations,
+    measured_profile_plan = (
+        None
+        if raw_measured_profile_plan is None
+        else _drop_continuous_plan_observations(
+            raw_measured_profile_plan,
+            unsupported_observations,
+        )
     )
-    coarse_measured_profile_plan = _drop_continuous_plan_observations(
-        raw_coarse_measured_profile_plan,
-        unsupported_observations,
+    coarse_measured_profile_plan = (
+        None
+        if raw_coarse_measured_profile_plan is None
+        else _drop_continuous_plan_observations(
+            raw_coarse_measured_profile_plan,
+            unsupported_observations,
+        )
     )
     profile_fold_plans = {
         name: compile_continuous_fold_correction_plan(detector, plan.fold_bands)
@@ -6038,10 +6603,6 @@ def prepare_profiles(
                 },
             }
         )
-    coarse_measured_projection = compile_native_pixel_region_projection(
-        coarse_measured_profile_plan.quadrature,
-        counts.shape,
-    )
 
     def project_dark_corrected_counts(
         projection: Any,
@@ -6056,74 +6617,164 @@ def prepare_profiles(
             raw_covariance + dark_scale * dark_scale * dark_covariance,
         )
 
-    coarse_count_sum, coarse_count_covariance = project_dark_corrected_counts(
-        coarse_measured_projection
-    )
-    coarse_count_support = coarse_measured_projection.observation_measure_px2
-    measured_projection = compile_native_pixel_region_projection(
-        measured_profile_plan.quadrature,
-        counts.shape,
-    )
-    count_sum, count_covariance = project_dark_corrected_counts(measured_projection)
-    count_support = measured_projection.observation_measure_px2
+    coarse_measured_projection = None
+    measured_projection = None
     m0_signal_only_projection = None
+    data_projection_qualification_required = _data_projection_qualification_required(recipe)
+    native_profile_plans: tuple[_DatasetNativePixelCenterPlan, ...] = ()
+    native_m0_signal_only_plans: tuple[_DatasetNativePixelCenterPlan, ...] = ()
     m0_signal_only_count_mass = np.empty(0, dtype=np.float64)
     m0_signal_only_count_covariance = np.empty((0, 0), dtype=np.float64)
     m0_signal_only_support = np.empty(0, dtype=np.float64)
     m0_signal_only_flat_pixel = np.empty(0, dtype=np.int64)
-    if m0_signal_only_plan is not None:
-        m0_signal_only_projection = compile_native_pixel_region_projection(
-            m0_signal_only_plan.quadrature,
+    if native_observations:
+        retained_native_member = ~np.isin(
+            selected_row, np.asarray(sorted(unsupported_observations))
+        )
+        selected_pixel = selected_pixel[retained_native_member]
+        selected_row = selected_row[retained_native_member]
+        data_supported = np.ones(row_count, dtype=np.bool_)
+        if unsupported_observations:
+            data_supported[np.asarray(sorted(unsupported_observations), dtype=np.int64)] = False
+        raw_count_sum = np.where(data_supported, count_sum, 0.0)
+        raw_count_support = np.where(data_supported, count_support, 0.0)
+        count_coordinate_mass = np.where(data_supported, count_coordinate_mass, 0.0)
+        count_axial_mass = np.where(data_supported, count_axial_mass, 0.0)
+        count_qz_mass = np.where(data_supported, count_qz_mass, 0.0)
+        native_profile_arrays = {
+            "dataset_index": np.zeros(row_count, dtype=np.int64),
+            "count_sum": raw_count_sum,
+            "support_px2": raw_count_support,
+            "selected_dataset_index": np.zeros(selected_pixel.size, dtype=np.int64),
+            "selected_flat_pixel_index": selected_pixel,
+            "selected_observation_row": selected_row,
+        }
+        (
+            count_sum,
+            count_covariance,
+            count_support,
+            native_profile_plans,
+        ) = _native_pixel_center_count_statistics(
+            native_profile_arrays,
+            dataset_ids=(display_dataset_id,),
+            counts_by_dataset={display_dataset_id: counts},
+            dark_counts=dark_counts,
+            dark_scale=dark_scale,
+        )
+        measured_projection = native_profile_plans[0].projection
+        measured_projection_refinement: dict[str, Any] = {
+            "status": "NOT_APPLICABLE_EXACT_MEMBERSHIP",
+            "converged": True,
+            "projection_performed": False,
+        }
+        if m0_signal_only_plan is not None and m0_signal_only_records:
+            source_rows = np.asarray(
+                [record["source_observation_row"] for record in m0_signal_only_records],
+                dtype=np.int64,
+            )
+            source_to_local = np.full(full_count_sum.size, -1, dtype=np.int64)
+            source_to_local[source_rows] = np.arange(source_rows.size, dtype=np.int64)
+            source_member = source_to_local[full_selected_row] >= 0
+            m0_signal_only_flat_pixel = full_selected_pixel[source_member]
+            m0_signal_only_selected_row = source_to_local[full_selected_row[source_member]]
+            m0_signal_only_arrays = {
+                "dataset_index": np.zeros(source_rows.size, dtype=np.int64),
+                "count_sum": full_count_sum[source_rows],
+                "support_px2": full_count_support[source_rows],
+                "selected_dataset_index": np.zeros(
+                    m0_signal_only_flat_pixel.size,
+                    dtype=np.int64,
+                ),
+                "selected_flat_pixel_index": m0_signal_only_flat_pixel,
+                "selected_observation_row": m0_signal_only_selected_row,
+            }
+            (
+                m0_signal_only_count_mass,
+                m0_signal_only_count_covariance,
+                m0_signal_only_support,
+                native_m0_signal_only_plans,
+            ) = _native_pixel_center_count_statistics(
+                m0_signal_only_arrays,
+                dataset_ids=(display_dataset_id,),
+                counts_by_dataset={display_dataset_id: counts},
+                dark_counts=dark_counts,
+                dark_scale=dark_scale,
+            )
+            m0_signal_only_flat_pixel = np.unique(m0_signal_only_flat_pixel)
+    else:
+        if measured_profile_plan is None or coarse_measured_profile_plan is None:
+            raise RuntimeError("continuous measured-profile plans were not compiled")
+        coarse_measured_projection = compile_native_pixel_region_projection(
+            coarse_measured_profile_plan.quadrature,
             counts.shape,
         )
-        m0_signal_only_count_mass, m0_signal_only_count_covariance = (
-            project_dark_corrected_counts(m0_signal_only_projection)
+        coarse_count_sum, coarse_count_covariance = project_dark_corrected_counts(
+            coarse_measured_projection
         )
-        m0_signal_only_support = m0_signal_only_projection.observation_measure_px2
-        m0_signal_only_flat_pixel = np.unique(
-            np.asarray(m0_signal_only_projection.flat_pixel_index, dtype=np.int64)[
-                np.asarray(m0_signal_only_projection.pixel_column_index, dtype=np.int64)
-            ]
+        coarse_count_support = coarse_measured_projection.observation_measure_px2
+        measured_projection = compile_native_pixel_region_projection(
+            measured_profile_plan.quadrature,
+            counts.shape,
         )
-    measured_projection_refinement = _native_projection_convergence(
-        coarse_count_mass=coarse_count_sum,
-        coarse_support_px2=coarse_count_support,
-        coarse_count_covariance=coarse_count_covariance,
-        refined_count_mass=count_sum,
-        refined_support_px2=count_support,
-        refined_count_covariance=count_covariance,
-        dataset_index=np.zeros(row_count, dtype=np.int64),
-        dataset_ids=(display_dataset_id,),
-        maximum_relative_l2=float(recipe["model_cubature"]["maximum_oracle_relative_l2"]),
-    )
-    covariance_refinement_converged = bool(measured_projection_refinement["converged"])
-    measured_projection_refinement = {
-        **measured_projection_refinement,
-        "converged": _display_profile_projection_converged(measured_projection_refinement),
-        "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
-        "covariance_refinement_converged": covariance_refinement_converged,
-        "covariance_policy": "refined_covariance_is_authoritative_for_display",
-    }
-    if not measured_projection_refinement["converged"]:
-        raise FloatingPointError(
-            "display native-pixel continuous-region projection did not converge; "
-            f"refine cubature: {measured_projection_refinement}"
+        count_sum, count_covariance = project_dark_corrected_counts(measured_projection)
+        count_support = measured_projection.observation_measure_px2
+        if m0_signal_only_plan is not None:
+            m0_signal_only_projection = compile_native_pixel_region_projection(
+                m0_signal_only_plan.quadrature,
+                counts.shape,
+            )
+            m0_signal_only_count_mass, m0_signal_only_count_covariance = (
+                project_dark_corrected_counts(m0_signal_only_projection)
+            )
+            m0_signal_only_support = m0_signal_only_projection.observation_measure_px2
+            m0_signal_only_flat_pixel = np.unique(
+                np.asarray(m0_signal_only_projection.flat_pixel_index, dtype=np.int64)[
+                    np.asarray(m0_signal_only_projection.pixel_column_index, dtype=np.int64)
+                ]
+            )
+        measured_projection_refinement = _native_projection_convergence(
+            coarse_count_mass=coarse_count_sum,
+            coarse_support_px2=coarse_count_support,
+            coarse_count_covariance=coarse_count_covariance,
+            refined_count_mass=count_sum,
+            refined_support_px2=count_support,
+            refined_count_covariance=count_covariance,
+            dataset_index=np.zeros(row_count, dtype=np.int64),
+            dataset_ids=(display_dataset_id,),
+            maximum_relative_l2=float(recipe["model_cubature"]["maximum_oracle_relative_l2"]),
         )
-    count_coordinate_mass = (
-        count_support * measured_profile_plan.quadrature.observation_background_coordinate
-    )
-    count_axial_mass, count_qz_mass = _continuous_plan_reciprocal_coordinate_moments(
-        inputs,
-        measured_profile_plan,
-        m0_observation=np.asarray(
-            [str(record["group"]) == "m0" for record in row_records],
-            dtype=np.bool_,
-        ),
-    )
-    selected_row = np.asarray(measured_projection.observation_row, dtype=np.int64)
-    selected_pixel = np.asarray(measured_projection.flat_pixel_index)[
-        np.asarray(measured_projection.pixel_column_index, dtype=np.int64)
-    ]
+        covariance_refinement_converged = bool(measured_projection_refinement["converged"])
+        measured_projection_refinement = {
+            **measured_projection_refinement,
+            "converged": _display_profile_projection_converged(measured_projection_refinement),
+            "acceptance_measure": "display_profile_pooled_count_mass_and_support.v1",
+            "covariance_refinement_converged": covariance_refinement_converged,
+            "covariance_policy": "refined_covariance_is_authoritative_for_display",
+        }
+        data_projection_qualification_required = _data_projection_qualification_required(recipe)
+        if (
+            data_projection_qualification_required
+            and not measured_projection_refinement["converged"]
+        ):
+            raise FloatingPointError(
+                "display native-pixel continuous-region projection did not converge; "
+                f"refine cubature: {measured_projection_refinement}"
+            )
+        count_coordinate_mass = (
+            count_support * measured_profile_plan.quadrature.observation_background_coordinate
+        )
+        count_axial_mass, count_qz_mass = _continuous_plan_reciprocal_coordinate_moments(
+            inputs,
+            measured_profile_plan,
+            m0_observation=np.asarray(
+                [str(record["group"]) == "m0" for record in row_records],
+                dtype=np.bool_,
+            ),
+        )
+        selected_row = np.asarray(measured_projection.observation_row, dtype=np.int64)
+        selected_pixel = np.asarray(measured_projection.flat_pixel_index)[
+            np.asarray(measured_projection.pixel_column_index, dtype=np.int64)
+        ]
     region_code_by_row = np.asarray(
         [
             _region_display_code(
@@ -6138,30 +6789,40 @@ def prepare_profiles(
     full_region_code.fill(0)
     np.maximum.at(full_region_code, selected_pixel, region_code_by_row[selected_row])
     np.maximum.at(full_region_code, m0_signal_only_flat_pixel, np.uint8(1))
-    display_fit_plan = _compile_dataset_continuous_region_plan(
-        inputs,
-        fit_arrays,
-        manifest,
-        dataset_index=display_index,
-        gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
-        subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-        offspecular_axial_refinement=offspecular_axial_refinement,
-        offspecular_radial_transform=offspecular_radial_transform,
-        offspecular_signal_minimum_radial_nodes_per_side=(
-            offspecular_signal_minimum_radial_nodes_per_side
-        ),
-        m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-    )
-    display_fit_projection = compile_native_pixel_region_projection(
-        display_fit_plan.quadrature,
-        counts.shape,
-    )
-    display_fit_pair_pixel = np.asarray(display_fit_projection.flat_pixel_index)[
-        np.asarray(display_fit_projection.pixel_column_index, dtype=np.int64)
-    ]
-    display_fit_global_row = np.asarray(display_fit_plan.global_observation_row)[
-        np.asarray(display_fit_projection.observation_row, dtype=np.int64)
-    ]
+    if native_observations:
+        display_fit_projection = None
+        display_fit_member = np.asarray(fit_arrays["selected_dataset_index"]) == display_index
+        display_fit_pair_pixel = np.asarray(fit_arrays["selected_flat_pixel_index"])[
+            display_fit_member
+        ]
+        display_fit_global_row = np.asarray(fit_arrays["selected_observation_row"])[
+            display_fit_member
+        ]
+    else:
+        display_fit_plan = _compile_dataset_continuous_region_plan(
+            inputs,
+            fit_arrays,
+            manifest,
+            dataset_index=display_index,
+            gauss_order=int(recipe["model_cubature"]["oracle_gauss_order"]),
+            subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            offspecular_axial_refinement=offspecular_axial_refinement,
+            offspecular_radial_transform=offspecular_radial_transform,
+            offspecular_signal_minimum_radial_nodes_per_side=(
+                offspecular_signal_minimum_radial_nodes_per_side
+            ),
+            m0_phi_subdivision_count=int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+        )
+        display_fit_projection = compile_native_pixel_region_projection(
+            display_fit_plan.quadrature,
+            counts.shape,
+        )
+        display_fit_pair_pixel = np.asarray(display_fit_projection.flat_pixel_index)[
+            np.asarray(display_fit_projection.pixel_column_index, dtype=np.int64)
+        ]
+        display_fit_global_row = np.asarray(display_fit_plan.global_observation_row)[
+            np.asarray(display_fit_projection.observation_row, dtype=np.int64)
+        ]
     display_fit_code = np.zeros(counts.size, dtype=np.uint8)
     display_fit_code_by_global_row = np.asarray(
         [
@@ -6180,22 +6841,46 @@ def prepare_profiles(
         display_fit_pair_pixel,
         display_fit_code_by_global_row[display_fit_global_row],
     )
-    radial_profile_background = _fixed_background_from_continuous_plans(
-        state=background_state,
-        plans=(measured_profile_plan,),
-        observation_count=row_count,
-        beam_center_column_row_px=tuple(manifest["fixed_position"]["beam_center_column_row_px"]),
-    )
-    m0_signal_only_background_mass = np.empty(0, dtype=np.float64)
-    if m0_signal_only_plan is not None:
-        m0_signal_only_background_mass = _fixed_background_from_continuous_plans(
+    radial_profile_background = (
+        _fixed_background_from_native_pixel_center_plans(
             state=background_state,
-            plans=(m0_signal_only_plan,),
-            observation_count=m0_signal_only_row_count,
+            plans=native_profile_plans,
+            observation_count=row_count,
             beam_center_column_row_px=tuple(
                 manifest["fixed_position"]["beam_center_column_row_px"]
             ),
-        ).count_mass
+        )
+        if native_observations
+        else _fixed_background_from_continuous_plans(
+            state=background_state,
+            plans=(measured_profile_plan,),
+            observation_count=row_count,
+            beam_center_column_row_px=tuple(
+                manifest["fixed_position"]["beam_center_column_row_px"]
+            ),
+        )
+    )
+    m0_signal_only_background_mass = np.empty(0, dtype=np.float64)
+    if m0_signal_only_plan is not None:
+        m0_signal_only_background_mass = (
+            _fixed_background_from_native_pixel_center_plans(
+                state=background_state,
+                plans=native_m0_signal_only_plans,
+                observation_count=m0_signal_only_row_count,
+                beam_center_column_row_px=tuple(
+                    manifest["fixed_position"]["beam_center_column_row_px"]
+                ),
+            ).count_mass
+            if native_observations
+            else _fixed_background_from_continuous_plans(
+                state=background_state,
+                plans=(m0_signal_only_plan,),
+                observation_count=m0_signal_only_row_count,
+                beam_center_column_row_px=tuple(
+                    manifest["fixed_position"]["beam_center_column_row_px"]
+                ),
+            ).count_mass
+        )
     supported_row = np.flatnonzero(count_support > 0.0)
     supported_records = [row_records[index] for index in supported_row]
     block_by_key: dict[tuple[str, int], int] = {}
@@ -6277,6 +6962,46 @@ def prepare_profiles(
         if _implementation_identity() != implementation_identity:
             raise RuntimeError("scientific implementation changed during profile generation")
 
+    measured_execution_identity = {
+        "measured_observation_method": (
+            NATIVE_PIXEL_CENTER_METHOD if native_observations else MEASURED_PROJECTION_METHOD
+        ),
+        "measured_projection_performed": not native_observations,
+        "coarse_measured_projection_revision": (
+            None
+            if coarse_measured_projection is None
+            else coarse_measured_projection.projection_revision
+        ),
+        "measured_projection_revision": measured_projection.projection_revision,
+        "measured_quadrature_revision": (
+            None
+            if measured_profile_plan is None
+            else measured_profile_plan.quadrature.quadrature_revision
+        ),
+        "measured_continuous_node_count": (
+            0
+            if measured_profile_plan is None
+            else int(measured_profile_plan.quadrature.column_px.size)
+        ),
+        "display_fit_projection_revision": (
+            None if display_fit_projection is None else display_fit_projection.projection_revision
+        ),
+        "display_fit_native_membership_sha256": (
+            _array_sha256(display_fit_pair_pixel) if native_observations else None
+        ),
+        "measured_selected_pixel_region_pair_count": (
+            int(selected_pixel.size) if native_observations else None
+        ),
+        "measured_selected_flat_pixel_index_sha256": (
+            _array_sha256(selected_pixel) if native_observations else None
+        ),
+        "measured_selected_observation_row_sha256": (
+            _array_sha256(selected_row) if native_observations else None
+        ),
+        "measured_count_mass_sha256": _array_sha256(count_sum),
+        "measured_support_px2_sha256": _array_sha256(count_support),
+        "measured_count_covariance_sha256": _array_sha256(count_covariance),
+    }
     execution_identity = {
         "diagnostic_sha256": diagnostic_identity["sha256"],
         "fit_sha256": fit_identity["sha256"],
@@ -6295,21 +7020,19 @@ def prepare_profiles(
         "selected_observation_row_sha256": _array_sha256(selected_row),
         "selected_pixel_count": int(selected_pixel.size),
         "selected_unique_pixel_count": int(np.unique(selected_pixel).size),
-        "coarse_measured_projection_revision": coarse_measured_projection.projection_revision,
-        "measured_projection_revision": measured_projection.projection_revision,
-        "measured_quadrature_revision": measured_profile_plan.quadrature.quadrature_revision,
-        "measured_continuous_node_count": int(measured_profile_plan.quadrature.column_px.size),
-        "display_fit_projection_revision": display_fit_projection.projection_revision,
-        "measured_count_mass_sha256": _array_sha256(count_sum),
-        "measured_count_covariance_sha256": _array_sha256(count_covariance),
+        **measured_execution_identity,
         "m0_signal_only_projection_revision": (
-            None
-            if m0_signal_only_projection is None
-            else m0_signal_only_projection.projection_revision
+            native_m0_signal_only_plans[0].projection.projection_revision
+            if native_m0_signal_only_plans
+            else (
+                None
+                if m0_signal_only_projection is None
+                else m0_signal_only_projection.projection_revision
+            )
         ),
         "m0_signal_only_measured_quadrature_revision": (
             None
-            if m0_signal_only_plan is None
+            if native_observations or m0_signal_only_plan is None
             else m0_signal_only_plan.quadrature.quadrature_revision
         ),
         "m0_signal_only_model_quadrature_revision": (
@@ -6319,9 +7042,7 @@ def prepare_profiles(
         ),
         "m0_signal_only_bin_count": m0_signal_only_row_count,
         "m0_signal_only_count_mass_sha256": _array_sha256(m0_signal_only_count_mass),
-        "m0_signal_only_count_covariance_sha256": _array_sha256(
-            m0_signal_only_count_covariance
-        ),
+        "m0_signal_only_count_covariance_sha256": _array_sha256(m0_signal_only_count_covariance),
         "m0_signal_only_radial_background_mass_sha256": _array_sha256(
             m0_signal_only_background_mass
         ),
@@ -6451,20 +7172,18 @@ def prepare_profiles(
         if m0_signal_only_plan.fold_bands:
             raise RuntimeError("m=0 signal-only display unexpectedly compiled fold corrections")
         verify_inputs()
-        m0_signal_only_model_mass, m0_signal_only_execution = (
-            _integrate_continuous_region_mass(
-                detector,
-                m0_signal_only_plan,
-                None,
-                row_count=m0_signal_only_row_count,
-                execution_backend=execution_backend,
-                cuda_coordinate_chunk_size=cuda_chunk_size,
-            )
+        m0_signal_only_model_mass, m0_signal_only_execution = _integrate_continuous_region_mass(
+            detector,
+            m0_signal_only_plan,
+            None,
+            row_count=m0_signal_only_row_count,
+            execution_backend=execution_backend,
+            cuda_coordinate_chunk_size=cuda_chunk_size,
         )
-        if (
-            sorted(set(m0_signal_only_execution["devices"])) != progress_document["devices"]
-            or sorted(set(m0_signal_only_execution["evaluated_backends"]))
-            != progress_document["evaluated_backends"]
+        if sorted(set(m0_signal_only_execution["devices"])) != progress_document[
+            "devices"
+        ] or not set(m0_signal_only_execution["evaluated_backends"]).issubset(
+            progress_document["evaluated_backends"]
         ):
             raise RuntimeError("m=0 signal-only display execution changed device or backend")
         progress_document["completed_passes"]["m0_signal_only_display"] = {
@@ -6547,11 +7266,7 @@ def prepare_profiles(
     )
     m0_edges_rad = np.asarray(m0.two_theta_bin_edges_rad, dtype=np.float64)
     m0_signal_only_two_theta_deg = np.rad2deg(
-        0.5
-        * (
-            m0_edges_rad[m0_signal_only_bin_index]
-            + m0_edges_rad[m0_signal_only_bin_index + 1]
-        )
+        0.5 * (m0_edges_rad[m0_signal_only_bin_index] + m0_edges_rad[m0_signal_only_bin_index + 1])
     )
     m0_signal_only_measured_density = np.full(
         m0_signal_only_row_count,
@@ -6563,8 +7278,14 @@ def prepare_profiles(
         np.nan,
         dtype=np.float64,
     )
+    m0_signal_only_model_support = (
+        np.empty(0, dtype=np.float64)
+        if m0_signal_only_plan is None
+        else np.asarray(m0_signal_only_plan.quadrature.observation_measure_px2)
+    )
     m0_signal_only_valid = (
         (m0_signal_only_support > 0.0)
+        & (m0_signal_only_model_support > 0.0)
         & np.isfinite(m0_signal_only_count_mass)
         & np.isfinite(m0_signal_only_model_mass)
         & np.isfinite(m0_signal_only_background_mass)
@@ -6625,6 +7346,42 @@ def prepare_profiles(
             arrays[f"row_model_{pass_name}_{array_name.removeprefix('model_')}"] = value
     render_array_sha256 = {name: _array_sha256(arrays[name]) for name in PROFILE_RENDER_ARRAY_NAMES}
     completed_progress_identity = _file_identity(progress_path)
+    measured_data_record = (
+        {
+            "method": NATIVE_PIXEL_CENTER_METHOD,
+            "qualification_role": "authoritative_frozen_observation",
+            "status": "COMPLETE",
+            "projection_performed": False,
+            "projection_revision": measured_projection.projection_revision,
+            "selected_pixel_region_pair_count": int(selected_pixel.size),
+            "selected_flat_pixel_index_sha256": _array_sha256(selected_pixel),
+            "selected_observation_row_sha256": _array_sha256(selected_row),
+            "count_mass_sha256": _array_sha256(count_sum),
+            "support_px2_sha256": _array_sha256(count_support),
+            "count_covariance_sha256": _array_sha256(count_covariance),
+            "refinement_oracle": "NOT_APPLICABLE_EXACT_MEMBERSHIP",
+            "smoothing_applied": False,
+            "model_pixelized": False,
+        }
+        if native_observations
+        else {
+            "method": MEASURED_PROJECTION_METHOD,
+            "qualification_role": "required_release_gate",
+            "coarse_projection_revision": coarse_measured_projection.projection_revision,
+            "projection_revision": measured_projection.projection_revision,
+            "display_fit_projection_revision": display_fit_projection.projection_revision,
+            "count_mass_sha256": _array_sha256(count_sum),
+            "count_covariance_sha256": _array_sha256(count_covariance),
+            "quadrature_revision": measured_profile_plan.quadrature.quadrature_revision,
+            "gauss_order": int(recipe["model_cubature"]["oracle_gauss_order"]),
+            "subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            "m0_phi_subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
+            "continuous_node_count": int(measured_profile_plan.quadrature.column_px.size),
+            "refinement_oracle": measured_projection_refinement,
+            "smoothing_applied": False,
+            "model_pixelized": False,
+        }
+    )
     profile_manifest = {
         "schema_version": PROFILE_SCHEMA,
         "material_id": manifest["material_id"],
@@ -6653,10 +7410,9 @@ def prepare_profiles(
         "dark_correction": manifest["dark_correction"],
         "figure_recipe": recipe,
         "profile_contract": (
-            "verified raw-minus-scaled-dark native-pixel counts define a signed piecewise-constant "
-            "measured field integrated "
-            "over the same continuous phi/two-theta or signed-side Qr/L chart rectangles as the "
-            "unrasterized model; a data-only frozen radial detector baseline conditioned on the two "
+            "verified raw-minus-scaled-dark native-pixel-center count masses and unit-membership "
+            "support are compared with unrasterized continuous phi/two-theta or signed-side Qr/L "
+            "model integrals; a data-only native-center radial detector baseline conditioned on the two "
             "adjacent sidebands is subtracted from measured signal regions, and the identical "
             "fixed sideband-conditioning operator is applied to the model before comparison; no family or "
             "panel renormalization; "
@@ -6697,16 +7453,22 @@ def prepare_profiles(
             ),
             "native_pixel_overlap_covariance_retained": True,
             "projection_method": (
-                MEASURED_PROJECTION_METHOD if m0_signal_only_projection is not None else None
+                NATIVE_PIXEL_CENTER_METHOD
+                if native_m0_signal_only_plans
+                else (MEASURED_PROJECTION_METHOD if m0_signal_only_projection is not None else None)
             ),
             "projection_revision": (
-                None
-                if m0_signal_only_projection is None
-                else m0_signal_only_projection.projection_revision
+                native_m0_signal_only_plans[0].projection.projection_revision
+                if native_m0_signal_only_plans
+                else (
+                    None
+                    if m0_signal_only_projection is None
+                    else m0_signal_only_projection.projection_revision
+                )
             ),
             "measured_quadrature_revision": (
                 None
-                if m0_signal_only_plan is None
+                if native_observations or m0_signal_only_plan is None
                 else m0_signal_only_plan.quadrature.quadrature_revision
             ),
             "model_quadrature_revision": (
@@ -6716,7 +7478,9 @@ def prepare_profiles(
             ),
             "measured_phi_subdivision_count": int(
                 recipe["model_cubature"]["fold_oracle_subdivisions"]
-            ),
+            )
+            if not native_observations
+            else None,
             "model_phi_subdivision_count": int(
                 recipe["model_cubature"]["fold_oracle_subdivisions"]
             ),
@@ -6724,19 +7488,15 @@ def prepare_profiles(
             "subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
             "measured_continuous_node_count": int(
                 0
-                if m0_signal_only_plan is None
+                if native_observations or m0_signal_only_plan is None
                 else m0_signal_only_plan.quadrature.column_px.size
             ),
             "model_continuous_node_count": int(
-                0
-                if m0_signal_only_plan is None
-                else m0_signal_only_plan.quadrature.column_px.size
+                0 if m0_signal_only_plan is None else m0_signal_only_plan.quadrature.column_px.size
             ),
             "count_mass_sha256": _array_sha256(m0_signal_only_count_mass),
             "count_covariance_sha256": _array_sha256(m0_signal_only_count_covariance),
-            "radial_background_mass_sha256": _array_sha256(
-                m0_signal_only_background_mass
-            ),
+            "radial_background_mass_sha256": _array_sha256(m0_signal_only_background_mass),
             "model_mass_sha256": _array_sha256(m0_signal_only_model_mass),
             "detector_overlay_flat_pixel_count": int(m0_signal_only_flat_pixel.size),
             "detector_overlay_flat_pixel_sha256": _array_sha256(m0_signal_only_flat_pixel),
@@ -6778,9 +7538,7 @@ def prepare_profiles(
         "continuous_support_exclusions": support_exclusions,
         "profile_cubature": {
             "settings": profile_cubature,
-            "m0_model_phi_subdivision_count": int(
-                profile_cubature["fold_fit_subdivisions"]
-            ),
+            "m0_model_phi_subdivision_count": int(profile_cubature["fold_fit_subdivisions"]),
             "offspecular_axial_refinement": offspecular_axial_refinement,
             "offspecular_radial_transform": offspecular_radial_transform,
             "offspecular_signal_minimum_radial_nodes_per_side": (
@@ -6793,23 +7551,7 @@ def prepare_profiles(
             "fit_artifact_data_projection": fit_document["data_projection"],
             "execution": executions,
         },
-        "measured_data_projection": {
-            "method": MEASURED_PROJECTION_METHOD,
-            "coarse_projection_revision": coarse_measured_projection.projection_revision,
-            "projection_revision": measured_projection.projection_revision,
-            "display_fit_projection_revision": display_fit_projection.projection_revision,
-            "count_mass_sha256": _array_sha256(count_sum),
-            "count_covariance_sha256": _array_sha256(count_covariance),
-            "quadrature_revision": measured_profile_plan.quadrature.quadrature_revision,
-            "gauss_order": int(recipe["model_cubature"]["oracle_gauss_order"]),
-            "subdivision_count": int(recipe["model_cubature"]["fold_oracle_subdivisions"]),
-            "m0_phi_subdivision_count": int(
-                recipe["model_cubature"]["fold_oracle_subdivisions"]
-            ),
-            "continuous_node_count": int(measured_profile_plan.quadrature.column_px.size),
-            "refinement_oracle": measured_projection_refinement,
-            "smoothing_applied": False,
-        },
+        "measured_data_projection": measured_data_record,
         "model_measure": "continuous_detector_chart_area",
         "full_selected_native_pixel_count": int(np.unique(selected_pixel).size),
         "full_selected_pixel_region_pair_count": int(selected_pixel.size),
@@ -6974,8 +7716,6 @@ def _pixel_cell_boundary_segments(mask: np.ndarray) -> np.ndarray:
     if not segments:
         return np.empty((0, 2, 2), dtype=np.float64)
     return np.asarray(segments, dtype=np.float64)
-
-
 
 
 def render(
@@ -7181,7 +7921,6 @@ def render(
     axes["m0"] = figure.add_subplot(profile_grid[3, :])
     identities = arrays["profile_identity"]
     valid = arrays["profile_valid"]
-    display_qz_Ainv = arrays["profile_display_qz_Ainv"]
     selection_coordinate = arrays["profile_selection_coordinate"]
     bin_index = arrays["profile_bin_index"]
     m0_signal_only_selected = _m0_signal_only_display_mask(
@@ -7240,9 +7979,7 @@ def render(
     def plot_m0_signal_only_supplement(axis: Any) -> None:
         x = arrays["m0_signal_only_two_theta_deg"][m0_signal_only_selected]
         observed = arrays["m0_signal_only_measured_density"][m0_signal_only_selected]
-        modeled = arrays["m0_signal_only_model_plus_background_density"][
-            m0_signal_only_selected
-        ]
+        modeled = arrays["m0_signal_only_model_plus_background_density"][m0_signal_only_selected]
         bins = arrays["m0_signal_only_bin_index"][m0_signal_only_selected]
         order = np.argsort(x)
         x = x[order]
@@ -7261,9 +7998,7 @@ def render(
                 marker="o",
                 markersize=2.8,
                 linewidth=0.9,
-                label=(
-                    "Signal-only data (no sidebands)" if segment_index == 0 else None
-                ),
+                label=("Signal-only data (no sidebands)" if segment_index == 0 else None),
             )
             axis.plot(
                 x[segment],
@@ -7273,14 +8008,12 @@ def render(
                 marker="x",
                 markersize=3.0,
                 linewidth=1.0,
-                label=(
-                    "Unified model + extrapolated radial BG" if segment_index == 0 else None
-                ),
+                label=("Unified model + extrapolated radial BG" if segment_index == 0 else None),
             )
 
     for identity, axis in axes.items():
         selected = (identities == identity) & valid
-        x = selection_coordinate[selected] if identity == "m0" else display_qz_Ainv[selected]
+        x = selection_coordinate[selected]
         observed = displayed_measured[selected]
         modeled = arrays["profile_model_signal_density"][selected]
         bins = bin_index[selected]
@@ -7337,24 +8070,26 @@ def render(
             lower = min(0.0, float(np.min(pair_values)))
             upper = float(np.max(pair_values))
             limits = (lower, upper * 1.05 if upper > 0.0 else 1.0)
-            pair_qz = display_qz_Ainv[np.isin(identities, pair) & valid]
-            pair_qz = pair_qz[np.isfinite(pair_qz)]
+            pair_coordinate = selection_coordinate[np.isin(identities, pair) & valid]
+            pair_coordinate = pair_coordinate[np.isfinite(pair_coordinate)]
             pair_xlim = None
-            if pair_qz.size:
-                unique_qz = np.unique(np.sort(pair_qz))
+            if pair_coordinate.size:
+                unique_coordinate = np.unique(np.sort(pair_coordinate))
                 half_step = (
-                    0.5 * float(np.median(np.diff(unique_qz))) if unique_qz.size > 1 else 0.0
+                    0.5 * float(np.median(np.diff(unique_coordinate)))
+                    if unique_coordinate.size > 1
+                    else 0.0
                 )
                 pair_xlim = (
-                    float(np.min(pair_qz) - half_step),
-                    float(np.max(pair_qz) + half_step),
+                    float(np.min(pair_coordinate) - half_step),
+                    float(np.max(pair_coordinate) + half_step),
                 )
             for identity in pair:
                 axes[identity].set_ylim(*limits)
                 if pair_xlim is not None:
                     axes[identity].set_xlim(*pair_xlim)
     for identity in ("m4_plus", "m4_minus"):
-        axes[identity].set_xlabel(r"$Q_z$ ($\AA^{-1}$)")
+        axes[identity].set_xlabel(r"$L$")
     axes["m0"].set_xlabel(r"$2\theta$ (deg)")
     axes["m1_minus"].legend(
         handles=(
@@ -7439,9 +8174,7 @@ def render(
             ],
             "m0_signal_only_supplement": {
                 "fit_role": "display only",
-                "bin_index": arrays["m0_signal_only_bin_index"][
-                    m0_signal_only_selected
-                ].tolist(),
+                "bin_index": arrays["m0_signal_only_bin_index"][m0_signal_only_selected].tolist(),
                 "two_theta_deg": arrays["m0_signal_only_two_theta_deg"][
                     m0_signal_only_selected
                 ].tolist(),

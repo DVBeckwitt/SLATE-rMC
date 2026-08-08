@@ -338,6 +338,50 @@ def test_background_exclusion_contains_center_and_continuous_projection_pixels()
     assert not excluded.flags.writeable
 
 
+def test_native_pixel_center_statistics_preserve_overlap_and_shared_dark_covariance() -> None:
+    arrays = {
+        "dataset_index": np.asarray((0, 0, 1), dtype=np.int64),
+        "count_sum": np.asarray((4.0, 5.0, 12.0)),
+        "support_px2": np.asarray((1.0, 1.0, 2.0)),
+        "selected_dataset_index": np.asarray((0, 0, 1, 1), dtype=np.int64),
+        "selected_flat_pixel_index": np.asarray((0, 1, 0, 1), dtype=np.int64),
+        "selected_observation_row": np.asarray((0, 1, 2, 2), dtype=np.int64),
+    }
+    counts_by_dataset = {
+        "a": np.asarray(((4.0, 5.0, 0.0), (0.0, 0.0, 0.0))),
+        "b": np.asarray(((7.0, 5.0, 0.0), (0.0, 0.0, 0.0))),
+    }
+
+    mass, covariance, support, plans = ADAPTER._native_pixel_center_count_statistics(
+        arrays,
+        dataset_ids=("a", "b"),
+        counts_by_dataset=counts_by_dataset,
+        dark_counts=np.asarray(((1.0, 2.0, 0.0), (0.0, 0.0, 0.0))),
+        dark_scale=1.0,
+    )
+
+    np.testing.assert_array_equal(mass, (3.0, 3.0, 9.0))
+    np.testing.assert_array_equal(support, (1.0, 1.0, 2.0))
+    np.testing.assert_allclose(
+        covariance,
+        ((5.0, 0.0, 1.0), (0.0, 7.0, 2.0), (1.0, 2.0, 15.0)),
+        rtol=1.0e-15,
+        atol=1.0e-15,
+    )
+    assert len(plans) == 2
+
+    changed = copy.deepcopy(arrays)
+    changed["count_sum"][0] += 1.0
+    with pytest.raises(ValueError, match="prepared count sums"):
+        ADAPTER._native_pixel_center_count_statistics(
+            changed,
+            dataset_ids=("a", "b"),
+            counts_by_dataset=counts_by_dataset,
+            dark_counts=np.asarray(((1.0, 2.0, 0.0), (0.0, 0.0, 0.0))),
+            dark_scale=1.0,
+        )
+
+
 def test_conditioned_cubature_gate_detects_anchor_cancellation() -> None:
     oracle = np.asarray((101.0, 101.0, 101.0, 101.0, 100.0, 100.0))
     candidate = np.asarray((101.0, 101.0, 101.0, 101.0, 99.0, 101.0))
@@ -1202,6 +1246,41 @@ def test_recipe_peak_coordinates_and_horizon_catalog_are_consistent() -> None:
     with pytest.raises(ValueError, match="dataset_id"):
         ADAPTER._validated_recipe(invalid)
 
+    external = copy.deepcopy(recipe)
+    external["parratt_stitch"]["interface_assumption"] = "fixed_external_qz_m0_strength.v1"
+    assert (
+        ADAPTER._validated_recipe(external)["parratt_stitch"]["interface_assumption"]
+        == "fixed_external_qz_m0_strength.v1"
+    )
+    external["parratt_stitch"]["interface_assumption"] = "unknown"
+    with pytest.raises(ValueError, match="interface assumption"):
+        ADAPTER._validated_recipe(external)
+
+
+def test_profile_selection_coordinate_contract_is_two_theta_then_L() -> None:
+    arrays = {
+        "profile_identity": np.asarray(
+            ("m0", "m1_minus", "m1_plus", "m3_minus", "m3_plus", "m4_minus", "m4_plus")
+        ),
+        "profile_selection_coordinate": np.asarray((0.05, 2.3, 3.1, 6.7, 7.1, 12.9, np.nan)),
+        "profile_selection_coordinate_kind": np.asarray(
+            ("two_theta_deg", "L", "L", "L", "L", "L", "L")
+        ),
+        "profile_valid": np.asarray((True, True, True, True, True, True, False)),
+    }
+
+    ADAPTER._validate_profile_selection_coordinates(arrays)
+    invalid = copy.deepcopy(arrays)
+    invalid["profile_selection_coordinate_kind"][2] = "Qz_Ainv"
+    with pytest.raises(ValueError, match="profile selection coordinate"):
+        ADAPTER._validate_profile_selection_coordinates(invalid)
+
+    invalid = copy.deepcopy(arrays)
+    invalid["profile_selection_coordinate"][0] = np.nan
+    with pytest.raises(ValueError, match="profile selection coordinate"):
+        ADAPTER._validate_profile_selection_coordinates(invalid)
+
+
 def test_fit_conditioned_profile_policy_accepts_complete_fit_evidence() -> None:
     policy = ADAPTER._profile_evidence_policy(
         fit_document=_accepted_fit_document(),
@@ -1415,9 +1494,7 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "measured_quadrature_revision": "b" * 64,
             "model_quadrature_revision": "0" * 64,
             "gauss_order": TRUSTED_RECIPE["model_cubature"]["oracle_gauss_order"],
-            "subdivision_count": TRUSTED_RECIPE["model_cubature"][
-                "fold_oracle_subdivisions"
-            ],
+            "subdivision_count": TRUSTED_RECIPE["model_cubature"]["fold_oracle_subdivisions"],
             "measured_phi_subdivision_count": TRUSTED_RECIPE["model_cubature"][
                 "fold_oracle_subdivisions"
             ],
@@ -1648,9 +1725,7 @@ def test_pixel_cell_boundary_segments_follow_exact_native_pixel_edges() -> None:
 def test_m0_is_rendered_only_from_unified_profile_field() -> None:
     parser = ADAPTER._parser()
     subparser_action = next(
-        action
-        for action in parser._actions
-        if action.__class__.__name__ == "_SubParsersAction"
+        action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction"
     )
     assert "m0-low-angle" not in subparser_action.choices
     render_options = {
@@ -1685,6 +1760,7 @@ def test_m0_signal_only_display_fills_only_conditioning_gaps() -> None:
     )
     assert empty.dtype == np.bool_
     assert empty.shape == (0,)
+
 
 def test_five_coordinate_structure_adapter_separates_site_adps_and_intensity_envelope() -> None:
     from rasim_next.pipeline.configured_simulation import (
@@ -1752,6 +1828,20 @@ def test_structure_fit_plan_declares_stages_priors_and_bounds() -> None:
     )
     assert bi2te3_plan["material_id"] == "Bi2Te3"
     assert tuple(bi2te3_plan["parameter_names"]) == ADAPTER.STRUCTURE_PARAMETER_NAMES
+
+    seeded_plan_path = (
+        ROOT / "examples" / "bi2te3" / "experiment" / "figure7_fast_seeded_joint_fit.toml"
+    )
+    seeded_plan = ADAPTER._validated_fit_plan(
+        tomllib.loads(seeded_plan_path.read_text(encoding="utf-8"))
+    )
+    assert seeded_plan["execution_policy"] == "seeded_joint_only.v1"
+    assert tuple(seeded_plan["stage"]) == ("joint",)
+    assert seeded_plan["stage"]["joint"].get("predecessor") is None
+    invalid_seeded_plan = copy.deepcopy(seeded_plan)
+    invalid_seeded_plan["execution_policy"] = "staged_A_B_C_joint.v1"
+    with pytest.raises(ValueError, match="seeded joint-only"):
+        ADAPTER._validated_fit_plan(invalid_seeded_plan)
 
     unbound = copy.deepcopy(plan)
     del unbound["material_id"]

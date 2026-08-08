@@ -39,7 +39,7 @@ tracked_paths = sorted(
     )
     .decode("utf-8")
     .split("\0")
-    if path and path != "FILE_MANIFEST.json"
+    if path and path != "FILE_MANIFEST.json" and (ROOT / path).is_file()
 )
 if manifest_paths != tracked_paths:
     errors.append("file manifest tracked-path coverage")

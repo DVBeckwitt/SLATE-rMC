@@ -12,6 +12,28 @@ from numpy.typing import ArrayLike, NDArray
 from rasim_next.reflectivity.parratt import ParrattResult, parratt_reflectivity
 
 KinematicEvaluator = Callable[[NDArray[np.float64]], ArrayLike]
+LOCAL_LAMELLA_INTERFACE = "local_lamella_follows_mosaic.v1"
+FIXED_EXTERNAL_QZ_INTERFACE = "fixed_external_qz_m0_strength.v1"
+
+
+def parratt_stitch_interface_code(interface_assumption: str) -> int:
+    """Return the compiled code for one explicit m=0 interface convention."""
+
+    if interface_assumption == LOCAL_LAMELLA_INTERFACE:
+        return 1
+    if interface_assumption == FIXED_EXTERNAL_QZ_INTERFACE:
+        return 2
+    raise ValueError("unsupported Parratt stitch interface assumption")
+
+
+def parratt_stitch_interface_assumption(interface_code: int) -> str:
+    """Return the declared convention for a compiled nonzero stitch code."""
+
+    if interface_code == 1:
+        return LOCAL_LAMELLA_INTERFACE
+    if interface_code == 2:
+        return FIXED_EXTERNAL_QZ_INTERFACE
+    raise ValueError("unsupported compiled Parratt stitch interface code")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,13 +172,13 @@ class KinematicScaleSpecularResult:
 
 @dataclass(frozen=True, slots=True)
 class ParrattStitchStack:
-    """Fixed local-lamella substrate and interface inputs for the `m=0` handoff."""
+    """Fixed substrate and interface inputs for the declared `m=0` handoff."""
 
     substrate_refractive_index: complex
     top_roughness_A: float = 0.0
     bottom_roughness_A: float = 0.0
     model_id: str = "empirical_parratt_kinematic_strength.v1"
-    interface_assumption: str = "local_lamella_follows_mosaic.v1"
+    interface_assumption: str = LOCAL_LAMELLA_INTERFACE
 
     def __post_init__(self) -> None:
         index_value = complex(self.substrate_refractive_index)
@@ -172,8 +194,7 @@ class ParrattStitchStack:
             raise ValueError("interface roughnesses must be finite and nonnegative")
         if self.model_id != "empirical_parratt_kinematic_strength.v1":
             raise ValueError("unsupported Parratt stitch model_id")
-        if self.interface_assumption != "local_lamella_follows_mosaic.v1":
-            raise ValueError("unsupported Parratt stitch interface assumption")
+        parratt_stitch_interface_code(self.interface_assumption)
         object.__setattr__(self, "substrate_refractive_index", index_value)
         object.__setattr__(self, "top_roughness_A", roughness[0])
         object.__setattr__(self, "bottom_roughness_A", roughness[1])
@@ -194,6 +215,7 @@ class CompiledParrattStitch:
     blend_bounds_q_over_qc: tuple[float, float]
     blend_selection: str
     model_id: str = "empirical_parratt_kinematic_strength.v1"
+    interface_assumption: str = LOCAL_LAMELLA_INTERFACE
 
     def __post_init__(self) -> None:
         film = complex(self.film_refractive_index)
@@ -231,6 +253,7 @@ class CompiledParrattStitch:
             or self.model_id != "empirical_parratt_kinematic_strength.v1"
         ):
             raise ValueError("compiled Parratt stitch state is invalid")
+        parratt_stitch_interface_code(self.interface_assumption)
         object.__setattr__(self, "film_refractive_index", film)
         object.__setattr__(self, "substrate_refractive_index", substrate)
         (
@@ -248,6 +271,12 @@ class CompiledParrattStitch:
         object.__setattr__(self, "zero_strength_A2", zero)
         object.__setattr__(self, "dimensionless_scale_factor", scale)
         object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
+
+    @property
+    def interface_code(self) -> int:
+        """Numeric convention code consumed by compiled detector kernels."""
+
+        return parratt_stitch_interface_code(self.interface_assumption)
 
 
 def _evaluate_kinematic(
@@ -504,4 +533,5 @@ def compile_parratt_stitch(
         dimensionless_scale_factor=stitched.dimensionless_scale_factor,
         blend_bounds_q_over_qc=stitched.blend_bounds_q_over_qc,
         blend_selection=stitched.blend_selection,
+        interface_assumption=stack.interface_assumption,
     )

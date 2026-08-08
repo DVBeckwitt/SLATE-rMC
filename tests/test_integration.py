@@ -1865,6 +1865,115 @@ def test_parratt_stitch_is_m0_only_and_uses_one_local_lamella_branch(
             )
 
 
+def test_fixed_external_qz_parratt_stitch_is_m0_only_and_preserves_cuda_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rasim_next.pipeline.source_averaged_detector as source_detector_module
+    from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
+
+    inputs = _configured_inputs(sample_count=1)
+    rods = tuple(rod for rod in inputs.rods if rod.family_m in (0, 1))
+    plain = build_source_averaged_detector(inputs).restrict_rods(rods)
+
+    def active_low_branch_stitch(
+        stack: ParrattStitchStack,
+        kinematic_at_l: object,
+        *,
+        wavelength_A: float,
+        film_refractive_index: complex,
+        film_thickness_A: float,
+        c_A: float,
+        grid_size: int = 513,
+    ) -> CompiledParrattStitch:
+        del wavelength_A, c_A, grid_size
+        zero = float(np.asarray(kinematic_at_l(np.zeros(1, dtype=np.float64)), dtype=np.float64)[0])
+        return CompiledParrattStitch(
+            film_refractive_index=film_refractive_index,
+            substrate_refractive_index=stack.substrate_refractive_index,
+            film_thickness_A=film_thickness_A,
+            top_roughness_A=stack.top_roughness_A,
+            bottom_roughness_A=stack.bottom_roughness_A,
+            qc_Ainv=1.0,
+            zero_strength_A2=zero,
+            dimensionless_scale_factor=1.0,
+            blend_bounds_q_over_qc=(3.0, 6.0),
+            blend_selection="fallback",
+            interface_assumption=stack.interface_assumption,
+        )
+
+    monkeypatch.setattr(
+        source_detector_module,
+        "compile_parratt_stitch",
+        active_low_branch_stitch,
+    )
+    stitched = plain.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+            interface_assumption="fixed_external_qz_m0_strength.v1",
+        )
+    )
+    column_px = np.asarray((1448.2, 1448.2, 1109.5), dtype=np.float64)
+    row_px = np.asarray((1182.6, 1400.0, 1349.5), dtype=np.float64)
+    baseline = plain.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    candidate = stitched.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    nonzero_rod = np.asarray([rod.family_m != 0 for rod in rods])
+
+    np.testing.assert_array_equal(
+        candidate.per_rod_density_A2_per_px2[:, nonzero_rod],
+        baseline.per_rod_density_A2_per_px2[:, nonzero_rod],
+    )
+    assert np.any(
+        candidate.per_rod_density_A2_per_px2[:, ~nonzero_rod]
+        != baseline.per_rod_density_A2_per_px2[:, ~nonzero_rod]
+    )
+    assert stitched.detector_visible_m0_q_gap_Ainv is not None
+    assert stitched.detector_visible_m0_q_gap_Ainv > 0.0
+    rebound = stitched.rebind_physics()
+    np.testing.assert_array_equal(
+        rebound.evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+        ).per_rod_density_A2_per_px2,
+        candidate.per_rod_density_A2_per_px2,
+    )
+
+    sampler = stitched.compile_monte_carlo_sampler(execution_backend="cpu", seed=4381)
+    local_stitch = plain.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+        )
+    )
+    changed_fixed_stitch = plain.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+            bottom_roughness_A=11.0,
+            interface_assumption="fixed_external_qz_m0_strength.v1",
+        )
+    )
+    for changed in (local_stitch, changed_fixed_stitch):
+        with pytest.raises(
+            ValueError,
+            match="unchanged source, rods, physics, and detector shape",
+        ):
+            sampler.rebind_geometry(changed)
+
+    from numba import cuda
+
+    if cuda.is_available():
+        gpu = stitched.evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+            execution_backend="cuda",
+        )
+        np.testing.assert_allclose(
+            gpu.per_rod_density_A2_per_px2,
+            candidate.per_rod_density_A2_per_px2,
+            rtol=2.0e-11,
+            atol=2.0e-24,
+        )
+        assert gpu.execution_backend == "numba_cuda_source_averaged.v1"
+
+
 def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
     from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
 
@@ -1966,11 +2075,13 @@ def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
     rebind_then_restrict = rebound.restrict_rods(
         (rebound.rods[m0_index],)
     ).evaluate_detector_coordinates_all_roots(column_px, row_px)
-    restrict_then_rebind = full_stitched.restrict_rods(
-        (full_stitched.rods[m0_index],)
-    ).rebind_physics(strength_model=changed_strength).evaluate_detector_coordinates_all_roots(
-        column_px,
-        row_px,
+    restrict_then_rebind = (
+        full_stitched.restrict_rods((full_stitched.rods[m0_index],))
+        .rebind_physics(strength_model=changed_strength)
+        .evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+        )
     )
     np.testing.assert_allclose(
         rebind_then_restrict.per_rod_density_A2_per_px2[:, 0],

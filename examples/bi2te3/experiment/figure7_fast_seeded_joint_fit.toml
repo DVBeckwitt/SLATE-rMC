@@ -1,0 +1,58 @@
+schema_version = "rasim-layered-quintuple-structure-fit-plan-v6"
+execution_policy = "seeded_joint_only.v1"
+material_id = "Bi2Te3"
+parameter_names = [
+  "bi_delta_z_fractional",
+  "outer_chalcogen_delta_z_fractional",
+  "outer_bi_antisite_fraction",
+  "intensity_envelope_u_radial_A2",
+  "intensity_envelope_u_normal_A2",
+]
+baseline_parameters = [0.0, 0.0, 0.0, 0.0, 0.0]
+lower_bounds = [-0.01, -0.01, 0.0, 0.0, 0.0]
+upper_bounds = [0.01, 0.01, 0.03, 0.02, 0.02]
+parameter_scales = [0.001, 0.001, 0.01, 0.005, 0.005]
+prior_mean = [0.0, 0.0, 0.0, 0.0, 0.0]
+prior_sigma = [0.001, 0.001, 0.005, 0.005, 0.005]
+prior_interpretation = "Reuse a compatible five-coordinate fit only as a starting point; recompute every scale, model integral, residual, sensitivity, and final parameter under this objective."
+sensitivity_relative_tolerance = 1.0e-5
+maximum_sensitivity_condition = 1.0e5
+bound_proximity_in_parameter_scales = 1.0e-6
+
+[displacement_gauge]
+model_id = "fixed_site_adp_plus_regularized_sample_q_envelope.v1"
+site_adp_common_mode = "fixed_reference"
+sample_q_envelope_mode = "fit_zero_centered_regularized"
+
+[site_displacement_profile]
+model_id = "transverse_isotropic_site_reference_fixed.v1"
+provenance = "Mansour and Wong-Ng, J. Appl. Phys. 116, 083513 (2014), doi:10.1063/1.4892441."
+
+[[site_displacement_profile.site]]
+role = "bi"
+u_radial_A2 = 0.0182
+u_normal_A2 = 0.0250
+
+[[site_displacement_profile.site]]
+role = "central_chalcogen"
+u_radial_A2 = 0.0158
+u_normal_A2 = 0.0120
+
+[[site_displacement_profile.site]]
+role = "outer_chalcogen"
+u_radial_A2 = 0.0270
+u_normal_A2 = 0.0150
+
+[continuous_quadrature]
+offspecular_axial_refinement = 3
+offspecular_radial_transform = "squared_fold_coordinate.v1"
+offspecular_signal_minimum_radial_nodes_per_side = 24
+
+[stage.joint]
+active_parameters = [
+  "bi_delta_z_fractional",
+  "outer_chalcogen_delta_z_fractional",
+  "outer_bi_antisite_fraction",
+  "intensity_envelope_u_radial_A2",
+  "intensity_envelope_u_normal_A2",
+]

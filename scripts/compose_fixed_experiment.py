@@ -97,7 +97,7 @@ def _geometry_contract(config: Any) -> tuple[object, ...]:
 
     return (
         config.cif_sha256,
-        config.material,
+        config.material.phase_id,
         config.source,
         replace(config.instrument, film_thickness_A=0.0),
         config.bragg,

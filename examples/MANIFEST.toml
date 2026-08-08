@@ -166,9 +166,14 @@ size_bytes = 17149
 sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
 
 [[file]]
+path = "examples/bi2te3/experiment/figure7_fast_seeded_joint_fit.toml"
+size_bytes = 1969
+sha256 = "0e4a25edc41d47907444ca4e8ad6559632acfe2f7252843202b2b6707d571c8b"
+
+[[file]]
 path = "examples/bi2te3/experiment/figure7_matched_regions.toml"
-size_bytes = 4736
-sha256 = "6717b7e78df18b5adb77e010baaec4204cc00b75845b210891898a40bcc31578"
+size_bytes = 4881
+sha256 = "479fa1ececfa1e5cba7bde013834b6038f12ed61f409ae3b9acdee2e85c50abb"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_structure_fit.toml"

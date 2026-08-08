@@ -336,7 +336,7 @@ def _forward_root_pixel(
         state_real[state_index, 12],
     )
     if (
-        int(state_real[state_index, 18]) == 1
+        int(state_real[state_index, 18]) == 2
         and rod_hk_population[rod_index, 0] == 0.0
         and rod_hk_population[rod_index, 1] == 0.0
     ):

@@ -1444,7 +1444,7 @@ def _compile_detector_state(
         }
         if specular_stitch is None
         else {
-            "specular_stitch_code": 1,
+            "specular_stitch_code": specular_stitch.interface_code,
             "specular_substrate_refractive_index": (specular_stitch.substrate_refractive_index),
             "specular_top_roughness_A": specular_stitch.top_roughness_A,
             "specular_bottom_roughness_A": specular_stitch.bottom_roughness_A,

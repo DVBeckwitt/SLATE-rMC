@@ -58,6 +58,15 @@ def test_geometry_contract_excludes_non_geometric_film_thickness() -> None:
     assert geometry.instrument.film_thickness_A != intensity.instrument.film_thickness_A
     assert ADAPTER._geometry_contract(geometry) == ADAPTER._geometry_contract(intensity)
 
+    relocated = SimpleNamespace(
+        cif_sha256=geometry.cif_sha256,
+        material=SimpleNamespace(phase_id=geometry.material.phase_id),
+        source=geometry.source,
+        instrument=geometry.instrument,
+        bragg=geometry.bragg,
+    )
+    assert ADAPTER._geometry_contract(geometry) == ADAPTER._geometry_contract(relocated)
+
 
 def test_compose_fixed_experiment_writes_resumable_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
