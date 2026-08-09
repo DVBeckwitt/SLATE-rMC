@@ -84,7 +84,11 @@ from rasim_next.pipeline.reciprocal_detector_chart import (
     LayeredReciprocalDetectorAreaChart,
 )
 from rasim_next.proof.diagnostics import write_diagnostic
-from rasim_next.reflectivity import ParrattStitchStack
+from rasim_next.reflectivity import (
+    FIXED_EXTERNAL_QZ_INTERFACE,
+    LOCAL_LAMELLA_INTERFACE,
+    ParrattStitchStack,
+)
 from rasim_next.selection import build_osc_angle_frame
 from rasim_next.stacking import Parent, RichEpsilonModel
 
@@ -119,6 +123,12 @@ FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v13"
 FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v10"
 PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v13"
 PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v7"
+PROFILE_PARAMETER_REPLAY_METHOD = "frozen_fit_parameter_profile_replay.v1"
+PROFILE_PARAMETER_REPLAY_EVIDENCE = "FROZEN_FIT_PARAMETER_REPLAY"
+SPECULAR_INTERFACE_ASSUMPTIONS = (
+    LOCAL_LAMELLA_INTERFACE,
+    FIXED_EXTERNAL_QZ_INTERFACE,
+)
 PROFILE_VECTOR_ARRAY_NAMES = (
     "profile_identity",
     "profile_bin_index",
@@ -2336,6 +2346,28 @@ def _recipe_parratt_stitch(recipe: dict[str, Any]) -> ParrattStitchStack | None:
     )
 
 
+def _profile_recipe_with_specular_interface(
+    recipe: dict[str, Any],
+    interface_assumption: str | None,
+) -> dict[str, Any]:
+    """Return the fit recipe or its one-field profile-only stitch override."""
+
+    if interface_assumption is None:
+        return recipe
+    if interface_assumption not in SPECULAR_INTERFACE_ASSUMPTIONS:
+        raise ValueError("unsupported profile specular interface assumption")
+    stitch = recipe.get("parratt_stitch")
+    if not isinstance(stitch, dict):
+        raise ValueError("profile specular replay requires a fitted Parratt stitch")
+    return {
+        **recipe,
+        "parratt_stitch": {
+            **stitch,
+            "interface_assumption": interface_assumption,
+        },
+    }
+
+
 def _validate_position_dataset_binding(
     position: FixedPositionState,
     datasets: Sequence[dict[str, Any]],
@@ -3795,14 +3827,24 @@ def _load_radial_background(
     observation_support_revisions: Sequence[str],
     observation_support_method: str,
     excluded_flat_pixel_index_by_dataset: dict[str, np.ndarray] | None = None,
+    expected_background_adapter_identity: dict[str, Any] | None = None,
+    expected_implementation_identity: dict[str, Any] | None = None,
 ) -> tuple[RadialBackgroundState, dict[str, str], dict[str, Any]]:
     identity = _file_identity(path)
     arrays, manifest = _load_diagnostic(path, expected_schema=BACKGROUND_SCHEMA)
     expected_ids = tuple(str(value) for value in dataset_ids)
     provenance = manifest.get("provenance", {})
     sampling = manifest.get("sampling", {})
-    background_adapter_identity = _file_identity(Path(__file__))
-    implementation_identity = _implementation_identity()
+    background_adapter_identity = (
+        _file_identity(Path(__file__))
+        if expected_background_adapter_identity is None
+        else expected_background_adapter_identity
+    )
+    implementation_identity = (
+        _implementation_identity()
+        if expected_implementation_identity is None
+        else expected_implementation_identity
+    )
     if excluded_flat_pixel_index_by_dataset is not None and set(
         excluded_flat_pixel_index_by_dataset
     ) != set(expected_ids):
@@ -4117,6 +4159,17 @@ def _profile_manifest_is_admissible(
         dark = manifest["dark_correction"]
         m0_signal_only = manifest["m0_signal_only_display"]
         supplemental_bin_count = m0_signal_only["supplemental_bin_count"]
+        fit_parameter_replay = manifest.get("fit_parameter_replay")
+        if fit_parameter_replay is not None and not isinstance(fit_parameter_replay, dict):
+            raise TypeError("fit parameter replay must be a mapping")
+        effective_trusted_recipe = _profile_recipe_with_specular_interface(
+            trusted_recipe,
+            (
+                None
+                if fit_parameter_replay is None
+                else str(fit_parameter_replay["profile_interface_assumption"])
+            ),
+        )
     except (AttributeError, KeyError, TypeError, ValueError):
         return False
     if (
@@ -4128,6 +4181,69 @@ def _profile_manifest_is_admissible(
     native_fit_binding = bool(
         fit_origin_adapter == profile_adapter
         and fit_origin_implementation == profile_implementation
+    )
+    parameter_replay_admissible = False
+    if fit_parameter_replay is not None:
+        try:
+            fit_stitch = trusted_recipe["parratt_stitch"]
+            replay_scales = fit_parameter_replay["dataset_scales"]
+            replay_scale_values = np.asarray(
+                [float(replay_scales[dataset_id]) for dataset_id in expected_dataset_ids],
+                dtype=np.float64,
+            )
+            structure_parameters = np.asarray(
+                execution["structure_parameters"],
+                dtype=np.float64,
+            )
+        except (KeyError, TypeError, ValueError):
+            parameter_replay_admissible = False
+        else:
+            parameter_replay_admissible = bool(
+                fit_parameter_replay.get("method") == PROFILE_PARAMETER_REPLAY_METHOD
+                and fit_parameter_replay.get("status") == "COMPLETE"
+                and fit_parameter_replay.get("fit_role")
+                == "frozen_parameter_and_dataset_scale_source_only"
+                and fit_parameter_replay.get("profile_role")
+                == "continuous_profile_recalculation_without_optimization"
+                and fit_parameter_replay.get("scope")
+                == "m0_specular_interface_assumption_only"
+                and fit_parameter_replay.get("fit_parameters_reused") is True
+                and fit_parameter_replay.get("optimizer_executed") is False
+                and fit_parameter_replay.get("fit_reexecuted") is False
+                and fit_parameter_replay.get("profile_reexecuted") is True
+                and fit_parameter_replay.get("objective_requalified_under_profile_model") is False
+                and fit_parameter_replay.get("dataset_scales_requalified") is False
+                and fit_parameter_replay.get("source_fit_sha256")
+                == provenance.get("fit_sha256")
+                == execution.get("fit_sha256")
+                and fit_parameter_replay.get("source_fit_status")
+                == manifest.get("fit_status")
+                and fit_parameter_replay.get("structure_parameter_vector_sha256")
+                == _array_sha256(structure_parameters)
+                and set(replay_scales) == set(expected_dataset_ids)
+                and replay_scale_values.shape == (len(expected_dataset_ids),)
+                and np.all(np.isfinite(replay_scale_values))
+                and np.all(replay_scale_values > 0.0)
+                and fit_parameter_replay.get("dataset_scale_vector_sha256")
+                == _array_sha256(replay_scale_values)
+                and float(manifest.get("dataset_scale", math.nan))
+                == float(replay_scales[display_dataset_id])
+                and fit_parameter_replay.get("fit_interface_assumption")
+                == fit_stitch.get("interface_assumption")
+                and fit_parameter_replay.get("profile_interface_assumption")
+                in SPECULAR_INTERFACE_ASSUMPTIONS
+                and fit_parameter_replay.get("profile_interface_assumption")
+                != fit_parameter_replay.get("fit_interface_assumption")
+                and execution.get("fit_parameter_replay") == fit_parameter_replay
+                and execution.get("profile_adapter_sha256") == profile_adapter
+                and execution.get("fit_origin_adapter_sha256") == fit_origin_adapter
+                and execution.get("fit_origin_implementation_sha256")
+                == fit_origin_implementation
+            )
+    fit_binding_admissible = (
+        parameter_replay_admissible
+        if fit_parameter_replay is not None
+        else native_fit_binding
     )
     native_observation = _uses_native_pixel_center_observations(trusted_recipe)
     measured_projection_qualification_admissible = bool(
@@ -4296,8 +4412,8 @@ def _profile_manifest_is_admissible(
         and manifest.get("fit_model_rod_roster_sha256") == roster_sha256
         and families == set(FAMILIES)
         and all(_is_sha256(value) for value in evaluator_hashes)
-        and native_fit_binding
-        and manifest.get("figure_recipe") == trusted_recipe
+        and fit_binding_admissible
+        and manifest.get("figure_recipe") == effective_trusted_recipe
         and manifest.get("stacking_model") == _fault_free_three_r_definition()
         and _fixed_displacement_gauge_is_admissible(manifest.get("structure_representative"))
         and dark.get("model_id") == DARK_CORRECTION_MODEL
@@ -4382,7 +4498,12 @@ def _profile_manifest_is_admissible(
     )
     return bool(
         common
-        and manifest.get("evidence_level") == "FIT_CONDITIONED"
+        and manifest.get("evidence_level")
+        == (
+            PROFILE_PARAMETER_REPLAY_EVIDENCE
+            if fit_parameter_replay is not None
+            else "FIT_CONDITIONED"
+        )
         and manifest.get("publication_ready") is False
         and manifest.get("fit_status") in {"FIT", "MODEL_LIMITED_FIT"}
         and manifest.get("all_rod_validation") == "NOT_REQUIRED_FOR_RENDER"
@@ -4451,6 +4572,25 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         or fit_document.get("stacking_model") != manifest.get("stacking_model")
     ):
         raise ValueError("profile scientific state does not match its fit artifact")
+    fit_parameter_replay = manifest.get("fit_parameter_replay")
+    if fit_parameter_replay is not None:
+        fit_scales = {
+            str(dataset_id): float(value)
+            for dataset_id, value in fit_document.get("dataset_scales", {}).items()
+        }
+        fit_stitch = fit_document.get("specular_stitch")
+        if (
+            not isinstance(fit_parameter_replay, dict)
+            or not isinstance(fit_stitch, dict)
+            or fit_parameter_replay.get("source_fit_sha256")
+            != verified_inputs["fit artifact"]["sha256"]
+            or fit_parameter_replay.get("structure_parameter_vector_sha256")
+            != _array_sha256(_fit_structure_vector(fit_document))
+            or fit_parameter_replay.get("dataset_scales") != fit_scales
+            or fit_parameter_replay.get("fit_interface_assumption")
+            != fit_stitch.get("interface_assumption")
+        ):
+            raise ValueError("profile parameter replay does not match its source fit")
     trusted_recipe = _load_recipe(recipe_path)
     missing = [name for name in PROFILE_RENDER_ARRAY_NAMES if name not in arrays]
     if missing:
@@ -6184,6 +6324,7 @@ def prepare_profiles(
     destination: Path,
     execution_backend: str,
     row_chunk_size: int,
+    specular_interface_assumption: str | None = None,
 ) -> Path:
     destination = _external_file(destination)
     if destination.exists():
@@ -6201,6 +6342,11 @@ def prepare_profiles(
     recipe_path = _verified_provenance_path(manifest, "recipe")
     recipe_identity = _file_identity(recipe_path)
     recipe = _load_recipe(recipe_path)
+    profile_recipe = _profile_recipe_with_specular_interface(
+        recipe,
+        specular_interface_assumption,
+    )
+    parameter_replay_requested = specular_interface_assumption is not None
     fit_provenance = fit_document.get("provenance", {})
     fit_plan_identity = _verified_recorded_file_identity(
         fit_document.get("provenance", {}).get("fit_plan"),
@@ -6226,6 +6372,12 @@ def prepare_profiles(
         observation_support_method=(
             NATIVE_PIXEL_CENTER_METHOD if native_observations else MEASURED_PROJECTION_METHOD
         ),
+        expected_background_adapter_identity=(
+            fit_provenance.get("fit_adapter") if parameter_replay_requested else None
+        ),
+        expected_implementation_identity=(
+            fit_provenance.get("implementation") if parameter_replay_requested else None
+        ),
     )
     if fit_document.get("provenance", {}).get("background") != background_identity:
         raise ValueError("fit artifact used a different radial background")
@@ -6243,6 +6395,14 @@ def prepare_profiles(
     maximum_sensitivity_condition = float(fit_plan["maximum_sensitivity_condition"])
     recorded_adapter_sha256 = fit_provenance.get("fit_adapter", {}).get("sha256")
     recorded_implementation_sha256 = fit_provenance.get("implementation", {}).get("sha256")
+    qualification_adapter_sha256 = (
+        recorded_adapter_sha256 if parameter_replay_requested else adapter_identity["sha256"]
+    )
+    qualification_implementation_sha256 = (
+        recorded_implementation_sha256
+        if parameter_replay_requested
+        else implementation_identity["sha256"]
+    )
     fit_chain = _load_qualified_stage_chain(
         fit_path,
         expected_stage="joint",
@@ -6251,17 +6411,17 @@ def prepare_profiles(
         diagnostic_sha256=diagnostic_identity["sha256"],
         recipe_sha256=recipe_identity["sha256"],
         fit_plan_sha256=fit_plan_identity["sha256"],
-        adapter_sha256=adapter_identity["sha256"],
-        implementation_sha256=implementation_identity["sha256"],
+        adapter_sha256=qualification_adapter_sha256,
+        implementation_sha256=qualification_implementation_sha256,
         allow_model_limited_joint=True,
     )
     policy = _profile_evidence_policy(
         fit_document=fit_document,
         trusted_recipe=recipe,
         recipe_sha256=recipe_identity["sha256"],
-        adapter_sha256=adapter_identity["sha256"],
+        adapter_sha256=qualification_adapter_sha256,
         fit_plan_sha256=fit_plan_identity["sha256"],
-        implementation_sha256=implementation_identity["sha256"],
+        implementation_sha256=qualification_implementation_sha256,
         lower_bounds=lower_full,
         upper_bounds=upper_full,
         parameter_scales=scale_full,
@@ -6367,6 +6527,47 @@ def prepare_profiles(
     count_qz_mass = count_qz_mass[retained_row]
     row_count = retained_row.size
     parameters = _fit_structure_vector(fit_document)
+    fit_parameter_replay: dict[str, Any] | None = None
+    if parameter_replay_requested:
+        fit_stitch = recipe.get("parratt_stitch")
+        profile_stitch = profile_recipe.get("parratt_stitch")
+        if not isinstance(fit_stitch, dict) or not isinstance(profile_stitch, dict):
+            raise ValueError("profile parameter replay requires explicit fit and profile stitches")
+        if fit_stitch.get("interface_assumption") == profile_stitch.get(
+            "interface_assumption"
+        ):
+            raise ValueError("profile parameter replay must change the m=0 interface assumption")
+        replay_scales = {
+            dataset_id: float(fit_document["dataset_scales"][dataset_id])
+            for dataset_id in dataset_ids
+        }
+        fit_parameter_replay = {
+            "method": PROFILE_PARAMETER_REPLAY_METHOD,
+            "status": "COMPLETE",
+            "fit_role": "frozen_parameter_and_dataset_scale_source_only",
+            "profile_role": "continuous_profile_recalculation_without_optimization",
+            "scope": "m0_specular_interface_assumption_only",
+            "fit_parameters_reused": True,
+            "optimizer_executed": False,
+            "fit_reexecuted": False,
+            "profile_reexecuted": True,
+            "objective_requalified_under_profile_model": False,
+            "dataset_scales_requalified": False,
+            "source_fit_sha256": fit_identity["sha256"],
+            "source_fit_status": fit_document.get("status"),
+            "structure_parameter_vector_sha256": _array_sha256(parameters),
+            "dataset_scales": replay_scales,
+            "dataset_scale_vector_sha256": _array_sha256(
+                np.asarray([replay_scales[dataset_id] for dataset_id in dataset_ids])
+            ),
+            "fit_interface_assumption": str(fit_stitch["interface_assumption"]),
+            "profile_interface_assumption": str(profile_stitch["interface_assumption"]),
+        }
+        policy = {
+            **policy,
+            "evidence_level": PROFILE_PARAMETER_REPLAY_EVIDENCE,
+            "publication_ready": False,
+        }
     structure = fit_document["structure_representative"]
     maximum_blocks = int(recipe["model_cubature"]["maximum_state_block_count"])
     profile_rods = tuple(rod for rod in inputs.rods if rod.family_m in FAMILIES)
@@ -6380,7 +6581,7 @@ def prepare_profiles(
     rod_roster_sha256 = _rod_roster_sha256(rod_roster)
     if rod_roster_sha256 != fit_document.get("model_rod_roster_sha256"):
         raise RuntimeError("profile rod roster differs from the qualified fit")
-    specular_stitch = _recipe_parratt_stitch(recipe)
+    specular_stitch = _recipe_parratt_stitch(profile_recipe)
     detector = build_source_averaged_detector(inputs)
     if len(profile_rods) != len(inputs.rods):
         detector = detector.restrict_rods(profile_rods)
@@ -7011,6 +7212,7 @@ def prepare_profiles(
         "profile_adapter_sha256": adapter_identity["sha256"],
         "fit_origin_adapter_sha256": recorded_adapter_sha256,
         "fit_origin_implementation_sha256": recorded_implementation_sha256,
+        "fit_parameter_replay": fit_parameter_replay,
         "osc_sha256": osc_identity["sha256"],
         "dark_osc_sha256": dark_identity["sha256"],
         "dark_scale": dark_scale,
@@ -7386,6 +7588,7 @@ def prepare_profiles(
         "display_dataset_id": display_dataset_id,
         "dataset_scale": dataset_scale,
         "fit_status": fit_document.get("status"),
+        "fit_parameter_replay": fit_parameter_replay,
         "evidence_level": policy["evidence_level"],
         "publication_ready": policy["publication_ready"],
         "all_rod_validation": policy["all_rod_validation"],
@@ -7406,7 +7609,7 @@ def prepare_profiles(
         "structure_representative": structure,
         "stacking_model": manifest["stacking_model"],
         "dark_correction": manifest["dark_correction"],
-        "figure_recipe": recipe,
+        "figure_recipe": profile_recipe,
         "profile_contract": (
             "verified raw-minus-scaled-dark native-pixel-center count masses and unit-membership "
             "support are compared with unrasterized continuous phi/two-theta or signed-side Qr/L "
@@ -7416,6 +7619,13 @@ def prepare_profiles(
             "panel renormalization; "
             "m=0 bins lacking complete sidebands are retained only as a separately declared, "
             "display-only signal-region measurement"
+            + (
+                "; the profile model reuses the frozen fit parameters and dataset scales while "
+                "recalculating only the declared m=0 interface convention; no optimizer or "
+                "objective requalification is performed"
+                if fit_parameter_replay is not None
+                else ""
+            )
         ),
         "display_projection_relation_to_fit": (
             "The plotted background-corrected signal uses the same detector-native affine "
@@ -7761,7 +7971,11 @@ def render(
     )
     recipe = _validated_recipe(dict(manifest["figure_recipe"]))
     material_id = str(manifest["material_id"])
-    model_label = "Fitted model"
+    model_label = (
+        "Frozen-parameter model"
+        if manifest.get("fit_parameter_replay") is not None
+        else "Fitted model"
+    )
     material_slug = "".join(
         character.lower() if character.isalnum() else "_" for character in material_id
     ).strip("_")
@@ -8035,7 +8249,9 @@ def render(
                 marker="x",
                 markersize=3.0,
                 linewidth=1.0,
-                label=("Unified model + extrapolated radial BG" if segment_index == 0 else None),
+                label=(
+                    f"{model_label} + extrapolated radial BG" if segment_index == 0 else None
+                ),
             )
 
     for identity, axis in axes.items():
@@ -8171,6 +8387,8 @@ def render(
         "profile_diagnostic": profile_identity,
         "renderer": renderer_identity,
         "fit_status": manifest.get("fit_status"),
+        "fit_parameter_replay": manifest.get("fit_parameter_replay"),
+        "profile_specular_stitch": recipe.get("parratt_stitch"),
         "computationally_valid": manifest.get("computationally_valid"),
         "evidence_level": manifest.get("evidence_level"),
         "publication_ready": bool(manifest.get("publication_ready")),
@@ -8271,6 +8489,14 @@ def _parser() -> argparse.ArgumentParser:
     profiles_parser.add_argument("--destination", type=Path, required=True)
     profiles_parser.add_argument("--backend", choices=("cpu", "cuda"), default="cuda")
     profiles_parser.add_argument("--row-chunk-size", type=int, default=32)
+    profiles_parser.add_argument(
+        "--specular-interface-assumption",
+        choices=SPECULAR_INTERFACE_ASSUMPTIONS,
+        help=(
+            "replay the frozen fit parameters and scales while recalculating profiles with "
+            "the selected m=0 interface assumption; no optimizer is run"
+        ),
+    )
     render_parser = subparsers.add_parser("render")
     render_parser.add_argument("--profile-diagnostic", type=Path, required=True)
     render_parser.add_argument("--output-directory", type=Path, required=True)
@@ -8323,6 +8549,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 destination=arguments.destination,
                 execution_backend=arguments.backend,
                 row_chunk_size=arguments.row_chunk_size,
+                specular_interface_assumption=arguments.specular_interface_assumption,
             )
         )
     elif arguments.command == "render":

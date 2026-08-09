@@ -1660,7 +1660,71 @@ def test_profile_manifest_accepts_an_empty_m0_signal_only_supplement() -> None:
     )
 
 
-def test_profiles_cli_is_explicitly_fit_conditioned() -> None:
+def test_profile_manifest_accepts_only_declared_frozen_parameter_replay() -> None:
+    trusted_recipe = copy.deepcopy(TRUSTED_RECIPE)
+    trusted_recipe["parratt_stitch"] = {
+        "interface_assumption": ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE,
+    }
+    accepted = _accepted_profile_manifest()
+    execution = accepted["provenance"]["execution_identity"]
+    structure_parameters = np.asarray((0.001, -0.001, 0.012, 0.004, 0.006))
+    dataset_scales = {"a": 2.0, "b": 3.0, "c": 4.0}
+    replay = {
+        "method": ADAPTER.PROFILE_PARAMETER_REPLAY_METHOD,
+        "status": "COMPLETE",
+        "fit_role": "frozen_parameter_and_dataset_scale_source_only",
+        "profile_role": "continuous_profile_recalculation_without_optimization",
+        "scope": "m0_specular_interface_assumption_only",
+        "fit_parameters_reused": True,
+        "optimizer_executed": False,
+        "fit_reexecuted": False,
+        "profile_reexecuted": True,
+        "objective_requalified_under_profile_model": False,
+        "dataset_scales_requalified": False,
+        "source_fit_sha256": "f" * 64,
+        "source_fit_status": "FIT",
+        "structure_parameter_vector_sha256": ADAPTER._array_sha256(structure_parameters),
+        "dataset_scales": dataset_scales,
+        "dataset_scale_vector_sha256": ADAPTER._array_sha256(
+            np.asarray(tuple(dataset_scales.values()))
+        ),
+        "fit_interface_assumption": ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE,
+        "profile_interface_assumption": ADAPTER.LOCAL_LAMELLA_INTERFACE,
+    }
+    accepted.update(
+        evidence_level=ADAPTER.PROFILE_PARAMETER_REPLAY_EVIDENCE,
+        dataset_scale=2.0,
+        fit_parameter_replay=replay,
+        figure_recipe=ADAPTER._profile_recipe_with_specular_interface(
+            trusted_recipe,
+            ADAPTER.LOCAL_LAMELLA_INTERFACE,
+        ),
+    )
+    accepted["provenance"].update(
+        profile_adapter_sha256="c" * 64,
+        implementation={"sha256": "d" * 64},
+    )
+    execution.update(
+        structure_parameters=structure_parameters.tolist(),
+        fit_parameter_replay=replay,
+        profile_adapter_sha256="c" * 64,
+        fit_origin_adapter_sha256="a" * 64,
+        fit_origin_implementation_sha256="b" * 64,
+        implementation_sha256="d" * 64,
+    )
+
+    assert ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=trusted_recipe,
+    )
+    replay["optimizer_executed"] = True
+    assert not ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=trusted_recipe,
+    )
+
+
+def test_profiles_cli_supports_explicit_frozen_parameter_replay() -> None:
     arguments = ADAPTER._parser().parse_args(
         [
             "profiles",
@@ -1672,13 +1736,43 @@ def test_profiles_cli_is_explicitly_fit_conditioned() -> None:
             "fit.json",
             "--destination",
             "profiles.ra_diag.npz",
+            "--specular-interface-assumption",
+            ADAPTER.LOCAL_LAMELLA_INTERFACE,
         ]
     )
 
     assert arguments.command == "profiles"
     assert arguments.destination == Path("profiles.ra_diag.npz")
+    assert arguments.specular_interface_assumption == ADAPTER.LOCAL_LAMELLA_INTERFACE
     assert not hasattr(arguments, "reuse_fit_parameters")
     assert not hasattr(arguments, "reuse_profile_diagnostic")
+
+
+def test_profile_specular_replay_changes_only_the_interface_assumption() -> None:
+    recipe = {
+        "dataset_ids": ["a"],
+        "parratt_stitch": {
+            "model_id": "empirical_parratt_kinematic_strength.v1",
+            "interface_assumption": ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE,
+            "top_roughness_A": 5.0,
+        },
+    }
+
+    replay = ADAPTER._profile_recipe_with_specular_interface(
+        recipe,
+        ADAPTER.LOCAL_LAMELLA_INTERFACE,
+    )
+
+    assert recipe["parratt_stitch"]["interface_assumption"] == (
+        ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE
+    )
+    assert replay == {
+        **recipe,
+        "parratt_stitch": {
+            **recipe["parratt_stitch"],
+            "interface_assumption": ADAPTER.LOCAL_LAMELLA_INTERFACE,
+        },
+    }
 
 
 def test_background_cli_requires_the_exact_structure_fit_plan() -> None:
