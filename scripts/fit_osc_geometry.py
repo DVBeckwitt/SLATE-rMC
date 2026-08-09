@@ -191,13 +191,18 @@ def _prediction_payload(
         entries = []
         for index, key in enumerate(image.observations.keys):
             error = prediction.coordinates_px[index] - image.observations.coordinates_px[index]
+            whitened_error = image.observations.whitening_matrix_px_inv[index] @ error
             entries.append(
                 {
                     "key": _key_payload(key),
                     "observed_coordinate_px": image.observations.coordinates_px[index].tolist(),
                     "predicted_coordinate_px": prediction.coordinates_px[index].tolist(),
+                    "covariance_px2": image.observations.covariance_px2[index].tolist(),
                     "detector_status": str(prediction.detector_status[index]),
+                    "error_column_px": float(error[0]),
+                    "error_row_px": float(error[1]),
                     "error_norm_px": float(np.linalg.norm(error)),
+                    "whitened_error_norm": float(np.linalg.norm(whitened_error)),
                 }
             )
         payload.append({"image_id": image.image_id, "sites": tuple(entries)})
@@ -685,6 +690,24 @@ def fit_osc_geometry_series(
             qualification_parameterization_matches,
         )
     )
+    coordinate_prediction_accepted = all(
+        (
+            run_completed,
+            fit_metrics_pass,
+            minimum_improvement_pass,
+            cross_validation is not None,
+            cross_validation_fit_succeeded,
+            heldout_metrics_pass,
+        )
+    )
+    parameter_precision_qualified = coordinate_prediction_accepted and no_active_bounds
+    position_classification = (
+        "POSITION_FIT"
+        if parameter_precision_qualified
+        else "POSITION_MODEL_LIMITED"
+        if coordinate_prediction_accepted
+        else "POSITION_UNQUALIFIED"
+    )
     position_revision_payload = {
         "indexed_manifest_hash": indexing.selection.manifest_hash,
         "corrections": asdict(result.corrections),
@@ -756,6 +779,12 @@ def fit_osc_geometry_series(
         "baseline": _metrics_payload(baseline),
         "cross_validation": cross_validation,
         "fit": _fit_payload(result),
+        "predictions": _prediction_payload(
+            images,
+            result.corrections,
+            result.incidence_angle_delta_rad,
+            result_trims,
+        ),
         "incidence_angle_correction": {
             "model_id": "commanded_plus_common_delta_plus_zero_sum_trim.helmert.v1",
             "parameter_name": INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
@@ -783,6 +812,13 @@ def fit_osc_geometry_series(
             "warm_residual_median_seconds": warm_residual_median_seconds,
             "fit_peak_memory_bytes": fit_peak_memory_bytes,
         },
+        "assessment": {
+            "classification": position_classification,
+            "coordinate_prediction_accepted": coordinate_prediction_accepted,
+            "dataset_qualified": accepted,
+            "parameter_precision_qualified": parameter_precision_qualified,
+            "heldout_validation_performed": cross_validation is not None,
+        },
         "qualification": {
             "accepted": accepted,
             "requested": qualification_requested,
@@ -805,7 +841,7 @@ def fit_osc_geometry_series(
             "maximum_heldout_error_px": _MAXIMUM_HELDOUT_ERROR_PX,
             "maximum_multistart_separation_px": _MAXIMUM_MULTISTART_SEPARATION_PX,
             "no_active_bounds": no_active_bounds,
-            "parameter_precision_qualified": no_active_bounds,
+            "parameter_precision_qualified": parameter_precision_qualified,
             "maximum_multistart_prediction_separation_px": (
                 maximum_multistart_prediction_separation
             ),
