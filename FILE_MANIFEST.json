@@ -693,8 +693,8 @@
     },
     {
       "path": "scripts/fit_layered_quintuple_regions.py",
-      "sha256": "845691b776f3195390011fa750f4ff90732ceda350a96219edd8e7ecb88f4a43",
-      "size_bytes": 377388
+      "sha256": "93ab6fa42ee666c800ea9f2edec4a43bc26d7b9b6cd8dd0b8c17da6d4d8e6995",
+      "size_bytes": 377020
     },
     {
       "path": "scripts/fit_osc_geometry.py",

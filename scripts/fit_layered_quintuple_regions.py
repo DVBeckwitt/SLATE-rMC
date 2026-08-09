@@ -7793,7 +7793,6 @@ def render(
         temporary.unlink(missing_ok=True)
     counts = arrays["display_detector_counts"]
     full_region_code = np.array(arrays["display_full_region_code"], copy=True)
-    fit_region_code = arrays["display_fit_region_code"]
     valid_profile_keys = {
         (str(identity), int(bin_value))
         for identity, bin_value, is_valid in zip(
@@ -7903,15 +7902,6 @@ def render(
                 linewidth=0.45,
                 zorder=3.0,
             )
-        fit_mask = fit_region_code == code
-        if np.any(fit_mask):
-            add_exact_boundary(
-                fit_mask,
-                color=color,
-                linestyle="solid",
-                linewidth=1.15,
-                zorder=4.0,
-            )
     for label in recipe.get("label", []):
         detector_axis.text(
             float(label["column_px"]),
@@ -7923,10 +7913,7 @@ def render(
             va="center",
         )
     detector_axis.set(
-        title=(
-            f"{material_label} {display_incidence_deg:g}° OSC: full integration regions "
-            "(thin) and fit-used windows (bold)"
-        ),
+        title=f"{material_label} {display_incidence_deg:g}° OSC: integration regions",
         xlabel="detector column (px)",
         ylabel="detector row (px, top-origin)",
     )
@@ -7934,8 +7921,14 @@ def render(
     detector_axis.set_ylim(row_count - 0.5, -0.5)
     detector_axis.legend(
         handles=(
-            Line2D((), (), color="white", linestyle="dashed", linewidth=0.7, label="full ROI"),
-            Line2D((), (), color="white", linewidth=1.4, label="fit-used window"),
+            Line2D(
+                (),
+                (),
+                color="white",
+                linestyle="dashed",
+                linewidth=0.7,
+                label="integration ROI",
+            ),
         ),
         facecolor="black",
         framealpha=0.65,
