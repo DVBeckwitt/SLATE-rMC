@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 import sys
 import tomllib
@@ -12,9 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rasim_next.fitting.fixed_experiment import FixedMosaicState, FixedPositionState
+
 FIT_WORKFLOW_SCHEMA = "rasim-layered-fit-workflow-v1"
 FIT_WORKFLOW_STAGE_SCHEMA = "rasim-layered-fit-workflow-stage-v1"
 FIT_WORKFLOW_PROGRESS_SCHEMA = "rasim-layered-fit-workflow-progress-v1"
+FIT_PARAMETER_SEED_SCHEMA = "rasim-layered-material-fit-seed-v1"
 FIT_WORKFLOW_STAGE_NAMES = ("geometry", "mosaic", "sf")
 
 
@@ -28,6 +32,21 @@ class FitWorkflowStage:
 
 
 @dataclass(frozen=True, slots=True)
+class FitParameterSeed:
+    """Current material parameters used to initialize a repeatable fit."""
+
+    path: Path
+    material_id: str
+    model_family: str
+    fixed_position: FixedPositionState
+    mosaic: FixedMosaicState
+    parameter_names: tuple[str, ...]
+    parameter_values: tuple[float, ...]
+    dataset_scales: tuple[tuple[str, float], ...]
+    profile_specular_interface_assumption: str
+
+
+@dataclass(frozen=True, slots=True)
 class FitWorkflow:
     """One material-neutral staged-fit case."""
 
@@ -37,6 +56,7 @@ class FitWorkflow:
     material_id: str
     model_family: str
     backend: str
+    fit_parameter_seed: FitParameterSeed | None
     stages: Mapping[str, FitWorkflowStage]
 
 
@@ -59,6 +79,69 @@ def _nonempty_string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a nonempty string")
     return value.strip()
+
+
+def _load_fit_parameter_seed(
+    path: Path,
+    *,
+    material_id: str,
+    model_family: str,
+) -> FitParameterSeed:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"failed to load fit parameter seed {path}: {error}") from error
+    if not isinstance(document, dict) or document.get("schema_version") != (
+        FIT_PARAMETER_SEED_SCHEMA
+    ):
+        raise ValueError("unsupported fit parameter seed schema")
+    if document.get("material_id") != material_id or document.get("model_family") != model_family:
+        raise ValueError("fit parameter seed does not match the workflow material")
+    structure = document.get("structure_function")
+    profile = document.get("profile")
+    if not isinstance(structure, dict) or not isinstance(profile, dict):
+        raise ValueError("fit parameter seed is missing structure or profile state")
+    raw_names = structure.get("parameter_names")
+    raw_values = structure.get("parameter_values")
+    raw_scales = structure.get("dataset_scales")
+    if (
+        not isinstance(raw_names, list)
+        or not isinstance(raw_values, list)
+        or not isinstance(raw_scales, dict)
+    ):
+        raise ValueError("fit parameter seed structure state is invalid")
+    names = tuple(_nonempty_string(value, "fit parameter name") for value in raw_names)
+    try:
+        values = tuple(float(value) for value in raw_values)
+        scales = tuple(
+            (_nonempty_string(key, "fit dataset ID"), float(value))
+            for key, value in raw_scales.items()
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("fit parameter seed contains a nonnumeric value") from error
+    if (
+        not names
+        or len(names) != len(values)
+        or len(set(names)) != len(names)
+        or any(not math.isfinite(value) for value in values)
+        or not scales
+        or any(not math.isfinite(value) or value <= 0.0 for _, value in scales)
+    ):
+        raise ValueError("fit parameter seed values are invalid")
+    return FitParameterSeed(
+        path=path,
+        material_id=material_id,
+        model_family=model_family,
+        fixed_position=FixedPositionState.from_record(document.get("fixed_position")),
+        mosaic=FixedMosaicState.from_record(document.get("mosaic")),
+        parameter_names=names,
+        parameter_values=values,
+        dataset_scales=scales,
+        profile_specular_interface_assumption=_nonempty_string(
+            profile.get("specular_interface_assumption"),
+            "profile specular interface assumption",
+        ),
+    )
 
 
 def _stage_from_record(name: str, record: object) -> FitWorkflowStage:
@@ -112,6 +195,17 @@ def load_fit_workflow(
     stages = {
         name: _stage_from_record(name, stage_records[name]) for name in FIT_WORKFLOW_STAGE_NAMES
     }
+    seed_reference = document.get("fit_parameter_seed")
+    fit_parameter_seed: FitParameterSeed | None = None
+    if seed_reference is not None:
+        seed_path = Path(_nonempty_string(seed_reference, "fit_parameter_seed"))
+        if not seed_path.is_absolute():
+            seed_path = case_path.parent / seed_path
+        fit_parameter_seed = _load_fit_parameter_seed(
+            seed_path.resolve(),
+            material_id=material_id,
+            model_family=model_family,
+        )
     repository_root = _repository_root()
     resolved_output = Path(output_directory).resolve()
     if resolved_output == repository_root or resolved_output.is_relative_to(repository_root):
@@ -123,13 +217,14 @@ def load_fit_workflow(
         material_id=material_id,
         model_family=model_family,
         backend=backend,
+        fit_parameter_seed=fit_parameter_seed,
         stages=stages,
     )
 
 
 def _format_context(workflow: FitWorkflow, stage: str) -> dict[str, str]:
     output = workflow.output_directory
-    return {
+    context = {
         "python": sys.executable,
         "repo": str(workflow.repository_root),
         "case_dir": str(workflow.case_path.parent),
@@ -142,6 +237,11 @@ def _format_context(workflow: FitWorkflow, stage: str) -> dict[str, str]:
         "material_id": workflow.material_id,
         "model_family": workflow.model_family,
     }
+    if workflow.fit_parameter_seed is not None:
+        context["fit_profile_interface_assumption"] = (
+            workflow.fit_parameter_seed.profile_specular_interface_assumption
+        )
+    return context
 
 
 def _expand(value: str, context: Mapping[str, str]) -> str:
@@ -156,15 +256,23 @@ def _expanded_stage(
     stage: FitWorkflowStage,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[Path, ...]]:
     context = _format_context(workflow, stage.name)
-    commands = tuple(
-        tuple(_expand(argument, context) for argument in command) for command in stage.commands
-    )
+    commands: list[tuple[str, ...]] = []
+    for command in stage.commands:
+        expanded: list[str] = []
+        for argument in command:
+            if argument == "{fit_parameter_values}":
+                if workflow.fit_parameter_seed is None:
+                    raise ValueError("workflow command requires a fit parameter seed")
+                expanded.extend(repr(value) for value in workflow.fit_parameter_seed.parameter_values)
+            else:
+                expanded.append(_expand(argument, context))
+        commands.append(tuple(expanded))
     stage_directory = workflow.output_directory / stage.name
     artifacts: list[Path] = []
     for declared in stage.completion_artifacts:
         expanded = Path(_expand(declared, context))
         artifacts.append(expanded if expanded.is_absolute() else stage_directory / expanded)
-    return commands, tuple(path.resolve() for path in artifacts)
+    return tuple(commands), tuple(path.resolve() for path in artifacts)
 
 
 def _revision(payload: object) -> str:
@@ -246,6 +354,11 @@ def planned_fit_workflow(
         "material_id": workflow.material_id,
         "model_family": workflow.model_family,
         "backend": workflow.backend,
+        "fit_parameter_seed": (
+            None
+            if workflow.fit_parameter_seed is None
+            else str(workflow.fit_parameter_seed.path)
+        ),
         "stages": plans,
     }
 
@@ -426,8 +539,10 @@ def run_fit_workflow(
 
 
 __all__ = [
+    "FIT_PARAMETER_SEED_SCHEMA",
     "FIT_WORKFLOW_SCHEMA",
     "FIT_WORKFLOW_STAGE_NAMES",
+    "FitParameterSeed",
     "FitWorkflow",
     "FitWorkflowStage",
     "FitWorkflowStageResult",

@@ -657,6 +657,14 @@ expanded commands without creating output. Both nominal Bi2X3 cases currently co
 tracked accepted fixed-mosaic checkpoint. A future material can replace that stage's empty command
 list with its mosaic fitter without changing the runner.
 
+Each workflow also names one tracked `*_current_fit.json` material seed. Its geometry, mosaic,
+structure-factor vector, analytic dataset scales, and final profile-interface convention preserve
+the current nominal result; the runner expands its structure-factor vector directly into the joint
+fit command. Both final figures use the same integration-ROI-only renderer. Bi2Te3 keeps the
+fixed-external convention during fitting, then automatically recalculates its continuous profiles
+with the fitted vector and scales frozen under the local-lamella m=0 convention. That profile replay
+runs no optimizer; Bi2Se3 already fits and profiles with local-lamella m=0 directly.
+
 First compose the independently supplied position, optional accepted lattice, and mosaic states.
 The tracked material-specific mosaic JSON has schema `rasim-fixed-mosaic-state-v1`, status
 `PROVIDED_MOSAIC_PRIOR`, the three continuous-mixture values, and a nonempty provenance string. For

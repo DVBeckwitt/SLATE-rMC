@@ -1,5 +1,5 @@
 {
-  "file_count": 325,
+  "file_count": 327,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -78,13 +78,23 @@
     },
     {
       "path": "configs/fit_workflows/bi2se3.toml",
-      "sha256": "4fa2444084118cf32b2106fec83e46af77097bc1c17d5cae39196e57d6c23acc",
-      "size_bytes": 2836
+      "sha256": "9ec5effda3c564758d9ee0a870b691bc394137559f19a026760da6c9f2bc6fd7",
+      "size_bytes": 2873
+    },
+    {
+      "path": "configs/fit_workflows/bi2se3_current_fit.json",
+      "sha256": "1802f0be5730c1ebce63fefa9c3f6c91b2e86cf972f7595658133832a3ef5c4a",
+      "size_bytes": 3700
     },
     {
       "path": "configs/fit_workflows/bi2te3.toml",
-      "sha256": "94ada7ff52f3d27982e9be50b23a9ba3f41e4c003d7d9525b432e38c543dcabd",
-      "size_bytes": 2822
+      "sha256": "96a2444952f1f9130798ba944446c8cd5c2a97a36129387cb8c31f6616e09ead",
+      "size_bytes": 2931
+    },
+    {
+      "path": "configs/fit_workflows/bi2te3_current_fit.json",
+      "sha256": "553da491e263ebc8e6e86c55d94547af5694b8d1627fd15a0170dd743801adfe",
+      "size_bytes": 3731
     },
     {
       "path": "docs/ARCHITECTURE.md",
@@ -128,8 +138,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "7e24ed3ec3120532a940afb6d3e50fe51341f6dc667c5df981f1b39134e1c68c",
-      "size_bytes": 49567
+      "sha256": "b3b57e83a85b418ed6e246ee91ef2309af7b9e55be4d07c112f53a6bedf44c25",
+      "size_bytes": 50237
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -933,8 +943,8 @@
     },
     {
       "path": "src/rasim_next/fitting/workflow.py",
-      "sha256": "3808fb4a4f4f8b3046551ee759aa94c7eaea903908ef327a8163ed506223f5df",
-      "size_bytes": 15115
+      "sha256": "31a1d7af51d85c770127b894a902f57618cc352cbae5ce22297a0702e2fe694b",
+      "size_bytes": 19845
     },
     {
       "path": "src/rasim_next/geometry/__init__.py",
@@ -1558,8 +1568,8 @@
     },
     {
       "path": "tests/test_layered_fit_workflow.py",
-      "sha256": "d209bc50d1d8761acfa146baa9b48947a52b6a46a85cf28cecbec49fdf4c8047",
-      "size_bytes": 3334
+      "sha256": "2d4fd6d167f1a9704410a7be4942190af4d5aed35d69e0052ddd96bf00a072bc",
+      "size_bytes": 5767
     },
     {
       "path": "tests/test_layered_quintuple_regions_cli.py",

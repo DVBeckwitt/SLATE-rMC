@@ -2,6 +2,7 @@ schema_version = "rasim-layered-fit-workflow-v1"
 material_id = "Bi2Se3"
 model_family = "bi2x3_quintuple.v1"
 backend = "cuda"
+fit_parameter_seed = "bi2se3_current_fit.json"
 
 [stages.geometry]
 completion_artifacts = ["position.json"]
@@ -18,13 +19,15 @@ completion_artifacts = [
   "joint.json",
   "profiles.ra_diag.npz",
   "rendered/bi2se3_figure7_matched_model.png",
+  "rendered/bi2se3_figure7_matched_model.pdf",
   "rendered/bi2se3_figure7_matched_model.json",
+  "rendered/bi2se3_peak_alignment.json",
 ]
 commands = [
   ["{python}", "{repo}/scripts/compose_fixed_experiment.py", "--position", "{geometry_dir}/position.json", "--geometry-manifest", "{repo}/configs/bi2se3_osc_geometry_fit.yaml", "--recipe", "{repo}/examples/bi2se3/experiment/figure7_matched_regions.toml", "--mosaic-state", "{repo}/examples/bi2se3/experiment/fixed_mosaic.json", "--source-state-count", "250", "--destination", "{sf_dir}/fixed_experiment.json"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "prepare", "--fixed-state", "{sf_dir}/fixed_experiment.json", "--recipe", "{repo}/examples/bi2se3/experiment/figure7_matched_regions.toml", "--destination", "{sf_dir}/matched_regions.ra_diag.npz", "--source-state-count", "250"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "background", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--fit-plan", "{repo}/examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml", "--destination", "{sf_dir}/radial_background.ra_diag.npz"],
-  ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "fit", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--background", "{sf_dir}/radial_background.ra_diag.npz", "--fit-plan", "{repo}/examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml", "--destination", "{sf_dir}/joint.json", "--stage", "joint", "--backend", "{backend}", "--maximum-function-evaluations", "20", "--initial-parameters", "-0.00023470731574029476", "0.005835113709169384", "7.237450881995888e-15", "0.01999999999999276", "0.0017923284519703931"],
+  ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "fit", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--background", "{sf_dir}/radial_background.ra_diag.npz", "--fit-plan", "{repo}/examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml", "--destination", "{sf_dir}/joint.json", "--stage", "joint", "--backend", "{backend}", "--maximum-function-evaluations", "20", "--initial-parameters", "{fit_parameter_values}"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "profiles", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--background", "{sf_dir}/radial_background.ra_diag.npz", "--fit", "{sf_dir}/joint.json", "--destination", "{sf_dir}/profiles.ra_diag.npz", "--backend", "{backend}"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "render", "--profile-diagnostic", "{sf_dir}/profiles.ra_diag.npz", "--output-directory", "{sf_dir}/rendered"],
 ]
