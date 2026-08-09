@@ -6386,7 +6386,6 @@ def prepare_profiles(
     detector = build_source_averaged_detector(inputs)
     if len(profile_rods) != len(inputs.rods):
         detector = detector.restrict_rods(profile_rods)
-    detector = detector.with_maximum_state_block_count(maximum_blocks)
     detector = detector.rebind_physics(
         strength_model=_candidate_strength(
             detector.strength_model,
@@ -6396,6 +6395,7 @@ def prepare_profiles(
         intensity_envelope=_candidate_intensity_envelope(parameters),
     )
     detector = detector.with_specular_stitch(specular_stitch)
+    detector = detector.with_maximum_state_block_count(maximum_blocks)
     profile_cubature = recipe["profile_cubature"]
     cuda_chunk_size = int(recipe["model_cubature"]["cuda_coordinate_chunk_size"])
     profile_row_arrays = {

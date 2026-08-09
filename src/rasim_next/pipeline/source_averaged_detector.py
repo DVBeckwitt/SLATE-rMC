@@ -894,6 +894,28 @@ def _sum_compiled_evaluator_block(
     return per_rod, caustic, valid_source_count
 
 
+def _warm_compiled_evaluator_blocks(
+    evaluator_blocks: tuple[tuple[_IndexedCompiledEvaluator, ...], ...],
+    column_px: FloatArray,
+    row_px: FloatArray,
+    branch: int | None,
+) -> None:
+    """Compile the exact coordinate signature before any evaluator enters a worker thread."""
+
+    first = next(
+        (indexed.evaluator for block in evaluator_blocks for indexed in block),
+        None,
+    )
+    if first is None:
+        return
+    empty_column = column_px[:0]
+    empty_row = row_px[:0]
+    if branch is None:
+        first.evaluate_all_roots(empty_column, empty_row)
+    else:
+        first.evaluate(empty_column, empty_row, branch=branch)
+
+
 def _reachable_master_rod_indices(
     rods: tuple[Rod, ...],
     reciprocal_basis_Ainv: FloatArray,
@@ -1488,7 +1510,7 @@ class SourceAveragedDetectorEwaldMeasure:
             return self
         if stack is not None and not isinstance(stack, ParrattStitchStack):
             raise TypeError("stack must be ParrattStitchStack")
-        return type(self)(
+        rebuilt = type(self)(
             reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
             crystal_to_sample=self._instrument.sample_from_crystal.rotation,
             rods=self._rods,
@@ -1504,6 +1526,7 @@ class SourceAveragedDetectorEwaldMeasure:
             worker_count=self._worker_count,
             specular_stitch_stack=stack,
         )
+        return rebuilt.with_maximum_state_block_count(len(self._evaluator_blocks))
 
     def with_maximum_state_block_count(
         self,
@@ -1812,10 +1835,14 @@ class SourceAveragedDetectorEwaldMeasure:
                 m0_index, m0_rod = next(
                     (index, rod) for index, rod in enumerate(self._rods) if rod.family_m == 0
                 )
-                local_m0 = self.restrict_rods((m0_rod,)).evaluate_detector_coordinates_all_roots(
-                    flat_column,
-                    flat_row,
-                    execution_backend="cpu",
+                local_m0 = (
+                    self.restrict_rods((m0_rod,))
+                    .with_maximum_state_block_count(1)
+                    .evaluate_detector_coordinates_all_roots(
+                        flat_column,
+                        flat_row,
+                        execution_backend="cpu",
+                    )
                 )
                 per_rod[:, m0_index] = np.asarray(local_m0.per_rod_density_A2_per_px2).reshape(-1)
                 caustic[:, m0_index] = np.asarray(local_m0.caustic).reshape(-1)
@@ -1824,21 +1851,15 @@ class SourceAveragedDetectorEwaldMeasure:
             else:
                 backend_id = "numba_cuda_source_averaged.v1"
         else:
-            if self._evaluator_blocks and flat_column.size:
-                first = self._evaluator_blocks[0][0].evaluator
-                if branch is None:
-                    first.evaluate_all_roots(
-                        np.empty(0, dtype=np.float64),
-                        np.empty(0, dtype=np.float64),
-                    )
-                else:
-                    first.evaluate(
-                        np.empty(0, dtype=np.float64),
-                        np.empty(0, dtype=np.float64),
-                        branch=branch,
-                    )
             executor = self._thread_pool()
             try:
+                if executor is not None and self._evaluator_blocks and flat_column.size:
+                    _warm_compiled_evaluator_blocks(
+                        self._evaluator_blocks,
+                        flat_column,
+                        flat_row,
+                        branch,
+                    )
                 per_rod, caustic, valid_source_count = self._evaluate_flat_coordinates(
                     flat_column,
                     flat_row,
@@ -2093,13 +2114,15 @@ class SourceAveragedDetectorEwaldMeasure:
                 )
                 backend_id = "numba_cuda_source_averaged.v1"
         else:
-            if self._evaluator_blocks and flat_column.size:
-                self._evaluator_blocks[0][0].evaluator.evaluate_all_roots(
-                    np.empty(0, dtype=np.float64),
-                    np.empty(0, dtype=np.float64),
-                )
             executor = self._thread_pool()
             try:
+                if executor is not None and self._evaluator_blocks and flat_column.size:
+                    _warm_compiled_evaluator_blocks(
+                        self._evaluator_blocks,
+                        flat_column,
+                        flat_row,
+                        None,
+                    )
                 density, caustic, valid_source_count = self._evaluate_flat_density_all_roots(
                     flat_column,
                     flat_row,

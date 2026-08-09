@@ -45,6 +45,7 @@ from rasim_next.pipeline.configured_simulation import (
 )
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
+    SourceAveragedDetectorEwaldMeasure,
 )
 from rasim_next.reflectivity import CompiledParrattStitch, ParrattStitchStack
 
@@ -1642,6 +1643,150 @@ def _two_state_source_averaged_detector_fixture(
         for coating, singleton_incident in zip(coatings, singleton_incidents, strict=True)
     )
     return averaged, scalar_detectors
+
+
+def test_source_averaged_detector_compiles_all_blocks_before_parallel_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from rasim_next.pipeline._continuous_detector_kernel import CompiledDetectorEvaluator
+
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    mapped = scalar_detectors[0].map_latent(
+        rod=averaged.rods[1],
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    column_px = np.asarray((mapped.geometry.column_px,), dtype=np.float64)
+    row_px = np.asarray((mapped.geometry.row_px,), dtype=np.float64)
+    column_px.flags.writeable = False
+    row_px.flags.writeable = False
+
+    main_thread = threading.get_ident()
+    warm_call_count = 0
+    evaluated_evaluators: set[int] = set()
+    phase = "parallel"
+    original_evaluate_all_roots = CompiledDetectorEvaluator.evaluate_all_roots
+
+    def evaluate_all_roots_spy(
+        self: CompiledDetectorEvaluator,
+        column_px: np.ndarray,
+        row_px: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        nonlocal warm_call_count
+        if not column_px.size:
+            assert phase == "parallel"
+            assert threading.get_ident() == main_thread
+            assert not column_px.flags.writeable
+            assert not row_px.flags.writeable
+            warm_call_count += 1
+        elif phase == "parallel":
+            assert threading.get_ident() != main_thread
+            assert warm_call_count == 1
+            assert not column_px.flags.writeable
+            assert not row_px.flags.writeable
+            evaluated_evaluators.add(id(self))
+        return original_evaluate_all_roots(self, column_px, row_px)
+
+    monkeypatch.setattr(
+        CompiledDetectorEvaluator,
+        "evaluate_all_roots",
+        evaluate_all_roots_spy,
+    )
+    parallel = averaged.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    assert warm_call_count == 1
+    assert len(evaluated_evaluators) == averaged.valid_source_state_count
+    phase = "serial"
+    monkeypatch.setattr(type(averaged), "_thread_pool", lambda self: None)
+    serial = averaged.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    np.testing.assert_array_equal(
+        parallel.per_rod_density_A2_per_px2,
+        serial.per_rod_density_A2_per_px2,
+    )
+    np.testing.assert_array_equal(parallel.density_A2_per_px2, serial.density_A2_per_px2)
+    np.testing.assert_array_equal(parallel.caustic, serial.caustic)
+    np.testing.assert_array_equal(parallel.valid_source_count, serial.valid_source_count)
+    assert np.any(parallel.density_A2_per_px2 > 0.0)
+
+
+def test_hybrid_cuda_preserves_regular_blocks_and_serializes_local_m0(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rasim_next.pipeline import _continuous_detector_cuda as cuda_module
+    from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
+
+    inputs = _configured_inputs(sample_count=3)
+    rods = tuple(rod for rod in inputs.rods if rod.family_m in (0, 1))
+    detector = (
+        build_source_averaged_detector(inputs)
+        .restrict_rods(rods)
+        .with_maximum_state_block_count(2)
+        .with_specular_stitch(
+            ParrattStitchStack(
+                substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+            )
+        )
+    )
+    column_px = np.asarray((1448.2, 1448.2, 1109.5), dtype=np.float64)
+    row_px = np.asarray((1182.6, 1400.0, 1349.5), dtype=np.float64)
+    oracle = detector.with_maximum_state_block_count(1).evaluate_detector_coordinates_all_roots(
+        column_px, row_px
+    )
+    m0_index = next(index for index, rod in enumerate(detector.rods) if rod.family_m == 0)
+    assert np.any(oracle.per_rod_density_A2_per_px2[:, m0_index] > 0.0)
+    regular_block_counts: list[int] = []
+
+    def fake_cuda(
+        evaluator_blocks: tuple[tuple[object, ...], ...],
+        column_px: np.ndarray,
+        row_px: np.ndarray,
+        *,
+        detector_shape_rc: tuple[int, int],
+        master_rod_count: int,
+        **_kwargs: object,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+        del row_px, detector_shape_rc
+        regular_block_counts.append(len(evaluator_blocks))
+        return (
+            np.asarray(oracle.per_rod_density_A2_per_px2, dtype=np.float64).copy(),
+            np.asarray(oracle.caustic, dtype=np.bool_).copy(),
+            np.asarray(oracle.valid_source_count, dtype=np.int64).copy(),
+            "test-cuda",
+        )
+
+    monkeypatch.setattr(cuda_module, "evaluate_source_averaged_all_roots_cuda", fake_cuda)
+    local_m0_block_counts: list[int] = []
+
+    def local_m0_thread_pool_spy(self: SourceAveragedDetectorEwaldMeasure) -> None:
+        active_rods = self.rods
+        assert active_rods and all(rod.family_m == 0 for rod in active_rods)
+        block_count = len(self._evaluator_blocks)
+        local_m0_block_counts.append(block_count)
+        assert block_count == 1
+        return None
+
+    monkeypatch.setattr(type(detector), "_thread_pool", local_m0_thread_pool_spy)
+    result = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+
+    assert regular_block_counts == [2]
+    assert local_m0_block_counts == [1]
+    assert result.execution_backend == "hybrid_cuda_cpu_local_m0.v1"
+    np.testing.assert_allclose(
+        result.per_rod_density_A2_per_px2,
+        oracle.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(result.caustic, oracle.caustic)
+    np.testing.assert_array_equal(result.valid_source_count, oracle.valid_source_count)
 
 
 def test_source_averaged_detector_density_equals_independent_state_sum() -> None:
