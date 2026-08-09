@@ -1,5 +1,5 @@
 {
-  "file_count": 324,
+  "file_count": 325,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -78,8 +78,8 @@
     },
     {
       "path": "configs/fit_workflows/bi2se3.toml",
-      "sha256": "6f6cd03b5dc9a200ebe4bdefe504c7ff6154cd208f69c4b824c5219f667b7c39",
-      "size_bytes": 3808
+      "sha256": "4fa2444084118cf32b2106fec83e46af77097bc1c17d5cae39196e57d6c23acc",
+      "size_bytes": 2836
     },
     {
       "path": "configs/fit_workflows/bi2te3.toml",
@@ -188,8 +188,8 @@
     },
     {
       "path": "examples/MANIFEST.toml",
-      "sha256": "50a4bfc584ac3c604c1dfda0594944030595c0903ccfaaaa457c495dd75adc97",
-      "size_bytes": 6391
+      "sha256": "5b3d6eb4fc68676c6075699f7053f8714b49cc9528f3e8b54da40080c853f884",
+      "size_bytes": 6566
     },
     {
       "path": "examples/README.md",
@@ -200,6 +200,11 @@
       "path": "examples/bi2se3/README.md",
       "sha256": "1620c68a5fae40ecb7ed7fde0caed0594d5c5de2486a54e59c36dc600ef655e6",
       "size_bytes": 1477
+    },
+    {
+      "path": "examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml",
+      "sha256": "3b5893746fbf88e92ba1ff654c340f0746425b9e59069cf81d8a4736d424000f",
+      "size_bytes": 2189
     },
     {
       "path": "examples/bi2se3/experiment/figure7_matched_regions.toml",

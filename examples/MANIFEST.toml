@@ -186,6 +186,11 @@ size_bytes = 11521
 sha256 = "9158f06eb1f415c53214d74b11e72174ddfe52ca142db50201b1f8d6ed9ac275"
 
 [[file]]
+path = "examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml"
+size_bytes = 2189
+sha256 = "3b5893746fbf88e92ba1ff654c340f0746425b9e59069cf81d8a4736d424000f"
+
+[[file]]
 path = "examples/bi2se3/experiment/fixed_mosaic.json"
 size_bytes = 300
 sha256 = "e0ac04b482f994842a2a01f5fd3e145355093bd536ade781ba4d2124be1e8b25"
