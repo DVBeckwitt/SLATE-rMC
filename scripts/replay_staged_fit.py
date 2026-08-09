@@ -14,6 +14,7 @@ import math
 import platform
 import sys
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ _SHARED_GEOMETRY_PARAMETER_NAMES = (
     "goniometer_pivot_yaw_offset_m",
 )
 _SHA256_PREFIX = "sha256-"
+_MOSAIC_COMPONENT_CACHE_SCHEMA = "rasim-mosaic-component-checkpoint-v1"
 _STAGE_RESULT_KEYS = {
     "case_id",
     "stage_case_sha256",
@@ -1603,29 +1605,61 @@ def _bi2se3_mosaic(
 
 def _bi2te3_fixed_inputs(
     case: ReplayCase,
-    corrections: list[float],
-    mosaic_runner: Any,
+    position: Any,
+    fixed_lattice: Any,
+    *,
+    simulation_config_path: Path | None = None,
 ) -> tuple[Any, tuple[Any, ...], tuple[Any, ...]]:
-    runtime_case = {
-        "simulation_config": str(case.input_paths["simulation_config"]),
-        "incidence_angles_deg": list(case.incidence_angles_deg),
-        "shared_geometry_corrections": corrections,
+    from rasim_next.fitting import (
+        FixedLatticeState,
+        FixedPositionState,
+        build_fixed_experiment_series,
+    )
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+    if not isinstance(position, FixedPositionState):
+        raise TypeError("position must be FixedPositionState")
+    if not isinstance(fixed_lattice, FixedLatticeState):
+        raise TypeError("fixed_lattice must be FixedLatticeState")
+    commanded_rad = tuple(math.radians(value) for value in case.incidence_angles_deg)
+    if position.commanded_incidence_angles_rad != commanded_rad:
+        raise ValueError("position incidence series differs from the mosaic case")
+
+    config = load_simulation_config(
+        case.input_paths["simulation_config"]
+        if simulation_config_path is None
+        else simulation_config_path
+    )
+    mosaic_arguments = {
+        "gaussian_sigma_rad": math.radians(config.mosaic.gaussian_sigma_deg),
+        "lorentzian_half_width_rad": math.radians(config.mosaic.lorentzian_hwhm_deg),
+        "lorentzian_probability": config.mosaic.lorentzian_probability,
     }
-    revision = (
-        "sha256-"
-        + hashlib.sha256(json.dumps(corrections, separators=(",", ":")).encode("utf-8")).hexdigest()
-    )
-    position = mosaic_runner._FixedPositionState(
-        artifact_revision=revision,
-        corrections=mosaic_runner.SharedGeometryCorrections.from_array(corrections),
-        incidence_angle_delta_rad=0.0,
-    )
-    return mosaic_runner._fixed_geometry_inputs(
-        case.path,
-        runtime_case,
-        source_sample_count=case.source_state_count,
+    series = build_fixed_experiment_series(
+        config,
         position=position,
+        fixed_lattice=fixed_lattice,
+        source_sample_count=case.source_state_count,
+        **mosaic_arguments,
     )
+    nominal_config = replace(
+        config,
+        source=replace(
+            config.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+    )
+    nominal_series = build_fixed_experiment_series(
+        nominal_config,
+        position=position,
+        fixed_lattice=fixed_lattice,
+        source_sample_count=1,
+        **mosaic_arguments,
+    )
+    return series[0], series, nominal_series
 
 
 def _local_peak_centroid(
@@ -1723,6 +1757,9 @@ def _bi2te3_profile_definitions(
         stage["dataset_ids"],
         strict=True,
     ):
+        effective_incidence_rad = math.radians(
+            inputs.config.instrument.axis_rotations[geometry_series.incidence_axis_index].angle_deg
+        )
         context = build_nominal_ewald_context(inputs)
         frame = build_osc_angle_frame(
             mean_direction_lab=inputs.config.source.mean_direction_lab,
@@ -1771,7 +1808,7 @@ def _bi2te3_profile_definitions(
                 MosaicProfileDefinition(
                     identity=MosaicProfileIdentity(
                         dataset_id=str(dataset_id),
-                        incidence_angle_rad=math.radians(angle),
+                        incidence_angle_rad=effective_incidence_rad,
                         group_key=group,
                         branch_id=1 if key[2] < 0 else 2,
                         analytic_branch_id=2,
@@ -1845,7 +1882,7 @@ def _bi2te3_profile_definitions(
                 MosaicProfileDefinition(
                     identity=MosaicProfileIdentity(
                         dataset_id=str(dataset_id),
-                        incidence_angle_rad=math.radians(angle),
+                        incidence_angle_rad=effective_incidence_rad,
                         group_key=group,
                         branch_id=None,
                         analytic_branch_id=0,
@@ -2009,22 +2046,282 @@ def _bi2te3_observations(
     return observations, tuple(selected_definitions), selection_records
 
 
+def _recover_global_mosaic_alias(error: Any) -> tuple[Any, list[dict[str, float | None]]]:
+    """Retain a fitted representative only for an explicit, locally identified alias."""
+
+    result = error.candidate_result
+    if error.reason != "global_alias" or result is None:
+        raise error
+    matching_sets = [
+        parameter_set
+        for parameter_set in error.competing_parameter_sets
+        if parameter_set.gaussian_sigma_rad == result.gaussian_sigma_rad
+        and parameter_set.lorentzian_half_width_rad == result.lorentzian_half_width_rad
+        and parameter_set.lorentzian_probability == result.lorentzian_probability
+    ]
+    if len(matching_sets) != 1 or not math.isclose(
+        matching_sets[0].objective,
+        result.objective,
+        rel_tol=2.0e-12,
+        abs_tol=2.0e-14 * max(1.0, result.objective),
+    ):
+        raise RuntimeError("global mosaic alias does not contain its fitted representative")
+    return result, [
+        {
+            "gaussian_sigma_deg": (
+                None
+                if parameter_set.gaussian_sigma_rad is None
+                else math.degrees(parameter_set.gaussian_sigma_rad)
+            ),
+            "lorentzian_hwhm_deg": (
+                None
+                if parameter_set.lorentzian_half_width_rad is None
+                else math.degrees(parameter_set.lorentzian_half_width_rad)
+            ),
+            "lorentzian_probability": parameter_set.lorentzian_probability,
+            "objective": parameter_set.objective,
+        }
+        for parameter_set in error.competing_parameter_sets
+    ]
+
+
+def _checkpointed_mosaic_component_evaluator(
+    evaluator: Callable[[float], Any],
+    *,
+    cache_directory: Path,
+    component_kind: str,
+    cache_revision: str,
+    observations: Any,
+    source_revision: str,
+    execution_backend: str,
+) -> Callable[[float], Any]:
+    """Persist exact continuous component profiles after every completed evaluation."""
+
+    import numpy as np
+
+    from rasim_next.fitting import MosaicProfileSet
+
+    if not callable(evaluator):
+        raise TypeError("evaluator must be callable")
+    if component_kind not in {"gaussian", "lorentzian"}:
+        raise ValueError("component_kind must be gaussian or lorentzian")
+    if not isinstance(observations, MosaicProfileSet):
+        raise TypeError("observations must be a MosaicProfileSet")
+    for name, value in (
+        ("cache_revision", cache_revision),
+        ("source_revision", source_revision),
+        ("execution_backend", execution_backend),
+    ):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{name} must be a nonempty string")
+    cache_path = cache_directory / "mosaic_component_profiles.checkpoint.npz"
+    keys = {
+        "schema_version",
+        "cache_revision",
+        "profile_revision",
+        "source_revision",
+        "execution_backend",
+        "execution_device",
+        "component_kind",
+        "width_rad",
+        "signal",
+        "normalization",
+        "valid",
+    }
+
+    def load_records() -> tuple[dict[tuple[str, float], MosaicProfileSet], str | None]:
+        if not cache_path.is_file():
+            return {}, None
+        try:
+            with np.load(cache_path, allow_pickle=False) as archive:
+                if set(archive.files) != keys:
+                    raise ValueError("component checkpoint has unexpected fields")
+                metadata = {
+                    name: str(archive[name].item())
+                    for name in (
+                        "schema_version",
+                        "cache_revision",
+                        "profile_revision",
+                        "source_revision",
+                        "execution_backend",
+                        "execution_device",
+                    )
+                }
+                if metadata != {
+                    "schema_version": _MOSAIC_COMPONENT_CACHE_SCHEMA,
+                    "cache_revision": cache_revision,
+                    "profile_revision": observations.profile_revision,
+                    "source_revision": source_revision,
+                    "execution_backend": execution_backend,
+                    "execution_device": metadata["execution_device"],
+                }:
+                    raise ValueError("component checkpoint provenance changed")
+                kinds = np.asarray(archive["component_kind"])
+                widths = np.asarray(archive["width_rad"], dtype=np.float64)
+                signals = np.asarray(archive["signal"], dtype=np.float64)
+                normalizations = np.asarray(archive["normalization"], dtype=np.float64)
+                valid_masks = np.asarray(archive["valid"], dtype=np.bool_)
+                count = widths.size
+                expected_shape = (count, *observations.signal.shape)
+                if (
+                    kinds.shape != (count,)
+                    or signals.shape != expected_shape
+                    or normalizations.shape != expected_shape
+                    or valid_masks.shape != expected_shape
+                    or np.any(~np.isfinite(widths))
+                    or np.any(widths <= 0.0)
+                    or any(str(kind) not in {"gaussian", "lorentzian"} for kind in kinds)
+                ):
+                    raise ValueError("component checkpoint arrays are malformed")
+                records: dict[tuple[str, float], MosaicProfileSet] = {}
+                device = metadata["execution_device"] or None
+                for index, (kind, width) in enumerate(zip(kinds, widths, strict=True)):
+                    key = (str(kind), float(width))
+                    if key in records:
+                        raise ValueError("component checkpoint contains duplicate profiles")
+                    records[key] = MosaicProfileSet(
+                        identities=observations.identities,
+                        signal=signals[index],
+                        normalization=normalizations[index],
+                        valid=valid_masks[index],
+                        profile_revision=observations.profile_revision,
+                        phi_bin_edges_rad=observations.phi_bin_edges_rad,
+                        two_theta_bounds_rad=observations.two_theta_bounds_rad,
+                        angle_frame_revisions=observations.angle_frame_revisions,
+                        source_revision=source_revision,
+                        execution_backend=execution_backend,
+                        execution_device=device,
+                    )
+                return records, device
+        except (KeyError, OSError, TypeError, ValueError):
+            return {}, None
+
+    def validate(profile: Any) -> MosaicProfileSet:
+        if not isinstance(profile, MosaicProfileSet):
+            raise TypeError("component evaluator must return MosaicProfileSet")
+        if (
+            profile.identities != observations.identities
+            or profile.profile_revision != observations.profile_revision
+            or profile.angle_frame_revisions != observations.angle_frame_revisions
+            or profile.source_revision != source_revision
+            or profile.execution_backend != execution_backend
+            or profile.observation_revision is not None
+            or not np.array_equal(profile.phi_bin_edges_rad, observations.phi_bin_edges_rad)
+            or not np.array_equal(profile.two_theta_bounds_rad, observations.two_theta_bounds_rad)
+        ):
+            raise ValueError("component profile changed the frozen fit identity")
+        return profile
+
+    def write_records(
+        records: dict[tuple[str, float], MosaicProfileSet],
+        execution_device: str | None,
+    ) -> None:
+        ordered = sorted(records.items(), key=lambda item: (item[0][0], item[0][1]))
+        cache_directory.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_suffix(".tmp.npz")
+        with temporary.open("wb") as stream:
+            np.savez_compressed(
+                stream,
+                schema_version=np.asarray(_MOSAIC_COMPONENT_CACHE_SCHEMA),
+                cache_revision=np.asarray(cache_revision),
+                profile_revision=np.asarray(observations.profile_revision),
+                source_revision=np.asarray(source_revision),
+                execution_backend=np.asarray(execution_backend),
+                execution_device=np.asarray(execution_device or ""),
+                component_kind=np.asarray([key[0] for key, _ in ordered]),
+                width_rad=np.asarray([key[1] for key, _ in ordered], dtype=np.float64),
+                signal=np.stack([profile.signal for _, profile in ordered]),
+                normalization=np.stack([profile.normalization for _, profile in ordered]),
+                valid=np.stack([profile.valid for _, profile in ordered]),
+            )
+        temporary.replace(cache_path)
+
+    def checkpointed(width_rad: float) -> MosaicProfileSet:
+        width = float(width_rad)
+        if not math.isfinite(width) or width <= 0.0:
+            raise ValueError("component width must be finite and positive")
+        records, execution_device = load_records()
+        key = (component_kind, width)
+        if key in records:
+            return records[key]
+        profile = validate(evaluator(width))
+        if execution_device is not None and profile.execution_device != execution_device:
+            raise ValueError("component evaluations changed execution device")
+        records[key] = profile
+        write_records(records, profile.execution_device)
+        return profile
+
+    return checkpointed
+
+
 def _bi2te3_mosaic(
     case: ReplayCase,
     upstream: dict[str, Any],
     backend: str,
     output_directory: Path,
+    *,
+    fixed_position: Any | None = None,
+    fixed_lattice: Any | None = None,
+    simulation_config_path: Path | None = None,
 ) -> dict[str, Any]:
-    del output_directory
     if backend != "cuda":
         raise ValueError("the accepted Bi2Te3 mosaic replay is CUDA-qualified only")
+    from rasim_next.fitting import (
+        FixedLatticeState,
+        FixedPositionState,
+        MosaicIdentifiabilityError,
+    )
+    from rasim_next.fitting.indexed_series import SharedGeometryCorrections
     from rasim_next.io.osc import read_osc
+    from rasim_next.materials import read_crystal
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
 
     mosaic_runner = _load_script_module(
         "staged_fit_bi2te3_mosaic_physics", "recover_bi2se3_mosaic.py"
     )
-    corrections = [float(value) for value in upstream["state"]["corrections"]]
-    base, series, nominal_series = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    config_path = (
+        case.input_paths["simulation_config"]
+        if simulation_config_path is None
+        else simulation_config_path.resolve()
+    )
+    config = load_simulation_config(config_path)
+    if fixed_position is None:
+        fixed_position_record = upstream["state"].get("fixed_position")
+        if fixed_position_record is not None:
+            fixed_position = FixedPositionState.from_record(fixed_position_record)
+        else:
+            corrections = [float(value) for value in upstream["state"]["corrections"]]
+            fixed_position = FixedPositionState(
+                artifact_revision=upstream["scientific_revision"],
+                corrections=SharedGeometryCorrections.from_array(corrections),
+                incidence_angle_delta_rad=float(
+                    upstream["state"].get("incidence_angle_delta_rad", 0.0)
+                ),
+                commanded_incidence_angles_rad=tuple(
+                    math.radians(value) for value in case.incidence_angles_deg
+                ),
+                beam_center_column_row_px=tuple(
+                    float(value) for value in config.instrument.detector_reference_coordinate_px
+                ),
+            )
+    if not isinstance(fixed_position, FixedPositionState):
+        raise TypeError("fixed_position must be FixedPositionState")
+    if fixed_lattice is None:
+        crystal = read_crystal(
+            config.material.cif_path,
+            phase_id=config.material.phase_id,
+            expected_sha256=config.cif_sha256,
+        )
+        fixed_lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+    if not isinstance(fixed_lattice, FixedLatticeState):
+        raise TypeError("fixed_lattice must be FixedLatticeState")
+    corrections = fixed_position.corrections.as_array().tolist()
+    base, series, nominal_series = _bi2te3_fixed_inputs(
+        case,
+        fixed_position,
+        fixed_lattice,
+        simulation_config_path=config_path,
+    )
     if base.samples.source_revision != _source_revision(case):
         raise RuntimeError("Bi2Te3 mosaic replay changed its source realization")
     stage = case.stage_config["mosaic"]
@@ -2054,7 +2351,11 @@ def _bi2te3_mosaic(
         + hashlib.sha256(
             json.dumps(
                 {
-                    "geometry_revision": upstream["scientific_revision"],
+                    "geometry_revision": fixed_position.artifact_revision,
+                    "fixed_lattice": fixed_lattice.to_record(),
+                    "simulation_config_sha256": _sha256(config_path),
+                    "physics_revision": base.config.physics_revision,
+                    "cif_sha256": base.config.cif_sha256,
                     "source_revision": base.samples.source_revision,
                     "catalog_sha256": _sha256(case.input_paths[str(stage["catalog_role"])]),
                     "definitions": definition_payload,
@@ -2089,7 +2390,7 @@ def _bi2te3_mosaic(
         profile_revision,
         mosaic_runner,
     )
-    gaussian, lorentzian = mosaic_runner._component_profile_evaluators(
+    gaussian_evaluator, lorentzian_evaluator = mosaic_runner._component_profile_evaluators(
         physics=physics,
         geometry=profile_geometry,
         frames=frames,
@@ -2097,25 +2398,72 @@ def _bi2te3_mosaic(
         profile_revision=profile_revision,
         execution_backend=backend,
     )
-    search, _ = mosaic_runner._fit_profiles(
-        observations=observations,
-        evaluate_gaussian_profile=gaussian,
-        evaluate_lorentzian_profile=lorentzian,
-        search_config={
-            name: stage[name]
-            for name in (
-                "gaussian_sigma_bounds_deg",
-                "lorentzian_hwhm_bounds_deg",
-                "coarse_width_count",
-                "refinement_width_count",
-                "refinement_levels",
-                "near_optimal_objective_delta",
-                "maximum_sensitivity_condition",
-            )
-        },
-        nuisance_basis=mosaic_runner._constant_profile_background_basis(observations),
+    cache_revision = (
+        _SHA256_PREFIX
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    "schema_version": _MOSAIC_COMPONENT_CACHE_SCHEMA,
+                    "stage_case_sha256": _stage_case_sha256(case, "mosaic"),
+                    "profile_revision": profile_revision,
+                    "source_revision": base.samples.source_revision,
+                    "execution_backend": layout.execution_backend,
+                    "execution_device": layout.execution_device,
+                    "implementation_sha256": {
+                        "mosaic_runner": _sha256(Path(mosaic_runner.__file__)),
+                        "mosaic_core": _sha256(ROOT / "src/rasim_next/fitting/mosaic.py"),
+                        "source_averaged_detector": _sha256(
+                            ROOT / "src/rasim_next/pipeline/source_averaged_detector.py"
+                        ),
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
     )
-    result = search.fit
+    cache_directory = output_directory / ".mosaic_component_cache"
+    gaussian = _checkpointed_mosaic_component_evaluator(
+        gaussian_evaluator,
+        cache_directory=cache_directory,
+        component_kind="gaussian",
+        cache_revision=cache_revision,
+        observations=observations,
+        source_revision=base.samples.source_revision,
+        execution_backend=str(layout.execution_backend),
+    )
+    lorentzian = _checkpointed_mosaic_component_evaluator(
+        lorentzian_evaluator,
+        cache_directory=cache_directory,
+        component_kind="lorentzian",
+        cache_revision=cache_revision,
+        observations=observations,
+        source_revision=base.samples.source_revision,
+        execution_backend=str(layout.execution_backend),
+    )
+    alias_parameter_sets: list[dict[str, float | None]] = []
+    try:
+        search, _ = mosaic_runner._fit_profiles(
+            observations=observations,
+            evaluate_gaussian_profile=gaussian,
+            evaluate_lorentzian_profile=lorentzian,
+            search_config={
+                name: stage[name]
+                for name in (
+                    "gaussian_sigma_bounds_deg",
+                    "lorentzian_hwhm_bounds_deg",
+                    "coarse_width_count",
+                    "refinement_width_count",
+                    "refinement_levels",
+                    "near_optimal_objective_delta",
+                    "maximum_sensitivity_condition",
+                )
+            },
+            nuisance_basis=mosaic_runner._constant_profile_background_basis(observations),
+        )
+        result = search.fit
+    except MosaicIdentifiabilityError as error:
+        result, alias_parameter_sets = _recover_global_mosaic_alias(error)
     records = [
         {
             "dataset_id": identity.dataset_id,
@@ -2134,11 +2482,18 @@ def _bi2te3_mosaic(
         float(parameters["lorentzian_hwhm_deg"]),
         float(parameters["lorentzian_probability"]),
     ]
+    classification = (
+        "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_INTERVAL"
+        if alias_parameter_sets
+        else "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+    )
     summary = {
-        "classification": "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE",
+        "classification": classification,
         "parameters": parameter_values,
         "objective": float(result.objective),
         "rank": int(result.sensitivity_rank),
+        "sensitivity_condition": float(result.sensitivity_condition),
+        "global_alias_count": len(alias_parameter_sets),
         "profile_count": len(identities),
         "m0_profile_count": len(m0_identities),
         "per_incidence_profile_count": counts,
@@ -2151,6 +2506,21 @@ def _bi2te3_mosaic(
         "profile_scales": result.profile_scales.tolist(),
         "profile_revision": profile_revision,
         "geometry_corrections": corrections,
+        "fixed_position": fixed_position.to_record(),
+        "fixed_lattice": fixed_lattice.to_record(),
+        "simulation_config": {
+            "path": str(config_path),
+            "sha256": _sha256(config_path),
+        },
+        "component_profile_checkpoint_revision": cache_revision,
+        "identifiability": {
+            "classification": classification,
+            "representative_is_fitted_solution": True,
+            "competing_parameter_sets": alias_parameter_sets,
+            "sensitivity_singular_values": result.sensitivity_singular_values.tolist(),
+            "sensitivity_rank": int(result.sensitivity_rank),
+            "sensitivity_condition": float(result.sensitivity_condition),
+        },
     }
     return _stage_result(
         "mosaic",

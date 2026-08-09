@@ -74,6 +74,7 @@ from rasim_next.fitting.matched_regions import (
 )
 from rasim_next.fitting.mosaic import (
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
+    MosaicCompetingParameterSet,
     MosaicComponentProfile,
     MosaicComponentProfileBank,
     MosaicIdentifiabilityError,
@@ -177,6 +178,7 @@ __all__ = [
     "M0IntegerLPrediction",
     "MatchedRegionFitResult",
     "MatchedRegionObservations",
+    "MosaicCompetingParameterSet",
     "MosaicComponentProfile",
     "MosaicComponentProfileBank",
     "MosaicIdentifiabilityError",

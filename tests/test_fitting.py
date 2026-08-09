@@ -3149,6 +3149,11 @@ def test_mosaic_component_profiles_reject_two_interior_eta_minima_for_one_width_
     with pytest.raises(MosaicIdentifiabilityError) as caught:
         fit_mosaic_component_profiles(bank)
     assert caught.value.reason == "global_alias"
+    candidate = caught.value.candidate_result
+    assert candidate is not None
+    assert candidate.sensitivity_rank == caught.value.rank
+    assert candidate.sensitivity_condition == caught.value.condition
+    assert candidate.objective >= 0.0
     assert caught.value.rank == len(caught.value.active_parameter_names)
     assert np.isfinite(caught.value.condition)
     competing = caught.value.competing_solution_keys
@@ -3161,6 +3166,17 @@ def test_mosaic_component_profiles_reject_two_interior_eta_minima_for_one_width_
     assert 0.0 < eta[0] < 0.25
     assert 0.75 < eta[1] < 1.0
     assert sum(eta) == pytest.approx(1.0, abs=2.0e-12)
+    competing_parameters = caught.value.competing_parameter_sets
+    assert len(competing_parameters) == 2
+    assert {
+        (item.gaussian_sigma_rad, item.lorentzian_half_width_rad) for item in competing_parameters
+    } == {(1.0, 1.0)}
+    assert sorted(item.lorentzian_probability for item in competing_parameters) == pytest.approx(
+        eta
+    )
+    assert all(
+        item.objective == pytest.approx(candidate.objective) for item in competing_parameters
+    )
 
 
 def test_mosaic_component_profiles_reject_eta_alias_after_constant_projection() -> None:

@@ -140,6 +140,218 @@ def _profile_record(identity: str) -> dict:
     }
 
 
+def test_bi2te3_mosaic_inputs_preserve_effective_incidence_angles() -> None:
+    import numpy as np
+
+    from rasim_next.fitting import FixedLatticeState, FixedPositionState
+    from rasim_next.fitting.indexed_series import (
+        SharedGeometryCorrections,
+        zero_sum_helmert_basis,
+    )
+    from rasim_next.materials import read_crystal
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+    module = _load_replay_cli()
+    case = SimpleNamespace(
+        path=ROOT / "examples" / "bi2te3" / "experiment" / "staged_fit_replay.toml",
+        input_paths={"simulation_config": ROOT / "configs" / "bi2te3_simulation.yaml"},
+        incidence_angles_deg=(5.0, 10.0, 15.0),
+        source_state_count=3,
+    )
+    config = load_simulation_config(case.input_paths["simulation_config"])
+    image_ids = ("Bi2Te3_5m_5d", "Bi2Te3_10d_5m", "Bi2Te3_15d_5m")
+    trims = (2.0e-4, -3.5e-4, 1.5e-4)
+    trim_by_id = dict(zip(image_ids, trims, strict=True))
+    sorted_trims = np.asarray([trim_by_id[image_id] for image_id in sorted(image_ids)])
+    contrasts = zero_sum_helmert_basis(3).T @ sorted_trims
+    position = FixedPositionState(
+        artifact_revision=f"sha256-{'a' * 64}",
+        corrections=SharedGeometryCorrections.from_array(np.zeros(9)),
+        incidence_angle_delta_rad=1.4e-4,
+        commanded_incidence_angles_rad=tuple(
+            math.radians(value) for value in case.incidence_angles_deg
+        ),
+        beam_center_column_row_px=tuple(
+            float(value) for value in config.instrument.detector_reference_coordinate_px
+        ),
+        incidence_angle_image_ids=image_ids,
+        incidence_angle_trim_rad=trims,
+        incidence_angle_trim_contrast_rad=tuple(float(value) for value in contrasts),
+        incidence_angle_trim_prior_sigma_rad=math.radians(0.05),
+        incidence_angle_trim_contrast_half_span_rad=math.radians(0.12),
+    )
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+
+    _, series, nominal_series = module._bi2te3_fixed_inputs(
+        case,
+        position,
+        lattice,
+    )
+
+    expected_deg = np.degrees(position.effective_incidence_angles_rad)
+    for candidate in (series, nominal_series):
+        actual_deg = [inputs.config.instrument.axis_rotations[0].angle_deg for inputs in candidate]
+        assert np.allclose(actual_deg, expected_deg, rtol=0.0, atol=1.0e-13)
+
+
+def test_replay_recovers_only_an_explicit_global_mosaic_alias() -> None:
+    class AliasError(ValueError):
+        pass
+
+    module = _load_replay_cli()
+    result = SimpleNamespace(
+        gaussian_sigma_rad=math.radians(0.4),
+        lorentzian_half_width_rad=math.radians(0.15),
+        lorentzian_probability=0.7,
+        objective=3.5,
+    )
+    competing = (
+        SimpleNamespace(
+            gaussian_sigma_rad=result.gaussian_sigma_rad,
+            lorentzian_half_width_rad=result.lorentzian_half_width_rad,
+            lorentzian_probability=result.lorentzian_probability,
+            objective=result.objective,
+        ),
+        SimpleNamespace(
+            gaussian_sigma_rad=result.gaussian_sigma_rad,
+            lorentzian_half_width_rad=math.radians(0.17),
+            lorentzian_probability=result.lorentzian_probability,
+            objective=result.objective,
+        ),
+    )
+    error = AliasError("global alias")
+    error.reason = "global_alias"
+    error.candidate_result = result
+    error.competing_parameter_sets = competing
+
+    recovered, records = module._recover_global_mosaic_alias(error)
+
+    assert recovered is result
+    assert records[0] == {
+        "gaussian_sigma_deg": pytest.approx(0.4),
+        "lorentzian_hwhm_deg": pytest.approx(0.15),
+        "lorentzian_probability": 0.7,
+        "objective": 3.5,
+    }
+    for reason, candidate in (("local_sensitivity", result), ("global_alias", None)):
+        rejected = AliasError(reason)
+        rejected.reason = reason
+        rejected.candidate_result = candidate
+        rejected.competing_parameter_sets = competing
+        with pytest.raises(AliasError, match=reason):
+            module._recover_global_mosaic_alias(rejected)
+
+
+def test_mosaic_component_checkpoint_reuses_only_exact_profiles(tmp_path: Path) -> None:
+    import numpy as np
+
+    from rasim_next.fitting import (
+        MosaicProfileIdentity,
+        MosaicProfileSet,
+        MosaicReflectionGroupKey,
+    )
+
+    module = _load_replay_cli()
+    identity = MosaicProfileIdentity(
+        dataset_id="osc-5deg",
+        incidence_angle_rad=math.radians(5.0),
+        group_key=MosaicReflectionGroupKey(
+            group_id="00L-3",
+            rod_catalog_revision="catalog.v1",
+            member_rod_hk=((0, 0),),
+            branch_mode="COLLAPSED_00L",
+            layered_family_m=0,
+            layered_integer_L=3,
+        ),
+        branch_id=None,
+    )
+    phi_edges = np.asarray(((-0.2, -0.1, 0.0, 0.1, 0.2),))
+    two_theta_bounds = np.asarray(((0.05, 0.08),))
+    valid = np.ones((1, 4), dtype=np.bool_)
+    observations = MosaicProfileSet(
+        identities=(identity,),
+        signal=np.ones((1, 4)),
+        normalization=np.ones((1, 4)),
+        valid=valid,
+        profile_revision="profiles.v1",
+        phi_bin_edges_rad=phi_edges,
+        two_theta_bounds_rad=two_theta_bounds,
+        angle_frame_revisions=("frame.v1",),
+        source_revision=None,
+        observation_revision="observations.v1",
+    )
+    calls: list[float] = []
+
+    def evaluate(width_rad: float) -> MosaicProfileSet:
+        calls.append(width_rad)
+        return MosaicProfileSet(
+            identities=(identity,),
+            signal=np.full((1, 4), width_rad),
+            normalization=np.ones((1, 4)),
+            valid=valid,
+            profile_revision="profiles.v1",
+            phi_bin_edges_rad=phi_edges,
+            two_theta_bounds_rad=two_theta_bounds,
+            angle_frame_revisions=("frame.v1",),
+            source_revision="source.v1",
+            execution_backend="numba_cpu_source_averaged.v1",
+        )
+
+    width = math.radians(0.4)
+    cached = module._checkpointed_mosaic_component_evaluator(
+        evaluate,
+        cache_directory=tmp_path,
+        component_kind="gaussian",
+        cache_revision="cache.v1",
+        observations=observations,
+        source_revision="source.v1",
+        execution_backend="numba_cpu_source_averaged.v1",
+    )
+    first = cached(width)
+    second = cached(width)
+    assert calls == [width]
+    assert np.array_equal(second.signal, first.signal)
+
+    def must_not_run(_width_rad: float) -> MosaicProfileSet:
+        raise AssertionError("exact cached profile was recomputed")
+
+    resumed = module._checkpointed_mosaic_component_evaluator(
+        must_not_run,
+        cache_directory=tmp_path,
+        component_kind="gaussian",
+        cache_revision="cache.v1",
+        observations=observations,
+        source_revision="source.v1",
+        execution_backend="numba_cpu_source_averaged.v1",
+    )
+    reloaded = resumed(width)
+    assert np.array_equal(reloaded.signal, first.signal)
+    assert reloaded.source_revision == "source.v1"
+
+    changed_calls: list[float] = []
+
+    def changed(width_rad: float) -> MosaicProfileSet:
+        changed_calls.append(width_rad)
+        return evaluate(width_rad)
+
+    invalidated = module._checkpointed_mosaic_component_evaluator(
+        changed,
+        cache_directory=tmp_path,
+        component_kind="gaussian",
+        cache_revision="cache.v2",
+        observations=observations,
+        source_revision="source.v1",
+        execution_backend="numba_cpu_source_averaged.v1",
+    )
+    invalidated(width)
+    assert changed_calls == [width]
+
+
 def _mosaic_artifact_document(case, fixed_position: dict) -> dict:
     summary = case.expected_scientific_summary["mosaic"]
     profiles = [

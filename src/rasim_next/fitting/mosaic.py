@@ -922,6 +922,48 @@ class MosaicComponentProfileBank:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class MosaicCompetingParameterSet:
+    """One exact physical parameter set in a globally aliased mosaic solution."""
+
+    gaussian_sigma_rad: float | None
+    lorentzian_half_width_rad: float | None
+    lorentzian_probability: float
+    objective: float
+
+    def __post_init__(self) -> None:
+        probability = float(self.lorentzian_probability)
+        objective = float(self.objective)
+        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise ValueError("lorentzian_probability must be finite and within [0, 1]")
+        if not math.isfinite(objective) or objective < 0.0:
+            raise ValueError("objective must be finite and nonnegative")
+        gaussian = self.gaussian_sigma_rad
+        lorentzian = self.lorentzian_half_width_rad
+        for name, width in (
+            ("gaussian_sigma_rad", gaussian),
+            ("lorentzian_half_width_rad", lorentzian),
+        ):
+            if width is not None and (not math.isfinite(float(width)) or float(width) <= 0.0):
+                raise ValueError(f"{name} must be finite and positive when active")
+        if (
+            (probability == 0.0 and (gaussian is None or lorentzian is not None))
+            or (probability == 1.0 and (gaussian is not None or lorentzian is None))
+            or (0.0 < probability < 1.0 and (gaussian is None or lorentzian is None))
+        ):
+            raise ValueError("component widths do not match the mixture face")
+        object.__setattr__(
+            self, "gaussian_sigma_rad", None if gaussian is None else float(gaussian)
+        )
+        object.__setattr__(
+            self,
+            "lorentzian_half_width_rad",
+            None if lorentzian is None else float(lorentzian),
+        )
+        object.__setattr__(self, "lorentzian_probability", probability)
+        object.__setattr__(self, "objective", objective)
+
+
 class MosaicIdentifiabilityError(ValueError):
     """Raised when nuisance-projected profiles cannot constrain the active model."""
 
@@ -934,6 +976,8 @@ class MosaicIdentifiabilityError(ValueError):
         *,
         reason: str = "local_sensitivity",
         competing_solution_keys: tuple[tuple[str, int | None, int | None, float], ...] = (),
+        competing_parameter_sets: tuple[MosaicCompetingParameterSet, ...] = (),
+        candidate_result: MosaicProfileFitResult | None = None,
     ) -> None:
         self.rank = int(rank)
         self.active_parameter_names = tuple(active_parameter_names)
@@ -952,8 +996,25 @@ class MosaicIdentifiabilityError(ValueError):
             )
         self.reason = reason
         self.competing_solution_keys = tuple(competing_solution_keys)
+        self.competing_parameter_sets = tuple(competing_parameter_sets)
+        if any(
+            not isinstance(parameter_set, MosaicCompetingParameterSet)
+            for parameter_set in self.competing_parameter_sets
+        ):
+            raise TypeError("competing_parameter_sets must contain MosaicCompetingParameterSet")
+        if candidate_result is not None and not isinstance(
+            candidate_result, MosaicProfileFitResult
+        ):
+            raise TypeError("candidate_result must be MosaicProfileFitResult")
+        self.candidate_result = candidate_result
         if self.reason == "global_alias" and len(self.competing_solution_keys) < 2:
             raise ValueError("global_alias requires at least two competing solution keys")
+        if self.reason == "global_alias" and len(self.competing_parameter_sets) != len(
+            self.competing_solution_keys
+        ):
+            raise ValueError(
+                "global_alias requires one physical parameter tuple per competing solution"
+            )
         if self.reason == "global_alias":
             detail = f"global_aliases={self.competing_solution_keys}"
         elif self.reason == "nonattained_boundary":
@@ -2031,6 +2092,7 @@ def fit_mosaic_component_profiles(
         )
     )
     solution_keys: set[tuple[str, int | None, int | None, float]] = set()
+    solution_objectives: dict[tuple[str, int | None, int | None, float], float] = {}
     for tied_gaussian_index, tied_lorentzian_index in np.argwhere(
         objective_surface <= objective + tie_tolerance
     ):
@@ -2047,14 +2109,101 @@ def fit_mosaic_component_profiles(
                     tied_eta,
                 )
             solution_keys.add(solution_key)
-    if len(solution_keys) > 1:
+            tied_model = (1.0 - tied_eta) * gaussian_valid[
+                tied_gaussian_index
+            ] + tied_eta * lorentzian_valid[tied_lorentzian_index]
+            _, tied_objective = _profiled_scales_and_objective(
+                tied_model,
+                observed,
+                weight,
+                valid_profile,
+                profile_count,
+            )
+            solution_objectives[solution_key] = min(
+                solution_objectives.get(solution_key, math.inf),
+                tied_objective,
+            )
+    gaussian_width = (
+        None if eta == 1.0 else float(canonical_bank.gaussian_sigma_rad[gaussian_index])
+    )
+    lorentzian_width = (
+        None if eta == 0.0 else float(canonical_bank.lorentzian_half_width_rad[lorentzian_index])
+    )
+    fit_result: MosaicProfileFitResult | None = None
+    if rank == len(active_parameter_names) and condition <= maximum_condition:
+        fit_result = MosaicProfileFitResult(
+            gaussian_sigma_rad=gaussian_width,
+            lorentzian_half_width_rad=lorentzian_width,
+            lorentzian_probability=eta,
+            active_parameter_names=active_parameter_names,
+            profile_identities=bank.observations.identities,
+            profile_scales=scales[inverse_order],
+            profile_relative_l2_residual=canonical_profile_residual[inverse_order],
+            objective=objective,
+            predicted_intensity=predicted,
+            background_coefficients=canonical_background_coefficients[inverse_order],
+            predicted_total_intensity=canonical_total_prediction[inverse_order],
+            nuisance_basis_revision=(
+                None if canonical_nuisance is None else canonical_nuisance.revision
+            ),
+            sensitivity_singular_values=singular,
+            sensitivity_rank=rank,
+            sensitivity_condition=condition,
+            width_pair_objective=objective_surface,
+            width_pair_eta=eta_surface,
+            gaussian_bank_index=None if eta == 1.0 else gaussian_index,
+            lorentzian_bank_index=None if eta == 0.0 else lorentzian_index,
+            gaussian_activation_probe_width_rad=(
+                float(canonical_bank.gaussian_sigma_rad[gaussian_probe_index])
+                if eta == 1.0
+                else None
+            ),
+            lorentzian_activation_probe_width_rad=(
+                float(canonical_bank.lorentzian_half_width_rad[lorentzian_probe_index])
+                if eta == 0.0
+                else None
+            ),
+        )
+    ordered_solution_keys = tuple(sorted(solution_keys, key=repr))
+    if len(ordered_solution_keys) > 1:
+        competing_parameter_sets = tuple(
+            MosaicCompetingParameterSet(
+                gaussian_sigma_rad=(
+                    None
+                    if gaussian_solution_index is None
+                    else float(canonical_bank.gaussian_sigma_rad[gaussian_solution_index])
+                ),
+                lorentzian_half_width_rad=(
+                    None
+                    if lorentzian_solution_index is None
+                    else float(canonical_bank.lorentzian_half_width_rad[lorentzian_solution_index])
+                ),
+                lorentzian_probability=solution_eta,
+                objective=solution_objectives[
+                    (
+                        solution_kind,
+                        gaussian_solution_index,
+                        lorentzian_solution_index,
+                        solution_eta,
+                    )
+                ],
+            )
+            for (
+                solution_kind,
+                gaussian_solution_index,
+                lorentzian_solution_index,
+                solution_eta,
+            ) in ordered_solution_keys
+        )
         raise MosaicIdentifiabilityError(
             rank,
             singular,
             condition,
             active_parameter_names,
             reason="global_alias",
-            competing_solution_keys=tuple(sorted(solution_keys, key=repr)),
+            competing_solution_keys=ordered_solution_keys,
+            competing_parameter_sets=competing_parameter_sets,
+            candidate_result=fit_result,
         )
     if rank < len(active_parameter_names) or condition > maximum_condition:
         raise MosaicIdentifiabilityError(
@@ -2062,44 +2211,10 @@ def fit_mosaic_component_profiles(
             singular,
             condition,
             active_parameter_names,
+            candidate_result=fit_result,
         )
-    gaussian_width = (
-        None if eta == 1.0 else float(canonical_bank.gaussian_sigma_rad[gaussian_index])
-    )
-    lorentzian_width = (
-        None if eta == 0.0 else float(canonical_bank.lorentzian_half_width_rad[lorentzian_index])
-    )
-    return MosaicProfileFitResult(
-        gaussian_sigma_rad=gaussian_width,
-        lorentzian_half_width_rad=lorentzian_width,
-        lorentzian_probability=eta,
-        active_parameter_names=active_parameter_names,
-        profile_identities=bank.observations.identities,
-        profile_scales=scales[inverse_order],
-        profile_relative_l2_residual=canonical_profile_residual[inverse_order],
-        objective=objective,
-        predicted_intensity=predicted,
-        background_coefficients=canonical_background_coefficients[inverse_order],
-        predicted_total_intensity=canonical_total_prediction[inverse_order],
-        nuisance_basis_revision=(
-            None if canonical_nuisance is None else canonical_nuisance.revision
-        ),
-        sensitivity_singular_values=singular,
-        sensitivity_rank=rank,
-        sensitivity_condition=condition,
-        width_pair_objective=objective_surface,
-        width_pair_eta=eta_surface,
-        gaussian_bank_index=None if eta == 1.0 else gaussian_index,
-        lorentzian_bank_index=None if eta == 0.0 else lorentzian_index,
-        gaussian_activation_probe_width_rad=(
-            float(canonical_bank.gaussian_sigma_rad[gaussian_probe_index]) if eta == 1.0 else None
-        ),
-        lorentzian_activation_probe_width_rad=(
-            float(canonical_bank.lorentzian_half_width_rad[lorentzian_probe_index])
-            if eta == 0.0
-            else None
-        ),
-    )
+    assert fit_result is not None
+    return fit_result
 
 
 @dataclass(frozen=True, slots=True)
