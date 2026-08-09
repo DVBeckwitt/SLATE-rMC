@@ -640,6 +640,23 @@ gauge representation of the two fitted ratios.
 
 ## Jointly fit and recreate a layered-quintuple Figure 7 view
 
+For repeatable geometry -> mosaic -> structure-factor execution, use one tracked workflow case:
+
+```powershell
+uv run --frozen python scripts/run_layered_fit.py configs/fit_workflows/bi2se3.toml `
+  --output-directory C:\external\bi2se3-fit
+
+uv run --frozen python scripts/run_layered_fit.py configs/fit_workflows/bi2te3.toml `
+  --output-directory C:\external\bi2te3-fit
+```
+
+Each stage runs in child processes and writes a small completion manifest. Rerunning resumes after
+the last completed command. Use `--through geometry`, `--through mosaic`, or `--only sf` for an
+independent boundary; `--only` requires completed upstream stage manifests. Add `--plan` to inspect
+expanded commands without creating output. Both nominal Bi2X3 cases currently consume their
+tracked accepted fixed-mosaic checkpoint. A future material can replace that stage's empty command
+list with its mosaic fitter without changing the runner.
+
 First compose the independently supplied position, optional accepted lattice, and mosaic states.
 The tracked material-specific mosaic JSON has schema `rasim-fixed-mosaic-state-v1`, status
 `PROVIDED_MOSAIC_PRIOR`, the three continuous-mixture values, and a nonempty provenance string. For
