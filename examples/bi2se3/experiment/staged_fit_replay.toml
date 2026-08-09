@@ -9,7 +9,7 @@ incidence_angles_deg = [5.0, 10.0, 15.0]
 [[files]]
 role = "simulation_config"
 path = "../../../configs/bi2se3_simulation.yaml"
-sha256 = "e9c261c87b2379ec43a64a202fe6c3b99b7f56c0c47ab84a3747ca24ae4c4867"
+sha256 = "60588869f6b6dc12f20daf000a0c9b8fcb43b103d7ca1f73c830eaa57487c322"
 
 [[files]]
 role = "geometry_series"
@@ -177,7 +177,7 @@ enabled = false
 reason = "No current gate-v2 Bi2Se3 render was produced; older images bind a retired mosaic result."
 
 [expected]
-source_revision = "42e8108b3ba9c66cb7752bc7e9d2f9fdb8401987a8f9a0eb272d3f4edeaa39a7"
+source_revision = "1cae8a451133352359f492b563675baa733debe0c8811f0360259643f465af17"
 
 [expected.geometry]
 classification = "QUALIFIED_DETECTOR_COORDINATE_FIT_PARAMETER_PRECISION_UNQUALIFIED"

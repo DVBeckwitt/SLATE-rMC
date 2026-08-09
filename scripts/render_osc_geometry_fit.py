@@ -61,6 +61,8 @@ def render_geometry_fit(
     output = Path(destination).resolve()
     if output == ROOT or output.is_relative_to(ROOT):
         raise ValueError("geometry-fit figure must be written outside the repository")
+    if output.suffix.lower() != ".png":
+        raise ValueError("geometry-fit figure destination must use a .png suffix")
     if output.exists():
         raise FileExistsError(output)
 
@@ -154,7 +156,7 @@ def render_geometry_fit(
         angle = record.axis_rotation_angles_deg[series.incidence_axis_index]
         rms = float(np.sqrt(np.mean(np.sum(error * error, axis=1))))
         maximum = float(np.max(np.linalg.norm(error, axis=1)))
-        image_axis.set_title(f"{record.image_id}  ({angle:g}°)\n{len(sites)} fitted m=1 landmarks")
+        image_axis.set_title(f"{record.image_id}  ({angle:g}°)\n{len(sites)} fitted landmarks")
         image_axis.set_xlabel("detector column (px)")
         image_axis.set_ylabel("detector row (px)")
         if column == 0:
@@ -215,7 +217,7 @@ def render_geometry_fit(
 
     figure.suptitle(
         "Detector-native OSC geometry fit: observed vs predicted positions\n"
-        "training scope: fitted m=1 landmarks only",
+        "training scope: fitted detector landmarks",
         fontsize=14,
     )
     output.parent.mkdir(parents=True, exist_ok=True)

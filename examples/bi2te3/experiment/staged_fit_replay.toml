@@ -9,7 +9,7 @@ incidence_angles_deg = [5.0, 10.0, 15.0]
 [[files]]
 role = "simulation_config"
 path = "../../../configs/bi2te3_simulation.yaml"
-sha256 = "3f301b2ef4aa4432d9cba14e9bac6143414ed9841989699059f0dedf6618790b"
+sha256 = "ee84d925c50aad97d3b508a0c8b7618bc6e0dc1f1551ea683eda8ad0be19446a"
 
 [[files]]
 role = "geometry_series"
@@ -229,7 +229,7 @@ raw_display_model = "shared_log1p_99p995_percentile.v1"
 simulation_display_model = "shared_log_1st_to_99p995_positive_percentiles.v1"
 
 [expected]
-source_revision = "01201acafa8851df0f210a37a3f3e24e33e488eac9003805579e4d5c45791f93"
+source_revision = "1593464e91ba9489b6209239acb73ce532a3c8c63f070db04636ef606d51bc04"
 
 [expected.geometry]
 classification = "MODEL_LIMITED_UNQUALIFIED_FIXED_DETECTOR_TILTS"
@@ -263,7 +263,7 @@ site_max_px = 15.077869219014078
 per_incidence_profile_count = [11, 14, 10]
 
 [expected.mosaic]
-classification = "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_ESTIMATE"
+classification = "MODEL_LIMITED_EFFECTIVE_RADIAL_MOSAIC_INTERVAL"
 parameters = [1.0340984212409956, 0.6600483355881804, 0.34468382364752914]
 objective = 15.46096804564828
 rank = 3

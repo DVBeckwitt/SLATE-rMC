@@ -35,15 +35,10 @@ def _stage_envelope(
     summary: dict,
     state: dict,
 ) -> dict:
-    geometry_source_revisions = {
-        "Bi2Se3": "86a5a9f191688065c8265df9bf47175a1b070115a4ce20129a321cd79d2dc416",
-        "Bi2Te3": "3a68902a791bd9e28d50205b4596738b19a6ea36ce169fe4ff39441798a24659",
-    }
-    source_state_count = 1 if stage == "geometry" else case.source_state_count
-    source_revision = (
-        geometry_source_revisions[case.material_id]
-        if stage == "geometry"
-        else case.expected_scientific_summary["source_revision"]
+    source_state_count, source_seed, source_revision = module._stage_source_identity(
+        case,
+        stage,
+        case_source_revision=module._source_revision(case),
     )
     payload = {
         "schema_version": module._STAGE_SCHEMA_VERSION,
@@ -54,7 +49,7 @@ def _stage_envelope(
         "execution_backend": "cuda",
         "runtime": case.runtime_identity,
         "source_state_count": source_state_count,
-        "source_seed": case.source_seed,
+        "source_seed": source_seed,
         "source_revision": source_revision,
         "upstream_scientific_revision": (
             None if upstream is None else upstream["scientific_revision"]
@@ -1221,8 +1216,9 @@ def test_replay_runs_stages_in_order_and_chains_scientific_revisions(
     geometry = result["stages"]["geometry"]
     assert geometry["source_state_count"] == 1
     assert geometry["source_seed"] == 1729
-    assert geometry["source_revision"] == (
-        "3a68902a791bd9e28d50205b4596738b19a6ea36ce169fe4ff39441798a24659"
+    assert geometry["source_revision"] == module._source_revision(
+        case,
+        source_state_count=1,
     )
     assert geometry["source_revision"] != result["stages"]["mosaic"]["source_revision"]
     assert all(
