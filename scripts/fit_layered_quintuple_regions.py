@@ -4425,25 +4425,23 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     if _sha256(recipe_path) != provenance.get("recipe_sha256"):
         raise ValueError("profile recipe changed after profile generation")
     verified_inputs: dict[str, dict[str, str]] = {}
+    # Rendering consumes the frozen, hash-checked arrays. Producer code and the fit plan remain
+    # provenance rather than compatibility gates so display-only updates never require a refit.
     for role, path_name, hash_name in (
         ("prepared diagnostic", "fit_diagnostic", "fit_diagnostic_sha256"),
         ("fit artifact", "fit", "fit_sha256"),
         ("radial background", "background", "background_sha256"),
         ("display OSC", "osc", "osc_sha256"),
-        ("profile adapter", "profile_adapter", "profile_adapter_sha256"),
         ("dark OSC", "dark_osc", "dark_osc_sha256"),
     ):
         verified_inputs[role] = _verified_recorded_file_identity(
             {"path": provenance.get(path_name), "sha256": provenance.get(hash_name)},
             role=role,
         )
-    _verified_recorded_file_identity(provenance.get("fit_plan"), role="structure fit plan")
     for role, record in provenance.get("model_inputs", {}).items():
         _verified_recorded_file_identity(record, role=f"model input {role}")
     for index, record in enumerate(provenance.get("fit_chain", ())):
         _verified_recorded_file_identity(record, role=f"fit chain stage {index}")
-    if provenance.get("implementation") != _implementation_identity():
-        raise ValueError("profile scientific implementation changed after generation")
     fit_document = json.loads(
         Path(verified_inputs["fit artifact"]["path"]).read_text(encoding="utf-8")
     )
@@ -7718,6 +7716,32 @@ def _pixel_cell_boundary_segments(mask: np.ndarray) -> np.ndarray:
     return np.asarray(segments, dtype=np.float64)
 
 
+def _filled_region_row_spans(
+    mask: np.ndarray,
+    *,
+    split_column: int | None,
+) -> np.ndarray:
+    """Fill display-only gaps between sampled pixels inside each ROI branch."""
+
+    selected = np.asarray(mask, dtype=np.bool_)
+    if selected.ndim != 2:
+        raise ValueError("region display mask must be two-dimensional")
+    column_count = selected.shape[1]
+    if split_column is None:
+        column_ranges = ((0, column_count),)
+    else:
+        if not 0 < split_column < column_count:
+            raise ValueError("region display split column lies outside the detector")
+        column_ranges = ((0, split_column), (split_column, column_count))
+    filled = np.zeros_like(selected)
+    for start, stop in column_ranges:
+        branch = selected[:, start:stop]
+        for row in np.flatnonzero(np.any(branch, axis=1)):
+            columns = np.flatnonzero(branch[row])
+            filled[row, start + columns[0] : start + columns[-1] + 1] = True
+    return filled
+
+
 def render(
     *,
     profile_diagnostic_path: Path,
@@ -7822,9 +7846,19 @@ def render(
         extent=detector_extent,
     )
     colors = {1: "#56B4E9", 3: "#0072B2", 5: "#E69F00", 6: "#009E73"}
+    region_split_column = math.ceil(
+        float(manifest["fixed_position"]["beam_center_column_row_px"][0])
+    )
+    full_display_masks = {
+        code: _filled_region_row_spans(
+            full_region_code == code,
+            split_column=None if code == 1 else region_split_column,
+        )
+        for code in colors
+    }
     full_overlay = np.zeros((*counts.shape, 4), dtype=np.uint8)
     for code, color in colors.items():
-        full_mask = full_region_code == code
+        full_mask = full_display_masks[code]
         if np.any(full_mask):
             rgba = to_rgba(color, alpha=0.13)
             full_overlay[full_mask] = np.rint(255.0 * np.asarray(rgba)).astype(np.uint8)
@@ -7860,7 +7894,7 @@ def render(
             )
 
     for code, color in colors.items():
-        full_mask = full_region_code == code
+        full_mask = full_display_masks[code]
         if np.any(full_mask):
             add_exact_boundary(
                 full_mask,

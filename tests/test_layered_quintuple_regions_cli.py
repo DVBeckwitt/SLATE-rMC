@@ -1722,6 +1722,19 @@ def test_pixel_cell_boundary_segments_follow_exact_native_pixel_edges() -> None:
     )
 
 
+def test_region_display_row_spans_fill_each_detector_branch_independently() -> None:
+    mask = np.zeros((2, 10), dtype=np.bool_)
+    mask[0, (1, 3, 6, 8)] = True
+    mask[1, 2:5] = True
+
+    split = ADAPTER._filled_region_row_spans(mask, split_column=5)
+    unsplit = ADAPTER._filled_region_row_spans(mask, split_column=None)
+
+    assert np.array_equal(np.flatnonzero(split[0]), np.asarray((1, 2, 3, 6, 7, 8)))
+    assert np.array_equal(np.flatnonzero(split[1]), np.asarray((2, 3, 4)))
+    assert np.array_equal(np.flatnonzero(unsplit[0]), np.arange(1, 9))
+
+
 def test_m0_is_rendered_only_from_unified_profile_field() -> None:
     parser = ADAPTER._parser()
     subparser_action = next(

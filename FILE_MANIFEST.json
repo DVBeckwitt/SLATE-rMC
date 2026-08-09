@@ -693,8 +693,8 @@
     },
     {
       "path": "scripts/fit_layered_quintuple_regions.py",
-      "sha256": "dcbdf3bb359a44a160c076ddfc1c753033c6a8ff06abf7ab2240f0d38387df83",
-      "size_bytes": 376201
+      "sha256": "845691b776f3195390011fa750f4ff90732ceda350a96219edd8e7ecb88f4a43",
+      "size_bytes": 377388
     },
     {
       "path": "scripts/fit_osc_geometry.py",
@@ -1563,8 +1563,8 @@
     },
     {
       "path": "tests/test_layered_quintuple_regions_cli.py",
-      "sha256": "16ac38b3bfd08737b2975741aaf680b1bf20a42e855a237169debd14432ba9f0",
-      "size_bytes": 78183
+      "sha256": "edff3500d596d9118543ca540e6e85d57f59e726a7893958eca3e39b40b78bd6",
+      "size_bytes": 78743
     },
     {
       "path": "tests/test_matched_regions.py",
