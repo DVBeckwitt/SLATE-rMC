@@ -31,6 +31,7 @@ from rasim_next.core.contracts import (
     canonical_revision_sha256,
 )
 from rasim_next.core.frames import FrameId
+from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.scattering import polarization_model_code
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.geometry import build_incident_states
@@ -1687,15 +1688,39 @@ class IntegerLEwaldRoots:
         object.__setattr__(self, "root_sign", signs)
 
 
-def solve_integer_l_ewald_roots(
+@dataclass(frozen=True, slots=True)
+class LayerLEwaldRoots:
+    """Isolated alpha-zero beta roots for one exact commensurate layer section."""
+
+    beta_rad: tuple[float, ...]
+    root_sign: tuple[int, ...]
+    branch: int
+
+    def __post_init__(self) -> None:
+        beta = tuple(float(value) for value in self.beta_rad)
+        signs = tuple(int(value) for value in self.root_sign)
+        if (
+            len(beta) not in {1, 2}
+            or len(signs) != len(beta)
+            or any(not math.isfinite(value) or not 0.0 <= value < 2.0 * np.pi for value in beta)
+            or (len(beta) == 1 and signs != (0,))
+            or (len(beta) == 2 and signs != (-1, 1))
+            or self.branch not in {1, 2}
+        ):
+            raise ValueError("invalid isolated layer-L Ewald roots")
+        object.__setattr__(self, "beta_rad", beta)
+        object.__setattr__(self, "root_sign", signs)
+
+
+def _solve_fixed_layer_l_ewald_roots(
     *,
     rod: Rod,
-    integer_l: int,
+    layer_l: float,
     reciprocal_basis_Ainv: FloatArray,
     crystal_to_sample: FloatArray,
     ki_sample_Ainv: FloatArray,
-) -> IntegerLEwaldRoots | None:
-    """Solve the alpha=0 Ewald equation analytically for full-beta roots."""
+) -> LayerLEwaldRoots | None:
+    """Authoritative alpha-zero fixed-layer-L root equation."""
 
     b3 = reciprocal_basis_Ainv[:, 2]
     mean_axis = b3 / np.linalg.norm(b3)
@@ -1711,7 +1736,7 @@ def solve_integer_l_ewald_roots(
         1.0,
     )
     tolerance = 4096.0 * np.finfo(np.float64).eps
-    u_Ainv = integer_l * float(np.linalg.norm(b3))
+    u_Ainv = layer_l * float(np.linalg.norm(b3))
     q_base = q_axis + u_Ainv * mean_axis
     q_unrotated = q_parallel + u_Ainv * mean_axis
     constant = float(
@@ -1724,9 +1749,7 @@ def solve_integer_l_ewald_roots(
     )
     if amplitude <= tolerance * coefficient_scale:
         if abs(constant) <= tolerance * equation_scale:
-            raise ValueError(
-                "integer-L center is a continuous beta manifold, not isolated marker points"
-            )
+            raise ValueError("layer-L center is a continuous beta manifold, not isolated points")
         return None
     cosine = -constant / amplitude
     if cosine < -1.0 - tolerance or cosine > 1.0 + tolerance:
@@ -1745,11 +1768,54 @@ def solve_integer_l_ewald_roots(
     root_scale = max(abs(u_Ainv), float(np.linalg.norm(ki_sample_Ainv)), 1.0)
     if abs(signed_root) <= tolerance * root_scale:
         return None
-    return IntegerLEwaldRoots(
+    return LayerLEwaldRoots(
         beta_rad=beta,
         root_sign=root_sign,
         branch=1 if signed_root < 0.0 else 2,
     )
+
+
+def solve_layer_l_ewald_roots(
+    *,
+    rod: Rod,
+    layer_order: CommensurateLayerOrder,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+) -> LayerLEwaldRoots | None:
+    """Solve one exact rational-layer section in the declared one-layer basis."""
+
+    if not isinstance(layer_order, CommensurateLayerOrder):
+        raise TypeError("layer_order must be CommensurateLayerOrder")
+    return _solve_fixed_layer_l_ewald_roots(
+        rod=rod,
+        layer_l=layer_order.as_float(),
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+    )
+
+
+def solve_integer_l_ewald_roots(
+    *,
+    rod: Rod,
+    integer_l: int,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+) -> IntegerLEwaldRoots | None:
+    """Solve the alpha=0 Ewald equation analytically for full-beta roots."""
+
+    roots = _solve_fixed_layer_l_ewald_roots(
+        rod=rod,
+        layer_l=CommensurateLayerOrder(integer_l).as_float(),
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+    )
+    if roots is None:
+        return None
+    return IntegerLEwaldRoots(roots.beta_rad, roots.root_sign, roots.branch)
 
 
 def evaluate_nominal_integer_l_markers(
@@ -2499,6 +2565,7 @@ __all__ = [
     "DetectorMacrobinImage",
     "EwaldSurfaceDisplay",
     "GeometryOnlyEwaldContext",
+    "LayerLEwaldRoots",
     "NominalEwaldContext",
     "ReciprocalSpaceDisplay",
     "SimulationConfiguration",
@@ -2518,4 +2585,5 @@ __all__ = [
     "rebind_configured_simulation_instrument",
     "sample_detector_pixel_center_density",
     "sample_reciprocal_space",
+    "solve_layer_l_ewald_roots",
 ]

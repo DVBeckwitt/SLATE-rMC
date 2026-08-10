@@ -9,12 +9,18 @@ import numpy as np
 import pytest
 
 import rasim_next.fitting.geometry as fitting_geometry_module
+import rasim_next.fitting.stacking_intensity as stacking_intensity_module
+import rasim_next.ordered.motifs as ordered_motifs_module
+import rasim_next.pipeline.configured_simulation as configured_simulation_module
 import rasim_next.selection.blind as blind_module
+import rasim_next.stacking.finite_intensity as finite_intensity_module
 from painted_ewald import MosaicBraggSpace, Rod
 from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.frames import FrameId
+from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import (
+    PBI2_IDEAL_PARENTS,
     SHARED_GEOMETRY_PARAMETER_NAMES,
     STACKING_COMPONENT_IDS,
     STACKING_PHASE_IDS,
@@ -31,6 +37,9 @@ from rasim_next.fitting import (
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
+    LayerLMarkerDefinition,
+    LayerLMarkerKey,
+    LayerLMarkerObservations,
     M0IntegerLObservations,
     M0IntegerLPrediction,
     MosaicComponentProfile,
@@ -47,15 +56,19 @@ from rasim_next.fitting import (
     apply_shared_geometry_corrections,
     audit_indexed_geometry_series_roots,
     audit_integer_l_marker_selection,
+    build_ideal_pbi2_polytype_landmark_catalogue,
     compile_pbi2_stacking_profile_response,
     evaluate_continuous_mosaic_profiles,
     evaluate_indexed_geometry_series_residual,
+    evaluate_layer_l_geometry_objective_residual,
     evaluate_tagged_geometry_objective_residual,
     fit_indexed_geometry_series,
     fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,
     fit_stacking_phase_totals,
     fit_tagged_detector_function_geometry,
+    merge_layer_l_marker_observations,
+    pbi2_ideal_parent_landmark_contributions,
 )
 from rasim_next.geometry import (
     AngleFrame,
@@ -75,6 +88,7 @@ from rasim_next.pipeline.configured_simulation import (
     rebind_configured_geometry_instrument,
     sample_configured_source,
     solve_integer_l_ewald_roots,
+    solve_layer_l_ewald_roots,
 )
 from rasim_next.pipeline.continuous_detector import (
     DetectorEwaldMeasure,
@@ -91,6 +105,611 @@ from rasim_next.selection import (
     simulation_config_for_osc_image,
 )
 from rasim_next.selection.blind import _discovery_geometry_hash
+from rasim_next.stacking import Parent
+
+
+def test_reduced_layer_orders_and_fixed_l_roots_match_analytic_oracle() -> None:
+    half = CommensurateLayerOrder(2, 4)
+    assert half == CommensurateLayerOrder(-2, -4) == CommensurateLayerOrder(1, 2)
+    assert CommensurateLayerOrder(2, -4) == CommensurateLayerOrder(-1, 2)
+    assert CommensurateLayerOrder(0, 9) == CommensurateLayerOrder(0, 1)
+    assert hash(half) == hash(CommensurateLayerOrder(1, 2))
+    assert sorted(
+        (
+            CommensurateLayerOrder(2, 3),
+            CommensurateLayerOrder(1, 3),
+            CommensurateLayerOrder(1, 2),
+        )
+    ) == [
+        CommensurateLayerOrder(1, 3),
+        CommensurateLayerOrder(1, 2),
+        CommensurateLayerOrder(2, 3),
+    ]
+    with pytest.raises(ValueError, match="denominator"):
+        CommensurateLayerOrder(1, 0)
+    with pytest.raises(TypeError, match="integer"):
+        CommensurateLayerOrder(True, 1)
+
+    basis = np.eye(3, dtype=np.float64)
+    rotation = np.eye(3, dtype=np.float64)
+    ki_sample = np.asarray((1.0, 0.0, 0.0), dtype=np.float64)
+    rod = Rod(1, 0, 1.0)
+    expected_regular_beta = (4.037257447447658, 2.2459278597319283)
+    for layer_order, expected_branch in (
+        (CommensurateLayerOrder(-1, 2), 1),
+        (CommensurateLayerOrder(1, 2), 2),
+    ):
+        roots = solve_layer_l_ewald_roots(
+            rod=rod,
+            layer_order=layer_order,
+            reciprocal_basis_Ainv=basis,
+            crystal_to_sample=rotation,
+            ki_sample_Ainv=ki_sample,
+        )
+        assert roots is not None
+        assert roots.branch == expected_branch
+        assert roots.root_sign == (-1, 1)
+        np.testing.assert_allclose(roots.beta_rad, expected_regular_beta, rtol=0.0, atol=1.0e-14)
+        layer_l = layer_order.as_float()
+        for beta in roots.beta_rad:
+            q = np.asarray((math.cos(beta), math.sin(beta), layer_l))
+            assert float(q @ (q + 2.0 * ki_sample)) == pytest.approx(0.0, abs=5.0e-15)
+
+    tangent = solve_layer_l_ewald_roots(
+        rod=rod,
+        layer_order=CommensurateLayerOrder(1),
+        reciprocal_basis_Ainv=basis,
+        crystal_to_sample=rotation,
+        ki_sample_Ainv=ki_sample,
+    )
+    assert tangent is not None
+    assert tangent.beta_rad == pytest.approx((math.pi,), abs=1.0e-15)
+    assert tangent.root_sign == (0,)
+    assert tangent.branch == 2
+    assert (
+        solve_layer_l_ewald_roots(
+            rod=rod,
+            layer_order=CommensurateLayerOrder(3, 2),
+            reciprocal_basis_Ainv=basis,
+            crystal_to_sample=rotation,
+            ki_sample_Ainv=ki_sample,
+        )
+        is None
+    )
+
+
+def test_denominator_one_layer_prediction_is_bit_exact_with_integer_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    inputs = build_configured_geometry_inputs(config)
+    model = ExactTagGeometryModel(inputs)
+    rod = next(rod for rod in inputs.rods if rod.family_m == 1 and (rod.h, rod.k) == (-1, 0))
+    incident = build_incident_states(inputs.samples, inputs.material, inputs.instrument)
+    integer_keys: list[IntegerLMarkerKey] = []
+    layer_definitions: list[LayerLMarkerDefinition] = []
+    for integer_l in (4, 5):
+        integer_roots = solve_integer_l_ewald_roots(
+            rod=rod,
+            integer_l=integer_l,
+            reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+            crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
+            ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
+        )
+        layer_roots = solve_layer_l_ewald_roots(
+            rod=rod,
+            layer_order=CommensurateLayerOrder(integer_l),
+            reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+            crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
+            ki_sample_Ainv=incident.states.k_film_phase_sample_Ainv[0],
+        )
+        assert integer_roots is not None and layer_roots is not None
+        assert layer_roots.beta_rad == integer_roots.beta_rad
+        assert layer_roots.root_sign == integer_roots.root_sign
+        assert layer_roots.branch == integer_roots.branch
+        for root_sign in integer_roots.root_sign:
+            integer_keys.append(
+                IntegerLMarkerKey(
+                    family_m=rod.family_m,
+                    integer_L=integer_l,
+                    branch=integer_roots.branch,
+                    root_sign=root_sign,
+                    representative_rod_hk=(rod.h, rod.k),
+                )
+            )
+            layer_definitions.append(
+                LayerLMarkerDefinition(
+                    key=LayerLMarkerKey(
+                        family_m=rod.family_m,
+                        layer_order=CommensurateLayerOrder(integer_l),
+                        branch=integer_roots.branch,
+                        root_sign=root_sign,
+                        reciprocal_basis_revision=model.reciprocal_basis_revision,
+                    ),
+                    contributing_rod_hk=((rod.h, rod.k),),
+                )
+            )
+
+    integer_prediction = model.predict_integer_l_tags(tuple(integer_keys))
+    layer_prediction = model.predict_layer_l_tags(tuple(layer_definitions))
+    np.testing.assert_array_equal(
+        layer_prediction.coordinates_px, integer_prediction.coordinates_px
+    )
+    np.testing.assert_array_equal(
+        layer_prediction.ewald_residual_Ainv,
+        integer_prediction.ewald_residual_Ainv,
+    )
+    np.testing.assert_array_equal(
+        layer_prediction.detector_status, integer_prediction.detector_status
+    )
+
+
+@pytest.mark.parametrize(
+    ("signed_rod_hk", "layer_order", "expected_parents"),
+    (
+        (
+            (1, 1),
+            CommensurateLayerOrder(1),
+            (
+                Parent.TWO_H,
+                Parent.FOUR_H_PLUS,
+                Parent.FOUR_H_MINUS,
+                Parent.SIX_H_PLUS,
+                Parent.SIX_H_MINUS,
+            ),
+        ),
+        (
+            (1, 0),
+            CommensurateLayerOrder(1),
+            (Parent.TWO_H, Parent.FOUR_H_PLUS, Parent.FOUR_H_MINUS),
+        ),
+        (
+            (1, 0),
+            CommensurateLayerOrder(1, 2),
+            (Parent.FOUR_H_PLUS, Parent.FOUR_H_MINUS),
+        ),
+        ((1, 0), CommensurateLayerOrder(1, 3), (Parent.SIX_H_MINUS,)),
+        ((1, 0), CommensurateLayerOrder(2, 3), (Parent.SIX_H_PLUS,)),
+        ((1, 0), CommensurateLayerOrder(-1, 3), (Parent.SIX_H_PLUS,)),
+        ((-1, 0), CommensurateLayerOrder(1, 3), (Parent.SIX_H_PLUS,)),
+        ((-1, 0), CommensurateLayerOrder(2, 3), (Parent.SIX_H_MINUS,)),
+        ((1, 1), CommensurateLayerOrder(1, 2), ()),
+    ),
+)
+def test_ideal_pbi2_parent_landmark_support_is_exact(
+    signed_rod_hk: tuple[int, int],
+    layer_order: CommensurateLayerOrder,
+    expected_parents: tuple[Parent, ...],
+) -> None:
+    contributions = pbi2_ideal_parent_landmark_contributions(
+        signed_rod_hk=signed_rod_hk,
+        layer_order=layer_order,
+    )
+    assert tuple(item.parent for item in contributions) == expected_parents
+    assert all(item.signed_rod_hk == signed_rod_hk for item in contributions)
+
+
+def test_ideal_pbi2_polytype_catalogue_deduplicates_physical_overlaps() -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    pbi2_2h = root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif"
+    config = replace(
+        base,
+        material=replace(base.material, cif_path=pbi2_2h, phase_id="pbi2"),
+    )
+    model = ExactTagGeometryModel(build_configured_geometry_inputs(config))
+    layer_orders = tuple(
+        CommensurateLayerOrder(numerator, denominator)
+        for numerator, denominator in (
+            (1, 3),
+            (1, 2),
+            (2, 3),
+            (1, 1),
+            (4, 3),
+            (3, 2),
+            (5, 3),
+            (2, 1),
+            (5, 2),
+            (3, 1),
+        )
+    )
+    catalogue = build_ideal_pbi2_polytype_landmark_catalogue(model, layer_orders)
+    assert catalogue.source_cif_sha256 == config.cif_sha256
+    assert catalogue.reciprocal_basis_revision == model.reciprocal_basis_revision
+    assert catalogue.geometry_context_revision == model.geometry_context_revision
+    assert catalogue.model_id == "pbi2.declared_single_trilayer_metric.landmarks.v1"
+    assert len(catalogue.keys) == len(set(catalogue.keys))
+    assert catalogue.prediction.active_panel.all()
+    assert all(
+        definition.contributing_rod_hk == tuple(sorted(set(definition.contributing_rod_hk)))
+        for definition in catalogue.definitions
+    )
+    assert all(
+        contribution.signed_rod_hk in definition.contributing_rod_hk
+        for definition, contributions in zip(
+            catalogue.definitions,
+            catalogue.parent_contributions,
+            strict=True,
+        )
+        for contribution in contributions
+    )
+    assert any(
+        definition.key.layer_order.denominator == 2
+        and {item.parent for item in contributions} == {Parent.FOUR_H_PLUS, Parent.FOUR_H_MINUS}
+        for definition, contributions in zip(
+            catalogue.definitions,
+            catalogue.parent_contributions,
+            strict=True,
+        )
+    )
+    assert any(
+        definition.key.layer_order.denominator == 3
+        and {item.parent for item in contributions} <= {Parent.SIX_H_PLUS, Parent.SIX_H_MINUS}
+        for definition, contributions in zip(
+            catalogue.definitions,
+            catalogue.parent_contributions,
+            strict=True,
+        )
+    )
+    assert any(
+        definition.key.layer_order.is_integer
+        and {item.parent for item in contributions} == set(PBI2_IDEAL_PARENTS)
+        for definition, contributions in zip(
+            catalogue.definitions,
+            catalogue.parent_contributions,
+            strict=True,
+        )
+    )
+    with pytest.raises(ValueError, match="catalogue_revision"):
+        replace(catalogue, catalogue_revision="0" * 64)
+
+    restricted = build_ideal_pbi2_polytype_landmark_catalogue(
+        model,
+        layer_orders,
+        parents=(Parent.SIX_H_PLUS,),
+    )
+    restricted_index, unsupported_rod_hk = next(
+        (index, (rod.h, rod.k))
+        for index, definition in enumerate(restricted.definitions)
+        for rod in model.inputs.rods
+        if rod.family_m == definition.key.family_m
+        and (rod.h, rod.k) not in definition.contributing_rod_hk
+        and not pbi2_ideal_parent_landmark_contributions(
+            signed_rod_hk=(rod.h, rod.k),
+            layer_order=definition.key.layer_order,
+            parents=restricted.selected_parents,
+        )
+    )
+    restricted_definition = restricted.definitions[restricted_index]
+    paired_identity = (
+        restricted_definition.key.family_m,
+        restricted_definition.key.layer_order,
+        restricted_definition.key.reciprocal_basis_revision,
+    )
+    forged_definitions = list(restricted.definitions)
+    for index, definition in enumerate(restricted.definitions):
+        if (
+            definition.key.family_m,
+            definition.key.layer_order,
+            definition.key.reciprocal_basis_revision,
+        ) == paired_identity:
+            forged_definitions[index] = replace(
+                definition,
+                contributing_rod_hk=(*definition.contributing_rod_hk, unsupported_rod_hk),
+            )
+    with pytest.raises(ValueError, match="exact signed-rod support"):
+        replace(
+            restricted,
+            prediction=replace(
+                restricted.prediction,
+                definitions=tuple(forged_definitions),
+            ),
+        )
+
+    overlap_index = next(
+        index
+        for index, definition in enumerate(catalogue.definitions)
+        if len(definition.contributing_rod_hk) > 1
+    )
+    overlap = LayerLMarkerObservations.from_prediction(
+        catalogue.prediction.subset(np.asarray([overlap_index])),
+        reference_wavelength_A=model.reference_wavelength_A,
+        sigma_px=0.25,
+    )
+    overlap_definition = overlap.definitions[0]
+    split = tuple(
+        LayerLMarkerObservations(
+            definitions=(
+                LayerLMarkerDefinition(
+                    key=overlap_definition.key,
+                    contributing_rod_hk=rods,
+                ),
+            ),
+            coordinates_px=overlap.coordinates_px,
+            covariance_px2=overlap.covariance_px2,
+            reference_wavelength_A=overlap.reference_wavelength_A,
+        )
+        for rods in (
+            overlap_definition.contributing_rod_hk[:1],
+            overlap_definition.contributing_rod_hk[1:],
+        )
+    )
+    merged_overlap = merge_layer_l_marker_observations(*split)
+    assert isinstance(merged_overlap, LayerLMarkerObservations)
+    assert len(merged_overlap.keys) == 1
+    assert (
+        merged_overlap.definitions[0].contributing_rod_hk == overlap_definition.contributing_rod_hk
+    )
+    with pytest.raises(ValueError, match="conflict"):
+        merge_layer_l_marker_observations(
+            split[0],
+            replace(
+                split[1],
+                coordinates_px=split[1].coordinates_px + np.asarray((0.1, 0.0)),
+            ),
+        )
+    foreign_definition = LayerLMarkerDefinition(
+        key=replace(overlap_definition.key, reciprocal_basis_revision="f" * 64),
+        contributing_rod_hk=split[1].definitions[0].contributing_rod_hk,
+    )
+    foreign = replace(split[1], definitions=(foreign_definition,))
+    with pytest.raises(ValueError, match="one reciprocal-basis revision"):
+        merge_layer_l_marker_observations(split[0], foreign)
+    with pytest.raises(ValueError, match="reciprocal-basis revision"):
+        IndexedGeometryImage(
+            image_id="foreign-basis",
+            commanded_angle_rad=math.radians(config.instrument.axis_rotations[0].angle_deg),
+            model=model,
+            observations=foreign,
+        )
+    subset_prediction = model.predict_layer_l_tags(split[0].definitions)
+    with pytest.raises(ValueError, match="definitions"):
+        evaluate_layer_l_geometry_objective_residual(overlap, subset_prediction)
+
+    relaxed_4h = root / "examples" / "pbi2" / "structures" / "PbI2_4H.cif"
+    relaxed_model = ExactTagGeometryModel(
+        build_configured_geometry_inputs(
+            replace(config, material=replace(config.material, cif_path=relaxed_4h))
+        )
+    )
+    with pytest.raises(ValueError, match="one PbI2 trilayer"):
+        build_ideal_pbi2_polytype_landmark_catalogue(relaxed_model, layer_orders)
+
+
+def test_optional_pbi2_polytype_landmarks_strengthen_shared_geometry_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    pbi2_2h = root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif"
+    base = replace(
+        base,
+        material=replace(base.material, cif_path=pbi2_2h, phase_id="pbi2"),
+    )
+    truth = SharedGeometryCorrections(
+        detector_column_tilt_rad=math.radians(0.25),
+        detector_row_tilt_rad=math.radians(-0.45),
+        sample_normal_x_tilt_rad=math.radians(0.18),
+        sample_normal_y_tilt_rad=math.radians(-0.27),
+        goniometer_axis_pitch_rad=math.radians(0.15),
+        goniometer_axis_yaw_rad=math.radians(-0.22),
+        sample_plane_normal_offset_m=2.0e-5,
+        goniometer_pivot_pitch_offset_m=3.0e-5,
+        goniometer_pivot_yaw_offset_m=-2.5e-5,
+    )
+    baseline_orders = tuple(CommensurateLayerOrder(value) for value in range(1, 5))
+    augmented_orders = tuple(
+        sorted(
+            {
+                *baseline_orders,
+                *(CommensurateLayerOrder(value, 2) for value in range(1, 8, 2)),
+                *(CommensurateLayerOrder(value, 3) for value in (2, 5, 8, 11)),
+            }
+        )
+    )
+    baseline_images: list[IndexedGeometryImage] = []
+    augmented_images: list[IndexedGeometryImage] = []
+
+    def reject_intensity_or_mosaic(*args: object, **kwargs: object) -> None:
+        raise AssertionError("polytype geometry must not build intensity or mosaic state")
+
+    monkeypatch.setattr(Bi2X3FiniteStackStrength, "__init__", reject_intensity_or_mosaic)
+    monkeypatch.setattr(MosaicBraggSpace, "__init__", reject_intensity_or_mosaic)
+    monkeypatch.setattr(
+        ordered_motifs_module,
+        "pbi2_layer_amplitudes",
+        reject_intensity_or_mosaic,
+    )
+    monkeypatch.setattr(
+        stacking_intensity_module,
+        "compile_pbi2_stacking_profile_response",
+        reject_intensity_or_mosaic,
+    )
+    monkeypatch.setattr(
+        finite_intensity_module,
+        "finite_population_event_intensity",
+        reject_intensity_or_mosaic,
+    )
+    monkeypatch.setattr(
+        configured_simulation_module,
+        "integrate_detector_macrobins",
+        reject_intensity_or_mosaic,
+    )
+    monkeypatch.setattr(
+        configured_simulation_module,
+        "sample_detector_pixel_center_density",
+        reject_intensity_or_mosaic,
+    )
+    for angle_deg in (5.0, 10.0, 15.0):
+        axis = base.instrument.axis_rotations[0]
+        config = replace(
+            base,
+            instrument=replace(
+                base.instrument,
+                axis_rotations=(replace(axis, angle_deg=angle_deg),),
+            ),
+        )
+        inputs = build_configured_geometry_inputs(config)
+        model = ExactTagGeometryModel(inputs)
+        truth_instrument = _shared_truth_instrument(inputs, truth)
+        baseline_catalogue = build_ideal_pbi2_polytype_landmark_catalogue(
+            model,
+            baseline_orders,
+            parents=(Parent.TWO_H,),
+        )
+        augmented_catalogue = build_ideal_pbi2_polytype_landmark_catalogue(
+            model,
+            augmented_orders,
+            parents=(Parent.TWO_H, Parent.FOUR_H_PLUS, Parent.SIX_H_MINUS),
+        )
+        baseline_definitions = tuple(
+            definition
+            for definition in baseline_catalogue.definitions
+            if definition.key.family_m == 1
+            and definition.key.branch == 2
+            and (-1, 0) in definition.contributing_rod_hk
+        )
+        augmented_definitions = tuple(
+            definition
+            for definition in augmented_catalogue.definitions
+            if definition.key.family_m == 1
+            and definition.key.branch == 2
+            and (-1, 0) in definition.contributing_rod_hk
+        )
+        baseline_prediction = model.predict_layer_l_tags(
+            baseline_definitions,
+            instrument=truth_instrument,
+        )
+        augmented_prediction = model.predict_layer_l_tags(
+            augmented_definitions,
+            instrument=truth_instrument,
+        )
+        baseline_layer_prediction = baseline_prediction.subset(baseline_prediction.active_panel)
+        baseline_integer_keys = tuple(
+            IntegerLMarkerKey(
+                family_m=definition.key.family_m,
+                integer_L=definition.key.layer_order.numerator,
+                branch=definition.key.branch,
+                root_sign=definition.key.root_sign,
+                representative_rod_hk=definition.representative_rod_hk,
+            )
+            for definition in baseline_layer_prediction.definitions
+        )
+        baseline_integer_prediction = model.predict_integer_l_tags(
+            baseline_integer_keys,
+            instrument=truth_instrument,
+        )
+        np.testing.assert_array_equal(
+            baseline_layer_prediction.coordinates_px,
+            baseline_integer_prediction.coordinates_px,
+        )
+        baseline_observations = IntegerLMarkerObservations.from_prediction(
+            baseline_integer_prediction,
+            reference_wavelength_A=model.reference_wavelength_A,
+            sigma_px=0.25,
+        )
+        all_augmented_observations = LayerLMarkerObservations.from_prediction(
+            augmented_prediction.subset(augmented_prediction.active_panel),
+            reference_wavelength_A=model.reference_wavelength_A,
+            sigma_px=0.25,
+        )
+        assert merge_layer_l_marker_observations(baseline_observations) is baseline_observations
+        augmented_observations = merge_layer_l_marker_observations(
+            baseline_observations,
+            all_augmented_observations,
+            reciprocal_basis_revision=model.reciprocal_basis_revision,
+        )
+        assert isinstance(augmented_observations, LayerLMarkerObservations)
+        assert augmented_observations.keys == all_augmented_observations.keys
+        assert augmented_observations.definitions == all_augmented_observations.definitions
+        image_id = f"pbi2-{int(angle_deg):02d}"
+        baseline_images.append(
+            IndexedGeometryImage(
+                image_id=image_id,
+                commanded_angle_rad=math.radians(angle_deg),
+                model=model,
+                observations=baseline_observations,
+            )
+        )
+        augmented_images.append(
+            IndexedGeometryImage(
+                image_id=image_id,
+                commanded_angle_rad=math.radians(angle_deg),
+                model=model,
+                observations=augmented_observations,
+            )
+        )
+
+    assert tuple(len(image.observations.keys) for image in baseline_images) == (8, 8, 6)
+    assert tuple(len(image.observations.keys) for image in augmented_images) == (24, 20, 18)
+    assert {
+        key.layer_order.denominator
+        for image in augmented_images
+        if isinstance(image.observations, LayerLMarkerObservations)
+        for key in image.observations.keys
+    } == {1, 2, 3}
+    assert all(
+        len(augmented.observations.keys) > len(baseline.observations.keys)
+        for baseline, augmented in zip(baseline_images, augmented_images, strict=True)
+    )
+    bounds = SharedGeometryCorrectionBounds.rasim_multi_angle_pose()
+    baseline_fit = fit_indexed_geometry_series(
+        tuple(baseline_images),
+        initial=SharedGeometryCorrections.zero(),
+        bounds=bounds,
+    )
+    augmented_fit = fit_indexed_geometry_series(
+        tuple(augmented_images),
+        initial=SharedGeometryCorrections.zero(),
+        bounds=bounds,
+    )
+    for result in (baseline_fit, augmented_fit):
+        assert result.success, result.message
+        assert result.jacobian_rank == len(SHARED_GEOMETRY_PARAMETER_NAMES)
+        assert not np.any(result.active_bounds)
+        np.testing.assert_array_less(
+            np.abs(result.corrections.as_array() - truth.as_array()) / bounds.half_span,
+            np.full(9, 2.5e-5),
+        )
+        assert result.training_site_max_px < 5.0e-3
+    assert (
+        augmented_fit.scaled_jacobian_singular_values[-1]
+        > 1.25 * baseline_fit.scaled_jacobian_singular_values[-1]
+    )
+    assert (
+        audit_indexed_geometry_series_roots(
+            tuple(baseline_images),
+            baseline_fit.corrections,
+        ).classification
+        == "SAME"
+    )
+    assert (
+        audit_indexed_geometry_series_roots(
+            tuple(augmented_images),
+            augmented_fit.corrections,
+        ).classification
+        == "SAME"
+    )
+
+    real_solver = fitting_geometry_module.solve_layer_l_ewald_roots
+
+    def swapped_layer_root_solver(**kwargs: object) -> object:
+        roots = real_solver(**kwargs)
+        if roots is None or len(roots.beta_rad) != 2:
+            return roots
+        return replace(roots, beta_rad=tuple(reversed(roots.beta_rad)))
+
+    monkeypatch.setattr(
+        fitting_geometry_module,
+        "solve_layer_l_ewald_roots",
+        swapped_layer_root_solver,
+    )
+    assert (
+        audit_indexed_geometry_series_roots(
+            tuple(augmented_images),
+            augmented_fit.corrections,
+        ).classification
+        == "CHANGED"
+    )
 
 
 def _analytic_mosaic_profile_bank() -> tuple[

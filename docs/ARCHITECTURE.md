@@ -64,9 +64,13 @@ contributing rod/orientation branches on the active detector panel.
 - `selection`: position-free angle-chart discovery, detector-native peak refinement, reciprocal
   identity inference, immutable cross-incidence branch manifests, strict OSC-series ingestion, and
   frozen-key post-fit visibility audits.
-- `fitting/geometry.py`: callable pose-bound detector fields, their exact-L tagged landmarks,
-  the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
-  fitting, rank diagnostics, and post-fit root re-enumeration.
+- `fitting/geometry.py`: callable pose-bound detector fields, their exact integer- or
+  commensurate-rational-L tagged landmarks,
+    the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
+    fitting, rank diagnostics, and post-fit root re-enumeration.
+- `fitting/pbi2_geometry.py`: ideal 2H/4H/6H parent-period support in one declared single-trilayer
+  PbI2 metric, exact detector-locus deduplication, and hash-bound signed-rod/parent provenance; no
+  structure intensity, population weight, mosaic, or measured-centroid ownership.
 - `fitting/indexed_series.py`: exact image-ID joins, one shared nine-coordinate
   detector/sample/axis/pivot correction pack, one optional common additive incidence-angle delta,
   and optional zero-sum image trims represented by Helmert contrasts. Any identifiable subset may

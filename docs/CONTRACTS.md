@@ -37,7 +37,9 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `ConfiguredGeometryInputs` / `GeometryOnlyEwaldContext` | configured pipeline | one nominal ray, material optics, reciprocal basis, rods, and instrument; no strength or mosaic object |
 | `EwaldDirectionIntensity` | continuous detector pipeline | sample-frame internal-film outgoing directions and `Q`; exact a.e. total/per-rod `A2/sr` density, inverse counts, caustics, rods, branch selection, and measure identity |
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
-| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
+| `CommensurateLayerOrder` / `LayerLMarkerDefinition` / `LayerLMarkerObservations` | geometry/fitting | exact reduced layer coordinate; rod-free physical marker identity plus explicit signed-rod provenance; one frozen coordinate/covariance row per physical detector locus |
+| `Pbi2PolytypeLandmarkCatalogue` | fitting | ideal-parent 2H/4H/6H support in one declared single-trilayer PbI2 metric, exact overlap deduplication, signed-rod/parent provenance, source-CIF and full geometry-context revisions; no intensity or measured-centroid claim |
+| `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen integer- or rational-layer image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
 | `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 | `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
 | `ReciprocalProfileMembership` / `BinnedSampleIntegral` | measurement | immutable sample-to-bin identities and separately accumulated signal/measure vectors; division occurs only after finite-bin integration |
@@ -542,6 +544,49 @@ yaw/pitch, crystal rotation about the rod axis, detector tangent translation/bea
 sample-normal offset/detector-distance gauges. Those parameters require additional constrained data,
 especially multiple commanded goniometer angles; they are not exposed by this fit contract.
 
+### Optional exact rational-layer landmarks
+
+`CommensurateLayerOrder(numerator, denominator)` is the exact identity for a coordinate along one
+declared layer repeat. It reduces by the greatest common divisor, keeps a positive denominator,
+orders by exact cross multiplication, and converts to `float64` only at the fixed-L Ewald equation.
+`solve_layer_l_ewald_roots(...)` owns that equation. The retained integer solver delegates to the
+same kernel with denominator one; integer marker/catalogue/selection records and their hashes are
+unchanged.
+
+`LayerLMarkerKey` freezes `(m, reduced L, analytic branch, beta-root sign,
+reciprocal-basis revision)` and deliberately contains no representative rod. A
+`LayerLMarkerDefinition` carries every signed `(h,k)` rod that realizes the detector locus. The
+predictor independently verifies that all such rods map to the same Cartesian `Q`, detector
+coordinate, status, and root identity; a split locus fails closed. `LayerLMarkerObservations`
+is a nonzero-`m` contract and stores one coordinate/covariance row per key, so exact parent or rod overlaps never duplicate a
+geometry residual. `merge_layer_l_marker_observations(...)` joins already-qualified optional rows,
+rejects conflicting duplicates, and returns the original baseline object when no optional pack is
+supplied.
+
+For PbI2, `build_ideal_pbi2_polytype_landmark_catalogue(...)` requires the one-trilayer PbI2 metric
+supplied by its geometry model; T22 validates the tracked `PbI2_2H.cif` as that declared reference.
+It admits reduced denominators one, two, and three and evaluates pure-parent support with exact modular arithmetic in the corrected
+`h+2k` registry gauge. Integer loci may be shared; half-order loci can carry both 4H hands; and
+third-order support swaps 6H hand between the two signed registry sectors. The catalogue retains
+the supporting parent and signed rod as provenance only, not as an intensity or population weight;
+geometry uses only the qualified coordinate and covariance. It never evaluates a structure amplitude, population
+fraction, stacking recurrence, mosaic distribution, detector raster, or pixel integral.
+
+`IndexedGeometryImage` accepts either the retained integer observations or one rational-layer pack
+that contains the integer baseline plus any observed half-/third-order rows. Missing, weak,
+off-panel, unresolved, or centroid-unqualified optional peaks simply add no rows. The same
+covariance-whitened site-plus-chord residual and nine-coordinate multi-incidence optimizer are
+used. `audit_exact_layer_l_geometry_roots(...)` independently brackets the fixed-L elastic
+equation for every contributing rod and detects root/order swaps without calling the production
+rational solver.
+
+This is a synthetic ideal-parent geometry boundary, not a measured selection workflow. The current
+OSC discovery/indexing schemas remain integer-L only, no measured PbI2 OSC/calibration data are
+tracked, and the separately relaxed native 4H/6H cells do not share the 2H layer repeat. A future
+measured admission step must freeze and certify each optional centroid before constructing these
+observations; broad or population-dependent blends belong to the stacking-aware intensity fit.
+The common-incidence-delta/sample-normal-x gauge is unchanged by the additional landmarks.
+
 ### Indexed multi-OSC geometry series
 
 `load_osc_geometry_series(...)` accepts one strict `rasim-osc-geometry-fit-v1` manifest with a
@@ -618,11 +663,13 @@ sensitivities separately, and promotes the candidate only
 when the data-only scaled rank, condition, improvement, bounds, prior-pull, selection, and root gates
 all pass. Otherwise downstream construction receives no basis override and follows the CIF path.
 
-`audit_indexed_geometry_series_roots(...)` brackets
-`F(beta)=q(beta) dot (q(beta)+2 ki)` on its two monotone arcs without calling the production
-integer-`L` root solver, assigns root sign from the oriented crossing and branch from the signed
-axial derivative, and compares independent and production detector coordinates per full key. A
-swapped beta/root assignment therefore fails even when the key set is unchanged.
+`audit_indexed_geometry_series_roots(...)` dispatches by observation contract. For integer records
+it brackets `F(beta)=q(beta) dot (q(beta)+2 ki)` on its two monotone arcs without calling the
+production integer-`L` root solver. For rational records it applies the same independent bracketed
+solve to every contributing signed rod without calling the production rational solver. Both paths
+assign root sign from the oriented crossing and branch from the signed axial derivative, then
+compare independent and production detector coordinates per physical key. A swapped beta/root
+assignment therefore fails even when the key set is unchanged.
 
 `reindex_frozen_osc_geometry_series(...)` returns a typed `FrozenOscGeometryReindexing` bound to the
 source manifest and discovery hashes. `audit_frozen_osc_geometry_reindexing(...)` independently

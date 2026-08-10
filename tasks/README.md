@@ -21,3 +21,9 @@ Ewald roots, callable detector-coordinate density, and explicitly declared obser
 T19 is the accepted fluid full-native detector viewer. It adds prefix-stable progressive execution,
 explicit CPU/CUDA forward Monte Carlo, causal geometry invalidation, and explicit OpenGL or
 Matplotlib presentation without changing the stochastic pixel-mass measure.
+
+T22 is the accepted synthetic geometry-only PbI2 rational-landmark slice. It proves that optional
+4H half-order and 6H third-order sites can strengthen the existing shared multi-incidence geometry
+fit while an absent optional pack leaves the legacy integer observations untouched. Measured PbI2
+fractional-peak discovery/centroid qualification, per-specimen detector calibration, mosaic, and
+stacking-population fitting remain separate work.

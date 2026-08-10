@@ -16,5 +16,18 @@ python -m rasim_next.proof pbi2-polytype-bragg --json
 
 The benchmark 6H+ hand is intentionally opposite the supplied relaxed R-3m 6H- setting. The
 benchmark validates ideal stacking topology and raw intensity assembly; it is not another material
-structure determination. `stacking_truth.toml` remains a synthetic disorder input. Bi2Se3 is the
-main detector example, but it is not a sufficient material fixture for the PbI2 stacking model.
+structure determination.
+
+The optional-polytype geometry validation uses `structures/PbI2_2H.cif` as one declared
+single-trilayer metric and admits already-qualified exact half-/third-order landmarks:
+
+```powershell
+uv run --frozen pytest -q tests/test_fitting.py `
+  -k optional_pbi2_polytype_landmarks_strengthen
+```
+
+It is synthetic and geometry-only: no measured PbI2 OSC data, separate detector calibrations,
+mosaic profiles, or population/intensity fit are supplied here.
+
+`stacking_truth.toml` remains a synthetic disorder input. Bi2Se3 is the main detector example, but
+it is not a sufficient material fixture for the PbI2 stacking model.

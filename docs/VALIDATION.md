@@ -1001,6 +1001,48 @@ and per-image corrections stay fixed. The pivot-pitch/pivot-yaw/plane-offset com
 weakest direction for the measured three-angle design, so a fourth incidence is recommended for an
 independent validation and parameter-level pivot uncertainties must be reported honestly.
 
+### Synthetic PbI2 optional-polytype-landmark geometry proof
+
+T22 activates `PHY-FIT-003D` and `PHY-FIT-004B` for a geometry-only synthetic boundary. The
+tracked `PbI2_2H.cif` supplies one declared trilayer metric. At commanded incidences 5, 10, and 15
+degrees, the baseline uses the nonzero-`m` 2H orders `L={1,2,3,4}`. The augmented fixture adds
+4H+ half orders `{1/2,3/2,5/2,7/2}` and 6H- third orders
+`{2/3,5/3,8/3,11/3}`. All rows use family `m=1`, signed rod `(-1,0)`, analytic branch 2, both
+root signs, and `0.25 px` covariance. The common incidence delta is fixed, leaving all nine shared
+detector/sample/axis coordinates active.
+
+The 2H baseline retains `8/8/6` detector sites at 5/10/15 degrees; the optional pack retains
+`24/20/18`. Exact parent and rod overlaps are one physical key and one residual with unioned
+provenance. Supplying no optional pack returns the original legacy integer observation object.
+Supplying the complete augmented pack preserves every contributing rod; a conflicting duplicate
+centroid and a mixed reciprocal-basis revision are rejected.
+
+Both noiseless fits recover the planted nine-coordinate pose at rank 9/9 with no active bounds.
+The baseline and augmented maximum parameter errors normalized by their hard half-spans are
+`1.68284e-11` and `6.41023e-11`; maximum site residuals are `2.14504e-12` and
+`4.86069e-12 px`. The scaled Jacobian condition changes from `24920.4269954` to
+`16842.9140450`. Its weakest singular value rises from `0.193651473287` to
+`0.296279736884`, a factor of `1.52996376`; this is the accepted information-gain statement.
+Full condition need not improve for every optional roster, because all singular directions receive
+additional information at different rates.
+
+The independent rational fixed-L audits are `SAME` with exact expected/enumerated counts
+`8/8/6` and `24/20/18`. Reversing the production beta-root tuple while retaining root signs makes
+the augmented audit `CHANGED`. Denominator-one root tuples and detector predictions are bit-exact
+with the retained integer API. The exact signed-sector support table includes negative `L`, and the
+tracked relaxed 4H cell is rejected as a shared single-trilayer authority. Constructor and function
+spies reject ordered layer amplitudes, PbI2 stacking-response compilation, finite-population
+intensity, mosaic-space construction, detector macrobin integration, and pixel-center sampling.
+The focused diagnostic took `71.67 s`; the baseline and augmented fits took `18.83 s` and
+`41.77 s` respectively. A separate full-proof `tracemalloc` run peaked at `3,931,972` bytes
+(`3.74982 MiB`) after imports; this excludes native-library allocations and process RSS.
+
+This is internal consistency for frozen, exact, noiseless landmarks under one detector calibration.
+Parent metadata is support provenance, not a fitted fraction or intensity. Measured rational-L
+discovery and centroid certification, separate detector calibrations for the three specimens,
+mosaic fitting, stacking-fault population fitting, and the separately relaxed native 4H/6H metrics
+remain `NO_ORACLE` in this result.
+
 ## Historical one-state deterministic mosaic recovery
 
 This retained synthetic proof predates the required 250-state source reduction and is not the active

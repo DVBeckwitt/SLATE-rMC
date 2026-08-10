@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: parratt_specular_stitch_complete
+current_phase: pbi2_rational_polytype_geometry
 
 tasks:
   - id: T00
@@ -107,3 +107,8 @@ tasks:
     branch: codex/parratt-specular-stitch
     status: READY_MODEL_LIMITED_FIT_CONDITIONED_NO_OBSERVED_HANDOFF_OVERLAP
     depends_on: [T04, T20]
+  - id: T22
+    file: tasks/22_pbi2_polytype_geometry.md
+    branch: codex/pbi2-rational-geometry
+    status: READY_SYNTHETIC_DECLARED_SINGLE_TRILAYER_METRIC_NO_MEASURED_PBI2
+    depends_on: [T05, T18]

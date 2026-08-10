@@ -873,6 +873,23 @@ normalization, and it checks both one cell and two coherent cells so the closing
 `FINITE_TOTAL` measure are exercised. The ideal fixtures do not replace the separately relaxed
 native CIFs.
 
+## PbI2 optional-polytype geometry validation
+
+The geometry fitter also accepts a frozen exact-rational landmark pack. The compact synthetic test
+uses the tracked one-trilayer 2H CIF as the declared layer metric, fits the same nine shared
+geometry coordinates at 5/10/15 degrees, and compares 2H integer orders with an augmented
+2H+4H+6H half-/third-order roster:
+
+```powershell
+uv run --frozen pytest -q tests/test_fitting.py `
+  -k optional_pbi2_polytype_landmarks_strengthen
+```
+
+This is not a raw-OSC example. Fractional peaks must already be detected, indexed, resolved, and
+centroid-qualified; missing optional peaks add no observations. The test fits no population or
+intensity, uses one detector calibration, and does not treat the relaxed native 4H/6H metrics as
+the common 2H layer coordinate.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

@@ -1,4 +1,4 @@
-"""Detector-native bounded geometry fitting for exact integer-L marker sites."""
+"""Detector-native bounded geometry fitting at exact layer-coordinate landmarks."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from painted_ewald import (
 )
 from painted_ewald.rotations import mosaic_axes
 from painted_ewald.types import Rod, RootStatus
-from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.core.frames import FrameId
+from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry import build_incident_states, compose_intrinsic_xy_rotation
@@ -33,6 +34,7 @@ from rasim_next.pipeline.configured_simulation import (
     evaluate_nominal_integer_l_markers,
     sample_configured_source,
     solve_integer_l_ewald_roots,
+    solve_layer_l_ewald_roots,
 )
 from rasim_next.pipeline.continuous_detector import (
     map_ewald_geometry_to_detector,
@@ -56,6 +58,7 @@ _PREDICTION_STATUSES = frozenset(code.value for code in ValidityCode) | {
     "BRANCH_CHANGED",
     "ROOT_MISSING",
     "ROOT_TANGENT",
+    "LOCUS_SPLIT",
 }
 
 
@@ -181,6 +184,115 @@ class IntegerLMarkerKey:
         """User-facing detector branch: negative beta-root side 1, positive side 2."""
 
         return 1 if self.root_sign < 0 else 2
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class LayerLMarkerKey:
+    """Rod-free physical identity for an exact commensurate layer landmark."""
+
+    family_m: int
+    layer_order: CommensurateLayerOrder
+    branch: int
+    root_sign: int
+    reciprocal_basis_revision: str
+
+    def __post_init__(self) -> None:
+        values = (self.family_m, self.branch, self.root_sign)
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in values
+        ):
+            raise TypeError("layer-L marker identity fields must be integers")
+        if self.family_m <= 0 or self.branch not in {1, 2} or self.root_sign not in {-1, 1}:
+            raise ValueError("invalid non-specular layer-L marker identity")
+        if not isinstance(self.layer_order, CommensurateLayerOrder):
+            raise TypeError("layer_order must be CommensurateLayerOrder")
+        revision = self.reciprocal_basis_revision
+        if (
+            not isinstance(revision, str)
+            or len(revision) != 64
+            or any(character not in "0123456789abcdef" for character in revision)
+        ):
+            raise ValueError("reciprocal_basis_revision must be a lowercase SHA-256 revision")
+        object.__setattr__(self, "family_m", int(self.family_m))
+        object.__setattr__(self, "branch", int(self.branch))
+        object.__setattr__(self, "root_sign", int(self.root_sign))
+
+    @property
+    def tag_branch(self) -> int:
+        return 1 if self.root_sign < 0 else 2
+
+
+@dataclass(frozen=True, slots=True)
+class LayerLMarkerDefinition:
+    """A physical key plus the explicit signed rods that realize its detector locus."""
+
+    key: LayerLMarkerKey
+    contributing_rod_hk: tuple[tuple[int, int], ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.key, LayerLMarkerKey):
+            raise TypeError("key must be LayerLMarkerKey")
+        rods: list[tuple[int, int]] = []
+        for supplied in tuple(self.contributing_rod_hk):
+            rod = tuple(supplied)
+            if len(rod) != 2 or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer)) for value in rod
+            ):
+                raise ValueError("contributing_rod_hk must contain integer (h, k) pairs")
+            hk = (int(rod[0]), int(rod[1]))
+            if hk[0] * hk[0] + hk[0] * hk[1] + hk[1] * hk[1] != self.key.family_m:
+                raise ValueError("each contributing rod must belong to the marker family")
+            rods.append(hk)
+        canonical = tuple(sorted(set(rods)))
+        if not canonical:
+            raise ValueError("a layer-L marker definition requires at least one contributing rod")
+        object.__setattr__(self, "contributing_rod_hk", canonical)
+
+    @property
+    def representative_rod_hk(self) -> tuple[int, int]:
+        return self.contributing_rod_hk[0]
+
+
+def _validate_layer_l_definitions(
+    definitions: tuple[LayerLMarkerDefinition, ...],
+    record_name: str,
+) -> None:
+    if not definitions or any(
+        not isinstance(definition, LayerLMarkerDefinition) for definition in definitions
+    ):
+        raise ValueError("definitions must contain at least one LayerLMarkerDefinition")
+    keys = tuple(definition.key for definition in definitions)
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"layer-L {record_name} physical keys must be unique")
+    if len({key.reciprocal_basis_revision for key in keys}) != 1:
+        raise ValueError(f"layer-L {record_name} must use one reciprocal-basis revision")
+    tag_identities = tuple(
+        (
+            key.family_m,
+            key.layer_order,
+            key.tag_branch,
+            key.reciprocal_basis_revision,
+        )
+        for key in keys
+    )
+    if len(set(tag_identities)) != len(tag_identities):
+        raise ValueError("each (m,L,tag_branch,basis) may have only one detector tag")
+    paired: dict[
+        tuple[int, CommensurateLayerOrder, str],
+        dict[int, LayerLMarkerDefinition],
+    ] = {}
+    for definition in definitions:
+        key = definition.key
+        paired.setdefault((key.family_m, key.layer_order, key.reciprocal_basis_revision), {})[
+            key.tag_branch
+        ] = definition
+    for sides in paired.values():
+        if set(sides) != {1, 2}:
+            continue
+        if sides[1].key.branch != sides[2].key.branch:
+            raise ValueError("paired detector tags must share one analytic Ewald branch")
+        if sides[1].contributing_rod_hk != sides[2].contributing_rod_hk:
+            raise ValueError("paired detector tags must share contributing physical rods")
 
 
 def _validate_tag_key_pack(keys: tuple[IntegerLMarkerKey, ...], record_name: str) -> None:
@@ -363,6 +475,231 @@ class IntegerLMarkerPrediction:
         object.__setattr__(self, "detector_status", status)
         object.__setattr__(self, "ewald_residual_Ainv", residual)
         object.__setattr__(self, "active_panel", active)
+
+
+@dataclass(frozen=True, slots=True)
+class LayerLMarkerPrediction:
+    """Detector prediction aligned to rod-free exact-layer definitions."""
+
+    definitions: tuple[LayerLMarkerDefinition, ...]
+    coordinates_px: FloatArray
+    detector_status: NDArray[np.str_]
+    ewald_residual_Ainv: FloatArray
+    active_panel: BoolArray = field(init=False)
+
+    def __post_init__(self) -> None:
+        definitions = tuple(self.definitions)
+        _validate_layer_l_definitions(definitions, "prediction")
+        size = len(definitions)
+        coordinates = _readonly_float_array(self.coordinates_px, (size, 2), "coordinates_px")
+        residual = _readonly_float_array(
+            self.ewald_residual_Ainv,
+            (size,),
+            "ewald_residual_Ainv",
+        )
+        if np.any(residual < 0.0):
+            raise ValueError("ewald_residual_Ainv must be nonnegative")
+        supplied_status = np.asarray(self.detector_status)
+        if supplied_status.shape != (size,):
+            raise ValueError("detector_status must contain one value per marker")
+        status = np.asarray(tuple(str(value) for value in supplied_status), dtype="U32")
+        invalid_status = sorted(set(status) - _PREDICTION_STATUSES)
+        if invalid_status:
+            raise ValueError(f"unsupported detector prediction status: {invalid_status}")
+        active = status == ValidityCode.VALID.value
+        for value in (status, active):
+            value.setflags(write=False)
+        object.__setattr__(self, "definitions", definitions)
+        object.__setattr__(self, "coordinates_px", coordinates)
+        object.__setattr__(self, "detector_status", status)
+        object.__setattr__(self, "ewald_residual_Ainv", residual)
+        object.__setattr__(self, "active_panel", active)
+
+    @property
+    def keys(self) -> tuple[LayerLMarkerKey, ...]:
+        return tuple(definition.key for definition in self.definitions)
+
+    def subset(self, selection: ArrayLike) -> LayerLMarkerPrediction:
+        indices = _selection_indices(selection, len(self.definitions))
+        return LayerLMarkerPrediction(
+            definitions=tuple(self.definitions[int(index)] for index in indices),
+            coordinates_px=self.coordinates_px[indices],
+            detector_status=self.detector_status[indices],
+            ewald_residual_Ainv=self.ewald_residual_Ainv[indices],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LayerLMarkerObservations:
+    """Frozen detector-native observations at exact commensurate layer coordinates."""
+
+    definitions: tuple[LayerLMarkerDefinition, ...]
+    coordinates_px: FloatArray
+    covariance_px2: FloatArray
+    reference_wavelength_A: float
+    whitening_matrix_px_inv: FloatArray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        definitions = tuple(self.definitions)
+        _validate_layer_l_definitions(definitions, "observation")
+        size = len(definitions)
+        coordinates = _readonly_float_array(self.coordinates_px, (size, 2), "coordinates_px")
+        covariance = _readonly_float_array(
+            self.covariance_px2,
+            (size, 2, 2),
+            "covariance_px2",
+        )
+        if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
+            raise ValueError("each marker covariance must be symmetric")
+        try:
+            cholesky = np.linalg.cholesky(covariance)
+        except np.linalg.LinAlgError as error:
+            raise ValueError("each marker covariance must be positive definite") from error
+        whitening = np.linalg.inv(cholesky)
+        whitening.setflags(write=False)
+        wavelength = float(self.reference_wavelength_A)
+        if not math.isfinite(wavelength) or wavelength <= 0.0:
+            raise ValueError("reference_wavelength_A must be finite and positive")
+        object.__setattr__(self, "definitions", definitions)
+        object.__setattr__(self, "coordinates_px", coordinates)
+        object.__setattr__(self, "covariance_px2", covariance)
+        object.__setattr__(self, "reference_wavelength_A", wavelength)
+        object.__setattr__(self, "whitening_matrix_px_inv", whitening)
+
+    @property
+    def keys(self) -> tuple[LayerLMarkerKey, ...]:
+        return tuple(definition.key for definition in self.definitions)
+
+    @classmethod
+    def from_prediction(
+        cls,
+        prediction: LayerLMarkerPrediction,
+        *,
+        reference_wavelength_A: float,
+        sigma_px: float = 1.0,
+    ) -> LayerLMarkerObservations:
+        if not isinstance(prediction, LayerLMarkerPrediction):
+            raise TypeError("prediction must be LayerLMarkerPrediction")
+        if not np.all(prediction.active_panel):
+            raise ValueError("every reference layer-L landmark must lie on the active panel")
+        sigma = float(sigma_px)
+        if not math.isfinite(sigma) or sigma <= 0.0:
+            raise ValueError("sigma_px must be finite and positive")
+        covariance = np.broadcast_to(
+            np.eye(2) * sigma**2,
+            (len(prediction.definitions), 2, 2),
+        ).copy()
+        return cls(
+            definitions=prediction.definitions,
+            coordinates_px=prediction.coordinates_px,
+            covariance_px2=covariance,
+            reference_wavelength_A=reference_wavelength_A,
+        )
+
+    def subset(self, selection: ArrayLike) -> LayerLMarkerObservations:
+        indices = _selection_indices(selection, len(self.definitions))
+        return LayerLMarkerObservations(
+            definitions=tuple(self.definitions[int(index)] for index in indices),
+            coordinates_px=self.coordinates_px[indices],
+            covariance_px2=self.covariance_px2[indices],
+            reference_wavelength_A=self.reference_wavelength_A,
+        )
+
+
+def merge_layer_l_marker_observations(
+    baseline: IntegerLMarkerObservations | LayerLMarkerObservations,
+    *optional_groups: LayerLMarkerObservations,
+    reciprocal_basis_revision: str | None = None,
+) -> IntegerLMarkerObservations | LayerLMarkerObservations:
+    """Merge already-qualified optional landmarks without duplicating physical loci."""
+
+    if not isinstance(baseline, (IntegerLMarkerObservations, LayerLMarkerObservations)):
+        raise TypeError("baseline must be integer- or layer-L marker observations")
+    if any(not isinstance(group, LayerLMarkerObservations) for group in optional_groups):
+        raise TypeError("optional_groups must contain LayerLMarkerObservations")
+    if not optional_groups:
+        return baseline
+    if isinstance(baseline, IntegerLMarkerObservations):
+        if reciprocal_basis_revision is None:
+            raise ValueError(
+                "reciprocal_basis_revision is required when augmenting integer-L observations"
+            )
+        baseline = LayerLMarkerObservations(
+            definitions=tuple(
+                LayerLMarkerDefinition(
+                    key=LayerLMarkerKey(
+                        family_m=key.family_m,
+                        layer_order=CommensurateLayerOrder(key.integer_L),
+                        branch=key.branch,
+                        root_sign=key.root_sign,
+                        reciprocal_basis_revision=reciprocal_basis_revision,
+                    ),
+                    contributing_rod_hk=(key.representative_rod_hk,),
+                )
+                for key in baseline.keys
+            ),
+            coordinates_px=baseline.coordinates_px,
+            covariance_px2=baseline.covariance_px2,
+            reference_wavelength_A=baseline.reference_wavelength_A,
+        )
+    elif reciprocal_basis_revision is not None and any(
+        key.reciprocal_basis_revision != reciprocal_basis_revision for key in baseline.keys
+    ):
+        raise ValueError("baseline reciprocal-basis revision does not match the requested revision")
+    groups = (baseline, *optional_groups)
+    revisions = {key.reciprocal_basis_revision for group in groups for key in group.keys}
+    if len(revisions) != 1:
+        raise ValueError("merged layer-L observations must share one reciprocal-basis revision")
+    wavelength = groups[0].reference_wavelength_A
+    scale = max(1.0, *(group.reference_wavelength_A for group in groups))
+    if any(
+        not math.isclose(
+            group.reference_wavelength_A,
+            wavelength,
+            rel_tol=0.0,
+            abs_tol=256.0 * np.finfo(np.float64).eps * scale,
+        )
+        for group in groups[1:]
+    ):
+        raise ValueError("merged layer-L observations must share one reference wavelength")
+
+    rows: dict[
+        LayerLMarkerKey,
+        tuple[LayerLMarkerDefinition, FloatArray, FloatArray],
+    ] = {}
+    for group in groups:
+        for index, definition in enumerate(group.definitions):
+            key = definition.key
+            existing = rows.get(key)
+            coordinate = group.coordinates_px[index]
+            covariance = group.covariance_px2[index]
+            if existing is None:
+                rows[key] = (definition, coordinate, covariance)
+                continue
+            prior_definition, prior_coordinate, prior_covariance = existing
+            if not np.array_equal(prior_coordinate, coordinate) or not np.array_equal(
+                prior_covariance,
+                covariance,
+            ):
+                raise ValueError("duplicate physical layer-L observations conflict")
+            rows[key] = (
+                LayerLMarkerDefinition(
+                    key=key,
+                    contributing_rod_hk=(
+                        *prior_definition.contributing_rod_hk,
+                        *definition.contributing_rod_hk,
+                    ),
+                ),
+                prior_coordinate,
+                prior_covariance,
+            )
+    ordered = tuple(rows[key] for key in sorted(rows))
+    return LayerLMarkerObservations(
+        definitions=tuple(item[0] for item in ordered),
+        coordinates_px=np.asarray([item[1] for item in ordered]),
+        covariance_px2=np.asarray([item[2] for item in ordered]),
+        reference_wavelength_A=wavelength,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -700,6 +1037,102 @@ def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(int(value) for value in frozen)
 
 
+def _map_fixed_layer_l_roots_to_detector(
+    *,
+    rod: Rod,
+    branch: int,
+    beta_rad: FloatArray,
+    layer_l: FloatArray,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> tuple[FloatArray, NDArray[np.str_], FloatArray, FloatArray]:
+    """Map already-solved fixed-L roots through the one canonical detector projection."""
+
+    beta = np.asarray(beta_rad, dtype=np.float64)
+    ell = np.asarray(layer_l, dtype=np.float64)
+    if beta.ndim != 1 or ell.shape != beta.shape or not np.all(np.isfinite(beta + ell)):
+        raise ValueError("beta_rad and layer_l must be aligned finite vectors")
+    b3_norm_Ainv = float(np.linalg.norm(reciprocal_basis_Ainv[:, 2]))
+    q_sample = map_tied_rotation_latent(
+        rod=rod,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        alpha_rad=np.zeros(beta.size, dtype=np.float64),
+        beta_rad=beta,
+        u_Ainv=ell * b3_norm_Ainv,
+    )
+    kf_sample = q_sample + ki_sample_Ainv[None, :]
+    ewald_residual = np.abs(np.linalg.norm(kf_sample, axis=1) - np.linalg.norm(ki_sample_Ainv))
+    geometry = EwaldLatentGeometry(
+        rod=rod,
+        branch=branch,
+        alpha_rad=np.zeros(beta.size, dtype=np.float64),
+        beta_rad=beta,
+        u_Ainv=ell * b3_norm_Ainv,
+        L=ell,
+        q_sample_Ainv=q_sample,
+        kf_sample_Ainv=kf_sample,
+        ewald_residual_Ainv=ewald_residual,
+        status=np.full(beta.size, RootStatus.REGULAR.value, dtype="U32"),
+    )
+    mapped = map_ewald_geometry_to_detector(
+        geometry,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    coordinates = np.column_stack((mapped.column_px, mapped.row_px))
+    status = np.asarray(mapped.detector_status, dtype="U32")
+    return coordinates, status, ewald_residual, q_sample
+
+
+def _predict_single_layer_l_rod(
+    *,
+    key: LayerLMarkerKey,
+    rod: Rod,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> tuple[FloatArray, str, float, FloatArray]:
+    roots = solve_layer_l_ewald_roots(
+        rod=rod,
+        layer_order=key.layer_order,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+    )
+    empty_coordinate = np.zeros(2, dtype=np.float64)
+    empty_q = np.zeros(3, dtype=np.float64)
+    if roots is None:
+        return empty_coordinate, "ROOT_MISSING", 0.0, empty_q
+    if roots.branch != key.branch:
+        return empty_coordinate, "BRANCH_CHANGED", 0.0, empty_q
+    if key.root_sign not in roots.root_sign:
+        status = "ROOT_TANGENT" if roots.root_sign == (0,) else "ROOT_MISSING"
+        return empty_coordinate, status, 0.0, empty_q
+    beta = roots.beta_rad[roots.root_sign.index(key.root_sign)]
+    coordinates, status, residual, q_sample = _map_fixed_layer_l_roots_to_detector(
+        rod=rod,
+        branch=key.branch,
+        beta_rad=np.asarray([beta]),
+        layer_l=np.asarray([key.layer_order.as_float()]),
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
+    return coordinates[0], str(status[0]), float(residual[0]), q_sample[0]
+
+
 class ExactTagGeometryModel:
     """One-ray exact integer-L predictor with no intensity or mosaic dependency."""
 
@@ -730,6 +1163,45 @@ class ExactTagGeometryModel:
     def reference_wavelength_A(self) -> float:
         return float(self._inputs.samples.wavelength_A[0])
 
+    @property
+    def reciprocal_basis_revision(self) -> str:
+        return canonical_revision_sha256(
+            ("definition_id", "commensurate_layer_coordinate_basis.v1"),
+            ("phase_id", self._inputs.config.material.phase_id),
+            ("cif_sha256", self._inputs.config.cif_sha256),
+            ("reciprocal_basis_Ainv", self._inputs.reciprocal.basis_Ainv),
+        )
+
+    @property
+    def geometry_context_revision(self) -> str:
+        instrument = self._inputs.instrument
+        return canonical_revision_sha256(
+            ("definition_id", "exact_tag_geometry_context.v1"),
+            ("source_revision", self._inputs.samples.source_revision),
+            ("material_revision", self._inputs.material.material_revision),
+            ("reciprocal_basis_revision", self.reciprocal_basis_revision),
+            (
+                "rod_hkm",
+                np.asarray(
+                    [(rod.h, rod.k, rod.family_m) for rod in self._inputs.rods],
+                    dtype=np.int64,
+                ),
+            ),
+            ("sample_geometry_revision", instrument.sample_geometry_revision),
+            ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
+            ("sample_from_crystal_translation_m", instrument.sample_from_crystal.translation_m),
+            ("lab_from_detector_rotation", instrument.lab_from_detector.rotation),
+            ("lab_from_detector_translation_m", instrument.lab_from_detector.translation_m),
+            ("detector_shape_rc", np.asarray(instrument.detector_shape_rc, dtype=np.int64)),
+            ("detector_row_pitch_m", np.asarray(instrument.detector_row_pitch_m)),
+            ("detector_column_pitch_m", np.asarray(instrument.detector_column_pitch_m)),
+            (
+                "detector_reference_coordinate_px",
+                np.asarray(instrument.detector_reference_coordinate_px),
+            ),
+            ("film_thickness_A", np.asarray(instrument.film_thickness_A)),
+        )
+
     def predict_integer_l_tags(
         self,
         keys: tuple[IntegerLMarkerKey, ...],
@@ -756,7 +1228,6 @@ class ExactTagGeometryModel:
         basis = self._inputs.reciprocal.basis_Ainv
         crystal_to_sample = active_instrument.sample_from_crystal.rotation
         ki_sample_Ainv = incident.states.k_film_phase_sample_Ainv[0]
-        b3_norm_Ainv = float(np.linalg.norm(basis[:, 2]))
         size = len(frozen_keys)
         coordinates = np.zeros((size, 2), dtype=np.float64)
         residual = np.zeros(size, dtype=np.float64)
@@ -805,45 +1276,265 @@ class ExactTagGeometryModel:
                 [frozen_keys[int(index)].integer_L for index in indices],
                 dtype=np.float64,
             )
-            q_sample = map_tied_rotation_latent(
-                rod=rod,
-                reciprocal_basis_Ainv=basis,
-                crystal_to_sample=crystal_to_sample,
-                alpha_rad=np.zeros(beta.size, dtype=np.float64),
-                beta_rad=beta,
-                u_Ainv=integer_l * b3_norm_Ainv,
+            mapped_coordinates, mapped_status, ewald_residual, _ = (
+                _map_fixed_layer_l_roots_to_detector(
+                    rod=rod,
+                    branch=branch,
+                    beta_rad=beta,
+                    layer_l=integer_l,
+                    reciprocal_basis_Ainv=basis,
+                    crystal_to_sample=crystal_to_sample,
+                    ki_sample_Ainv=ki_sample_Ainv,
+                    incident=incident,
+                    material=self._inputs.material,
+                    instrument=active_instrument,
+                )
             )
-            kf_sample = q_sample + ki_sample_Ainv[None, :]
-            ewald_residual = np.abs(
-                np.linalg.norm(kf_sample, axis=1) - np.linalg.norm(ki_sample_Ainv)
-            )
-            geometry = EwaldLatentGeometry(
-                rod=rod,
-                branch=branch,
-                alpha_rad=np.zeros(beta.size, dtype=np.float64),
-                beta_rad=beta,
-                u_Ainv=integer_l * b3_norm_Ainv,
-                L=integer_l,
-                q_sample_Ainv=q_sample,
-                kf_sample_Ainv=kf_sample,
-                ewald_residual_Ainv=ewald_residual,
-                status=np.full(beta.size, RootStatus.REGULAR.value, dtype="U32"),
-            )
-            mapped = map_ewald_geometry_to_detector(
-                geometry,
-                incident=incident,
-                material=self._inputs.material,
-                instrument=active_instrument,
-            )
-            coordinates[indices, 0] = mapped.column_px
-            coordinates[indices, 1] = mapped.row_px
+            coordinates[indices] = mapped_coordinates
             residual[indices] = ewald_residual
-            status[indices] = mapped.detector_status
+            status[indices] = mapped_status
         return IntegerLMarkerPrediction(
             keys=frozen_keys,
             coordinates_px=coordinates,
             detector_status=status,
             ewald_residual_Ainv=residual,
+        )
+
+    def predict_layer_l_tags(
+        self,
+        definitions: tuple[LayerLMarkerDefinition, ...],
+        *,
+        instrument: CompiledInstrument | None = None,
+    ) -> LayerLMarkerPrediction:
+        """Predict exact rational-layer tags without structure or mosaic evaluation."""
+
+        frozen = tuple(definitions)
+        _validate_layer_l_definitions(frozen, "prediction input")
+        basis_revision = self.reciprocal_basis_revision
+        if any(definition.key.reciprocal_basis_revision != basis_revision for definition in frozen):
+            raise ValueError("layer-L marker reciprocal-basis revision does not match the model")
+        active_instrument = self._inputs.instrument if instrument is None else instrument
+        if not isinstance(active_instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        incident = build_incident_states(
+            self._inputs.samples,
+            self._inputs.material,
+            active_instrument,
+        )
+        if not bool(incident.states.valid[0]):
+            raise GeometryPredictionError(
+                f"nominal incident state became {incident.states.status[0].value}"
+            )
+
+        rods = {(rod.h, rod.k): rod for rod in self._inputs.rods}
+        for definition in frozen:
+            if any(
+                rod_hk not in rods or rods[rod_hk].family_m != definition.key.family_m
+                for rod_hk in definition.contributing_rod_hk
+            ):
+                raise ValueError("a layer-L contributing rod is not present in the model family")
+
+        size = len(frozen)
+        coordinates = np.zeros((size, 2), dtype=np.float64)
+        residual = np.zeros(size, dtype=np.float64)
+        status = np.full(size, "ROOT_MISSING", dtype="U32")
+
+        integer_indices = tuple(
+            index
+            for index, definition in enumerate(frozen)
+            if definition.key.layer_order.is_integer
+        )
+        if integer_indices:
+            integer_keys = tuple(
+                IntegerLMarkerKey(
+                    family_m=frozen[index].key.family_m,
+                    integer_L=frozen[index].key.layer_order.numerator,
+                    branch=frozen[index].key.branch,
+                    root_sign=frozen[index].key.root_sign,
+                    representative_rod_hk=frozen[index].representative_rod_hk,
+                )
+                for index in integer_indices
+            )
+            integer_prediction = self.predict_integer_l_tags(
+                integer_keys,
+                instrument=active_instrument,
+            )
+            target = np.asarray(integer_indices, dtype=np.int64)
+            coordinates[target] = integer_prediction.coordinates_px
+            residual[target] = integer_prediction.ewald_residual_Ainv
+            status[target] = integer_prediction.detector_status
+
+        basis = self._inputs.reciprocal.basis_Ainv
+        crystal_to_sample = active_instrument.sample_from_crystal.rotation
+        ki_sample = incident.states.k_film_phase_sample_Ainv[0]
+        for index, definition in enumerate(frozen):
+            key = definition.key
+            if not key.layer_order.is_integer:
+                coordinate, marker_status, marker_residual, _ = _predict_single_layer_l_rod(
+                    key=key,
+                    rod=rods[definition.representative_rod_hk],
+                    reciprocal_basis_Ainv=basis,
+                    crystal_to_sample=crystal_to_sample,
+                    ki_sample_Ainv=ki_sample,
+                    incident=incident,
+                    material=self._inputs.material,
+                    instrument=active_instrument,
+                )
+                coordinates[index] = coordinate
+                residual[index] = marker_residual
+                status[index] = marker_status
+            if len(definition.contributing_rod_hk) == 1:
+                continue
+            contributing = tuple(
+                _predict_single_layer_l_rod(
+                    key=key,
+                    rod=rods[rod_hk],
+                    reciprocal_basis_Ainv=basis,
+                    crystal_to_sample=crystal_to_sample,
+                    ki_sample_Ainv=ki_sample,
+                    incident=incident,
+                    material=self._inputs.material,
+                    instrument=active_instrument,
+                )
+                for rod_hk in definition.contributing_rod_hk
+            )
+            reference_coordinate, reference_status, _, reference_q = contributing[0]
+            coordinate_scale = max(float(max(active_instrument.detector_shape_rc)), 1.0)
+            coordinate_tolerance = 32768.0 * np.finfo(np.float64).eps * coordinate_scale
+            q_tolerance = (
+                32768.0
+                * np.finfo(np.float64).eps
+                * max(
+                    float(np.linalg.norm(ki_sample)),
+                    1.0,
+                )
+            )
+            if any(
+                marker_status != reference_status
+                or float(np.linalg.norm(marker_coordinate - reference_coordinate))
+                > coordinate_tolerance
+                or float(np.linalg.norm(marker_q - reference_q)) > q_tolerance
+                for marker_coordinate, marker_status, _, marker_q in contributing[1:]
+            ):
+                status[index] = "LOCUS_SPLIT"
+                continue
+            residual[index] = max(item[2] for item in contributing)
+        return LayerLMarkerPrediction(
+            definitions=frozen,
+            coordinates_px=coordinates,
+            detector_status=status,
+            ewald_residual_Ainv=residual,
+        )
+
+    def enumerate_layer_l_tags(
+        self,
+        layer_orders: tuple[CommensurateLayerOrder, ...],
+        *,
+        instrument: CompiledInstrument | None = None,
+    ) -> LayerLMarkerPrediction:
+        """Enumerate panel-visible exact-layer loci before any intensity selection."""
+
+        orders = tuple(layer_orders)
+        if (
+            not orders
+            or any(not isinstance(order, CommensurateLayerOrder) for order in orders)
+            or len(set(orders)) != len(orders)
+        ):
+            raise ValueError("layer_orders must contain unique CommensurateLayerOrder values")
+        active_instrument = self._inputs.instrument if instrument is None else instrument
+        if not isinstance(active_instrument, CompiledInstrument):
+            raise TypeError("instrument must be CompiledInstrument")
+        incident = build_incident_states(
+            self._inputs.samples,
+            self._inputs.material,
+            active_instrument,
+        )
+        if not bool(incident.states.valid[0]):
+            raise GeometryPredictionError(
+                f"nominal incident state became {incident.states.status[0].value}"
+            )
+        basis = self._inputs.reciprocal.basis_Ainv
+        crystal_to_sample = active_instrument.sample_from_crystal.rotation
+        ki_sample = incident.states.k_film_phase_sample_Ainv[0]
+        groups: dict[
+            LayerLMarkerKey,
+            tuple[list[tuple[int, int]], FloatArray, FloatArray, float],
+        ] = {}
+        coordinate_scale = max(float(max(active_instrument.detector_shape_rc)), 1.0)
+        coordinate_tolerance = 32768.0 * np.finfo(np.float64).eps * coordinate_scale
+        q_tolerance = (
+            32768.0
+            * np.finfo(np.float64).eps
+            * max(
+                float(np.linalg.norm(ki_sample)),
+                1.0,
+            )
+        )
+        basis_revision = self.reciprocal_basis_revision
+        for rod in self._inputs.rods:
+            if rod.family_m == 0:
+                continue
+            for layer_order in sorted(orders):
+                roots = solve_layer_l_ewald_roots(
+                    rod=rod,
+                    layer_order=layer_order,
+                    reciprocal_basis_Ainv=basis,
+                    crystal_to_sample=crystal_to_sample,
+                    ki_sample_Ainv=ki_sample,
+                )
+                if roots is None or roots.root_sign == (0,):
+                    continue
+                for root_sign in roots.root_sign:
+                    key = LayerLMarkerKey(
+                        family_m=rod.family_m,
+                        layer_order=layer_order,
+                        branch=roots.branch,
+                        root_sign=root_sign,
+                        reciprocal_basis_revision=basis_revision,
+                    )
+                    coordinate, status, residual, q_sample = _predict_single_layer_l_rod(
+                        key=key,
+                        rod=rod,
+                        reciprocal_basis_Ainv=basis,
+                        crystal_to_sample=crystal_to_sample,
+                        ki_sample_Ainv=ki_sample,
+                        incident=incident,
+                        material=self._inputs.material,
+                        instrument=active_instrument,
+                    )
+                    if status != ValidityCode.VALID.value:
+                        continue
+                    existing = groups.get(key)
+                    if existing is None:
+                        groups[key] = ([(rod.h, rod.k)], coordinate, q_sample, residual)
+                        continue
+                    rods, reference_coordinate, reference_q, reference_residual = existing
+                    if (
+                        float(np.linalg.norm(coordinate - reference_coordinate))
+                        > coordinate_tolerance
+                        or float(np.linalg.norm(q_sample - reference_q)) > q_tolerance
+                    ):
+                        raise GeometryPredictionError(
+                            "one rod-free layer-L key maps to multiple detector loci"
+                        )
+                    rods.append((rod.h, rod.k))
+                    groups[key] = (
+                        rods,
+                        reference_coordinate,
+                        reference_q,
+                        max(reference_residual, residual),
+                    )
+        if not groups:
+            raise GeometryPredictionError("no exact layer-L landmarks reach the active panel")
+        ordered = tuple((key, groups[key]) for key in sorted(groups))
+        return LayerLMarkerPrediction(
+            definitions=tuple(
+                LayerLMarkerDefinition(key=key, contributing_rod_hk=tuple(value[0]))
+                for key, value in ordered
+            ),
+            coordinates_px=np.asarray([value[1] for _, value in ordered]),
+            detector_status=np.full(len(ordered), ValidityCode.VALID.value, dtype="U32"),
+            ewald_residual_Ainv=np.asarray([value[3] for _, value in ordered]),
         )
 
     def predict_m0_minimum_tilt_exact_l_landmarks(
@@ -959,10 +1650,10 @@ class ExactTagGeometryModel:
         )
 
 
-def _direct_integer_l_root_coordinates(
+def _direct_layer_l_root_coordinates(
     *,
     rod: Rod,
-    integer_l: int,
+    layer_order: CommensurateLayerOrder,
     reciprocal_basis_Ainv: FloatArray,
     crystal_to_sample: FloatArray,
     ki_sample_Ainv: FloatArray,
@@ -973,8 +1664,9 @@ def _direct_integer_l_root_coordinates(
     """Directly bracket fixed-L elastic roots without the prediction solver."""
 
     tau = 2.0 * np.pi
+    layer_l = layer_order.as_float()
     b3_norm_Ainv = float(np.linalg.norm(reciprocal_basis_Ainv[:, 2]))
-    u_Ainv = integer_l * b3_norm_Ainv
+    u_Ainv = layer_l * b3_norm_Ainv
     mean_axis, _ = mosaic_axes(reciprocal_basis_Ainv)
     mean_axis_sample = crystal_to_sample @ mean_axis
 
@@ -1117,7 +1809,7 @@ def _direct_integer_l_root_coordinates(
             alpha_rad=np.asarray(0.0),
             beta_rad=np.asarray(beta),
             u_Ainv=np.asarray(u_Ainv),
-            L=np.asarray(float(integer_l)),
+            L=np.asarray(layer_l),
             q_sample_Ainv=q_sample,
             kf_sample_Ainv=kf_sample,
             ewald_residual_Ainv=np.asarray(ewald_residual),
@@ -1138,6 +1830,29 @@ def _direct_integer_l_root_coordinates(
         coordinate.setflags(write=False)
         coordinates[(branch, root_sign)] = coordinate
     return coordinates, False
+
+
+def _direct_integer_l_root_coordinates(
+    *,
+    rod: Rod,
+    integer_l: int,
+    reciprocal_basis_Ainv: FloatArray,
+    crystal_to_sample: FloatArray,
+    ki_sample_Ainv: FloatArray,
+    incident: IncidentTransportResult,
+    material: MaterialOptics,
+    instrument: CompiledInstrument,
+) -> tuple[dict[tuple[int, int], FloatArray], bool]:
+    return _direct_layer_l_root_coordinates(
+        rod=rod,
+        layer_order=CommensurateLayerOrder(integer_l),
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        ki_sample_Ainv=ki_sample_Ainv,
+        incident=incident,
+        material=material,
+        instrument=instrument,
+    )
 
 
 def audit_exact_tag_geometry_roots(
@@ -1240,6 +1955,121 @@ def audit_exact_tag_geometry_roots(
         missing_keys=missing_keys,
         unexpected_keys=unexpected_keys,
         expected_count=len(expected),
+        enumerated_count=matched_count + len(unexpected_keys),
+    )
+
+
+def audit_exact_layer_l_geometry_roots(
+    model: ExactTagGeometryModel,
+    expected_definitions: tuple[LayerLMarkerDefinition, ...],
+    *,
+    instrument: CompiledInstrument | None = None,
+) -> LayerLSelectionAudit:
+    """Audit rational-layer loci with an independent bracketed elastic-root solve."""
+
+    if not isinstance(model, ExactTagGeometryModel):
+        raise TypeError("model must be ExactTagGeometryModel")
+    expected = tuple(expected_definitions)
+    _validate_layer_l_definitions(expected, "root audit")
+    active_instrument = model.instrument if instrument is None else instrument
+    if not isinstance(active_instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    keys = tuple(definition.key for definition in expected)
+    incident = build_incident_states(model.inputs.samples, model.inputs.material, active_instrument)
+    if not bool(incident.states.valid[0]):
+        return LayerLSelectionAudit(
+            classification="MISSING",
+            missing_keys=keys,
+            unexpected_keys=(),
+            expected_count=len(keys),
+            enumerated_count=0,
+        )
+    try:
+        predicted = model.predict_layer_l_tags(expected, instrument=active_instrument)
+    except GeometryPredictionError:
+        return LayerLSelectionAudit(
+            classification="MISSING",
+            missing_keys=keys,
+            unexpected_keys=(),
+            expected_count=len(keys),
+            enumerated_count=0,
+        )
+
+    rods = {(rod.h, rod.k): rod for rod in model.inputs.rods}
+    basis = model.inputs.reciprocal.basis_Ainv
+    crystal_to_sample = active_instrument.sample_from_crystal.rotation
+    ki_sample = incident.states.k_film_phase_sample_Ainv[0]
+    direct_by_problem: dict[
+        tuple[tuple[int, int], CommensurateLayerOrder],
+        tuple[dict[tuple[int, int], FloatArray], bool],
+    ] = {}
+    for definition in expected:
+        for rod_hk in definition.contributing_rod_hk:
+            rod = rods.get(rod_hk)
+            if rod is None or rod.family_m != definition.key.family_m:
+                continue
+            problem = (rod_hk, definition.key.layer_order)
+            if problem in direct_by_problem:
+                continue
+            direct_by_problem[problem] = _direct_layer_l_root_coordinates(
+                rod=rod,
+                layer_order=definition.key.layer_order,
+                reciprocal_basis_Ainv=basis,
+                crystal_to_sample=crystal_to_sample,
+                ki_sample_Ainv=ki_sample,
+                incident=incident,
+                material=model.inputs.material,
+                instrument=active_instrument,
+            )
+    if any(ambiguous for _, ambiguous in direct_by_problem.values()):
+        return LayerLSelectionAudit(
+            classification="AMBIGUOUS",
+            missing_keys=(),
+            unexpected_keys=(),
+            expected_count=len(keys),
+            enumerated_count=sum(
+                all(
+                    (rod_hk, definition.key.layer_order) in direct_by_problem
+                    for rod_hk in definition.contributing_rod_hk
+                )
+                for definition in expected
+            ),
+        )
+
+    missing: list[LayerLMarkerKey] = []
+    mismatched: list[LayerLMarkerKey] = []
+    matched_count = 0
+    coordinate_tolerance_px = 1.0e-5
+    for index, definition in enumerate(expected):
+        key = definition.key
+        oracle_coordinates = []
+        for rod_hk in definition.contributing_rod_hk:
+            direct = direct_by_problem.get((rod_hk, key.layer_order))
+            coordinate = None if direct is None else direct[0].get((key.branch, key.root_sign))
+            if coordinate is None:
+                oracle_coordinates = []
+                break
+            oracle_coordinates.append(coordinate)
+        if not oracle_coordinates or not predicted.active_panel[index]:
+            missing.append(key)
+            continue
+        if any(
+            float(np.linalg.norm(predicted.coordinates_px[index] - coordinate))
+            > coordinate_tolerance_px
+            for coordinate in oracle_coordinates
+        ):
+            missing.append(key)
+            mismatched.append(key)
+            continue
+        matched_count += 1
+    missing_keys = tuple(sorted(missing))
+    unexpected_keys = tuple(sorted(mismatched))
+    classification = "CHANGED" if unexpected_keys else "MISSING" if missing_keys else "SAME"
+    return LayerLSelectionAudit(
+        classification=classification,
+        missing_keys=missing_keys,
+        unexpected_keys=unexpected_keys,
+        expected_count=len(keys),
         enumerated_count=matched_count + len(unexpected_keys),
     )
 
@@ -1453,11 +2283,16 @@ class ContinuousDetectorFunction:
 
 
 def _marker_chord_pairs(
-    keys: tuple[IntegerLMarkerKey, ...],
+    keys: tuple[IntegerLMarkerKey | LayerLMarkerKey, ...],
 ) -> tuple[tuple[int, int], ...]:
-    groups: dict[tuple[int, int], dict[int, int]] = {}
+    groups: dict[tuple[int, CommensurateLayerOrder], dict[int, int]] = {}
     for index, key in enumerate(keys):
-        groups.setdefault((key.family_m, key.integer_L), {})[key.root_sign] = index
+        layer_order = (
+            key.layer_order
+            if isinstance(key, LayerLMarkerKey)
+            else CommensurateLayerOrder(key.integer_L)
+        )
+        groups.setdefault((key.family_m, layer_order), {})[key.root_sign] = index
     pairs: list[tuple[int, int]] = []
     for _, sides in sorted(groups.items()):
         if set(sides) != {-1, 1}:
@@ -1480,8 +2315,8 @@ def _signed_line_angle_rad(target_vector: FloatArray, trial_vector: FloatArray) 
 
 
 def _nonzero_chord_angles_and_residual_px(
-    observations: IntegerLMarkerObservations,
-    prediction: IntegerLMarkerPrediction,
+    observations: IntegerLMarkerObservations | LayerLMarkerObservations,
+    prediction: IntegerLMarkerPrediction | LayerLMarkerPrediction,
 ) -> tuple[FloatArray, FloatArray]:
     pairs = _marker_chord_pairs(observations.keys)
     angle = np.empty(len(pairs), dtype=np.float64)
@@ -1559,25 +2394,13 @@ _TrialLandmarkPredictor = Callable[
 ]
 
 
-def evaluate_tagged_geometry_objective_residual(
-    observations: IntegerLMarkerObservations,
-    prediction: IntegerLMarkerPrediction,
+def _evaluate_nonzero_geometry_objective_residual(
+    observations: IntegerLMarkerObservations | LayerLMarkerObservations,
+    prediction: IntegerLMarkerPrediction | LayerLMarkerPrediction,
     *,
     m0_observations: M0IntegerLObservations | None = None,
     m0_prediction: M0IntegerLPrediction | None = None,
 ) -> FloatArray:
-    """Evaluate the declared whitened site-plus-line objective without optimization.
-
-    Ordering is nonzero-tag ``(column,row)`` residuals in key order, paired nonzero
-    half-angle residuals in sorted ``(m,L)`` order, then—when supplied—m=0
-    ``(column,row)`` residuals in L-record order and the single increasing-L TLS-line
-    half-angle residual.
-    """
-
-    if not isinstance(observations, IntegerLMarkerObservations):
-        raise TypeError("observations must be IntegerLMarkerObservations")
-    if not isinstance(prediction, IntegerLMarkerPrediction):
-        raise TypeError("prediction must be IntegerLMarkerPrediction")
     if prediction.keys != observations.keys:
         raise ValueError("prediction keys must exactly match observation keys")
     if (m0_observations is None) != (m0_prediction is None):
@@ -1657,6 +2480,42 @@ def evaluate_tagged_geometry_objective_residual(
     result = np.concatenate(pieces)
     result.setflags(write=False)
     return result
+
+
+def evaluate_tagged_geometry_objective_residual(
+    observations: IntegerLMarkerObservations,
+    prediction: IntegerLMarkerPrediction,
+    *,
+    m0_observations: M0IntegerLObservations | None = None,
+    m0_prediction: M0IntegerLPrediction | None = None,
+) -> FloatArray:
+    """Evaluate the legacy integer-L site-plus-line objective without optimization."""
+
+    if not isinstance(observations, IntegerLMarkerObservations):
+        raise TypeError("observations must be IntegerLMarkerObservations")
+    if not isinstance(prediction, IntegerLMarkerPrediction):
+        raise TypeError("prediction must be IntegerLMarkerPrediction")
+    return _evaluate_nonzero_geometry_objective_residual(
+        observations,
+        prediction,
+        m0_observations=m0_observations,
+        m0_prediction=m0_prediction,
+    )
+
+
+def evaluate_layer_l_geometry_objective_residual(
+    observations: LayerLMarkerObservations,
+    prediction: LayerLMarkerPrediction,
+) -> FloatArray:
+    """Evaluate the same geometry objective at exact rational-layer landmarks."""
+
+    if not isinstance(observations, LayerLMarkerObservations):
+        raise TypeError("observations must be LayerLMarkerObservations")
+    if not isinstance(prediction, LayerLMarkerPrediction):
+        raise TypeError("prediction must be LayerLMarkerPrediction")
+    if prediction.definitions != observations.definitions:
+        raise ValueError("prediction definitions must exactly match observation definitions")
+    return _evaluate_nonzero_geometry_objective_residual(observations, prediction)
 
 
 def _finite_difference_jacobian(
@@ -2030,6 +2889,44 @@ class IntegerLSelectionAudit:
         unexpected = tuple(self.unexpected_keys)
         if any(not isinstance(key, IntegerLMarkerKey) for key in missing + unexpected):
             raise TypeError("audit differences must contain IntegerLMarkerKey values")
+        if len(set(missing)) != len(missing) or len(set(unexpected)) != len(unexpected):
+            raise ValueError("audit differences must contain unique identities")
+        for name in ("expected_count", "enumerated_count"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
+            object.__setattr__(self, name, int(value))
+        if self.classification == "SAME" and (
+            missing or unexpected or self.expected_count != self.enumerated_count
+        ):
+            raise ValueError("a SAME audit cannot contain differences or unequal counts")
+        if self.classification == "MISSING" and (not missing or unexpected):
+            raise ValueError("a MISSING audit requires missing identities only")
+        if self.classification == "CHANGED" and not unexpected:
+            raise ValueError("a CHANGED audit requires unexpected identities")
+        if self.classification != "AMBIGUOUS" and (
+            self.expected_count - len(missing) != self.enumerated_count - len(unexpected)
+        ):
+            raise ValueError("audit counts and identity differences are inconsistent")
+        object.__setattr__(self, "missing_keys", missing)
+        object.__setattr__(self, "unexpected_keys", unexpected)
+
+
+@dataclass(frozen=True, slots=True)
+class LayerLSelectionAudit:
+    classification: str
+    missing_keys: tuple[LayerLMarkerKey, ...]
+    unexpected_keys: tuple[LayerLMarkerKey, ...]
+    expected_count: int
+    enumerated_count: int
+
+    def __post_init__(self) -> None:
+        if self.classification not in {"SAME", "CHANGED", "MISSING", "AMBIGUOUS"}:
+            raise ValueError("unsupported layer-L marker selection classification")
+        missing = tuple(self.missing_keys)
+        unexpected = tuple(self.unexpected_keys)
+        if any(not isinstance(key, LayerLMarkerKey) for key in missing + unexpected):
+            raise TypeError("audit differences must contain LayerLMarkerKey values")
         if len(set(missing)) != len(missing) or len(set(unexpected)) != len(unexpected):
             raise ValueError("audit differences must contain unique identities")
         for name in ("expected_count", "enumerated_count"):

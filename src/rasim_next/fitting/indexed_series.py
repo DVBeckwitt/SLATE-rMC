@@ -20,11 +20,17 @@ from rasim_next.fitting.geometry import (
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
     IntegerLSelectionAudit,
+    LayerLMarkerDefinition,
+    LayerLMarkerObservations,
+    LayerLMarkerPrediction,
+    LayerLSelectionAudit,
     _finite_difference_jacobian,
     _nonzero_chord_angles_and_residual_px,
     _rank_diagnostics,
     _readonly_float_array,
+    audit_exact_layer_l_geometry_roots,
     audit_exact_tag_geometry_roots,
+    evaluate_layer_l_geometry_objective_residual,
     evaluate_tagged_geometry_objective_residual,
 )
 from rasim_next.geometry.instrument import (
@@ -394,15 +400,20 @@ class IndexedGeometryImage:
     image_id: str
     commanded_angle_rad: float
     model: ExactTagGeometryModel
-    observations: IntegerLMarkerObservations
+    observations: IntegerLMarkerObservations | LayerLMarkerObservations
 
     def __post_init__(self) -> None:
         if not isinstance(self.image_id, str) or not self.image_id.strip():
             raise ValueError("image_id must be nonempty")
         if not isinstance(self.model, ExactTagGeometryModel):
             raise TypeError("model must be ExactTagGeometryModel")
-        if not isinstance(self.observations, IntegerLMarkerObservations):
-            raise TypeError("observations must be IntegerLMarkerObservations")
+        if not isinstance(
+            self.observations,
+            (IntegerLMarkerObservations, LayerLMarkerObservations),
+        ):
+            raise TypeError(
+                "observations must be IntegerLMarkerObservations or LayerLMarkerObservations"
+            )
         angle = float(self.commanded_angle_rad)
         if not math.isfinite(angle):
             raise ValueError("commanded_angle_rad must be finite")
@@ -424,6 +435,14 @@ class IndexedGeometryImage:
             include_commanded_sample_pose=True,
         ):
             raise ValueError("indexed geometry model instrument does not match its declared config")
+        if (
+            isinstance(self.observations, LayerLMarkerObservations)
+            and self.observations.keys[0].reciprocal_basis_revision
+            != self.model.reciprocal_basis_revision
+        ):
+            raise ValueError(
+                "observation reciprocal-basis revision does not match the image geometry context"
+            )
         wavelength_scale = max(
             self.observations.reference_wavelength_A,
             self.model.reference_wavelength_A,
@@ -490,6 +509,44 @@ class IndexedGeometryImage:
             ),
         )
 
+    def predict_layer_l_tags(
+        self,
+        definitions: tuple[LayerLMarkerDefinition, ...],
+        corrections: SharedGeometryCorrections,
+        *,
+        incidence_angle_delta_rad: float = 0.0,
+        incidence_angle_trim_rad: float = 0.0,
+    ) -> LayerLMarkerPrediction:
+        return self.model.predict_layer_l_tags(
+            definitions,
+            instrument=self.corrected_instrument(
+                corrections,
+                incidence_angle_delta_rad=incidence_angle_delta_rad,
+                incidence_angle_trim_rad=incidence_angle_trim_rad,
+            ),
+        )
+
+    def _predict_observation_tags(
+        self,
+        corrections: SharedGeometryCorrections,
+        *,
+        incidence_angle_delta_rad: float = 0.0,
+        incidence_angle_trim_rad: float = 0.0,
+    ) -> IntegerLMarkerPrediction | LayerLMarkerPrediction:
+        if isinstance(self.observations, LayerLMarkerObservations):
+            return self.predict_layer_l_tags(
+                self.observations.definitions,
+                corrections,
+                incidence_angle_delta_rad=incidence_angle_delta_rad,
+                incidence_angle_trim_rad=incidence_angle_trim_rad,
+            )
+        return self.predict_integer_l_tags(
+            self.observations.keys,
+            corrections,
+            incidence_angle_delta_rad=incidence_angle_delta_rad,
+            incidence_angle_trim_rad=incidence_angle_trim_rad,
+        )
+
 
 def _series_geometry_signature(image: IndexedGeometryImage) -> tuple[object, ...]:
     inputs = image.model.inputs
@@ -547,13 +604,23 @@ def evaluate_indexed_geometry_series_residual(
     trims = _canonical_incidence_angle_trims(ordered, incidence_angle_trim_by_image_id_rad)
     blocks = []
     for image in ordered:
-        prediction = image.predict_integer_l_tags(
-            image.observations.keys,
+        prediction = image._predict_observation_tags(
             corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=trims[image.image_id],
         )
-        blocks.append(evaluate_tagged_geometry_objective_residual(image.observations, prediction))
+        if isinstance(image.observations, LayerLMarkerObservations):
+            if not isinstance(prediction, LayerLMarkerPrediction):
+                raise AssertionError("layer-L observations produced the wrong prediction type")
+            blocks.append(
+                evaluate_layer_l_geometry_objective_residual(image.observations, prediction)
+            )
+        else:
+            if not isinstance(prediction, IntegerLMarkerPrediction):
+                raise AssertionError("integer-L observations produced the wrong prediction type")
+            blocks.append(
+                evaluate_tagged_geometry_objective_residual(image.observations, prediction)
+            )
     residual = np.concatenate(blocks)
     residual.setflags(write=False)
     return residual
@@ -797,13 +864,13 @@ class IndexedGeometrySeriesMetrics:
 @dataclass(frozen=True, slots=True)
 class IndexedGeometryRootAuditImage:
     image_id: str
-    audit: IntegerLSelectionAudit
+    audit: IntegerLSelectionAudit | LayerLSelectionAudit
 
     def __post_init__(self) -> None:
         if not isinstance(self.image_id, str) or not self.image_id:
             raise ValueError("root audit image_id must be nonempty")
-        if not isinstance(self.audit, IntegerLSelectionAudit):
-            raise TypeError("audit must be IntegerLSelectionAudit")
+        if not isinstance(self.audit, (IntegerLSelectionAudit, LayerLSelectionAudit)):
+            raise TypeError("audit must be IntegerLSelectionAudit or LayerLSelectionAudit")
 
 
 @dataclass(frozen=True, slots=True)
@@ -842,26 +909,35 @@ def audit_indexed_geometry_series_roots(
         raise TypeError("corrections must be SharedGeometryCorrections")
     ordered = _canonical_images(images)
     trims = _canonical_incidence_angle_trims(ordered, incidence_angle_trim_by_image_id_rad)
-    audits = tuple(
-        IndexedGeometryRootAuditImage(
-            image_id=image.image_id,
-            audit=audit_exact_tag_geometry_roots(
+    audits = []
+    for image in ordered:
+        instrument = image.corrected_instrument(
+            corrections,
+            incidence_angle_delta_rad=incidence_angle_delta_rad,
+            incidence_angle_trim_rad=trims[image.image_id],
+        )
+        audit = (
+            audit_exact_layer_l_geometry_roots(
+                image.model,
+                image.observations.definitions,
+                instrument=instrument,
+            )
+            if isinstance(image.observations, LayerLMarkerObservations)
+            else audit_exact_tag_geometry_roots(
                 image.model,
                 image.observations.keys,
-                instrument=image.corrected_instrument(
-                    corrections,
-                    incidence_angle_delta_rad=incidence_angle_delta_rad,
-                    incidence_angle_trim_rad=trims[image.image_id],
-                ),
-            ),
+                instrument=instrument,
+            )
         )
-        for image in ordered
-    )
+        audits.append(IndexedGeometryRootAuditImage(image_id=image.image_id, audit=audit))
+    frozen_audits = tuple(audits)
     return IndexedGeometrySeriesRootAudit(
         classification=(
-            "SAME" if all(item.audit.classification == "SAME" for item in audits) else "CHANGED"
+            "SAME"
+            if all(item.audit.classification == "SAME" for item in frozen_audits)
+            else "CHANGED"
         ),
-        images=audits,
+        images=frozen_audits,
     )
 
 
@@ -876,8 +952,7 @@ def _fit_metrics(
     all_chord_angle: list[FloatArray] = []
     trims = _canonical_incidence_angle_trims(images, incidence_angle_trim_by_image_id_rad)
     for image in images:
-        prediction = image.predict_integer_l_tags(
-            image.observations.keys,
+        prediction = image._predict_observation_tags(
             corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=trims[image.image_id],
