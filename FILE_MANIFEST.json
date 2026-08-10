@@ -1,5 +1,5 @@
 {
-  "file_count": 327,
+  "file_count": 331,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "b3b57e83a85b418ed6e246ee91ef2309af7b9e55be4d07c112f53a6bedf44c25",
-      "size_bytes": 50237
+      "sha256": "e3f2bf0861561a10d549859dfde58e21430591494d4109ff784d9165d520ecc2",
+      "size_bytes": 51002
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -183,8 +183,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "17803038652dc12f6bcc5014ff8b67ed072a4d1694af02436b084264dd675503",
-      "size_bytes": 115461
+      "sha256": "fb8cd87828915af2eb80851fdc2645ed53b9f998e8beb544f04bf772b067fc9d",
+      "size_bytes": 117557
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -193,13 +193,13 @@
     },
     {
       "path": "examples/DATA_PROVENANCE.md",
-      "sha256": "dcd3a92a9de042539aa5830649f7f2a02bbf23f1f854b8c0eaa4d3d509601ae6",
-      "size_bytes": 2416
+      "sha256": "52e928212bdd7854389ab9acf5889058cc393fec8e4fcba828a2f09ec521662f",
+      "size_bytes": 2741
     },
     {
       "path": "examples/MANIFEST.toml",
-      "sha256": "5b3d6eb4fc68676c6075699f7053f8714b49cc9528f3e8b54da40080c853f884",
-      "size_bytes": 6566
+      "sha256": "11c2a60be64ca081bdda8c6f1537d82e8cb65c9d07c8d6742be9ecbcc610a619",
+      "size_bytes": 7040
     },
     {
       "path": "examples/README.md",
@@ -403,8 +403,23 @@
     },
     {
       "path": "examples/pbi2/README.md",
-      "sha256": "b2f23f57dee74675e4a50733febc8223dda2b2bf057744ed33ebd860096f5ea4",
-      "size_bytes": 273
+      "sha256": "eeb37b9b809a22ba6f878bab8581797a7135d2ece8d76219d21b919c0ad59086",
+      "size_bytes": 1183
+    },
+    {
+      "path": "examples/pbi2/benchmark/PbI2_2H_ideal.cif",
+      "sha256": "c2ebb0c719d249f682f31dc5ce69113bce079485b71aada0981691634a0cfa50",
+      "size_bytes": 956
+    },
+    {
+      "path": "examples/pbi2/benchmark/PbI2_4H_plus_ideal.cif",
+      "sha256": "bfceb8b65e258d4f71fb8a996afa4e90f3678526ef0c435731fbf7ffaa35b9c1",
+      "size_bytes": 1176
+    },
+    {
+      "path": "examples/pbi2/benchmark/PbI2_6H_plus_ideal.cif",
+      "sha256": "f4e733e9b06d211a8ceb32a6c00bf5c0016b90733d1fe959e00b0dec352c60bf",
+      "size_bytes": 1398
     },
     {
       "path": "examples/pbi2/experiment/stacking_truth.toml",
@@ -1143,8 +1158,8 @@
     },
     {
       "path": "src/rasim_next/proof/__main__.py",
-      "sha256": "658de8e36cfb1d699912583bd894ab1bf726c040bf49be89ac9a621155cd4601",
-      "size_bytes": 2075
+      "sha256": "51f2658c8c88dd4e82a942bf4618e7f490c34c0b696895f7f0bf3963e227a3c3",
+      "size_bytes": 2151
     },
     {
       "path": "src/rasim_next/proof/core.py",
@@ -1155,6 +1170,11 @@
       "path": "src/rasim_next/proof/diagnostics.py",
       "sha256": "741e283381d4a3d8bf1dc4dc7ec4b7cc9aa7d33cbbff104911f0ecabcce4574e",
       "size_bytes": 2149
+    },
+    {
+      "path": "src/rasim_next/proof/pbi2_polytype.py",
+      "sha256": "2f3fee7fd1f472ce1cb6529cca68b002a7e8bf21076553f91be5dcc64a4695d2",
+      "size_bytes": 18224
     },
     {
       "path": "src/rasim_next/proof/reference.py",
@@ -1618,8 +1638,8 @@
     },
     {
       "path": "tests/test_stacking_transition.py",
-      "sha256": "910a18023a1669eefc79389b769627246147b0ab383e1706c793c6b6e085a9dd",
-      "size_bytes": 13283
+      "sha256": "5450f46b504fd90989a85700120a6f6a639b9beab47034a7c0a8d3a3335c96fc",
+      "size_bytes": 14314
     },
     {
       "path": "tests/test_staged_fit_replay_cli.py",

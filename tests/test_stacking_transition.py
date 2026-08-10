@@ -14,6 +14,7 @@ from rasim_next.core.contracts import (
     RodQueryBatch,
 )
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
+from rasim_next.proof.pbi2_polytype import run_proof as run_pbi2_polytype_bragg_proof
 from rasim_next.proof.tolerances import load_stage_tolerances
 from rasim_next.stacking import (
     STATE_ORDER,
@@ -348,3 +349,27 @@ def test_population_components_are_unweighted_and_use_individual_initial_states(
     assert all(
         not hasattr(component, "weighted_total_scattering_strength_A2") for component in result
     )
+
+
+def test_ideal_pbi2_polytype_cifs_match_pure_transition_parent_intensities() -> None:
+    result = run_pbi2_polytype_bragg_proof()
+
+    assert result["status"] == "PASS"
+    assert all(check["status"] == "PASS" for check in result["checks"])
+    assert result["native_2h_source"]["benchmark_source_matches_reflected_native_motif"]
+    assert tuple(result["polytypes"]) == ("2H", "4H+", "6H+")
+    assert tuple(polytype["extinction_count"] for polytype in result["polytypes"].values()) == (
+        0,
+        4,
+        44,
+    )
+    assert tuple(polytype["reflection_count"] for polytype in result["polytypes"].values()) == (
+        24,
+        44,
+        64,
+    )
+    for polytype in result["polytypes"].values():
+        assert polytype["intensity_nrmse"] < 1.0e-12
+        assert polytype["support_disagreement_count"] == 0
+        assert polytype["wrong_parent_nrmse"] > 1.0e-3
+        assert polytype["registry_sectors"] == [0, 1, 2]

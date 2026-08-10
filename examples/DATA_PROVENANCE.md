@@ -4,6 +4,11 @@ The OSC, CIF, PONI, and calibration inputs in this directory were supplied by th
 for this repository seed. Absolute legacy paths and GUI state were removed. SHA-256 values are
 recorded in `examples/MANIFEST.toml` and `FILE_MANIFEST.json`.
 
+The three files under `pbi2/benchmark/` are the exception: they are generated, explicit-P1
+scientific validation fixtures idealized from the SHA-pinned native 2H metric and layer height,
+with exact rational registry coordinates. Their CIF comments and `pbi2/README.md` distinguish them
+from the supplied relaxed structures.
+
 `Bi2Se3_legacy.cif` is the CIF referenced by the supplied saved state. `Bi2Se3_vesta.cif` differs
 only in textual occupancy formatting for Se1 and is paired with the VESTA export. The expanded P1
 file is an independent symmetry-expansion fixture.

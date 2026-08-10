@@ -136,6 +136,21 @@ size_bytes = 1963
 sha256 = "85c7727d74aca6eb30e1abc7bdcc6e9c5738c9f24f6350f4fa322940f05d45ca"
 
 [[file]]
+path = "examples/pbi2/benchmark/PbI2_2H_ideal.cif"
+size_bytes = 956
+sha256 = "c2ebb0c719d249f682f31dc5ce69113bce079485b71aada0981691634a0cfa50"
+
+[[file]]
+path = "examples/pbi2/benchmark/PbI2_4H_plus_ideal.cif"
+size_bytes = 1176
+sha256 = "bfceb8b65e258d4f71fb8a996afa4e90f3678526ef0c435731fbf7ffaa35b9c1"
+
+[[file]]
+path = "examples/pbi2/benchmark/PbI2_6H_plus_ideal.cif"
+size_bytes = 1398
+sha256 = "f4e733e9b06d211a8ceb32a6c00bf5c0016b90733d1fe959e00b0dec352c60bf"
+
+[[file]]
 path = "examples/pbi2/experiment/stacking_truth.toml"
 size_bytes = 509
 sha256 = "3198cfacaba81eece48ed5b049f17fc5deab03e4dbb7204d4f2c6c4846bfefc8"

@@ -1,0 +1,30 @@
+# Synthetic exact-parent benchmark idealized from the tracked 2H metric and layer height.
+# Registry coordinates are rationalized to exact thirds.
+# The two layers are 0F+ and 1F-. This is not a relaxed structure determination.
+data_PbI2_4H_plus_ideal
+_chemical_name_common 'PbI2 ideal 4H+ benchmark'
+_cell_length_a 4.558000000000
+_cell_length_b 4.558000000000
+_cell_length_c 13.972000000000
+_cell_angle_alpha 90.000000000000
+_cell_angle_beta 90.000000000000
+_cell_angle_gamma 120.000000000000
+_space_group_name_H-M_alt 'P 1'
+_space_group_IT_number 1
+loop_
+_space_group_symop_operation_xyz
+'x,y,z'
+loop_
+_atom_site_label
+_atom_site_occupancy
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+_atom_site_type_symbol
+Pb1 1.0 0.0000000000000000 0.0000000000000000 0.0000000000000000 0.0 Pb
+I1  1.0 0.6666666666666667 0.3333333333333333 0.1337500000000000 0.0 I
+I2  1.0 0.3333333333333333 0.6666666666666667 0.8662500000000000 0.0 I
+Pb2 1.0 0.3333333333333333 0.6666666666666667 0.5000000000000000 0.0 Pb
+I3  1.0 0.6666666666666667 0.3333333333333333 0.6337500000000000 0.0 I
+I4  1.0 0.0000000000000000 0.0000000000000000 0.3662500000000000 0.0 I

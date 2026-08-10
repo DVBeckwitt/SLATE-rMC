@@ -669,6 +669,38 @@ gates passed, and no production code, API, dependency, CLI, or example changed. 
 proof design, tolerances, exact legacy anchors, performance, and branch disposition are recorded in
 [WORKBRANCH_ARCHIVE_2026-07-16.md](WORKBRANCH_ARCHIVE_2026-07-16.md).
 
+### Ideal PbI2 pure-polytype Bragg benchmark
+
+The registered `pbi2-polytype-bragg` proof now supplies the exact comparison that the relaxed native
+cells cannot provide. Three frozen explicit-P1 CIFs use the SHA-pinned native 2H metric and layer
+height with exact rational registry coordinates, unit occupancy, and zero `Uiso`. Their cycles are
+`0F+` for 2H, `0F+ -> 1F-` for 4H+, and `0F+ -> 1F+ -> 2F+` for 6H+. The CIF side is a literal
+positive-phase atom sum that does not call the ordered or stacking amplitude helpers. The transition
+side evaluates the pure one-hot parent with `L=l_cell/P`, `plus_only`, and raw `FINITE_TOTAL`
+strength. Signed rods, all three registry sectors, positive and negative cell orders, and nominal
+extinctions remain separate; no multiplicity, fitted scale, or maximum normalization is applied.
+
+At Cu Kalpha wavelength `1.540592925 A`, the one-period comparisons covered `24`, `44`, and `64`
+reflections. The 2H, 4H+, and 6H+ intensity NRMSE values were respectively
+`5.962865799816879e-16`, `1.1374213994096617e-15`, and `6.074268331496083e-16`. Maximum absolute
+raw-intensity errors were `2.5600471323672586e-11`, `5.333431525765122e-11`, and
+`1.0240188529469034e-10 e2`, all less than `9e-6` of the frozen per-reflection stacking tolerance;
+support disagreements were zero, and the frozen extinction counts were `0`, `4`, and `44`. A second
+coherent period agreed with four times the CIF unit-cell intensity and therefore exercised every
+closing transition and the total-intensity normalization. Wrong 2H orientation, opposite 4H/6H
+hands, `epsilon=0.001`, and per-layer normalization all failed on the same frozen observations.
+
+Run the benchmark with:
+
+```powershell
+python -m rasim_next.proof pbi2-polytype-bragg --json
+```
+
+This is an exact implementation-parity benchmark for ideal shared-motif parents, not independent
+material validation. In particular, its canonical 6H+ cell is the opposite hand from the supplied
+relaxed R-3m 6H- CIF. The native structural-relaxation comparison above remains `NO_ORACLE` and is
+not admitted into this exact gate.
+
 ## Permanent suite
 
 Keep a small permanent suite:

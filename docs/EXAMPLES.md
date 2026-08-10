@@ -857,6 +857,22 @@ python scripts/recover_bi2se3_ordered_intensity.py `
   --json
 ```
 
+## PbI2 pure-polytype Bragg benchmark
+
+The supplied PbI2 structures remain under `examples/pbi2/structures/`. A separate synthetic
+benchmark under `examples/pbi2/benchmark/` contains explicit-P1 ideal 2H, 4H+, and 6H+ cells built
+from one common 2H trilayer. It compares independently summed whole-CIF Bragg intensities with the
+pure transition parents at identical signed `(h,k,l)` coordinates:
+
+```powershell
+python -m rasim_next.proof pbi2-polytype-bragg --json
+```
+
+The command writes JSON only to stdout. It applies no fitted scale, multiplicity, or peak
+normalization, and it checks both one cell and two coherent cells so the closing transition and
+`FINITE_TOTAL` measure are exercised. The ideal fixtures do not replace the separately relaxed
+native CIFs.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

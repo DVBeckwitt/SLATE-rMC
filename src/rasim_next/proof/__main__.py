@@ -18,6 +18,7 @@ _COMMANDS = {
         "run_ordered_intensity_proof",
     ),
     "ordered-reflectivity": ("rasim_next.ordered.proof", "run_proof"),
+    "pbi2-polytype-bragg": ("rasim_next.proof.pbi2_polytype", "run_proof"),
     "stacking-transition": ("rasim_next.stacking.proof", "run_proof"),
 }
 
