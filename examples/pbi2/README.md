@@ -26,8 +26,14 @@ uv run --frozen pytest -q tests/test_fitting.py `
   -k optional_pbi2_polytype_landmarks_strengthen
 ```
 
-It is synthetic and geometry-only: no measured PbI2 OSC data, separate detector calibrations,
-mosaic profiles, or population/intensity fit are supplied here.
+It is synthetic and geometry-only: no measured PbI2 OSC data, separate detector calibrations, or
+population/intensity fit are supplied here.
+
+The same test contains a separate synthetic mosaic response-bank proof. It converts the qualified
+integer/half/third landmarks to exact typed profile identities, omits unavailable peaks, keeps one
+profile at exact overlaps, and recovers a shared planted mosaic distribution while profiling out
+population-weighted amplitudes. The fitted shapes are analytic: there is still no PbI2
+source-averaged detector response or measured mosaic-profile data in this example.
 
 `stacking_truth.toml` remains a synthetic disorder input. Bi2Se3 is the main detector example, but
 it is not a sufficient material fixture for the PbI2 stacking model.

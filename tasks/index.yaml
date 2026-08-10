@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: pbi2_rational_polytype_geometry
+current_phase: pbi2_rational_polytype_mosaic
 
 tasks:
   - id: T00
@@ -112,3 +112,8 @@ tasks:
     branch: codex/pbi2-rational-geometry
     status: READY_SYNTHETIC_DECLARED_SINGLE_TRILAYER_METRIC_NO_MEASURED_PBI2
     depends_on: [T05, T18]
+  - id: T23
+    file: tasks/23_pbi2_polytype_mosaic.md
+    branch: codex/pbi2-rational-mosaic
+    status: READY_SYNTHETIC_PROFILE_RESPONSE_NO_PBI2_DETECTOR_FORWARD
+    depends_on: [T12, T22]

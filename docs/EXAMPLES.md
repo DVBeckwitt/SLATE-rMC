@@ -890,6 +890,22 @@ centroid-qualified; missing optional peaks add no observations. The test fits no
 intensity, uses one detector calibration, and does not treat the relaxed native 4H/6H metrics as
 the common 2H layer coordinate.
 
+## PbI2 optional-polytype mosaic validation
+
+The same exact-rational landmarks can seed typed mosaic profiles. The compact synthetic test
+compares the integer-order baseline with the admitted half-/third-order roster, plants one
+population-weighted amplitude per physical profile (summing support at exact overlaps), and
+recovers one shared Gaussian/Lorentzian mosaic distribution:
+
+```powershell
+uv run --frozen pytest -q tests/test_fitting.py `
+  -k optional_pbi2_polytype_landmarks_strengthen_mosaic
+```
+
+This is an analytic synthetic profile bank, not a measured or detector-native PbI2 forward model.
+Independent per-profile nuisance amplitudes deliberately remove population and cross-peak strength
+from the mosaic objective; those constants remain inputs to a later stacking-intensity stage.
+
 ## Reference and observed data
 
 - `examples/bi2se3/structures`: crystallographic inputs.

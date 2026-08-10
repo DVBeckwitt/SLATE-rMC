@@ -13,9 +13,9 @@ signed rod retained as provenance.
 
 This task is a synthetic validation of ideal parent periods in the model-supplied one-trilayer
 PbI2 metric; the permanent proof uses the tracked 2H CIF. It does not activate measured PbI2
-OSC discovery, mosaic fitting, detector-native stacking fitting, or relaxed-native 4H/6H lattice
-metrics. The existing integer-L selection, serialization, and Bi2X3 staged workflows remain
-unchanged.
+OSC discovery, detector-native stacking fitting, or relaxed-native 4H/6H lattice metrics. T23
+separately validates only a synthetic mosaic response bank over these frozen landmarks. The
+existing integer-L selection, serialization, and Bi2X3 staged workflows remain unchanged.
 
 ## Scientific contract
 

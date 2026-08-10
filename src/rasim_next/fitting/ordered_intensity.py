@@ -65,8 +65,7 @@ SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR = 1.0e-12
 def _profile_identity_revision(identity: MosaicProfileIdentity) -> str:
     group = identity.group_key
     member_rods = np.asarray(group.member_rod_hk, dtype=np.int64)
-    return canonical_revision_sha256(
-        ("definition_id", "ordered_intensity_profile_identity.v1"),
+    common_fields: tuple[tuple[str, object], ...] = (
         ("dataset_id", identity.dataset_id),
         ("incidence_angle_rad", identity.incidence_angle_rad),
         ("group_id", group.group_id),
@@ -78,6 +77,20 @@ def _profile_identity_revision(identity: MosaicProfileIdentity) -> str:
         ("layered_integer_L", 0 if group.layered_integer_L is None else group.layered_integer_L),
         ("branch_id", 0 if identity.branch_id is None else identity.branch_id),
         ("analytic_branch_id", identity.analytic_branch_id),
+    )
+    order = group.layered_layer_order
+    if order is None:
+        return canonical_revision_sha256(
+            ("definition_id", "ordered_intensity_profile_identity.v1"),
+            *common_fields,
+        )
+    return canonical_revision_sha256(
+        ("definition_id", "ordered_intensity_profile_identity.v2"),
+        *common_fields,
+        ("layered_coordinate_kind", "exact-rational"),
+        ("layered_order_numerator", order.numerator),
+        ("layered_order_denominator", order.denominator),
+        ("layered_reciprocal_basis_revision", group.layered_reciprocal_basis_revision),
     )
 
 

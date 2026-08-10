@@ -40,7 +40,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `CommensurateLayerOrder` / `LayerLMarkerDefinition` / `LayerLMarkerObservations` | geometry/fitting | exact reduced layer coordinate; rod-free physical marker identity plus explicit signed-rod provenance; one frozen coordinate/covariance row per physical detector locus |
 | `Pbi2PolytypeLandmarkCatalogue` | fitting | ideal-parent 2H/4H/6H support in one declared single-trilayer PbI2 metric, exact overlap deduplication, signed-rod/parent provenance, source-CIF and full geometry-context revisions; no intensity or measured-centroid claim |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen integer- or rational-layer image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
-| `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
+| `MosaicProfileDefinition` / `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | frozen integer- or exact-rational reflection identity; finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 | `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
 | `ReciprocalProfileMembership` / `BinnedSampleIntegral` | measurement | immutable sample-to-bin identities and separately accumulated signal/measure vectors; division occurs only after finite-bin integration |
 
@@ -234,6 +234,16 @@ any predeclared bin exclusions are immutable and must agree throughout a compone
 `MosaicProfileSet.source_revision` is the detector result's actual source realization revision; a
 profile-layout hash cannot substitute for it.
 
+Layered nonzero groups may carry either the retained integer `L` metadata or an exact
+`CommensurateLayerOrder` with its reciprocal-basis revision, never both.
+`build_layer_l_mosaic_profile_definitions(...)` maps one already frozen
+`LayerLMarkerObservations` pack to one profile per rod-free physical key, copies the complete
+contributing signed-rod tuple, and converts its detector centroid into the canonical angular frame.
+It rejects a stale basis or invalid/nonpolar center. `None` returns no profiles: a missing optional
+half-/third-order landmark is not represented by a zero-valued residual. Parent support remains
+upstream provenance and is neither expanded into duplicate profiles nor interpreted as a mosaic
+weight.
+
 `compile_detector_profile_projector(...)` is the detector-native observation boundary for measured
 images. It clips each physical pixel polygon directly into independent local `(2theta, phi)` bins,
 accumulates detector signal `S` and pixel-area normalization `N` separately, and never renormalizes
@@ -264,6 +274,14 @@ cached during deterministic refinement. A fit fails with a typed identifiability
 nuisance-projected local sensitivity is deficient or when the finite global audit finds distinct
 tied solutions. The 8,193-point stationary audit is deterministic numerical evidence, not a formal
 theorem excluding arbitrarily narrower sub-grid aliases.
+
+For rational PbI2 landmarks this scale projection permits fixed parent-population constants,
+including summed strength at exact overlaps, to set profile amplitudes without entering the mosaic
+objective. It does not remove binwise structure-factor, finite-stack, disorder, source, optics, or
+detector variation. Those responses must be frozen in a complete component bank or separately
+proved shape-invariant before measured rational profiles are admitted. Exact pure-parent support is
+landmark provenance, not an intensity mask; finite stacks or disorder can leak intensity into a
+nominally absent site.
 
 Data-quality screening, when requested, occurs before fitting and removes an entire profile under
 a frozen, provenance-bound policy. It may use selection-only sidebands to classify weak profiles

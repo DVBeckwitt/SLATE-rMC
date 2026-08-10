@@ -12,7 +12,9 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import brentq, direct, minimize_scalar
 
 from painted_ewald.types import Rod
-from rasim_next.geometry.angles import AngleFrame
+from rasim_next.core.layer_order import CommensurateLayerOrder
+from rasim_next.fitting.geometry import LayerLMarkerObservations
+from rasim_next.geometry.angles import AngleFrame, detector_coordinates_to_angles
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.measurement import evaluate_continuous_per_rod_angle_signal
 
@@ -84,6 +86,8 @@ class MosaicReflectionGroupKey:
     branch_mode: str
     layered_family_m: int | None = None
     layered_integer_L: int | None = None
+    layered_layer_order: CommensurateLayerOrder | None = None
+    layered_reciprocal_basis_revision: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("group_id", "rod_catalog_revision"):
@@ -106,7 +110,11 @@ class MosaicReflectionGroupKey:
             raise ValueError("branch_mode must be EXPLICIT_NONZERO or COLLAPSED_00L")
         family_m = self.layered_family_m
         integer_l = self.layered_integer_L
-        if (family_m is None) != (integer_l is None):
+        layer_order = self.layered_layer_order
+        basis_revision = self.layered_reciprocal_basis_revision
+        has_integer_metadata = integer_l is not None
+        has_exact_metadata = layer_order is not None or basis_revision is not None
+        if family_m is None and (has_integer_metadata or has_exact_metadata):
             raise ValueError("layered display metadata must be supplied together")
         if family_m is not None:
             if (
@@ -115,14 +123,32 @@ class MosaicReflectionGroupKey:
                 or int(family_m) < 0
             ):
                 raise ValueError("layered_family_m must be a nonnegative integer")
-            if isinstance(integer_l, bool) or not isinstance(integer_l, (int, np.integer)):
-                raise ValueError("layered_integer_L must be an integer")
             object.__setattr__(self, "layered_family_m", int(family_m))
-            object.__setattr__(self, "layered_integer_L", int(integer_l))
             if (self.branch_mode == "COLLAPSED_00L") != (int(family_m) == 0):
                 raise ValueError("layered_family_m disagrees with the branch mode")
-            if self.branch_mode == "COLLAPSED_00L" and int(integer_l) <= 0:
-                raise ValueError("collapsed m=0 groups require one positive |L| identity")
+            if has_integer_metadata == has_exact_metadata:
+                raise ValueError(
+                    "layered metadata requires exactly one integer-L or exact layer-order identity"
+                )
+            if has_integer_metadata:
+                if isinstance(integer_l, bool) or not isinstance(integer_l, (int, np.integer)):
+                    raise ValueError("layered_integer_L must be an integer")
+                object.__setattr__(self, "layered_integer_L", int(integer_l))
+                if self.branch_mode == "COLLAPSED_00L" and int(integer_l) <= 0:
+                    raise ValueError("collapsed m=0 groups require one positive |L| identity")
+            else:
+                if not isinstance(layer_order, CommensurateLayerOrder):
+                    raise TypeError("layered_layer_order must be CommensurateLayerOrder")
+                if (
+                    not isinstance(basis_revision, str)
+                    or len(basis_revision) != 64
+                    or any(character not in "0123456789abcdef" for character in basis_revision)
+                ):
+                    raise ValueError(
+                        "layered_reciprocal_basis_revision must be a lowercase SHA-256 revision"
+                    )
+                if self.branch_mode != "EXPLICIT_NONZERO":
+                    raise ValueError("exact layer-order metadata is restricted to nonzero profiles")
         object.__setattr__(self, "member_rod_hk", canonical_rods)
 
 
@@ -232,6 +258,83 @@ class MosaicProfileDefinition:
         if self.phi_bin_count - len(excluded) < 3:
             raise ValueError("each profile must retain at least three included phi bins")
         object.__setattr__(self, "excluded_phi_bin_indices", excluded)
+
+
+def build_layer_l_mosaic_profile_definitions(
+    observations: LayerLMarkerObservations | None,
+    *,
+    required_reciprocal_basis_revision: str,
+    dataset_id: str,
+    incidence_angle_rad: float,
+    instrument: CompiledInstrument,
+    angle_frame: AngleFrame,
+    rod_catalog_revision: str,
+    two_theta_half_width_rad: float,
+    phi_half_width_rad: float,
+    phi_bin_count: int,
+    two_theta_gauss_order: int = 2,
+    phi_gauss_order: int = 2,
+) -> tuple[MosaicProfileDefinition, ...]:
+    """Map frozen exact-layer centroids into fixed mosaic-profile definitions.
+
+    The input is an already selected geometry observation pack. Parent support remains upstream
+    provenance and is never expanded into extra profiles or used as an intensity weight here.
+    ``None`` represents an absent optional pack and contributes no mosaic residual.
+    """
+
+    if observations is None:
+        return ()
+    if not isinstance(observations, LayerLMarkerObservations):
+        raise TypeError("observations must be LayerLMarkerObservations or None")
+    if any(
+        key.reciprocal_basis_revision != required_reciprocal_basis_revision
+        for key in observations.keys
+    ):
+        raise ValueError("layer-L observations changed the required reciprocal-basis revision")
+    angles = detector_coordinates_to_angles(
+        observations.coordinates_px[:, 0],
+        observations.coordinates_px[:, 1],
+        instrument=instrument,
+        angle_frame=angle_frame,
+    )
+    if not np.all(angles.valid & angles.azimuth_valid):
+        raise ValueError("a layer-L mosaic centroid has no valid nonpolar angle coordinate")
+
+    definitions: list[MosaicProfileDefinition] = []
+    for index, marker in enumerate(observations.definitions):
+        key = marker.key
+        order = key.layer_order
+        group_id = (
+            f"layer-L:m={key.family_m}:L={order.numerator}/{order.denominator}:"
+            f"basis={key.reciprocal_basis_revision}"
+        )
+        definitions.append(
+            MosaicProfileDefinition(
+                identity=MosaicProfileIdentity(
+                    dataset_id=dataset_id,
+                    incidence_angle_rad=incidence_angle_rad,
+                    group_key=MosaicReflectionGroupKey(
+                        group_id=group_id,
+                        rod_catalog_revision=rod_catalog_revision,
+                        member_rod_hk=marker.contributing_rod_hk,
+                        branch_mode="EXPLICIT_NONZERO",
+                        layered_family_m=key.family_m,
+                        layered_layer_order=order,
+                        layered_reciprocal_basis_revision=key.reciprocal_basis_revision,
+                    ),
+                    branch_id=key.tag_branch,
+                    analytic_branch_id=key.branch,
+                ),
+                center_two_theta_rad=float(angles.two_theta_rad[index]),
+                center_phi_rad=float(angles.phi_rad[index]),
+                two_theta_half_width_rad=two_theta_half_width_rad,
+                phi_half_width_rad=phi_half_width_rad,
+                phi_bin_count=phi_bin_count,
+                two_theta_gauss_order=two_theta_gauss_order,
+                phi_gauss_order=phi_gauss_order,
+            )
+        )
+    return tuple(definitions)
 
 
 class _AllRootDetector(Protocol):
@@ -1233,6 +1336,13 @@ def _reflection_group_sort_key(group: MosaicReflectionGroupKey) -> tuple[object,
         group.branch_mode,
         -1 if group.layered_family_m is None else group.layered_family_m,
         0 if group.layered_integer_L is None else group.layered_integer_L,
+        0 if group.layered_layer_order is None else 1,
+        CommensurateLayerOrder(0)
+        if group.layered_layer_order is None
+        else group.layered_layer_order,
+        ""
+        if group.layered_reciprocal_basis_revision is None
+        else group.layered_reciprocal_basis_revision,
     )
 
 
@@ -2493,6 +2603,7 @@ __all__ = [
     "MosaicProfileSearchResult",
     "MosaicProfileSet",
     "MosaicReflectionGroupKey",
+    "build_layer_l_mosaic_profile_definitions",
     "evaluate_continuous_mosaic_profiles",
     "fit_mosaic_component_profiles",
     "fit_refined_mosaic_component_profiles",

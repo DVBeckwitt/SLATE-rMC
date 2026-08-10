@@ -1040,8 +1040,45 @@ The focused diagnostic took `71.67 s`; the baseline and augmented fits took `18.
 This is internal consistency for frozen, exact, noiseless landmarks under one detector calibration.
 Parent metadata is support provenance, not a fitted fraction or intensity. Measured rational-L
 discovery and centroid certification, separate detector calibrations for the three specimens,
-mosaic fitting, stacking-fault population fitting, and the separately relaxed native 4H/6H metrics
-remain `NO_ORACLE` in this result.
+stacking-fault population fitting, and the separately relaxed native 4H/6H metrics remain
+`NO_ORACLE` in this result. T23 separately validates only a synthetic mosaic response-bank boundary.
+
+### Synthetic PbI2 optional-polytype-landmark mosaic proof
+
+T23 activates `PHY-FIT-005B` for a synthetic response-bank boundary. It converts the frozen T22
+`LayerLMarkerObservations` into typed mosaic definitions and reuses the same 5/10/15-degree active
+detector-locus roster. The integer-order baseline has `8/8/6` profiles; the augmented roster has
+`24/20/18` after adding admitted 4H half orders and 6H third orders. An off-panel or missing
+optional site produces no definition. Each exact integer or fractional overlap remains one physical
+profile with its complete contributing signed-rod tuple.
+
+The analytic fixture imposes one wrapped Gaussian/Lorentzian mosaic distribution with Gaussian
+sigma `2 deg`, Lorentzian HWHM `0.5 deg`, and Lorentzian probability `0.2`. One fixed parent
+population vector `[2H, 4H, 6H] = [0.65, 0.20, 0.15]` contributes only to the independent nuisance
+amplitude of each profile; exact overlaps sum their population-weighted support once. Those planted
+exposure factors span `1e-5` to `1e5`, and both the 22-profile baseline and 62-profile augmented
+fit recover all three mosaic parameters and every scale to roundoff at projected rank 3. Objectives
+are `2.52488e-30` and `5.44379e-30`.
+
+The fitted sensitivity singular values are
+`(1.18125191698, 0.563424525297, 0.113453905211)` and
+`(1.94255075723, 0.975935337849, 0.191405863494)`. The weakest direction improves by
+`1.68708043x`. An independent nuisance-projected derivative calculation gives ascending Fisher
+eigenvalues `(0.0128717886076, 0.317447195706, 1.39535609137)` and
+`(0.0366362045800, 0.952449783661, 3.77350344440)`. The information-increment eigenvalues are
+strictly positive: `(0.0235148383159, 0.632742343524, 2.38065717512)`; the weakest Fisher
+direction improves by `2.84624039x`.
+
+The focused test takes about `7.01 s`; live geometry/catalogue construction is `4.61 s`, while the
+two mosaic fits total `2.49 s`. A separate full-test `tracemalloc` run after imports peaked at
+`36,236,422` bytes (`34.5577 MiB`) and took `29.25 s`; this excludes process RSS and native-library
+allocations. This is not a detector-native PbI2 validation. Exact keys and upstream active-panel
+qualification select the roster; detector coordinates set only the angular centers. The profile
+shapes are independent analytic responses. The repository does not yet fold PbI2
+transition/finite-stack strength, source, optics, mosaic, and detector integration into a common
+response. Measured PbI2 profiles, background/PSF/noise, parent-specific
+mosaics, the eventual separately calibrated specimens, relaxed 4H/6H metrics, and simultaneous
+mosaic/population recovery remain `NO_ORACLE`.
 
 ## Historical one-state deterministic mosaic recovery
 

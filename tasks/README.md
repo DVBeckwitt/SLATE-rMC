@@ -25,5 +25,11 @@ Matplotlib presentation without changing the stochastic pixel-mass measure.
 T22 is the accepted synthetic geometry-only PbI2 rational-landmark slice. It proves that optional
 4H half-order and 6H third-order sites can strengthen the existing shared multi-incidence geometry
 fit while an absent optional pack leaves the legacy integer observations untouched. Measured PbI2
-fractional-peak discovery/centroid qualification, per-specimen detector calibration, mosaic, and
-stacking-population fitting remain separate work.
+fractional-peak discovery/centroid qualification and per-specimen detector calibration remain
+separate work.
+
+T23 is the accepted synthetic profile-response mosaic slice over those frozen rational landmarks.
+It proves that admitted half-/third-order profiles can add nuisance-projected information about one
+shared mosaic distribution while missing sites add no profile and exact overlaps remain one
+physical residual. It does not supply the missing PbI2 detector/source/stacking response, measured
+profiles, or a simultaneous mosaic/population fit.
