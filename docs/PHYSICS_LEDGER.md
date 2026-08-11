@@ -232,6 +232,7 @@ deferred.
 | PHY-FIT-009 | analytic nonnegative per-image scale and explicit common-occupancy gauge | `ordered_structure_fit.py:53-99` | nuisance image scale | fitting | MATCH principle, active exact profiling and ratio recovery |
 | PHY-FIT-010 | fixed detector-response reuse for intensity fits | old code rerenders broadly | performance requirement | fitting | NEW active cached occupancy quadratic plus `Qr/Qz` damping; no detector reprojection per trial |
 | PHY-FIT-011 | selected `Qr` and branch stacking objective | rod-profile and branch-selection paths | SI lines 704-749 | fitting | CORRECTED |
+| PHY-FIT-011B | exact-rational PbI2 landmark responses constrain fixed 2H/4H/6H populations with one residual per physical overlap | no compact old proof | pure-parent periodicity + refinement step 6 | fitting | NEW active synthetic intrinsic-A2 boundary; detector roots collapse, unique signed rods sum once, missing optional sites add no row, active phase rank is enforced, and measured detector-folded PbI2 fitting remains `NO_ORACLE` |
 | PHY-FIT-012 | signal and normalization summed before division in future caking | `fitting/rod_profiles.py:91-308` | SI selected-rod profile equation | fitting | MATCH when caking is added |
 | PHY-FIT-013 | upstream parameters frozen before stacking fit | staged runtime | refinement step 6 | fitting | MATCH principle |
 | PHY-FIT-014 | stage-specific synthetic parameter recovery | absent as one system | scientific validation | fitting | NEW active for geometry, mosaic, and fixed-position ordered intensity |

@@ -234,6 +234,27 @@ or residual is defined. This point density is neither the finite-bin integral be
 pixel count. It can be compared only with an observation carrying the same selected-component
 extraction contract.
 
+### Intrinsic exact-rational PbI2 landmark strength
+
+For one admitted structural landmark `j` with exact layer coordinate `L_j` and complete unique
+signed-rod set `H_j`, the fixed-parent response is
+
+```text
+R[j,c] = sum_(h,k in H_j) S_c(h,k,L_j; wavelength,N,epsilon).
+```
+
+Each `S_c` is the existing nonnegative finite-per-layer PbI2 parent strength in `A2`. Independent
+signed rods and parent populations add as intensities. Detector root-side identities are collapsed
+because they do not change this intrinsic structural query; their keys remain sampling provenance.
+The response measure ID is
+`pointwise-intrinsic-summed-signed-rods-layer-L-strength-A2.v1`.
+
+This is neither detector density nor a finite peak integral. It contains no source probability,
+rod population beyond the explicit sum, mosaic probability, optical/attenuation/polarization
+factor, detector-coordinate Jacobian, detector solid angle, exposure, background, or pixel/ROI
+integration. Therefore measured detector counts or mosaic nuisance scales cannot be supplied as
+observations of this measure without a separately declared transport and covariance boundary.
+
 For a finite angular bin `B`, the only admitted reduction is
 
 ```text

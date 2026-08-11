@@ -240,6 +240,24 @@ frozen `m=0` support evidence, per-profile scale invariance, physical-source and
 rejection, boundary and within-cell global-alias fixtures, extreme-scale invariance, or local
 rank/condition failure.
 
+### PbI2 exact-rational intrinsic SF populations
+
+- Expand one exact parent overlap into one residual per parent, count a signed rod once per
+  supporting parent, average the rods, or coherently add parent amplitudes.
+- Retain both detector root sides as independent intrinsic structural rows, mask nominally absent
+  parent columns, or fabricate a zero-valued row for a missing half-/third-order peak.
+- Reorder strengths without their exact landmark identities, change the reciprocal/fixed-state
+  sampling revision, change the crystal basis behind a pinned catalogue, drop a contributing rod,
+  mix analytic branches across paired source tags, or compile from a restricted-parent catalogue.
+- Give every peak an independent scale, permit excluded specimen components to enter, or accept a
+  full three-phase fit whose integer-only phase-contrast rank is below two. Drop a nonzero scale
+  nuisance merely because its column norm is small relative to another phase response.
+
+Expected detection: exact catalogue-definition, reciprocal-basis, paired-source, and
+sampling-revision rejection; structural root-side collapse; explicit unique-rod sum comparison;
+nonzero leakage witnesses; scale-normalized nuisance projection; allowed-support NNLS/profile
+bounds; held-out prediction; and the integer-only identifiability failure.
+
 ### Fixed-position ordered-intensity fitting
 
 - Swap `Qr^2` and `Qz^2`, omit the one-half amplitude exponent, or apply the directional

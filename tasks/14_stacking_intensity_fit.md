@@ -60,7 +60,7 @@ manuscript
 python -m compileall -q src
 ruff check src/rasim_next/fitting/stacking_intensity.py tests/test_fitting.py
 pytest -q tests/test_fitting.py
-python -m rasim_next.proof stacking-intensity-fit --json
+python scripts/recover_pbi2_stacking_population.py
 git diff --check
 ```
 

@@ -54,6 +54,9 @@ detector geometry.
 - Explicit fault-free R-centered three-registry finite stacks in the proof, compiled CPU, and CUDA
   detector paths. This is the tracked R-3m Bi2X3 conventional-cell centering law, not a fitted
   4H/6H mixture or stacking-disorder population.
+- A separate synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five fixed
+  2H/4H/6H near-parent responses at exact rational structural landmarks. It has no PbI2
+  detector/source/optics forward and does not refine continuous transition-law parameters.
 - An optional unified local-lamella `(0,0)` detector field that evaluates the Parratt--kinematic
   strength at internal phase `L` for every actual sampled incident direction and wavelength.
   Interface roughness is physical Nevot--Croce roughness; no auxiliary count scale, model raster,

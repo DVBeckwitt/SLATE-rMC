@@ -39,6 +39,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
 | `CommensurateLayerOrder` / `LayerLMarkerDefinition` / `LayerLMarkerObservations` | geometry/fitting | exact reduced layer coordinate; rod-free physical marker identity plus explicit signed-rod provenance; one frozen coordinate/covariance row per physical detector locus |
 | `Pbi2PolytypeLandmarkCatalogue` | fitting | ideal-parent 2H/4H/6H support in one declared single-trilayer PbI2 metric, exact overlap deduplication, signed-rod/parent provenance, source-CIF and full geometry-context revisions; no intensity or measured-centroid claim |
+| `CompiledLayerLStackingResponse` / `LayerLStackingObservations` / `StackingPopulationFitResult` | fitting | canonical exact-rational reflection-group identities, unique signed-rod summed intrinsic parent responses, keyed specimen strengths/variances, allowed-component provenance, and constrained population/phase diagnostics |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen integer- or rational-layer image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
 | `MosaicProfileDefinition` / `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | frozen integer- or exact-rational reflection identity; finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
 | `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
@@ -604,6 +605,45 @@ tracked, and the separately relaxed native 4H/6H cells do not share the 2H layer
 measured admission step must freeze and certify each optional centroid before constructing these
 observations; broad or population-dependent blends belong to the stacking-aware intensity fit.
 The common-incidence-delta/sample-normal-x gauge is unchanged by the additional landmarks.
+
+### Exact rational-layer intrinsic SF population fitting
+
+`compile_pbi2_layer_l_stacking_response(...)` consumes an all-five-parent
+`Pbi2PolytypeLandmarkCatalogue` and an already admitted subset of
+`LayerLMarkerObservations`. It verifies every marker definition against the catalogue, then
+collapses analytic detector root sides to one canonical `MosaicReflectionGroupKey` carrying
+`(m, reduced L, reciprocal-basis revision)` and the complete signed-rod membership. Canonical
+source marker definitions remain response provenance only. Missing optional
+markers produce no structural row.
+
+For each structural row the compiler evaluates every unique contributing signed rod through the
+authoritative five-parent finite-stack response and sums the resulting intensities. It neither
+averages rods nor iterates parent-support records as multiplicity. All five component columns are
+evaluated at every admitted site: pure-parent support is a selection provenance and never masks
+finite-stack or nonzero-disorder leakage. The declared measure is
+`pointwise-intrinsic-summed-signed-rods-layer-L-strength-A2.v1`; detector roots, source, optics,
+mosaic, polarization, detector Jacobians, and finite detector bins are absent.
+
+`LayerLStackingObservations` binds one specimen's intrinsic strengths and positive variances to
+the exact reflection groups and response sampling revision. `fit_layer_l_stacking_phase_totals`
+joins by branch-independent group identity and complete signed-rod membership rather than tuple
+position. One
+nonnegative amount vector and its sum as one global specimen scale tie every row. Parent overlaps
+remain columns in the same row, so the prediction is `R @ amount`; they never create duplicate
+residuals.
+
+`allowed_component_ids` is an explicit canonical-order prior. The accepted specimen rosters are
+2H only, 2H plus both 6H hands, or all five components. Excluded components have exactly zero
+amount and excluded phase-profile bounds are `[0,0]`; the sole allowed 2H phase has bounds `[1,1]`.
+The required aggregate phase-contrast rank is the number of allowed phases minus one. Handed
+domains may alias while their aggregate phase total remains identifiable; their reported domain
+fractions are then one NNLS representative.
+
+This boundary fits populations of fixed responses with `epsilon=0.001`, plus-only initialization,
+declared layer count, one 2H-derived motif, corrected registry convention, and finite-per-layer
+normalization. It is not arbitrary transition-law refinement and is not a detector-native or
+measured PbI2 fit. Separately calibrated specimens require separately compiled responses and
+scales.
 
 ### Indexed multi-OSC geometry series
 

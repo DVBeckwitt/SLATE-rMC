@@ -1040,8 +1040,9 @@ The focused diagnostic took `71.67 s`; the baseline and augmented fits took `18.
 This is internal consistency for frozen, exact, noiseless landmarks under one detector calibration.
 Parent metadata is support provenance, not a fitted fraction or intensity. Measured rational-L
 discovery and centroid certification, separate detector calibrations for the three specimens,
-stacking-fault population fitting, and the separately relaxed native 4H/6H metrics remain
-`NO_ORACLE` in this result. T23 separately validates only a synthetic mosaic response-bank boundary.
+detector-folded stacking-fault population fitting, and the separately relaxed native 4H/6H metrics
+remain `NO_ORACLE` in this result. T23 validates a synthetic mosaic response-bank boundary and T24
+validates a separate synthetic intrinsic-strength population boundary.
 
 ### Synthetic PbI2 optional-polytype-landmark mosaic proof
 
@@ -1079,6 +1080,51 @@ transition/finite-stack strength, source, optics, mosaic, and detector integrati
 response. Measured PbI2 profiles, background/PSF/noise, parent-specific
 mosaics, the eventual separately calibrated specimens, relaxed 4H/6H metrics, and simultaneous
 mosaic/population recovery remain `NO_ORACLE`.
+
+### Synthetic PbI2 exact-rational intrinsic SF population proof
+
+T24 activates `PHY-FIT-011B` at the intrinsic-strength boundary. One all-five-parent T22 catalogue
+supplies the complete six signed rods in the `m=1` family at integer orders 1--4, 4H half-orders
+1/2--7/2, and 6H third-orders 2/3--11/3. The two detector root sides at each exact order collapse
+to one structural `(m,L,basis)` identity, leaving 12 rows. The tracked 2H motif, wavelength
+`1.540592925 A`, 52 layers, fixed `epsilon=0.001`, plus-only initialization, corrected `h+2k`
+registry gauge, and finite-per-layer normalization are frozen.
+
+Every row is the sum of the existing pointwise response over each unique contributing rod. An
+integer-row audit reproduces an explicit six-rod sum to roundoff. All five parent columns are
+evaluated even where pure-parent support is absent; the smallest retained response is
+`7.35423e-9 A2`, confirming finite-stack/disorder leakage rather than an ideal-support mask.
+Restricted-parent catalogues, incomplete or branch-inconsistent source provenance, a changed
+crystal reciprocal basis, or a changed sampling revision are rejected. Reordering keyed
+observations leaves the fit unchanged. A separate extreme-scale alias mutation verifies that a
+nonzero scale nuisance is normalized before the phase-rank projection rather than discarded by a
+larger response column.
+
+The three specimens are independent fits with different planted scales:
+
+| specimen | training / held-out rows | allowed response rank | phase-contrast rank | recovered phase totals |
+|---|---:|---:|---:|---|
+| assumed 2H | 3 / 1 | 1 | 0 | `[1,0,0]` |
+| 2H+6H | 6 / 2 | 3 | 1 | `[.70,0,.30]` |
+| 2H+4H+6H | 9 / 3 | 5 | 2 | `[.55,.25,.20]` |
+
+The corresponding planted scales `2.75`, `7.0`, and `13.5`, every hand-resolved amount, and every
+held-out strength recover within `3e-11` relative tolerance. The full allowed-response singular
+values are `(212092.362,116767.649,113581.670,84845.657,3301.024)` under the frozen variance;
+condition is `64.2505`. Its aggregate phase-contrast condition is `1.59552`. In contrast, the four
+integer structural rows have full-model domain rank 3 and phase-contrast rank 1, so an unconstrained
+three-phase fit fails the rank gate. The half-/third-order rows are therefore necessary for this
+compact full-population proof, while the assumed-pure 2H roster remains a valid scale-only fit.
+
+The three retained T24/scale-rank tests complete in `7.85839 s` in one untraced focused invocation;
+the full `tests/test_fitting.py` suite also passes. One 12-row/72-signed-rod grouped compilation
+takes `0.0624491 s` (best of three) versus `0.683017 s` for 12 equivalent pointwise compiler calls,
+a `10.9372x` work-reuse speedup; the matrices agree within `4.33681e-19 A2`. A `tracemalloc` run
+started before pytest loaded the test module peaks at `77,400,472` bytes (`73.8148 MiB`) and takes
+`52.5931 s`; it includes Python test/module loading but excludes process RSS and native-library
+allocations. This remains synthetic `A2` internal consistency. No measured PbI2
+strength/covariance, detector/source/optics/mosaic transport, background/PSF/count calibration,
+relaxed 4H/6H metric, or arbitrary transition-parameter recovery is claimed.
 
 ## Historical one-state deterministic mosaic recovery
 

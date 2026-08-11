@@ -24,6 +24,7 @@ from rasim_next.fitting import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
     STACKING_COMPONENT_IDS,
     STACKING_PHASE_IDS,
+    CompiledLayerLStackingResponse,
     CompiledStackingResponse,
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
@@ -40,6 +41,7 @@ from rasim_next.fitting import (
     LayerLMarkerDefinition,
     LayerLMarkerKey,
     LayerLMarkerObservations,
+    LayerLStackingObservations,
     M0IntegerLObservations,
     M0IntegerLPrediction,
     MosaicComponentProfile,
@@ -50,6 +52,7 @@ from rasim_next.fitting import (
     MosaicProfileNuisanceBasis,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
+    Pbi2PolytypeLandmarkCatalogue,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
     StackingPopulationIdentifiabilityError,
@@ -58,12 +61,14 @@ from rasim_next.fitting import (
     audit_integer_l_marker_selection,
     build_ideal_pbi2_polytype_landmark_catalogue,
     build_layer_l_mosaic_profile_definitions,
+    compile_pbi2_layer_l_stacking_response,
     compile_pbi2_stacking_profile_response,
     evaluate_continuous_mosaic_profiles,
     evaluate_indexed_geometry_series_residual,
     evaluate_layer_l_geometry_objective_residual,
     evaluate_tagged_geometry_objective_residual,
     fit_indexed_geometry_series,
+    fit_layer_l_stacking_phase_totals,
     fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,
     fit_stacking_phase_totals,
@@ -78,6 +83,7 @@ from rasim_next.geometry import (
     build_incident_states,
     detector_coordinates_to_angles,
 )
+from rasim_next.materials.crystal import crystal_with_direct_basis
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_geometry_inputs,
@@ -4358,6 +4364,387 @@ def test_bi2te3_figure7_config_selects_fault_free_three_r_parent() -> None:
     assert inputs.strength.shared_disorder_epsilon == 0.0
 
 
+def _pbi2_sf_layer_orders() -> tuple[CommensurateLayerOrder, ...]:
+    return tuple(
+        sorted(
+            {
+                *(CommensurateLayerOrder(value) for value in range(1, 5)),
+                *(CommensurateLayerOrder(value, 2) for value in range(1, 8, 2)),
+                *(CommensurateLayerOrder(value, 3) for value in (2, 5, 8, 11)),
+            }
+        )
+    )
+
+
+type Pbi2LayerLStackingFixture = tuple[
+    ExactTagGeometryModel,
+    Pbi2PolytypeLandmarkCatalogue,
+    LayerLMarkerObservations,
+]
+
+
+@pytest.fixture(scope="module")
+def pbi2_layer_l_stacking_fixture() -> Pbi2LayerLStackingFixture:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    axis = base.instrument.axis_rotations[0]
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="pbi2",
+        ),
+        instrument=replace(
+            base.instrument,
+            axis_rotations=(replace(axis, angle_deg=5.0),),
+        ),
+    )
+    model = ExactTagGeometryModel(build_configured_geometry_inputs(config))
+    catalogue = build_ideal_pbi2_polytype_landmark_catalogue(model, _pbi2_sf_layer_orders())
+    selected = np.asarray(
+        [
+            index
+            for index, definition in enumerate(catalogue.definitions)
+            if definition.key.family_m == 1 and definition.key.branch == 2
+        ],
+        dtype=np.int64,
+    )
+    marker_observations = LayerLMarkerObservations.from_prediction(
+        catalogue.prediction.subset(selected),
+        reference_wavelength_A=model.reference_wavelength_A,
+        sigma_px=0.25,
+    )
+    return model, catalogue, marker_observations
+
+
+def _compile_pbi2_sf_response(
+    fixture: Pbi2LayerLStackingFixture,
+    *,
+    specimen_id: str,
+    layer_orders: tuple[CommensurateLayerOrder, ...],
+) -> CompiledLayerLStackingResponse:
+    model, catalogue, observations = fixture
+    selected = observations.subset(
+        np.asarray([key.layer_order in layer_orders for key in observations.keys])
+    )
+    return compile_pbi2_layer_l_stacking_response(
+        model.inputs.crystal,
+        catalogue.source_cif_sha256,
+        catalogue=catalogue,
+        observations=selected,
+        specimen_id=specimen_id,
+        fixed_state_revision="1" * 64,
+        layers=52,
+    )
+
+
+def test_layer_l_stacking_response_preserves_exact_sites_and_sums_physical_rods(
+    pbi2_layer_l_stacking_fixture: Pbi2LayerLStackingFixture,
+) -> None:
+    """Validate the intrinsic-A2 rational-landmark boundary, not a detector response."""
+
+    model, catalogue, marker_observations = pbi2_layer_l_stacking_fixture
+    expected_orders = _pbi2_sf_layer_orders()
+    response = _compile_pbi2_sf_response(
+        pbi2_layer_l_stacking_fixture,
+        specimen_id="pbi2-full-response",
+        layer_orders=expected_orders,
+    )
+    assert tuple(group.layered_layer_order for group in response.group_keys) == expected_orders
+    assert response.component_response_A2.shape == (12, 5)
+    assert all(len(group) == 2 for group in response.source_marker_definitions)
+    assert all(len(group.member_rod_hk) == 6 for group in response.group_keys)
+    first_sources = response.source_marker_definitions[0]
+    mixed_branch = replace(
+        first_sources[0],
+        key=replace(first_sources[0].key, branch=3 - first_sources[1].key.branch),
+    )
+    with pytest.raises(ValueError, match="share one analytic branch"):
+        replace(
+            response,
+            source_marker_definitions=(
+                (mixed_branch, first_sources[1]),
+                *response.source_marker_definitions[1:],
+            ),
+        )
+    mismatched_groups = tuple(
+        replace(group, rod_catalog_revision="e" * 64) for group in response.group_keys
+    )
+    with pytest.raises(ValueError, match="disagree with catalogue_revision"):
+        replace(response, group_keys=mismatched_groups)
+    duplicate_group = replace(response.group_keys[0], group_id="duplicate-structural-site")
+    with pytest.raises(ValueError, match="structural layer-L identity"):
+        replace(
+            response,
+            group_keys=(response.group_keys[0], duplicate_group, *response.group_keys[2:]),
+            source_marker_definitions=(
+                response.source_marker_definitions[0],
+                response.source_marker_definitions[0],
+                *response.source_marker_definitions[2:],
+            ),
+        )
+    observation = LayerLStackingObservations(
+        specimen_id=response.specimen_id,
+        group_keys=response.group_keys,
+        observed_strength_A2=np.ones(len(response.group_keys)),
+        variance_A4=np.ones(len(response.group_keys)),
+        sampling_revision=response.sampling_revision,
+    )
+    changed_observation = replace(
+        observation,
+        group_keys=mismatched_groups,
+    )
+    assert changed_observation.observation_revision != observation.observation_revision
+
+    integer_index = next(
+        index
+        for index, group in enumerate(response.group_keys)
+        if group.layered_layer_order == CommensurateLayerOrder(1)
+    )
+    integer_group = response.group_keys[integer_index]
+    direct = compile_pbi2_stacking_profile_response(
+        model.inputs.crystal,
+        catalogue.source_cif_sha256,
+        signed_hk=np.asarray(integer_group.member_rod_hk),
+        l_coordinate=np.full(
+            len(integer_group.member_rod_hk),
+            integer_group.layered_layer_order.as_float(),
+        ),
+        wavelength_A=model.reference_wavelength_A,
+        layers=52,
+    )
+    np.testing.assert_allclose(
+        response.component_response_A2[integer_index],
+        np.sum(direct.component_response_A2, axis=0),
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    half_index = next(
+        index
+        for index, group in enumerate(response.group_keys)
+        if group.layered_layer_order == CommensurateLayerOrder(1, 2)
+    )
+    assert np.all(response.component_response_A2[half_index] > 0.0)
+
+    integer_response = _compile_pbi2_sf_response(
+        pbi2_layer_l_stacking_fixture,
+        specimen_id="pbi2-integer-response",
+        layer_orders=tuple(order for order in expected_orders if order.is_integer),
+    )
+    assert len(integer_response.group_keys) == 4
+    assert {group.layered_layer_order.denominator for group in integer_response.group_keys} == {1}
+
+    changed_basis = model.inputs.crystal.direct_basis_A.copy()
+    changed_basis[:, 2] *= 1.01
+    with pytest.raises(ValueError, match="reciprocal basis disagrees"):
+        compile_pbi2_layer_l_stacking_response(
+            crystal_with_direct_basis(
+                model.inputs.crystal,
+                changed_basis,
+                provenance="stacking-basis-mutation",
+            ),
+            catalogue.source_cif_sha256,
+            catalogue=catalogue,
+            observations=marker_observations,
+            specimen_id="pbi2-basis-mutation",
+            fixed_state_revision="1" * 64,
+            layers=52,
+        )
+
+    restricted = build_ideal_pbi2_polytype_landmark_catalogue(
+        model,
+        expected_orders,
+        parents=(Parent.TWO_H, Parent.SIX_H_MINUS),
+    )
+    with pytest.raises(ValueError, match="all five ideal parents"):
+        compile_pbi2_layer_l_stacking_response(
+            model.inputs.crystal,
+            catalogue.source_cif_sha256,
+            catalogue=restricted,
+            observations=marker_observations,
+            specimen_id="pbi2-restricted-catalogue",
+            fixed_state_revision="1" * 64,
+            layers=52,
+        )
+
+    one_marker = marker_observations.subset(np.asarray([0]))
+    incomplete = replace(
+        one_marker,
+        definitions=(
+            replace(
+                one_marker.definitions[0],
+                contributing_rod_hk=one_marker.definitions[0].contributing_rod_hk[:-1],
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="catalogue definition"):
+        compile_pbi2_layer_l_stacking_response(
+            model.inputs.crystal,
+            catalogue.source_cif_sha256,
+            catalogue=catalogue,
+            observations=incomplete,
+            specimen_id="pbi2-incomplete-rods",
+            fixed_state_revision="1" * 64,
+            layers=52,
+        )
+
+
+def test_three_separate_pbi2_sf_fits_recover_and_predict_heldout(
+    pbi2_layer_l_stacking_fixture: Pbi2LayerLStackingFixture,
+) -> None:
+    """Fit fixed-parent populations from synthetic intrinsic-A2 landmarks only."""
+
+    specifications = (
+        (
+            "pbi2-2h",
+            ("2H",),
+            np.asarray((1.0, 0.0, 0.0, 0.0, 0.0)),
+            2.75,
+            {1},
+            (CommensurateLayerOrder(4),),
+            1,
+            0,
+        ),
+        (
+            "pbi2-2h-6h",
+            ("2H", "6H+", "6H-"),
+            np.asarray((0.70, 0.0, 0.0, 0.18, 0.12)),
+            7.0,
+            {1, 3},
+            (CommensurateLayerOrder(4), CommensurateLayerOrder(11, 3)),
+            3,
+            1,
+        ),
+        (
+            "pbi2-2h-4h-6h",
+            STACKING_COMPONENT_IDS,
+            np.asarray((0.55, 0.17, 0.08, 0.12, 0.08)),
+            13.5,
+            {1, 2, 3},
+            (
+                CommensurateLayerOrder(4),
+                CommensurateLayerOrder(7, 2),
+                CommensurateLayerOrder(11, 3),
+            ),
+            5,
+            2,
+        ),
+    )
+    for (
+        specimen_id,
+        allowed_component_ids,
+        domain_fraction,
+        scale,
+        allowed_denominators,
+        heldout_orders,
+        expected_rank,
+        expected_phase_rank,
+    ) in specifications:
+        roster_orders = tuple(
+            order for order in _pbi2_sf_layer_orders() if order.denominator in allowed_denominators
+        )
+        heldout_set = set(heldout_orders)
+        training = _compile_pbi2_sf_response(
+            pbi2_layer_l_stacking_fixture,
+            specimen_id=specimen_id,
+            layer_orders=tuple(order for order in roster_orders if order not in heldout_set),
+        )
+        heldout = _compile_pbi2_sf_response(
+            pbi2_layer_l_stacking_fixture,
+            specimen_id=specimen_id,
+            layer_orders=tuple(order for order in roster_orders if order in heldout_set),
+        )
+        planted_amount = scale * domain_fraction
+        signal = training.component_response_A2 @ planted_amount
+        variance = np.full(signal.size, (1.0e-6 * float(np.max(signal))) ** 2)
+        reverse = np.arange(signal.size - 1, -1, -1, dtype=np.int64)
+        observations = LayerLStackingObservations(
+            specimen_id=specimen_id,
+            group_keys=tuple(training.group_keys[int(index)] for index in reverse),
+            observed_strength_A2=signal[reverse],
+            variance_A4=variance[reverse],
+            sampling_revision=training.sampling_revision,
+        )
+        result = fit_layer_l_stacking_phase_totals(
+            training,
+            observations,
+            allowed_component_ids=allowed_component_ids,
+        )
+
+        np.testing.assert_allclose(result.domain_amount, planted_amount, rtol=3.0e-11, atol=1.0e-14)
+        np.testing.assert_allclose(result.domain_fraction, domain_fraction, atol=3.0e-11)
+        np.testing.assert_allclose(
+            result.phase_fraction,
+            (
+                domain_fraction[0],
+                domain_fraction[1] + domain_fraction[2],
+                domain_fraction[3] + domain_fraction[4],
+            ),
+            atol=3.0e-11,
+        )
+        assert result.global_scale == pytest.approx(scale, rel=3.0e-11)
+        assert result.allowed_component_ids == allowed_component_ids
+        assert result.response_rank == expected_rank
+        assert result.phase_contrast_rank == expected_phase_rank
+        assert result.chi_square < 1.0e-16
+        np.testing.assert_allclose(
+            heldout.component_response_A2 @ result.domain_amount,
+            heldout.component_response_A2 @ planted_amount,
+            rtol=3.0e-11,
+            atol=1.0e-16,
+        )
+        excluded_phase = {
+            "2H": 0,
+            "4H+": 1,
+            "4H-": 1,
+            "6H+": 2,
+            "6H-": 2,
+        }
+        for component_id, phase_index in excluded_phase.items():
+            if component_id not in allowed_component_ids:
+                np.testing.assert_array_equal(result.phase_profile_bounds[phase_index], (0.0, 0.0))
+        if allowed_component_ids == ("2H",):
+            np.testing.assert_array_equal(result.phase_profile_bounds[0], (1.0, 1.0))
+
+    integer_response = _compile_pbi2_sf_response(
+        pbi2_layer_l_stacking_fixture,
+        specimen_id="integer-only-control",
+        layer_orders=tuple(order for order in _pbi2_sf_layer_orders() if order.is_integer),
+    )
+    integer_signal = integer_response.component_response_A2 @ np.asarray(
+        (0.55, 0.17, 0.08, 0.12, 0.08)
+    )
+    integer_observations = LayerLStackingObservations(
+        specimen_id="integer-only-control",
+        group_keys=integer_response.group_keys,
+        observed_strength_A2=integer_signal,
+        variance_A4=np.ones(integer_signal.size),
+        sampling_revision=integer_response.sampling_revision,
+    )
+    with pytest.raises(StackingPopulationIdentifiabilityError, match="cannot separate"):
+        fit_layer_l_stacking_phase_totals(integer_response, integer_observations)
+
+    with pytest.raises(ValueError, match="sampling revision"):
+        fit_layer_l_stacking_phase_totals(
+            integer_response,
+            replace(integer_observations, sampling_revision="f" * 64),
+            allowed_component_ids=("2H",),
+        )
+    with pytest.raises(ValueError, match="specimen_id disagrees"):
+        fit_layer_l_stacking_phase_totals(
+            integer_response,
+            replace(integer_observations, specimen_id="different-specimen"),
+            allowed_component_ids=("2H",),
+        )
+    with pytest.raises(ValueError, match="require 2H"):
+        fit_layer_l_stacking_phase_totals(
+            integer_response,
+            integer_observations,
+            allowed_component_ids=("2H", "4H+"),
+        )
+
+
 def _synthetic_stacking_response(matrix: np.ndarray) -> CompiledStackingResponse:
     row_count = matrix.shape[0]
     return CompiledStackingResponse(
@@ -4367,6 +4754,23 @@ def _synthetic_stacking_response(matrix: np.ndarray) -> CompiledStackingResponse
         wavelength_A=np.full(row_count, 1.540592925),
         fixed_model_revision="synthetic-fixed-model.v1",
     )
+
+
+def test_stacking_phase_rank_retains_a_small_but_nonzero_scale_nuisance() -> None:
+    epsilon = 2.0**-538
+    matrix = np.asarray(
+        (
+            (epsilon, 1.0, 1.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0, 1.0),
+        )
+    )
+    with pytest.raises(StackingPopulationIdentifiabilityError) as caught:
+        fit_stacking_phase_totals(
+            _synthetic_stacking_response(matrix),
+            matrix[:, 0] / epsilon,
+            np.ones(2),
+        )
+    assert caught.value.phase_contrast_rank == 1
 
 
 def test_stacking_population_fit_recovers_global_scale_and_profiles_phase_totals() -> None:

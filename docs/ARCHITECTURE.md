@@ -80,6 +80,11 @@ contributing rod/orientation branches on the active detector panel.
   per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
   search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
   fitting-boundary adapter over the canonical measurement transform, not another angle mapping.
+- `fitting/stacking_intensity.py`: direct signed-rod PbI2 finite-parent strengths, exact-rational
+  reflection-group aggregation, keyed intrinsic-strength observations, and deterministic
+  constrained nonnegative population fitting. The rational adapter collapses detector-root sides,
+  retains their canonical definitions as provenance, and sums unique rods, but is not a
+  detector/source/optics response.
 - `fitting/ordered_intensity.py`: fixed detector/mosaic sparse ROI-mass responses plus certified
   source-averaged selected-center responses, fixed-position Bi2Se3 occupancy quadratics,
   directional `Qr/Qz` damping, analytic image-scale projection, and structural rank/correlation
@@ -149,9 +154,13 @@ contributing rod/orientation branches on the active detector panel.
     including six `m=0`; a measured-mosaic handoff instead propagates its exact fit-eligible
     identity set. Both prove synthetic selected-component recovery, not unresolved raw-OSC
     intensity recovery.
-13. Native-center rendering samples the final combined detector density once per native pixel. It
+13. The synthetic PbI2 rational-landmark SF boundary collapses detector-root duplicates to one
+    intrinsic structural query, sums every unique signed rod once, and fits one fixed-parent amount
+    vector and scale per specimen. Exact parent overlaps stay inside one response row. Detector
+    transport and arbitrary transition-law refinement remain downstream work.
+14. Native-center rendering samples the final combined detector density once per native pixel. It
     is display-only `A^2/px^2`, not pixel-integrated mass, OSC counts, or a count-calibrated fit.
-14. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
+15. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
     worker. Detector-only controls compile one batched projection and swap only four projection
     buffers; even after a nonzero sample correction they retain the already-bound incident
     transport. Sample/goniometer controls rebuild incident transport and re-enumerate rods only

@@ -904,7 +904,24 @@ uv run --frozen pytest -q tests/test_fitting.py `
 
 This is an analytic synthetic profile bank, not a measured or detector-native PbI2 forward model.
 Independent per-profile nuisance amplitudes deliberately remove population and cross-peak strength
-from the mosaic objective; those constants remain inputs to a later stacking-intensity stage.
+from the mosaic objective; the subsequent T24 synthetic intrinsic-strength stage fits those
+population constants under a separately declared measure.
+
+## PbI2 exact-rational intrinsic SF population validation
+
+The next synthetic boundary collapses the qualified detector-root landmarks into unique structural
+integer/half/third-order rows, sums all signed rods once, and fits separate fixed-parent population
+vectors for assumed 2H, 2H+6H, and 2H+4H+6H specimens:
+
+```powershell
+uv run --frozen pytest -q tests/test_fitting.py `
+  -k "layer_l_stacking_response or three_separate_pbi2_sf"
+```
+
+Parent overlaps remain columns in one response row and one scale ties all peaks within each
+specimen. Missing optional peaks add no rows. The example uses pointwise intrinsic summed-rod
+strength in `A2`; it is not measured OSC intensity, a detector-integrated PbI2 response, or a fit
+of continuous transition probabilities.
 
 ## Reference and observed data
 

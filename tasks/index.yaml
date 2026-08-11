@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: pbi2_rational_polytype_mosaic
+current_phase: pbi2_rational_polytype_sf_population
 
 tasks:
   - id: T00
@@ -84,8 +84,8 @@ tasks:
     depends_on: [T12]
   - id: T14
     file: tasks/14_stacking_intensity_fit.md
-    branch: feat/stacking-intensity-fit
-    status: NEEDS_REPLAN
+    branch: codex/pbi2-stacking-independent-validation
+    status: COMPLETE_DIRECT_PROFILE_SYNTHETIC_NO_DETECTOR_FORWARD
     depends_on: [T13]
   - id: T15
     file: tasks/15_caking_qspace.md
@@ -117,3 +117,8 @@ tasks:
     branch: codex/pbi2-rational-mosaic
     status: READY_SYNTHETIC_PROFILE_RESPONSE_NO_PBI2_DETECTOR_FORWARD
     depends_on: [T12, T22]
+  - id: T24
+    file: tasks/24_pbi2_polytype_sf.md
+    branch: codex/pbi2-rational-sf
+    status: READY_SYNTHETIC_INTRINSIC_LANDMARK_POPULATION_NO_PBI2_DETECTOR_FORWARD
+    depends_on: [T14, T22, T23]

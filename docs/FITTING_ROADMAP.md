@@ -368,6 +368,11 @@ Proof:
 - held-out branch agreement
 - selected-region or profile mass conservation
 
+T24 implements only the synthetic intrinsic-landmark population slice of this stage. It freezes
+five near-parent responses and recovers their specimen-specific nonnegative populations from exact
+rational structural rows. It does not yet fit continuous transition probabilities or consume a
+detector/source/optics-folded PbI2 observable.
+
 ## Later caking and `2theta/phi`
 
 Caking is a separate measurement transformation, not part of geometry, rod identity, or branch identity. When added:

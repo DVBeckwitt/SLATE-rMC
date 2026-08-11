@@ -33,3 +33,9 @@ It proves that admitted half-/third-order profiles can add nuisance-projected in
 shared mosaic distribution while missing sites add no profile and exact overlaps remain one
 physical residual. It does not supply the missing PbI2 detector/source/stacking response, measured
 profiles, or a simultaneous mosaic/population fit.
+
+T24 is the accepted synthetic intrinsic-strength population slice. It collapses detector-root
+duplicates, sums every unique signed rod once per exact rational structural landmark, and fits one
+fixed-parent population vector and scale per specimen. The 2H, 2H+6H, and full rosters recover
+internally; measured detector-folded PbI2 SF fitting and transition-parameter refinement remain
+separate work.
