@@ -148,3 +148,22 @@ def test_nominal_bi2x3_cases_share_one_stage_contract(
         "rendered/" + material_id.lower() + "_peak_alignment.json",
     }.issubset(workflow.stages["sf"].completion_artifacts)
     assert not output_directory.exists()
+
+
+def test_bi2se3_current_workflow_uses_a_separate_model_limited_geometry_manifest(
+    tmp_path: Path,
+) -> None:
+    workflow = load_fit_workflow(
+        ROOT / "configs" / "fit_workflows" / "bi2se3.toml",
+        output_directory=tmp_path / "bi2se3-current",
+    )
+    plan = planned_fit_workflow(workflow)
+    geometry_manifest = ROOT / "configs" / "bi2se3_osc_geometry_fit_model_limited.yaml"
+
+    geometry_command = plan["stages"][0]["commands"][0]
+    compose_command = plan["stages"][2]["commands"][0]
+    assert Path(geometry_command[2]).resolve() == geometry_manifest.resolve()
+    assert "--fit-incidence-angle-trim" in geometry_command
+    assert Path(compose_command[compose_command.index("--geometry-manifest") + 1]).resolve() == (
+        geometry_manifest.resolve()
+    )

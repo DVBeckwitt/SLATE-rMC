@@ -104,7 +104,7 @@ def test_fit_cli_persists_the_raw_position_artifact(
     assert json.loads(capsys.readouterr().out) == payload
 
 
-def test_bi2se3_qualification_requires_zero_gauge_common_delta_and_trim_policy(
+def test_bi2se3_qualification_requires_its_frozen_no_trim_parameterization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_fit_cli()
@@ -127,7 +127,6 @@ def test_bi2se3_qualification_requires_zero_gauge_common_delta_and_trim_policy(
             "series.yaml",
             fitted_parameter_names=fitted,
             fit_incidence_angle_delta=True,
-            fit_incidence_angle_trim=True,
             initial=nonzero_gauge,
         )
     with pytest.raises(ValueError, match="qualified bounds/prior"):
@@ -135,16 +134,14 @@ def test_bi2se3_qualification_requires_zero_gauge_common_delta_and_trim_policy(
             "series.yaml",
             fitted_parameter_names=fitted,
             fit_incidence_angle_delta=True,
-            fit_incidence_angle_trim=True,
             incidence_angle_delta_half_span_deg=0.4,
         )
-    with pytest.raises(ValueError, match="qualified bounds/prior"):
+    with pytest.raises(ValueError, match="does not include incidence-angle trims"):
         module.fit_osc_geometry_series(
             "series.yaml",
             fitted_parameter_names=fitted,
             fit_incidence_angle_delta=True,
             fit_incidence_angle_trim=True,
-            incidence_angle_trim_prior_sigma_deg=0.2,
         )
 
 

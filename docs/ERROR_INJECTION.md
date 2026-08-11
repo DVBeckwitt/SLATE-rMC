@@ -240,6 +240,22 @@ frozen `m=0` support evidence, per-profile scale invariance, physical-source and
 rejection, boundary and within-cell global-alias fixtures, extreme-scale invariance, or local
 rank/condition failure.
 
+### PbI2 measured rational-landmark admission
+
+- Feed predicted marker coordinates into discovery, use a restricted parent catalogue, or invoke
+  the PbI2 catalogue for a different material.
+- Admit one root side when its paired visible root is missing, let one peak own two nearby exact
+  sites, average competing peaks, ignore covariance, or convert a missing half-/third-order site
+  into a zero-valued observation.
+- Reuse discovery after changing detector geometry, angle frame, detector shape, source CIF, or
+  reciprocal basis.
+- Strip the discovery/catalogue identity from an admitted coordinate pack or change the frozen
+  catalogue-to-peak row join after admission.
+
+Expected detection: catalogue-free discovery provenance, material/full-parent/revision rejection,
+hard-distance and Mahalanobis gates, two-way assignment margins, complete-visible-root admission,
+the immutable `Pbi2LayerLPeakAdmission` source join, and the `None` no-observation result.
+
 ### PbI2 exact-rational intrinsic SF populations
 
 - Expand one exact parent overlap into one residual per parent, count a signed rod once per

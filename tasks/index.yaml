@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: pbi2_rational_polytype_sf_population
+current_phase: optional_polytype_staged_integration
 
 tasks:
   - id: T00
@@ -122,3 +122,8 @@ tasks:
     branch: codex/pbi2-rational-sf
     status: READY_SYNTHETIC_INTRINSIC_LANDMARK_POPULATION_NO_PBI2_DETECTOR_FORWARD
     depends_on: [T14, T22, T23]
+  - id: T25
+    file: tasks/25_polytype_staged_integration.md
+    branch: codex/polytype-staged-integration
+    status: READY_INTEGRATED_BI2X3_MATCH_PBI2_POSITIONAL_PREFLIGHT_ONLY
+    depends_on: [T12, T13, T20, T22, T23, T24]

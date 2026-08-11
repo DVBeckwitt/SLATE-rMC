@@ -39,3 +39,10 @@ duplicates, sums every unique signed rod once per exact rational structural land
 fixed-parent population vector and scale per specimen. The 2H, 2H+6H, and full rosters recover
 internally; measured detector-folded PbI2 SF fitting and transition-parameter refinement remain
 separate work.
+
+T25 integrates the optional rational-landmark path with the accepted staged workflow while
+preserving the Bi2Se3/Bi2Te3 integer-only null path. It also owns the blind-prior audit and any
+scientifically supported measured PbI2 stages. Detector-native stages that cannot be validated from
+the available raw series remain explicit stop conditions rather than inferred results. Its accepted
+slice is the measured rational-admission API, exact Bi2X3 null regression, and external PbI2
+positional preflight; measured PbI2 geometry, mosaic, structure, and stacking remain blocked.

@@ -956,6 +956,16 @@ passes but parameter precision does not. Widening that bound through 0.2, 0.5, a
 pooled RMS only from about `1.55875` to `1.55815` pixels while the pivot estimate remains
 bound-seeking; a fourth incidence is required for a parameter-level pivot claim.
 
+That frozen `bi2se3-osc-5-10-15.v1` qualification is the historical common-delta/no-trim
+parameterization. Later polarization and zero-sum-trim changes necessarily changed the complete
+selection context, but the profile name and expected hash were not revised. T25 restores the v1
+precondition instead of blessing a new hash by reflection counts. The current nominal workflow now
+uses `bi2se3_osc_geometry_fit_model_limited.yaml`, which omits the qualification profile and retains
+the trim-enabled model explicitly. Its fresh result has the complete selection revision
+`sha256-c0b94e5b439e25a4320de382ec15570cbb63ad36266425d1df535a9566e1a37a`, site counts
+`10/8/8`, RMS/max `1.48267846014/5.28147243571 px`, scaled rank `11`, and condition
+`8748.88440059`. It is `POSITION_MODEL_LIMITED`, not a replacement qualification oracle.
+
 A follow-up constrained diagnostic freezes both detector corrections and instead uses the saved
 old RA-SIM Bi2Se3 GUI-state tilts as the base detector calibration. The typed state, saved
 2026-07-01, has SHA-256
@@ -1038,10 +1048,10 @@ The focused diagnostic took `71.67 s`; the baseline and augmented fits took `18.
 (`3.74982 MiB`) after imports; this excludes native-library allocations and process RSS.
 
 This is internal consistency for frozen, exact, noiseless landmarks under one detector calibration.
-Parent metadata is support provenance, not a fitted fraction or intensity. Measured rational-L
-discovery and centroid certification, separate detector calibrations for the three specimens,
-detector-folded stacking-fault population fitting, and the separately relaxed native 4H/6H metrics
-remain `NO_ORACLE` in this result. T23 validates a synthetic mosaic response-bank boundary and T24
+Parent metadata is support provenance, not a fitted fraction or intensity. T25 adds the separate
+catalogue-free-discovery-to-measured-centroid admission boundary, but detector-folded population
+fitting, separately calibrated three-specimen recovery, and the separately relaxed native 4H/6H
+metrics remain `NO_ORACLE` here. T23 validates a synthetic mosaic response-bank boundary and T24
 validates a separate synthetic intrinsic-strength population boundary.
 
 ### Synthetic PbI2 optional-polytype-landmark mosaic proof
@@ -1125,6 +1135,74 @@ started before pytest loaded the test module peaks at `77,400,472` bytes (`73.81
 allocations. This remains synthetic `A2` internal consistency. No measured PbI2
 strength/covariance, detector/source/optics/mosaic transport, background/PSF/count calibration,
 relaxed 4H/6H metric, or arbitrary transition-parameter recovery is claimed.
+
+### Optional-polytype staged integration and measured PbI2 preflight
+
+T25 activates the measured admission part of `PHY-FIT-003D` without changing the integer-L
+selection or staged Bi2X3 contracts. `admit_discovered_pbi2_layer_l_peaks(...)` consumes only a
+previously frozen, catalogue-free discovery plus one complete PbI2 parent catalogue under the same
+geometry. Its immutable result retains the hashed discovery and complete catalogue, exact
+catalogue/peak index join, and the qualified observation pack. A permanent positive fixture admits
+the two active `m=1`, branch-2 roots at `L=4/3` and preserves the measured coordinates and covariance
+exactly. Empty input, one missing visible root, competing peak owners, a midpoint ambiguity between
+`L=4/3` and `3/2`, a point inside the hard-distance but outside the Mahalanobis gate, a restricted
+parent catalogue, and a Bi2Se3 model all fail closed. The measured boundary remains an API-only
+preflight because no detector-native PbI2 staged runner exists.
+
+The additive null path was checked against the current detector-native Bi2X3 benchmarks. A dynamic
+pre-rational/current comparison gives identical beta tuples, root signs, branches, and no-root
+outcomes for 31,110 real Bi2Se3/Bi2Te3 integer-L root problems; all 26 selected Bi2Se3 detector
+coordinates, residuals, and statuses are bit-exact. Fresh staged workflows then completed through
+geometry, the provided mosaic state, joint structure-factor fitting, profiles, and rendering:
+
+| material | geometry | joint/profile replay | stacking |
+|---|---|---|---|
+| Bi2Se3 | bit-exact to the accepted current result; RMS/max `1.4826784601/5.2814724357 px`, rank/condition `11/8748.8844` | maximum parameter delta `8.16e-8`, maximum scale-relative delta `2.41e-7`, weighted-RMS delta `4.43e-8`; 34/40 profile arrays bit-exact and maximum numeric relative-L2 `2.83e-7` | exact 3R, `epsilon=0`, transition vector `(0,0,1,0,0)` |
+| Bi2Te3 | bit-exact; RMS/max `0.5954597082/1.7999302531 px`, rank/condition `11/10223.4414` | maximum parameter delta `6.11e-9`, maximum scale-relative delta `2.26e-8`, maximum profile relative-L2 `2.04e-8`; rendered PNG changes 28 pixels by at most one channel count | exact 3R, `epsilon=0`, transition vector `(0,0,1,0,0)` |
+
+The Bi2Se3 rendered detector panel is pixel-exact; `0.100583%` of pixels differ in the lower plotted
+profile panels because the tiny replay shift moves antialiased curves. Exact roots and detector
+predictions establish the first unchanged stage, while the nonzero joint/profile differences are
+normal optimized replay noise. These runs prove that the PbI2-specific optional route is not
+activated for Bi2X3 and that its absence preserves the accepted numerical results. They do not
+claim a material-neutral rational-peak search or infer fault freedom from a non-detection; 3R and
+zero epsilon remain the declared Bi2X3 model.
+
+The two compact measured-admission tests take `6.91271 s` in one traced invocation. With
+`tracemalloc` started after importing pytest and before loading the test module, traced Python peak
+memory is `76,594,633` bytes (`73.0463 MiB`). The admission pass stores only the discovered peaks,
+active catalogue rows, and their small covariance blocks; it does not allocate an image-sized
+candidate tensor.
+
+The exact RA-SIM-linked measured target is `biggerB_4deg_2m.osc`, SHA-256
+`57a740b36cba74b2e80d1ecc0afd2d7c50233778d755a5f9377dc5bb825844f5`, with the tracked-equivalent
+2H CIF, SHA-256 `7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9`.
+The surviving `PbI2_mixed.json` state is not a fit artifact: it reports no ordered-structure fit,
+contains no manual pairs, and stores zero simulated/grouped intensities. Its geometry, mosaic,
+layer-count, and transition values were quarantined. Catalogue-free detector discovery on the raw
+OSC finds bilateral integer and third-order first-family candidates. In a post-hoc calibration
+feasibility check, the `L=1` pair has significance `16.57/16.65` and the `L=4/3` pair
+`19.21/14.17`; no independently resolved half-order pair passes the same threshold. This is
+6H-compatible positional evidence, not a phase fraction.
+
+The measured stages stop at their declared identifiability boundaries:
+
+| stage | result | reason |
+|---|---|---|
+| catalogue-free discovery / rational positional evidence | `PARTIAL` | integer and third-order pairs are present; the calibration check is post-hoc rather than a blind fitted detector state |
+| complete geometry | `BLOCKED` | one fixed-incidence image gives data-Jacobian rank 5/9; the reduced fits either hit bounds with RMS/max `6.18/6.95 px` or require an unsupported `-6.72 deg` detector correction |
+| mosaic | `NO_ORACLE` | geometry is not accepted and no PbI2 transition/source/optics/mosaic/detector-bin response exists |
+| ordered structure factor | `NO_ORACLE` | the detector-native PbI2 observation/response boundary is absent |
+| fixed-parent 2H/4H/6H population | `BLOCKED` | the two admitted structural rows have phase-contrast rank 0 for the blind all-five and 2H+6H rosters |
+| arbitrary stacking-transition parameters | `NO_ORACLE` | T24 fits five fixed `epsilon=0.001` parent responses, not a free transition law |
+
+The stop is data/model limited rather than an optimizer failure. With the same landmark design,
+synthetic two-incidence geometry has rank 7/9, while three static incidences at 4/8/12 degrees have
+rank 9/9 and condition about `9.9e3`. A complete all-five population fit first becomes possible at
+five independent structural groups and requires a half-order group to distinguish 4H. The next
+measured experiment therefore needs three static images of the same specimen, a separately bound
+detector calibration, and the detector-native PbI2 profile-response bridge before mosaic,
+structure, populations, or transition probabilities can be reported.
 
 ## Historical one-state deterministic mosaic recovery
 

@@ -348,17 +348,16 @@ def fit_osc_geometry_series(
     initial_corrections = zero if initial is None else initial
     if not isinstance(initial_corrections, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections or None")
+    if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and fit_incidence_angle_trim:
+        raise ValueError("the Bi2Se3 qualification does not include incidence-angle trims")
     if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and (
         initial_corrections.sample_normal_x_tilt_rad != 0.0
         or not fit_incidence_angle_delta
         or delta_half_span_deg != 0.5
-        or not fit_incidence_angle_trim
-        or trim_half_span_deg != 0.5
-        or trim_prior_sigma_deg != 0.25
     ):
         raise ValueError(
             "the Bi2Se3 qualification requires sample_normal_x_tilt_rad fixed at zero "
-            "with one common delta and zero-sum trims using the qualified bounds/prior"
+            "with one common delta using the qualified bounds/prior"
         )
     indexing = index_osc_geometry_series(series)
     bounds = SharedGeometryCorrectionBounds.rasim_multi_angle_pose()
@@ -672,10 +671,10 @@ def fit_osc_geometry_series(
         and incidence_bounds is not None
         and incidence_bounds.lower_rad == -math.radians(0.5)
         and incidence_bounds.upper_rad == math.radians(0.5)
-        and result.incidence_angle_trim_fitted
-        and result.incidence_angle_trim_contrast_half_span_rad == math.radians(0.5)
-        and result.incidence_angle_trim_prior_sigma_rad == math.radians(0.25)
-        and len(result.incidence_angle_trim_contrast_rad) == len(images) - 1
+        and not result.incidence_angle_trim_fitted
+        and result.incidence_angle_trim_contrast_half_span_rad is None
+        and result.incidence_angle_trim_prior_sigma_rad is None
+        and len(result.incidence_angle_trim_contrast_rad) == 0
     )
     accepted = all(
         (

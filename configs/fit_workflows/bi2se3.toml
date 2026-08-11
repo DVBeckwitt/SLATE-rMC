@@ -7,7 +7,7 @@ fit_parameter_seed = "bi2se3_current_fit.json"
 [stages.geometry]
 completion_artifacts = ["position.json"]
 commands = [
-  ["{python}", "{repo}/scripts/fit_osc_geometry.py", "{repo}/configs/bi2se3_osc_geometry_fit.yaml", "--fit-incidence-angle-delta", "--fit-incidence-angle-trim", "--freeze-parameter", "sample_normal_x_tilt_rad", "--heldout-integer-l", "4", "11", "--benchmark", "--destination", "{geometry_dir}/position.json", "--json"],
+  ["{python}", "{repo}/scripts/fit_osc_geometry.py", "{repo}/configs/bi2se3_osc_geometry_fit_model_limited.yaml", "--fit-incidence-angle-delta", "--fit-incidence-angle-trim", "--freeze-parameter", "sample_normal_x_tilt_rad", "--heldout-integer-l", "4", "11", "--benchmark", "--destination", "{geometry_dir}/position.json", "--json"],
 ]
 
 [stages.mosaic]
@@ -24,7 +24,7 @@ completion_artifacts = [
   "rendered/bi2se3_peak_alignment.json",
 ]
 commands = [
-  ["{python}", "{repo}/scripts/compose_fixed_experiment.py", "--position", "{geometry_dir}/position.json", "--geometry-manifest", "{repo}/configs/bi2se3_osc_geometry_fit.yaml", "--recipe", "{repo}/examples/bi2se3/experiment/figure7_matched_regions.toml", "--mosaic-state", "{repo}/examples/bi2se3/experiment/fixed_mosaic.json", "--source-state-count", "250", "--destination", "{sf_dir}/fixed_experiment.json"],
+  ["{python}", "{repo}/scripts/compose_fixed_experiment.py", "--position", "{geometry_dir}/position.json", "--geometry-manifest", "{repo}/configs/bi2se3_osc_geometry_fit_model_limited.yaml", "--recipe", "{repo}/examples/bi2se3/experiment/figure7_matched_regions.toml", "--mosaic-state", "{repo}/examples/bi2se3/experiment/fixed_mosaic.json", "--source-state-count", "250", "--destination", "{sf_dir}/fixed_experiment.json"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "prepare", "--fixed-state", "{sf_dir}/fixed_experiment.json", "--recipe", "{repo}/examples/bi2se3/experiment/figure7_matched_regions.toml", "--destination", "{sf_dir}/matched_regions.ra_diag.npz", "--source-state-count", "250"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "background", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--fit-plan", "{repo}/examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml", "--destination", "{sf_dir}/radial_background.ra_diag.npz"],
   ["{python}", "{repo}/scripts/fit_layered_quintuple_regions.py", "fit", "--diagnostic", "{sf_dir}/matched_regions.ra_diag.npz", "--background", "{sf_dir}/radial_background.ra_diag.npz", "--fit-plan", "{repo}/examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml", "--destination", "{sf_dir}/joint.json", "--stage", "joint", "--backend", "{backend}", "--maximum-function-evaluations", "20", "--initial-parameters", "{fit_parameter_values}"],

@@ -599,12 +599,26 @@ used. `audit_exact_layer_l_geometry_roots(...)` independently brackets the fixed
 equation for every contributing rod and detects root/order swaps without calling the production
 rational solver.
 
-This is a synthetic ideal-parent geometry boundary, not a measured selection workflow. The current
-OSC discovery/indexing schemas remain integer-L only, no measured PbI2 OSC/calibration data are
-tracked, and the separately relaxed native 4H/6H cells do not share the 2H layer repeat. A future
-measured admission step must freeze and certify each optional centroid before constructing these
-observations; broad or population-dependent blends belong to the stacking-aware intensity fit.
-The common-incidence-delta/sample-normal-x gauge is unchanged by the additional landmarks.
+`admit_discovered_pbi2_layer_l_peaks(...)` is the material-specific measured admission boundary.
+It runs only after catalogue-free `MeasuredPeakDiscovery` under the same frozen detector geometry
+and angle frame. It requires the complete five-parent catalogue, considers only active half- and
+third-order sites, and admits a group only when its native centroids pass the discovery significance,
+hard-distance, covariance-aware uncertainty, competing-site, competing-peak, and complete-visible-
+root gates. It never searches the image, evaluates a predicted structure factor or parent
+population intensity, or turns a missing candidate into an extinction; measured discovery
+significance is still required. Success returns `Pbi2LayerLPeakAdmission`, which retains the complete hashed blind
+discovery, complete parent catalogue, exact catalogue-to-peak row join, and the frozen
+`LayerLMarkerObservations`; callers pass its `observations` member to
+`merge_layer_l_marker_observations(...)`. No admitted group returns `None`, preserving the integer
+observation object and legacy path at the caller boundary.
+
+The general OSC manifest and integer indexing schemas remain unchanged; measured rational rows are
+an additive post-discovery pack. T25 exposes this auditable, fitter-ready API boundary but does not
+install a measured PbI2 staged runner: detector-native PbI2 mosaic/intensity transfer remains
+absent. The separately relaxed native 4H/6H cells do not share the exact 2H layer repeat, so this
+admission is valid only for the declared common-layer transition model. Broad, asymmetric, or
+population-dependent blends belong to the stacking-aware intensity fit. The common-incidence-
+delta/sample-normal-x gauge is unchanged by the additional landmarks.
 
 ### Exact rational-layer intrinsic SF population fitting
 

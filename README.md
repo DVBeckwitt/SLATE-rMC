@@ -48,7 +48,7 @@ model, with fractional-pixel covariance retained.
 ```powershell
 uv run --frozen python scripts/compose_fixed_experiment.py `
   --position C:\external\fit\position.json `
-  --geometry-manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --geometry-manifest configs/bi2se3_osc_geometry_fit_model_limited.yaml `
   --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
   --mosaic-state examples/bi2se3/experiment/fixed_mosaic.json `
   --destination C:\external\fit\fixed_experiment.json

@@ -9,12 +9,16 @@ import pytest
 
 import rasim_next.selection.blind as blind_module
 from rasim_next.core.frames import FrameId
+from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import (
+    PBI2_IDEAL_PARENTS,
     ExactTagGeometryModel,
     IndexedGeometryImage,
     IntegerLMarkerKey,
     IntegerLMarkerPrediction,
+    Pbi2PolytypeLandmarkCatalogue,
+    build_ideal_pbi2_polytype_landmark_catalogue,
 )
 from rasim_next.geometry import (
     AngleFrame,
@@ -47,6 +51,7 @@ from rasim_next.selection import (
     MeasuredPeakDiscovery,
     OscGeometryIndexingRun,
     PeakIndexingPolicy,
+    admit_discovered_pbi2_layer_l_peaks,
     audit_frozen_marker_visibility,
     audit_frozen_osc_geometry_reindexing,
     build_osc_angle_frame,
@@ -1218,6 +1223,253 @@ def _configured_angle_frame(inputs: object) -> AngleFrame:
         column_right_lab=column_right,
         direct_beam_lab=direct_beam,
         revision="configured-selection-test-angle-frame.v1",
+    )
+
+
+@pytest.fixture(scope="module")
+def pbi2_rational_admission_fixture() -> tuple[
+    ExactTagGeometryModel,
+    Pbi2PolytypeLandmarkCatalogue,
+    AngleFrame,
+]:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="pbi2",
+        ),
+    )
+    inputs = build_configured_geometry_inputs(config)
+    model = ExactTagGeometryModel(inputs)
+    catalogue = build_ideal_pbi2_polytype_landmark_catalogue(
+        model,
+        (CommensurateLayerOrder(4, 3), CommensurateLayerOrder(3, 2)),
+        parents=PBI2_IDEAL_PARENTS,
+    )
+    return model, catalogue, _configured_angle_frame(inputs)
+
+
+def _pbi2_rational_discovery(
+    model: ExactTagGeometryModel,
+    frame: AngleFrame,
+    coordinates_px: np.ndarray,
+) -> MeasuredPeakDiscovery:
+    coordinates = np.asarray(coordinates_px, dtype=np.float64)
+    angles = detector_coordinates_to_angles(
+        coordinates[:, 0],
+        coordinates[:, 1],
+        instrument=model.instrument,
+        angle_frame=frame,
+    )
+    covariance = ((0.25, 0.0), (0.0, 0.25))
+    peaks = tuple(
+        DiscoveredCakePeak(
+            column_px=float(coordinate[0]),
+            row_px=float(coordinate[1]),
+            two_theta_rad=float(two_theta),
+            phi_rad=float(phi),
+            covariance_px2=covariance,
+            localization_covariance_px2=covariance,
+            z_score=20.0,
+        )
+        for coordinate, two_theta, phi in zip(
+            coordinates,
+            angles.two_theta_rad,
+            angles.phi_rad,
+            strict=True,
+        )
+    )
+    return MeasuredPeakDiscovery(
+        image_id="pbi2-rational-admission",
+        detector_shape_rc=model.instrument.detector_shape_rc,
+        peaks=peaks,
+        detector_data_hash="sha256-" + "1" * 64,
+        detector_mask_hash="sha256-" + "2" * 64,
+        detector_mask_revision="synthetic-all-valid.v1",
+        geometry_context_hash=_discovery_geometry_hash(model.instrument, frame),
+        policy=BlindIndexingPolicy(),
+    )
+
+
+def test_pbi2_rational_admission_preserves_frozen_measured_coordinates(
+    pbi2_rational_admission_fixture: tuple[
+        ExactTagGeometryModel,
+        Pbi2PolytypeLandmarkCatalogue,
+        AngleFrame,
+    ],
+) -> None:
+    model, catalogue, frame = pbi2_rational_admission_fixture
+    selected = np.asarray(
+        [
+            index
+            for index, definition in enumerate(catalogue.definitions)
+            if definition.key.family_m == 1
+            and definition.key.branch == 2
+            and definition.key.layer_order == CommensurateLayerOrder(4, 3)
+        ],
+        dtype=np.int64,
+    )
+    assert tuple(catalogue.keys[index].root_sign for index in selected) == (-1, 1)
+    measured = catalogue.prediction.coordinates_px[selected] + np.asarray(
+        ((0.5, -0.25), (-0.5, -0.25))
+    )
+    discovery = _pbi2_rational_discovery(model, frame, measured)
+
+    admitted = admit_discovered_pbi2_layer_l_peaks(
+        discovery,
+        model=model,
+        catalogue=catalogue,
+        angle_frame=frame,
+    )
+
+    assert admitted is not None
+    assert admitted.discovery is discovery
+    assert admitted.catalogue is catalogue
+    assert admitted.catalogue_indices == tuple(int(index) for index in selected)
+    observations = admitted.observations
+    assert observations.definitions == tuple(catalogue.definitions[index] for index in selected)
+    np.testing.assert_array_equal(observations.coordinates_px, measured)
+    np.testing.assert_array_equal(
+        observations.covariance_px2,
+        np.broadcast_to(np.eye(2) * 0.25, (2, 2, 2)),
+    )
+    assert observations.reference_wavelength_A == model.reference_wavelength_A
+    with pytest.raises(ValueError, match="qualification gates"):
+        replace(
+            admitted,
+            discovery_peak_indices=tuple(reversed(admitted.discovery_peak_indices)),
+        )
+
+
+def test_pbi2_rational_admission_rejects_missing_ambiguous_or_uncertain_groups(
+    pbi2_rational_admission_fixture: tuple[
+        ExactTagGeometryModel,
+        Pbi2PolytypeLandmarkCatalogue,
+        AngleFrame,
+    ],
+) -> None:
+    model, catalogue, frame = pbi2_rational_admission_fixture
+    pair_indices: dict[CommensurateLayerOrder, np.ndarray] = {}
+    for order in (CommensurateLayerOrder(4, 3), CommensurateLayerOrder(3, 2)):
+        pair_indices[order] = np.asarray(
+            [
+                index
+                for index, definition in enumerate(catalogue.definitions)
+                if definition.key.family_m == 1
+                and definition.key.branch == 2
+                and definition.key.layer_order == order
+            ],
+            dtype=np.int64,
+        )
+        assert tuple(catalogue.keys[index].root_sign for index in pair_indices[order]) == (-1, 1)
+
+    exact = _pbi2_rational_discovery(
+        model,
+        frame,
+        catalogue.prediction.coordinates_px[pair_indices[CommensurateLayerOrder(4, 3)]],
+    )
+    assert (
+        admit_discovered_pbi2_layer_l_peaks(
+            replace(exact, peaks=()),
+            model=model,
+            catalogue=catalogue,
+            angle_frame=frame,
+        )
+        is None
+    )
+
+    one_root = _pbi2_rational_discovery(
+        model,
+        frame,
+        catalogue.prediction.coordinates_px[pair_indices[CommensurateLayerOrder(4, 3)][:1]],
+    )
+    assert (
+        admit_discovered_pbi2_layer_l_peaks(
+            one_root,
+            model=model,
+            catalogue=catalogue,
+            angle_frame=frame,
+        )
+        is None
+    )
+
+    pair = catalogue.prediction.coordinates_px[pair_indices[CommensurateLayerOrder(4, 3)]]
+    competing = np.vstack((pair[0] + (0.1, 0.0), pair[0] - (0.1, 0.0), pair[1]))
+    assert (
+        admit_discovered_pbi2_layer_l_peaks(
+            _pbi2_rational_discovery(model, frame, competing),
+            model=model,
+            catalogue=catalogue,
+            angle_frame=frame,
+        )
+        is None
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    bi2se3_model = ExactTagGeometryModel(
+        build_configured_geometry_inputs(
+            load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+        )
+    )
+    with pytest.raises(ValueError, match="requires a PbI2 geometry model"):
+        admit_discovered_pbi2_layer_l_peaks(
+            exact,
+            model=bi2se3_model,
+            catalogue=catalogue,
+            angle_frame=frame,
+        )
+
+    restricted = build_ideal_pbi2_polytype_landmark_catalogue(
+        model,
+        (CommensurateLayerOrder(4, 3), CommensurateLayerOrder(3, 2)),
+        parents=(PBI2_IDEAL_PARENTS[0], PBI2_IDEAL_PARENTS[-1]),
+    )
+    with pytest.raises(ValueError, match="requires the complete parent catalogue"):
+        admit_discovered_pbi2_layer_l_peaks(
+            exact,
+            model=model,
+            catalogue=restricted,
+            angle_frame=frame,
+        )
+    valid = admit_discovered_pbi2_layer_l_peaks(
+        exact,
+        model=model,
+        catalogue=catalogue,
+        angle_frame=frame,
+    )
+    assert valid is not None
+    with pytest.raises(ValueError, match="requires the complete parent catalogue"):
+        replace(valid, catalogue=restricted)
+
+    midpoint = 0.5 * (
+        catalogue.prediction.coordinates_px[pair_indices[CommensurateLayerOrder(4, 3)]]
+        + catalogue.prediction.coordinates_px[pair_indices[CommensurateLayerOrder(3, 2)]]
+    )
+    assert (
+        admit_discovered_pbi2_layer_l_peaks(
+            _pbi2_rational_discovery(model, frame, midpoint),
+            model=model,
+            catalogue=catalogue,
+            angle_frame=frame,
+        )
+        is None
+    )
+
+    uncertain = catalogue.prediction.coordinates_px[
+        pair_indices[CommensurateLayerOrder(4, 3)]
+    ] + np.asarray((0.0, 30.0))
+    assert (
+        admit_discovered_pbi2_layer_l_peaks(
+            _pbi2_rational_discovery(model, frame, uncertain),
+            model=model,
+            catalogue=catalogue,
+            angle_frame=frame,
+            allowed_denominators=(3,),
+        )
+        is None
     )
 
 

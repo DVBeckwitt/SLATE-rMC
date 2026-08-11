@@ -40,6 +40,10 @@ from rasim_next.selection.osc_series import (
     reindex_frozen_osc_geometry_series,
     simulation_config_for_osc_image,
 )
+from rasim_next.selection.pbi2_rational import (
+    Pbi2LayerLPeakAdmission,
+    admit_discovered_pbi2_layer_l_peaks,
+)
 
 __all__ = [
     "DETECTOR_VALID_MASK_REVISION",
@@ -61,7 +65,9 @@ __all__ = [
     "OscGeometryImageConfiguration",
     "OscGeometryIndexingRun",
     "OscGeometrySeriesConfiguration",
+    "Pbi2LayerLPeakAdmission",
     "PeakIndexingPolicy",
+    "admit_discovered_pbi2_layer_l_peaks",
     "audit_frozen_marker_visibility",
     "audit_frozen_osc_geometry_reindexing",
     "build_osc_angle_frame",

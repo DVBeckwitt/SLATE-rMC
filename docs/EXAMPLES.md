@@ -475,7 +475,7 @@ separate timing/memory evidence:
 
 ```powershell
 uv run --frozen python scripts/fit_osc_geometry.py `
-  configs/bi2se3_osc_geometry_fit.yaml `
+  configs/bi2se3_osc_geometry_fit_model_limited.yaml `
   --fit-incidence-angle-delta `
   --fit-incidence-angle-trim `
   --freeze-parameter sample_normal_x_tilt_rad `
@@ -488,10 +488,27 @@ uv run --frozen python scripts/fit_osc_geometry.py `
 The manifest is the reusable boundary: each record declares an exact image ID, OSC path, and full
 commanded-angle tuple. A different layered-hexagonal material uses the same command with its own
 simulation configuration and image records. Unrelated materials or mounts are separate fit groups.
-The optional `qualification_profile` names a frozen data-specific acceptance profile. The tracked
-Bi2Se3 profile requires both `--heldout-integer-l 4 11` and `--benchmark`, and it fails closed if the
-initial indexed-manifest hash changes. A generic manifest omits the profile: the command then reports
-numerical run completion without applying or claiming the Bi2Se3 thresholds.
+The current trim-enabled workflow deliberately uses the separate model-limited manifest above. It
+retains the complete selection revision in its result but does not claim the immutable historical
+qualification. The optional `qualification_profile` names a frozen data-specific acceptance
+profile. The tracked `bi2se3-osc-5-10-15.v1` profile predates the trim extension, requires the
+original no-trim common-delta parameterization plus `--heldout-integer-l 4 11` and `--benchmark`,
+and fails closed if the full indexed-manifest hash changes:
+
+```powershell
+uv run --frozen python scripts/fit_osc_geometry.py `
+  configs/bi2se3_osc_geometry_fit.yaml `
+  --fit-incidence-angle-delta `
+  --freeze-parameter sample_normal_x_tilt_rad `
+  --heldout-integer-l 4 11 `
+  --benchmark `
+  --destination C:\path\outside\the\repository\position\qualified-v1.json `
+  --json
+```
+
+A generic manifest omits the profile: the command reports numerical run completion without
+applying or claiming the frozen Bi2Se3 thresholds. Counts or reflection names never substitute for
+the full selection revision because moved same-key detector lobes are scientifically distinct.
 The primary fit always uses every frozen key; `--heldout-integer-l` requests a separate training
 refit and held-out prediction report without changing that primary data set.
 Every geometry coordinate is active by default. Repeat `--freeze-parameter NAME` to hold any
@@ -503,22 +520,23 @@ to use calibrated detector tilts without refitting them:
 
 ```powershell
 uv run --frozen python scripts/fit_osc_geometry.py `
-  configs/bi2se3_osc_geometry_fit.yaml `
+  configs/bi2se3_osc_geometry_fit_model_limited.yaml `
   --freeze-parameter detector_column_tilt_rad `
   --freeze-parameter detector_row_tilt_rad `
   --json
 ```
 
 The JSON fit record lists canonical `fitted_parameter_names`, `fixed_parameter_names`, combined
-`jacobian_parameter_names`, the common delta, two canonical Helmert trim contrasts, three
-zero-sum per-image trims, and every commanded/effective incidence pair. The common delta controls
-the mean incidence correction; the bounded trims describe only deviations around that mean. Beam
+`jacobian_parameter_names`, the common delta, and every commanded/effective incidence pair. The
+current model-limited workflow also lists two canonical Helmert trim contrasts and three zero-sum
+per-image trims; the immutable qualified v1 record has an empty trim pack. The common delta controls
+the mean incidence correction and any bounded trims describe only deviations around that mean. Beam
 center and lattice constants are not switchable coordinates inside the position fit. A separate
 near-CIF lattice-sensitivity stage may follow an accepted position artifact:
 
 ```powershell
 uv run --frozen python scripts/fit_osc_lattice.py `
-  --manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --manifest configs/bi2se3_osc_geometry_fit_model_limited.yaml `
   --position C:\path\outside\the\repository\position\geometry.json `
   --destination C:\path\outside\the\repository\lattice.json
 ```
@@ -673,7 +691,7 @@ example:
 ```powershell
 uv run --frozen python scripts/compose_fixed_experiment.py `
   --position C:\external\bi2se3-fit\position.json `
-  --geometry-manifest configs/bi2se3_osc_geometry_fit.yaml `
+  --geometry-manifest configs/bi2se3_osc_geometry_fit_model_limited.yaml `
   --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
   --mosaic-state examples/bi2se3/experiment/fixed_mosaic.json `
   --lattice C:\external\bi2se3-fit\lattice.json `
@@ -873,6 +891,27 @@ normalization, and it checks both one cell and two coherent cells so the closing
 `FINITE_TOTAL` measure are exercised. The ideal fixtures do not replace the separately relaxed
 native CIFs.
 
+## Current Bi2X3 optional-polytype null regression
+
+The rational-landmark path is additive and material-declared. Bi2Se3 and Bi2Te3 do not invoke the
+PbI2 catalogue or fixed-parent population compiler; their current workflows remain on the exact
+integer-L path with deterministic 3R stacking and `epsilon=0`:
+
+```powershell
+uv run --frozen python scripts/run_layered_fit.py `
+  configs/fit_workflows/bi2se3.toml `
+  --output-directory C:\path\outside\the\repository\bi2se3-current
+
+uv run --frozen python scripts/run_layered_fit.py `
+  configs/fit_workflows/bi2te3.toml `
+  --output-directory C:\path\outside\the\repository\bi2te3-current
+```
+
+The integration proof compares pre-extension and current integer roots, geometry, joint structure
+parameters, dataset scales, profile arrays, and rendered figures. It establishes that the optional
+path was not activated and the accepted outputs are unchanged within numerical replay tolerance;
+it does not claim that a material-neutral rational-peak search was run on Bi2X3.
+
 ## PbI2 optional-polytype geometry validation
 
 The geometry fitter also accepts a frozen exact-rational landmark pack. The compact synthetic test
@@ -889,6 +928,17 @@ This is not a raw-OSC example. Fractional peaks must already be detected, indexe
 centroid-qualified; missing optional peaks add no observations. The test fits no population or
 intensity, uses one detector calibration, and does not treat the relaxed native 4H/6H metrics as
 the common 2H layer coordinate.
+
+For measured data, run the existing catalogue-free cake discovery first and freeze its native
+centroids. Then call `admit_discovered_pbi2_layer_l_peaks(...)` with the corrected PbI2 geometry,
+complete five-parent catalogue, and matching angle frame. It returns either a complete
+`Pbi2LayerLPeakAdmission` or `None`; the former retains the hashed discovery, full catalogue, and
+exact source-row join, and its `observations` member is the only optional pack passed to
+`merge_layer_l_marker_observations(...)`. The latter leaves the integer baseline object unchanged.
+The admission pass uses no predicted structure-factor or parent-population intensity; measured
+discovery significance is required. It rejects ambiguous, uncertain, stale-geometry,
+incomplete-root, competing-owner, restricted-parent, and non-PbI2 inputs. This is a fitter-ready
+API preflight, not a measured PbI2 staged CLI.
 
 ## PbI2 optional-polytype mosaic validation
 
