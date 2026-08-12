@@ -1,5 +1,5 @@
 {
-  "file_count": 343,
+  "file_count": 341,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -103,8 +103,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "c8604d2f01ea5131587c44061ddce72fbcc2c9730d5444dc35a247817e98766c",
-      "size_bytes": 20690
+      "sha256": "aa93f2b8c2a8b5daec0156c24b77e46e69ada1e727bd1f1b30c0c40c55120ef8",
+      "size_bytes": 20904
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -118,8 +118,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "2a45f96983e63ca1af2bd805eddc1bdf25a484e9cf2babb2d8136a41b3931804",
-      "size_bytes": 75190
+      "sha256": "e00e19363c3c0f9da2f5341ef76bd0dc77b90485a8f20f97aa2df96dfc61d425",
+      "size_bytes": 75463
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -195,21 +195,6 @@
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
       "sha256": "8e6d5cf688cf160338735b64633e1eee7da8fb7a1202e63564f15cc4247d3d5b",
       "size_bytes": 20699
-    },
-    {
-      "path": "docs/general-cif-pipeline/IMPLEMENTATION.md",
-      "sha256": "69e7fdffd6850715f06a06c12de2eea65c78fab454d0f0ec2a3b9efa038ea6ef",
-      "size_bytes": 2499
-    },
-    {
-      "path": "docs/general-cif-pipeline/PROGRESS.md",
-      "sha256": "08101dd19ed69f32b95da3cd2041b27a7a410b107cd1de8e270f961bee27a25b",
-      "size_bytes": 1324
-    },
-    {
-      "path": "docs/general-cif-pipeline/RESEARCH.md",
-      "sha256": "224b78dbca75e0212c5ad374ec211b32e87cea996bc4207de3254defafa4a517",
-      "size_bytes": 1932
     },
     {
       "path": "examples/DATA_PROVENANCE.md",
@@ -948,8 +933,8 @@
     },
     {
       "path": "src/rasim_next/fitting/matched_regions.py",
-      "sha256": "9a0a9effbef203e6524567dcdb4e53446c92daca291110e7ac343876c5d1c6ae",
-      "size_bytes": 42138
+      "sha256": "93bf13023d5df213421dc9e10bfd47fbb98bec9873bd085d61a26b0dffbffed4",
+      "size_bytes": 42139
     },
     {
       "path": "src/rasim_next/fitting/mosaic.py",
@@ -983,8 +968,8 @@
     },
     {
       "path": "src/rasim_next/fitting/stacking_intensity.py",
-      "sha256": "eead20a59f1d0b9ec3964adf5cba08b2e7dae17493143a7071883f9e0ca8ea30",
-      "size_bytes": 62643
+      "sha256": "6704d0e056328fd18618856404b4cfcf6d56a886e1efea620839db920f41c323",
+      "size_bytes": 62396
     },
     {
       "path": "src/rasim_next/fitting/workflow.py",
@@ -1053,8 +1038,8 @@
     },
     {
       "path": "src/rasim_next/materials/crystal.py",
-      "sha256": "af5bf43906e0f0dfd027936780ecbb1a6e7d95fe33658420d3fe10d7562f69f6",
-      "size_bytes": 21741
+      "sha256": "cc6ecd4f31314cf92c06c8ded7f56748e258ccc9cdf270c8ba3a160af36dd47a",
+      "size_bytes": 22393
     },
     {
       "path": "src/rasim_next/materials/optics.py",
@@ -1118,8 +1103,8 @@
     },
     {
       "path": "src/rasim_next/ordered/bi2se3_proof.py",
-      "sha256": "1cd46e3081fef5dce6d1a111dbb36b8fd8a6b911da83649d0729ee34f8a52ccb",
-      "size_bytes": 9580
+      "sha256": "a5b4153fb2991e276bb3882717dbdd9e23dbf1c5b1e18131fc616dec55b2a583",
+      "size_bytes": 9625
     },
     {
       "path": "src/rasim_next/ordered/finite_stack.py",
@@ -1128,8 +1113,8 @@
     },
     {
       "path": "src/rasim_next/ordered/motifs.py",
-      "sha256": "f95178ba0fb4a186c59130f66696ccf4caf8aeb5555086c64b355bfa06ef85e5",
-      "size_bytes": 30631
+      "sha256": "237449d99cc05d82266ccc67149b37ff309bd07a6724c2dab9a2c81c4b68f903",
+      "size_bytes": 30676
     },
     {
       "path": "src/rasim_next/ordered/proof.py",
@@ -1153,13 +1138,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
-      "sha256": "ea91cf7cf82b9b4840d0a4f2632f73f4526bc4883f22bf91fb71b33f7dab7371",
-      "size_bytes": 36883
+      "sha256": "7e96b6c345bfbbeb568fdac1d5e9d4e1d876c6c822ff47058e5191ef6e8a3783",
+      "size_bytes": 37054
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
-      "sha256": "2fc32cf35dadf753e91026da04288f037aa6151ce0b1be18c02d5caf5951bdec",
-      "size_bytes": 109139
+      "sha256": "df6b6bb79a5c761cf9e07f3a281e70b6bd06a01cb4dfad97a429c0c8a74e1ee4",
+      "size_bytes": 109183
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
@@ -1178,8 +1163,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "58548f73774670dcf9b21e7563f5bab168d61ee225388acf1483d09fcfaa1e30",
-      "size_bytes": 161681
+      "sha256": "9759b36d5eda6691ccd28ba4784780b2f5f6f79c40b547d0cf9b44afaad2d940",
+      "size_bytes": 124393
+    },
+    {
+      "path": "src/rasim_next/pipeline/source_averaged_structure.py",
+      "sha256": "9f754a6761983558ea0e25c3f686446b11e379198578e425563dd7beca4bd8ad",
+      "size_bytes": 35304
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1623,8 +1613,8 @@
     },
     {
       "path": "tests/test_fitting.py",
-      "sha256": "3860af041e786c06c7769a5b4c0cf85fb749c813261d89f345fb0edecd54ba7d",
-      "size_bytes": 203616
+      "sha256": "1002ee8432c4c0f1f8bd72fcdb0f17c535840c0f17a495e12c9e1cf1af32332e",
+      "size_bytes": 203669
     },
     {
       "path": "tests/test_fixed_experiment.py",
@@ -1643,8 +1633,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "e8c5f0316b641a074ecc92f715a418c8bc259b9087fbb57e357ce68383641ef9",
-      "size_bytes": 302065
+      "sha256": "649d6ffbeb5d9ff97e8c075b1c674aff7484ae55214f5b24740f54e66e1a40e1",
+      "size_bytes": 300882
     },
     {
       "path": "tests/test_layered_fit_workflow.py",

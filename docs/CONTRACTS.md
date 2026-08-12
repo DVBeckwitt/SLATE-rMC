@@ -958,6 +958,10 @@ explicit quintuple-layer termination, and the PbI2 provider retains five fixed n
 templates at `epsilon=0.001`. Provider selection is an explicit model declaration, never an
 element- or material-name dispatch.
 
+`read_crystal(...)` hashes the same source bytes it parses and retains that digest on the resolved
+immutable crystal. Providers that accept an explicit source digest validate it against this
+in-memory lineage; candidate evaluation never rereads a mutable filesystem path.
+
 `AffineCifSiteBasis` changes only declared expanded-CIF fractional coordinates, occupancies, and
 isotropic `U`. Cell, species, charge, site order, and topology are fixed. Coordinates are not
 wrapped, occupancies must remain in `[0,1]`, `Uiso` must remain nonnegative, and common-origin,

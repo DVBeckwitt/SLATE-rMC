@@ -56,6 +56,7 @@ from rasim_next.pipeline.bragg_space import (
     RevisionedStructureStrengthModel,
 )
 from rasim_next.pipeline.configured_simulation import (
+    SimulationConfiguration,
     build_configured_geometry_inputs,
     build_configured_simulation_inputs,
     build_nominal_ewald_context,
@@ -68,6 +69,8 @@ from rasim_next.pipeline.configured_simulation import (
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
     SourceAveragedDetectorEwaldMeasure,
+)
+from rasim_next.pipeline.source_averaged_structure import (
     compile_source_averaged_detector_structure_response,
 )
 from rasim_next.reflectivity import CompiledParrattStitch, ParrattStitchStack
@@ -88,6 +91,39 @@ def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> o
             source=replace(config.source, sample_count=sample_count),
             instrument=replace(config.instrument, axis_rotations=rotations),
         )
+    )
+
+
+def _generic_pbi2_config(*, include_detector_visible_m0: bool) -> SimulationConfiguration:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    return replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="PbI2",
+        ),
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        structure_factor=replace(
+            base.structure_factor,
+            model_id="cif_conventional_cell_finite_repeat.v1",
+            layers=None,
+            repeats=5,
+            normalization="FINITE_TOTAL",
+            shared_disorder_epsilon=0.0,
+            unknown_u_iso_A2=0.0,
+        ),
+        bragg=replace(
+            base.bragg,
+            include_detector_visible_m0=include_detector_visible_m0,
+        ),
     )
 
 
@@ -1702,6 +1738,7 @@ def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> N
 
     class _ComplexStrength:
         reciprocal_basis_Ainv = averaged.strength_model.reciprocal_basis_Ainv
+        structure_model_revision = "f" * 64
 
         @staticmethod
         def evaluate_hkl(**kwargs: object) -> np.ndarray:
@@ -1886,33 +1923,14 @@ def test_configured_generic_cif_detector_matches_direct_all_root_sum(
 
 
 def test_pbi2_parent_mixture_uses_shared_sparse_detector_including_regular_00l() -> None:
-    root = Path(__file__).resolve().parents[1]
     source_cif_sha256 = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"
-    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    base_config = _generic_pbi2_config(include_detector_visible_m0=True)
     config = replace(
-        base,
-        material=replace(
-            base.material,
-            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
-            phase_id="PbI2",
-        ),
-        source=replace(
-            base.source,
-            spatial_sigma_m=(0.0, 0.0),
-            divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
-        ),
+        base_config,
         structure_factor=replace(
-            base.structure_factor,
-            model_id="cif_conventional_cell_finite_repeat.v1",
-            layers=None,
-            repeats=5,
+            base_config.structure_factor,
             normalization="FINITE_PER_LAYER",
-            shared_disorder_epsilon=0.0,
-            unknown_u_iso_A2=0.0,
         ),
-        bragg=replace(base.bragg, include_detector_visible_m0=True),
     )
     inputs = build_configured_simulation_inputs(config)
     reference = Pbi2ParentMixtureStrength(
@@ -2069,33 +2087,7 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
     )
     from rasim_next.selection import build_osc_angle_frame
 
-    root = Path(__file__).resolve().parents[1]
-    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    config = replace(
-        base,
-        material=replace(
-            base.material,
-            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
-            phase_id="PbI2",
-        ),
-        source=replace(
-            base.source,
-            spatial_sigma_m=(0.0, 0.0),
-            divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
-        ),
-        structure_factor=replace(
-            base.structure_factor,
-            model_id="cif_conventional_cell_finite_repeat.v1",
-            layers=None,
-            repeats=5,
-            normalization="FINITE_TOTAL",
-            shared_disorder_epsilon=0.0,
-            unknown_u_iso_A2=0.0,
-        ),
-        bragg=replace(base.bragg, include_detector_visible_m0=True),
-    )
+    config = _generic_pbi2_config(include_detector_visible_m0=True)
     inputs = build_configured_simulation_inputs(config)
     detector = build_source_averaged_structure_detector(inputs)
     nominal = build_nominal_ewald_context(inputs)
@@ -2260,33 +2252,7 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
 
 
 def test_generic_cif_structure_uses_unchanged_matched_region_fitter() -> None:
-    root = Path(__file__).resolve().parents[1]
-    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    config = replace(
-        base,
-        material=replace(
-            base.material,
-            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
-            phase_id="PbI2",
-        ),
-        source=replace(
-            base.source,
-            spatial_sigma_m=(0.0, 0.0),
-            divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
-        ),
-        structure_factor=replace(
-            base.structure_factor,
-            model_id="cif_conventional_cell_finite_repeat.v1",
-            layers=None,
-            repeats=5,
-            normalization="FINITE_TOTAL",
-            shared_disorder_epsilon=0.0,
-            unknown_u_iso_A2=0.0,
-        ),
-        bragg=replace(base.bragg, include_detector_visible_m0=True),
-    )
+    config = _generic_pbi2_config(include_detector_visible_m0=True)
     inputs = build_configured_simulation_inputs(config)
     detector = build_source_averaged_structure_detector(inputs)
     nominal = build_nominal_ewald_context(inputs)

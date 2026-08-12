@@ -51,6 +51,15 @@ class RevisionedStructureStrengthModel(BasisBoundStrengthModel, Protocol):
     @property
     def structure_model_revision(self) -> str: ...
 
+    def evaluate_hkl(
+        self,
+        *,
+        h: ArrayLike,
+        k: ArrayLike,
+        L: ArrayLike,
+        k_norm_Ainv: ArrayLike,
+    ) -> FloatArray: ...
+
 
 class StructureStrengthParameterization(Protocol):
     """Bind one explicit parameter vector to a basis-bound strength model."""

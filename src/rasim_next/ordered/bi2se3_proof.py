@@ -142,6 +142,7 @@ def _reconstructed_crystal(
         sites=tuple(sites),
         source_path=crystal.source_path,
         provenance="one Se1-centered QL plus exact R-centering translations",
+        source_sha256=crystal.source_sha256,
     )
 
 

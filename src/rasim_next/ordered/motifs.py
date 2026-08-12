@@ -411,6 +411,7 @@ def _motif_crystal(
         sites=sites,
         source_path=crystal.source_path,
         provenance=f"registry-free motif extracted from {crystal.provenance}",
+        source_sha256=crystal.source_sha256,
     )
 
 

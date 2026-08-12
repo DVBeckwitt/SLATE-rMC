@@ -58,6 +58,9 @@ contributing rod/orientation branches on the active detector panel.
   unchanged across candidate structure rebinding. The stitched
   field owns all `(0,0)` momentum transfer; nonzero rods keep the regular path. Forward Monte Carlo
   fails closed for this optional field until it has an equivalent implementation.
+- `pipeline/source_averaged_structure.py`: sparse selected-coordinate source averaging with fixed
+  detector transfer and revision-bearing candidate structure strength for mosaic and ordered-
+  intensity fitting.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   quantitative pixel integration or display-only native-center density sampling. Its geometry-only
   input/context builders stop before structure strength or mosaic construction.
@@ -267,7 +270,7 @@ explicit CIF/model declaration
 
 `materials.crystal` owns the resolved-CIF revision and affine expanded-site basis.
 `pipeline.bragg_space` owns the generic conventional-cell repeat and specialized Bi2X3 providers.
-`pipeline.source_averaged_detector` owns the shared sparse response and fitting detector;
+`pipeline.source_averaged_structure` owns the shared sparse response and fitting detector;
 `fitting.matched_regions` owns the parameterized region model and fail-closed identifiability gate.
 PbI2's five fixed near-parent provider lives beside its existing stacking compiler and implements
 the same detector-facing contract. No module dispatches on elements or a material name.

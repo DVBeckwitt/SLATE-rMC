@@ -61,10 +61,8 @@ from rasim_next.pipeline.continuous_detector import (
     evaluate_detector_coordinates_geometry,
     map_ewald_geometry_to_detector,
 )
-from rasim_next.pipeline.source_averaged_detector import (
-    SourceAveragedDetectorEwaldMeasure,
-    SourceAveragedStructureDetector,
-)
+from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_structure import SourceAveragedStructureDetector
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.sampling.source import sample_gaussian_source_rays
 from rasim_next.stacking import Parent

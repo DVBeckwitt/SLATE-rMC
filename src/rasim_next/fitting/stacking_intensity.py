@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from math import isfinite, pi, sqrt
@@ -446,11 +445,7 @@ def _pbi2_fixed_parent_model_revision(
     """Bind the five fixed parents to resolved motif and finite-stack physics."""
 
     source_revision = _sha256_revision(source_cif_sha256, "source_cif_sha256")
-    try:
-        actual_source_revision = hashlib.sha256(crystal.source_path.read_bytes()).hexdigest()
-    except OSError as error:
-        raise ValueError("PbI2 source CIF must remain readable for lineage validation") from error
-    if actual_source_revision != source_revision:
+    if crystal.source_sha256 != source_revision:
         raise ValueError("source_cif_sha256 does not identify the supplied PbI2 crystal")
     layer_count = _positive_integer(layers, "layers")
     if len(extract_pbi2_motifs(crystal)) != 1:

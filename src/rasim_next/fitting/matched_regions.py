@@ -15,7 +15,7 @@ from scipy.optimize import least_squares, nnls
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.measurement.continuous_regions import ContinuousRegionQuadrature
 from rasim_next.pipeline.bragg_space import StructureStrengthParameterization
-from rasim_next.pipeline.source_averaged_detector import (
+from rasim_next.pipeline.source_averaged_structure import (
     SourceAveragedDetectorStructureResponse,
 )
 

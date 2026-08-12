@@ -5043,6 +5043,7 @@ def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m
         phase_id="pbi2-2h",
         expected_sha256=crystal_revision,
     )
+    assert crystal.source_sha256 == crystal_revision
     reciprocal = ReciprocalLattice.from_crystal(crystal)
     signed_hk = np.asarray(
         (

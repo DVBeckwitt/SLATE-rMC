@@ -66,6 +66,7 @@ class CrystalStructure:
     sites: tuple[CrystalSite, ...]
     source_path: Path
     provenance: str
+    source_sha256: str | None = None
 
     def __post_init__(self) -> None:
         basis = np.array(self.direct_basis_A, dtype=np.float64, copy=True, order="C")
@@ -80,10 +81,19 @@ class CrystalStructure:
             raise ValueError("cell volume must be finite and positive")
         if not self.phase_id or not self.spacegroup_hm or not self.sites or not self.provenance:
             raise ValueError("phase, space group, sites, and provenance are required")
+        source_sha256 = self.source_sha256
+        if source_sha256 is not None and (
+            not isinstance(source_sha256, str)
+            or len(source_sha256) != 64
+            or source_sha256 != source_sha256.lower()
+            or any(character not in "0123456789abcdef" for character in source_sha256)
+        ):
+            raise ValueError("source_sha256 must be one lowercase SHA-256 digest")
         basis.setflags(write=False)
         object.__setattr__(self, "direct_basis_A", basis)
         object.__setattr__(self, "sites", tuple(self.sites))
         object.__setattr__(self, "source_path", Path(self.source_path))
+        object.__setattr__(self, "source_sha256", source_sha256)
 
 
 def crystal_structure_revision(crystal: CrystalStructure) -> str:
@@ -317,6 +327,7 @@ class AffineCifSiteBasis:
                 f"{self.reference_crystal.provenance}; affine expanded-CIF site basis "
                 f"{self.basis_revision}"
             ),
+            source_sha256=self.reference_crystal.source_sha256,
         )
 
 
@@ -346,6 +357,7 @@ def crystal_with_direct_basis(
         sites=crystal.sites,
         source_path=crystal.source_path,
         provenance=f"{crystal.provenance}; {provenance.strip()}",
+        source_sha256=crystal.source_sha256,
     )
 
 
@@ -411,6 +423,7 @@ def read_crystal(
     source_path = Path(path)
     try:
         source_bytes = source_path.read_bytes()
+        actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
         if expected_sha256 is not None:
             if (
                 not isinstance(expected_sha256, str)
@@ -418,7 +431,6 @@ def read_crystal(
                 or any(character not in "0123456789abcdef" for character in expected_sha256)
             ):
                 raise ValueError("expected_sha256 must be one lowercase SHA-256 digest")
-            actual_sha256 = hashlib.sha256(source_bytes).hexdigest()
             if actual_sha256 != expected_sha256:
                 raise ValueError("CIF content changed after its configuration revision was frozen")
         document = gemmi.cif.read_string(source_bytes.decode("utf-8"))
@@ -501,4 +513,5 @@ def read_crystal(
             f"Gemmi {gemmi.__version__}; symmetry expanded once; "
             "unknown isotropic displacement preserved as None"
         ),
+        source_sha256=actual_sha256,
     )
