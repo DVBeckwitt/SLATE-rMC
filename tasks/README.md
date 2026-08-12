@@ -3,9 +3,9 @@
 `tasks/index.yaml` is the authoritative status registry.
 
 T00--T06 and the original four-worktree run are historical proof phases. The contract-v12
-continuous reciprocal and detector runtime on current `main` is the accepted successor to the
-sampled T07 design. The old candidate, selector, event, hit, depositor, raster, and sphere-painter
-APIs have been removed and must not be recreated from historical task text.
+continuous reciprocal and detector observable remains accepted; contract v13 adds the shared
+sparse general-CIF fitting core. The old candidate, selector, event, hit, depositor, raster, and
+sphere-painter APIs have been removed and must not be recreated from historical task text.
 
 T08 is complete under the position-free measured-selection contract recorded in
 `tasks/08_selection_indexing.md`. T18 is the accepted detector-native, multi-incidence geometry fit;
@@ -17,6 +17,8 @@ recovery remains unclaimed. T09--T11 and T14--T15 remain design notes rather tha
 assignments. The broader mosaic qualification matrix also remains proposed. Each future stage
 requires a fresh plan against the current continuous contracts and must use physical rods, analytic
 Ewald roots, callable detector-coordinate density, and explicitly declared observation measures.
+T26 preserves the T18 null path and adds an optional, explicitly provenance-bound native center and
+panel-normal distance refinement; pitch remains calibration-owned and fixed.
 
 T19 is the accepted fluid full-native detector viewer. It adds prefix-stable progressive execution,
 explicit CPU/CUDA forward Monte Carlo, causal geometry invalidation, and explicit OpenGL or
@@ -28,11 +30,13 @@ fit while an absent optional pack leaves the legacy integer observations untouch
 fractional-peak discovery/centroid qualification and per-specimen detector calibration remain
 separate work.
 
-T23 is the accepted synthetic profile-response mosaic slice over those frozen rational landmarks.
+T23 is the accepted historical synthetic profile-response mosaic slice over those frozen rational
+landmarks.
 It proves that admitted half-/third-order profiles can add nuisance-projected information about one
 shared mosaic distribution while missing sites add no profile and exact overlaps remain one
-physical residual. It does not supply the missing PbI2 detector/source/stacking response, measured
-profiles, or a simultaneous mosaic/population fit.
+physical residual. Contract v13 supersedes its missing numerical-response limitation with a shared
+sparse detector plus the same five fixed parents; measured profile admission/backgrounds and a
+simultaneous mosaic/population fit remain absent.
 
 T24 is the accepted synthetic intrinsic-strength population slice. It collapses detector-root
 duplicates, sums every unique signed rod once per exact rational structural landmark, and fits one

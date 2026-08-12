@@ -25,6 +25,24 @@ The authoritative Bi2Se3 input is
 detector pose and both detector tilts, mosaic, finite 2H structure model, numerical backend, and
 which external figures are rendered.
 
+For fitting at selected continuous detector coordinates, contract v13 also accepts a general
+layered CIF through `cif_conventional_cell_finite_repeat.v1` and the shared
+`build_source_averaged_structure_detector(...)` boundary. Bi2Se3, Bi2Te3, ordered generic CIFs,
+and the fixed five-parent PbI2 provider use the same sparse detector and rank-gated region fitter.
+The ordinary `run_configured_simulation.py` command below remains the optimized Bi2X3 full-image
+renderer; a CIF alone does not define observation regions, fit coordinates, background, mosaic, or
+stacking law. See `docs/EXAMPLES.md` for the shared API and limitations.
+
+Generic configured strength declaration:
+
+```yaml
+structure_factor:
+  model_id: cif_conventional_cell_finite_repeat.v1
+  repeats: 5
+  normalization: FINITE_TOTAL
+  unknown_u_iso_A2: 0.0
+```
+
 ```powershell
 uv run python scripts/run_configured_simulation.py configs/bi2se3_simulation.yaml
 ```

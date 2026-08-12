@@ -32,8 +32,9 @@ population/intensity fit are supplied here.
 The same test contains a separate synthetic mosaic response-bank proof. It converts the qualified
 integer/half/third landmarks to exact typed profile identities, omits unavailable peaks, keeps one
 profile at exact overlaps, and recovers a shared planted mosaic distribution while profiling out
-population-weighted amplitudes. The fitted shapes are analytic: there is still no PbI2
-source-averaged detector response or measured mosaic-profile data in this example.
+population-weighted amplitudes. The fitted shapes are analytic and predate the contract-v13 sparse
+detector response. This example still contains no measured mosaic-profile observation/background
+data and is not a detector-folded fit.
 
 `stacking_truth.toml` remains a synthetic disorder input. Bi2Se3 is the main detector example, but
 it is not a sufficient material fixture for the PbI2 stacking model.

@@ -359,3 +359,20 @@ only at an unexplained later stage, or triggers an unrelated earlier failure.
 
 Only a minimal representative set belongs in permanent tests. Broad sweeps and one-control-per-test
 collections are external proof work and are removed after review.
+
+## Contract-v13 general-CIF controls
+
+- Swap native calibration column/row, translate distance along a non-panel-normal axis, or allow a
+  center/distance change without active calibration provenance.
+- Exchange generic `repeats` with Bi2X3 `layers`, omit an unknown-U policy, or add a nonzero generic
+  stacking epsilon.
+- Use reference strength to prune sparse terms, collapse source wavelengths/rows, change signed
+  rod identity, apply a candidate with another reciprocal basis, or accept complex/negative
+  strength.
+- Reuse stale response/parameterization revisions, omit parameter scales, cross dataset rows,
+  retain a scale-gauged direction, or accept deficient/over-conditioned sensitivity.
+- Treat hexagonal `family_m` as general-cell identity or merge noncoincident metric shells.
+
+Expected first detection is strict config validation, calibration provenance/rank, response basis
+and revision checks, strength validation, block ownership, parameterized-fit identifiability, or
+the public nonhexagonal indexing regression respectively.

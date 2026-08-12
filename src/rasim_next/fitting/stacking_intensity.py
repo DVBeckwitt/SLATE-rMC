@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from math import isfinite, sqrt
+from dataclasses import dataclass, field, replace
+from math import isfinite, pi, sqrt
 from operator import index
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import brentq
 
+from painted_ewald import Rod
+from painted_ewald.validation import reject_complex
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
     LayerNormalQBatch,
@@ -20,8 +23,8 @@ from rasim_next.core.contracts import (
 from rasim_next.fitting.geometry import LayerLMarkerDefinition, LayerLMarkerObservations
 from rasim_next.fitting.mosaic import MosaicReflectionGroupKey
 from rasim_next.fitting.pbi2_geometry import PBI2_IDEAL_PARENTS, Pbi2PolytypeLandmarkCatalogue
-from rasim_next.materials.crystal import CrystalStructure
-from rasim_next.ordered.motifs import pbi2_layer_amplitudes
+from rasim_next.materials.crystal import CrystalStructure, crystal_structure_revision
+from rasim_next.ordered.motifs import extract_pbi2_motifs, pbi2_layer_amplitudes
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.stacking.finite_intensity import finite_population_event_intensity
 from rasim_next.stacking.parent_models import RichEpsilonModel, StackingPopulation
@@ -435,6 +438,269 @@ def _parent_populations() -> tuple[StackingPopulation, ...]:
     )
 
 
+def _pbi2_fixed_parent_model_revision(
+    crystal: CrystalStructure,
+    source_cif_sha256: str,
+    layers: int,
+) -> str:
+    """Bind the five fixed parents to resolved motif and finite-stack physics."""
+
+    source_revision = _sha256_revision(source_cif_sha256, "source_cif_sha256")
+    try:
+        actual_source_revision = hashlib.sha256(crystal.source_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError("PbI2 source CIF must remain readable for lineage validation") from error
+    if actual_source_revision != source_revision:
+        raise ValueError("source_cif_sha256 does not identify the supplied PbI2 crystal")
+    layer_count = _positive_integer(layers, "layers")
+    if len(extract_pbi2_motifs(crystal)) != 1:
+        raise ValueError("five-parent PbI2 strength requires one trilayer motif per unit cell")
+    return canonical_revision_sha256(
+        ("model", "pbi2-five-parent-finite-profile.v2"),
+        ("source_cif_sha256", source_revision),
+        ("resolved_crystal_revision", crystal_structure_revision(crystal)),
+        ("layers", layer_count),
+        ("component_ids", STACKING_COMPONENT_IDS),
+        ("epsilon", _PBI2_EPSILON),
+        ("initial_population", "plus_only"),
+        ("normalization", EventIntensityNormalization.FINITE_PER_LAYER.value),
+        ("unknown_u_iso_A2", 0.0),
+        ("registry_phase_model", RegistryPhaseModel.FORWARD_H_PLUS_2K.value),
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Pbi2ParentMixtureStrength:
+    """Incoherent mixture of the existing five finite PbI2 parent providers.
+
+    This is a basis-bound strength provider for the shared sparse detector. It
+    does not turn the five fixed near-parent templates into a general stacking
+    transition law.
+    """
+
+    crystal: CrystalStructure
+    source_cif_sha256: str
+    layers: int
+    domain_fraction: FloatArray
+    reciprocal_basis_Ainv: FloatArray = field(init=False, repr=False)
+    fixed_parent_model_revision: str = field(init=False)
+    structure_model_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.crystal, CrystalStructure):
+            raise TypeError("crystal must be CrystalStructure")
+        layer_count = _positive_integer(self.layers, "layers")
+        fraction = _readonly_float(
+            self.domain_fraction,
+            (len(STACKING_COMPONENT_IDS),),
+            "domain_fraction",
+        )
+        if np.any(fraction < 0.0) or not np.isclose(
+            np.sum(fraction),
+            1.0,
+            rtol=0.0,
+            atol=64.0 * np.finfo(np.float64).eps,
+        ):
+            raise ValueError("domain_fraction must be a nonnegative unit simplex")
+        fixed_revision = _pbi2_fixed_parent_model_revision(
+            self.crystal,
+            self.source_cif_sha256,
+            layer_count,
+        )
+        basis = np.array(
+            ReciprocalLattice.from_crystal(self.crystal).basis_Ainv,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        basis.setflags(write=False)
+        revision = canonical_revision_sha256(
+            ("definition_id", "pbi2_parent_mixture_strength.v1"),
+            ("fixed_parent_model_revision", fixed_revision),
+            ("domain_fraction", fraction),
+        )
+        object.__setattr__(
+            self,
+            "source_cif_sha256",
+            _sha256_revision(
+                self.source_cif_sha256,
+                "source_cif_sha256",
+            ),
+        )
+        object.__setattr__(self, "layers", layer_count)
+        object.__setattr__(self, "domain_fraction", fraction)
+        object.__setattr__(self, "reciprocal_basis_Ainv", basis)
+        object.__setattr__(self, "fixed_parent_model_revision", fixed_revision)
+        object.__setattr__(self, "structure_model_revision", revision)
+
+    def evaluate_hkl(
+        self,
+        *,
+        h: ArrayLike,
+        k: ArrayLike,
+        L: ArrayLike,
+        k_norm_Ainv: ArrayLike,
+    ) -> FloatArray:
+        """Evaluate mixed signed rods, wavelengths, and exact layer coordinates."""
+
+        reject_complex(h, "h")
+        reject_complex(k, "k")
+        reject_complex(L, "L")
+        reject_complex(k_norm_Ainv, "k_norm_Ainv")
+        h_value, k_value, ell, k_norm = np.broadcast_arrays(
+            np.asarray(h),
+            np.asarray(k),
+            np.asarray(L, dtype=np.float64),
+            np.asarray(k_norm_Ainv, dtype=np.float64),
+        )
+        if (
+            np.any(~np.isfinite(h_value))
+            or np.any(~np.isfinite(k_value))
+            or np.any(~np.isfinite(ell))
+            or np.any(~np.isfinite(k_norm))
+            or np.any(k_norm <= 0.0)
+            or np.any(h_value != np.rint(h_value))
+            or np.any(k_value != np.rint(k_value))
+        ):
+            raise ValueError("h, k, L, and k_norm_Ainv must be finite valid rod queries")
+        bounds = np.iinfo(np.int32)
+        if np.any((h_value < bounds.min) | (h_value > bounds.max)) or np.any(
+            (k_value < bounds.min) | (k_value > bounds.max)
+        ):
+            raise ValueError("h and k must fit signed 32-bit integers")
+        if ell.size == 0:
+            return np.empty(ell.shape, dtype=np.float64)
+        response = compile_pbi2_stacking_profile_response(
+            self.crystal,
+            self.source_cif_sha256,
+            signed_hk=np.column_stack(
+                (
+                    h_value.ravel().astype(np.int32),
+                    k_value.ravel().astype(np.int32),
+                )
+            ),
+            l_coordinate=ell.ravel(),
+            wavelength_A=(2.0 * pi / k_norm).ravel(),
+            layers=self.layers,
+        )
+        if response.fixed_model_revision != self.fixed_parent_model_revision:
+            raise RuntimeError("PbI2 parent physics changed while evaluating a bound provider")
+        return np.asarray(
+            (response.component_response_A2 @ self.domain_fraction).reshape(ell.shape),
+            dtype=np.float64,
+        )
+
+    def evaluate_profile(
+        self,
+        *,
+        rod: Rod,
+        L: ArrayLike,
+        k_norm_Ainv: float,
+    ) -> FloatArray:
+        """Evaluate one signed physical rod over continuous layer coordinate."""
+
+        if not isinstance(rod, Rod):
+            raise TypeError("rod must be Rod")
+        ell = np.asarray(L)
+        return self.evaluate_hkl(
+            h=np.full(ell.shape, rod.h, dtype=np.int32),
+            k=np.full(ell.shape, rod.k, dtype=np.int32),
+            L=ell,
+            k_norm_Ainv=np.full(ell.shape, k_norm_Ainv, dtype=np.float64),
+        )
+
+    def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+        """Evaluate one exact Ewald intersection."""
+
+        return float(self.evaluate_profile(rod=rod, L=L, k_norm_Ainv=k_norm_Ainv))
+
+    def rebind_domain_fraction(self, domain_fraction: ArrayLike) -> Pbi2ParentMixtureStrength:
+        """Return the same fixed parent physics with a new incoherent simplex."""
+
+        return replace(self, domain_fraction=domain_fraction)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Pbi2ParentLogRatioParameterization:
+    """Gauge-free log-ratio coordinates for a declared PbI2 parent roster."""
+
+    reference_strength: Pbi2ParentMixtureStrength
+    active_component_ids: tuple[str, ...]
+    reference_component_id: str = "2H"
+    parameter_names: tuple[str, ...] = field(init=False)
+    parameter_units: tuple[str, ...] = field(init=False)
+    reference_parameters: FloatArray = field(init=False)
+    parameterization_revision: str = field(init=False)
+    _active_indices: tuple[int, ...] = field(init=False, repr=False)
+    _reference_active_index: int = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference_strength, Pbi2ParentMixtureStrength):
+            raise TypeError("reference_strength must be Pbi2ParentMixtureStrength")
+        active, component_indices, _ = _canonical_allowed_component_ids(self.active_component_ids)
+        if len(active) < 2 or self.reference_component_id not in active:
+            raise ValueError("active PbI2 roster requires at least two parents including reference")
+        fraction = self.reference_strength.domain_fraction
+        inactive_indices = tuple(
+            index for index in range(len(STACKING_COMPONENT_IDS)) if index not in component_indices
+        )
+        if np.any(fraction[np.asarray(component_indices)] <= 0.0) or (
+            inactive_indices and np.any(fraction[np.asarray(inactive_indices)] != 0.0)
+        ):
+            raise ValueError("reference fractions must be positive exactly on the active roster")
+        reference_active_index = active.index(self.reference_component_id)
+        reference_fraction = fraction[component_indices[reference_active_index]]
+        parameter_components = tuple(
+            component for component in active if component != self.reference_component_id
+        )
+        reference = np.asarray(
+            [
+                np.log(fraction[STACKING_COMPONENT_IDS.index(component)] / reference_fraction)
+                for component in parameter_components
+            ],
+            dtype=np.float64,
+        )
+        reference.setflags(write=False)
+        names = tuple(
+            f"log_fraction_ratio:{component}:{self.reference_component_id}"
+            for component in parameter_components
+        )
+        revision = canonical_revision_sha256(
+            ("definition_id", "pbi2_parent_log_ratio_parameterization.v1"),
+            (
+                "reference_structure_model_revision",
+                self.reference_strength.structure_model_revision,
+            ),
+            ("active_component_ids", active),
+            ("reference_component_id", self.reference_component_id),
+        )
+        object.__setattr__(self, "active_component_ids", active)
+        object.__setattr__(self, "parameter_names", names)
+        object.__setattr__(self, "parameter_units", ("1",) * len(names))
+        object.__setattr__(self, "reference_parameters", reference)
+        object.__setattr__(self, "parameterization_revision", revision)
+        object.__setattr__(self, "_active_indices", component_indices)
+        object.__setattr__(self, "_reference_active_index", reference_active_index)
+
+    def bind_strength(self, parameters: ArrayLike) -> Pbi2ParentMixtureStrength:
+        """Map additive log ratios to one exact nonnegative unit simplex."""
+
+        values = _readonly_float(
+            parameters,
+            (len(self.parameter_names),),
+            "parameters",
+        )
+        logits = np.empty(len(self.active_component_ids), dtype=np.float64)
+        logits[self._reference_active_index] = 0.0
+        logits[np.arange(logits.size) != self._reference_active_index] = values
+        logits -= np.max(logits)
+        active_fraction = np.exp(logits)
+        active_fraction /= np.sum(active_fraction)
+        fraction = np.zeros(len(STACKING_COMPONENT_IDS), dtype=np.float64)
+        fraction[np.asarray(self._active_indices)] = active_fraction
+        return self.reference_strength.rebind_domain_fraction(fraction)
+
+
 def compile_pbi2_stacking_profile_response(
     crystal: CrystalStructure,
     crystal_revision: str,
@@ -509,15 +775,10 @@ def compile_pbi2_stacking_profile_response(
     )
     if tuple(value.model_component_id for value in components) != STACKING_COMPONENT_IDS:
         raise RuntimeError("finite stacking components did not preserve canonical order")
-    fixed_model_revision = canonical_revision_sha256(
-        ("model", "pbi2-five-parent-finite-profile.v1"),
-        ("crystal_revision", crystal_revision),
-        ("layers", layer_count),
-        ("epsilon", _PBI2_EPSILON),
-        ("initial_population", "plus_only"),
-        ("normalization", EventIntensityNormalization.FINITE_PER_LAYER.value),
-        ("unknown_u_iso_A2", 0.0),
-        ("registry_phase_model", RegistryPhaseModel.FORWARD_H_PLUS_2K.value),
+    fixed_model_revision = _pbi2_fixed_parent_model_revision(
+        crystal,
+        crystal_revision,
+        layer_count,
     )
     return CompiledStackingResponse(
         component_response_A2=np.column_stack(
@@ -1196,6 +1457,8 @@ __all__ = [
     "CompiledLayerLStackingResponse",
     "CompiledStackingResponse",
     "LayerLStackingObservations",
+    "Pbi2ParentLogRatioParameterization",
+    "Pbi2ParentMixtureStrength",
     "StackingPopulationFitResult",
     "StackingPopulationIdentifiabilityError",
     "compile_pbi2_layer_l_stacking_response",

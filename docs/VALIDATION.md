@@ -10,7 +10,39 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## Current contract-v12 runtime
+## Current contract-v13 general-CIF fitting runtime
+
+Contract v13 adds one shared selected-coordinate fitting authority without changing the v12 full
+detector runtime below. Compact permanent proofs establish:
+
+| Proof | Acceptance |
+|---|---|
+| triclinic CIF atom/repeat enumeration, including mixed rods/wavelengths | `rtol=3e-13`, `atol=2e-18 A2` |
+| sparse two-state Bi2X3 detector against compiled evaluator, including regular `00L` | `rtol=4e-11`, `atol=3e-24 A2/px2` |
+| configured Bi2Se3, Bi2Te3, and PbI2 conventional-cell providers against direct all-root reduction | `rtol=3e-11` |
+| generic PbI2 mosaic synthetic recovery | objective `<1e-24`, rank 3, condition `<100` |
+| generic PbI2 affine-site matched-region recovery | parameter `atol=2e-8`, scale `rtol=2e-8`; scale gauge rejected |
+| Bi2Se3/Bi2Te3 same parameterized fitter | antisite `atol=2e-7`, scales `rtol=3e-8`, condition 1 |
+| fixed-parent PbI2 sparse-detector linearity and log-ratio recovery | parameter `atol=2e-8`, rank 1; `00L` parent invariance |
+| optional detector center/distance recovery | independent truth, rank 3; inactive serialization is legacy-exact and gauge failures reject |
+| nonhexagonal public integer-L indexing | same legacy `m` but distinct metric shells retain physical `(h,k)` identities |
+
+The generic strength and affine parameterization are `NO_ORACLE` relative to legacy and accepted by
+analytic/direct enumeration. The Bi2X3 sparse substitution is `MATCH`; active calibration is `NEW`.
+The PbI2 proofs are synthetic ordered/fixed-parent plumbing, not acceptance of the measured GD1
+mixed/disordered SF or 001 profile. The latter remains model-limited because observation transfer,
+beamstop/background, and free transition-law adequacy are not supplied by a CIF.
+
+The final contract-v13 run collected and passed all `407` tests in `544.618 s`; the only warnings
+were the retained small-grid CUDA under-utilization notices. An equivalent-work 250-source,
+85-rod, five-coordinate Bi2Se3 sparse benchmark compiled `6,067` retained terms in `15.7920 s`.
+After warmup, applying a candidate strength took median `0.243617 s` over seven runs and returned
+total density `2.6277546359241665e-9 A2/px2`. `tracemalloc`, started before configured input
+construction, recorded peak traced Python/NumPy memory `11,669,445` bytes; it excludes process RSS
+and native-library allocations. The focused multi-source sparse/optimized parity proof uses
+`rtol=4e-11`, `atol=3e-24 A2/px2`.
+
+## Contract-v12 detector-runtime baseline
 
 The production runtime is the continuous detector pushforward described in
 `CONTINUOUS_EWAL_COATING_STRATEGY.md`. The sampled mosaic/scattering-event
@@ -1083,11 +1115,12 @@ direction improves by `2.84624039x`.
 The focused test takes about `7.01 s`; live geometry/catalogue construction is `4.61 s`, while the
 two mosaic fits total `2.49 s`. A separate full-test `tracemalloc` run after imports peaked at
 `36,236,422` bytes (`34.5577 MiB`) and took `29.25 s`; this excludes process RSS and native-library
-allocations. This is not a detector-native PbI2 validation. Exact keys and upstream active-panel
+allocations. This historical T23 record is not a detector-native PbI2 validation. Exact keys and
+upstream active-panel
 qualification select the roster; detector coordinates set only the angular centers. The profile
-shapes are independent analytic responses. The repository does not yet fold PbI2
-transition/finite-stack strength, source, optics, mosaic, and detector integration into a common
-response. Measured PbI2 profiles, background/PSF/noise, parent-specific
+shapes are independent analytic responses. Contract v13 can fold the fixed five-parent PbI2
+strength through a common source/optics/mosaic/detector response, but this historical proof does
+not use that response. Measured PbI2 profiles, background/PSF/noise, parent-specific
 mosaics, the eventual separately calibrated specimens, relaxed 4H/6H metrics, and simultaneous
 mosaic/population recovery remain `NO_ORACLE`.
 
@@ -1147,7 +1180,8 @@ the two active `m=1`, branch-2 roots at `L=4/3` and preserves the measured coord
 exactly. Empty input, one missing visible root, competing peak owners, a midpoint ambiguity between
 `L=4/3` and `3/2`, a point inside the hard-distance but outside the Mahalanobis gate, a restricted
 parent catalogue, and a Bi2Se3 model all fail closed. The measured boundary remains an API-only
-preflight because no detector-native PbI2 staged runner exists.
+preflight because no accepted raw-observation/background recipe consumes the detector-native PbI2
+response.
 
 The additive null path was checked against the current detector-native Bi2X3 benchmarks. A dynamic
 pre-rational/current comparison gives identical beta tuples, root signs, branches, and no-root
@@ -1191,8 +1225,8 @@ The measured stages stop at their declared identifiability boundaries:
 |---|---|---|
 | catalogue-free discovery / rational positional evidence | `PARTIAL` | integer and third-order pairs are present; the calibration check is post-hoc rather than a blind fitted detector state |
 | complete geometry | `BLOCKED` | one fixed-incidence image gives data-Jacobian rank 5/9; the reduced fits either hit bounds with RMS/max `6.18/6.95 px` or require an unsupported `-6.72 deg` detector correction |
-| mosaic | `NO_ORACLE` | geometry is not accepted and no PbI2 transition/source/optics/mosaic/detector-bin response exists |
-| ordered structure factor | `NO_ORACLE` | the detector-native PbI2 observation/response boundary is absent |
+| mosaic | `NO_ORACLE` | geometry is not accepted and measured mask/background/source-resolution state is absent; the v13 fixed-parent sparse response does not supply those data |
+| ordered structure factor | `NO_ORACLE` | the shared numerical response exists, but an accepted measured detector-native observation/background boundary does not |
 | fixed-parent 2H/4H/6H population | `BLOCKED` | the two admitted structural rows have phase-contrast rank 0 for the blind all-five and 2H+6H rosters |
 | arbitrary stacking-transition parameters | `NO_ORACLE` | T24 fits five fixed `epsilon=0.001` parent responses, not a free transition law |
 
@@ -1201,8 +1235,8 @@ synthetic two-incidence geometry has rank 7/9, while three static incidences at 
 rank 9/9 and condition about `9.9e3`. A complete all-five population fit first becomes possible at
 five independent structural groups and requires a half-order group to distinguish 4H. The next
 measured experiment therefore needs three static images of the same specimen, a separately bound
-detector calibration, and the detector-native PbI2 profile-response bridge before mosaic,
-structure, populations, or transition probabilities can be reported.
+detector calibration, and a qualified detector-native observation/background recipe before
+mosaic, structure, populations, or transition probabilities can be reported.
 
 ## Historical one-state deterministic mosaic recovery
 

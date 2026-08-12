@@ -104,6 +104,105 @@ def test_fit_cli_persists_the_raw_position_artifact(
     assert json.loads(capsys.readouterr().out) == payload
 
 
+def test_fit_cli_forwards_optional_detector_calibration_pack(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_fit_cli()
+    calls: list[dict[str, object]] = []
+
+    def fake_fit(_manifest_path: object, **options: object) -> dict[str, object]:
+        calls.append(options)
+        return {
+            "qualification": {"requested": False, "accepted": False},
+            "run_completed": True,
+        }
+
+    monkeypatch.setattr(module, "fit_osc_geometry_series", fake_fit)
+    assert (
+        module.main(
+            [
+                "series.yaml",
+                "--fit-detector-center",
+                "--detector-center-half-span-px",
+                "6",
+                "--fit-detector-distance",
+                "--detector-distance-half-span-mm",
+                "2",
+                "--freeze-parameter",
+                "goniometer_pivot_yaw_offset_m",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["run_completed"] is True
+    assert calls[0]["fitted_detector_calibration_parameter_names"] == (
+        "detector_reference_column_offset_px",
+        "detector_reference_row_offset_px",
+        "detector_plane_normal_offset_m",
+    )
+    assert calls[0]["detector_center_half_span_px"] == 6.0
+    assert calls[0]["detector_distance_half_span_m"] == 0.002
+
+
+def test_inactive_detector_calibration_preserves_legacy_fit_payload() -> None:
+    module = _load_fit_cli()
+    result = SimpleNamespace(
+        success=True,
+        message="done",
+        parameterization_id="legacy",
+        fitted_parameter_names=("geometry",),
+        fixed_parameter_names=(),
+        fitted_detector_calibration_parameter_names=(),
+        fixed_detector_calibration_parameter_names=module.DETECTOR_CALIBRATION_PARAMETER_NAMES,
+        jacobian_parameter_names=("geometry",),
+        corrections=module.SharedGeometryCorrections.zero(),
+        detector_calibration_corrections=module.DetectorCalibrationCorrections.zero(),
+        incidence_angle_delta_rad=0.0,
+        incidence_angle_delta_fitted=False,
+        incidence_angle_trim_fitted=False,
+        incidence_angle_trim_contrast_rad=np.empty(0),
+        image_ids=("one",),
+        incidence_angle_trim_by_image_id_rad=np.zeros(1),
+        incidence_angle_trim_prior_sigma_rad=None,
+        incidence_angle_trim_contrast_half_span_rad=None,
+        jacobian_rank=1,
+        jacobian_condition=1.0,
+        posterior_jacobian_rank=1,
+        posterior_jacobian_condition=1.0,
+        scaled_jacobian_singular_values=np.ones(1),
+        scaled_jacobian_weakest_direction=np.ones(1),
+        active_bounds=np.zeros(1, dtype=np.bool_),
+        training_site_rms_px=0.0,
+        training_site_max_px=0.0,
+        training_chord_angle_rms_rad=0.0,
+        per_image=(),
+        model_evaluation_count=1,
+        optimizer_function_evaluation_count=1,
+        optimizer_jacobian_evaluation_count=1,
+    )
+
+    payload = module.serialize_geometry_fit_result(result)
+
+    assert "detector_calibration_corrections" not in payload
+    assert "fitted_detector_calibration_parameter_names" not in payload
+
+    result.detector_calibration_corrections = module.DetectorCalibrationCorrections(
+        detector_reference_column_offset_px=1.25,
+        detector_reference_row_offset_px=-0.75,
+        detector_plane_normal_offset_m=2.0e-4,
+    )
+    calibrated_payload = module.serialize_geometry_fit_result(result)
+
+    assert calibrated_payload["detector_calibration_corrections"] == {
+        "detector_reference_column_offset_px": 1.25,
+        "detector_reference_row_offset_px": -0.75,
+        "detector_plane_normal_offset_m": 2.0e-4,
+    }
+    assert calibrated_payload["fitted_detector_calibration_parameter_names"] == ()
+
+
 def test_bi2se3_qualification_requires_its_frozen_no_trim_parameterization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

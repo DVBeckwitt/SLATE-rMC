@@ -251,3 +251,30 @@ fault-free R-centered parent is explicit CPU/CUDA finite-stack state, not a fitt
 If the optional lattice stage accepts a changed basis, every lattice-dependent material,
 reciprocal, rod, optical, and detector object is rebuilt before downstream fitting; otherwise the
 CIF basis is retained exactly.
+
+## General-CIF sparse fitting core
+
+Contract v13 inserts one material-neutral strength seam before detector fitting:
+
+```text
+explicit CIF/model declaration
+  -> reciprocal-basis-bound strength provider
+  -> shared source/optics/mosaic/detector transfer
+  -> mosaic branch: rebind mosaic -> candidate profile bank -> unchanged mosaic fitter
+  -> structure branch: frozen sparse response x candidate strength
+       -> exact region integration -> unchanged matched-region fitter
+```
+
+`materials.crystal` owns the resolved-CIF revision and affine expanded-site basis.
+`pipeline.bragg_space` owns the generic conventional-cell repeat and specialized Bi2X3 providers.
+`pipeline.source_averaged_detector` owns the shared sparse response and fitting detector;
+`fitting.matched_regions` owns the parameterized region model and fail-closed identifiability gate.
+PbI2's five fixed near-parent provider lives beside its existing stacking compiler and implements
+the same detector-facing contract. No module dispatches on elements or a material name.
+
+The response is reusable only while reciprocal basis, source, optics, mosaic, rods, pose,
+calibration, sample-Q envelope, and requested coordinates are fixed. A candidate site structure
+may change strength but not those authorities. This path is CPU sparse fitting authority, not a
+replacement for the optimized Bi2X3 full-image renderer. Raw-image discovery, background/mask
+policy, fitted-coordinate declarations, and any non-CIF stacking law remain explicit experiment
+inputs rather than per-material Python files.

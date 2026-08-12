@@ -348,3 +348,20 @@ two-anchor projection transforms the full measured-count and radial-background c
 whitening. Division by support occurs only for displayed density profiles. Where a
 continuous region crosses the inverse-map fold, fixed-rule mass from the complete same-`|b|` rod
 group is removed and replaced by exact-`x` cubature with `x^2 = Qr^2 - b^2`.
+
+## Sparse structure-response factorization
+
+At selected continuous detector coordinates, contract v13 stores
+`d_i = sum_t R_it S_t`. `R_it` has units `px^-2` (the detector-density to structure-strength
+ratio) and contains every
+fixed source, wavelength, signed rod, inverse root, mosaic, optical, polarization, attenuation,
+sample-Q-envelope, and detector-Jacobian factor. `S_t` is the candidate provider's nonnegative
+`A2` strength at its exact `(h,k,L,k_norm)` query. Applying a candidate introduces no detector
+solid-angle efficiency correction, normalization, per-profile scale, or hidden pruning; source,
+wavelength, rod, root, and parent contributions remain incoherent intensities.
+
+`ParameterizedStructureRegionModel` integrates the applied raw detector density through each
+block's exact `ContinuousRegionQuadrature`. Candidate site or population coordinates change only
+`S`; transfer, quadrature, measured background, covariance, and one scale per dataset stay frozen.
+Regular kinematic `00L` uses the same factorization after its positive-Q support gate. The optional
+local-lamella Parratt composite is a separate declared observable and is not part of this response.

@@ -298,12 +298,14 @@ def _validate_layer_l_definitions(
 def _validate_tag_key_pack(keys: tuple[IntegerLMarkerKey, ...], record_name: str) -> None:
     if len(set(keys)) != len(keys):
         raise ValueError(f"integer-L {record_name} identities must be unique")
-    tag_identities = tuple((key.family_m, key.integer_L, key.tag_branch) for key in keys)
+    tag_identities = tuple(
+        (key.representative_rod_hk, key.integer_L, key.tag_branch) for key in keys
+    )
     if len(set(tag_identities)) != len(tag_identities):
-        raise ValueError("each (m,L,tag_branch) may have only one detector tag")
-    paired: dict[tuple[int, int], dict[int, IntegerLMarkerKey]] = {}
+        raise ValueError("each physical (rod,L,tag_branch) may have only one detector tag")
+    paired: dict[tuple[tuple[int, int], int], dict[int, IntegerLMarkerKey]] = {}
     for key in keys:
-        paired.setdefault((key.family_m, key.integer_L), {})[key.tag_branch] = key
+        paired.setdefault((key.representative_rod_hk, key.integer_L), {})[key.tag_branch] = key
     for sides in paired.values():
         if set(sides) != {1, 2}:
             continue
@@ -1151,6 +1153,26 @@ class ExactTagGeometryModel:
     def __delattr__(self, name: str) -> None:
         raise AttributeError("ExactTagGeometryModel is immutable")
 
+    def _require_hexagonal_layer_l_metric(self) -> None:
+        """Fail before legacy rod-free rational identities can merge split metric shells."""
+
+        direct = self._inputs.crystal.direct_basis_A
+        a1 = direct[:, 0]
+        a2 = direct[:, 1]
+        norm1 = float(np.linalg.norm(a1))
+        norm2 = float(np.linalg.norm(a2))
+        cosine = float(a1 @ a2) / (norm1 * norm2)
+        tolerance = 4096.0 * np.finfo(np.float64).eps
+        if not np.isclose(norm1, norm2, rtol=tolerance, atol=0.0) or not np.isclose(
+            abs(cosine),
+            0.5,
+            rtol=0.0,
+            atol=tolerance,
+        ):
+            raise ValueError(
+                "rational layer-L marker identity currently requires a hexagonal surface metric"
+            )
+
     @property
     def inputs(self) -> ConfiguredGeometryInputs:
         return self._inputs
@@ -1308,6 +1330,7 @@ class ExactTagGeometryModel:
     ) -> LayerLMarkerPrediction:
         """Predict exact rational-layer tags without structure or mosaic evaluation."""
 
+        self._require_hexagonal_layer_l_metric()
         frozen = tuple(definitions)
         _validate_layer_l_definitions(frozen, "prediction input")
         basis_revision = self.reciprocal_basis_revision
@@ -1434,6 +1457,7 @@ class ExactTagGeometryModel:
     ) -> LayerLMarkerPrediction:
         """Enumerate panel-visible exact-layer loci before any intensity selection."""
 
+        self._require_hexagonal_layer_l_metric()
         orders = tuple(layer_orders)
         if (
             not orders
@@ -2285,14 +2309,27 @@ class ContinuousDetectorFunction:
 def _marker_chord_pairs(
     keys: tuple[IntegerLMarkerKey | LayerLMarkerKey, ...],
 ) -> tuple[tuple[int, int], ...]:
-    groups: dict[tuple[int, CommensurateLayerOrder], dict[int, int]] = {}
+    groups: dict[
+        tuple[str, int, int, CommensurateLayerOrder],
+        dict[int, int],
+    ] = {}
     for index, key in enumerate(keys):
         layer_order = (
             key.layer_order
             if isinstance(key, LayerLMarkerKey)
             else CommensurateLayerOrder(key.integer_L)
         )
-        groups.setdefault((key.family_m, layer_order), {})[key.root_sign] = index
+        group_id = (
+            ("layer", key.family_m, 0, layer_order)
+            if isinstance(key, LayerLMarkerKey)
+            else (
+                "rod",
+                key.representative_rod_hk[0],
+                key.representative_rod_hk[1],
+                layer_order,
+            )
+        )
+        groups.setdefault(group_id, {})[key.root_sign] = index
     pairs: list[tuple[int, int]] = []
     for _, sides in sorted(groups.items()):
         if set(sides) != {-1, 1}:

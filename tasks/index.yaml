@@ -1,5 +1,5 @@
 schema_version: rasim-task-index-v3
-current_phase: optional_polytype_staged_integration
+current_phase: general_cif_shared_numerical_pipeline
 
 tasks:
   - id: T00
@@ -127,3 +127,8 @@ tasks:
     branch: codex/polytype-staged-integration
     status: READY_INTEGRATED_BI2X3_MATCH_PBI2_POSITIONAL_PREFLIGHT_ONLY
     depends_on: [T12, T13, T20, T22, T23, T24]
+  - id: T26
+    file: tasks/26_general_cif_pipeline.md
+    branch: codex/general-cif-pipeline
+    status: READY_SHARED_NUMERICAL_PIPELINE_MEASURED_PBI2_MODEL_LIMITED
+    depends_on: [T18, T20, T25]

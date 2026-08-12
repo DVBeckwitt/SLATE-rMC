@@ -2,7 +2,7 @@
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
-API v12 does not renumber historical evidence.
+API v13 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
@@ -237,3 +237,8 @@ The common comparator:
 
 The comparator must not hide missing stages by comparing only final outputs.
 `mosaic.wrapped_line_density` has unit `rad^-1`, no coordinate frame, and `PROBABILITY_DENSITY` measure.
+
+Optional geometry calibration names/values, configured detector reference coordinates, and the
+fixed-position calibration-provenance flag belong to the existing position envelope. Sparse
+response, strength-parameterization, region-model, and fitted-structure SHA-256 revisions map to
+the existing fitting invalidation/provenance fields; they do not create new trace stage IDs.

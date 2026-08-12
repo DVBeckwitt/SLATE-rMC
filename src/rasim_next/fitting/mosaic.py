@@ -527,6 +527,22 @@ def evaluate_continuous_mosaic_profiles(
     if not isinstance(profile_revision, str) or not profile_revision:
         raise ValueError("profile_revision must be a nonempty string")
 
+    requested_hk = {
+        rod_hk for definition in frozen for rod_hk in definition.identity.group_key.member_rod_hk
+    }
+    configured_by_hk = {(rod.h, rod.k): rod for rod in rods}
+    missing_hk = requested_hk - configured_by_hk.keys()
+    if missing_hk:
+        raise ValueError(f"profile references unconfigured rods {sorted(missing_hk)}")
+    evaluation_rods = tuple(rod for rod in rods if (rod.h, rod.k) in requested_hk)
+    restrict_rods = getattr(detector, "restrict_rods", None)
+    if callable(restrict_rods):
+        evaluation_detector = restrict_rods(evaluation_rods)
+        evaluated_rods = evaluation_rods
+    else:
+        evaluation_detector = detector
+        evaluated_rods = rods
+
     phi_bin_count, theta_order, phi_order = next(iter(layouts))
     (
         two_theta,
@@ -540,14 +556,14 @@ def evaluate_continuous_mosaic_profiles(
 
     included_flat = np.flatnonzero(included_node.ravel())
     angle_values = evaluate_continuous_per_rod_angle_signal(
-        detector,
+        evaluation_detector,
         angle_frame=angle_frame,
         two_theta_rad=two_theta.ravel()[included_flat],
         phi_rad=phi.ravel()[included_flat],
         execution_backend=execution_backend,
     )
     if (
-        angle_values.rods != rods
+        angle_values.rods != evaluated_rods
         or angle_values.rod_catalog_revision != rod_catalog_revision
         or angle_values.root_policy != "all_retained_roots.v1"
     ):
@@ -562,11 +578,11 @@ def evaluate_continuous_mosaic_profiles(
     if flat_valid.size:
         per_rod_signal = angle_values.per_rod_signal_density_A2_per_rad2.reshape(
             -1,
-            len(rods),
+            len(evaluated_rods),
         )
-        caustic = angle_values.caustic.reshape(-1, len(rods))
+        caustic = angle_values.caustic.reshape(-1, len(evaluated_rods))
         rod_lookup = {(rod.h, rod.k): index for index, rod in enumerate(angle_values.rods)}
-        if len(rod_lookup) != len(rods):
+        if len(rod_lookup) != len(evaluated_rods):
             raise ValueError("detector rods must have unique (h, k) identities")
         profile_at_node = np.broadcast_to(
             np.arange(len(frozen), dtype=np.int64)[:, None, None, None],
@@ -741,6 +757,7 @@ class MosaicProfileSet:
         if self.execution_backend is not None and self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
+            "numpy_cpu_sparse_source_averaged.v1",
         }:
             raise ValueError("unsupported profile execution backend")
         if self.execution_device is not None and (

@@ -11,6 +11,43 @@ from rasim_next.core.contracts import EventIntensityResult
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
 
 
+def _finite_geometric_amplitude_factor(
+    step_phase_rad: ArrayLike,
+    repeat_count: int,
+) -> np.ndarray:
+    """Return the stable coherent sum for one constant phase step."""
+
+    try:
+        count = index(repeat_count)
+    except TypeError as error:
+        raise ValueError("repeat_count must be a positive integer") from error
+    if isinstance(repeat_count, bool) or count < 1:
+        raise ValueError("repeat_count must be a positive integer")
+    phase = np.asarray(step_phase_rad, dtype=np.float64)
+    if not np.all(np.isfinite(phase)):
+        raise ValueError("step_phase_rad must be finite")
+    wrapped = np.remainder(phase + np.pi, 2.0 * np.pi) - np.pi
+    return np.asarray(
+        count
+        * np.exp(0.5j * (count - 1) * wrapped)
+        * np.sinc(count * wrapped / (2.0 * np.pi))
+        / np.sinc(wrapped / (2.0 * np.pi)),
+        dtype=np.complex128,
+    )
+
+
+def finite_periodic_repeat_amplitude_factor(
+    l_coordinate: ArrayLike,
+    repeat_count: int,
+) -> np.ndarray:
+    """Return ``sum(exp(2*pi*i*n*L), n=0..N-1)`` without a Bragg singularity."""
+
+    ell = np.asarray(l_coordinate, dtype=np.float64)
+    if not np.all(np.isfinite(ell)):
+        raise ValueError("l_coordinate must be finite")
+    return _finite_geometric_amplitude_factor(2.0 * np.pi * ell, repeat_count)
+
+
 def _result(event_id: ArrayLike, amplitude_e: ArrayLike) -> EventIntensityResult:
     event = np.asarray(event_id, dtype=np.int64)
     amplitude = np.asarray(amplitude_e, dtype=np.complex128)
@@ -100,11 +137,5 @@ def uniform_finite_stack(
     ):
         raise ValueError("uniform finite stack inputs must be finite with nonnegative spacing")
     step_phase = q_sample_normal * spacing + registry
-    wrapped = np.remainder(step_phase + np.pi, 2.0 * np.pi) - np.pi
-    geometric = (
-        count
-        * np.exp(0.5j * (count - 1) * wrapped)
-        * np.sinc(count * wrapped / (2.0 * np.pi))
-        / np.sinc(wrapped / (2.0 * np.pi))
-    )
+    geometric = _finite_geometric_amplitude_factor(step_phase, count)
     return _result(event, repeat * geometric)

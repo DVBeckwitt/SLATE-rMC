@@ -961,7 +961,8 @@ def _validate_geometry_mapping_context(
     instrument: CompiledInstrument,
     ki_sample_Ainv: ArrayLike,
     material: MaterialOptics | None = None,
-) -> tuple[FloatArray, float]:
+    incident_state_index: int | None = None,
+) -> tuple[FloatArray, float, int]:
     if not isinstance(incident, IncidentTransportResult):
         raise TypeError("incident must be IncidentTransportResult")
     if not isinstance(instrument, CompiledInstrument):
@@ -969,9 +970,20 @@ def _validate_geometry_mapping_context(
     if material is not None and not isinstance(material, MaterialOptics):
         raise TypeError("material must be MaterialOptics")
     states = incident.states
-    if states.incident_state_id.size != 1:
-        raise ValueError("detector geometry mapping requires exactly one incident state")
-    if not states.valid[0]:
+    if incident_state_index is None:
+        if states.incident_state_id.size != 1:
+            raise ValueError(
+                "detector geometry mapping requires exactly one incident state unless "
+                "incident_state_index is explicit"
+            )
+        state_index = 0
+    else:
+        if isinstance(incident_state_index, (bool, np.bool_)):
+            raise TypeError("incident_state_index must be an integer")
+        state_index = index(incident_state_index)
+        if state_index < 0 or state_index >= states.incident_state_id.size:
+            raise ValueError("incident_state_index lies outside the incident batch")
+    if not states.valid[state_index]:
         raise ValueError("the incident state must be valid")
     if states.sample_geometry_revision != instrument.sample_geometry_revision:
         raise ValueError("incident and detector geometry sample revisions disagree")
@@ -983,12 +995,16 @@ def _validate_geometry_mapping_context(
     scale = max(float(np.linalg.norm(ki_sample)), 1.0)
     if not np.allclose(
         ki_sample,
-        states.k_film_phase_sample_Ainv[0],
+        states.k_film_phase_sample_Ainv[state_index],
         rtol=0.0,
         atol=256.0 * np.finfo(np.float64).eps * scale,
     ):
         raise ValueError("ki_sample_Ainv must match the canonical incident film-phase vector")
-    return ki_sample, 2.0 * np.pi / float(states.wavelength_A[0])
+    return (
+        ki_sample,
+        2.0 * np.pi / float(states.wavelength_A[state_index]),
+        state_index,
+    )
 
 
 def evaluate_detector_coordinates_geometry(
@@ -999,13 +1015,15 @@ def evaluate_detector_coordinates_geometry(
     instrument: CompiledInstrument,
     ki_sample_Ainv: ArrayLike,
     include_surface_jacobian: bool = True,
+    incident_state_index: int | None = None,
 ) -> DetectorCoordinateGeometry:
     """Map native detector coordinates to internal elastic Q without intensity work."""
 
-    ki_sample, air_k0_Ainv = _validate_geometry_mapping_context(
+    ki_sample, air_k0_Ainv, state_index = _validate_geometry_mapping_context(
         incident=incident,
         instrument=instrument,
         ki_sample_Ainv=ki_sample_Ainv,
+        incident_state_index=incident_state_index,
     )
     supplied_column = np.asarray(column_px)
     supplied_row = np.asarray(row_px)
@@ -1032,7 +1050,7 @@ def evaluate_detector_coordinates_geometry(
     )
     status = np.full(size, ValidityCode.OUTSIDE_SUPPORT.value, dtype="U32")
     point_lab = _detector_coordinates_to_lab_points(flat_column, flat_row, instrument)
-    origin_lab = incident.states.sample_intersection_lab_m[0]
+    origin_lab = incident.states.sample_intersection_lab_m[state_index]
     displacement_lab = point_lab - origin_lab
     distance_m = np.linalg.norm(displacement_lab, axis=1)
     nonzero = inside & (distance_m > 0.0)
@@ -1138,6 +1156,7 @@ def _map_ewald_geometry_arrays(
     incident: IncidentTransportResult,
     material: MaterialOptics,
     instrument: CompiledInstrument,
+    incident_state_index: int | None = None,
 ) -> _MappedArrays:
     """Apply canonical exit transport and native detector projection to Ewald geometry."""
 
@@ -1146,11 +1165,15 @@ def _map_ewald_geometry_arrays(
     if not isinstance(incident, IncidentTransportResult):
         raise TypeError("incident must be IncidentTransportResult")
     states = incident.states
-    ki_sample, air_k0_Ainv = _validate_geometry_mapping_context(
+    if isinstance(incident_state_index, (bool, np.bool_)):
+        raise TypeError("incident_state_index must be an integer")
+    state_index = 0 if incident_state_index is None else index(incident_state_index)
+    ki_sample, air_k0_Ainv, state_index = _validate_geometry_mapping_context(
         incident=incident,
         material=material,
         instrument=instrument,
-        ki_sample_Ainv=states.k_film_phase_sample_Ainv[0],
+        ki_sample_Ainv=states.k_film_phase_sample_Ainv[state_index],
+        incident_state_index=incident_state_index,
     )
     root_valid = geometry.valid.reshape(-1)
     q_sample = geometry.q_sample_Ainv.reshape(-1, 3)
@@ -1193,7 +1216,7 @@ def _map_ewald_geometry_arrays(
     propagation_direction = np.zeros(size, dtype=np.int8)
     eligible_rows = np.flatnonzero(eligible)
     if eligible_rows.size:
-        wavelengths = np.full(eligible_rows.size, states.wavelength_A[0])
+        wavelengths = np.full(eligible_rows.size, states.wavelength_A[state_index])
         modes = _solve_exit_mode_arrays(kf_film[eligible_rows], wavelengths, material)
         exit_status[eligible_rows] = modes.status
         valid_mode = modes.status == ValidityCode.VALID
@@ -1214,7 +1237,7 @@ def _map_ewald_geometry_arrays(
     exit_rows = np.flatnonzero(exit_valid)
     if exit_rows.size:
         origin = np.broadcast_to(
-            states.sample_intersection_lab_m[0],
+            states.sample_intersection_lab_m[state_index],
             (exit_rows.size, 3),
         )
         projection = _project_detector_rays(
@@ -1254,6 +1277,7 @@ def map_ewald_geometry_to_detector(
     incident: IncidentTransportResult,
     material: MaterialOptics,
     instrument: CompiledInstrument,
+    incident_state_index: int | None = None,
 ) -> DetectorMappedGeometry:
     """Map exact Ewald geometry without intensity, mosaic, raster, or pixel work."""
 
@@ -1262,6 +1286,7 @@ def map_ewald_geometry_to_detector(
         incident=incident,
         material=material,
         instrument=instrument,
+        incident_state_index=incident_state_index,
     ).geometry
 
 
@@ -1292,6 +1317,8 @@ def _compile_detector_state(
 ) -> CompiledDetectorState:
     """Pack one canonical incident row for the shared compiled point kernel."""
 
+    if isinstance(incident_state_index, (bool, np.bool_)):
+        raise TypeError("incident_state_index must be an integer")
     state_index = index(incident_state_index)
     states = incident.states
     if state_index < 0 or state_index >= states.incident_state_id.size:
@@ -1500,7 +1527,7 @@ def _compile_detector_state(
 
 
 class DetectorEwaldMeasure:
-    """Map a one-incident-state Ewald coating to the active detector panel.
+    """Map one selected incident-state Ewald coating to the active detector panel.
 
     This class defines the pre-binned pushforward. Its detector-coordinate
     density contains the required coordinate Jacobian, but detector solid
@@ -1513,6 +1540,7 @@ class DetectorEwaldMeasure:
         "_crystal_from_local",
         "_crystal_to_sample",
         "_incident",
+        "_incident_state_index",
         "_instrument",
         "_intensity_envelope",
         "_material",
@@ -1532,6 +1560,7 @@ class DetectorEwaldMeasure:
         phase_population_weight: float = 1.0,
         polarization_weight: float = 1.0,
         intensity_envelope: SampleQIntensityEnvelope | None = None,
+        incident_state_index: int | None = None,
     ) -> None:
         if not isinstance(coating, ContinuousEwaldCoating):
             raise TypeError("coating must be ContinuousEwaldCoating")
@@ -1554,14 +1583,22 @@ class DetectorEwaldMeasure:
                 "tangent dead band"
             )
         states = incident.states
-        if states.incident_state_id.size != 1:
-            raise ValueError("DetectorEwaldMeasure requires exactly one incident state")
-        if not states.valid[0]:
+        if incident_state_index is None:
+            if states.incident_state_id.size != 1:
+                raise ValueError(
+                    "DetectorEwaldMeasure requires exactly one incident state unless "
+                    "incident_state_index is explicit"
+                )
+            state_index = 0
+        else:
+            if isinstance(incident_state_index, (bool, np.bool_)):
+                raise TypeError("incident_state_index must be an integer")
+            state_index = index(incident_state_index)
+            if state_index < 0 or state_index >= states.incident_state_id.size:
+                raise ValueError("incident_state_index lies outside the incident batch")
+        if not states.valid[state_index]:
             raise ValueError("the incident state must be valid")
-        polarization_ids = set(states.polarization_state_id)
-        if len(polarization_ids) != 1:
-            raise ValueError("one detector measure requires one polarization model")
-        polarization_model_id = next(iter(polarization_ids))
+        polarization_model_id = states.polarization_state_id[state_index]
         polarization_model_code(polarization_model_id)
         phase_weight = float(phase_population_weight)
         polarization = float(polarization_weight)
@@ -1572,12 +1609,12 @@ class DetectorEwaldMeasure:
         ki_scale = max(float(np.linalg.norm(coating.ki_sample_Ainv)), 1.0)
         if not np.allclose(
             coating.ki_sample_Ainv,
-            states.k_film_phase_sample_Ainv[0],
+            states.k_film_phase_sample_Ainv[state_index],
             rtol=0.0,
             atol=256.0 * np.finfo(np.float64).eps * ki_scale,
         ):
             raise ValueError("coating ki must be the canonical incident film-phase vector")
-        air_k0_Ainv = 2.0 * np.pi / states.wavelength_A[0]
+        air_k0_Ainv = 2.0 * np.pi / states.wavelength_A[state_index]
         if not np.isclose(
             coating.bragg_space.config.k_norm_Ainv,
             air_k0_Ainv,
@@ -1592,10 +1629,14 @@ class DetectorEwaldMeasure:
         crystal_from_local.setflags(write=False)
         crystal_to_sample = coating.bragg_space.config.crystal_to_sample
         source_phase_weight = float(
-            states.source_weight[0] * states.footprint_acceptance[0] * phase_weight * polarization
+            states.source_weight[state_index]
+            * states.footprint_acceptance[state_index]
+            * phase_weight
+            * polarization
         )
         object.__setattr__(self, "_coating", coating)
         object.__setattr__(self, "_incident", incident)
+        object.__setattr__(self, "_incident_state_index", state_index)
         object.__setattr__(self, "_material", material)
         object.__setattr__(self, "_polarization_model_id", polarization_model_id)
         object.__setattr__(self, "_instrument", instrument)
@@ -1619,6 +1660,10 @@ class DetectorEwaldMeasure:
     @property
     def incident(self) -> IncidentTransportResult:
         return self._incident
+
+    @property
+    def incident_state_index(self) -> int:
+        return self._incident_state_index
 
     @property
     def instrument(self) -> CompiledInstrument:
@@ -1645,6 +1690,7 @@ class DetectorEwaldMeasure:
             incident=self._incident,
             material=self._material,
             instrument=self._instrument,
+            incident_state_index=self._incident_state_index,
         )
 
     def _event_scattering_polarization(
@@ -1655,7 +1701,7 @@ class DetectorEwaldMeasure:
         result = np.zeros(valid.shape, dtype=np.float64)
         if np.any(valid):
             result[valid] = scattering_polarization_weight(
-                self._incident.states.direction_sample[0],
+                self._incident.states.direction_sample[self._incident_state_index],
                 kf_air_sample_Ainv[valid] / self._air_k0_Ainv,
                 model_id=self._polarization_model_id,
             )
@@ -1684,9 +1730,13 @@ class DetectorEwaldMeasure:
         attenuation = np.zeros(shape, dtype=np.float64)
         optical = np.zeros(shape, dtype=np.float64)
         if np.any(exit_valid):
-            incident_direction = -1 if self._incident.states.direction_sample[0, 2] < 0.0 else 1
+            incident_direction = (
+                -1
+                if self._incident.states.direction_sample[self._incident_state_index, 2] < 0.0
+                else 1
+            )
             incident_kappa = mode_decay_constant(
-                self._incident.states.kz_film_Ainv[0],
+                self._incident.states.kz_film_Ainv[self._incident_state_index],
                 incident_direction,
             )
             exit_kappa = mode_decay_constant(
@@ -1699,7 +1749,7 @@ class DetectorEwaldMeasure:
                 self._instrument.film_thickness_A,
             )
             optical[exit_valid] = scalar_optical_weight(
-                self._incident.states.entrance_amplitude[0],
+                self._incident.states.entrance_amplitude[self._incident_state_index],
                 mapped.exit_amplitude[exit_valid],
                 attenuation[exit_valid],
             )
@@ -1843,6 +1893,7 @@ class DetectorEwaldMeasure:
             instrument=self._instrument,
             ki_sample_Ainv=self._coating.ki_sample_Ainv,
             include_surface_jacobian=include_surface_jacobian,
+            incident_state_index=self._incident_state_index,
         )
         shape = geometry.column_px.shape
         size = geometry.column_px.size
@@ -1853,7 +1904,10 @@ class DetectorEwaldMeasure:
         optical = np.zeros(size, dtype=np.float64)
         reachable_rows = np.flatnonzero(reachable)
         if include_optical and reachable_rows.size:
-            wavelengths = np.full(reachable_rows.size, self._incident.states.wavelength_A[0])
+            wavelengths = np.full(
+                reachable_rows.size,
+                self._incident.states.wavelength_A[self._incident_state_index],
+            )
             modes = _solve_exit_mode_arrays(
                 kf_film[reachable_rows],
                 wavelengths,
@@ -1871,9 +1925,13 @@ class DetectorEwaldMeasure:
                     atol=512.0 * np.finfo(np.float64).eps * roundtrip_scale,
                 ):
                     raise FloatingPointError("detector ray failed the canonical exit round trip")
-                incident_direction = -1 if self._incident.states.direction_sample[0, 2] < 0.0 else 1
+                incident_direction = (
+                    -1
+                    if self._incident.states.direction_sample[self._incident_state_index, 2] < 0.0
+                    else 1
+                )
                 incident_kappa = mode_decay_constant(
-                    self._incident.states.kz_film_Ainv[0],
+                    self._incident.states.kz_film_Ainv[self._incident_state_index],
                     incident_direction,
                 )
                 exit_kappa = mode_decay_constant(
@@ -1886,7 +1944,7 @@ class DetectorEwaldMeasure:
                     self._instrument.film_thickness_A,
                 )
                 optical[valid_rows] = scalar_optical_weight(
-                    self._incident.states.entrance_amplitude[0],
+                    self._incident.states.entrance_amplitude[self._incident_state_index],
                     modes.exit_amplitude[mode_valid],
                     attenuation,
                 )
@@ -2370,7 +2428,7 @@ class DetectorEwaldMeasure:
             term_root_sign = np.empty(0, dtype=np.int8)
 
         m0_rod_index = np.asarray(
-            [rod_index for rod_index, rod in enumerate(selected) if rod.family_m == 0],
+            [rod_index for rod_index, rod in enumerate(selected) if rod.h == 0 and rod.k == 0],
             dtype=np.int64,
         )
         if m0_rod_index.size:
@@ -2470,7 +2528,7 @@ class DetectorEwaldMeasure:
             material=self._material,
             instrument=self._instrument,
             rods=rods,
-            incident_state_index=0,
+            incident_state_index=self._incident_state_index,
             source_phase_weight=self._source_phase_weight,
             intensity_envelope=self._intensity_envelope,
         )

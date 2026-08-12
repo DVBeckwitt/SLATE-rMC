@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **12**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **13**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -613,12 +613,13 @@ discovery, complete parent catalogue, exact catalogue-to-peak row join, and the 
 observation object and legacy path at the caller boundary.
 
 The general OSC manifest and integer indexing schemas remain unchanged; measured rational rows are
-an additive post-discovery pack. T25 exposes this auditable, fitter-ready API boundary but does not
-install a measured PbI2 staged runner: detector-native PbI2 mosaic/intensity transfer remains
-absent. The separately relaxed native 4H/6H cells do not share the exact 2H layer repeat, so this
-admission is valid only for the declared common-layer transition model. Broad, asymmetric, or
-population-dependent blends belong to the stacking-aware intensity fit. The common-incidence-
-delta/sample-normal-x gauge is unchanged by the additional landmarks.
+an additive post-discovery pack. T25 exposed this auditable admission boundary. Contract v13 now
+supplies a shared numerical PbI2 detector response, but no accepted measured observation/background
+recipe or per-material staged runner is inferred from the CIF. The separately relaxed native 4H/6H
+cells do not share the exact 2H layer repeat, so this admission is valid only for the declared
+common-layer transition model. Broad, asymmetric, or population-dependent blends belong to the
+stacking-aware intensity fit. The common-incidence-delta/sample-normal-x gauge is unchanged by the
+additional landmarks.
 
 ### Exact rational-layer intrinsic SF population fitting
 
@@ -944,3 +945,54 @@ A/B/C/joint chain, source, backend, device, cubature, chunk, state-block, pixel 
 scope; a mismatch fails rather than resumes.
 The callable intrinsic solid-angle density added in v12 is a continuous function result; it does
 not restore a retained sphere mesh or texture as model state.
+
+## Contract-v13 general-CIF fitting boundary
+
+`CifFiniteStackStrength`, `Bi2X3FiniteStackStrength`, and
+`Pbi2ParentMixtureStrength` implement one revision-bearing, reciprocal-basis-bound, nonnegative
+strength contract `S(h,k,L;k)`. Bound/reference providers expose a lowercase SHA-256
+`structure_model_revision`; construction fails before evaluation when that lineage is absent or
+malformed. The generic provider is the complete periodic CIF unit-cell amplitude times a
+declared number of coherent conventional-cell `repeats`; the R-3m Bi2X3 provider retains its
+explicit quintuple-layer termination, and the PbI2 provider retains five fixed near-parent
+templates at `epsilon=0.001`. Provider selection is an explicit model declaration, never an
+element- or material-name dispatch.
+
+`AffineCifSiteBasis` changes only declared expanded-CIF fractional coordinates, occupancies, and
+isotropic `U`. Cell, species, charge, site order, and topology are fixed. Coordinates are not
+wrapped, occupancies must remain in `[0,1]`, `Uiso` must remain nonnegative, and common-origin,
+no-op, or linearly dependent columns are rejected. `AffineCifFiniteStackParameterization`,
+`Bi2X3FiniteStackParameterization`, and `Pbi2ParentLogRatioParameterization` bind explicit vectors
+to their corresponding providers and retain immutable reference/model revisions.
+
+`SourceAveragedDetectorStructureResponse` freezes source mass, physical signed rods, exact source
+wavelength, inverse roots, mosaic, refraction/attenuation, polarization, detector projection, and
+the sample-Q envelope at requested continuous detector coordinates. It represents
+`d_i(theta) = sum_t R_it S_(h_t,k_t)(L_t;k_t)`. `R_it` has measure
+`fixed_source_averaged_detector_density_per_structure_strength_px2_inv.v1`; applying an `A2`
+strength returns the unchanged `raw_detector_coordinate_density_A2_per_px2.v1`. Reference
+strength establishes reciprocal-basis and structure lineage only and never prunes terms. Exact
+caustics fail closed. The current shared fitting backend is CPU sparse selected-coordinate
+evaluation, not a generic full-image renderer or Parratt/substrate stitch. The optimized Bi2X3
+renderer remains a parity-checked accelerator behind the same strength semantics.
+
+`StructureRegionResponseBlock` binds one response to one exact `ContinuousRegionQuadrature` and
+dataset. `ParameterizedStructureRegionModel` applies one shared candidate provider and integrates
+the resulting density without changing detector transfer. `fit_parameterized_matched_regions`
+profiles one scale per dataset through the existing covariance/background objective, requires
+explicit parameter scales, and fails closed on optimizer failure, rank deficiency, or excessive
+condition. A CIF does not infer fitted coordinates, mounting, repeat count, source/PSF,
+background, mosaic law, termination, or stacking law.
+
+The generic configured model requires `repeats`, forbids the Bi2X3 `layers` key and nonzero
+stacking epsilon, and requires explicit unknown-`Uiso` policy when needed. Specialized Bi2X3
+models require `layers` and use the same sparse fitting detector. Regular kinematic `00L` crosses
+this response after the positive direct-root-gap gate; exact direct beam and generic Parratt
+stitching remain excluded.
+
+`DetectorCalibrationCorrections` is an optional indexed-geometry pack containing native reference
+column/row offsets and a nominal panel-normal distance offset. It is inactive by default, so the
+old numerical and serialized path remains exact. An active pack is applied after once-only OSC
+orientation conversion and before shared pose corrections, survives in `FixedPositionState`, and
+must carry explicit calibration provenance. Its data-scaled Jacobian uses the ordinary rank and
+condition gates.

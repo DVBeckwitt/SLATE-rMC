@@ -60,6 +60,11 @@ SHARED_GEOMETRY_PARAMETER_NAMES = (
     "goniometer_pivot_pitch_offset_m",
     "goniometer_pivot_yaw_offset_m",
 )
+DETECTOR_CALIBRATION_PARAMETER_NAMES = (
+    "detector_reference_column_offset_px",
+    "detector_reference_row_offset_px",
+    "detector_plane_normal_offset_m",
+)
 _PARAMETER_NAMES = SHARED_GEOMETRY_PARAMETER_NAMES
 _PARAMETERIZATION_ID = (
     "shared_detector_xy_axis_tangent_xy_pivot_tangent_xy_sample_normal_xy_plane_offset.v2"
@@ -81,6 +86,9 @@ _OPTIMIZER_SCALE = (
 _INCIDENCE_ANGLE_DELTA_RANK_STEP_RAD = 1.0e-5
 _INCIDENCE_ANGLE_DELTA_OPTIMIZER_SCALE_RAD = math.radians(0.5)
 _INCIDENCE_ANGLE_TRIM_RANK_STEP_RAD = 1.0e-5
+_DETECTOR_CALIBRATION_RANK_STEP = (0.01, 0.01, 1.0e-5)
+_DETECTOR_CALIBRATION_OPTIMIZER_SCALE = (1.0, 1.0, 1.0e-3)
+_CALIBRATED_PARAMETERIZATION_ID = f"{_PARAMETERIZATION_ID}.detector_reference_polish.v1"
 
 
 def zero_sum_helmert_basis(image_count: int) -> FloatArray:
@@ -135,6 +143,23 @@ def _canonical_fitted_parameter_names(
         raise ValueError(f"unknown shared geometry parameter names: {sorted(unknown)}")
     selected = set(names)
     return tuple(name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name in selected)
+
+
+def _canonical_detector_calibration_parameter_names(
+    value: tuple[str, ...],
+) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)):
+        raise TypeError("fitted detector calibration names must be a sequence")
+    names = tuple(value)
+    if any(not isinstance(name, str) for name in names):
+        raise TypeError("fitted detector calibration names must contain only strings")
+    if len(set(names)) != len(names):
+        raise ValueError("fitted detector calibration names must not contain duplicates")
+    unknown = set(names) - set(DETECTOR_CALIBRATION_PARAMETER_NAMES)
+    if unknown:
+        raise ValueError(f"unknown detector calibration parameter names: {sorted(unknown)}")
+    selected = set(names)
+    return tuple(name for name in DETECTOR_CALIBRATION_PARAMETER_NAMES if name in selected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +245,62 @@ class SharedGeometryCorrectionBounds:
 
 
 @dataclass(frozen=True, slots=True)
+class DetectorCalibrationCorrections:
+    """Optional detector reference-coordinate and plane-normal calibration polish."""
+
+    detector_reference_column_offset_px: float = 0.0
+    detector_reference_row_offset_px: float = 0.0
+    detector_plane_normal_offset_m: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name in DETECTOR_CALIBRATION_PARAMETER_NAMES:
+            value = float(getattr(self, name))
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            object.__setattr__(self, name, value)
+
+    @classmethod
+    def zero(cls) -> DetectorCalibrationCorrections:
+        return cls()
+
+    @classmethod
+    def from_array(cls, value: ArrayLike) -> DetectorCalibrationCorrections:
+        values = _readonly_float_array(value, (3,), "detector calibration corrections")
+        return cls(*(float(item) for item in values))
+
+    def as_array(self) -> FloatArray:
+        return _readonly_float_array(
+            tuple(getattr(self, name) for name in DETECTOR_CALIBRATION_PARAMETER_NAMES),
+            (3,),
+            "detector calibration corrections",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorCalibrationCorrectionBounds:
+    """Hard bounds for optional detector reference calibration coordinates."""
+
+    lower: DetectorCalibrationCorrections
+    upper: DetectorCalibrationCorrections
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.lower, DetectorCalibrationCorrections) or not isinstance(
+            self.upper, DetectorCalibrationCorrections
+        ):
+            raise TypeError("lower and upper must be DetectorCalibrationCorrections")
+        if np.any(self.lower.as_array() >= self.upper.as_array()):
+            raise ValueError("every detector calibration lower bound must be smaller than upper")
+
+    @property
+    def half_span(self) -> FloatArray:
+        return _readonly_float_array(
+            0.5 * (self.upper.as_array() - self.lower.as_array()),
+            (3,),
+            "detector calibration half span",
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class IncidenceAngleDeltaBounds:
     """Hard bounds for one common additive commanded-incidence correction."""
 
@@ -263,6 +344,39 @@ def _axis_rotation(
         axis_lab=np.asarray(axis_lab, dtype=np.float64),
         angle_rad=math.radians(configuration.angle_deg),
         pivot_lab_m=np.asarray(pivot_lab_m, dtype=np.float64),
+    )
+
+
+def apply_detector_calibration_corrections(
+    instrument: CompiledInstrument,
+    corrections: DetectorCalibrationCorrections,
+) -> CompiledInstrument:
+    """Apply native center offsets and a translation along the nominal panel normal."""
+
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    if not isinstance(corrections, DetectorCalibrationCorrections):
+        raise TypeError("corrections must be DetectorCalibrationCorrections")
+    if np.all(corrections.as_array() == 0.0):
+        return instrument
+    detector = instrument.lab_from_detector
+    detector_translation = (
+        detector.translation_m
+        + corrections.detector_plane_normal_offset_m * detector.rotation[:, 2]
+    )
+    reference_column, reference_row = instrument.detector_reference_coordinate_px
+    return replace(
+        instrument,
+        lab_from_detector=RigidTransform(
+            detector.rotation,
+            detector_translation,
+            FrameId.DETECTOR,
+            FrameId.LAB,
+        ),
+        detector_reference_coordinate_px=(
+            reference_column + corrections.detector_reference_column_offset_px,
+            reference_row + corrections.detector_reference_row_offset_px,
+        ),
     )
 
 
@@ -462,6 +576,7 @@ class IndexedGeometryImage:
         self,
         corrections: SharedGeometryCorrections,
         *,
+        detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
         incidence_angle_delta_rad: float = 0.0,
         incidence_angle_trim_rad: float = 0.0,
     ) -> CompiledInstrument:
@@ -486,8 +601,16 @@ class IndexedGeometryImage:
             self.model.inputs,
             shifted_config,
         )
-        return apply_shared_geometry_corrections(
+        calibrated_instrument = apply_detector_calibration_corrections(
             shifted_inputs.instrument,
+            (
+                DetectorCalibrationCorrections.zero()
+                if detector_calibration_corrections is None
+                else detector_calibration_corrections
+            ),
+        )
+        return apply_shared_geometry_corrections(
+            calibrated_instrument,
             shifted_config.instrument.axis_rotations,
             corrections,
         )
@@ -497,6 +620,7 @@ class IndexedGeometryImage:
         keys: tuple[IntegerLMarkerKey, ...],
         corrections: SharedGeometryCorrections,
         *,
+        detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
         incidence_angle_delta_rad: float = 0.0,
         incidence_angle_trim_rad: float = 0.0,
     ) -> IntegerLMarkerPrediction:
@@ -504,6 +628,7 @@ class IndexedGeometryImage:
             keys,
             instrument=self.corrected_instrument(
                 corrections,
+                detector_calibration_corrections=detector_calibration_corrections,
                 incidence_angle_delta_rad=incidence_angle_delta_rad,
                 incidence_angle_trim_rad=incidence_angle_trim_rad,
             ),
@@ -514,6 +639,7 @@ class IndexedGeometryImage:
         definitions: tuple[LayerLMarkerDefinition, ...],
         corrections: SharedGeometryCorrections,
         *,
+        detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
         incidence_angle_delta_rad: float = 0.0,
         incidence_angle_trim_rad: float = 0.0,
     ) -> LayerLMarkerPrediction:
@@ -521,6 +647,7 @@ class IndexedGeometryImage:
             definitions,
             instrument=self.corrected_instrument(
                 corrections,
+                detector_calibration_corrections=detector_calibration_corrections,
                 incidence_angle_delta_rad=incidence_angle_delta_rad,
                 incidence_angle_trim_rad=incidence_angle_trim_rad,
             ),
@@ -530,6 +657,7 @@ class IndexedGeometryImage:
         self,
         corrections: SharedGeometryCorrections,
         *,
+        detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
         incidence_angle_delta_rad: float = 0.0,
         incidence_angle_trim_rad: float = 0.0,
     ) -> IntegerLMarkerPrediction | LayerLMarkerPrediction:
@@ -537,12 +665,14 @@ class IndexedGeometryImage:
             return self.predict_layer_l_tags(
                 self.observations.definitions,
                 corrections,
+                detector_calibration_corrections=detector_calibration_corrections,
                 incidence_angle_delta_rad=incidence_angle_delta_rad,
                 incidence_angle_trim_rad=incidence_angle_trim_rad,
             )
         return self.predict_integer_l_tags(
             self.observations.keys,
             corrections,
+            detector_calibration_corrections=detector_calibration_corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=incidence_angle_trim_rad,
         )
@@ -593,6 +723,7 @@ def evaluate_indexed_geometry_series_residual(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
     *,
+    detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
     incidence_angle_delta_rad: float = 0.0,
     incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> FloatArray:
@@ -606,6 +737,7 @@ def evaluate_indexed_geometry_series_residual(
     for image in ordered:
         prediction = image._predict_observation_tags(
             corrections,
+            detector_calibration_corrections=detector_calibration_corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=trims[image.image_id],
         )
@@ -672,6 +804,13 @@ class IndexedGeometryFitResult:
     parameterization_id: str = _PARAMETERIZATION_ID
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES
     fixed_parameter_names: tuple[str, ...] = ()
+    detector_calibration_corrections: DetectorCalibrationCorrections = field(
+        default_factory=DetectorCalibrationCorrections.zero
+    )
+    fitted_detector_calibration_parameter_names: tuple[str, ...] = ()
+    fixed_detector_calibration_parameter_names: tuple[str, ...] = (
+        DETECTOR_CALIBRATION_PARAMETER_NAMES
+    )
     incidence_angle_trim_contrast_rad: FloatArray = field(
         default_factory=lambda: np.empty(0, dtype=np.float64)
     )
@@ -692,6 +831,7 @@ class IndexedGeometryFitResult:
         )
         return (
             self.fitted_parameter_names
+            + self.fitted_detector_calibration_parameter_names
             + ((INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,) if self.incidence_angle_delta_fitted else ())
             + trim_names
         )
@@ -699,6 +839,13 @@ class IndexedGeometryFitResult:
     def __post_init__(self) -> None:
         if not isinstance(self.corrections, SharedGeometryCorrections):
             raise TypeError("corrections must be SharedGeometryCorrections")
+        if not isinstance(
+            self.detector_calibration_corrections,
+            DetectorCalibrationCorrections,
+        ):
+            raise TypeError(
+                "detector_calibration_corrections must be DetectorCalibrationCorrections"
+            )
         if not isinstance(self.success, bool):
             raise TypeError("success must be bool")
         if not isinstance(self.message, str) or not self.message:
@@ -710,17 +857,35 @@ class IndexedGeometryFitResult:
         incidence_delta = float(self.incidence_angle_delta_rad)
         if not math.isfinite(incidence_delta):
             raise ValueError("incidence_angle_delta_rad must be finite")
+        fitted_calibration_names = _canonical_detector_calibration_parameter_names(
+            self.fitted_detector_calibration_parameter_names
+        )
         fitted_names = _canonical_fitted_parameter_names(
             self.fitted_parameter_names,
-            allow_empty=self.incidence_angle_delta_fitted,
+            allow_empty=(
+                bool(fitted_calibration_names)
+                or self.incidence_angle_delta_fitted
+                or self.incidence_angle_trim_fitted
+            ),
         )
         fixed_names = tuple(
             name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in fitted_names
+        )
+        fixed_calibration_names = tuple(
+            name
+            for name in DETECTOR_CALIBRATION_PARAMETER_NAMES
+            if name not in fitted_calibration_names
         )
         if tuple(self.fitted_parameter_names) != fitted_names:
             raise ValueError("fitted_parameter_names must use canonical parameter order")
         if tuple(self.fixed_parameter_names) != fixed_names:
             raise ValueError("fixed_parameter_names must be the canonical fitted complement")
+        if tuple(self.fitted_detector_calibration_parameter_names) != fitted_calibration_names:
+            raise ValueError("fitted_detector_calibration_parameter_names must use canonical order")
+        if tuple(self.fixed_detector_calibration_parameter_names) != fixed_calibration_names:
+            raise ValueError(
+                "fixed_detector_calibration_parameter_names must be the canonical complement"
+            )
         contrast = np.asarray(self.incidence_angle_trim_contrast_rad, dtype=np.float64)
         trims = np.asarray(self.incidence_angle_trim_by_image_id_rad, dtype=np.float64)
         expected_contrast_count = len(self.image_ids) - 1 if self.incidence_angle_trim_fitted else 0
@@ -744,7 +909,10 @@ class IndexedGeometryFitResult:
         elif trim_prior is not None or trim_half_span is not None:
             raise ValueError("unfitted incidence-angle trims cannot declare controls")
         fitted_count = (
-            len(fitted_names) + int(self.incidence_angle_delta_fitted) + expected_contrast_count
+            len(fitted_names)
+            + len(fitted_calibration_names)
+            + int(self.incidence_angle_delta_fitted)
+            + expected_contrast_count
         )
         if not self.image_ids or len(set(self.image_ids)) != len(self.image_ids):
             raise ValueError("image_ids must contain unique nonempty IDs")
@@ -799,7 +967,13 @@ class IndexedGeometryFitResult:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a nonnegative integer")
-        if self.parameterization_id != _PARAMETERIZATION_ID:
+        calibration_active = bool(fitted_calibration_names) or np.any(
+            self.detector_calibration_corrections.as_array() != 0.0
+        )
+        expected_parameterization_id = (
+            _CALIBRATED_PARAMETERIZATION_ID if calibration_active else _PARAMETERIZATION_ID
+        )
+        if self.parameterization_id != expected_parameterization_id:
             raise ValueError("unsupported indexed geometry parameterization")
         if self.success and (
             self.jacobian_rank != fitted_count
@@ -823,6 +997,16 @@ class IndexedGeometryFitResult:
             raise ValueError("posterior_jacobian_condition must be finite and at least one")
         object.__setattr__(self, "fitted_parameter_names", fitted_names)
         object.__setattr__(self, "fixed_parameter_names", fixed_names)
+        object.__setattr__(
+            self,
+            "fitted_detector_calibration_parameter_names",
+            fitted_calibration_names,
+        )
+        object.__setattr__(
+            self,
+            "fixed_detector_calibration_parameter_names",
+            fixed_calibration_names,
+        )
         object.__setattr__(self, "incidence_angle_delta_rad", incidence_delta)
         object.__setattr__(self, "incidence_angle_trim_contrast_rad", contrast)
         object.__setattr__(self, "incidence_angle_trim_by_image_id_rad", trims)
@@ -900,6 +1084,7 @@ def audit_indexed_geometry_series_roots(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
     *,
+    detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
     incidence_angle_delta_rad: float = 0.0,
     incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> IndexedGeometrySeriesRootAudit:
@@ -913,6 +1098,7 @@ def audit_indexed_geometry_series_roots(
     for image in ordered:
         instrument = image.corrected_instrument(
             corrections,
+            detector_calibration_corrections=detector_calibration_corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=trims[image.image_id],
         )
@@ -946,6 +1132,7 @@ def _fit_metrics(
     corrections: SharedGeometryCorrections,
     incidence_angle_delta_rad: float,
     incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
+    detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
 ) -> tuple[tuple[IndexedGeometryImageMetrics, ...], FloatArray, FloatArray]:
     per_image: list[IndexedGeometryImageMetrics] = []
     all_site_error: list[FloatArray] = []
@@ -954,6 +1141,7 @@ def _fit_metrics(
     for image in images:
         prediction = image._predict_observation_tags(
             corrections,
+            detector_calibration_corrections=detector_calibration_corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=trims[image.image_id],
         )
@@ -993,6 +1181,7 @@ def evaluate_indexed_geometry_series_metrics(
     images: tuple[IndexedGeometryImage, ...],
     corrections: SharedGeometryCorrections,
     *,
+    detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
     incidence_angle_delta_rad: float = 0.0,
     incidence_angle_trim_by_image_id_rad: Mapping[str, float] | None = None,
 ) -> IndexedGeometrySeriesMetrics:
@@ -1004,6 +1193,7 @@ def evaluate_indexed_geometry_series_metrics(
         corrections,
         incidence_angle_delta_rad,
         incidence_angle_trim_by_image_id_rad,
+        detector_calibration_corrections,
     )
     return IndexedGeometrySeriesMetrics(
         image_ids=tuple(image.image_id for image in ordered),
@@ -1020,19 +1210,45 @@ def fit_indexed_geometry_series(
     initial: SharedGeometryCorrections,
     bounds: SharedGeometryCorrectionBounds,
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
+    initial_detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
+    detector_calibration_correction_bounds: DetectorCalibrationCorrectionBounds | None = None,
+    fitted_detector_calibration_parameter_names: tuple[str, ...] = (),
     initial_incidence_angle_delta_rad: float = 0.0,
     incidence_angle_delta_bounds: IncidenceAngleDeltaBounds | None = None,
     initial_incidence_angle_trim_contrast_rad: ArrayLike | None = None,
     incidence_angle_trim_contrast_half_span_rad: float | None = None,
     incidence_angle_trim_prior_sigma_rad: float | None = None,
 ) -> IndexedGeometryFitResult:
-    """Fit shared geometry, a common incidence delta, and optional zero-sum trims."""
+    """Fit shared geometry, optional detector calibration, incidence, and trims."""
 
     ordered = _canonical_images(images)
     if not isinstance(initial, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections")
     if not isinstance(bounds, SharedGeometryCorrectionBounds):
         raise TypeError("bounds must be SharedGeometryCorrectionBounds")
+    initial_calibration = (
+        DetectorCalibrationCorrections.zero()
+        if initial_detector_calibration_corrections is None
+        else initial_detector_calibration_corrections
+    )
+    if not isinstance(initial_calibration, DetectorCalibrationCorrections):
+        raise TypeError(
+            "initial_detector_calibration_corrections must be DetectorCalibrationCorrections"
+        )
+    fitted_calibration_names = _canonical_detector_calibration_parameter_names(
+        fitted_detector_calibration_parameter_names
+    )
+    if fitted_calibration_names and detector_calibration_correction_bounds is None:
+        raise ValueError(
+            "fitted detector calibration parameters require detector calibration bounds"
+        )
+    if detector_calibration_correction_bounds is not None and not isinstance(
+        detector_calibration_correction_bounds,
+        DetectorCalibrationCorrectionBounds,
+    ):
+        raise TypeError(
+            "detector_calibration_correction_bounds must be DetectorCalibrationCorrectionBounds"
+        )
     incidence_delta_fitted = incidence_angle_delta_bounds is not None
     trim_fitted = (
         incidence_angle_trim_contrast_half_span_rad is not None
@@ -1046,7 +1262,7 @@ def fit_indexed_geometry_series(
         raise ValueError("incidence-angle trims require both a contrast half-span and prior sigma")
     fitted_names = _canonical_fitted_parameter_names(
         fitted_parameter_names,
-        allow_empty=incidence_delta_fitted or trim_fitted,
+        allow_empty=bool(fitted_calibration_names) or incidence_delta_fitted or trim_fitted,
     )
     if incidence_delta_fitted and "sample_normal_x_tilt_rad" in fitted_names:
         raise ValueError(
@@ -1057,11 +1273,28 @@ def fit_indexed_geometry_series(
         [SHARED_GEOMETRY_PARAMETER_NAMES.index(name) for name in fitted_names],
         dtype=np.int64,
     )
+    fitted_calibration_indices = np.asarray(
+        [DETECTOR_CALIBRATION_PARAMETER_NAMES.index(name) for name in fitted_calibration_names],
+        dtype=np.int64,
+    )
     lower = bounds.lower.as_array()
     upper = bounds.upper.as_array()
     initial_values = initial.as_array()
     if np.any(initial_values < lower) or np.any(initial_values > upper):
         raise ValueError("initial shared geometry corrections must lie inside the bounds")
+    initial_calibration_values = initial_calibration.as_array()
+    if detector_calibration_correction_bounds is None:
+        calibration_lower = np.full(3, -np.inf, dtype=np.float64)
+        calibration_upper = np.full(3, np.inf, dtype=np.float64)
+        calibration_half_span = np.ones(3, dtype=np.float64)
+    else:
+        calibration_lower = detector_calibration_correction_bounds.lower.as_array()
+        calibration_upper = detector_calibration_correction_bounds.upper.as_array()
+        calibration_half_span = detector_calibration_correction_bounds.half_span
+        if np.any(initial_calibration_values < calibration_lower) or np.any(
+            initial_calibration_values > calibration_upper
+        ):
+            raise ValueError("initial detector calibration corrections must lie inside the bounds")
     initial_incidence_delta = float(initial_incidence_angle_delta_rad)
     if not math.isfinite(initial_incidence_delta):
         raise ValueError("initial_incidence_angle_delta_rad must be finite")
@@ -1106,14 +1339,26 @@ def fit_indexed_geometry_series(
     model_evaluation_count = 0
 
     shared_value_count = len(fitted_indices)
-    delta_index = shared_value_count if incidence_delta_fitted else None
-    trim_start = shared_value_count + int(incidence_delta_fitted)
+    calibration_value_count = len(fitted_calibration_indices)
+    calibration_start = shared_value_count
+    delta_index = shared_value_count + calibration_value_count if incidence_delta_fitted else None
+    trim_start = shared_value_count + calibration_value_count + int(incidence_delta_fitted)
 
     def unpack(
         value: FloatArray,
-    ) -> tuple[SharedGeometryCorrections, float, FloatArray, dict[str, float]]:
+    ) -> tuple[
+        SharedGeometryCorrections,
+        DetectorCalibrationCorrections,
+        float,
+        FloatArray,
+        dict[str, float],
+    ]:
         full_value = np.array(initial_values, copy=True)
         full_value[fitted_indices] = value[:shared_value_count]
+        full_calibration_value = np.array(initial_calibration_values, copy=True)
+        full_calibration_value[fitted_calibration_indices] = value[
+            calibration_start : calibration_start + calibration_value_count
+        ]
         incidence_delta = (
             float(value[delta_index]) if delta_index is not None else initial_incidence_delta
         )
@@ -1128,6 +1373,7 @@ def fit_indexed_geometry_series(
         }
         return (
             SharedGeometryCorrections.from_array(full_value),
+            DetectorCalibrationCorrections.from_array(full_calibration_value),
             incidence_delta,
             contrast,
             trim_by_id,
@@ -1136,10 +1382,11 @@ def fit_indexed_geometry_series(
     def data_residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
-        corrections, incidence_delta, _, trim_by_id = unpack(value)
+        corrections, calibration, incidence_delta, _, trim_by_id = unpack(value)
         return evaluate_indexed_geometry_series_residual(
             ordered,
             corrections,
+            detector_calibration_corrections=calibration,
             incidence_angle_delta_rad=incidence_delta,
             incidence_angle_trim_by_image_id_rad=trim_by_id,
         )
@@ -1156,6 +1403,31 @@ def fit_indexed_geometry_series(
     fitted_half_span = bounds.half_span[fitted_indices]
     fitted_rank_step = np.asarray(_RANK_STEP)[fitted_indices]
     fitted_optimizer_scale = np.asarray(_OPTIMIZER_SCALE)[fitted_indices]
+    if calibration_value_count:
+        fitted_lower = np.append(
+            fitted_lower,
+            calibration_lower[fitted_calibration_indices],
+        )
+        fitted_upper = np.append(
+            fitted_upper,
+            calibration_upper[fitted_calibration_indices],
+        )
+        fitted_initial = np.append(
+            fitted_initial,
+            initial_calibration_values[fitted_calibration_indices],
+        )
+        fitted_half_span = np.append(
+            fitted_half_span,
+            calibration_half_span[fitted_calibration_indices],
+        )
+        fitted_rank_step = np.append(
+            fitted_rank_step,
+            np.asarray(_DETECTOR_CALIBRATION_RANK_STEP)[fitted_calibration_indices],
+        )
+        fitted_optimizer_scale = np.append(
+            fitted_optimizer_scale,
+            np.asarray(_DETECTOR_CALIBRATION_OPTIMIZER_SCALE)[fitted_calibration_indices],
+        )
     if incidence_angle_delta_bounds is not None:
         fitted_lower = np.append(fitted_lower, incidence_angle_delta_bounds.lower_rad)
         fitted_upper = np.append(fitted_upper, incidence_angle_delta_bounds.upper_rad)
@@ -1192,7 +1464,9 @@ def fit_indexed_geometry_series(
         fitted_upper,
         step_size=fitted_rank_step,
     )
-    fitted_count = len(fitted_names) + int(incidence_delta_fitted) + trim_count
+    fitted_count = (
+        len(fitted_names) + len(fitted_calibration_names) + int(incidence_delta_fitted) + trim_count
+    )
     rank, condition, _ = _rank_diagnostics(preflight, fitted_half_span)
     if rank < fitted_count or condition > _MAXIMUM_JACOBIAN_CONDITION:
         raise GeometryRankError(
@@ -1213,13 +1487,20 @@ def fit_indexed_geometry_series(
         gtol=1.0e-12,
         max_nfev=150,
     )
-    corrections, incidence_angle_delta_rad, trim_contrast, trim_by_id = unpack(optimized.x)
+    (
+        corrections,
+        detector_calibration_corrections,
+        incidence_angle_delta_rad,
+        trim_contrast,
+        trim_by_id,
+    ) = unpack(optimized.x)
     trim_values = np.asarray(tuple(trim_by_id[image_id] for image_id in image_ids))
     per_image, site_error, chord_angle = _fit_metrics(
         ordered,
         corrections,
         incidence_angle_delta_rad,
         trim_by_id,
+        detector_calibration_corrections,
     )
     fitted_data_jacobian = _finite_difference_jacobian(
         data_residual,
@@ -1256,6 +1537,7 @@ def fit_indexed_geometry_series(
     )
     return IndexedGeometryFitResult(
         corrections=corrections,
+        detector_calibration_corrections=detector_calibration_corrections,
         incidence_angle_delta_rad=incidence_angle_delta_rad,
         incidence_angle_delta_fitted=incidence_delta_fitted,
         incidence_angle_trim_contrast_rad=np.array(trim_contrast, copy=True),
@@ -1270,6 +1552,18 @@ def fit_indexed_geometry_series(
         fitted_parameter_names=fitted_names,
         fixed_parameter_names=tuple(
             name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in fitted_names
+        ),
+        fitted_detector_calibration_parameter_names=fitted_calibration_names,
+        fixed_detector_calibration_parameter_names=tuple(
+            name
+            for name in DETECTOR_CALIBRATION_PARAMETER_NAMES
+            if name not in fitted_calibration_names
+        ),
+        parameterization_id=(
+            _CALIBRATED_PARAMETERIZATION_ID
+            if fitted_calibration_names
+            or np.any(detector_calibration_corrections.as_array() != 0.0)
+            else _PARAMETERIZATION_ID
         ),
         image_ids=tuple(image.image_id for image in ordered),
         per_image=per_image,
@@ -1290,8 +1584,11 @@ def fit_indexed_geometry_series(
 
 
 __all__ = [
+    "DETECTOR_CALIBRATION_PARAMETER_NAMES",
     "INCIDENCE_ANGLE_DELTA_PARAMETER_NAME",
     "SHARED_GEOMETRY_PARAMETER_NAMES",
+    "DetectorCalibrationCorrectionBounds",
+    "DetectorCalibrationCorrections",
     "IncidenceAngleDeltaBounds",
     "IndexedGeometryFitResult",
     "IndexedGeometryImage",
@@ -1301,6 +1598,7 @@ __all__ = [
     "IndexedGeometrySeriesRootAudit",
     "SharedGeometryCorrectionBounds",
     "SharedGeometryCorrections",
+    "apply_detector_calibration_corrections",
     "apply_shared_geometry_corrections",
     "audit_indexed_geometry_series_roots",
     "evaluate_indexed_geometry_series_metrics",

@@ -72,3 +72,18 @@ low-rank detrending; it does not fit a detector raster or claim a physical backg
 recreate sampled scattering events or move a factor upstream without a new declared measure and
 proof. The accepted exact-marker geometry fit consumes geometry only and therefore does not require
 detector intensity or pixel integration.
+
+## Contract-v13 shared fitting joins
+
+| Upstream state | Shared join | Downstream consumer | Qualification |
+|---|---|---|---|
+| CIF + explicit repeat/unknown-U policy | reciprocal-basis-bound strength provider | sparse detector or ordinary evaluation | conventional-cell repeat is not an inferred physical layer |
+| source + optics + mosaic + detector + selected coordinates | structure-independent sparse response | any compatible strength provider | CPU requested-coordinate fitting; no generic raster renderer |
+| detector + candidate mosaic state | finite angular profile bank | unchanged mosaic fitter | each candidate re-evaluates the detector; the structure-response factorization freezes mosaic |
+| sparse response + candidate provider | unchanged raw detector-coordinate density | exact region quadrature | basis and reference revisions must agree |
+| affine CIF, Bi2X3, or PbI2 log-ratio parameterization + region blocks | parameterized matched-region fitter | rank-qualified structure result | explicit scales; rank/condition failures reject |
+| optional detector calibration fit | provenance-bearing fixed position | downstream staged physics | inactive pack preserves legacy position exactly |
+
+Generic programmatic sparse fitting is active. Automatic raw-image region discovery/recipe
+generation, generic full-image rendering, and arbitrary stacking-law construction remain deferred
+consumers rather than reasons to create per-material Python runners.

@@ -952,10 +952,11 @@ uv run --frozen pytest -q tests/test_fitting.py `
   -k optional_pbi2_polytype_landmarks_strengthen_mosaic
 ```
 
-This is an analytic synthetic profile bank, not a measured or detector-native PbI2 forward model.
-Independent per-profile nuisance amplitudes deliberately remove population and cross-peak strength
-from the mosaic objective; the subsequent T24 synthetic intrinsic-strength stage fits those
-population constants under a separately declared measure.
+This historical T23 proof is an analytic synthetic profile bank, not a measured detector-native
+fit. Contract v13 separately proves the same mosaic fitter with the shared PbI2 detector response,
+including regular kinematic 001. Independent per-profile nuisance amplitudes deliberately remove
+population and cross-peak strength from the mosaic objective; a structure stage needs its own
+declared cross-region measure.
 
 ## PbI2 exact-rational intrinsic SF population validation
 
@@ -983,3 +984,52 @@ of continuous transition probabilities.
 
 Generated images, profiles, benchmark dumps, and diagnostics never belong under these directories or
 elsewhere in the repository.
+
+## General layered-CIF sparse fitting API
+
+The configured generic ordered default declares complete conventional-cell repeats:
+
+```yaml
+structure_factor:
+  model_id: cif_conventional_cell_finite_repeat.v1
+  repeats: 5
+  normalization: FINITE_TOTAL
+  unknown_u_iso_A2: 0.0
+```
+
+`FINITE_PER_LAYER` divides by this complete-cell repeat count; it does not reinterpret a repeat as
+an inferred monolayer or quintuple layer. The shared fitting entry is:
+
+```python
+inputs = build_configured_simulation_inputs(config)
+detector = build_source_averaged_structure_detector(inputs)
+response = detector.compile_structure_response(column_px, row_px)
+```
+
+`AffineCifSiteBasis` plus `AffineCifFiniteStackParameterization`, or the explicit Bi2X3/PbI2
+parameterizations, feeds `StructureRegionResponseBlock`, `ParameterizedStructureRegionModel`, and
+`fit_parameterized_matched_regions`. These are programmatic sparse fitting contracts, not a
+generic full-image renderer or raw-OSC observation-recipe generator. The PbI2 parent provider uses
+the five existing fixed near-parent templates; it does not infer a free stacking transition law.
+All five parents are identical on `00L`, so 001 has zero derivative with respect to every current
+Pb parent-population log ratio. It can constrain a profiled dataset scale jointly. A separately
+declared affine vertical-site basis does change 001 and uses the same response/fitter, but the
+fixed-parent log-ratio model cannot distinguish lateral parent populations there.
+
+The OSC geometry CLI can optionally polish a calibrated native center and detector-normal
+distance while fitting the ordinary shared geometry coordinates:
+
+```powershell
+uv run --frozen python scripts/fit_osc_geometry.py series.yaml `
+  --fit-detector-center --detector-center-half-span-px 6 `
+  --fit-detector-distance --detector-distance-half-span-mm 2 `
+  --freeze-parameter goniometer_pivot_yaw_offset_m `
+  --destination C:\external\fit\position.json --json
+```
+
+Center offsets are continuous detector-native `(column_px,row_px)` values; the distance offset is
+metres internally and the CLI bound is millimetres. Fitting distance while pivot yaw is active is
+forbidden by the CLI because those coordinates form the known Rigaku translation gauge; the data
+Jacobian still provides the general rank authority. Without either fit flag, no calibration pack is
+serialized and the legacy numerical/result-revision path is exact. These options polish an existing
+calibration and do not turn diffraction peaks into an absolute detector-calibration oracle.

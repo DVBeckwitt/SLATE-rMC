@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +75,58 @@ def test_fixed_position_round_trip_preserves_shared_delta_and_zero_sum_trims() -
     )
 
 
+def test_fixed_experiment_applies_calibrated_detector_center_and_distance() -> None:
+    config = load_simulation_config(ROOT / "configs" / "bi2se3_r3_simulation.yaml")
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+    nominal_position = _position()
+    calibrated_position = replace(
+        nominal_position,
+        beam_center_column_row_px=(1455.62, 1594.922),
+        detector_calibration_active=True,
+        detector_plane_normal_offset_m=1.5e-3,
+    )
+
+    nominal = build_fixed_experiment_series(
+        config,
+        position=nominal_position,
+        fixed_lattice=lattice,
+        source_sample_count=1,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )[0]
+    calibrated = build_fixed_experiment_series(
+        config,
+        position=FixedPositionState.from_record(calibrated_position.to_record()),
+        fixed_lattice=lattice,
+        source_sample_count=1,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )[0]
+
+    assert calibrated.instrument.detector_reference_coordinate_px == (
+        calibrated_position.beam_center_column_row_px
+    )
+    normal = nominal.instrument.lab_from_detector.rotation[:, 2]
+    translation_delta = (
+        calibrated.instrument.lab_from_detector.translation_m
+        - nominal.instrument.lab_from_detector.translation_m
+    )
+    assert float(normal @ translation_delta) == pytest.approx(1.5e-3, abs=1.0e-16)
+    np.testing.assert_allclose(
+        translation_delta - 1.5e-3 * normal,
+        0.0,
+        rtol=0.0,
+        atol=1.0e-16,
+    )
+
+
 def test_raw_geometry_fit_record_is_the_shared_position_handoff(tmp_path: Path) -> None:
     manifest = tmp_path / "geometry.yaml"
     manifest.write_text("schema_version: rasim-osc-geometry-fit-v1\n", encoding="utf-8")
@@ -124,12 +177,46 @@ def test_raw_geometry_fit_record_is_the_shared_position_handoff(tmp_path: Path) 
     assert status == "POSITION_MODEL_LIMITED"
     assert selection == "frozen-selection"
 
+    tampered = json.loads(json.dumps(record))
+    tampered["fixed_position"]["detector_plane_normal_offset_m"] = 0.123
+    with pytest.raises(ValueError, match="detector-calibration provenance"):
+        fixed_position_from_fit_record(
+            tampered,
+            expected_manifest_path=manifest,
+            expected_manifest_sha256=manifest_sha256,
+        )
+
     record["manifest_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="position result"):
         fixed_position_from_fit_record(
             record,
             expected_manifest_path=manifest,
             expected_manifest_sha256=manifest_sha256,
+        )
+
+
+def test_legacy_fixed_position_cannot_silently_change_detector_center() -> None:
+    config = load_simulation_config(ROOT / "configs" / "bi2se3_r3_simulation.yaml")
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+    unproven_center = replace(
+        _position(),
+        beam_center_column_row_px=(1454.12, 1596.422),
+    )
+
+    with pytest.raises(ValueError, match="without provenance"):
+        build_fixed_experiment_series(
+            config,
+            position=unproven_center,
+            fixed_lattice=lattice,
+            source_sample_count=1,
+            gaussian_sigma_rad=math.radians(1.0),
+            lorentzian_half_width_rad=math.radians(0.5),
+            lorentzian_probability=0.0,
         )
 
 

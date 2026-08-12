@@ -5,12 +5,19 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.linalg import cholesky, solve_triangular
 from scipy.optimize import least_squares, nnls
+
+from rasim_next.core.contracts import canonical_revision_sha256
+from rasim_next.measurement.continuous_regions import ContinuousRegionQuadrature
+from rasim_next.pipeline.bragg_space import StructureStrengthParameterization
+from rasim_next.pipeline.source_averaged_detector import (
+    SourceAveragedDetectorStructureResponse,
+)
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -257,9 +264,8 @@ class IntegratedPeakAreaProjection:
             raise ValueError("peak-area dataset index lies outside the observations")
         for peak_index in range(peak_count):
             selected = source_peak == peak_index
-            if (
-                np.any(source_dataset[selected] != self.peak_dataset_index[peak_index])
-                or np.any(source_family[selected] != self.peak_signal_family[peak_index])
+            if np.any(source_dataset[selected] != self.peak_dataset_index[peak_index]) or np.any(
+                source_family[selected] != self.peak_signal_family[peak_index]
             ):
                 raise ValueError("one integrated peak cannot cross datasets or signal families")
         matrix = np.zeros((peak_count, source_peak.size), dtype=np.float64)
@@ -300,6 +306,141 @@ class MatchedRegionFitResult:
     success: bool
     optimizer_message: str
     function_evaluations: int
+
+
+@dataclass(frozen=True, slots=True)
+class StructureRegionResponseBlock:
+    """One dataset's sparse detector transfer and exact region quadrature."""
+
+    dataset_id: str
+    response: SourceAveragedDetectorStructureResponse
+    quadrature: ContinuousRegionQuadrature
+    block_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dataset_id, str) or not self.dataset_id:
+            raise ValueError("dataset_id must be a nonempty string")
+        if not isinstance(self.response, SourceAveragedDetectorStructureResponse):
+            raise TypeError("response must be SourceAveragedDetectorStructureResponse")
+        if not isinstance(self.quadrature, ContinuousRegionQuadrature):
+            raise TypeError("quadrature must be ContinuousRegionQuadrature")
+        if not np.array_equal(
+            self.response.column_px, self.quadrature.column_px
+        ) or not np.array_equal(
+            self.response.row_px,
+            self.quadrature.row_px,
+        ):
+            raise ValueError("response coordinates and region quadrature must align exactly")
+        if np.any(self.response.per_rod_caustic):
+            raise ValueError("structure-region response cannot contain detector caustics")
+        object.__setattr__(
+            self,
+            "block_revision",
+            canonical_revision_sha256(
+                ("definition_id", "structure_region_response_block.v1"),
+                ("dataset_id", self.dataset_id),
+                ("response_revision", self.response.response_revision),
+                ("quadrature_revision", self.quadrature.quadrature_revision),
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterizedStructureRegionModel:
+    """Shared structure parameters applied to fixed detector-region transfers."""
+
+    parameterization: StructureStrengthParameterization
+    blocks: tuple[StructureRegionResponseBlock, ...]
+    parameter_names: tuple[str, ...] = field(init=False)
+    parameter_units: tuple[str, ...] = field(init=False)
+    reference_parameters: FloatArray = field(init=False)
+    dataset_ids: tuple[str, ...] = field(init=False)
+    observation_count: int = field(init=False)
+    model_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        parameterization = self.parameterization
+        names = tuple(getattr(parameterization, "parameter_names", ()))
+        units = tuple(getattr(parameterization, "parameter_units", ()))
+        reference = np.asarray(
+            getattr(parameterization, "reference_parameters", ()), dtype=np.float64
+        )
+        parameterization_revision = getattr(parameterization, "parameterization_revision", None)
+        reference_strength = getattr(parameterization, "reference_strength", None)
+        reference_structure_revision = getattr(reference_strength, "structure_model_revision", None)
+        if (
+            not names
+            or len(set(names)) != len(names)
+            or len(units) != len(names)
+            or reference.shape != (len(names),)
+            or np.any(~np.isfinite(reference))
+            or not isinstance(parameterization_revision, str)
+            or len(parameterization_revision) != 64
+            or not callable(getattr(parameterization, "bind_strength", None))
+            or not isinstance(reference_structure_revision, str)
+            or len(reference_structure_revision) != 64
+        ):
+            raise ValueError("structure-strength parameterization contract is incomplete")
+        blocks = tuple(self.blocks)
+        if not blocks or any(
+            not isinstance(block, StructureRegionResponseBlock) for block in blocks
+        ):
+            raise ValueError("blocks must contain structure-region response blocks")
+        observation_counts = {block.quadrature.observation_count for block in blocks}
+        if len(observation_counts) != 1:
+            raise ValueError("all structure-region blocks must share one observation row space")
+        if any(
+            block.response.reference_structure_model_revision != reference_structure_revision
+            for block in blocks
+        ):
+            raise ValueError("response was compiled from a different reference structure model")
+        dataset_ids = tuple(dict.fromkeys(block.dataset_id for block in blocks))
+        frozen_reference = np.array(reference, copy=True)
+        frozen_reference.setflags(write=False)
+        model_revision = canonical_revision_sha256(
+            ("definition_id", "parameterized_structure_region_model.v1"),
+            ("parameterization_revision", parameterization_revision),
+            ("block_revisions", tuple(block.block_revision for block in blocks)),
+        )
+        object.__setattr__(self, "blocks", blocks)
+        object.__setattr__(self, "parameter_names", names)
+        object.__setattr__(self, "parameter_units", units)
+        object.__setattr__(self, "reference_parameters", frozen_reference)
+        object.__setattr__(self, "dataset_ids", dataset_ids)
+        object.__setattr__(self, "observation_count", observation_counts.pop())
+        object.__setattr__(self, "model_revision", model_revision)
+
+    def predict_mass_A2(self, parameters: ArrayLike) -> FloatArray:
+        """Integrate one candidate structure over every fixed observation region."""
+
+        candidate = self.parameterization.bind_strength(parameters)
+        result = np.zeros(self.observation_count, dtype=np.float64)
+        for block in self.blocks:
+            density = block.response.apply_strength(candidate).density_A2_per_px2
+            result += block.quadrature.integrate_density(density)
+        if np.any(~np.isfinite(result)) or np.any(result < 0.0):
+            raise FloatingPointError("parameterized structure model returned invalid mass")
+        result.setflags(write=False)
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class ParameterizedMatchedRegionFitResult:
+    """Identifiable matched-region result bound to model and structure revisions."""
+
+    fit: MatchedRegionFitResult
+    model_revision: str
+    parameterization_revision: str
+    fitted_structure_model_revision: str
+    maximum_sensitivity_condition: float
+
+
+class StructureRegionIdentifiabilityError(RuntimeError):
+    """Raised when a shared structure fit is not data-identifiable."""
+
+    def __init__(self, message: str, result: MatchedRegionFitResult) -> None:
+        super().__init__(message)
+        self.result = result
 
 
 def condition_matched_region_background_from_anchors(
@@ -686,13 +827,110 @@ def fit_matched_regions(
     )
 
 
+def fit_parameterized_matched_regions(
+    observations: MatchedRegionObservations,
+    model: ParameterizedStructureRegionModel,
+    *,
+    fixed_background: FixedMatchedRegionBackground,
+    initial_parameters: Sequence[ArrayLike],
+    lower_bounds: ArrayLike,
+    upper_bounds: ArrayLike,
+    parameter_scales: ArrayLike | None = None,
+    prior_residual: Callable[[FloatArray], ArrayLike] | None = None,
+    peak_area_projection: IntegratedPeakAreaProjection | None = None,
+    sensitivity_relative_tolerance: float = 1.0e-5,
+    maximum_sensitivity_condition: float = 1.0e5,
+    maximum_function_evaluations: int = 200,
+) -> ParameterizedMatchedRegionFitResult:
+    """Fit one shared structure model and reject non-identifiable data directions."""
+
+    if not isinstance(observations, MatchedRegionObservations):
+        raise TypeError("observations must be MatchedRegionObservations")
+    if not isinstance(model, ParameterizedStructureRegionModel):
+        raise TypeError("model must be ParameterizedStructureRegionModel")
+    if parameter_scales is None:
+        raise ValueError(
+            "parameter_scales are required for coordinate-invariant structure identifiability"
+        )
+    maximum_condition = float(maximum_sensitivity_condition)
+    if not math.isfinite(maximum_condition) or maximum_condition < 1.0:
+        raise ValueError("maximum_sensitivity_condition must be finite and at least one")
+    if observations.count_mass.size != model.observation_count:
+        raise ValueError("observations and structure-region model row spaces differ")
+    if set(observations.dataset_ids) != set(model.dataset_ids):
+        raise ValueError("observations and structure-region model dataset IDs differ")
+    dataset_index_by_id = {
+        dataset_id: index for index, dataset_id in enumerate(observations.dataset_ids)
+    }
+    for block in model.blocks:
+        covered = block.quadrature.observation_covered
+        if np.any(
+            np.asarray(observations.dataset_index)[covered] != dataset_index_by_id[block.dataset_id]
+        ):
+            raise ValueError("one structure-region block crosses dataset observation rows")
+
+    result = fit_matched_regions(
+        observations,
+        model.predict_mass_A2,
+        fixed_background=fixed_background,
+        parameter_names=model.parameter_names,
+        initial_parameters=initial_parameters,
+        lower_bounds=lower_bounds,
+        upper_bounds=upper_bounds,
+        parameter_scales=parameter_scales,
+        prior_residual=prior_residual,
+        peak_area_projection=peak_area_projection,
+        sensitivity_relative_tolerance=sensitivity_relative_tolerance,
+        maximum_function_evaluations=maximum_function_evaluations,
+    )
+    parameter_count = len(model.parameter_names)
+    if not result.success:
+        raise StructureRegionIdentifiabilityError(
+            f"structure optimizer failed: {result.optimizer_message}",
+            result,
+        )
+    if (
+        result.sensitivity_rank != parameter_count
+        or result.sensitivity_numerical_rank != parameter_count
+    ):
+        raise StructureRegionIdentifiabilityError(
+            "structure sensitivity is rank deficient "
+            f"({result.sensitivity_rank}/{parameter_count})",
+            result,
+        )
+    if (
+        not math.isfinite(result.sensitivity_condition)
+        or result.sensitivity_condition > maximum_condition
+    ):
+        raise StructureRegionIdentifiabilityError(
+            "structure sensitivity condition exceeds the declared maximum",
+            result,
+        )
+    fitted_strength = model.parameterization.bind_strength(result.parameters)
+    fitted_revision = getattr(fitted_strength, "structure_model_revision", None)
+    if not isinstance(fitted_revision, str) or len(fitted_revision) != 64:
+        raise RuntimeError("fitted structure provider omitted its model revision")
+    return ParameterizedMatchedRegionFitResult(
+        fit=result,
+        model_revision=model.model_revision,
+        parameterization_revision=model.parameterization.parameterization_revision,
+        fitted_structure_model_revision=fitted_revision,
+        maximum_sensitivity_condition=maximum_condition,
+    )
+
+
 __all__ = [
     "FixedMatchedRegionBackground",
     "IntegratedPeakAreaProjection",
     "MatchedRegionFitResult",
     "MatchedRegionObservations",
+    "ParameterizedMatchedRegionFitResult",
+    "ParameterizedStructureRegionModel",
+    "StructureRegionIdentifiabilityError",
+    "StructureRegionResponseBlock",
     "condition_matched_region_background_from_anchors",
     "condition_matched_region_model_from_anchors",
     "fit_matched_regions",
+    "fit_parameterized_matched_regions",
     "profile_matched_region_nuisance",
 ]

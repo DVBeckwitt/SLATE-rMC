@@ -113,7 +113,7 @@ m=h^2+hk+k^2,
 Q_r=\frac{2\pi}{a}\sqrt{\frac{4m}{3}}.
 \]
 
-For a general cell, `Qr` comes from the in-plane reciprocal metric. Floating `Qr` alone is not a stable identity. The phase, reciprocal-cell revision, exact family key, and rod IDs are part of selection provenance.
+For a general cell, `Qr` comes from the in-plane reciprocal metric. Floating `Qr` alone is not a stable identity. The phase, reciprocal-cell revision, exact family key, and rod IDs are part of selection provenance. `family_m = h^2+hk+k^2` is hexagonal metadata only; general-cell integer-L indexing groups candidates by reciprocal-metric transverse radius and preserves representative signed `(h,k)` in marker identity. The accepted layered-CIF mounting uses direct vectors `a1,a2` as the surface lattice and reciprocal `b3` as continuous `L`.
 
 ## Branch convention
 

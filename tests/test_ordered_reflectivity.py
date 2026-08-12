@@ -25,8 +25,10 @@ from rasim_next.core.scattering import (
     scattering_polarization_weight,
 )
 from rasim_next.materials import (
+    AffineCifSiteBasis,
     CrystalSite,
     CrystalStructure,
+    crystal_structure_revision,
     material_optics,
     read_crystal,
 )
@@ -38,12 +40,13 @@ from rasim_next.ordered import (
     bi2x3_quintuple_layer_amplitudes,
     coherent_finite_stack,
     extract_pbi2_motifs,
+    finite_periodic_repeat_amplitude_factor,
     ordered_event_result,
     pbi2_layer_amplitudes,
     uniform_finite_stack,
     unit_cell_amplitude,
 )
-from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength, CifFiniteStackStrength
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.reciprocal.rods import build_rod_catalog
 from rasim_next.reflectivity import (
@@ -65,6 +68,212 @@ from rasim_next.stacking.enumeration import finite_explicit_sequence_intensity
 ROOT = Path(__file__).parents[1]
 STRUCTURES = ROOT / "examples"
 WAVELENGTH_A = 1.540592925
+
+
+def test_cif_finite_stack_strength_matches_direct_atom_and_repeat_sum() -> None:
+    direct_basis_A = np.asarray(
+        (
+            (4.1, 0.6, 0.2),
+            (0.0, 5.2, 0.7),
+            (0.0, 0.0, 6.3),
+        ),
+        dtype=np.float64,
+    )
+    crystal = CrystalStructure(
+        phase_id="generic-triclinic",
+        spacegroup_hm="P 1",
+        direct_basis_A=direct_basis_A,
+        volume_A3=float(np.linalg.det(direct_basis_A)),
+        sites=(
+            CrystalSite(
+                source_label="Si1",
+                species="Si",
+                element="Si",
+                charge=0,
+                occupancy=0.83,
+                fractional=(0.13, 0.27, 0.39),
+                u_iso_A2=0.012,
+                source_multiplicity=1,
+            ),
+            CrystalSite(
+                source_label="O1",
+                species="O",
+                element="O",
+                charge=0,
+                occupancy=1.0,
+                fractional=(0.61, 0.18, 0.74),
+                u_iso_A2=0.021,
+                source_multiplicity=1,
+            ),
+        ),
+        source_path=Path("generic-triclinic.cif"),
+        provenance="test-only explicit triclinic unit cell",
+    )
+    repeat_count = 7
+    model = CifFiniteStackStrength(
+        crystal=crystal,
+        repeats=repeat_count,
+        normalization=EventIntensityNormalization.FINITE_PER_LAYER,
+    )
+    rod = Rod(2, -1)
+    ell = np.asarray((-0.37, 0.0, 0.5, 1.0, 1.000000000003, 1.72))
+    wavelength_A = np.asarray((1.24, 1.31, 1.41, 1.54, 1.66, 1.79))
+    actual = np.asarray(
+        [
+            model.evaluate(rod=rod, L=float(layer), k_norm_Ainv=2.0 * np.pi / wavelength)
+            for layer, wavelength in zip(ell, wavelength_A, strict=True)
+        ]
+    )
+
+    hkl = np.column_stack((np.full(ell.size, rod.h), np.full(ell.size, rod.k), ell))
+    unit_cell = _scalar_atom_sum(crystal, hkl, wavelength_A)
+    repeat = np.asarray(
+        [sum(cmath.exp(2.0j * np.pi * layer * n) for n in range(repeat_count)) for layer in ell]
+    )
+    expected = (
+        np.asarray(
+            electron_squared_to_scattering_strength_A2(np.abs(unit_cell * repeat) ** 2)
+        ).copy()
+        / repeat_count
+    )
+    np.testing.assert_allclose(actual, expected, rtol=3.0e-13, atol=2.0e-18)
+
+    mixed_h = np.asarray((2, -1, 0, 3, -2, 1))
+    mixed_k = np.asarray((-1, 2, 1, 0, -3, -2))
+    mixed = model.evaluate_hkl(
+        h=mixed_h,
+        k=mixed_k,
+        L=ell,
+        k_norm_Ainv=2.0 * np.pi / wavelength_A,
+    )
+    mixed_hkl = np.column_stack((mixed_h, mixed_k, ell))
+    mixed_unit_cell = _scalar_atom_sum(crystal, mixed_hkl, wavelength_A)
+    mixed_expected = (
+        electron_squared_to_scattering_strength_A2(np.abs(mixed_unit_cell * repeat) ** 2)
+        / repeat_count
+    )
+    np.testing.assert_allclose(mixed, mixed_expected, rtol=3.0e-13, atol=2.0e-18)
+
+    factor = finite_periodic_repeat_amplitude_factor(ell, repeat_count)
+    np.testing.assert_allclose(factor, repeat, rtol=2.0e-13, atol=2.0e-13)
+    np.testing.assert_array_equal(
+        model.reciprocal_basis_Ainv, ReciprocalLattice.from_crystal(crystal).basis_Ainv
+    )
+
+
+def test_affine_cif_site_basis_is_declarative_and_rejects_origin_gauges() -> None:
+    crystal = CrystalStructure(
+        phase_id="generic-affine",
+        spacegroup_hm="P 1",
+        direct_basis_A=np.diag((4.0, 5.0, 6.0)),
+        volume_A3=120.0,
+        sites=(
+            CrystalSite(
+                source_label="Si1",
+                species="Si",
+                element="Si",
+                charge=0,
+                occupancy=0.8,
+                fractional=(0.1, 0.2, 0.3),
+                u_iso_A2=0.01,
+                source_multiplicity=1,
+            ),
+            CrystalSite(
+                source_label="O1",
+                species="O",
+                element="O",
+                charge=0,
+                occupancy=0.9,
+                fractional=(0.4, 0.5, 0.6),
+                u_iso_A2=None,
+                source_multiplicity=1,
+            ),
+        ),
+        source_path=Path("first-location.cif"),
+        provenance="test affine reference",
+    )
+    fractional = np.zeros((2, 3, 2), dtype=np.float64)
+    fractional[0, 2, 0] = 1.0
+    fractional[1, 2, 0] = -1.0
+    occupancy = np.zeros((2, 2), dtype=np.float64)
+    occupancy[:, 1] = (0.5, -0.25)
+    u_iso = np.zeros((2, 2), dtype=np.float64)
+    u_iso[1, 1] = 0.2
+    basis = AffineCifSiteBasis(
+        reference_crystal=crystal,
+        parameter_names=("relative_z", "shared_chemistry"),
+        parameter_units=("fractional", "unitless"),
+        reference_parameters=np.asarray((0.0, 0.0)),
+        fractional_coefficients=fractional,
+        occupancy_coefficients=occupancy,
+        u_iso_A2_coefficients=u_iso,
+        unknown_u_iso_A2=0.02,
+    )
+    candidate = basis.apply(np.asarray((0.03, 0.2)))
+
+    assert candidate.spacegroup_hm == "P 1"
+    assert candidate.sites[0].fractional == pytest.approx((0.1, 0.2, 0.33))
+    assert candidate.sites[1].fractional == pytest.approx((0.4, 0.5, 0.57))
+    assert candidate.sites[0].occupancy == pytest.approx(0.9)
+    assert candidate.sites[1].occupancy == pytest.approx(0.85)
+    assert candidate.sites[0].u_iso_A2 == pytest.approx(0.01)
+    assert candidate.sites[1].u_iso_A2 == pytest.approx(0.06)
+    np.testing.assert_array_equal(candidate.direct_basis_A, crystal.direct_basis_A)
+    assert candidate.sites[0].species == crystal.sites[0].species
+    assert candidate.sites[1].species == crystal.sites[1].species
+    assert basis.reference_crystal_revision == crystal_structure_revision(crystal)
+    relocated = replace(crystal, source_path=Path("second-location.cif"))
+    assert crystal_structure_revision(relocated) == basis.reference_crystal_revision
+
+    fixed_unknown = replace(
+        crystal,
+        sites=(
+            replace(crystal.sites[0], u_iso_A2=None),
+            crystal.sites[1],
+        ),
+    )
+    fallback_basis = replace(
+        basis,
+        reference_crystal=fixed_unknown,
+        u_iso_A2_coefficients=np.asarray(
+            (
+                ((0.0, 0.0)),
+                ((0.0, 0.2)),
+            )
+        ),
+    )
+    fallback_candidate = fallback_basis.apply(np.asarray((0.0, 0.2)))
+    assert fallback_candidate.sites[0].u_iso_A2 == pytest.approx(0.02)
+    assert fallback_candidate.sites[1].u_iso_A2 == pytest.approx(0.06)
+
+    unwrapped = basis.apply(np.asarray((0.8, 0.0)))
+    assert unwrapped.sites[0].fractional[2] > 1.0
+    assert unwrapped.sites[1].fractional[2] < 0.0
+    with pytest.raises(ValueError, match="occupancy"):
+        basis.apply(np.asarray((0.0, 1.0)))
+
+    common_origin = np.zeros((2, 3, 1), dtype=np.float64)
+    common_origin[:, 0, 0] = 1.0
+    with pytest.raises(ValueError, match="common origin"):
+        AffineCifSiteBasis(
+            reference_crystal=crystal,
+            parameter_names=("origin_x",),
+            parameter_units=("fractional",),
+            reference_parameters=np.asarray((0.0,)),
+            fractional_coefficients=common_origin,
+            occupancy_coefficients=np.zeros((2, 1)),
+            u_iso_A2_coefficients=np.zeros((2, 1)),
+        )
+    with pytest.raises(ValueError, match="unknown Uiso"):
+        AffineCifSiteBasis(
+            reference_crystal=crystal,
+            parameter_names=("unknown_u",),
+            parameter_units=("angstrom_squared",),
+            reference_parameters=np.asarray((0.0,)),
+            fractional_coefficients=np.zeros((2, 3, 1)),
+            occupancy_coefficients=np.zeros((2, 1)),
+            u_iso_A2_coefficients=np.asarray(((0.0,), (1.0,))),
+        )
 
 
 def test_unpolarized_thomson_factor_has_the_exact_angular_invariants() -> None:

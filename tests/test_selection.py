@@ -1226,6 +1226,86 @@ def _configured_angle_frame(inputs: object) -> AngleFrame:
     )
 
 
+def test_nonhexagonal_rods_use_metric_shells_and_physical_marker_identity() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    geometry_inputs = build_configured_geometry_inputs(
+        config,
+        direct_basis_A=np.diag((5.0, 8.0, 20.0)),
+    )
+    context = build_geometry_only_ewald_context(geometry_inputs)
+    reciprocal = geometry_inputs.reciprocal.basis_Ainv
+    assert not np.isclose(np.linalg.norm(reciprocal[:, 0]), np.linalg.norm(reciprocal[:, 1]))
+
+    expected_hk = []
+    discovered_peaks = []
+    for target_hk in ((1, 0), (0, 1)):
+        rod = next(rod for rod in context.rods if (rod.h, rod.k) == target_hk)
+        predicted = None
+        for integer_l in range(-12, 13):
+            roots = blind_module.solve_integer_l_ewald_roots(
+                rod=rod,
+                integer_l=integer_l,
+                reciprocal_basis_Ainv=context.reciprocal_basis_Ainv,
+                crystal_to_sample=context.crystal_to_sample,
+                ki_sample_Ainv=context.ki_sample_Ainv,
+            )
+            if roots is None:
+                continue
+            for beta_rad in roots.beta_rad:
+                mapped = context.map_latent_geometry(
+                    rod=rod,
+                    branch=roots.branch,
+                    alpha_rad=0.0,
+                    beta_rad=beta_rad,
+                )
+                if not bool(mapped.valid):
+                    continue
+                predicted = mapped
+                break
+            if predicted is not None:
+                break
+        assert predicted is not None
+        mapped = predicted
+        expected_hk.append(target_hk)
+        mapped_angles = detector_coordinates_to_angles(
+            np.asarray((mapped.column_px,)),
+            np.asarray((mapped.row_px,)),
+            instrument=context.instrument,
+            angle_frame=_configured_angle_frame(geometry_inputs),
+        )
+        discovered_peaks.append(
+            DiscoveredCakePeak(
+                column_px=float(mapped.column_px),
+                row_px=float(mapped.row_px),
+                two_theta_rad=float(mapped_angles.two_theta_rad[0]),
+                phi_rad=float(mapped_angles.phi_rad[0]),
+                covariance_px2=((0.01, 0.0), (0.0, 0.01)),
+                localization_covariance_px2=((0.01, 0.0), (0.0, 0.01)),
+                z_score=30.0,
+            )
+        )
+    frame = _configured_angle_frame(geometry_inputs)
+    discovery = MeasuredPeakDiscovery(
+        image_id="nonhexagonal-public-indexing-proof",
+        detector_shape_rc=context.instrument.detector_shape_rc,
+        peaks=tuple(discovered_peaks),
+        detector_data_hash="sha256-" + "1" * 64,
+        detector_mask_hash="sha256-" + "2" * 64,
+        detector_mask_revision="nonhexagonal-public-indexing-mask.v1",
+        geometry_context_hash=_discovery_geometry_hash(context.instrument, frame),
+        policy=BlindIndexingPolicy(),
+    )
+    indexed = index_discovered_integer_l_peaks(
+        discovery,
+        ewald_context=context,
+        angle_frame=frame,
+        incidence_angle_rad=math.radians(5.0),
+    )
+    observed_hk = {decision.key.representative_rod_hk for decision in indexed.marker_decisions}
+    assert {tuple(map(abs, value)) for value in observed_hk} == set(expected_hk)
+
+
 @pytest.fixture(scope="module")
 def pbi2_rational_admission_fixture() -> tuple[
     ExactTagGeometryModel,

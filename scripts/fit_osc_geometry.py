@@ -16,8 +16,11 @@ from time import perf_counter
 import numpy as np
 
 from rasim_next.fitting import (
+    DETECTOR_CALIBRATION_PARAMETER_NAMES,
     INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    DetectorCalibrationCorrectionBounds,
+    DetectorCalibrationCorrections,
     FixedPositionState,
     IncidenceAngleDeltaBounds,
     IndexedGeometryImage,
@@ -120,8 +123,15 @@ def _trim_by_image_id(result: object) -> dict[str, float]:
     }
 
 
-def _fit_payload(result: object) -> dict[str, object]:
-    return {
+def _detector_calibration_active(result: object) -> bool:
+    return bool(result.fitted_detector_calibration_parameter_names) or bool(
+        np.any(result.detector_calibration_corrections.as_array() != 0.0)
+    )
+
+
+def serialize_geometry_fit_result(result: object) -> dict[str, object]:
+    """Serialize one geometry-fit result without changing the legacy null-calibration record."""
+    payload = {
         "success": result.success,
         "message": result.message,
         "parameterization_id": result.parameterization_id,
@@ -160,6 +170,19 @@ def _fit_payload(result: object) -> dict[str, object]:
         "optimizer_function_evaluation_count": result.optimizer_function_evaluation_count,
         "optimizer_jacobian_evaluation_count": result.optimizer_jacobian_evaluation_count,
     }
+    if _detector_calibration_active(result):
+        payload.update(
+            {
+                "fitted_detector_calibration_parameter_names": (
+                    result.fitted_detector_calibration_parameter_names
+                ),
+                "fixed_detector_calibration_parameter_names": (
+                    result.fixed_detector_calibration_parameter_names
+                ),
+                "detector_calibration_corrections": asdict(result.detector_calibration_corrections),
+            }
+        )
+    return payload
 
 
 def _key_payload(key: object) -> dict[str, object]:
@@ -177,12 +200,14 @@ def _prediction_payload(
     corrections: SharedGeometryCorrections,
     incidence_angle_delta_rad: float,
     incidence_angle_trim_by_image_id_rad: dict[str, float] | None = None,
+    detector_calibration_corrections: DetectorCalibrationCorrections | None = None,
 ) -> tuple[dict[str, object], ...]:
     payload = []
     for image in sorted(images, key=lambda item: item.image_id):
         prediction = image.predict_integer_l_tags(
             image.observations.keys,
             corrections,
+            detector_calibration_corrections=detector_calibration_corrections,
             incidence_angle_delta_rad=incidence_angle_delta_rad,
             incidence_angle_trim_rad=(incidence_angle_trim_by_image_id_rad or {}).get(
                 image.image_id, 0.0
@@ -234,9 +259,12 @@ def _deterministic_starts(
     fitted_parameter_names: tuple[str, ...],
     *,
     initial: SharedGeometryCorrections,
+    detector_calibration_bounds: DetectorCalibrationCorrectionBounds | None,
+    fitted_detector_calibration_parameter_names: tuple[str, ...],
+    initial_detector_calibration: DetectorCalibrationCorrections,
     initial_incidence_angle_delta_rad: float,
     incidence_angle_delta_bounds: IncidenceAngleDeltaBounds | None,
-) -> tuple[tuple[SharedGeometryCorrections, float], ...]:
+) -> tuple[tuple[SharedGeometryCorrections, DetectorCalibrationCorrections, float], ...]:
     pattern = np.asarray((1.0, -0.8, 0.6, -0.4, 0.7, -0.5, 0.3, 0.9, -0.7))
     offset = 0.08 * bounds.half_span * pattern
     fitted = set(fitted_parameter_names)
@@ -255,19 +283,40 @@ def _deterministic_starts(
         if name not in fitted:
             positive[index] = initial_values[index]
             negative[index] = initial_values[index]
+    calibration_initial = initial_detector_calibration.as_array()
+    calibration_positive = np.array(calibration_initial, copy=True)
+    calibration_negative = np.array(calibration_initial, copy=True)
+    if detector_calibration_bounds is not None:
+        calibration_pattern = np.asarray((0.5, -0.7, 0.6), dtype=np.float64)
+        calibration_offset = 0.08 * detector_calibration_bounds.half_span * calibration_pattern
+        fitted_calibration = set(fitted_detector_calibration_parameter_names)
+        for index, name in enumerate(DETECTOR_CALIBRATION_PARAMETER_NAMES):
+            if name in fitted_calibration:
+                calibration_positive[index] += calibration_offset[index]
+                calibration_negative[index] -= calibration_offset[index]
     return (
-        (initial, initial_incidence_angle_delta_rad),
-        (SharedGeometryCorrections.from_array(positive), positive_incidence_start),
-        (SharedGeometryCorrections.from_array(negative), negative_incidence_start),
+        (initial, initial_detector_calibration, initial_incidence_angle_delta_rad),
+        (
+            SharedGeometryCorrections.from_array(positive),
+            DetectorCalibrationCorrections.from_array(calibration_positive),
+            positive_incidence_start,
+        ),
+        (
+            SharedGeometryCorrections.from_array(negative),
+            DetectorCalibrationCorrections.from_array(calibration_negative),
+            negative_incidence_start,
+        ),
     )
 
 
 def _maximum_prediction_separation_px(
     images: tuple[IndexedGeometryImage, ...],
     first: SharedGeometryCorrections,
+    first_detector_calibration: DetectorCalibrationCorrections,
     first_incidence_angle_delta_rad: float,
     first_incidence_angle_trim_by_image_id_rad: dict[str, float],
     second: SharedGeometryCorrections,
+    second_detector_calibration: DetectorCalibrationCorrections,
     second_incidence_angle_delta_rad: float,
     second_incidence_angle_trim_by_image_id_rad: dict[str, float],
 ) -> float:
@@ -276,12 +325,14 @@ def _maximum_prediction_separation_px(
         left = image.predict_integer_l_tags(
             image.observations.keys,
             first,
+            detector_calibration_corrections=first_detector_calibration,
             incidence_angle_delta_rad=first_incidence_angle_delta_rad,
             incidence_angle_trim_rad=first_incidence_angle_trim_by_image_id_rad[image.image_id],
         )
         right = image.predict_integer_l_tags(
             image.observations.keys,
             second,
+            detector_calibration_corrections=second_detector_calibration,
             incidence_angle_delta_rad=second_incidence_angle_delta_rad,
             incidence_angle_trim_rad=second_incidence_angle_trim_by_image_id_rad[image.image_id],
         )
@@ -311,24 +362,38 @@ def fit_osc_geometry_series(
     heldout_integer_l: tuple[int, ...] = (),
     benchmark: bool = False,
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
+    fitted_detector_calibration_parameter_names: tuple[str, ...] = (),
+    detector_center_half_span_px: float = 10.0,
+    detector_distance_half_span_m: float = 1.0e-2,
     fit_incidence_angle_delta: bool = False,
     incidence_angle_delta_half_span_deg: float = 0.5,
     fit_incidence_angle_trim: bool = False,
     incidence_angle_trim_contrast_half_span_deg: float = 0.5,
     incidence_angle_trim_prior_sigma_deg: float = 0.25,
     initial: SharedGeometryCorrections | None = None,
+    initial_detector_calibration: DetectorCalibrationCorrections | None = None,
     initial_incidence_angle_delta_rad: float = 0.0,
 ) -> dict[str, object]:
     """Index once, fit frozen observations jointly, and audit without reassignment."""
 
     if (
         not fitted_parameter_names
+        and not fitted_detector_calibration_parameter_names
         and not fit_incidence_angle_delta
         and not fit_incidence_angle_trim
     ):
         raise ValueError("at least one geometry parameter must remain fitted")
     if fit_incidence_angle_delta and "sample_normal_x_tilt_rad" in fitted_parameter_names:
         raise ValueError("fit_incidence_angle_delta requires sample_normal_x_tilt_rad to be frozen")
+    center_half_span_px = float(detector_center_half_span_px)
+    distance_half_span_m = float(detector_distance_half_span_m)
+    if (
+        not math.isfinite(center_half_span_px)
+        or center_half_span_px <= 0.0
+        or not math.isfinite(distance_half_span_m)
+        or distance_half_span_m <= 0.0
+    ):
+        raise ValueError("detector calibration half-spans must be positive and finite")
     delta_half_span_deg = float(incidence_angle_delta_half_span_deg)
     if not math.isfinite(delta_half_span_deg) or delta_half_span_deg <= 0.0:
         raise ValueError("incidence_angle_delta_half_span_deg must be positive and finite")
@@ -348,8 +413,28 @@ def fit_osc_geometry_series(
     initial_corrections = zero if initial is None else initial
     if not isinstance(initial_corrections, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections or None")
+    initial_calibration = (
+        DetectorCalibrationCorrections.zero()
+        if initial_detector_calibration is None
+        else initial_detector_calibration
+    )
+    if not isinstance(initial_calibration, DetectorCalibrationCorrections):
+        raise TypeError(
+            "initial_detector_calibration must be DetectorCalibrationCorrections or None"
+        )
+    fitted_calibration_names = tuple(
+        name
+        for name in DETECTOR_CALIBRATION_PARAMETER_NAMES
+        if name in set(fitted_detector_calibration_parameter_names)
+    )
+    if len(fitted_calibration_names) != len(fitted_detector_calibration_parameter_names):
+        raise ValueError("detector calibration parameter names are unknown or duplicated")
     if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and fit_incidence_angle_trim:
         raise ValueError("the Bi2Se3 qualification does not include incidence-angle trims")
+    if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and (
+        fitted_calibration_names or np.any(initial_calibration.as_array() != 0.0)
+    ):
+        raise ValueError("the Bi2Se3 qualification does not include detector calibration polish")
     if series.qualification_profile == _BI2SE3_QUALIFICATION_PROFILE and (
         initial_corrections.sample_normal_x_tilt_rad != 0.0
         or not fit_incidence_angle_delta
@@ -361,6 +446,23 @@ def fit_osc_geometry_series(
         )
     indexing = index_osc_geometry_series(series)
     bounds = SharedGeometryCorrectionBounds.rasim_multi_angle_pose()
+    calibration_half_span = DetectorCalibrationCorrections(
+        center_half_span_px,
+        center_half_span_px,
+        distance_half_span_m,
+    )
+    calibration_bounds = (
+        DetectorCalibrationCorrectionBounds(
+            lower=DetectorCalibrationCorrections.from_array(
+                initial_calibration.as_array() - calibration_half_span.as_array()
+            ),
+            upper=DetectorCalibrationCorrections.from_array(
+                initial_calibration.as_array() + calibration_half_span.as_array()
+            ),
+        )
+        if fitted_calibration_names
+        else None
+    )
     incidence_bounds = (
         IncidenceAngleDeltaBounds(
             lower_rad=-math.radians(delta_half_span_deg),
@@ -380,12 +482,15 @@ def fit_osc_geometry_series(
         bounds,
         fitted_parameter_names,
         initial=initial_corrections,
+        detector_calibration_bounds=calibration_bounds,
+        fitted_detector_calibration_parameter_names=fitted_calibration_names,
+        initial_detector_calibration=initial_calibration,
         initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
         incidence_angle_delta_bounds=incidence_bounds,
     )
     fit_results = []
     fit_wall_times = []
-    for initial_correction, initial_delta in starts:
+    for initial_correction, initial_detector, initial_delta in starts:
         started = perf_counter()
         fit_results.append(
             fit_indexed_geometry_series(
@@ -393,6 +498,9 @@ def fit_osc_geometry_series(
                 initial=initial_correction,
                 bounds=bounds,
                 fitted_parameter_names=fitted_parameter_names,
+                initial_detector_calibration_corrections=initial_detector,
+                detector_calibration_correction_bounds=calibration_bounds,
+                fitted_detector_calibration_parameter_names=fitted_calibration_names,
                 initial_incidence_angle_delta_rad=initial_delta,
                 incidence_angle_delta_bounds=incidence_bounds,
                 incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
@@ -406,6 +514,7 @@ def fit_osc_geometry_series(
         residual = evaluate_indexed_geometry_series_residual(
             images,
             candidate.corrections,
+            detector_calibration_corrections=(candidate.detector_calibration_corrections),
             incidence_angle_delta_rad=candidate.incidence_angle_delta_rad,
             incidence_angle_trim_by_image_id_rad=candidate_trims,
         )
@@ -419,6 +528,7 @@ def fit_osc_geometry_series(
     post_fit = evaluate_indexed_geometry_series_metrics(
         images,
         result.corrections,
+        detector_calibration_corrections=result.detector_calibration_corrections,
         incidence_angle_delta_rad=result.incidence_angle_delta_rad,
         incidence_angle_trim_by_image_id_rad=result_trims,
     )
@@ -426,9 +536,10 @@ def fit_osc_geometry_series(
         {
             "initial": {
                 "corrections": asdict(initial_correction),
+                "detector_calibration_corrections": asdict(initial_detector),
                 "incidence_angle_delta_rad": initial_delta,
             },
-            "fit": _fit_payload(candidate),
+            "fit": serialize_geometry_fit_result(candidate),
             "normalized_correction_separation_from_selected_start": float(
                 np.max(
                     np.abs(candidate.corrections.as_array() - result.corrections.as_array())
@@ -438,13 +549,28 @@ def fit_osc_geometry_series(
             "absolute_incidence_angle_delta_separation_from_selected_start_rad": abs(
                 candidate.incidence_angle_delta_rad - result.incidence_angle_delta_rad
             ),
+            "normalized_detector_calibration_separation_from_selected_start": (
+                0.0
+                if calibration_bounds is None
+                else float(
+                    np.max(
+                        np.abs(
+                            candidate.detector_calibration_corrections.as_array()
+                            - result.detector_calibration_corrections.as_array()
+                        )
+                        / calibration_bounds.half_span
+                    )
+                )
+            ),
             "maximum_prediction_separation_from_selected_start_px": (
                 _maximum_prediction_separation_px(
                     images,
                     result.corrections,
+                    result.detector_calibration_corrections,
                     result.incidence_angle_delta_rad,
                     result_trims,
                     candidate.corrections,
+                    candidate.detector_calibration_corrections,
                     candidate.incidence_angle_delta_rad,
                     _trim_by_image_id(candidate),
                 )
@@ -452,7 +578,11 @@ def fit_osc_geometry_series(
             "objective_sum_squares": objective_sum,
             "wall_time_seconds": elapsed,
         }
-        for (initial_correction, initial_delta), candidate, objective_sum, elapsed in zip(
+        for (
+            initial_correction,
+            initial_detector,
+            initial_delta,
+        ), candidate, objective_sum, elapsed in zip(
             starts, fit_results, fit_objective_sums, fit_wall_times, strict=True
         )
     )
@@ -460,6 +590,7 @@ def fit_osc_geometry_series(
     root_audit = audit_indexed_geometry_series_roots(
         images,
         result.corrections,
+        detector_calibration_corrections=result.detector_calibration_corrections,
         incidence_angle_delta_rad=result.incidence_angle_delta_rad,
         incidence_angle_trim_by_image_id_rad=result_trims,
     )
@@ -470,6 +601,7 @@ def fit_osc_geometry_series(
     corrected = {
         image.image_id: image.corrected_instrument(
             result.corrections,
+            detector_calibration_corrections=result.detector_calibration_corrections,
             incidence_angle_delta_rad=result.incidence_angle_delta_rad,
             incidence_angle_trim_rad=result_trims[image.image_id],
         )
@@ -548,6 +680,9 @@ def fit_osc_geometry_series(
             initial=initial_corrections,
             bounds=bounds,
             fitted_parameter_names=fitted_parameter_names,
+            initial_detector_calibration_corrections=initial_calibration,
+            detector_calibration_correction_bounds=calibration_bounds,
+            fitted_detector_calibration_parameter_names=fitted_calibration_names,
             initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
             incidence_angle_delta_bounds=incidence_bounds,
             incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
@@ -556,11 +691,12 @@ def fit_osc_geometry_series(
         cross_validation_fit_succeeded = cross_fit.success
         cross_validation = {
             "heldout_integer_L": tuple(sorted(heldout_set)),
-            "fit": _fit_payload(cross_fit),
+            "fit": serialize_geometry_fit_result(cross_fit),
             "heldout": _metrics_payload(
                 evaluate_indexed_geometry_series_metrics(
                     heldout_images,
                     cross_fit.corrections,
+                    detector_calibration_corrections=(cross_fit.detector_calibration_corrections),
                     incidence_angle_delta_rad=cross_fit.incidence_angle_delta_rad,
                     incidence_angle_trim_by_image_id_rad=_trim_by_image_id(cross_fit),
                 )
@@ -570,6 +706,7 @@ def fit_osc_geometry_series(
                 cross_fit.corrections,
                 cross_fit.incidence_angle_delta_rad,
                 _trim_by_image_id(cross_fit),
+                cross_fit.detector_calibration_corrections,
             ),
             "wall_time_seconds": perf_counter() - started,
         }
@@ -583,6 +720,7 @@ def fit_osc_geometry_series(
             evaluate_indexed_geometry_series_residual(
                 images,
                 result.corrections,
+                detector_calibration_corrections=(result.detector_calibration_corrections),
                 incidence_angle_delta_rad=result.incidence_angle_delta_rad,
                 incidence_angle_trim_by_image_id_rad=result_trims,
             )
@@ -594,6 +732,9 @@ def fit_osc_geometry_series(
             initial=initial_corrections,
             bounds=bounds,
             fitted_parameter_names=fitted_parameter_names,
+            initial_detector_calibration_corrections=initial_calibration,
+            detector_calibration_correction_bounds=calibration_bounds,
+            fitted_detector_calibration_parameter_names=fitted_calibration_names,
             initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
             incidence_angle_delta_bounds=incidence_bounds,
             incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
@@ -613,9 +754,11 @@ def fit_osc_geometry_series(
             "maximum_prediction_separation_px": _maximum_prediction_separation_px(
                 images,
                 fit_results[left].corrections,
+                fit_results[left].detector_calibration_corrections,
                 fit_results[left].incidence_angle_delta_rad,
                 _trim_by_image_id(fit_results[left]),
                 fit_results[right].corrections,
+                fit_results[right].detector_calibration_corrections,
                 fit_results[right].incidence_angle_delta_rad,
                 _trim_by_image_id(fit_results[right]),
             ),
@@ -667,6 +810,8 @@ def fit_osc_geometry_series(
         result.fitted_parameter_names == _BI2SE3_FITTED_SHARED_PARAMETER_NAMES
         and result.fixed_parameter_names == ("sample_normal_x_tilt_rad",)
         and result.corrections.sample_normal_x_tilt_rad == 0.0
+        and not result.fitted_detector_calibration_parameter_names
+        and np.all(result.detector_calibration_corrections.as_array() == 0.0)
         and result.incidence_angle_delta_fitted
         and incidence_bounds is not None
         and incidence_bounds.lower_rad == -math.radians(0.5)
@@ -714,6 +859,17 @@ def fit_osc_geometry_series(
         "incidence_angle_image_ids": image_ids,
         "incidence_angle_trim_by_image_id_rad": result_trims,
     }
+    calibration_active = _detector_calibration_active(result)
+    if calibration_active:
+        position_revision_payload.update(
+            {
+                "configured_detector_reference_coordinate_px": tuple(
+                    float(value)
+                    for value in images[0].model.inputs.instrument.detector_reference_coordinate_px
+                ),
+                "detector_calibration_corrections": asdict(result.detector_calibration_corrections),
+            }
+        )
     position_revision = (
         "sha256-"
         + hashlib.sha256(
@@ -731,8 +887,16 @@ def fit_osc_geometry_series(
         incidence_angle_delta_rad=result.incidence_angle_delta_rad,
         commanded_incidence_angles_rad=tuple(image.commanded_angle_rad for image in images),
         beam_center_column_row_px=tuple(
-            float(value)
-            for value in images[0].model.inputs.instrument.detector_reference_coordinate_px
+            float(value + offset)
+            for value, offset in zip(
+                images[0].model.inputs.instrument.detector_reference_coordinate_px,
+                result.detector_calibration_corrections.as_array()[:2],
+                strict=True,
+            )
+        ),
+        detector_calibration_active=calibration_active,
+        detector_plane_normal_offset_m=(
+            result.detector_calibration_corrections.detector_plane_normal_offset_m
         ),
         incidence_angle_image_ids=image_ids if result.incidence_angle_trim_fitted else (),
         incidence_angle_trim_rad=(
@@ -757,7 +921,7 @@ def fit_osc_geometry_series(
         ),
     ).to_record()
 
-    return {
+    payload = {
         "schema": "rasim-osc-geometry-fit-result-v6",
         "manifest_path": str(Path(manifest_path).resolve()),
         "manifest_sha256": hashlib.sha256(Path(manifest_path).resolve().read_bytes()).hexdigest(),
@@ -777,12 +941,13 @@ def fit_osc_geometry_series(
         "image_site_counts": {image.image_id: len(image.observations.keys) for image in images},
         "baseline": _metrics_payload(baseline),
         "cross_validation": cross_validation,
-        "fit": _fit_payload(result),
+        "fit": serialize_geometry_fit_result(result),
         "predictions": _prediction_payload(
             images,
             result.corrections,
             result.incidence_angle_delta_rad,
             result_trims,
+            result.detector_calibration_corrections,
         ),
         "incidence_angle_correction": {
             "model_id": "commanded_plus_common_delta_plus_zero_sum_trim.helmert.v1",
@@ -848,6 +1013,12 @@ def fit_osc_geometry_series(
             "outer_audit_same": outer_audit_same,
         },
     }
+    if calibration_active:
+        payload["configured_detector_reference_coordinate_px"] = tuple(
+            float(value)
+            for value in images[0].model.inputs.instrument.detector_reference_coordinate_px
+        )
+    return payload
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -871,6 +1042,31 @@ def _parser() -> argparse.ArgumentParser:
         choices=SHARED_GEOMETRY_PARAMETER_NAMES,
         default=None,
         help="shared geometry coordinate to hold at its configured/initial value; repeatable",
+    )
+    parser.add_argument(
+        "--fit-detector-center",
+        action="store_true",
+        help="fit shared native detector reference column and row offsets",
+    )
+    parser.add_argument(
+        "--detector-center-half-span-px",
+        type=float,
+        default=10.0,
+        help="symmetric bound in pixels around the configured detector center",
+    )
+    parser.add_argument(
+        "--fit-detector-distance",
+        action="store_true",
+        help=(
+            "fit panel translation along its configured normal; requires freezing "
+            "goniometer_pivot_yaw_offset_m"
+        ),
+    )
+    parser.add_argument(
+        "--detector-distance-half-span-mm",
+        type=float,
+        default=10.0,
+        help="symmetric panel-normal distance bound in millimetres",
     )
     parser.add_argument(
         "--fit-incidence-angle-delta",
@@ -915,9 +1111,18 @@ def main(argv: list[str] | None = None) -> int:
     fitted_parameter_names = tuple(
         name for name in SHARED_GEOMETRY_PARAMETER_NAMES if name not in frozen
     )
+    fitted_detector_calibration_parameter_names = (
+        (
+            "detector_reference_column_offset_px",
+            "detector_reference_row_offset_px",
+        )
+        if arguments.fit_detector_center
+        else ()
+    ) + (("detector_plane_normal_offset_m",) if arguments.fit_detector_distance else ())
     try:
         if (
             not fitted_parameter_names
+            and not fitted_detector_calibration_parameter_names
             and not arguments.fit_incidence_angle_delta
             and not arguments.fit_incidence_angle_trim
         ):
@@ -927,6 +1132,11 @@ def main(argv: list[str] | None = None) -> int:
             heldout_integer_l=tuple(arguments.heldout_integer_l),
             benchmark=arguments.benchmark,
             fitted_parameter_names=fitted_parameter_names,
+            fitted_detector_calibration_parameter_names=(
+                fitted_detector_calibration_parameter_names
+            ),
+            detector_center_half_span_px=arguments.detector_center_half_span_px,
+            detector_distance_half_span_m=(arguments.detector_distance_half_span_mm * 1.0e-3),
             fit_incidence_angle_delta=arguments.fit_incidence_angle_delta,
             incidence_angle_delta_half_span_deg=(arguments.incidence_angle_delta_half_span_deg),
             fit_incidence_angle_trim=arguments.fit_incidence_angle_trim,
@@ -974,6 +1184,10 @@ def main(argv: list[str] | None = None) -> int:
         f"chord_rms_rad={payload['post_fit']['chord_angle_rms_rad']:.6g}"
     )
     print(f"corrections={payload['fit']['corrections']}")
+    if "detector_calibration_corrections" in payload["fit"]:
+        print(
+            f"detector_calibration_corrections={payload['fit']['detector_calibration_corrections']}"
+        )
     print(f"fitted_parameters={payload['fit']['fitted_parameter_names']}")
     print(f"fixed_parameters={payload['fit']['fixed_parameter_names']}")
     incidence = payload["incidence_angle_correction"]

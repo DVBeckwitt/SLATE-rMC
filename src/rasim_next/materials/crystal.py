@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from operator import index
 from pathlib import Path
 
 import gemmi
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
+
+from rasim_next.core.contracts import canonical_revision_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,240 @@ class CrystalStructure:
         object.__setattr__(self, "direct_basis_A", basis)
         object.__setattr__(self, "sites", tuple(self.sites))
         object.__setattr__(self, "source_path", Path(self.source_path))
+
+
+def crystal_structure_revision(crystal: CrystalStructure) -> str:
+    """Hash resolved cell and expanded-site physics, excluding filesystem provenance."""
+
+    if not isinstance(crystal, CrystalStructure):
+        raise TypeError("crystal must be CrystalStructure")
+    u_known = np.asarray(
+        [site.u_iso_A2 is not None for site in crystal.sites],
+        dtype=np.bool_,
+    )
+    u_value = np.asarray(
+        [0.0 if site.u_iso_A2 is None else site.u_iso_A2 for site in crystal.sites],
+        dtype=np.float64,
+    )
+    return canonical_revision_sha256(
+        ("definition_id", "resolved_expanded_crystal_structure.v1"),
+        ("phase_id", crystal.phase_id),
+        ("spacegroup_hm", crystal.spacegroup_hm),
+        ("direct_basis_A", crystal.direct_basis_A),
+        ("volume_A3", np.asarray(crystal.volume_A3, dtype=np.float64)),
+        ("source_label", tuple(site.source_label for site in crystal.sites)),
+        ("species", tuple(site.species for site in crystal.sites)),
+        ("element", tuple(site.element for site in crystal.sites)),
+        ("charge", np.asarray([site.charge for site in crystal.sites], dtype=np.int64)),
+        (
+            "occupancy",
+            np.asarray([site.occupancy for site in crystal.sites], dtype=np.float64),
+        ),
+        (
+            "fractional",
+            np.asarray([site.fractional for site in crystal.sites], dtype=np.float64),
+        ),
+        ("u_iso_known", u_known),
+        ("u_iso_A2", u_value),
+        (
+            "source_multiplicity",
+            np.asarray(
+                [site.source_multiplicity for site in crystal.sites],
+                dtype=np.int64,
+            ),
+        ),
+    )
+
+
+def _readonly_finite_array(
+    value: ArrayLike,
+    shape: tuple[int, ...],
+    name: str,
+) -> NDArray[np.float64]:
+    supplied = np.asarray(value)
+    if np.iscomplexobj(supplied) and np.any(supplied.imag != 0.0):
+        raise ValueError(f"{name} must be real")
+    array = np.array(supplied.real, dtype=np.float64, copy=True, order="C")
+    if array.shape != shape or not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must be finite with shape {shape}")
+    array.setflags(write=False)
+    return array
+
+
+@dataclass(frozen=True, slots=True)
+class AffineCifSiteBasis:
+    """Declarative affine coordinates, occupancies, and isotropic U on expanded CIF rows."""
+
+    reference_crystal: CrystalStructure
+    parameter_names: tuple[str, ...]
+    parameter_units: tuple[str, ...]
+    reference_parameters: NDArray[np.float64]
+    fractional_coefficients: NDArray[np.float64]
+    occupancy_coefficients: NDArray[np.float64]
+    u_iso_A2_coefficients: NDArray[np.float64]
+    unknown_u_iso_A2: float | None = None
+    reference_crystal_revision: str = field(init=False)
+    basis_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference_crystal, CrystalStructure):
+            raise TypeError("reference_crystal must be CrystalStructure")
+        names = tuple(self.parameter_names)
+        units = tuple(self.parameter_units)
+        if (
+            not names
+            or any(not isinstance(value, str) or not value for value in names)
+            or len(set(names)) != len(names)
+        ):
+            raise ValueError("parameter_names must contain unique nonempty strings")
+        if len(units) != len(names) or any(
+            not isinstance(value, str) or not value for value in units
+        ):
+            raise ValueError("parameter_units must align with the named parameters")
+        parameter_count = len(names)
+        site_count = len(self.reference_crystal.sites)
+        reference = _readonly_finite_array(
+            self.reference_parameters,
+            (parameter_count,),
+            "reference_parameters",
+        )
+        fractional = _readonly_finite_array(
+            self.fractional_coefficients,
+            (site_count, 3, parameter_count),
+            "fractional_coefficients",
+        )
+        occupancy = _readonly_finite_array(
+            self.occupancy_coefficients,
+            (site_count, parameter_count),
+            "occupancy_coefficients",
+        )
+        u_iso = _readonly_finite_array(
+            self.u_iso_A2_coefficients,
+            (site_count, parameter_count),
+            "u_iso_A2_coefficients",
+        )
+        unknown = self.unknown_u_iso_A2
+        if unknown is not None:
+            unknown = float(unknown)
+            if not math.isfinite(unknown) or unknown < 0.0:
+                raise ValueError("unknown_u_iso_A2 must be finite and nonnegative")
+        unknown_rows = np.asarray(
+            [site.u_iso_A2 is None for site in self.reference_crystal.sites],
+            dtype=np.bool_,
+        )
+        if np.any((np.linalg.norm(u_iso, axis=1) > 0.0) & unknown_rows) and unknown is None:
+            raise ValueError("varying an unknown Uiso row requires unknown_u_iso_A2")
+
+        fractional_without_origin = fractional - np.mean(
+            fractional,
+            axis=0,
+            keepdims=True,
+        )
+        design = np.concatenate(
+            (
+                fractional_without_origin.reshape(-1, parameter_count),
+                occupancy,
+                u_iso,
+            ),
+            axis=0,
+        )
+        column_norm = np.linalg.norm(design, axis=0)
+        if np.any(column_norm == 0.0):
+            raise ValueError("every parameter must change structure beyond a common origin shift")
+        normalized = design / column_norm[None, :]
+        singular = np.linalg.svd(normalized, full_matrices=False, compute_uv=False)
+        tolerance = 128.0 * np.finfo(np.float64).eps * max(normalized.shape) * float(singular[0])
+        if int(np.count_nonzero(singular > tolerance)) != parameter_count:
+            raise ValueError("affine CIF parameter columns are linearly dependent")
+
+        reference_revision = crystal_structure_revision(self.reference_crystal)
+        unknown_policy = "explicit" if unknown is not None else "preserve_none"
+        basis_revision = canonical_revision_sha256(
+            ("definition_id", "affine_expanded_cif_site_basis.v1"),
+            ("reference_crystal_revision", reference_revision),
+            ("parameter_names", names),
+            ("parameter_units", units),
+            ("reference_parameters", reference),
+            ("fractional_coefficients", fractional),
+            ("occupancy_coefficients", occupancy),
+            ("u_iso_A2_coefficients", u_iso),
+            ("unknown_u_iso_policy", unknown_policy),
+            (
+                "unknown_u_iso_A2",
+                np.asarray(0.0 if unknown is None else unknown, dtype=np.float64),
+            ),
+        )
+        object.__setattr__(self, "parameter_names", names)
+        object.__setattr__(self, "parameter_units", units)
+        object.__setattr__(self, "reference_parameters", reference)
+        object.__setattr__(self, "fractional_coefficients", fractional)
+        object.__setattr__(self, "occupancy_coefficients", occupancy)
+        object.__setattr__(self, "u_iso_A2_coefficients", u_iso)
+        object.__setattr__(self, "unknown_u_iso_A2", unknown)
+        object.__setattr__(self, "reference_crystal_revision", reference_revision)
+        object.__setattr__(self, "basis_revision", basis_revision)
+
+    def apply(self, parameters: ArrayLike) -> CrystalStructure:
+        """Apply one candidate vector without wrapping, clipping, or topology changes."""
+
+        value = _readonly_finite_array(
+            parameters,
+            (len(self.parameter_names),),
+            "parameters",
+        )
+        delta = value - self.reference_parameters
+        reference_fractional = np.asarray(
+            [site.fractional for site in self.reference_crystal.sites],
+            dtype=np.float64,
+        )
+        reference_occupancy = np.asarray(
+            [site.occupancy for site in self.reference_crystal.sites],
+            dtype=np.float64,
+        )
+        fractional = reference_fractional + np.einsum(
+            "scp,p->sc",
+            self.fractional_coefficients,
+            delta,
+        )
+        occupancy = reference_occupancy + self.occupancy_coefficients @ delta
+        if np.any((occupancy < 0.0) | (occupancy > 1.0)):
+            raise ValueError("affine CIF occupancy lies outside [0, 1]")
+
+        sites: list[CrystalSite] = []
+        for site_index, site in enumerate(self.reference_crystal.sites):
+            u_change = float(self.u_iso_A2_coefficients[site_index] @ delta)
+            if (
+                site.u_iso_A2 is None
+                and self.unknown_u_iso_A2 is None
+                and np.all(self.u_iso_A2_coefficients[site_index] == 0.0)
+            ):
+                u_iso_A2 = None
+            else:
+                baseline_u = self.unknown_u_iso_A2 if site.u_iso_A2 is None else site.u_iso_A2
+                assert baseline_u is not None
+                u_iso_A2 = baseline_u + u_change
+                if u_iso_A2 < 0.0:
+                    raise ValueError("affine CIF isotropic displacement became negative")
+            sites.append(
+                replace(
+                    site,
+                    fractional=tuple(float(item) for item in fractional[site_index]),
+                    occupancy=float(occupancy[site_index]),
+                    u_iso_A2=u_iso_A2,
+                )
+            )
+        return CrystalStructure(
+            phase_id=self.reference_crystal.phase_id,
+            spacegroup_hm="P 1",
+            direct_basis_A=self.reference_crystal.direct_basis_A,
+            volume_A3=self.reference_crystal.volume_A3,
+            sites=tuple(sites),
+            source_path=self.reference_crystal.source_path,
+            provenance=(
+                f"{self.reference_crystal.provenance}; affine expanded-CIF site basis "
+                f"{self.basis_revision}"
+            ),
+        )
 
 
 def crystal_with_direct_basis(

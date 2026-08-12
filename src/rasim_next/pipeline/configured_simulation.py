@@ -49,7 +49,11 @@ from rasim_next.materials import (
     material_optics,
     read_crystal,
 )
-from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
+from rasim_next.pipeline.bragg_space import (
+    Bi2X3FiniteStackStrength,
+    CifFiniteStackStrength,
+    RevisionedStructureStrengthModel,
+)
 from rasim_next.pipeline.continuous_detector import (
     DetectorCoordinateGeometry,
     DetectorEwaldMeasure,
@@ -57,7 +61,10 @@ from rasim_next.pipeline.continuous_detector import (
     evaluate_detector_coordinates_geometry,
     map_ewald_geometry_to_detector,
 )
-from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
+from rasim_next.pipeline.source_averaged_detector import (
+    SourceAveragedDetectorEwaldMeasure,
+    SourceAveragedStructureDetector,
+)
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.sampling.source import sample_gaussian_source_rays
 from rasim_next.stacking import Parent
@@ -175,9 +182,11 @@ class MosaicInputConfiguration:
 @dataclass(frozen=True, slots=True)
 class StructureFactorConfiguration:
     model_id: str
-    layers: int
     normalization: str
     shared_disorder_epsilon: float
+    layers: int | None = None
+    repeats: int | None = None
+    unknown_u_iso_A2: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,14 +659,50 @@ def load_simulation_config(
     sf_data = _mapping(
         document["structure_factor"],
         "structure_factor",
-        required={"model_id", "layers", "normalization", "shared_disorder_epsilon"},
+        required={"model_id", "normalization"},
+        optional={"layers", "repeats", "shared_disorder_epsilon", "unknown_u_iso_A2"},
     )
+    structure_model_id = _string(sf_data["model_id"], "structure_factor.model_id")
+    generic_cif_model = structure_model_id == "cif_conventional_cell_finite_repeat.v1"
+    count_key = "repeats" if generic_cif_model else "layers"
+    forbidden_count_key = "layers" if generic_cif_model else "repeats"
+    if count_key not in sf_data:
+        raise ValueError(f"structure_factor: missing key {count_key!r} for the selected model")
+    if forbidden_count_key in sf_data:
+        raise ValueError(
+            f"structure_factor.{forbidden_count_key} does not apply to {structure_model_id}"
+        )
+    if (
+        structure_model_id != "cif_conventional_cell_finite_repeat.v1"
+        and "shared_disorder_epsilon" not in sf_data
+    ):
+        raise ValueError(
+            "structure_factor: missing key 'shared_disorder_epsilon' for the stacking model"
+        )
     structure_factor = StructureFactorConfiguration(
-        model_id=_string(sf_data["model_id"], "structure_factor.model_id"),
-        layers=_integer(sf_data["layers"], "structure_factor.layers", positive=True),
+        model_id=structure_model_id,
         normalization=_string(sf_data["normalization"], "structure_factor.normalization"),
         shared_disorder_epsilon=_finite(
-            sf_data["shared_disorder_epsilon"], "structure_factor.shared_disorder_epsilon"
+            sf_data.get("shared_disorder_epsilon", 0.0),
+            "structure_factor.shared_disorder_epsilon",
+        ),
+        layers=(
+            None
+            if generic_cif_model
+            else _integer(sf_data["layers"], "structure_factor.layers", positive=True)
+        ),
+        repeats=(
+            _integer(sf_data["repeats"], "structure_factor.repeats", positive=True)
+            if generic_cif_model
+            else None
+        ),
+        unknown_u_iso_A2=(
+            None
+            if sf_data.get("unknown_u_iso_A2") is None
+            else _nonnegative(
+                sf_data["unknown_u_iso_A2"],
+                "structure_factor.unknown_u_iso_A2",
+            )
         ),
     )
     bragg_data = _mapping(
@@ -1194,7 +1239,7 @@ class ConfiguredSimulationInputs:
     reciprocal: ReciprocalLattice
     rods: tuple[Rod, ...]
     mosaic: MosaicParameters
-    strength: Bi2X3FiniteStackStrength
+    strength: RevisionedStructureStrengthModel
     bragg_space: MosaicBraggSpace
     material: MaterialOptics
     commanded_instrument_rebindable: bool = True
@@ -1233,15 +1278,25 @@ def build_configured_simulation_inputs(
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
     if config.structure_factor.model_id not in {
+        "cif_conventional_cell_finite_repeat.v1",
         "r3m_quintuple_finite_2h.v1",
         "r3m_quintuple_finite_3r.v1",
     }:
         raise ValueError(
-            "structure_factor.model_id must select the finite R-3m quintuple-layer model "
-            "for intensity"
+            "structure_factor.model_id must select a supported model for intensity: the generic "
+            "CIF finite-repeat or finite R-3m quintuple-layer model"
         )
-    if config.structure_factor.normalization != "FINITE_TOTAL":
-        raise ValueError("structure_factor.normalization must be FINITE_TOTAL for intensity")
+    try:
+        normalization = EventIntensityNormalization(config.structure_factor.normalization)
+    except ValueError as error:
+        raise ValueError(
+            "structure_factor.normalization must be FINITE_TOTAL or FINITE_PER_LAYER"
+        ) from error
+    if normalization is EventIntensityNormalization.UNIT_CELL:
+        raise ValueError("structure_factor.normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
+    generic_cif = config.structure_factor.model_id == "cif_conventional_cell_finite_repeat.v1"
+    if not generic_cif and normalization is not EventIntensityNormalization.FINITE_TOTAL:
+        raise ValueError("R-3m quintuple intensity requires FINITE_TOTAL normalization")
     if not 0.0 <= config.structure_factor.shared_disorder_epsilon <= 1.0:
         raise ValueError(
             "structure_factor.shared_disorder_epsilon must lie in [0, 1] for intensity"
@@ -1251,6 +1306,8 @@ def build_configured_simulation_inputs(
         if config.structure_factor.model_id == "r3m_quintuple_finite_3r.v1"
         else Parent.TWO_H
     )
+    if generic_cif and config.structure_factor.shared_disorder_epsilon != 0.0:
+        raise ValueError("generic CIF finite repeats do not accept a stacking-disorder epsilon")
     if stacking_parent is Parent.THREE_R and config.structure_factor.shared_disorder_epsilon != 0.0:
         raise ValueError(
             "r3m_quintuple_finite_3r.v1 is a deterministic fault-free parent; "
@@ -1291,13 +1348,28 @@ def build_configured_simulation_inputs(
     if not config.bragg.include_detector_visible_m0:
         rods = tuple(rod for rod in rods if rod.family_m != 0)
     mosaic = _mosaic(config.mosaic)
-    strength = Bi2X3FiniteStackStrength(
-        crystal=crystal,
-        layers=config.structure_factor.layers,
-        normalization=EventIntensityNormalization.FINITE_TOTAL,
-        parent=stacking_parent,
-        shared_disorder_epsilon=config.structure_factor.shared_disorder_epsilon,
-    )
+    strength: RevisionedStructureStrengthModel
+    if generic_cif:
+        if config.structure_factor.repeats is None or config.structure_factor.layers is not None:
+            raise ValueError("generic CIF intensity requires a conventional-cell repeat count")
+        strength = CifFiniteStackStrength(
+            crystal=crystal,
+            repeats=config.structure_factor.repeats,
+            normalization=normalization,
+            unknown_u_iso_A2=config.structure_factor.unknown_u_iso_A2,
+        )
+    else:
+        if config.structure_factor.layers is None or config.structure_factor.repeats is not None:
+            raise ValueError("quintuple-layer intensity requires a layer count")
+        if config.structure_factor.unknown_u_iso_A2 is not None:
+            raise ValueError("R-3m quintuple intensity does not use unknown_u_iso_A2")
+        strength = Bi2X3FiniteStackStrength(
+            crystal=crystal,
+            layers=config.structure_factor.layers,
+            normalization=normalization,
+            parent=stacking_parent,
+            shared_disorder_epsilon=config.structure_factor.shared_disorder_epsilon,
+        )
     nominal_air_k = 2.0 * np.pi / config.source.mean_wavelength_A
     nominal_keys = {
         (rod.h, rod.k)
@@ -1381,10 +1453,8 @@ def rebind_configured_simulation_instrument(
     )
 
 
-def build_source_averaged_detector(
-    inputs: ConfiguredSimulationInputs,
-) -> SourceAveragedDetectorEwaldMeasure:
-    """Compile the continuous all-state detector pullback only when requested."""
+def _source_reachable_rods(inputs: ConfiguredSimulationInputs) -> tuple[Rod, ...]:
+    """Return the configured catalog subset reachable by at least one valid source state."""
 
     valid_index = np.flatnonzero(inputs.incident.states.valid)
     maximum_air_k = 2.0 * np.pi / float(np.min(inputs.incident.states.wavelength_A[valid_index]))
@@ -1396,7 +1466,44 @@ def build_source_averaged_detector(
             population=inputs.config.bragg.rod_population,
         )
     }
-    reachable_rods = tuple(rod for rod in inputs.rods if (rod.h, rod.k) in reachable_keys)
+    return tuple(rod for rod in inputs.rods if (rod.h, rod.k) in reachable_keys)
+
+
+def build_source_averaged_structure_detector(
+    inputs: ConfiguredSimulationInputs,
+    *,
+    strength_model: RevisionedStructureStrengthModel | None = None,
+) -> SourceAveragedStructureDetector:
+    """Build the one material-neutral detector function used by staged fitting."""
+
+    reachable_rods = _source_reachable_rods(inputs)
+    active_strength = inputs.strength if strength_model is None else strength_model
+    return SourceAveragedStructureDetector(
+        reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
+        crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
+        rods=reachable_rods,
+        rod_catalog_revision=configured_rod_catalog_revision(inputs, rods=reachable_rods),
+        mosaic=inputs.mosaic,
+        strength_model=active_strength,
+        incident=inputs.incident,
+        material=inputs.material,
+        instrument=inputs.instrument,
+        phase_population_weight=inputs.config.weights.phase_population,
+        polarization_weight=inputs.config.weights.polarization,
+    )
+
+
+def build_source_averaged_detector(
+    inputs: ConfiguredSimulationInputs,
+) -> SourceAveragedDetectorEwaldMeasure:
+    """Compile the optimized Bi2X3 renderer; fits use the generic structure detector."""
+
+    if not isinstance(inputs.strength, Bi2X3FiniteStackStrength):
+        raise TypeError(
+            "the optimized renderer requires Bi2X3FiniteStackStrength; use "
+            "build_source_averaged_structure_detector for a general CIF"
+        )
+    reachable_rods = _source_reachable_rods(inputs)
     return SourceAveragedDetectorEwaldMeasure(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
@@ -2574,6 +2681,7 @@ __all__ = [
     "build_geometry_only_ewald_context",
     "build_nominal_ewald_context",
     "build_source_averaged_detector",
+    "build_source_averaged_structure_detector",
     "configured_rod_catalog_revision",
     "evaluate_nominal_ewald_surface",
     "evaluate_nominal_integer_l_markers",

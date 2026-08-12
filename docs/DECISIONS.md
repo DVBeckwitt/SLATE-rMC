@@ -313,3 +313,18 @@ An accepted lattice and the independently provided mosaic state are bound togeth
 immutable fixed-experiment checkpoint is composed. The downstream rebuild regenerates all material
 optics, reciprocal bases, rods, and detector functions from that full basis while preserving the
 separate mosaic provenance, so structure fitting cannot silently mix incompatible states.
+
+## D040: Material-neutral fitting uses a strength-provider boundary
+
+A CIF supplies a periodic structure, not mounting, coherent repeat count, termination, mosaic,
+detector resolution/background, fitted chemical constraints, or stacking law. The generic default
+therefore evaluates one complete conventional cell with an explicit repeat count. Specialized
+Bi2X3 quintuple-layer and fixed-parent PbI2 physics remain reusable providers behind the identical
+reciprocal-basis-bound strength contract; they are not selected by material names.
+
+Source, wavelength, rods, inverse roots, optics, mosaic, detector projection, and selected
+coordinates are compiled once into a sparse transfer. Candidate strength is applied afterward and
+the existing region/mosaic fitters remain unchanged. The optimized Bi2X3 renderer stays a separate
+parity-checked accelerator. No plugin registry, material-name dispatcher, notebook import, or
+per-material fit runner is introduced. Experiment observation recipes and genuinely new disorder
+laws remain explicit data/model declarations.

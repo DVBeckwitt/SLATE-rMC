@@ -28,6 +28,8 @@ from rasim_next.fitting import (
     CompiledStackingResponse,
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
+    DetectorCalibrationCorrectionBounds,
+    DetectorCalibrationCorrections,
     ExactTagGeometryModel,
     GeometryCorrectionBounds,
     GeometryCorrections,
@@ -52,10 +54,13 @@ from rasim_next.fitting import (
     MosaicProfileNuisanceBasis,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
+    Pbi2ParentLogRatioParameterization,
+    Pbi2ParentMixtureStrength,
     Pbi2PolytypeLandmarkCatalogue,
     SharedGeometryCorrectionBounds,
     SharedGeometryCorrections,
     StackingPopulationIdentifiabilityError,
+    apply_detector_calibration_corrections,
     apply_shared_geometry_corrections,
     audit_indexed_geometry_series_roots,
     audit_integer_l_marker_selection,
@@ -1329,25 +1334,42 @@ def test_tag_identity_rejects_duplicates_and_mismatched_pairs() -> None:
         IntegerLMarkerKey(1, 2, 2, 0, (1, 0))
     negative = IntegerLMarkerKey(1, 2, 2, -1, (1, 0))
     positive = IntegerLMarkerKey(1, 2, 2, 1, (1, 0))
-    duplicate_user_identity = replace(negative, representative_rod_hk=(0, 1))
-    with pytest.raises(ValueError, match=r"\(m,L,tag_branch\)"):
+    same_legacy_family_distinct_rod = replace(negative, representative_rod_hk=(0, 1))
+    distinct_prediction = IntegerLMarkerPrediction(
+        keys=(negative, same_legacy_family_distinct_rod),
+        coordinates_px=np.zeros((2, 2)),
+        detector_status=np.asarray(("VALID", "VALID")),
+        ewald_residual_Ainv=np.zeros(2),
+    )
+    assert distinct_prediction.keys == (negative, same_legacy_family_distinct_rod)
+    with pytest.raises(ValueError, match="identities must be unique"):
         IntegerLMarkerPrediction(
-            keys=(negative, duplicate_user_identity),
+            keys=(negative, negative),
             coordinates_px=np.zeros((2, 2)),
             detector_status=np.asarray(("VALID", "VALID")),
             ewald_residual_Ainv=np.zeros(2),
         )
-    for changed, message in (
-        (replace(positive, representative_rod_hk=(0, 1)), "physical rod"),
-        (replace(positive, branch=1), "Ewald branch"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            IntegerLMarkerObservations(
-                keys=(negative, changed),
-                coordinates_px=np.zeros((2, 2)),
-                covariance_px2=np.broadcast_to(np.eye(2), (2, 2, 2)),
-                reference_wavelength_A=1.54,
-            )
+    with pytest.raises(ValueError, match="Ewald branch"):
+        IntegerLMarkerObservations(
+            keys=(negative, replace(positive, branch=1)),
+            coordinates_px=np.zeros((2, 2)),
+            covariance_px2=np.broadcast_to(np.eye(2), (2, 2, 2)),
+            reference_wavelength_A=1.54,
+        )
+
+
+def test_rational_layer_l_identity_rejects_nonhexagonal_surface_metric() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    model = ExactTagGeometryModel(
+        build_configured_geometry_inputs(
+            config,
+            direct_basis_A=np.diag((5.0, 8.0, 20.0)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="requires a hexagonal surface metric"):
+        model.enumerate_layer_l_tags((CommensurateLayerOrder(3, 2),))
 
 
 def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
@@ -2167,6 +2189,160 @@ def test_three_incidence_hidden_shared_geometry_recovery(
     assert all(
         item.audit.expected_count == item.audit.enumerated_count for item in root_audit.images
     )
+
+    zero_calibration = DetectorCalibrationCorrections.zero()
+    assert (
+        apply_detector_calibration_corrections(
+            images[0].model.instrument,
+            zero_calibration,
+        )
+        is images[0].model.instrument
+    )
+    np.testing.assert_array_equal(
+        evaluate_indexed_geometry_series_residual(
+            tuple(images),
+            truth,
+            incidence_angle_delta_rad=truth_incidence_angle_delta_rad,
+        ),
+        evaluate_indexed_geometry_series_residual(
+            tuple(images),
+            truth,
+            detector_calibration_corrections=zero_calibration,
+            incidence_angle_delta_rad=truth_incidence_angle_delta_rad,
+        ),
+    )
+
+    calibration_truth = DetectorCalibrationCorrections(
+        detector_reference_column_offset_px=2.4,
+        detector_reference_row_offset_px=-1.7,
+        detector_plane_normal_offset_m=1.5e-3,
+    )
+    calibration_bounds = DetectorCalibrationCorrectionBounds(
+        lower=DetectorCalibrationCorrections(-10.0, -10.0, -1.0e-2),
+        upper=DetectorCalibrationCorrections(10.0, 10.0, 1.0e-2),
+    )
+
+    def independently_calibrated_truth_instrument(
+        image: IndexedGeometryImage,
+    ) -> object:
+        config = image.model.inputs.config
+        axis = config.instrument.axis_rotations[0]
+        shifted_config = replace(
+            config,
+            instrument=replace(
+                config.instrument,
+                axis_rotations=(
+                    replace(
+                        axis,
+                        angle_deg=axis.angle_deg + math.degrees(truth_incidence_angle_delta_rad),
+                    ),
+                ),
+            ),
+        )
+        nominal = rebind_configured_geometry_instrument(
+            image.model.inputs,
+            shifted_config,
+        ).instrument
+        detector = nominal.lab_from_detector
+        independently_calibrated = replace(
+            nominal,
+            lab_from_detector=RigidTransform(
+                detector.rotation,
+                detector.translation_m
+                + calibration_truth.detector_plane_normal_offset_m * detector.rotation[:, 2],
+                FrameId.DETECTOR,
+                FrameId.LAB,
+            ),
+            detector_reference_coordinate_px=(
+                nominal.detector_reference_coordinate_px[0]
+                + calibration_truth.detector_reference_column_offset_px,
+                nominal.detector_reference_coordinate_px[1]
+                + calibration_truth.detector_reference_row_offset_px,
+            ),
+        )
+        return apply_shared_geometry_corrections(
+            independently_calibrated,
+            shifted_config.instrument.axis_rotations,
+            truth,
+        )
+
+    calibrated_images = tuple(
+        replace(
+            image,
+            observations=IntegerLMarkerObservations.from_prediction(
+                image.model.predict_integer_l_tags(
+                    image.observations.keys,
+                    instrument=independently_calibrated_truth_instrument(image),
+                ),
+                reference_wavelength_A=image.model.reference_wavelength_A,
+                sigma_px=0.25,
+            ),
+        )
+        for image in images
+    )
+    calibration_result = fit_indexed_geometry_series(
+        calibrated_images,
+        initial=truth,
+        bounds=bounds,
+        fitted_parameter_names=(),
+        initial_detector_calibration_corrections=zero_calibration,
+        detector_calibration_correction_bounds=calibration_bounds,
+        fitted_detector_calibration_parameter_names=(
+            "detector_reference_column_offset_px",
+            "detector_reference_row_offset_px",
+            "detector_plane_normal_offset_m",
+        ),
+        initial_incidence_angle_delta_rad=truth_incidence_angle_delta_rad,
+    )
+    assert calibration_result.success, calibration_result.message
+    assert calibration_result.jacobian_parameter_names == (
+        "detector_reference_column_offset_px",
+        "detector_reference_row_offset_px",
+        "detector_plane_normal_offset_m",
+    )
+    assert calibration_result.jacobian_rank == 3
+    assert calibration_result.jacobian_condition < 100.0
+    np.testing.assert_array_less(
+        np.abs(
+            calibration_result.detector_calibration_corrections.as_array()
+            - calibration_truth.as_array()
+        ),
+        np.asarray((1.0e-8, 1.0e-8, 1.0e-11)),
+    )
+    assert (
+        audit_indexed_geometry_series_roots(
+            calibrated_images,
+            calibration_result.corrections,
+            detector_calibration_corrections=(calibration_result.detector_calibration_corrections),
+            incidence_angle_delta_rad=calibration_result.incidence_angle_delta_rad,
+        ).classification
+        == "SAME"
+    )
+
+    gauge_images = tuple(
+        replace(
+            image,
+            observations=IntegerLMarkerObservations.from_prediction(
+                image.model.predict_integer_l_tags(
+                    image.observations.keys,
+                    instrument=image.corrected_instrument(SharedGeometryCorrections.zero()),
+                ),
+                reference_wavelength_A=image.model.reference_wavelength_A,
+                sigma_px=0.25,
+            ),
+        )
+        for image in images
+    )
+    with pytest.raises(GeometryRankError, match=r"rank=1/2"):
+        fit_indexed_geometry_series(
+            gauge_images,
+            initial=SharedGeometryCorrections.zero(),
+            bounds=bounds,
+            fitted_parameter_names=("goniometer_pivot_yaw_offset_m",),
+            initial_detector_calibration_corrections=zero_calibration,
+            detector_calibration_correction_bounds=calibration_bounds,
+            fitted_detector_calibration_parameter_names=("detector_plane_normal_offset_m",),
+        )
 
     real_solver = fitting_geometry_module.solve_integer_l_ewald_roots
 
@@ -4868,8 +5044,21 @@ def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m
         expected_sha256=crystal_revision,
     )
     reciprocal = ReciprocalLattice.from_crystal(crystal)
-    signed_hk = np.asarray(((-1, 0), (-1, 0), (0, 1), (1, -1), (-2, 0), (-2, 0), (0, 2), (2, -2)))
-    ell = np.asarray((1.1, 1.7, 2.2, 2.8, 3.1, 3.6, 4.2, 4.7))
+    signed_hk = np.asarray(
+        (
+            (0, 0),
+            (0, 0),
+            (-1, 0),
+            (-1, 0),
+            (0, 1),
+            (1, -1),
+            (-2, 0),
+            (-2, 0),
+            (0, 2),
+            (2, -2),
+        )
+    )
+    ell = np.asarray((1.0, 2.0, 1.1, 1.7, 2.2, 2.8, 3.1, 3.6, 4.2, 4.7))
     wavelength = np.linspace(1.53, 1.55, ell.size)
     layers = 7
     epsilon = 0.001
@@ -4935,6 +5124,63 @@ def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m
     assert not response.component_response_A2.flags.writeable
 
     planted_domain = np.asarray((0.60, 0.16, 0.09, 0.10, 0.05))
+    provider = Pbi2ParentMixtureStrength(
+        crystal=crystal,
+        source_cif_sha256=crystal_revision,
+        layers=layers,
+        domain_fraction=planted_domain,
+    )
+    actual_mixture = provider.evaluate_hkl(
+        h=signed_hk[:, 0].astype(np.float64),
+        k=signed_hk[:, 1].astype(np.float64),
+        L=ell,
+        k_norm_Ainv=2.0 * np.pi / wavelength,
+    )
+    np.testing.assert_allclose(
+        actual_mixture,
+        response.component_response_A2 @ planted_domain,
+        rtol=2.0e-14,
+        atol=1.0e-20,
+    )
+    np.testing.assert_allclose(
+        np.ptp(response.component_response_A2[:2], axis=1),
+        0.0,
+        rtol=0.0,
+        atol=2.0e-14 * np.max(response.component_response_A2[:2]),
+    )
+    np.testing.assert_allclose(
+        provider.evaluate_profile(
+            rod=Rod(-1, 0),
+            L=ell[2:4],
+            k_norm_Ainv=float(2.0 * np.pi / wavelength[2]),
+        ),
+        provider.evaluate_hkl(
+            h=-1,
+            k=0,
+            L=ell[2:4],
+            k_norm_Ainv=float(2.0 * np.pi / wavelength[2]),
+        ),
+    )
+    assert provider.rebind_domain_fraction((1.0, 0.0, 0.0, 0.0, 0.0)).structure_model_revision != (
+        provider.structure_model_revision
+    )
+    with pytest.raises(ValueError, match="does not identify"):
+        Pbi2ParentMixtureStrength(
+            crystal=crystal,
+            source_cif_sha256="0" * 64,
+            layers=layers,
+            domain_fraction=planted_domain,
+        )
+    with pytest.raises(ValueError, match="unit simplex"):
+        provider.rebind_domain_fraction((0.6, 0.2, 0.1, 0.1, 0.1))
+    parameterization = Pbi2ParentLogRatioParameterization(
+        reference_strength=provider,
+        active_component_ids=STACKING_COMPONENT_IDS,
+    )
+    rebound = parameterization.bind_strength(parameterization.reference_parameters)
+    np.testing.assert_allclose(rebound.domain_fraction, planted_domain, rtol=0.0, atol=2.0e-16)
+    assert len(parameterization.parameter_names) == len(STACKING_COMPONENT_IDS) - 1
+
     independent_signal = expected @ (1.0e6 * planted_domain)
     independent_fit = fit_stacking_phase_totals(
         response, independent_signal, np.ones(independent_signal.size)

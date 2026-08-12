@@ -54,9 +54,11 @@ detector geometry.
 - Explicit fault-free R-centered three-registry finite stacks in the proof, compiled CPU, and CUDA
   detector paths. This is the tracked R-3m Bi2X3 conventional-cell centering law, not a fitted
   4H/6H mixture or stacking-disorder population.
-- A separate synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five fixed
-  2H/4H/6H near-parent responses at exact rational structural landmarks. It has no PbI2
-  detector/source/optics forward and does not refine continuous transition-law parameters.
+- The historical synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five
+  fixed 2H/4H/6H near-parent responses at exact rational structural landmarks. Contract v13 can
+  now apply those same fixed parents through the shared selected-coordinate detector/source/optics
+  transfer; it still does not refine continuous transition-law parameters or supply measured
+  observation/background data.
 - An optional unified local-lamella `(0,0)` detector field that evaluates the Parratt--kinematic
   strength at internal phase `L` for every actual sampled incident direction and wavelength.
   Interface roughness is physical Nevot--Croce roughness; no auxiliary count scale, model raster,
@@ -93,19 +95,42 @@ observable, and any sphere mesh or raster is only a display sample of that funct
   acquisition-matched/general backgrounds beyond the implemented frozen radial halo.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
-- General-crystal peak identities, multi-axis mechanics, mixed-specimen shared fits, and raw-image
-  profile extraction beyond the accepted layered-hexagonal Bi2Se3/Bi2Te3 real-OSC slices.
+- Arbitrary 3-D single-crystal or powder peak identities, multi-axis mechanics, mixed-specimen
+  shared fits, and automatic raw-image profile extraction beyond the declared layered-film rod
+  geometry.
 - General continuous-`S/N` angular-bin products and reciprocal remapping beyond the prepared
   finite-profile fitting boundary.
 - Physical/nonnegative mosaic-fit backgrounds and general masks, detector PSF, counting noise,
   covariance/uncertainty intervals, held-out subsets, and intrinsic real-OSC recovery beyond the
   accepted model-limited effective radial estimate.
-- General-material structure-parameter bases and profile identity catalogs, per-site anisotropic
-  `Uij`, raw-OSC ordered-component extraction/deblending, and ordered-intensity
-  noise/background/uncertainty models.
-- Structure-parameter bases beyond the tracked Bi2Se3/Bi2Te3 layered-quintuple adapter, with
-  user-declared site/occupancy constraints mapped into the generic detector callable.
+- Species substitution or topology-changing structure bases, per-site anisotropic `Uij`, automatic
+  raw-OSC ordered-component extraction/deblending, and ordered-intensity
+  noise/background/uncertainty recipes.
+- Automatic chemistry constraints, variable cells, and arbitrary stacking-transition laws beyond
+  the declared affine CIF, Bi2X3 quintuple, and fixed-parent PbI2 parameterizations.
 - Optional bounded approximations for fitting, admitted only with observable error bounds.
+
+## Contract-v13 implemented general-CIF fitting scope
+
+- Complete conventional-CIF unit-cell amplitudes with explicit coherent repeat count, wavelength,
+  normalization, and unknown-isotropic-displacement policy.
+- One sparse source-averaged detector transfer shared by generic CIF, specialized Bi2X3, and fixed
+  five-parent PbI2 strengths at selected continuous coordinates.
+- Declarative affine expanded-CIF fractional-coordinate, occupancy, and isotropic-`U` bases, plus
+  gauge-free PbI2 parent log ratios, through one rank-gated matched-region fitter.
+- Optional native detector reference-center and panel-normal distance calibration with explicit
+  fixed-position provenance and an exact inactive legacy path.
+- Reciprocal-metric integer-L rod shells for nonhexagonal layered cells; `family_m` remains
+  hexagonal display metadata. PbI2 rational layer-order admission remains a specialized optional
+  helper rather than a general-cell identity.
+
+A CIF alone still cannot choose the surface mounting, repeat count, termination, mosaic law,
+detector mask/PSF/background, fitted chemical constraints, or stacking transition law. Automatic
+chemistry inference, species substitution through the affine basis, anisotropic per-site `Uij`, a
+generic raw-OSC recipe generator, a generic full-image renderer, arbitrary 3-D single-crystal or
+powder indexing, and arbitrary stacking-law inference remain deferred. The shared programmatic
+core removes the need for new per-material physics runners; accepted historical Bi2X3 workflow
+scripts remain until their raw-observation recipes are migrated to declarative experiment data.
 
 ## Phase discipline
 

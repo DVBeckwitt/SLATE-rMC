@@ -51,11 +51,13 @@ Python allocations (excluding process RSS and native-library allocations).
 
 ## Limitation
 
-The fitted profiles are analytic synthetic responses whose population-weighted amplitudes span ten
+This historical T23 limitation describes the contract-v12 state. The fitted profiles are analytic
+synthetic responses whose population-weighted amplitudes span ten
 orders of magnitude. Exact keys determine identity, upstream qualification determines availability,
-and detector coordinates set only the angular centers. The repository still lacks a PbI2
-source-averaged detector response that folds the transition model, finite-stack shape, optics, and
-mosaic into these bins. Consequently measured PbI2 mosaic recovery,
+and detector coordinates set only the angular centers. Contract v13 now supplies a shared sparse
+source/optics/mosaic/detector response for the same fixed five-parent strength provider, but not a
+measured observation/background recipe or an arbitrary transition law. Consequently measured
+PbI2 mosaic recovery,
 parent-specific mosaics, background/PSF effects, the eventual three separately calibrated
 specimens, relaxed native 4H/6H metrics, and simultaneous mosaic/population fitting remain
 `NO_ORACLE`.

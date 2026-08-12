@@ -4,25 +4,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from operator import index
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from painted_ewald import Rod
+from painted_ewald import BasisBoundStrengthModel, Rod
 from painted_ewald.validation import finite_scalar, reject_complex
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
     LayerNormalQBatch,
     RodQueryBatch,
+    canonical_revision_sha256,
 )
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
-from rasim_next.materials import CrystalStructure
+from rasim_next.materials import (
+    AffineCifSiteBasis,
+    CrystalStructure,
+    crystal_structure_revision,
+)
 from rasim_next.ordered import (
     Bi2X3QuintupleLayerParameters,
     SiteDisplacementProfile,
     bi2x3_quintuple_layer_amplitudes,
+    finite_periodic_repeat_amplitude_factor,
     quintuple_layer_site_labels,
     uniform_finite_stack,
+    unit_cell_amplitude,
 )
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.stacking import (
@@ -35,6 +43,232 @@ from rasim_next.stacking import (
 from rasim_next.stacking.finite_intensity import finite_intensity_reduced
 
 FloatArray = NDArray[np.float64]
+
+
+class RevisionedStructureStrengthModel(BasisBoundStrengthModel, Protocol):
+    """Basis-bound strength provider with immutable structure lineage."""
+
+    @property
+    def structure_model_revision(self) -> str: ...
+
+
+class StructureStrengthParameterization(Protocol):
+    """Bind one explicit parameter vector to a basis-bound strength model."""
+
+    parameter_names: tuple[str, ...]
+    parameter_units: tuple[str, ...]
+    reference_parameters: FloatArray
+    parameterization_revision: str
+    reference_strength: RevisionedStructureStrengthModel
+
+    def bind_strength(self, parameters: ArrayLike) -> RevisionedStructureStrengthModel: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CifFiniteStackStrength:
+    """Coherent finite repeat of one complete periodic CIF unit cell.
+
+    The CIF's first two direct-lattice vectors define the surface lattice and
+    its third reciprocal vector defines the continuous rod coordinate ``L``.
+    Repeating the complete unit cell is an ordered-film default; it does not
+    infer polytypes, faults, terminations, or substrate structure.
+    """
+
+    crystal: CrystalStructure
+    repeats: int
+    normalization: EventIntensityNormalization = EventIntensityNormalization.FINITE_TOTAL
+    unknown_u_iso_A2: float | None = None
+    _lattice: ReciprocalLattice = field(init=False, repr=False, compare=False)
+    structure_model_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.crystal, CrystalStructure):
+            raise TypeError("crystal must be a CrystalStructure")
+        try:
+            repeats = index(self.repeats)
+        except TypeError as error:
+            raise ValueError("repeats must be a positive integer") from error
+        if isinstance(self.repeats, bool) or repeats < 1:
+            raise ValueError("repeats must be a positive integer")
+        normalization = EventIntensityNormalization(self.normalization)
+        if normalization is EventIntensityNormalization.UNIT_CELL:
+            raise ValueError("finite CIF strength requires FINITE_TOTAL or FINITE_PER_LAYER")
+        unknown_u = self.unknown_u_iso_A2
+        if unknown_u is not None:
+            unknown_u = finite_scalar(unknown_u, "unknown_u_iso_A2")
+            if unknown_u < 0.0:
+                raise ValueError("unknown_u_iso_A2 must be nonnegative")
+        if unknown_u is None and any(site.u_iso_A2 is None for site in self.crystal.sites):
+            raise ValueError("unknown CIF displacement requires explicit unknown_u_iso_A2")
+
+        lattice = ReciprocalLattice.from_crystal(self.crystal)
+        effective_u_iso_A2 = np.asarray(
+            [unknown_u if site.u_iso_A2 is None else site.u_iso_A2 for site in self.crystal.sites],
+            dtype=np.float64,
+        )
+        revision = canonical_revision_sha256(
+            ("definition_id", "cif_finite_periodic_stack_strength.v1"),
+            ("phase_id", self.crystal.phase_id),
+            ("spacegroup_hm", self.crystal.spacegroup_hm),
+            ("direct_basis_A", self.crystal.direct_basis_A),
+            ("site_source_label", tuple(site.source_label for site in self.crystal.sites)),
+            ("site_species", tuple(site.species for site in self.crystal.sites)),
+            ("site_element", tuple(site.element for site in self.crystal.sites)),
+            (
+                "site_charge",
+                np.asarray([site.charge for site in self.crystal.sites], dtype=np.int64),
+            ),
+            (
+                "site_occupancy",
+                np.asarray([site.occupancy for site in self.crystal.sites], dtype=np.float64),
+            ),
+            (
+                "site_fractional",
+                np.asarray([site.fractional for site in self.crystal.sites], dtype=np.float64),
+            ),
+            ("site_effective_u_iso_A2", effective_u_iso_A2),
+            ("repeats", repeats),
+            ("normalization", normalization.value),
+        )
+        object.__setattr__(self, "repeats", repeats)
+        object.__setattr__(self, "normalization", normalization)
+        object.__setattr__(self, "unknown_u_iso_A2", unknown_u)
+        object.__setattr__(self, "_lattice", lattice)
+        object.__setattr__(self, "structure_model_revision", revision)
+
+    @property
+    def reciprocal_basis_Ainv(self) -> FloatArray:
+        """CIF-derived reciprocal basis used by every rod query."""
+
+        return self._lattice.basis_Ainv
+
+    def evaluate_profile(
+        self,
+        *,
+        rod: Rod,
+        L: ArrayLike,
+        k_norm_Ainv: float,
+    ) -> FloatArray:
+        """Evaluate one signed physical rod at arbitrary continuous ``L``."""
+
+        if not isinstance(rod, Rod):
+            raise TypeError("rod must be a Rod")
+        reject_complex(L, "L")
+        ell = np.asarray(L, dtype=np.float64)
+        if not np.all(np.isfinite(ell)):
+            raise ValueError("L must be finite")
+        k_norm = finite_scalar(k_norm_Ainv, "k_norm_Ainv")
+        if k_norm <= 0.0:
+            raise ValueError("k_norm_Ainv must be positive")
+        return self.evaluate_hkl(
+            h=np.full(ell.shape, rod.h, dtype=np.int32),
+            k=np.full(ell.shape, rod.k, dtype=np.int32),
+            L=ell,
+            k_norm_Ainv=np.full(ell.shape, k_norm, dtype=np.float64),
+        )
+
+    def evaluate_hkl(
+        self,
+        *,
+        h: ArrayLike,
+        k: ArrayLike,
+        L: ArrayLike,
+        k_norm_Ainv: ArrayLike,
+    ) -> FloatArray:
+        """Vectorize the CIF strength over mixed rods, wavelengths, and exact ``L``."""
+
+        reject_complex(h, "h")
+        reject_complex(k, "k")
+        reject_complex(L, "L")
+        reject_complex(k_norm_Ainv, "k_norm_Ainv")
+        h_value, k_value, ell, k_norm = np.broadcast_arrays(
+            np.asarray(h),
+            np.asarray(k),
+            np.asarray(L, dtype=np.float64),
+            np.asarray(k_norm_Ainv, dtype=np.float64),
+        )
+        if (
+            np.any(~np.isfinite(h_value))
+            or np.any(~np.isfinite(k_value))
+            or np.any(~np.isfinite(ell))
+            or np.any(~np.isfinite(k_norm))
+            or np.any(k_norm <= 0.0)
+            or np.any(h_value != np.rint(h_value))
+            or np.any(k_value != np.rint(k_value))
+        ):
+            raise ValueError("h, k, L, and k_norm_Ainv must be finite valid rod queries")
+        integer_bounds = np.iinfo(np.int32)
+        if np.any((h_value < integer_bounds.min) | (h_value > integer_bounds.max)) or np.any(
+            (k_value < integer_bounds.min) | (k_value > integer_bounds.max)
+        ):
+            raise ValueError("h and k must fit signed 32-bit integers")
+        hkl = np.stack((h_value, k_value, ell), axis=-1)
+        amplitude = unit_cell_amplitude(
+            self.crystal,
+            hkl,
+            2.0 * np.pi / k_norm,
+            unknown_u_iso_A2=self.unknown_u_iso_A2,
+        ).amplitude_e
+        repeat = finite_periodic_repeat_amplitude_factor(ell, self.repeats)
+        strength = electron_squared_to_scattering_strength_A2(np.abs(amplitude * repeat) ** 2)
+        if self.normalization is EventIntensityNormalization.FINITE_PER_LAYER:
+            strength = strength / float(self.repeats)
+        return np.asarray(strength, dtype=np.float64)
+
+    def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+        """Implement the scalar reciprocal-basis-bound strength protocol."""
+
+        return float(self.evaluate_profile(rod=rod, L=L, k_norm_Ainv=k_norm_Ainv))
+
+    def rebind_crystal(self, crystal: CrystalStructure) -> CifFiniteStackStrength:
+        """Return the same declared finite-repeat model for a candidate crystal."""
+
+        if not isinstance(crystal, CrystalStructure):
+            raise TypeError("crystal must be a CrystalStructure")
+        return replace(self, crystal=crystal)
+
+
+@dataclass(frozen=True, slots=True)
+class AffineCifFiniteStackParameterization:
+    """Bind an affine expanded-CIF basis to the generic finite-repeat provider."""
+
+    reference_strength: CifFiniteStackStrength
+    site_basis: AffineCifSiteBasis
+    parameter_names: tuple[str, ...] = field(init=False)
+    parameter_units: tuple[str, ...] = field(init=False)
+    reference_parameters: FloatArray = field(init=False)
+    parameterization_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference_strength, CifFiniteStackStrength):
+            raise TypeError("reference_strength must be CifFiniteStackStrength")
+        if not isinstance(self.site_basis, AffineCifSiteBasis):
+            raise TypeError("site_basis must be AffineCifSiteBasis")
+        if self.site_basis.reference_crystal_revision != crystal_structure_revision(
+            self.reference_strength.crystal
+        ):
+            raise ValueError("affine CIF basis and reference strength identify different crystals")
+        if self.site_basis.unknown_u_iso_A2 != self.reference_strength.unknown_u_iso_A2:
+            raise ValueError("affine CIF basis and strength require the same unknown-U policy")
+        reference = np.array(self.site_basis.reference_parameters, copy=True)
+        reference.setflags(write=False)
+        revision = canonical_revision_sha256(
+            ("definition_id", "affine_cif_finite_stack_parameterization.v1"),
+            (
+                "reference_structure_model_revision",
+                self.reference_strength.structure_model_revision,
+            ),
+            ("site_basis_revision", self.site_basis.basis_revision),
+        )
+        object.__setattr__(self, "parameter_names", self.site_basis.parameter_names)
+        object.__setattr__(self, "parameter_units", self.site_basis.parameter_units)
+        object.__setattr__(self, "reference_parameters", reference)
+        object.__setattr__(self, "parameterization_revision", revision)
+
+    def bind_strength(self, parameters: ArrayLike) -> CifFiniteStackStrength:
+        """Apply one validated vector without changing repeat or normalization state."""
+
+        return self.reference_strength.rebind_crystal(self.site_basis.apply(parameters))
 
 
 def _nearest_physical_occupancy_quadratic(
@@ -134,6 +368,7 @@ class Bi2X3FiniteStackStrength:
     structure_parameters: Bi2X3QuintupleLayerParameters | None = None
     site_displacement_profile: SiteDisplacementProfile | None = None
     _lattice: ReciprocalLattice = field(init=False, repr=False, compare=False)
+    structure_model_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.crystal, CrystalStructure):
@@ -173,12 +408,57 @@ class Bi2X3FiniteStackStrength:
                 raise ValueError(
                     "site-resolved and shared quintuple-layer displacements are mutually exclusive"
                 )
+        parameter_values = np.asarray(
+            [
+                parameters.bi_fractional_z,
+                parameters.se2_fractional_z,
+                parameters.bi_occupancy,
+                parameters.se1_occupancy,
+                parameters.se2_occupancy,
+                parameters.u_radial_A2,
+                parameters.u_normal_A2,
+                parameters.outer_bi_antisite_fraction,
+            ],
+            dtype=np.float64,
+        )
+        revision_fields: list[tuple[str, object]] = [
+            ("definition_id", "bi2x3_finite_quintuple_stack_strength.v1"),
+            ("crystal_revision", crystal_structure_revision(self.crystal)),
+            ("layers", layers),
+            ("normalization", normalization.value),
+            ("parent", parent.value),
+            ("shared_disorder_epsilon", epsilon),
+            ("structure_parameter_values", parameter_values),
+        ]
+        if profile is None:
+            revision_fields.append(("site_displacement_profile", "shared_parameters"))
+        else:
+            revision_fields.extend(
+                (
+                    ("site_displacement_profile", "site_resolved"),
+                    (
+                        "site_displacement_labels",
+                        tuple(site.source_label for site in profile.sites),
+                    ),
+                    (
+                        "site_displacement_components_A2",
+                        np.asarray(
+                            [(site.u_radial_A2, site.u_normal_A2) for site in profile.sites],
+                            dtype=np.float64,
+                        ),
+                    ),
+                    ("site_displacement_scale", profile.scale),
+                    ("site_displacement_provenance", profile.provenance),
+                )
+            )
+        revision = canonical_revision_sha256(*revision_fields)
         object.__setattr__(self, "layers", layers)
         object.__setattr__(self, "normalization", normalization)
         object.__setattr__(self, "parent", parent)
         object.__setattr__(self, "shared_disorder_epsilon", epsilon)
         object.__setattr__(self, "structure_parameters", parameters)
         object.__setattr__(self, "_lattice", ReciprocalLattice.from_crystal(self.crystal))
+        object.__setattr__(self, "structure_model_revision", revision)
 
     @property
     def reciprocal_basis_Ainv(self) -> FloatArray:
@@ -217,7 +497,7 @@ class Bi2X3FiniteStackStrength:
         h: ArrayLike,
         k: ArrayLike,
         L: ArrayLike,
-        k_norm_Ainv: float,
+        k_norm_Ainv: ArrayLike,
     ) -> FloatArray:
         """Vectorize the authoritative strength over mixed physical rods and exact L."""
 
@@ -262,7 +542,7 @@ class Bi2X3FiniteStackStrength:
         h: ArrayLike,
         k: ArrayLike,
         L: ArrayLike,
-        k_norm_Ainv: float,
+        k_norm_Ainv: ArrayLike,
     ) -> tuple[tuple[int, ...], RodQueryBatch, FloatArray, FloatArray]:
         """Validate mixed indices once and build the virtual-normal query."""
 
@@ -289,14 +569,19 @@ class Bi2X3FiniteStackStrength:
             raise ValueError("h and k must fit signed 32-bit integers")
         h_integer = np.asarray(h_value, dtype=np.int32)
         k_integer = np.asarray(k_value, dtype=np.int32)
-        k_norm = finite_scalar(k_norm_Ainv, "k_norm_Ainv")
-        if k_norm <= 0.0:
-            raise ValueError("k_norm_Ainv must be positive")
         shape = ell.shape
+        reject_complex(k_norm_Ainv, "k_norm_Ainv")
+        k_norm_value = np.asarray(k_norm_Ainv, dtype=np.float64)
+        try:
+            k_norm = np.broadcast_to(k_norm_value, shape)
+        except ValueError as error:
+            raise ValueError("k_norm_Ainv must broadcast with h, k, and L") from error
+        if np.any(~np.isfinite(k_norm)) or np.any(k_norm <= 0.0):
+            raise ValueError("k_norm_Ainv must be finite and positive")
         ell_flat = ell.reshape(-1)
         h_flat = h_integer.reshape(-1)
         k_flat = k_integer.reshape(-1)
-        wavelength_A = 2.0 * np.pi / k_norm
+        wavelength_A = 2.0 * np.pi / k_norm.reshape(-1)
         hkl = np.column_stack(
             (
                 h_flat,
@@ -340,7 +625,7 @@ class Bi2X3FiniteStackStrength:
             k=k_flat,
             q_sample_normal_Ainv=layer_normal_q,
             l_coordinate=ell_flat,
-            wavelength_A=np.full(ell_flat.size, wavelength_A),
+            wavelength_A=wavelength_A,
         )
         return shape, query, layer_normal_q, q_radial_squared
 
@@ -513,5 +798,95 @@ class Bi2X3FiniteStackStrength:
 
         return float(self.evaluate_profile(rod=rod, L=L, k_norm_Ainv=k_norm_Ainv))
 
+    def rebind_structure_parameters(
+        self,
+        parameters: Bi2X3QuintupleLayerParameters,
+    ) -> Bi2X3FiniteStackStrength:
+        """Safely replace resolved QL parameters without retaining stale derived state."""
 
-__all__ = ["Bi2X3FiniteStackStrength"]
+        if not isinstance(parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("parameters must be Bi2X3QuintupleLayerParameters")
+        return replace(self, structure_parameters=parameters)
+
+
+_BI2X3_PARAMETER_UNITS = {
+    "bi_fractional_z": "fractional",
+    "se2_fractional_z": "fractional",
+    "bi_occupancy": "1",
+    "se1_occupancy": "1",
+    "se2_occupancy": "1",
+    "u_radial_A2": "A2",
+    "u_normal_A2": "A2",
+    "outer_bi_antisite_fraction": "1",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Bi2X3FiniteStackParameterization:
+    """Explicit reusable parameter basis for the specialized QL strength provider."""
+
+    reference_strength: Bi2X3FiniteStackStrength
+    parameter_names: tuple[str, ...]
+    parameter_units: tuple[str, ...] = field(init=False)
+    reference_parameters: FloatArray = field(init=False)
+    parameterization_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference_strength, Bi2X3FiniteStackStrength):
+            raise TypeError("reference_strength must be Bi2X3FiniteStackStrength")
+        names = tuple(self.parameter_names)
+        if (
+            not names
+            or len(set(names)) != len(names)
+            or any(name not in _BI2X3_PARAMETER_UNITS for name in names)
+        ):
+            raise ValueError("parameter_names must select unique supported QL parameters")
+        if self.reference_strength.site_displacement_profile is not None and any(
+            name in {"u_radial_A2", "u_normal_A2"} for name in names
+        ):
+            raise ValueError("shared displacement parameters conflict with the site profile")
+        parameters = self.reference_strength.structure_parameters
+        if not isinstance(parameters, Bi2X3QuintupleLayerParameters):
+            raise TypeError("reference strength must contain resolved structure parameters")
+        units = tuple(_BI2X3_PARAMETER_UNITS[name] for name in names)
+        reference = np.asarray([getattr(parameters, name) for name in names], dtype=np.float64)
+        reference.setflags(write=False)
+        revision = canonical_revision_sha256(
+            ("definition_id", "bi2x3_finite_stack_parameterization.v1"),
+            (
+                "reference_structure_model_revision",
+                self.reference_strength.structure_model_revision,
+            ),
+            ("parameter_names", names),
+            ("parameter_units", units),
+            ("reference_parameters", reference),
+        )
+        object.__setattr__(self, "parameter_names", names)
+        object.__setattr__(self, "parameter_units", units)
+        object.__setattr__(self, "reference_parameters", reference)
+        object.__setattr__(self, "parameterization_revision", revision)
+
+    def bind_strength(self, values: ArrayLike) -> Bi2X3FiniteStackStrength:
+        """Bind one finite vector through the authoritative QL parameter dataclass."""
+
+        supplied = np.asarray(values, dtype=np.float64)
+        if supplied.shape != (len(self.parameter_names),) or np.any(~np.isfinite(supplied)):
+            raise ValueError("values must be a finite vector aligned with parameter_names")
+        reference = self.reference_strength.structure_parameters
+        if not isinstance(reference, Bi2X3QuintupleLayerParameters):
+            raise TypeError("reference strength must contain resolved structure parameters")
+        candidate = replace(
+            reference,
+            **dict(zip(self.parameter_names, supplied.tolist(), strict=True)),
+        )
+        return self.reference_strength.rebind_structure_parameters(candidate)
+
+
+__all__ = [
+    "AffineCifFiniteStackParameterization",
+    "Bi2X3FiniteStackParameterization",
+    "Bi2X3FiniteStackStrength",
+    "CifFiniteStackStrength",
+    "RevisionedStructureStrengthModel",
+    "StructureStrengthParameterization",
+]

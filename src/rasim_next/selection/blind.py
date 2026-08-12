@@ -575,15 +575,36 @@ class _ReciprocalLabel:
     predicted_row_px: float
 
 
-def _family_rods(context: _GeometryIndexingContext) -> dict[int, tuple[Rod, ...]]:
-    rods: dict[int, list[Rod]] = {}
+def _transverse_radius_rod_shells(
+    context: _GeometryIndexingContext,
+) -> tuple[tuple[float, tuple[Rod, ...]], ...]:
+    """Group physical rods only when the configured reciprocal metric says so."""
+
+    basis = context.reciprocal_basis_Ainv
+    b3 = basis[:, 2]
+    mean_axis = b3 / np.linalg.norm(b3)
+    entries: list[tuple[float, Rod]] = []
     for rod in context.rods:
-        if rod.family_m > 0:
-            rods.setdefault(rod.family_m, []).append(rod)
-    return {
-        family_m: tuple(sorted(values, key=lambda item: (item.h, item.k)))
-        for family_m, values in rods.items()
-    }
+        if rod.h == 0 and rod.k == 0:
+            continue
+        q_parallel = rod.h * basis[:, 0] + rod.k * basis[:, 1]
+        transverse = q_parallel - float(q_parallel @ mean_axis) * mean_axis
+        entries.append((float(np.linalg.norm(transverse)), rod))
+    entries.sort(key=lambda item: (item[0], item[1].h, item[1].k))
+    shell_radii: list[list[float]] = []
+    shell_rods: list[list[Rod]] = []
+    for radius, rod in entries:
+        tolerance = 4096.0 * np.finfo(np.float64).eps * max(radius, 1.0)
+        if shell_radii and abs(radius - shell_radii[-1][0]) <= tolerance:
+            shell_radii[-1].append(radius)
+            shell_rods[-1].append(rod)
+        else:
+            shell_radii.append([radius])
+            shell_rods.append([rod])
+    return tuple(
+        (float(np.mean(radii)), tuple(rods))
+        for radii, rods in zip(shell_radii, shell_rods, strict=True)
+    )
 
 
 def _label_q_point(
@@ -605,31 +626,17 @@ def _label_q_point(
     transverse_norm = float(np.linalg.norm(transverse_q))
     if transverse_norm <= np.finfo(np.float64).eps:
         return None
-    family_rods = _family_rods(context)
-    if not family_rods:
+    radial_shells = _transverse_radius_rod_shells(context)
+    if not radial_shells:
         return None
-    family_radius: dict[int, float] = {}
-    for family_m, rods in family_rods.items():
-        radii = []
-        for rod in rods:
-            q_parallel = rod.h * basis[:, 0] + rod.k * basis[:, 1]
-            transverse = q_parallel - float(q_parallel @ mean_axis) * mean_axis
-            radii.append(float(np.linalg.norm(transverse)))
-        radius_scale = max(max(radii), 1.0)
-        if max(radii) - min(radii) > 4096.0 * np.finfo(np.float64).eps * radius_scale:
-            raise ValueError("one family_m contains noncoincident transverse rod radii")
-        family_radius[family_m] = float(np.mean(radii))
-    ordered_family = sorted(
-        family_radius,
-        key=lambda family_m: (abs(transverse_norm - family_radius[family_m]), family_m),
+    ordered_shell = sorted(
+        enumerate(radial_shells),
+        key=lambda item: (abs(transverse_norm - item[1][0]), item[0]),
     )
-    selected_family = ordered_family[0]
-    radial_residual = abs(transverse_norm - family_radius[selected_family])
+    _, (selected_radius, selected_rods) = ordered_shell[0]
+    radial_residual = abs(transverse_norm - selected_radius)
     other_gap = min(
-        (
-            abs(family_radius[selected_family] - family_radius[family_m])
-            for family_m in ordered_family[1:]
-        ),
+        (abs(selected_radius - shell[0]) for _, shell in ordered_shell[1:]),
         default=math.inf,
     )
     radial_gradient = transverse_q / transverse_norm
@@ -643,7 +650,7 @@ def _label_q_point(
         return None
 
     labels: list[tuple[IntegerLMarkerKey, Rod, float, float]] = []
-    for rod in family_rods[selected_family]:
+    for rod in selected_rods:
         q_parallel = rod.h * basis[:, 0] + rod.k * basis[:, 1]
         transverse_parallel = q_parallel - float(q_parallel @ mean_axis) * mean_axis
         l_value = (float(q_crystal @ mean_axis) - float(q_parallel @ mean_axis)) / b3_norm
@@ -680,7 +687,7 @@ def _label_q_point(
             continue
         root_sign = roots.root_sign[root_index]
         key = IntegerLMarkerKey(
-            family_m=selected_family,
+            family_m=rod.family_m,
             integer_L=integer_l,
             branch=roots.branch,
             root_sign=root_sign,
@@ -693,9 +700,7 @@ def _label_q_point(
             / (policy.separation_fraction * root_gap),
         )
         labels.append((key, rod, roots.beta_rad[root_index], score))
-    discrete = {
-        (item[0].family_m, item[0].integer_L, item[0].branch, item[0].root_sign) for item in labels
-    }
+    discrete = {(item[0].integer_L, item[0].branch, item[0].root_sign) for item in labels}
     if len(discrete) != 1:
         return None
 

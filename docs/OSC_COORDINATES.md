@@ -68,3 +68,4 @@ Prove:
 - No general `display_rotation` setting exists in the numerical core.
 - Display orientation, if later needed by a GUI, is outside the scientific coordinate contract.
 - `2theta/phi` and caking must consume detector-native coordinates and cannot redefine the OSC conversion.
+- Optional fitted detector-reference offsets are native continuous `(column_px,row_px)` quantities applied after the once-only OSC conversion; they are never raw-OSC row/column corrections.

@@ -284,6 +284,7 @@ class ContinuousPerRodAngleValues:
         if self.execution_backend not in {
             "numba_cpu_source_averaged.v1",
             "numba_cuda_source_averaged.v1",
+            "numpy_cpu_sparse_source_averaged.v1",
         }:
             raise ValueError("unsupported detector-coordinate execution backend")
         if self.execution_device is not None and (
@@ -371,12 +372,15 @@ def evaluate_continuous_per_rod_angle_signal(
     source_revision = getattr(evaluated, "source_revision", None)
     if not isinstance(source_revision, str) or not source_revision:
         raise ValueError("all-root detector must expose a nonempty source revision")
-    expected_backend = (
-        "numba_cuda_source_averaged.v1"
+    allowed_backends = (
+        {"numba_cuda_source_averaged.v1"}
         if execution_backend == "cuda"
-        else "numba_cpu_source_averaged.v1"
+        else {
+            "numba_cpu_source_averaged.v1",
+            "numpy_cpu_sparse_source_averaged.v1",
+        }
     )
-    if result_backend != expected_backend:
+    if result_backend not in allowed_backends:
         raise ValueError("all-root detector did not honor the requested execution backend")
     per_rod = np.asarray(evaluated.per_rod_density_A2_per_px2, dtype=np.float64)
     evaluated_caustic = np.asarray(evaluated.caustic, dtype=np.bool_)
@@ -395,7 +399,7 @@ def evaluate_continuous_per_rod_angle_signal(
         caustic=caustic,
         valid=valid,
         source_revision=source_revision,
-        execution_backend=expected_backend,
+        execution_backend=result_backend,
         execution_device=result_device,
     )
 

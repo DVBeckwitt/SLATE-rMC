@@ -7,6 +7,7 @@ from rasim_next.ordered.amplitudes import (
 )
 from rasim_next.ordered.finite_stack import (
     coherent_finite_stack,
+    finite_periodic_repeat_amplitude_factor,
     uniform_finite_stack,
 )
 from rasim_next.ordered.motifs import (
@@ -31,6 +32,7 @@ __all__ = [
     "bi2x3_quintuple_layer_amplitudes",
     "coherent_finite_stack",
     "extract_pbi2_motifs",
+    "finite_periodic_repeat_amplitude_factor",
     "ordered_event_result",
     "pbi2_layer_amplitudes",
     "quintuple_layer_site_labels",

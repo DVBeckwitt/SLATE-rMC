@@ -13,8 +13,11 @@ import numpy as np
 from painted_ewald import MosaicBraggSpace, MosaicParameters
 from rasim_next.fitting.fixed_lattice import FixedLatticeState
 from rasim_next.fitting.indexed_series import (
+    DETECTOR_CALIBRATION_PARAMETER_NAMES,
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    DetectorCalibrationCorrections,
     SharedGeometryCorrections,
+    apply_detector_calibration_corrections,
     apply_shared_geometry_corrections,
     zero_sum_helmert_basis,
 )
@@ -51,6 +54,9 @@ _TRIM_POSITION_FIELDS = frozenset(
         "incidence_angle_trim_prior_sigma_rad",
         "incidence_angle_trim_contrast_half_span_rad",
     }
+)
+_CALIBRATION_POSITION_FIELDS = frozenset(
+    {"detector_calibration_active", "detector_plane_normal_offset_m"}
 )
 
 
@@ -125,6 +131,8 @@ class FixedPositionState:
     incidence_angle_delta_rad: float
     commanded_incidence_angles_rad: tuple[float, ...]
     beam_center_column_row_px: tuple[float, float]
+    detector_calibration_active: bool = False
+    detector_plane_normal_offset_m: float = 0.0
     incidence_angle_image_ids: tuple[str, ...] = ()
     incidence_angle_trim_rad: tuple[float, ...] = ()
     incidence_angle_trim_contrast_rad: tuple[float, ...] = ()
@@ -145,6 +153,8 @@ class FixedPositionState:
         delta = float(self.incidence_angle_delta_rad)
         commanded = tuple(float(value) for value in self.commanded_incidence_angles_rad)
         beam_center = tuple(float(value) for value in self.beam_center_column_row_px)
+        calibration_active = self.detector_calibration_active
+        detector_offset = float(self.detector_plane_normal_offset_m)
         supplied_image_ids = tuple(self.incidence_angle_image_ids)
         if any(not isinstance(value, str) or not value.strip() for value in supplied_image_ids):
             raise ValueError("incidence-angle image IDs must be nonempty strings")
@@ -168,6 +178,12 @@ class FixedPositionState:
             raise ValueError("commanded incidence angles must be finite and nonempty")
         if len(beam_center) != 2 or any(not math.isfinite(value) for value in beam_center):
             raise ValueError("beam center must contain two finite detector coordinates")
+        if not isinstance(calibration_active, bool):
+            raise TypeError("detector_calibration_active must be bool")
+        if not math.isfinite(detector_offset):
+            raise ValueError("detector plane-normal offset must be finite")
+        if not calibration_active and detector_offset != 0.0:
+            raise ValueError("detector distance requires explicit detector-calibration provenance")
 
         if image_ids:
             if (
@@ -208,6 +224,8 @@ class FixedPositionState:
         object.__setattr__(self, "incidence_angle_delta_rad", delta)
         object.__setattr__(self, "commanded_incidence_angles_rad", commanded)
         object.__setattr__(self, "beam_center_column_row_px", beam_center)
+        object.__setattr__(self, "detector_calibration_active", calibration_active)
+        object.__setattr__(self, "detector_plane_normal_offset_m", detector_offset)
         object.__setattr__(self, "incidence_angle_image_ids", image_ids)
         object.__setattr__(self, "incidence_angle_trim_rad", trims)
         object.__setattr__(self, "incidence_angle_trim_contrast_rad", contrasts)
@@ -239,7 +257,10 @@ class FixedPositionState:
         fields = frozenset(record)
         if (
             not _REQUIRED_POSITION_FIELDS.issubset(fields)
-            or fields - _REQUIRED_POSITION_FIELDS - _TRIM_POSITION_FIELDS
+            or fields
+            - _REQUIRED_POSITION_FIELDS
+            - _TRIM_POSITION_FIELDS
+            - _CALIBRATION_POSITION_FIELDS
             or record["geometry_parameters_fitted_here"] is not False
         ):
             raise ValueError("fixed-position record has an invalid shape")
@@ -290,6 +311,8 @@ class FixedPositionState:
             beam_center_column_row_px=tuple(
                 float(value) for value in record["beam_center_column_row_px"]
             ),
+            detector_calibration_active=record.get("detector_calibration_active", False),
+            detector_plane_normal_offset_m=float(record.get("detector_plane_normal_offset_m", 0.0)),
             incidence_angle_image_ids=image_ids,
             incidence_angle_trim_rad=trims,
             incidence_angle_trim_contrast_rad=contrasts,
@@ -360,6 +383,10 @@ class FixedPositionState:
                     ),
                 }
             )
+        if self.detector_calibration_active:
+            record["detector_calibration_active"] = True
+        if self.detector_plane_normal_offset_m != 0.0:
+            record["detector_plane_normal_offset_m"] = self.detector_plane_normal_offset_m
         return record
 
 
@@ -428,6 +455,47 @@ def fixed_position_from_fit_record(
         ):
             raise ValueError("fixed position and fitted geometry corrections differ")
 
+        fitted_calibration = fit.get("detector_calibration_corrections")
+        if fitted_calibration is not None:
+            if not position.detector_calibration_active:
+                raise ValueError("fixed position omitted detector-calibration provenance")
+            if not isinstance(fitted_calibration, Mapping) or set(fitted_calibration) != set(
+                DETECTOR_CALIBRATION_PARAMETER_NAMES
+            ):
+                raise ValueError("fitted detector calibration corrections are malformed")
+            calibration = DetectorCalibrationCorrections.from_array(
+                [float(fitted_calibration[name]) for name in DETECTOR_CALIBRATION_PARAMETER_NAMES]
+            )
+            configured_center = record.get("configured_detector_reference_coordinate_px")
+            if not isinstance(configured_center, (list, tuple)) or len(configured_center) != 2:
+                raise ValueError("configured detector reference is missing")
+            expected_center = tuple(
+                float(value) + offset
+                for value, offset in zip(
+                    configured_center,
+                    calibration.as_array()[:2],
+                    strict=True,
+                )
+            )
+            if position.beam_center_column_row_px != expected_center or (
+                position.detector_plane_normal_offset_m
+                != calibration.detector_plane_normal_offset_m
+            ):
+                raise ValueError("fixed position and fitted detector calibration differ")
+        else:
+            if position.detector_calibration_active:
+                raise ValueError("legacy fit cannot authorize detector calibration")
+            if position.detector_plane_normal_offset_m != 0.0:
+                raise ValueError("legacy fixed position cannot introduce detector distance")
+            configured_center = record.get("configured_detector_reference_coordinate_px")
+            if configured_center is not None:
+                if not isinstance(configured_center, (list, tuple)) or len(configured_center) != 2:
+                    raise ValueError("configured detector reference is malformed")
+                if position.beam_center_column_row_px != tuple(
+                    float(value) for value in configured_center
+                ):
+                    raise ValueError("legacy fixed position changed the detector reference")
+
         fitted_trims = fit["incidence_angle_trim_by_image_id_rad"]
         if not isinstance(fitted_trims, Mapping):
             raise ValueError("fitted incidence trims are malformed")
@@ -476,11 +544,6 @@ def build_fixed_experiment_series(
         raise ValueError("source_sample_count must be a positive integer")
     if len(config.instrument.axis_rotations) != 1:
         raise ValueError("fixed-experiment series currently requires one incidence axis")
-    if position.beam_center_column_row_px != tuple(
-        float(value) for value in config.instrument.detector_reference_coordinate_px
-    ):
-        raise ValueError("fixed position and simulation detector reference differ")
-
     reference_crystal = read_crystal(
         config.material.cif_path,
         phase_id=config.material.phase_id,
@@ -521,6 +584,17 @@ def build_fixed_experiment_series(
     ):
         raise ValueError("rebuilt crystal differs from the adopted lattice")
 
+    configured_center = tuple(
+        float(value) for value in base_inputs.instrument.detector_reference_coordinate_px
+    )
+    if not position.detector_calibration_active and (
+        position.beam_center_column_row_px != configured_center
+        or position.detector_plane_normal_offset_m != 0.0
+    ):
+        raise ValueError(
+            "legacy fixed position cannot change detector calibration without provenance"
+        )
+
     series: list[ConfiguredSimulationInputs] = []
     for incidence_rad in position.effective_incidence_angles_rad:
         angle_config = replace(
@@ -537,8 +611,23 @@ def build_fixed_experiment_series(
         )
         inputs = rebind_configured_simulation_instrument(base_inputs, angle_config)
 
-        instrument = apply_shared_geometry_corrections(
+        configured_center = tuple(
+            float(value) for value in inputs.instrument.detector_reference_coordinate_px
+        )
+        calibrated_instrument = apply_detector_calibration_corrections(
             inputs.instrument,
+            DetectorCalibrationCorrections(
+                detector_reference_column_offset_px=(
+                    position.beam_center_column_row_px[0] - configured_center[0]
+                ),
+                detector_reference_row_offset_px=(
+                    position.beam_center_column_row_px[1] - configured_center[1]
+                ),
+                detector_plane_normal_offset_m=position.detector_plane_normal_offset_m,
+            ),
+        )
+        instrument = apply_shared_geometry_corrections(
+            calibrated_instrument,
             angle_config.instrument.axis_rotations,
             position.corrections,
         )

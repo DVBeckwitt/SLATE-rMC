@@ -5,6 +5,7 @@ import math
 import runpy
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -14,7 +15,19 @@ from painted_ewald import Rod
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.fitting import ContinuousDetectorGeometryModel, GeometryCorrections
+from rasim_next.fitting import (
+    ContinuousDetectorGeometryModel,
+    ExactTagGeometryModel,
+    FixedMatchedRegionBackground,
+    GeometryCorrections,
+    MatchedRegionObservations,
+    ParameterizedStructureRegionModel,
+    Pbi2ParentLogRatioParameterization,
+    Pbi2ParentMixtureStrength,
+    StructureRegionIdentifiabilityError,
+    StructureRegionResponseBlock,
+    fit_parameterized_matched_regions,
+)
 from rasim_next.geometry import (
     AngleFrame,
     CompiledInstrument,
@@ -26,19 +39,28 @@ from rasim_next.geometry import (
     project_detector_ray,
     project_detector_rays,
 )
-from rasim_next.materials import material_optics
+from rasim_next.materials import AffineCifSiteBasis, material_optics
 from rasim_next.measurement import (
     AngleBinGrid,
     ContinuousNormalizedAngleFunction,
+    ContinuousRegionQuadrature,
     compile_detector_angle_projector,
     compile_detector_profile_projector,
     project_detector_profiles,
     project_normalized_angle_field,
     to_increasing_phi,
 )
+from rasim_next.pipeline.bragg_space import (
+    AffineCifFiniteStackParameterization,
+    Bi2X3FiniteStackParameterization,
+    RevisionedStructureStrengthModel,
+)
 from rasim_next.pipeline.configured_simulation import (
+    build_configured_geometry_inputs,
     build_configured_simulation_inputs,
     build_nominal_ewald_context,
+    build_source_averaged_detector,
+    build_source_averaged_structure_detector,
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
     rebind_configured_simulation_instrument,
@@ -46,6 +68,7 @@ from rasim_next.pipeline.configured_simulation import (
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
     SourceAveragedDetectorEwaldMeasure,
+    compile_source_averaged_detector_structure_response,
 )
 from rasim_next.reflectivity import CompiledParrattStitch, ParrattStitchStack
 
@@ -1645,6 +1668,928 @@ def _two_state_source_averaged_detector_fixture(
     return averaged, scalar_detectors
 
 
+def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> None:
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    rods = averaged.rods
+    mapped = tuple(
+        detector.map_latent(
+            rod=rods[1],
+            branch=2,
+            alpha_rad=math.radians(2.0),
+            beta_rad=math.radians(178.0),
+        )
+        for detector in scalar_detectors
+    )
+    column_px = np.asarray([item.geometry.column_px for item in mapped])
+    row_px = np.asarray([item.geometry.row_px for item in mapped])
+
+    response = compile_source_averaged_detector_structure_response(
+        column_px,
+        row_px,
+        reciprocal_basis_Ainv=averaged.strength_model.reciprocal_basis_Ainv,
+        crystal_to_sample=averaged.instrument.sample_from_crystal.rotation,
+        rods=rods,
+        rod_catalog_revision=averaged.rod_catalog_revision,
+        mosaic=averaged.mosaic,
+        reference_strength_model=averaged.strength_model,
+        intensity_envelope=averaged.intensity_envelope,
+        incident=averaged.incident,
+        material=averaged.material,
+        instrument=averaged.instrument,
+    )
+    actual = response.apply_strength(averaged.strength_model)
+    expected = averaged.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    class _ComplexStrength:
+        reciprocal_basis_Ainv = averaged.strength_model.reciprocal_basis_Ainv
+
+        @staticmethod
+        def evaluate_hkl(**kwargs: object) -> np.ndarray:
+            return np.full(np.asarray(kwargs["L"]).shape, 1.0 + 1.0j)
+
+    with pytest.raises(ValueError, match="evaluate_hkl result must be real"):
+        response.apply_strength(_ComplexStrength())
+
+    assert response.source_state_count == 2
+    assert np.unique(response.term_k_norm_Ainv).size == 2
+    assert len(response.response_revision) == 64
+    assert actual.execution_backend == "numpy_cpu_sparse_source_averaged.v1"
+    np.testing.assert_allclose(
+        actual.per_rod_density_A2_per_px2,
+        expected.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        actual.density_A2_per_px2,
+        expected.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(actual.caustic, expected.caustic)
+    np.testing.assert_array_equal(actual.valid_source_count, expected.valid_source_count)
+    assert actual.source_revision == expected.source_revision
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    ("bi2se3_simulation.yaml", "bi2te3_simulation.yaml"),
+)
+def test_configured_bi2x3_provider_uses_shared_sparse_fitting_detector(
+    config_name: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / config_name)
+    config = replace(
+        base,
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    shared = build_source_averaged_structure_detector(inputs)
+    optimized = build_source_averaged_detector(inputs)
+    nominal = build_nominal_ewald_context(inputs)
+
+    class _UnrevisionedStrength:
+        reciprocal_basis_Ainv = inputs.strength.reciprocal_basis_Ainv
+
+    with pytest.raises(ValueError, match="structure-model revision"):
+        build_source_averaged_structure_detector(
+            inputs,
+            strength_model=cast(RevisionedStructureStrengthModel, _UnrevisionedStrength()),
+        )
+
+    mapped = None
+    for rod in nominal.rods:
+        if rod.h == 0 and rod.k == 0:
+            continue
+        for branch in (1, 2):
+            candidate = nominal.geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=math.radians(2.0),
+                beta_rad=math.radians(178.0),
+            )
+            if bool(candidate.geometry.valid):
+                mapped = candidate
+                break
+        if mapped is not None:
+            break
+    assert mapped is not None
+    column_px = np.asarray((mapped.geometry.column_px,))
+    row_px = np.asarray((mapped.geometry.row_px,))
+
+    actual = shared.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    expected = optimized.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    assert shared.strength_model is inputs.strength
+    np.testing.assert_allclose(
+        actual.per_rod_density_A2_per_px2,
+        expected.per_rod_density_A2_per_px2,
+        rtol=5.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        actual.density_A2_per_px2,
+        expected.density_A2_per_px2,
+        rtol=5.0e-11,
+        atol=3.0e-24,
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_cif", "phase_id"),
+    (
+        ("examples/bi2se3/structures/Bi2Se3_vesta.cif", "Bi2Se3"),
+        ("examples/bi2te3/structures/Bi2Te3_cod_9011962.cif", "Bi2Te3"),
+        ("examples/pbi2/structures/PbI2_2H.cif", "PbI2"),
+    ),
+)
+def test_configured_generic_cif_detector_matches_direct_all_root_sum(
+    relative_cif: str,
+    phase_id: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / relative_cif,
+            phase_id=phase_id,
+        ),
+        source=replace(base.source, sample_count=1),
+        structure_factor=replace(
+            base.structure_factor,
+            model_id="cif_conventional_cell_finite_repeat.v1",
+            layers=None,
+            repeats=5,
+            normalization="FINITE_TOTAL",
+            shared_disorder_epsilon=0.0,
+            unknown_u_iso_A2=0.0,
+        ),
+        bragg=replace(base.bragg, include_detector_visible_m0=False),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    detector = build_source_averaged_structure_detector(inputs)
+    nominal = build_nominal_ewald_context(inputs)
+
+    mapped = None
+    for rod in nominal.rods:
+        if (rod.h, rod.k) == (0, 0):
+            continue
+        for branch in (1, 2):
+            candidate = nominal.geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=math.radians(2.0),
+                beta_rad=math.radians(178.0),
+            )
+            if bool(candidate.geometry.valid):
+                mapped = candidate
+                break
+        if mapped is not None:
+            break
+    assert mapped is not None
+    column_px = np.asarray((float(mapped.geometry.column_px),), dtype=np.float64)
+    row_px = np.asarray((float(mapped.geometry.row_px),), dtype=np.float64)
+
+    actual = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    lower = nominal.geometry.evaluate_detector_coordinates(
+        column_px,
+        row_px,
+        rods=detector.rods,
+        branch=1,
+    )
+    upper = nominal.geometry.evaluate_detector_coordinates(
+        column_px,
+        row_px,
+        rods=detector.rods,
+        branch=2,
+    )
+    expected = lower.per_rod_density_A2_per_px2 + upper.per_rod_density_A2_per_px2
+
+    assert inputs.strength.normalization == "FINITE_TOTAL"
+    np.testing.assert_allclose(
+        actual.per_rod_density_A2_per_px2,
+        expected,
+        rtol=3.0e-11,
+        atol=2.0e-24,
+    )
+    np.testing.assert_array_equal(actual.caustic, lower.caustic | upper.caustic)
+    np.testing.assert_array_equal(actual.valid_source_count, np.ones(1, dtype=np.int64))
+
+
+def test_pbi2_parent_mixture_uses_shared_sparse_detector_including_regular_00l() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source_cif_sha256 = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="PbI2",
+        ),
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        structure_factor=replace(
+            base.structure_factor,
+            model_id="cif_conventional_cell_finite_repeat.v1",
+            layers=None,
+            repeats=5,
+            normalization="FINITE_PER_LAYER",
+            shared_disorder_epsilon=0.0,
+            unknown_u_iso_A2=0.0,
+        ),
+        bragg=replace(base.bragg, include_detector_visible_m0=True),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    reference = Pbi2ParentMixtureStrength(
+        crystal=inputs.crystal,
+        source_cif_sha256=source_cif_sha256,
+        layers=5,
+        domain_fraction=(0.36, 0.19, 0.13, 0.17, 0.15),
+    )
+    detector = build_source_averaged_structure_detector(
+        inputs,
+        strength_model=reference,
+    )
+    nominal = build_nominal_ewald_context(inputs)
+
+    m0_landmark = ExactTagGeometryModel(
+        build_configured_geometry_inputs(config)
+    ).predict_m0_minimum_tilt_exact_l_landmarks((1,))
+    assert m0_landmark.detector_status.tolist() == ["VALID"]
+    m0_response = detector.compile_structure_response(
+        m0_landmark.coordinates_px[:, 0],
+        m0_landmark.coordinates_px[:, 1],
+    )
+    m0_pure = tuple(
+        m0_response.apply_strength(
+            reference.rebind_domain_fraction(
+                tuple(float(index == component_index) for index in range(5))
+            )
+        )
+        for component_index in range(5)
+    )
+    m0_rod_index = m0_response.rods.index(Rod(0, 0))
+    m0_parent_density = np.asarray(
+        [item.per_rod_density_A2_per_px2[0, m0_rod_index] for item in m0_pure]
+    )
+    assert np.all(m0_parent_density > 0.0)
+    np.testing.assert_allclose(
+        np.ptp(m0_parent_density),
+        0.0,
+        rtol=0.0,
+        atol=2.0e-13 * np.max(m0_parent_density),
+    )
+
+    mapped = []
+    for rod in nominal.rods:
+        if (rod.h, rod.k) == (0, 0):
+            continue
+        for branch in (1, 2):
+            candidate = nominal.geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=math.radians(2.0),
+                beta_rad=math.radians(165.0 + 3.0 * len(mapped)),
+            )
+            if bool(candidate.geometry.valid):
+                mapped.append(candidate)
+                break
+        if len(mapped) == 4:
+            break
+    assert len(mapped) == 4
+    column_px = np.asarray([value.geometry.column_px for value in mapped])
+    row_px = np.asarray([value.geometry.row_px for value in mapped])
+    response = detector.compile_structure_response(column_px, row_px)
+    actual = response.apply_strength(reference)
+    pure = tuple(
+        response.apply_strength(
+            reference.rebind_domain_fraction(
+                tuple(float(index == component_index) for index in range(5))
+            )
+        )
+        for component_index in range(5)
+    )
+    expected_per_rod = np.sum(
+        np.stack(tuple(item.per_rod_density_A2_per_px2 for item in pure))
+        * reference.domain_fraction[:, None, None],
+        axis=0,
+    )
+
+    np.testing.assert_allclose(
+        actual.per_rod_density_A2_per_px2,
+        expected_per_rod,
+        rtol=3.0e-13,
+        atol=3.0e-24,
+    )
+    fit_reference = reference.rebind_domain_fraction((0.5, 0.5, 0.0, 0.0, 0.0))
+    fit_response = build_source_averaged_structure_detector(
+        inputs,
+        strength_model=fit_reference,
+    ).compile_structure_response(column_px, row_px)
+    parameterization = Pbi2ParentLogRatioParameterization(
+        reference_strength=fit_reference,
+        active_component_ids=("2H", "4H+"),
+    )
+    observation_count = column_px.size + 2
+    model = ParameterizedStructureRegionModel(
+        parameterization=parameterization,
+        blocks=(
+            StructureRegionResponseBlock(
+                dataset_id="pbi2-parent-mixture",
+                response=fit_response,
+                quadrature=ContinuousRegionQuadrature(
+                    column_px=column_px,
+                    row_px=row_px,
+                    detector_area_weight_px2=np.ones(column_px.size),
+                    observation_row=np.arange(column_px.size),
+                    background_coordinate=np.zeros(column_px.size),
+                    observation_count=observation_count,
+                    chart_revision="pbi2-parent-mixture-points.v1",
+                ),
+            ),
+        ),
+    )
+    truth = np.asarray((math.log(0.7 / 0.3),))
+    truth_mass = model.predict_mass_A2(truth)
+    reference_peak = float(np.max(model.predict_mass_A2(model.reference_parameters)))
+    dataset_scale = 2.0 / reference_peak
+    fixed_background_mass = np.full(observation_count, 12.0)
+    observations = MatchedRegionObservations(
+        dataset_ids=("pbi2-parent-mixture",),
+        dataset_index=np.zeros(observation_count, dtype=np.int64),
+        block_index=np.zeros(observation_count, dtype=np.int64),
+        signal_family=np.asarray((*range(column_px.size), -1, -1)),
+        is_background=np.asarray((*([False] * column_px.size), True, True)),
+        count_mass=fixed_background_mass + dataset_scale * truth_mass,
+        support_px2=np.ones(observation_count),
+        background_coordinate=np.asarray((*([0.0] * column_px.size), -1.0, 1.0)),
+        required_signal_families=tuple(range(column_px.size)),
+        count_covariance_count2=np.eye(observation_count),
+    )
+    fit = fit_parameterized_matched_regions(
+        observations,
+        model,
+        fixed_background=FixedMatchedRegionBackground(
+            count_mass=fixed_background_mass,
+            covariance_count2=np.zeros((observation_count, observation_count)),
+            revision="pbi2-parent-mixture-background.v1",
+        ),
+        initial_parameters=(np.asarray((-1.0,)), np.asarray((1.0,))),
+        lower_bounds=np.asarray((-4.0,)),
+        upper_bounds=np.asarray((4.0,)),
+        parameter_scales=np.asarray((1.0,)),
+    )
+    np.testing.assert_allclose(fit.fit.parameters, truth, rtol=0.0, atol=2.0e-8)
+    assert fit.fit.sensitivity_rank == 1
+    assert fit.fit.sensitivity_condition == pytest.approx(1.0)
+
+
+def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
+    from rasim_next.fitting import (
+        MosaicProfileDefinition,
+        MosaicProfileIdentity,
+        MosaicReflectionGroupKey,
+        evaluate_continuous_mosaic_profiles,
+        fit_refined_mosaic_component_profiles,
+    )
+    from rasim_next.selection import build_osc_angle_frame
+
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="PbI2",
+        ),
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        structure_factor=replace(
+            base.structure_factor,
+            model_id="cif_conventional_cell_finite_repeat.v1",
+            layers=None,
+            repeats=5,
+            normalization="FINITE_TOTAL",
+            shared_disorder_epsilon=0.0,
+            unknown_u_iso_A2=0.0,
+        ),
+        bragg=replace(base.bragg, include_detector_visible_m0=True),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    detector = build_source_averaged_structure_detector(inputs)
+    nominal = build_nominal_ewald_context(inputs)
+
+    mapped = None
+    mapped_rod = None
+    mapped_branch = None
+    for rod in nominal.rods:
+        if (rod.h, rod.k) == (0, 0):
+            continue
+        for branch in (1, 2):
+            candidate = nominal.geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=math.radians(2.0),
+                beta_rad=math.radians(178.0),
+            )
+            if bool(candidate.geometry.valid):
+                mapped = candidate
+                mapped_rod = rod
+                mapped_branch = branch
+                break
+        if mapped is not None:
+            break
+    assert mapped is not None and mapped_rod is not None and mapped_branch is not None
+
+    angle_frame = build_osc_angle_frame(
+        mean_direction_lab=config.source.mean_direction_lab,
+        instrument=inputs.instrument,
+        sample_intersection_lab_m=nominal.incident.states.sample_intersection_lab_m[0],
+        revision="generic-pbi2-mosaic-proof.v1",
+    )
+    angles = detector_coordinates_to_angles(
+        np.asarray((mapped.geometry.column_px,)),
+        np.asarray((mapped.geometry.row_px,)),
+        instrument=inputs.instrument,
+        angle_frame=angle_frame,
+    )
+    m0_landmark = ExactTagGeometryModel(
+        build_configured_geometry_inputs(config)
+    ).predict_m0_minimum_tilt_exact_l_landmarks((1,))
+    assert m0_landmark.detector_status.tolist() == ["VALID"]
+    m0_angles = detector_coordinates_to_angles(
+        m0_landmark.coordinates_px[:, 0],
+        m0_landmark.coordinates_px[:, 1],
+        instrument=inputs.instrument,
+        angle_frame=angle_frame,
+    )
+    assert np.all(m0_angles.valid & m0_angles.azimuth_valid)
+    definitions = (
+        MosaicProfileDefinition(
+            identity=MosaicProfileIdentity(
+                dataset_id="generic-pbi2-mosaic-proof",
+                incidence_angle_rad=math.radians(config.instrument.axis_rotations[0].angle_deg),
+                group_key=MosaicReflectionGroupKey(
+                    group_id="generic-pbi2-mosaic-proof:one-rod",
+                    rod_catalog_revision=detector.rod_catalog_revision,
+                    member_rod_hk=((mapped_rod.h, mapped_rod.k),),
+                    branch_mode="EXPLICIT_NONZERO",
+                ),
+                branch_id=mapped_branch,
+                analytic_branch_id=mapped_branch,
+            ),
+            center_two_theta_rad=float(angles.two_theta_rad[0]),
+            center_phi_rad=float(angles.phi_rad[0]),
+            two_theta_half_width_rad=math.radians(0.05),
+            phi_half_width_rad=math.radians(4.0),
+            phi_bin_count=11,
+            two_theta_gauss_order=2,
+            phi_gauss_order=2,
+        ),
+        MosaicProfileDefinition(
+            identity=MosaicProfileIdentity(
+                dataset_id="generic-pbi2-mosaic-proof",
+                incidence_angle_rad=math.radians(config.instrument.axis_rotations[0].angle_deg),
+                group_key=MosaicReflectionGroupKey(
+                    group_id="generic-pbi2-mosaic-proof:001",
+                    rod_catalog_revision=detector.rod_catalog_revision,
+                    member_rod_hk=((0, 0),),
+                    branch_mode="COLLAPSED_00L",
+                    layered_family_m=0,
+                    layered_integer_L=1,
+                ),
+                branch_id=None,
+                analytic_branch_id=0,
+            ),
+            center_two_theta_rad=float(m0_angles.two_theta_rad[0]),
+            center_phi_rad=float(m0_angles.phi_rad[0]),
+            two_theta_half_width_rad=math.radians(0.05),
+            phi_half_width_rad=math.radians(4.0),
+            phi_bin_count=11,
+            two_theta_gauss_order=2,
+            phi_gauss_order=2,
+        ),
+    )
+
+    def evaluate_component(
+        gaussian_sigma_rad: float,
+        lorentzian_half_width_rad: float,
+        lorentzian_probability: float,
+    ) -> object:
+        return evaluate_continuous_mosaic_profiles(
+            replace(
+                detector,
+                mosaic=replace(
+                    detector.mosaic,
+                    gaussian_sigma_rad=gaussian_sigma_rad,
+                    lorentzian_half_width_rad=lorentzian_half_width_rad,
+                    lorentzian_probability=lorentzian_probability,
+                ),
+            ),
+            angle_frame=angle_frame,
+            definitions=definitions,
+            profile_revision="generic-pbi2-mosaic-proof.v1",
+        )
+
+    truth_gaussian = math.radians(1.0)
+    truth_lorentzian = math.radians(0.5)
+    truth_eta = 0.25
+    gaussian = evaluate_component(truth_gaussian, truth_lorentzian, 0.0)
+    lorentzian = evaluate_component(truth_gaussian, truth_lorentzian, 1.0)
+    assert np.all(np.sum(gaussian.signal, axis=1) > 0.0)
+    observations = replace(
+        gaussian,
+        signal=(1.0 - truth_eta) * gaussian.signal + truth_eta * lorentzian.signal,
+        source_revision=None,
+        execution_backend=None,
+        execution_device=None,
+        observation_revision="generic-pbi2-synthetic-observation.v1",
+    )
+    result = fit_refined_mosaic_component_profiles(
+        observations,
+        evaluate_gaussian_profile=lambda width: evaluate_component(
+            width,
+            truth_lorentzian,
+            0.0,
+        ),
+        evaluate_lorentzian_profile=lambda width: evaluate_component(
+            truth_gaussian,
+            width,
+            1.0,
+        ),
+        gaussian_sigma_bounds_rad=np.asarray((math.radians(0.5), math.radians(2.0))),
+        lorentzian_half_width_bounds_rad=np.asarray((math.radians(0.25), math.radians(1.0))),
+        coarse_width_count=3,
+        refinement_width_count=3,
+        refinement_levels=0,
+        near_optimal_objective_delta=0.0,
+    )
+
+    assert inputs.strength.normalization == "FINITE_TOTAL"
+    assert gaussian.execution_backend == "numpy_cpu_sparse_source_averaged.v1"
+    assert result.fit.gaussian_sigma_rad == pytest.approx(truth_gaussian, abs=1.0e-15)
+    assert result.fit.lorentzian_half_width_rad == pytest.approx(
+        truth_lorentzian,
+        abs=1.0e-15,
+    )
+    assert result.fit.lorentzian_probability == pytest.approx(truth_eta, abs=1.0e-12)
+    assert result.fit.objective < 1.0e-24
+    assert result.fit.sensitivity_rank == 3
+    assert result.fit.sensitivity_condition < 100.0
+
+
+def test_generic_cif_structure_uses_unchanged_matched_region_fitter() -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    config = replace(
+        base,
+        material=replace(
+            base.material,
+            cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
+            phase_id="PbI2",
+        ),
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        structure_factor=replace(
+            base.structure_factor,
+            model_id="cif_conventional_cell_finite_repeat.v1",
+            layers=None,
+            repeats=5,
+            normalization="FINITE_TOTAL",
+            shared_disorder_epsilon=0.0,
+            unknown_u_iso_A2=0.0,
+        ),
+        bragg=replace(base.bragg, include_detector_visible_m0=True),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    detector = build_source_averaged_structure_detector(inputs)
+    nominal = build_nominal_ewald_context(inputs)
+
+    site_count = len(inputs.crystal.sites)
+    fractional = np.zeros((site_count, 3, 2), dtype=np.float64)
+    occupancy = np.zeros((site_count, 2), dtype=np.float64)
+    u_iso = np.zeros((site_count, 2), dtype=np.float64)
+    fractional[1, 2, 0] = 1.0
+    fractional[2, 2, 0] = -1.0
+    occupancy[1:, 1] = 1.0
+    basis = AffineCifSiteBasis(
+        reference_crystal=inputs.crystal,
+        parameter_names=("iodine_z_shift", "iodine_occupancy"),
+        parameter_units=("fractional", "1"),
+        reference_parameters=np.asarray((0.0, 1.0)),
+        fractional_coefficients=fractional,
+        occupancy_coefficients=occupancy,
+        u_iso_A2_coefficients=u_iso,
+        unknown_u_iso_A2=0.0,
+    )
+
+    requested = (
+        ((-1, 1), 170.0),
+        ((0, 1), 170.0),
+        ((1, 0), 170.0),
+        ((-1, 1), 175.0),
+        ((0, 1), 175.0),
+        ((-1, 1), 190.0),
+    )
+    mapped = []
+    for rod_hk, beta_deg in requested:
+        rod = next(rod for rod in nominal.rods if (rod.h, rod.k) == rod_hk)
+        point = nominal.geometry.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=math.radians(1.0),
+            beta_rad=math.radians(beta_deg),
+        )
+        assert bool(point.geometry.valid)
+        mapped.append(point)
+    column_px = np.asarray([point.geometry.column_px for point in mapped])
+    row_px = np.asarray([point.geometry.row_px for point in mapped])
+    signal_count = len(mapped)
+    rows_per_dataset = signal_count + 2
+    observation_count = 2 * rows_per_dataset
+    quadratures = tuple(
+        ContinuousRegionQuadrature(
+            column_px=column_px,
+            row_px=row_px,
+            detector_area_weight_px2=np.ones(signal_count),
+            observation_row=dataset_index * rows_per_dataset + np.arange(signal_count),
+            background_coordinate=np.zeros(signal_count),
+            observation_count=observation_count,
+            chart_revision=f"generic-cif-ordered-sf-points.dataset-{dataset_index}.v1",
+        )
+        for dataset_index in range(2)
+    )
+    response = detector.compile_structure_response(column_px, row_px)
+    parameterization = AffineCifFiniteStackParameterization(inputs.strength, basis)
+    m0_landmark = ExactTagGeometryModel(
+        build_configured_geometry_inputs(config)
+    ).predict_m0_minimum_tilt_exact_l_landmarks((1,))
+    assert m0_landmark.detector_status.tolist() == ["VALID"]
+    m0_response = detector.compile_structure_response(
+        m0_landmark.coordinates_px[:, 0],
+        m0_landmark.coordinates_px[:, 1],
+    )
+    m0_rod_index = m0_response.rods.index(Rod(0, 0))
+    m0_density = np.asarray(
+        [
+            m0_response.apply_strength(
+                parameterization.bind_strength((iodine_z_shift, 1.0))
+            ).per_rod_density_A2_per_px2[0, m0_rod_index]
+            for iodine_z_shift in (-0.01, 0.0, 0.01)
+        ]
+    )
+    assert np.all(m0_density > 0.0)
+    assert np.all(np.diff(m0_density) < 0.0)
+    model = ParameterizedStructureRegionModel(
+        parameterization=parameterization,
+        blocks=tuple(
+            StructureRegionResponseBlock(
+                dataset_id=dataset_id,
+                response=response,
+                quadrature=quadrature,
+            )
+            for dataset_id, quadrature in zip(
+                ("first", "second"),
+                quadratures,
+                strict=True,
+            )
+        ),
+    )
+
+    truth = np.asarray((0.008, 0.86))
+    reference_peak = float(np.max(model.predict_mass_A2(parameterization.reference_parameters)))
+    dataset_scales = np.asarray((2.0, 3.0)) / reference_peak
+    truth_model = model.predict_mass_A2(truth)
+    dataset_index = np.repeat(np.arange(2), rows_per_dataset)
+    is_background = np.tile(
+        np.asarray((*([False] * signal_count), True, True)),
+        2,
+    )
+    fixed_background_mass = np.full(2 * rows_per_dataset, 20.0)
+    count_mass = fixed_background_mass + dataset_scales[dataset_index] * truth_model
+    observations = MatchedRegionObservations(
+        dataset_ids=("first", "second"),
+        dataset_index=dataset_index,
+        block_index=np.repeat(np.arange(2), rows_per_dataset),
+        signal_family=np.tile(np.asarray((*range(signal_count), -1, -1)), 2),
+        is_background=is_background,
+        count_mass=count_mass,
+        support_px2=np.ones(2 * rows_per_dataset),
+        background_coordinate=np.tile(
+            np.asarray((*([0.0] * signal_count), -1.0, 1.0)),
+            2,
+        ),
+        required_signal_families=tuple(range(signal_count)),
+        count_covariance_count2=np.eye(2 * rows_per_dataset),
+    )
+    fixed_background = FixedMatchedRegionBackground(
+        count_mass=fixed_background_mass,
+        covariance_count2=np.zeros((2 * rows_per_dataset, 2 * rows_per_dataset)),
+        revision="generic-cif-ordered-sf-fixed-background.v1",
+    )
+    result = fit_parameterized_matched_regions(
+        observations,
+        model,
+        fixed_background=fixed_background,
+        initial_parameters=(np.asarray((0.0, 0.9)), np.asarray((0.015, 0.8))),
+        lower_bounds=np.asarray((-0.02, 0.7)),
+        upper_bounds=np.asarray((0.02, 1.0)),
+        parameter_scales=np.asarray((0.01, 0.1)),
+    )
+
+    np.testing.assert_allclose(result.fit.parameters, truth, rtol=0.0, atol=2.0e-8)
+    np.testing.assert_allclose(result.fit.dataset_scales, dataset_scales, rtol=2.0e-8, atol=0.0)
+    assert result.fit.sensitivity_rank == 2
+    assert result.fit.sensitivity_condition < 100.0
+    assert result.fit.success
+    assert result.model_revision == model.model_revision
+
+    scale_basis = AffineCifSiteBasis(
+        reference_crystal=inputs.crystal,
+        parameter_names=("iodine_z_shift", "common_site_occupancy"),
+        parameter_units=("fractional", "1"),
+        reference_parameters=np.asarray((0.0, 1.0)),
+        fractional_coefficients=fractional,
+        occupancy_coefficients=np.column_stack((np.zeros(site_count), np.ones(site_count))),
+        u_iso_A2_coefficients=np.zeros((site_count, 2)),
+        unknown_u_iso_A2=0.0,
+    )
+
+    scale_parameterization = AffineCifFiniteStackParameterization(inputs.strength, scale_basis)
+    scale_gauged_model = ParameterizedStructureRegionModel(
+        parameterization=scale_parameterization,
+        blocks=model.blocks,
+    )
+
+    scale_gauged_truth = np.asarray((0.008, 0.86))
+    scale_gauged_truth_model = scale_gauged_model.predict_mass_A2(scale_gauged_truth)
+    scale_gauged_observations = replace(
+        observations,
+        count_mass=(
+            fixed_background_mass + dataset_scales[dataset_index] * scale_gauged_truth_model
+        ),
+    )
+    with pytest.raises(StructureRegionIdentifiabilityError, match="rank deficient") as captured:
+        fit_parameterized_matched_regions(
+            scale_gauged_observations,
+            scale_gauged_model,
+            fixed_background=fixed_background,
+            initial_parameters=(np.asarray((0.0, 0.9)),),
+            lower_bounds=np.asarray((-0.02, 0.7)),
+            upper_bounds=np.asarray((0.02, 1.0)),
+            parameter_scales=np.asarray((0.01, 0.1)),
+        )
+    assert captured.value.result.sensitivity_rank == 1
+
+    stale_parameterization = AffineCifFiniteStackParameterization(
+        replace(inputs.strength, repeats=inputs.strength.repeats + 1),
+        basis,
+    )
+    with pytest.raises(ValueError, match="different reference structure model"):
+        ParameterizedStructureRegionModel(
+            parameterization=stale_parameterization,
+            blocks=model.blocks,
+        )
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    ("bi2se3_simulation.yaml", "bi2te3_simulation.yaml"),
+)
+def test_bi2x3_structure_uses_same_parameterized_region_fitter(config_name: str) -> None:
+    root = Path(__file__).resolve().parents[1]
+    base = load_simulation_config(root / "configs" / config_name)
+    config = replace(
+        base,
+        source=replace(
+            base.source,
+            spatial_sigma_m=(0.0, 0.0),
+            divergence_sigma_rad=(0.0, 0.0),
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+        ),
+        bragg=replace(base.bragg, include_detector_visible_m0=False),
+    )
+    inputs = build_configured_simulation_inputs(config)
+    detector = build_source_averaged_structure_detector(inputs)
+    nominal = build_nominal_ewald_context(inputs)
+    parameterization = Bi2X3FiniteStackParameterization(
+        inputs.strength,
+        ("outer_bi_antisite_fraction",),
+    )
+
+    mapped = []
+    for rod in nominal.rods:
+        if rod.h == 0 and rod.k == 0:
+            continue
+        for branch in (1, 2):
+            candidate = nominal.geometry.map_latent(
+                rod=rod,
+                branch=branch,
+                alpha_rad=math.radians(1.5),
+                beta_rad=math.radians(165.0 + 3.0 * len(mapped)),
+            )
+            if bool(candidate.geometry.valid):
+                mapped.append(candidate)
+                break
+        if len(mapped) == 4:
+            break
+    assert len(mapped) == 4
+    column_px = np.asarray([point.geometry.column_px for point in mapped])
+    row_px = np.asarray([point.geometry.row_px for point in mapped])
+    signal_count = len(mapped)
+    rows_per_dataset = signal_count + 2
+    observation_count = 2 * rows_per_dataset
+    response = detector.compile_structure_response(column_px, row_px)
+    model = ParameterizedStructureRegionModel(
+        parameterization=parameterization,
+        blocks=tuple(
+            StructureRegionResponseBlock(
+                dataset_id=dataset_id,
+                response=response,
+                quadrature=ContinuousRegionQuadrature(
+                    column_px=column_px,
+                    row_px=row_px,
+                    detector_area_weight_px2=np.ones(signal_count),
+                    observation_row=dataset_index * rows_per_dataset + np.arange(signal_count),
+                    background_coordinate=np.zeros(signal_count),
+                    observation_count=observation_count,
+                    chart_revision=(f"shared-bi2x3-sf-{config_name}.dataset-{dataset_index}.v1"),
+                ),
+            )
+            for dataset_index, dataset_id in enumerate(("first", "second"))
+        ),
+    )
+    truth = np.asarray((0.08,))
+    truth_mass = model.predict_mass_A2(truth)
+    reference_peak = float(np.max(model.predict_mass_A2(model.reference_parameters)))
+    dataset_scales = np.asarray((2.0, 3.0)) / reference_peak
+    dataset_index = np.repeat(np.arange(2), rows_per_dataset)
+    fixed_background_mass = np.full(observation_count, 15.0)
+    observations = MatchedRegionObservations(
+        dataset_ids=("first", "second"),
+        dataset_index=dataset_index,
+        block_index=np.repeat(np.arange(2), rows_per_dataset),
+        signal_family=np.tile(np.asarray((*range(signal_count), -1, -1)), 2),
+        is_background=np.tile(
+            np.asarray((*([False] * signal_count), True, True)),
+            2,
+        ),
+        count_mass=fixed_background_mass + dataset_scales[dataset_index] * truth_mass,
+        support_px2=np.ones(observation_count),
+        background_coordinate=np.tile(
+            np.asarray((*([0.0] * signal_count), -1.0, 1.0)),
+            2,
+        ),
+        required_signal_families=tuple(range(signal_count)),
+        count_covariance_count2=np.eye(observation_count),
+    )
+    result = fit_parameterized_matched_regions(
+        observations,
+        model,
+        fixed_background=FixedMatchedRegionBackground(
+            count_mass=fixed_background_mass,
+            covariance_count2=np.zeros((observation_count, observation_count)),
+            revision=f"shared-bi2x3-sf-{config_name}-background.v1",
+        ),
+        initial_parameters=(np.asarray((0.02,)), np.asarray((0.14,))),
+        lower_bounds=np.asarray((0.0,)),
+        upper_bounds=np.asarray((0.2,)),
+        parameter_scales=np.asarray((0.1,)),
+    )
+
+    np.testing.assert_allclose(result.fit.parameters, truth, rtol=0.0, atol=2.0e-7)
+    np.testing.assert_allclose(result.fit.dataset_scales, dataset_scales, rtol=3.0e-8)
+    assert result.fit.sensitivity_rank == 1
+    assert result.fit.sensitivity_condition == pytest.approx(1.0)
+
+
 def test_source_averaged_detector_compiles_all_blocks_before_parallel_evaluation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2922,6 +3867,33 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
         rtol=4.0e-11,
         atol=3.0e-24,
     )
+    sparse_response = compile_source_averaged_detector_structure_response(
+        column_px,
+        row_px,
+        reciprocal_basis_Ainv=(
+            scalar_detectors[0].coating.bragg_space.config.reciprocal_basis_Ainv
+        ),
+        crystal_to_sample=nonzero.instrument.sample_from_crystal.rotation,
+        rods=rods,
+        rod_catalog_revision=detector.rod_catalog_revision,
+        mosaic=scalar_detectors[0].coating.bragg_space.config.mosaic,
+        reference_strength_model=strength,
+        intensity_envelope=detector.intensity_envelope,
+        incident=detector.incident,
+        material=detector.material,
+        instrument=detector.instrument,
+    )
+    sparse = sparse_response.apply_strength(strength)
+    np.testing.assert_allclose(
+        sparse.per_rod_density_A2_per_px2,
+        all_roots.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    m0_terms = sparse_response.term_rod_index == 0
+    assert np.count_nonzero(m0_terms) == 4
+    assert set(sparse_response.term_source_state_index[m0_terms]) == {0, 1}
+    assert set(sparse_response.term_root_sign[m0_terms]) == {-1, 1}
 
     assert first_m0_oracle is not None
     positive_k = first_m0_oracle.coating.ki_sample_Ainv.copy()
@@ -3881,6 +4853,26 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {73: 9, 85: 991}
     assert not detector.reachable_rod_count_per_source_state.flags.writeable
 
+    portable_default = default_path.read_text(encoding="utf-8").replace(
+        "../examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        (root / "examples/bi2se3/structures/Bi2Se3_vesta.cif").as_posix(),
+    )
+
+    generic_yaml = tmp_path / "generic-cif.yaml"
+    generic_yaml.write_text(
+        portable_default.replace(
+            "model_id: r3m_quintuple_finite_2h.v1",
+            "model_id: cif_conventional_cell_finite_repeat.v1",
+        )
+        .replace("  shared_disorder_epsilon: 0.001\n", "")
+        .replace("  layers: 52", "  repeats: 5"),
+        encoding="utf-8",
+    )
+    generic_config = load_simulation_config(generic_yaml, repository_root=root)
+    assert generic_config.structure_factor.shared_disorder_epsilon == 0.0
+    assert generic_config.structure_factor.layers is None
+    assert generic_config.structure_factor.repeats == 5
+
     duplicate = tmp_path / "duplicate.yaml"
     duplicate.write_text(
         "schema_version: rasim-simulation-v2\nschema_version: duplicate\n",
@@ -3898,10 +4890,6 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
         load_simulation_config(unknown, repository_root=root)
 
     duplicate_filename = tmp_path / "duplicate-filename.yaml"
-    portable_default = default_path.read_text(encoding="utf-8").replace(
-        "../examples/bi2se3/structures/Bi2Se3_vesta.cif",
-        (root / "examples/bi2se3/structures/Bi2Se3_vesta.cif").as_posix(),
-    )
     duplicate_filename.write_text(
         portable_default.replace(
             "filename: ewald-surface.png",
