@@ -17,8 +17,8 @@ bottom_roughness_A = 10.0000000000
 [dark_correction]
 model_id = "scaled_dark_subtraction_no_clip.v1"
 path = "../../calibration/hbn/darkImg.osc.gz"
-scale = 1.0
-scale_basis = "matched_exposure_assumed.v1"
+scale = 0.0
+scale_basis = "no_acquisition_matched_dark.v1"
 
 [detector]
 native_shape_rc = [3000, 3000]

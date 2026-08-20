@@ -138,6 +138,8 @@ def build_incident_states(
     states = IncidentStateBatch(
         incident_state_id=samples.incident_sample_id,
         incident_sample_id=samples.incident_sample_id,
+        source_origin_lab_m=samples.origin_lab_m,
+        source_direction_lab=samples.direction_lab,
         sample_intersection_lab_m=intersection_lab_m,
         direction_sample=direction_output,
         k_air_sample_Ainv=k_air_output,
@@ -155,6 +157,7 @@ def build_incident_states(
         source_seed=samples.source_seed,
         source_parameter_provenance=samples.source_parameter_provenance,
         source_parameter_revision=samples.source_parameter_revision,
+        source_weight_revision=samples.source_weight_revision,
         source_revision=samples.source_revision,
         sample_geometry_revision=instrument.sample_geometry_revision,
         material_revision=material.material_revision,

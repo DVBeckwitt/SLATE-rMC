@@ -3,11 +3,13 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import rasim_next.selection.blind as blind_module
+import rasim_next.selection.osc_series as osc_series_module
 from rasim_next.core.frames import FrameId
 from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
@@ -59,12 +61,25 @@ from rasim_next.selection import (
     evaluate_expected_m0_peak_evidence,
     index_discovered_integer_l_peaks,
     index_measured_integer_l_branches,
+    index_osc_geometry_series,
     load_osc_geometry_series,
     reindex_frozen_osc_geometry_series,
     select_confident_branch_tracks,
     simulation_config_for_osc_image,
 )
 from rasim_next.selection.blind import _discovery_geometry_hash, _indexing_context_hash
+
+
+def _single_mean_test_source(source: object) -> object:
+    return replace(
+        source,
+        wavelength_model_id="gaussian.v1",
+        wavelength_sigma_A=0.0,
+        sample_count=1,
+        line_wavelength_A=(),
+        line_probability=(),
+        common_line_sigma_A=0.0,
+    )
 
 
 def _instrument() -> CompiledInstrument:
@@ -360,7 +375,10 @@ def test_frozen_visibility_audit_ignores_new_candidate_track_censoring() -> None
         )
 
 
-def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
+def _synthetic_osc_series_provenance(
+    *,
+    last_l_values: tuple[int, ...] = (2, 4, 6),
+):
     root = Path(__file__).resolve().parents[1]
     series = load_osc_geometry_series(root / "configs" / "bi2se3_osc_geometry_fit.yaml")
     base = load_simulation_config(series.config_path)
@@ -389,11 +407,11 @@ def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
         result = _synthetic_image_result(
             image.image_id,
             image.axis_rotation_angles_deg[0],
-            (2, 4, 6),
+            last_l_values if index == len(series.images) - 1 else (2, 4, 6),
             geometry_offset_px=float(index),
             detector_hash_digit=str(index + 1),
             context_hash_digit="abcdef"[index],
-            wavelength_A=1.540592925,
+            wavelength_A=float(base.source.mean_wavelength_A),
         )
         discovery = MeasuredPeakDiscovery(
             image_id=result.image_id,
@@ -426,8 +444,21 @@ def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
         inputs_by_image.append(inputs)
         contexts.append(context)
         models.append(ExactTagGeometryModel(inputs))
-    results = tuple(results)
-    discoveries = tuple(discoveries)
+
+    return (
+        series,
+        tuple(inputs_by_image),
+        tuple(contexts),
+        tuple(models),
+        tuple(results),
+        tuple(discoveries),
+    )
+
+
+def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
+    series, inputs_by_image, contexts, models, results, discoveries = (
+        _synthetic_osc_series_provenance()
+    )
     selection = select_confident_branch_tracks(tuple(reversed(results)), policy=_policy())
     indexed_images = tuple(
         IndexedGeometryImage(
@@ -528,6 +559,55 @@ def test_osc_indexing_run_rejects_mismatched_series_provenance() -> None:
         replace(
             indexed_images[0],
             model=ExactTagGeometryModel(wrong_inputs),
+        )
+
+
+def test_osc_series_retains_incomplete_preflight_without_partial_fit_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    series, _, contexts, _, results, discoveries = _synthetic_osc_series_provenance(
+        last_l_values=(8, 10, 12)
+    )
+    discovery_iterator = iter(discoveries)
+    result_iterator = iter(results)
+    fake_counts = np.ones((1, 1), dtype=np.int32)
+    monkeypatch.setattr(
+        osc_series_module,
+        "read_osc",
+        lambda _path: SimpleNamespace(detector_native_counts=fake_counts),
+    )
+    monkeypatch.setattr(
+        osc_series_module,
+        "discover_measured_cake_peaks",
+        lambda *_args, **_kwargs: next(discovery_iterator),
+    )
+    monkeypatch.setattr(
+        osc_series_module,
+        "index_discovered_integer_l_peaks",
+        lambda *_args, **_kwargs: next(result_iterator),
+    )
+
+    run = index_osc_geometry_series(
+        series, blind_policy=BlindIndexingPolicy(track_policy=_policy())
+    )
+
+    assert run.indexed_images is None
+    assert tuple(item.image_id for item in run.discoveries) == tuple(
+        item.image_id for item in series.images
+    )
+    incomplete_id = series.images[-1].image_id
+    assert next(
+        item.marker_decisions
+        for item in run.selection.image_results
+        if item.image_id == incomplete_id
+    )
+    with pytest.raises(ValueError, match="provenance-bound geometry models"):
+        reindex_frozen_osc_geometry_series(
+            run,
+            instrument_by_image_id={
+                image.image_id: context.instrument
+                for image, context in zip(series.images, contexts, strict=True)
+            },
         )
 
 
@@ -861,7 +941,7 @@ def test_q_space_label_algebra_matches_exact_bi2se3_markers(
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+        replace(config, source=_single_mean_test_source(config.source))
     )
     context = build_nominal_ewald_context(inputs)
     markers = evaluate_nominal_integer_l_markers(context)
@@ -1049,7 +1129,7 @@ def test_withheld_raster_peaks_are_discovered_and_q_indexed_with_coarse_geometry
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+        replace(config, source=_single_mean_test_source(config.source))
     )
     nominal = build_nominal_ewald_context(inputs)
     shape_rc = (300, 850)

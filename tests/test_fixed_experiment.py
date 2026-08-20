@@ -16,6 +16,7 @@ from rasim_next.fitting import (
     FixedPositionState,
     SharedGeometryCorrections,
     build_fixed_experiment_series,
+    build_fixed_incidence_scan_series,
     fixed_position_from_fit_record,
     zero_sum_helmert_basis,
 )
@@ -95,7 +96,7 @@ def test_fixed_experiment_applies_calibrated_detector_center_and_distance() -> N
         config,
         position=nominal_position,
         fixed_lattice=lattice,
-        source_sample_count=1,
+        source_sample_count=2,
         gaussian_sigma_rad=math.radians(1.0),
         lorentzian_half_width_rad=math.radians(0.5),
         lorentzian_probability=0.0,
@@ -104,7 +105,7 @@ def test_fixed_experiment_applies_calibrated_detector_center_and_distance() -> N
         config,
         position=FixedPositionState.from_record(calibrated_position.to_record()),
         fixed_lattice=lattice,
-        source_sample_count=1,
+        source_sample_count=2,
         gaussian_sigma_rad=math.radians(1.0),
         lorentzian_half_width_rad=math.radians(0.5),
         lorentzian_probability=0.0,
@@ -125,6 +126,95 @@ def test_fixed_experiment_applies_calibrated_detector_center_and_distance() -> N
         rtol=0.0,
         atol=1.0e-16,
     )
+
+
+def test_fixed_incidence_scan_uses_only_the_shared_angle_calibration() -> None:
+    config = load_simulation_config(ROOT / "configs" / "bi2se3_r3_simulation.yaml")
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+    commanded = tuple(map(math.radians, (6.0, 12.0)))
+
+    scan = build_fixed_incidence_scan_series(
+        config,
+        position=_position(),
+        fixed_lattice=lattice,
+        commanded_incidence_angles_rad=commanded,
+        source_sample_count=2,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )
+    series = scan.inputs
+
+    np.testing.assert_allclose(
+        tuple(item.config.instrument.axis_rotations[0].angle_deg for item in series),
+        (6.4, 12.4),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+    assert series[0].samples is series[1].samples
+    assert series[0].samples.source_revision == series[1].samples.source_revision
+    assert scan.commanded_incidence_angles_rad == commanded
+    assert scan.effective_incidence_angles_rad == tuple(
+        value + math.radians(0.4) for value in commanded
+    )
+    assert scan.incidence_angle_delta_rad == _position().incidence_angle_delta_rad
+    assert scan.incidence_angle_delta_rad.hex() == _position().incidence_angle_delta_rad.hex()
+    assert all(
+        item.scan_calibration_binding_revision == scan.scan_calibration_binding_revision
+        for item in series
+    )
+    assert all(
+        item.calibrated_incidence_axis_angle_rad
+        == math.radians(item.config.instrument.axis_rotations[0].angle_deg)
+        for item in series
+    )
+    replaced_input = replace(series[0])
+    assert replaced_input.scan_calibration_binding_revision is None
+    assert replaced_input.calibrated_incidence_axis_angle_rad is None
+    changed_position = replace(_position(), artifact_revision=f"sha256-{'b' * 64}")
+    changed_scan = build_fixed_incidence_scan_series(
+        config,
+        position=changed_position,
+        fixed_lattice=lattice,
+        commanded_incidence_angles_rad=commanded,
+        source_sample_count=2,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )
+    assert scan.scan_calibration_revision != changed_scan.scan_calibration_revision
+
+    relabeled = replace(
+        series[0],
+        config=replace(
+            series[0].config,
+            instrument=replace(
+                series[0].config.instrument,
+                axis_rotations=(
+                    replace(
+                        series[0].config.instrument.axis_rotations[0],
+                        angle_deg=18.0,
+                    ),
+                ),
+            ),
+        ),
+    )
+    from rasim_next.fitting.fixed_experiment import FixedIncidenceScanSeries
+
+    with pytest.raises(TypeError, match="calibrated builder"):
+        FixedIncidenceScanSeries(
+            inputs=(relabeled, series[1]),
+            commanded_incidence_angles_rad=commanded,
+            effective_incidence_angles_rad=scan.effective_incidence_angles_rad,
+            calibration_model_id=scan.calibration_model_id,
+            position_artifact_revision=scan.position_artifact_revision,
+            incidence_angle_delta_rad=scan.incidence_angle_delta_rad,
+        )
 
 
 def test_raw_geometry_fit_record_is_the_shared_position_handoff(tmp_path: Path) -> None:
@@ -213,7 +303,7 @@ def test_legacy_fixed_position_cannot_silently_change_detector_center() -> None:
             config,
             position=unproven_center,
             fixed_lattice=lattice,
-            source_sample_count=1,
+            source_sample_count=2,
             gaussian_sigma_rad=math.radians(1.0),
             lorentzian_half_width_rad=math.radians(0.5),
             lorentzian_probability=0.0,

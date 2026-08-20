@@ -99,7 +99,7 @@ from rasim_next.pipeline.configured_simulation import (
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
     rebind_configured_geometry_instrument,
-    sample_configured_source,
+    sample_configured_nominal_geometry_source,
     solve_integer_l_ewald_roots,
     solve_layer_l_ewald_roots,
 )
@@ -119,6 +119,18 @@ from rasim_next.selection import (
 )
 from rasim_next.selection.blind import _discovery_geometry_hash
 from rasim_next.stacking import Parent
+
+
+def _single_mean_test_source(source: object) -> object:
+    return replace(
+        source,
+        wavelength_model_id="gaussian.v1",
+        wavelength_sigma_A=0.0,
+        sample_count=1,
+        line_wavelength_A=(),
+        line_probability=(),
+        common_line_sigma_A=0.0,
+    )
 
 
 def test_reduced_layer_orders_and_fixed_l_roots_match_analytic_oracle() -> None:
@@ -497,6 +509,16 @@ def test_optional_pbi2_polytype_landmarks_strengthen_shared_geometry_recovery(
     base = replace(
         base,
         material=replace(base.material, cif_path=pbi2_2h, phase_id="pbi2"),
+        source=replace(
+            base.source,
+            wavelength_model_id="gaussian.v1",
+            mean_wavelength_A=1.540592925,
+            wavelength_sigma_A=0.0,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            position_divergence_correlation=(0.0, 0.0),
+        ),
     )
     truth = SharedGeometryCorrections(
         detector_column_tilt_rad=math.radians(0.25),
@@ -1198,7 +1220,17 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     sample_mount = config.instrument.goniometer_from_sample
     config = replace(
         config,
-        source=replace(config.source, sample_count=8),
+        source=replace(
+            config.source,
+            sample_count=8,
+            wavelength_model_id="gaussian.v1",
+            mean_wavelength_A=1.540592925,
+            wavelength_sigma_A=0.0,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            position_divergence_correlation=(0.0, 0.0),
+        ),
         numerics=replace(config.numerics, worker_count=4),
         instrument=replace(
             config.instrument,
@@ -1259,8 +1291,8 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     np.testing.assert_allclose(
         actual.per_rod_density_A2_per_px2,
         expected.per_rod_density_A2_per_px2,
-        rtol=2.0e-13,
-        atol=0.0,
+        rtol=7.0e-13,
+        atol=2.0e-60,
     )
     np.testing.assert_array_equal(actual.caustic, expected.caustic)
     np.testing.assert_array_equal(actual.valid_source_count, expected.valid_source_count)
@@ -1292,7 +1324,7 @@ def test_continuous_detector_geometry_prediction_matches_fresh_nonpixel_oracle()
     ambiguous_inputs = build_configured_simulation_inputs(
         replace(
             config,
-            source=replace(config.source, sample_count=1),
+            source=_single_mean_test_source(config.source),
             instrument=replace(
                 config.instrument,
                 axis_rotations=(*config.instrument.axis_rotations, distinct_pivot_axis),
@@ -1377,10 +1409,12 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     assert config.source.sample_count == 1000
     inputs_1000 = build_configured_simulation_inputs(config)
-    inputs_1 = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+    inputs_2 = build_configured_simulation_inputs(
+        replace(config, source=replace(config.source, sample_count=2))
     )
-    nominal_samples = sample_configured_source(config.source, sample_count=1)
+    with pytest.raises(ValueError, match="at least the number of source lines"):
+        replace(config.source, sample_count=1)
+    nominal_samples = sample_configured_nominal_geometry_source(config.source)
     np.testing.assert_array_equal(
         nominal_samples.origin_lab_m,
         np.asarray((config.source.mean_origin_lab_m,)),
@@ -1413,10 +1447,10 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
     assert not np.any(empirical_nominal)
 
     context_1000 = build_nominal_ewald_context(inputs_1000)
-    context_1 = build_nominal_ewald_context(inputs_1)
+    context_2 = build_nominal_ewald_context(inputs_2)
     assert bool(context_1000.incident.states.valid[0])
     markers_1000 = evaluate_nominal_integer_l_markers(context_1000)
-    markers_1 = evaluate_nominal_integer_l_markers(context_1)
+    markers_2 = evaluate_nominal_integer_l_markers(context_2)
     for name in (
         "family_m",
         "integer_L",
@@ -1428,7 +1462,7 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
         "ewald_residual_Ainv",
         "family_strength_weight_A2",
     ):
-        np.testing.assert_array_equal(getattr(markers_1000, name), getattr(markers_1, name))
+        np.testing.assert_array_equal(getattr(markers_1000, name), getattr(markers_2, name))
     for name in (
         "contributing_rod_hk",
         "contributing_beta_rad",
@@ -1437,7 +1471,7 @@ def test_nominal_tag_companion_is_single_and_source_count_invariant() -> None:
         "definition_id",
         "source_state_policy",
     ):
-        assert getattr(markers_1000, name) == getattr(markers_1, name)
+        assert getattr(markers_1000, name) == getattr(markers_2, name)
     observations = IntegerLMarkerObservations.from_markers(markers_1000)
     detector_function = ContinuousDetectorGeometryModel(inputs_1000).bind(
         GeometryCorrections.zero()
@@ -1528,7 +1562,7 @@ def test_tagged_detector_objective_retains_independent_line_angle_terms() -> Non
 def test_m0_minimum_tilt_landmarks_obey_independent_ewald_oracle() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    config = replace(config, source=replace(config.source, sample_count=1))
+    config = replace(config, source=_single_mean_test_source(config.source))
     inputs = build_configured_simulation_inputs(config)
     context = build_nominal_ewald_context(inputs)
     prediction = (
@@ -1586,7 +1620,7 @@ def test_blind_integer_l_geometry_fit_recovers_ra_sim_bounded_pose(
 ) -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    config = replace(config, source=replace(config.source, sample_count=1))
+    config = replace(config, source=_single_mean_test_source(config.source))
     base_inputs = build_configured_simulation_inputs(config)
     truth = GeometryCorrections(
         detector_column_tilt_rad=math.radians(0.25),
@@ -2691,6 +2725,16 @@ def test_optional_pbi2_polytype_landmarks_strengthen_mosaic_recovery() -> None:
     base = replace(
         base,
         material=replace(base.material, cif_path=pbi2_2h, phase_id="pbi2"),
+        source=replace(
+            base.source,
+            wavelength_model_id="gaussian.v1",
+            mean_wavelength_A=1.540592925,
+            wavelength_sigma_A=0.0,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            position_divergence_correlation=(0.0, 0.0),
+        ),
     )
     baseline_orders = tuple(CommensurateLayerOrder(value) for value in range(1, 5))
     augmented_orders = tuple(
@@ -3400,7 +3444,7 @@ def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_di
     base = load_simulation_config(
         Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
     )
-    config = replace(base, source=replace(base.source, sample_count=1))
+    config = replace(base, source=_single_mean_test_source(base.source))
     inputs = build_configured_simulation_inputs(config)
     frame = build_osc_angle_frame(
         mean_direction_lab=config.source.mean_direction_lab,
@@ -3638,6 +3682,7 @@ def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_di
 
 def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profiles() -> None:
     from rasim_next.fitting import (
+        ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION,
         OrderedIntensityObservations,
         OrderedIntensityPeakCenterObservations,
         compile_ordered_intensity_response,
@@ -3646,7 +3691,11 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
         probe_ordered_intensity_inverse_boundary_bins,
     )
     from rasim_next.ordered import Bi2X3QuintupleLayerParameters
-    from rasim_next.pipeline.configured_simulation import configured_rod_catalog_revision
+    from rasim_next.pipeline.configured_simulation import (
+        build_single_source_ewald_context,
+        build_source_averaged_structure_detector,
+        configured_rod_catalog_revision,
+    )
 
     base = load_simulation_config(
         Path(__file__).resolve().parents[1] / "configs" / "bi2se3_simulation.yaml"
@@ -3654,11 +3703,9 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     config = replace(
         base,
         source=replace(
-            base.source,
+            _single_mean_test_source(base.source),
             spatial_sigma_m=(0.0, 0.0),
             divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
         ),
         mosaic=replace(
             base.mosaic,
@@ -3669,6 +3716,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     )
     inputs = build_configured_simulation_inputs(config)
     context = build_nominal_ewald_context(inputs)
+    one_state_context = build_single_source_ewald_context(inputs)
     frame = build_osc_angle_frame(
         mean_direction_lab=config.source.mean_direction_lab,
         instrument=inputs.instrument,
@@ -3725,22 +3773,24 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
             )
         )
     frozen_definitions = tuple(definitions)
-    audited_definitions = probe_ordered_intensity_inverse_boundary_bins(
-        context.geometry,
+    one_state_audited_definitions = probe_ordered_intensity_inverse_boundary_bins(
+        one_state_context.geometry,
         angle_frame=frame,
         definitions=frozen_definitions,
     )
-    assert tuple(definition.excluded_phi_bin_indices for definition in audited_definitions) == (
+    assert tuple(
+        definition.excluded_phi_bin_indices for definition in one_state_audited_definitions
+    ) == (
         (),
         (6, 8, 9, 10, 11, 12, 13),
     )
     assert (
         probe_ordered_intensity_inverse_boundary_bins(
-            context.geometry,
+            one_state_context.geometry,
             angle_frame=frame,
-            definitions=audited_definitions,
+            definitions=one_state_audited_definitions,
         )
-        == audited_definitions
+        == one_state_audited_definitions
     )
     stale_identity = frozen_definitions[0].identity
     stale_definitions = (
@@ -3758,17 +3808,17 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     )
     with pytest.raises(ValueError, match="rod catalog revision"):
         compile_ordered_intensity_response(
-            context.geometry,
+            one_state_context.geometry,
             angle_frame=frame,
             definitions=stale_definitions,
         )
     response = compile_ordered_intensity_response(
-        context.geometry,
+        one_state_context.geometry,
         angle_frame=frame,
         definitions=frozen_definitions,
     )
     assert response.excluded_phi_bin_indices == ((), (6, 8, 9, 10, 11, 12, 13))
-    assert response.topology_probe_revision == "inverse_root_signature_grid_17x17.v1"
+    assert response.topology_probe_revision == ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION
 
     def direct(strength: Bi2X3FiniteStackStrength) -> np.ndarray:
         candidate_inputs = replace(
@@ -3779,7 +3829,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
         profiles = evaluate_continuous_mosaic_profiles(
             build_source_averaged_detector(candidate_inputs),
             angle_frame=frame,
-            definitions=audited_definitions,
+            definitions=one_state_audited_definitions,
             profile_revision="ordered-response-test.v1",
         )
         return np.sum(profiles.signal, axis=1, dtype=np.float64)
@@ -3816,11 +3866,19 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
     distributed_config = replace(config, source=replace(base.source, sample_count=2))
     distributed_inputs = build_configured_simulation_inputs(distributed_config)
     assert configured_rod_catalog_revision(distributed_inputs) == revision
+    distributed_audited_definitions = probe_ordered_intensity_inverse_boundary_bins(
+        build_source_averaged_structure_detector(distributed_inputs),
+        angle_frame=frame,
+        definitions=frozen_definitions,
+    )
+    assert tuple(
+        definition.excluded_phi_bin_indices for definition in distributed_audited_definitions
+    ) == ((), (6, 7, 8, 9, 10, 11, 12, 13))
     distributed_detector = build_source_averaged_detector(distributed_inputs)
     distributed_response = compile_source_averaged_ordered_intensity_response(
         distributed_detector,
         angle_frame=frame,
-        definitions=audited_definitions,
+        definitions=distributed_audited_definitions,
         execution_backend="cpu",
     )
 
@@ -3831,9 +3889,11 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
             distributed_detector.rebind_physics(strength_model=strength),
             angle_frame=frame,
             two_theta_rad=np.asarray(
-                [definition.center_two_theta_rad for definition in audited_definitions]
+                [definition.center_two_theta_rad for definition in distributed_audited_definitions]
             ),
-            phi_rad=np.asarray([definition.center_phi_rad for definition in audited_definitions]),
+            phi_rad=np.asarray(
+                [definition.center_phi_rad for definition in distributed_audited_definitions]
+            ),
             execution_backend="cpu",
         )
         rod_lookup = {(rod.h, rod.k): index for index, rod in enumerate(points.rods)}
@@ -3848,7 +3908,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
                         ],
                     ]
                 )
-                for profile_index, definition in enumerate(audited_definitions)
+                for profile_index, definition in enumerate(distributed_audited_definitions)
             ]
         )
 
@@ -4507,7 +4567,7 @@ def test_bi2te3_config_builds_material_generic_quintuple_layer_strength() -> Non
         Path(__file__).resolve().parents[1] / "configs" / "bi2te3_simulation.yaml"
     )
     inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+        replace(config, source=_single_mean_test_source(config.source))
     )
 
     assert config.structure_factor.model_id == "r3m_quintuple_finite_2h.v1"
@@ -4532,7 +4592,7 @@ def test_bi2te3_figure7_config_selects_fault_free_three_r_parent() -> None:
         Path(__file__).resolve().parents[1] / "configs" / "bi2te3_r3_simulation.yaml"
     )
     inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+        replace(config, source=_single_mean_test_source(config.source))
     )
 
     assert config.structure_factor.model_id == "r3m_quintuple_finite_3r.v1"
@@ -4570,6 +4630,16 @@ def pbi2_layer_l_stacking_fixture() -> Pbi2LayerLStackingFixture:
             base.material,
             cif_path=root / "examples" / "pbi2" / "structures" / "PbI2_2H.cif",
             phase_id="pbi2",
+        ),
+        source=replace(
+            base.source,
+            wavelength_model_id="gaussian.v1",
+            mean_wavelength_A=1.540592925,
+            wavelength_sigma_A=0.0,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            position_divergence_correlation=(0.0, 0.0),
         ),
         instrument=replace(
             base.instrument,

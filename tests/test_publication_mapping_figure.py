@@ -34,6 +34,7 @@ def _external_scratch_directory(prefix: str) -> Path:
 def test_publication_defaults_preserve_bi2se3_while_applying_declared_overrides() -> None:
     from rasim_next.pipeline.configured_simulation import (
         build_configured_simulation_inputs,
+        build_nominal_ewald_context,
         load_simulation_config,
     )
 
@@ -47,23 +48,29 @@ def test_publication_defaults_preserve_bi2se3_while_applying_declared_overrides(
     assert base.instrument.axis_rotations[0].angle_deg == 5.0
     assert configured.material == base.material
     assert configured.instrument.axis_rotations[0].angle_deg == 10.0
-    assert configured.source.sample_count == 1
+    assert configured.source.sample_count == len(configured.source.line_wavelength_A)
     assert configured.mosaic.gaussian_sigma_deg == 2.0
     assert configured.mosaic.lorentzian_hwhm_deg == 0.2
     assert configured.mosaic.lorentzian_probability == 0.1
     assert configured.instrument.lab_from_detector == base.instrument.lab_from_detector
     inputs = build_configured_simulation_inputs(configured)
     np.testing.assert_array_equal(
-        inputs.samples.origin_lab_m, (configured.source.mean_origin_lab_m,)
+        inputs.samples.wavelength_A,
+        configured.source.line_wavelength_A,
     )
     np.testing.assert_array_equal(
-        inputs.samples.direction_lab,
-        (configured.source.mean_direction_lab,),
+        inputs.samples.source_weight,
+        configured.source.line_probability,
     )
-    np.testing.assert_array_equal(
-        inputs.samples.wavelength_A, (configured.source.mean_wavelength_A,)
+    assert np.all(inputs.samples.origin_lab_m == configured.source.mean_origin_lab_m)
+    assert np.all(inputs.samples.direction_lab == configured.source.mean_direction_lab)
+    policies = FIGURE._source_policy_records(inputs, build_nominal_ewald_context(inputs))
+    assert policies["reciprocal_ewald_reference"]["state_count"] == 1
+    assert policies["detector_intensity"]["state_count"] == len(configured.source.line_wavelength_A)
+    assert (
+        policies["reciprocal_ewald_reference"]["source_revision"]
+        != policies["detector_intensity"]["source_revision"]
     )
-    np.testing.assert_array_equal(inputs.samples.source_weight, (1.0,))
 
     wrong_phase = replace(base, material=replace(base.material, phase_id="bi2te3"))
     with pytest.raises(ValueError, match="only the Bi2Se3 phase"):
@@ -375,35 +382,25 @@ def test_schematic_detector_coarsening_uses_linear_cell_averages() -> None:
 
     assert FIGURE._coarsened_cell_count(360, 180) == 180
     assert FIGURE._coarsened_cell_count(359, 180) == 180
-    source = np.arange(77.0).reshape(7, 11)
-    rebinned = FIGURE._conservative_uniform_rebin_2d(source, (4, 6))
-    assert rebinned.shape == (4, 6)
-    np.testing.assert_allclose(np.mean(rebinned), np.mean(source), rtol=2.0e-15)
-    scalar_oracle = np.zeros((4, 6), dtype=np.float64)
-    for target_row in range(4):
-        target_row_bounds = (target_row / 4.0, (target_row + 1) / 4.0)
-        for target_column in range(6):
-            target_column_bounds = (target_column / 6.0, (target_column + 1) / 6.0)
-            for source_row in range(7):
-                row_overlap = max(
-                    0.0,
-                    min(target_row_bounds[1], (source_row + 1) / 7.0)
-                    - max(target_row_bounds[0], source_row / 7.0),
-                )
-                for source_column in range(11):
-                    column_overlap = max(
-                        0.0,
-                        min(target_column_bounds[1], (source_column + 1) / 11.0)
-                        - max(target_column_bounds[0], source_column / 11.0),
-                    )
-                    scalar_oracle[target_row, target_column] += (
-                        source[source_row, source_column] * row_overlap * column_overlap * 24.0
-                    )
-    np.testing.assert_allclose(rebinned, scalar_oracle, rtol=2.0e-15, atol=2.0e-14)
-    np.testing.assert_allclose(
-        FIGURE._conservative_uniform_rebin_2d(np.ones((7, 11)), (4, 6)),
-        1.0,
+
+
+def test_finite_stack_display_nodes_include_integer_peaks_and_shoulders() -> None:
+    from rasim_next.pipeline.bragg_space import finite_stack_integer_l_display_nodes
+
+    nodes = finite_stack_integer_l_display_nodes(
+        2.25,
+        4.25,
+        layer_count=5,
+        background_count=3,
     )
+
+    np.testing.assert_allclose(
+        nodes,
+        (2.25, 2.9, 3.0, 3.1, 3.25, 3.9, 4.0, 4.1, 4.25),
+        rtol=0.0,
+        atol=8.0 * np.finfo(np.float64).eps,
+    )
+    assert not nodes.flags.writeable
 
 
 def test_detector_visible_ewald_patch_includes_m0_and_only_paints_active_panel() -> None:
@@ -747,7 +744,13 @@ def test_publication_manifest_declares_visible_m0_patch_and_spawn_execution() ->
             settings=FIGURE.FigureSettings(ewald_worker_count=2),
             inputs=SimpleNamespace(
                 config=SimpleNamespace(physics_revision="test-physics"),
-                samples=SimpleNamespace(source_revision="test-source"),
+                samples=SimpleNamespace(
+                    incident_sample_id=np.arange(2),
+                    wavelength_A=np.asarray((1.540592925, 1.544427)),
+                    source_weight=np.asarray((0.6587615283267457, 0.3412384716732543)),
+                    source_sampling_model_id="weighted-doublet.v1",
+                    source_revision="physical-source",
+                ),
                 instrument=instrument,
             ),
             tilted_instrument=instrument,
@@ -758,7 +761,18 @@ def test_publication_manifest_declares_visible_m0_patch_and_spawn_execution() ->
             ewald=ewald,
             ideal_detector=detector,
             tilted_detector=detector,
-            nominal=SimpleNamespace(rods=(object(), object())),
+            nominal=SimpleNamespace(
+                rods=(object(), object()),
+                incident=SimpleNamespace(
+                    states=SimpleNamespace(
+                        incident_sample_id=np.arange(1),
+                        wavelength_A=np.asarray((1.5419012588932806,)),
+                        source_weight=np.ones(1),
+                        source_sampling_model_id="nominal_mean_geometry_reference.v1",
+                        source_revision="nominal-source",
+                    )
+                ),
+            ),
             mosaic_alpha_nodes_rad=np.asarray((0.0, 1.0)),
             reciprocal_logical_candidate_count=4,
             reciprocal_candidate_evaluation_count=3,
@@ -778,7 +792,25 @@ def test_publication_manifest_declares_visible_m0_patch_and_spawn_execution() ->
             outputs=(output,),
         )
 
-        assert payload["schema_version"] == "rasim-bi2se3-publication-mapping-v5"
+        assert payload["schema_version"] == "rasim-bi2se3-publication-mapping-v6"
+        assert (
+            payload["source_policies"]["reciprocal_ewald_reference"]["source_revision"]
+            == "nominal-source"
+        )
+        assert payload["source_policies"]["detector_intensity"]["source_revision"] == (
+            "physical-source"
+        )
+        assert payload["source_policies"]["detector_intensity"]["policy"] == (
+            "weighted_discrete_lines_at_mean_ray_geometry.v1"
+        )
+        assert payload["source_policies"]["detector_intensity"]["phase_space_sampling"] == (
+            "one_mean_geometry_row_per_line; configured spatial and divergence widths are not "
+            "sampled"
+        )
+        assert payload["source_policies"]["detector_intensity"]["source_weight"] == [
+            0.6587615283267457,
+            0.3412384716732543,
+        ]
         assert payload["measures"]["ewald"] == ewald.measure_id
         assert payload["measures"]["ewald_selection"] == ewald.selection_id
         assert payload["ewald_point_sampling"]["sphere_policy"] == (
@@ -1142,8 +1174,25 @@ def test_schematic_only_manifest_records_scope_coordinates_and_ewald_proof() -> 
             settings=FIGURE.FigureSettings(ewald_worker_count=2),
             inputs=SimpleNamespace(
                 config=SimpleNamespace(physics_revision="test-physics"),
-                samples=SimpleNamespace(source_revision="test-source"),
+                samples=SimpleNamespace(
+                    incident_sample_id=np.arange(2),
+                    wavelength_A=np.asarray((1.540592925, 1.544427)),
+                    source_weight=np.asarray((0.6587615283267457, 0.3412384716732543)),
+                    source_sampling_model_id="weighted-doublet.v1",
+                    source_revision="physical-source",
+                ),
                 instrument=instrument,
+            ),
+            nominal=SimpleNamespace(
+                incident=SimpleNamespace(
+                    states=SimpleNamespace(
+                        incident_sample_id=np.arange(1),
+                        wavelength_A=np.asarray((1.5419012588932806,)),
+                        source_weight=np.ones(1),
+                        source_sampling_model_id="nominal_mean_geometry_reference.v1",
+                        source_revision="nominal-source",
+                    )
+                )
             ),
             tilted_instrument=instrument,
             ewald=ewald,
@@ -1166,7 +1215,14 @@ def test_schematic_only_manifest_records_scope_coordinates_and_ewald_proof() -> 
             outputs=(output,),
         )
 
-        assert payload["schema_version"] == "rasim-bi2se3-projection-schematic-v1"
+        assert payload["schema_version"] == "rasim-bi2se3-projection-schematic-v2"
+        assert (
+            payload["source_policies"]["reciprocal_ewald_reference"]["source_revision"]
+            == "nominal-source"
+        )
+        assert payload["source_policies"]["detector_intensity"]["source_revision"] == (
+            "physical-source"
+        )
         assert payload["build_scope"] == {
             "reciprocal_space": "not_evaluated",
             "ewald_patch": "evaluated_at_requested_schematic_resolution",

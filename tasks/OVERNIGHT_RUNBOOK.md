@@ -5,7 +5,7 @@ their accidental recreation.
 
 Do not relaunch the old worktrees or prompts. Do not restore their sampled candidate, event,
 selection, deposition, raster, or Ewald-sphere pathways. New write-heavy work starts from approved
-current `main` in a new `codex/` worktree and follows the contract-v13 architecture, which retains
+current `main` in a new `codex/` worktree and follows the contract-v14 architecture, which retains
 the contract-v12 continuous detector baseline.
 
 Historical proof provenance is recorded in `docs/VALIDATION.md`, `docs/PHYSICS_LEDGER.md`, and the

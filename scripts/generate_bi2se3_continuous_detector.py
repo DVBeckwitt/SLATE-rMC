@@ -39,16 +39,7 @@ class _MosaicInputError(ValueError):
     """Invalid user-selected continuous mosaic parameters."""
 
 
-def _validate_reference_strength(
-    reference_path: Path,
-    strength: Bi2X3FiniteStackStrength,
-) -> None:
-    """Require reference and active finite-stack strength fixtures to match."""
-
-    with np.load(reference_path) as reference:
-        if "manifest_json" not in reference.files:
-            raise ValueError("reference diagnostic has no embedded manifest_json")
-        manifest_array = np.asarray(reference["manifest_json"])
+def _decode_reference_manifest(manifest_array: np.ndarray) -> dict[str, object]:
     if manifest_array.dtype != np.uint8 or manifest_array.ndim != 1:
         raise ValueError("reference diagnostic has an invalid manifest_json")
     try:
@@ -57,20 +48,137 @@ def _validate_reference_strength(
         raise ValueError("reference diagnostic has an invalid manifest_json") from error
     if not isinstance(manifest, dict):
         raise ValueError("reference diagnostic manifest must be a JSON object")
+    return manifest
 
-    expected = {
+
+def _require_reference_identity(
+    manifest: dict[str, object],
+    expected_identity: dict[str, object],
+) -> None:
+    for field, expected_value in expected_identity.items():
+        if manifest.get(field) != expected_value:
+            raise ValueError(f"reference {field} does not match the active detector fixture")
+
+
+def _load_reference_manifest(reference_path: Path) -> dict[str, object]:
+    with np.load(reference_path, allow_pickle=False) as reference:
+        if "manifest_json" not in reference.files:
+            raise ValueError("reference diagnostic has no embedded manifest_json")
+        return _decode_reference_manifest(np.asarray(reference["manifest_json"]))
+
+
+def _validate_reference_strength(
+    reference_path: Path,
+    expected_identity: dict[str, object],
+) -> None:
+    """Require reference and active detector-comparison identities to match."""
+
+    manifest = _load_reference_manifest(reference_path)
+    _require_reference_identity(manifest, expected_identity)
+
+
+def _reference_comparison_identity(
+    detector: DetectorEwaldMeasure,
+    strength: Bi2X3FiniteStackStrength,
+    rods: Sequence[Rod],
+    *,
+    branch: int,
+    configured_physics_revision: str,
+) -> dict[str, object]:
+    return {
+        "reference_comparison_model_id": "one_ki_selected_rods_detector_mass.v2",
+        "configured_physics_revision": configured_physics_revision,
+        "result_measure_id": "raw_detector_pixel_mass_A2.v1",
+        "wavelength_A": float(2.0 * np.pi / detector.coating.bragg_space.config.k_norm_Ainv),
+        "cif_path": "examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        "strength_parent": strength.parent.value,
+        "strength_structure_model_revision": strength.structure_model_revision,
         "strength_layer_count": strength.layers,
         "strength_normalization": strength.normalization.value,
         "strength_shared_disorder_epsilon": strength.shared_disorder_epsilon,
+        "detector_shape_rc": list(detector.instrument.detector_shape_rc),
+        "m1_rod_keys": [[rod.h, rod.k] for rod in rods],
+        "branch": branch,
     }
-    actual = {
-        "strength_layer_count": manifest.get("strength_layer_count"),
-        "strength_normalization": manifest.get("strength_normalization"),
-        "strength_shared_disorder_epsilon": manifest.get("strength_shared_disorder_epsilon"),
-    }
-    for field, expected_value in expected.items():
-        if actual[field] != expected_value:
-            raise ValueError(f"reference {field} does not match the active strength fixture")
+
+
+def _load_reference_arrays(
+    reference_path: Path,
+    *,
+    image_shape: tuple[int, int],
+    per_rod_shape: tuple[int, ...],
+    expected_identity: dict[str, object],
+) -> tuple[np.ndarray, np.ndarray, str, str]:
+    diagnostic_digest = hashlib.sha256()
+    with reference_path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            diagnostic_digest.update(block)
+        handle.seek(0)
+        with np.load(handle, allow_pickle=False) as reference:
+            required = {"manifest_json", "image_A2", "per_rod_detector_mass_A2"}
+            if not required.issubset(reference.files):
+                raise ValueError("reference diagnostic is missing detector arrays")
+            manifest = _decode_reference_manifest(np.asarray(reference["manifest_json"]))
+            _require_reference_identity(manifest, expected_identity)
+            raw_image = np.asarray(reference["image_A2"])
+            raw_per_rod = np.asarray(reference["per_rod_detector_mass_A2"])
+    if raw_image.dtype != np.float64 or raw_per_rod.dtype != np.float64:
+        raise ValueError("reference detector arrays must use float64 dtype")
+    if np.iscomplexobj(raw_image) or np.iscomplexobj(raw_per_rod):
+        raise ValueError("reference detector arrays must be real")
+    reference_image = np.asarray(raw_image, dtype=np.float64)
+    reference_per_rod = np.asarray(raw_per_rod, dtype=np.float64)
+    if reference_image.shape != image_shape:
+        raise ValueError("reference detector image shape does not match")
+    if reference_per_rod.shape != per_rod_shape:
+        raise ValueError("reference per-rod detector mass shape does not match")
+    if (
+        not np.all(np.isfinite(reference_image))
+        or np.any(reference_image < 0.0)
+        or float(np.sum(reference_image, dtype=np.float64)) <= 0.0
+        or not np.all(np.isfinite(reference_per_rod))
+        or np.any(reference_per_rod <= 0.0)
+    ):
+        raise ValueError("reference detector arrays must be finite with positive mass")
+    expected_image_sha256 = manifest.get("image_sha256")
+    actual_image_sha256 = hashlib.sha256(
+        memoryview(np.ascontiguousarray(reference_image)).cast("B")
+    ).hexdigest()
+    if expected_image_sha256 != actual_image_sha256:
+        raise ValueError("reference detector image does not match its declared SHA-256")
+    if manifest.get("nonzero_pixel_count") != int(np.count_nonzero(reference_image)):
+        raise ValueError("reference detector image does not match its declared nonzero count")
+    declared_per_rod = np.asarray(manifest.get("per_rod_detector_mass_A2"))
+    if (
+        declared_per_rod.dtype.kind not in "iuf"
+        or declared_per_rod.shape != per_rod_shape
+        or not np.array_equal(declared_per_rod.astype(np.float64), reference_per_rod)
+    ):
+        raise ValueError("reference per-rod detector masses do not match their manifest")
+    declared_total = manifest.get("total_detector_mass_A2")
+    if isinstance(declared_total, (bool, np.bool_)) or not isinstance(
+        declared_total,
+        (int, float),
+    ):
+        raise ValueError("reference total detector mass is invalid")
+    declared_total = float(declared_total)
+    image_total = float(np.sum(reference_image, dtype=np.float64))
+    per_rod_total = float(np.sum(reference_per_rod, dtype=np.float64))
+    if (
+        not math.isfinite(declared_total)
+        or declared_total <= 0.0
+        or not (
+            math.isclose(image_total, declared_total, rel_tol=2.0e-12, abs_tol=1.0e-24)
+            and math.isclose(per_rod_total, declared_total, rel_tol=2.0e-12, abs_tol=1.0e-24)
+        )
+    ):
+        raise ValueError("reference detector mass does not satisfy declared conservation")
+    return (
+        reference_image,
+        reference_per_rod,
+        actual_image_sha256,
+        diagnostic_digest.hexdigest(),
+    )
 
 
 def _peak_working_set_bytes() -> int | None:
@@ -143,7 +251,7 @@ def build_default_detector_measure(
     eta: float | None = None,
     layers: int | None = None,
     shared_disorder_epsilon: float | None = None,
-) -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod]:
+) -> tuple[DetectorEwaldMeasure, tuple[Rod, ...], Rod, str]:
     """Build the YAML-authoritative 5-degree fixture with optional overrides."""
 
     config = load_simulation_config(ROOT / "configs" / "bi2se3_simulation.yaml")
@@ -168,7 +276,15 @@ def build_default_detector_measure(
     )
     config = replace(
         config,
-        source=replace(config.source, sample_count=1),
+        source=replace(
+            config.source,
+            wavelength_model_id="gaussian.v1",
+            wavelength_sigma_A=0.0,
+            sample_count=1,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+        ),
         mosaic=replace(
             config.mosaic,
             gaussian_sigma_deg=gaussian_sigma_deg,
@@ -201,6 +317,7 @@ def build_default_detector_measure(
         ),
         m1_rods,
         m0_rod,
+        config.physics_revision,
     )
 
 
@@ -384,7 +501,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     fixture_start = perf_counter()
     try:
-        detector, m1_rods, m0_rod = build_default_detector_measure(
+        detector, m1_rods, m0_rod, configured_physics_revision = build_default_detector_measure(
             gaussian_sigma_deg=args.gaussian_sigma_deg,
             lorentzian_hwhm_deg=args.lorentzian_hwhm_deg,
             eta=args.eta,
@@ -400,8 +517,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     reference_path = (
         args.reference_diagnostic.resolve() if args.reference_diagnostic is not None else None
     )
+    reference_identity = _reference_comparison_identity(
+        detector,
+        strength_model,
+        m1_rods,
+        branch=2,
+        configured_physics_revision=configured_physics_revision,
+    )
     if reference_path is not None:
-        _validate_reference_strength(reference_path, strength_model)
+        _validate_reference_strength(reference_path, reference_identity)
     start = perf_counter()
     integration_method = PixelIntegrationMethod(args.integration_method)
     result = detector.integrate_native_pixels(
@@ -450,8 +574,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     ).hexdigest()
     hash_elapsed = perf_counter() - hash_start
     summary = {
-        "branch": 2,
-        "cif_path": "examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        **reference_identity,
         "detector_column_pitch_m": detector.instrument.detector_column_pitch_m,
         "detector_distance_m": float(
             np.linalg.norm(
@@ -467,7 +590,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         "ki_sample_Ainv": detector.coating.ki_sample_Ainv.tolist(),
         "m0_intensity_status": specular.intensity_status.value,
         "m0_specular_column_row_px": list(specular_coordinate),
-        "m1_rod_keys": [[rod.h, rod.k] for rod in m1_rods],
         "mosaic_gaussian_sigma_deg": math.degrees(mosaic.gaussian_sigma_rad),
         "mosaic_lorentzian_hwhm_deg": math.degrees(mosaic.lorentzian_half_width_rad),
         "mosaic_lorentzian_probability": mosaic.lorentzian_probability,
@@ -506,20 +628,22 @@ def main(argv: Sequence[str] | None = None) -> None:
         "integration_peak_working_set_bytes": _peak_working_set_bytes(),
         "per_rod_detector_mass_A2": result.per_rod_detector_mass_A2.tolist(),
         "pixel_gauss_order": args.pixel_gauss_order,
-        "strength_layer_count": strength_model.layers,
-        "strength_normalization": strength_model.normalization.value,
-        "strength_shared_disorder_epsilon": strength_model.shared_disorder_epsilon,
         "total_detector_mass_A2": result.total_detector_mass_A2,
         "integration_wall_time_s": elapsed,
-        "wavelength_A": float(2.0 * np.pi / bragg_config.k_norm_Ainv),
     }
     if reference_path is not None:
         reference_start = perf_counter()
-        with np.load(reference_path) as reference:
-            reference_image = np.asarray(reference["image_A2"], dtype=np.float64)
-            reference_per_rod = np.asarray(reference["per_rod_detector_mass_A2"], dtype=np.float64)
-        if reference_image.shape != result.image_A2.shape:
-            raise ValueError("reference detector image shape does not match")
+        (
+            reference_image,
+            reference_per_rod,
+            reference_image_sha256,
+            reference_diagnostic_sha256,
+        ) = _load_reference_arrays(
+            reference_path,
+            image_shape=result.image_A2.shape,
+            per_rod_shape=result.per_rod_detector_mass_A2.shape,
+            expected_identity=reference_identity,
+        )
         reference_total = float(np.sum(reference_image, dtype=np.float64))
         total_relative_error = (
             abs(result.total_detector_mass_A2 - reference_total) / reference_total
@@ -560,6 +684,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             "maximum_per_rod_relative_error": float(np.max(per_rod_relative_error)),
             "normalized_image_l1": normalized_l1,
             "path": os.fspath(reference_path),
+            "reference_diagnostic_sha256": reference_diagnostic_sha256,
+            "reference_image_sha256": reference_image_sha256,
             "total_relative_error": total_relative_error,
         }
         del reference_image

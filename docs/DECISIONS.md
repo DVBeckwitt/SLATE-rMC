@@ -291,8 +291,8 @@ or model-limited status preserved.
 
 The tracked R-3m Bi2X3 adapter uses the explicit fault-free R-centered registry cycle
 `(0F+,2F+,1F+)`. This implements conventional centering and its extinction rule; it does not add a
-4H/6H population or fit
-stacking disorder. A compact declared rod set accelerates the inverse problem. The explicitly
+4H/6H population or fit stacking disorder. A compact declared rod set accelerates the inverse
+problem. The explicitly
 labeled `FIT_CONDITIONED` terminal renders the same fitted scope over full-Qz branches, is not
 publication-ready, and makes no all-rod/full-profile-oracle claim. Fit stages checkpoint resumably;
 profiles restart atomically. Prepare, background, and render
@@ -328,3 +328,39 @@ the existing region/mosaic fitters remain unchanged. The optimized Bi2X3 rendere
 parity-checked accelerator. No plugin registry, material-name dispatcher, notebook import, or
 per-material fit runner is introduced. Experiment observation recipes and genuinely new disorder
 laws remain explicit data/model declarations.
+
+## D041: Bi2Se3 remediation corrects the measure and chemistry without accepting a parameter update
+
+Contract v14 admits nonuniform source probability masses, an exact weighted discrete-line source,
+the once-only flat-film illuminated-path factor, and optional scalar or exact-wavelength external
+Beer--Lambert attenuation. Source-line geometry is a product rule for equal per-line counts. A
+separate one-row mean-wavelength companion is geometry-only and cannot enter a source-weighted
+detector-measure intensity. Source-free intrinsic coating/locus density remains available only for
+geometry displays and reference landmarks, not as source intensity or likelihood evidence. Physical
+discrete sampling requires at least one row per line. Nonzero-correlation grids with at least eight
+rows per line are moment-matched, while zero-correlation LHS grids, smaller correlated grids, and
+non-divisible multirow grids retain explicit finite-quadrature semantics. External attenuation
+uses the actual sample-to-detector ray distance, is unity at zero coefficient, and remains a named
+dry-air sensitivity while the path medium is unverified.
+
+This decision supersedes D038's historical antisite and fault-free-3R clauses. The layered-Bi2X3
+outer-site coordinate is vacancy `v`, with chalcogen occupancy `1-v` and Bi
+substitution fixed to zero. Bi substitution remains a separate discrete hypothesis. Native 3R
+RichEpsilon is implemented behind direct-enumeration and optimized CPU/CUDA proofs, but epsilon
+zero remains the production nested model when nonzero candidates fail the cross-image gates. The
+available pre-acquisition dark is hash-verified at scale zero and contributes neither subtraction
+nor covariance. Detector PSF, texture, polarization, flat field, and nonlinearity remain inactive
+until independently calibrated; none may be fitted as a residual-repair term.
+
+## D042: Continuous incidence and staged acceptance stay material-neutral
+
+A continuous scan is an outer normalized probability measure over one canonical acquisition
+support. Acquisition metadata does not invent numerical nodes, and calibrated quadrature retains
+the original source and exposure masses without interpolation or survivor renormalization.
+Finite-region angular refinement is evaluator-owned: the generic oracle freezes its source and
+evaluation revisions, preserves signed contrast, and refines only failing or event-bearing leaves.
+
+Delayed acceptance evaluates the fixed datasets before any exact scan candidate and carries an
+explicit work/gate policy. No material-specific scan runner, representative-pose substitution,
+angle Monte Carlo, hidden detector-region compiler, or unbounded scan loop belongs in the reusable
+core.

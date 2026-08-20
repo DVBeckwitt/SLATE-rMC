@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import runpy
@@ -11,8 +12,11 @@ import numpy as np
 import pytest
 from scipy.spatial import ConvexHull, QhullError
 
-from painted_ewald import Rod
-from rasim_next.core.contracts import EventIntensityNormalization
+from painted_ewald import ContinuousEwaldCoating, Rod
+from rasim_next.core.contracts import (
+    EventIntensityNormalization,
+    incidence_scan_calibration_binding_revision,
+)
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting import (
@@ -62,10 +66,14 @@ from rasim_next.pipeline.configured_simulation import (
     build_nominal_ewald_context,
     build_source_averaged_detector,
     build_source_averaged_structure_detector,
+    configured_rod_catalog_revision,
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
     rebind_configured_simulation_instrument,
+    rebind_source_averaged_detector_incidence_scan,
+    sample_configured_nominal_geometry_source,
 )
+from rasim_next.pipeline.continuous_detector import DetectorEwaldMeasure, SampleQIntensityEnvelope
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
     SourceAveragedDetectorEwaldMeasure,
@@ -78,19 +86,79 @@ from rasim_next.reflectivity import CompiledParrattStitch, ParrattStitchStack
 DETECTOR_VIEWER_SCRIPT = Path(__file__).resolve().parents[1] / "interactive" / "detector_viewer.py"
 
 
-def _configured_inputs(*, sample_count: int, sample_angle_deg: float = 5.0) -> object:
+def _single_mean_test_source(source: object) -> object:
+    return replace(
+        source,
+        wavelength_model_id="gaussian.v1",
+        wavelength_sigma_A=0.0,
+        sample_count=1,
+        line_wavelength_A=(),
+        line_probability=(),
+        common_line_sigma_A=0.0,
+    )
+
+
+def _configured_inputs(
+    *,
+    sample_count: int,
+    sample_angle_deg: float = 5.0,
+    detector_path_linear_attenuation_m_inv: float = 0.0,
+    reference_wavelength_A: float | None = None,
+) -> object:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     rotations = (
         replace(config.instrument.axis_rotations[0], angle_deg=sample_angle_deg),
         *config.instrument.axis_rotations[1:],
     )
+    source = (
+        _single_mean_test_source(config.source)
+        if sample_count == 1
+        else replace(config.source, sample_count=sample_count)
+    )
+    if reference_wavelength_A is not None:
+        source = replace(
+            source,
+            wavelength_model_id="gaussian.v1",
+            mean_wavelength_A=reference_wavelength_A,
+            wavelength_sigma_A=0.0,
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            position_divergence_correlation=(0.0, 0.0),
+        )
     return build_configured_simulation_inputs(
         replace(
             config,
-            source=replace(config.source, sample_count=sample_count),
-            instrument=replace(config.instrument, axis_rotations=rotations),
+            source=source,
+            instrument=replace(
+                config.instrument,
+                axis_rotations=rotations,
+                detector_path_medium_id=(
+                    "standard_dry_air_sensitivity.v1"
+                    if detector_path_linear_attenuation_m_inv
+                    else "vacuum_or_helium_unity.v1"
+                ),
+                detector_path_linear_attenuation_m_inv=(detector_path_linear_attenuation_m_inv),
+            ),
         )
+    )
+
+
+def _physical_scalar_detector(inputs: object) -> DetectorEwaldMeasure:
+    if inputs.incident.states.incident_state_id.size != 1:
+        raise ValueError("scalar detector proof requires one physical source state")
+    return DetectorEwaldMeasure(
+        coating=ContinuousEwaldCoating(
+            inputs.bragg_space,
+            ki_sample_Ainv=inputs.incident.states.k_film_phase_sample_Ainv[0],
+        ),
+        incident=inputs.incident,
+        material=inputs.material,
+        instrument=inputs.instrument,
+        rod_catalog_revision=configured_rod_catalog_revision(inputs),
+        phase_population_weight=inputs.config.weights.phase_population,
+        polarization_weight=inputs.config.weights.polarization,
     )
 
 
@@ -105,11 +173,9 @@ def _generic_pbi2_config(*, include_detector_visible_m0: bool) -> SimulationConf
             phase_id="PbI2",
         ),
         source=replace(
-            base.source,
+            _single_mean_test_source(base.source),
             spatial_sigma_m=(0.0, 0.0),
             divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
         ),
         structure_factor=replace(
             base.structure_factor,
@@ -134,7 +200,11 @@ def test_commanded_angle_rebind_retains_every_sample_wavelength_rod() -> None:
         config.source,
         sample_count=40,
         seed=1,
+        wavelength_model_id="gaussian.v1",
         wavelength_sigma_A=0.25,
+        line_wavelength_A=(),
+        line_probability=(),
+        common_line_sigma_A=0.0,
     )
 
     def at_angle(angle_deg: float) -> object:
@@ -146,6 +216,7 @@ def test_commanded_angle_rebind_retains_every_sample_wavelength_rod() -> None:
             config,
             source=broad_source,
             instrument=replace(config.instrument, axis_rotations=rotations),
+            bragg=replace(config.bragg, include_detector_visible_m0=False),
         )
 
     base = build_configured_simulation_inputs(at_angle(0.0))
@@ -156,12 +227,731 @@ def test_commanded_angle_rebind_retains_every_sample_wavelength_rod() -> None:
         (rod.h, rod.k) for rod in fresh.rods
     )
 
+    base_5deg = build_configured_simulation_inputs(at_angle(5.0))
+    rebound_20deg = rebind_configured_simulation_instrument(base_5deg, at_angle(20.0))
+    fresh_20deg = build_configured_simulation_inputs(at_angle(20.0))
+    rebound_detector = build_source_averaged_detector(base_5deg).rebind_geometry(
+        incident=rebound_20deg.incident,
+        instrument=rebound_20deg.instrument,
+    )
+    fresh_detector = build_source_averaged_detector(fresh_20deg)
+    markers = evaluate_nominal_integer_l_markers(build_nominal_ewald_context(fresh_20deg))
+    marker_index = int(np.flatnonzero((markers.family_m == 1) & (markers.root_sign != 0))[0])
+    rebound_density = rebound_detector.evaluate_detector_coordinates_all_roots(
+        [markers.column_px[marker_index]],
+        [markers.row_px[marker_index]],
+    )
+    fresh_density = fresh_detector.evaluate_detector_coordinates_all_roots(
+        [markers.column_px[marker_index]],
+        [markers.row_px[marker_index]],
+    )
+    assert np.any(fresh_density.per_rod_density_A2_per_px2 > 0.0)
+    np.testing.assert_allclose(
+        rebound_density.per_rod_density_A2_per_px2,
+        fresh_density.per_rod_density_A2_per_px2,
+        rtol=3.0e-12,
+        atol=1.0e-24,
+    )
+
+
+def test_nominal_geometry_reference_cannot_enter_source_averaged_intensity() -> None:
+    from rasim_next.pipeline.continuous_detector import DetectorQuadrature
+
+    physical = _configured_inputs(sample_count=2)
+    nominal_samples = sample_configured_nominal_geometry_source(physical.config.source)
+    nominal_material = material_optics(physical.crystal, nominal_samples.wavelength_A)
+    nominal_incident = build_incident_states(
+        nominal_samples,
+        nominal_material,
+        physical.instrument,
+    )
+    nominal = replace(
+        physical,
+        samples=nominal_samples,
+        material=nominal_material,
+        incident=nominal_incident,
+    )
+
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        build_source_averaged_detector(nominal)
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        build_source_averaged_structure_detector(nominal)
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        compile_source_averaged_detector_structure_response(
+            np.asarray([1000.0]),
+            np.asarray([1000.0]),
+            reciprocal_basis_Ainv=nominal.reciprocal.basis_Ainv,
+            crystal_to_sample=nominal.instrument.sample_from_crystal.rotation,
+            rods=nominal.rods,
+            rod_catalog_revision=configured_rod_catalog_revision(nominal),
+            mosaic=nominal.mosaic,
+            reference_strength_model=nominal.strength,
+            incident=nominal.incident,
+            material=nominal.material,
+            instrument=nominal.instrument,
+        )
+    nominal_context = build_nominal_ewald_context(physical)
+    rod = next(item for item in nominal_context.rods if item.family_m != 0)
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        nominal_context.geometry.map_latent(
+            rod=rod,
+            branch=2,
+            alpha_rad=0.01,
+            beta_rad=0.02,
+        )
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        nominal_context.geometry.evaluate_detector_coordinates(
+            [1000.0],
+            [1000.0],
+            rods=(rod,),
+        )
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        nominal_context.geometry.evaluate_detector_structure_response(
+            [1000.0],
+            [1000.0],
+            rods=(rod,),
+        )
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        nominal_context.geometry.integrate_native_pixels(
+            rods=(rod,),
+            branch=2,
+            quadrature=DetectorQuadrature(),
+        )
+    assert build_source_averaged_detector(_configured_inputs(sample_count=1)) is not None
+    assert _physical_scalar_detector(_configured_inputs(sample_count=1)) is not None
+
+
+def test_incidence_angle_quadrature_is_a_normalized_uniform_measure() -> None:
+    from rasim_next.pipeline.incidence_acquisition import IncidenceAngleQuadrature
+
+    lower = math.radians(3.25)
+    upper = math.radians(19.75)
+    quadrature = IncidenceAngleQuadrature.uniform_legendre(
+        lower,
+        upper,
+        gauss_order=6,
+        subdivision_count=3,
+        incidence_angle_calibration_revision="test-effective-incidence-axis.v1",
+    )
+
+    assert np.all(np.diff(quadrature.incidence_angle_rad) > 0.0)
+    assert np.all(quadrature.incidence_angle_rad > lower)
+    assert np.all(quadrature.incidence_angle_rad < upper)
+    assert math.fsum(quadrature.exposure_probability_mass) == pytest.approx(
+        1.0,
+        rel=0.0,
+        abs=4.0e-16,
+    )
+    assert math.fsum(
+        quadrature.incidence_angle_rad * quadrature.exposure_probability_mass
+    ) == pytest.approx(0.5 * (lower + upper), rel=0.0, abs=3.0e-16)
+    assert not quadrature.incidence_angle_rad.flags.writeable
+    assert not quadrature.exposure_probability_mass.flags.writeable
+    assert quadrature.quadrature_revision != (
+        IncidenceAngleQuadrature.uniform_legendre(
+            lower,
+            upper,
+            gauss_order=8,
+            subdivision_count=3,
+            incidence_angle_calibration_revision="test-effective-incidence-axis.v1",
+        ).quadrature_revision
+    )
+    with pytest.raises(ValueError, match="already sum to one"):
+        IncidenceAngleQuadrature(
+            incidence_angle_rad=np.asarray((lower, upper)),
+            exposure_probability_mass=np.asarray((0.2, 0.7)),
+            exposure_density_id="unnormalized-test-exposure.v1",
+            incidence_angle_calibration_revision="test-effective-incidence-axis.v1",
+        )
+
+
+def test_incidence_angle_averaged_detector_equals_explicit_weighted_sum() -> None:
+    from types import SimpleNamespace
+
+    from rasim_next.pipeline.incidence_acquisition import IncidenceAngleQuadrature
+    from rasim_next.pipeline.incidence_angle_average import (
+        build_incidence_angle_averaged_detector,
+    )
+
+    rods = (Rod(-1, 0), Rod(1, 0))
+    quadrature = IncidenceAngleQuadrature(
+        incidence_angle_rad=np.asarray((0.1, 0.4, 0.9)),
+        exposure_probability_mass=np.asarray((0.2, 0.3, 0.5)),
+        exposure_density_id="explicit-test-exposure.v1",
+        incidence_angle_calibration_revision="analytic-test-angle-axis.v1",
+    )
+    analytic_geometry_revisions = tuple(
+        f"analytic-pose-{float(angle):.17g}" for angle in quadrature.incidence_angle_rad
+    )
+    analytic_calibration_binding_revision = incidence_scan_calibration_binding_revision(
+        scan_calibration_revision=quadrature.incidence_angle_calibration_revision,
+        component_sample_geometry_revision=analytic_geometry_revisions,
+        component_incidence_axis_angle_rad=quadrature.incidence_angle_rad,
+        effective_incidence_angle_rad=quadrature.incidence_angle_rad,
+        detector_panel_revision="analytic-fixed-panel.v1",
+        source_revision="analytic-shared-source.v1",
+        source_state_count=4,
+    )
+
+    class AnalyticAllRootDetector:
+        measure_id = "raw_detector_coordinate_density_A2_per_px2.v1"
+        root_policy = "all_retained_roots.v1"
+        source_revision = "analytic-shared-source.v1"
+        source_state_count = 4
+        rod_catalog_revision = "analytic-angle-scan-rods.v1"
+        detector_panel_revision = "analytic-fixed-panel.v1"
+        detector_shape_rc = (10, 12)
+        incidence_angle_static_physics_revision = "analytic-fixed-physics.v1"
+        detector_visible_m0_q_gap_Ainv = None
+
+        def __init__(self, incidence_angle_rad: float) -> None:
+            self.incidence_angle_rad = incidence_angle_rad
+            self.incidence_axis_angle_rad = incidence_angle_rad
+            self.rods = rods
+            self.sample_geometry_revision = f"analytic-pose-{incidence_angle_rad:.17g}"
+            self.scan_calibration_binding_revision = analytic_calibration_binding_revision
+
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            assert execution_backend == "cpu"
+            assert cuda_coordinate_chunk_size is None
+            column, row = np.broadcast_arrays(
+                np.asarray(column_px, dtype=np.float64),
+                np.asarray(row_px, dtype=np.float64),
+            )
+            first = 1.0 + self.incidence_angle_rad * column**2
+            second = 2.0 + self.incidence_angle_rad**2 * (row + 1.0)
+            per_rod = np.stack((first, second), axis=-1)
+            valid_count = np.where(
+                column + row > 1.0,
+                4,
+                1 + int(self.incidence_angle_rad > 0.3) + int(self.incidence_angle_rad > 0.8),
+            )
+            caustic = np.zeros(per_rod.shape, dtype=np.bool_)
+            return SimpleNamespace(
+                column_px=column,
+                row_px=row,
+                rods=rods,
+                rod_catalog_revision=self.rod_catalog_revision,
+                branch=None,
+                root_policy=self.root_policy,
+                per_rod_density_A2_per_px2=per_rod,
+                density_A2_per_px2=np.sum(per_rod, axis=-1),
+                caustic=caustic,
+                valid_source_count=valid_count,
+                source_state_count=self.source_state_count,
+                source_revision=self.source_revision,
+                measure_id=self.measure_id,
+                execution_backend="numba_cpu_source_averaged.v1",
+                execution_device=None,
+            )
+
+    detector = build_incidence_angle_averaged_detector(
+        quadrature,
+        AnalyticAllRootDetector,
+    )
+    column_px = np.asarray((0.5, 2.0))[:, None]
+    row_px = np.asarray((0.0, 1.0, 3.0))[None, :]
+    expected_components = tuple(
+        AnalyticAllRootDetector(float(angle)).evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+        )
+        for angle in quadrature.incidence_angle_rad
+    )
+    expected_per_rod = sum(
+        mass * component.per_rod_density_A2_per_px2
+        for mass, component in zip(
+            quadrature.exposure_probability_mass,
+            expected_components,
+            strict=True,
+        )
+    )
+    expected_valid_fraction = sum(
+        mass * component.valid_source_count / component.source_state_count
+        for mass, component in zip(
+            quadrature.exposure_probability_mass,
+            expected_components,
+            strict=True,
+        )
+    )
+
+    evaluated = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    total_only = detector.evaluate_detector_density_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        evaluated.per_rod_density_A2_per_px2,
+        expected_per_rod,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        evaluated.density_A2_per_px2,
+        np.sum(expected_per_rod, axis=-1),
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        evaluated.valid_incident_state_fraction,
+        expected_valid_fraction,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(evaluated.caustic, False)
+    np.testing.assert_array_equal(total_only.caustic, False)
+    np.testing.assert_allclose(
+        total_only.density_A2_per_px2,
+        evaluated.density_A2_per_px2,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        total_only.valid_incident_state_fraction,
+        expected_valid_fraction,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    expected_column, expected_row = np.broadcast_arrays(column_px, row_px)
+    np.testing.assert_array_equal(evaluated.column_px, expected_column)
+    np.testing.assert_array_equal(evaluated.row_px, expected_row)
+    assert evaluated.per_rod_density_A2_per_px2.shape == (2, 3, 2)
+    assert evaluated.reduction_id == (
+        "fixed_quadrature_estimate_of_incoherent_incidence_angle_probability_average.v1"
+    )
+    assert evaluated.quadrature_revision == quadrature.quadrature_revision
+    assert evaluated.source_revision == "analytic-shared-source.v1"
+    assert evaluated.scan_revision == detector.scan_revision
+    with pytest.raises(TypeError, match="built by their detector evaluator"):
+        replace(evaluated, source_state_count=0)
+
+    class ReducedAnalyticAllRootDetector(AnalyticAllRootDetector):
+        detailed_call_count = 0
+        total_call_count = 0
+
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            type(self).detailed_call_count += 1
+            return super().evaluate_detector_coordinates_all_roots(
+                column_px,
+                row_px,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
+            )
+
+        def evaluate_detector_density_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            type(self).total_call_count += 1
+            detailed = super().evaluate_detector_coordinates_all_roots(
+                column_px,
+                row_px,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
+            )
+            return SimpleNamespace(
+                column_px=detailed.column_px,
+                row_px=detailed.row_px,
+                rods=detailed.rods,
+                rod_catalog_revision=detailed.rod_catalog_revision,
+                branch=None,
+                density_A2_per_px2=detailed.density_A2_per_px2,
+                caustic=np.any(detailed.caustic, axis=-1),
+                valid_source_count=detailed.valid_source_count,
+                source_state_count=detailed.source_state_count,
+                source_revision=detailed.source_revision,
+                root_policy=detailed.root_policy,
+                measure_id=detailed.measure_id,
+                execution_backend=detailed.execution_backend,
+                execution_device=detailed.execution_device,
+            )
+
+    reduced = build_incidence_angle_averaged_detector(
+        quadrature,
+        ReducedAnalyticAllRootDetector,
+    ).evaluate_detector_density_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        reduced.density_A2_per_px2,
+        evaluated.density_A2_per_px2,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        reduced.valid_incident_state_fraction,
+        expected_valid_fraction,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+    assert ReducedAnalyticAllRootDetector.total_call_count == 3
+    assert ReducedAnalyticAllRootDetector.detailed_call_count == 0
+
+    class ExactCausticDetector(AnalyticAllRootDetector):
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            result = super().evaluate_detector_coordinates_all_roots(
+                column_px,
+                row_px,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
+            )
+            result.caustic = np.ones_like(result.caustic)
+            return result
+
+    exact_caustic = build_incidence_angle_averaged_detector(
+        quadrature,
+        ExactCausticDetector,
+    )
+    with pytest.raises(FloatingPointError, match="exact caustic"):
+        exact_caustic.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    with pytest.raises(FloatingPointError, match="exact caustic"):
+        exact_caustic.evaluate_detector_density_all_roots(column_px, row_px)
+
+    class InvalidDensityDetector(AnalyticAllRootDetector):
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            result = super().evaluate_detector_coordinates_all_roots(
+                column_px,
+                row_px,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
+            )
+            result.per_rod_density_A2_per_px2 = -result.per_rod_density_A2_per_px2
+            result.density_A2_per_px2 = -result.density_A2_per_px2
+            return result
+
+    invalid_density = build_incidence_angle_averaged_detector(
+        quadrature,
+        InvalidDensityDetector,
+    )
+    with pytest.raises(RuntimeError, match="invalid density"):
+        invalid_density.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    with pytest.raises(RuntimeError, match="invalid density"):
+        invalid_density.evaluate_detector_density_all_roots(column_px, row_px)
+
+    class ComplexDensityDetector(AnalyticAllRootDetector):
+        def evaluate_detector_coordinates_all_roots(
+            self,
+            column_px: object,
+            row_px: object,
+            *,
+            execution_backend: str = "cpu",
+            cuda_coordinate_chunk_size: int | None = None,
+        ) -> object:
+            result = super().evaluate_detector_coordinates_all_roots(
+                column_px,
+                row_px,
+                execution_backend=execution_backend,
+                cuda_coordinate_chunk_size=cuda_coordinate_chunk_size,
+            )
+            result.per_rod_density_A2_per_px2 = result.per_rod_density_A2_per_px2 + 1.0j
+            result.density_A2_per_px2 = result.density_A2_per_px2 + 1.0j
+            return result
+
+    complex_density = build_incidence_angle_averaged_detector(
+        quadrature,
+        ComplexDensityDetector,
+    )
+    with pytest.raises(RuntimeError, match="complex detector density"):
+        complex_density.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    class SourceInvalidDensityDetector(AnalyticAllRootDetector):
+        def evaluate_detector_coordinates_all_roots(
+            self, *args: object, **kwargs: object
+        ) -> object:
+            result = super().evaluate_detector_coordinates_all_roots(*args, **kwargs)
+            result.valid_source_count = np.zeros_like(result.valid_source_count)
+            return result
+
+    source_invalid_density = build_incidence_angle_averaged_detector(
+        quadrature,
+        SourceInvalidDensityDetector,
+    )
+    with pytest.raises(RuntimeError, match="source-invalid"):
+        source_invalid_density.evaluate_detector_density_all_roots(column_px, row_px)
+
+    class MismatchedSourceDetector(AnalyticAllRootDetector):
+        def __init__(self, incidence_angle_rad: float) -> None:
+            super().__init__(incidence_angle_rad)
+            self.source_revision = f"angle-dependent-source-{incidence_angle_rad:.17g}"
+
+    with pytest.raises(ValueError, match="calibrated scan binding"):
+        build_incidence_angle_averaged_detector(
+            quadrature,
+            MismatchedSourceDetector,
+        )
+
+    class IgnoredAngleDetector(AnalyticAllRootDetector):
+        def __init__(self, incidence_angle_rad: float) -> None:
+            super().__init__(incidence_angle_rad)
+            self.incidence_axis_angle_rad = 0.1
+
+    with pytest.raises(ValueError, match="do not match their quadrature angles"):
+        build_incidence_angle_averaged_detector(
+            quadrature,
+            IgnoredAngleDetector,
+        )
+
+
+def test_incidence_angle_average_wraps_real_shared_source_engines() -> None:
+    from rasim_next.fitting import (
+        FixedLatticeState,
+        FixedPositionState,
+        SharedGeometryCorrections,
+        build_fixed_incidence_scan_series,
+    )
+    from rasim_next.materials import read_crystal
+    from rasim_next.pipeline.incidence_acquisition import IncidenceAngleQuadrature
+    from rasim_next.pipeline.incidence_angle_average import IncidenceAngleAveragedDetector
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_r3_simulation.yaml")
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+    delta = math.radians(0.4)
+    position = FixedPositionState(
+        artifact_revision=f"sha256-{'a' * 64}",
+        corrections=SharedGeometryCorrections.zero(),
+        incidence_angle_delta_rad=delta,
+        commanded_incidence_angles_rad=(math.radians(5.0),),
+        beam_center_column_row_px=tuple(config.instrument.detector_reference_coordinate_px),
+    )
+    commanded = tuple(map(math.radians, (5.0, 10.0)))
+    scan = build_fixed_incidence_scan_series(
+        config,
+        position=position,
+        fixed_lattice=lattice,
+        commanded_incidence_angles_rad=commanded,
+        source_sample_count=2,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )
+    series = scan.inputs
+    components = tuple(build_source_averaged_structure_detector(item) for item in series)
+    quadrature = IncidenceAngleQuadrature(
+        incidence_angle_rad=np.asarray(commanded) + delta,
+        exposure_probability_mass=np.asarray((0.25, 0.75)),
+        exposure_density_id="real-engine-test-exposure.v1",
+        incidence_angle_calibration_revision=scan.scan_calibration_revision,
+    )
+    detector = IncidenceAngleAveragedDetector(quadrature, components)
+    changed_position = replace(position, artifact_revision=f"sha256-{'b' * 64}")
+    changed_scan = build_fixed_incidence_scan_series(
+        config,
+        position=changed_position,
+        fixed_lattice=lattice,
+        commanded_incidence_angles_rad=commanded,
+        source_sample_count=2,
+        gaussian_sigma_rad=math.radians(1.0),
+        lorentzian_half_width_rad=math.radians(0.5),
+        lorentzian_probability=0.0,
+    )
+    changed_components = tuple(
+        build_source_averaged_structure_detector(item) for item in changed_scan.inputs
+    )
+    with pytest.raises(ValueError, match="calibrated scan binding"):
+        IncidenceAngleAveragedDetector(quadrature, changed_components)
+    shifted_components = tuple(
+        replace(
+            component,
+            incidence_axis_angle_rad=float(component.incidence_axis_angle_rad) + 0.01,
+        )
+        for component in components
+    )
+    shifted_quadrature = replace(
+        quadrature,
+        incidence_angle_rad=quadrature.incidence_angle_rad + 0.01,
+    )
+    with pytest.raises(ValueError, match="calibrated scan binding"):
+        IncidenceAngleAveragedDetector(shifted_quadrature, shifted_components)
+    from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
+
+    with pytest.raises(ValueError, match="only incidence geometry may vary"):
+        IncidenceAngleAveragedDetector(
+            quadrature,
+            (
+                components[0],
+                replace(
+                    components[1],
+                    intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.01),
+                ),
+            ),
+        )
+    common_rod = Rod(-1, 1)
+    detector = detector.restrict_rods((common_rod,))
+    components = detector.detectors
+    mapped = build_nominal_ewald_context(series[0]).map_latent_geometry(
+        rod=common_rod,
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    column_px = np.asarray((float(mapped.column_px),))
+    row_px = np.asarray((float(mapped.row_px),))
+    explicit = tuple(
+        component.evaluate_detector_coordinates_all_roots(column_px, row_px)
+        for component in components
+    )
+
+    evaluated = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
+
+    np.testing.assert_allclose(
+        evaluated.per_rod_density_A2_per_px2,
+        sum(
+            mass * value.per_rod_density_A2_per_px2
+            for mass, value in zip(
+                quadrature.exposure_probability_mass,
+                explicit,
+                strict=True,
+            )
+        ),
+        rtol=4.0e-11,
+        atol=0.0,
+    )
+    assert series[0].samples is series[1].samples
+    assert evaluated.source_revision == series[0].samples.source_revision
+    assert evaluated.angle_evaluation_count == 2
+    assert np.any(evaluated.density_A2_per_px2 > 0.0)
+
+    template = build_source_averaged_detector(series[0]).restrict_rods((common_rod,))
+    fresh_second = build_source_averaged_detector(series[1]).restrict_rods((common_rod,))
+    with pytest.raises(ValueError, match="calibrated incidence-scan metadata"):
+        rebind_source_averaged_detector_incidence_scan(
+            template,
+            (build_configured_simulation_inputs(config),),
+        )
+    rebound_components = rebind_source_averaged_detector_incidence_scan(
+        template,
+        series,
+    )
+    second_mapped = build_nominal_ewald_context(series[1]).map_latent_geometry(
+        rod=common_rod,
+        branch=2,
+        alpha_rad=math.radians(2.0),
+        beta_rad=math.radians(178.0),
+    )
+    second_column_px = np.asarray((float(second_mapped.column_px),))
+    second_row_px = np.asarray((float(second_mapped.row_px),))
+    rebound_value = rebound_components[1].evaluate_detector_density_all_roots(
+        second_column_px,
+        second_row_px,
+    )
+    fresh_value = fresh_second.evaluate_detector_density_all_roots(
+        second_column_px,
+        second_row_px,
+    )
+    np.testing.assert_allclose(
+        rebound_value.density_A2_per_px2,
+        fresh_value.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(rebound_value.caustic, fresh_value.caustic)
+    np.testing.assert_array_equal(
+        rebound_value.valid_source_count,
+        fresh_value.valid_source_count,
+    )
+    assert np.any(fresh_value.density_A2_per_px2 > 0.0)
+    assert tuple(component.incidence_axis_angle_rad for component in rebound_components) == tuple(
+        map(float, quadrature.incidence_angle_rad)
+    )
+    assert all(
+        component.scan_calibration_binding_revision == series[0].scan_calibration_binding_revision
+        for component in rebound_components
+    )
+    uncalibrated_rebind = template.rebind_geometry(
+        incident=series[1].incident,
+        instrument=series[1].instrument,
+    )
+    assert uncalibrated_rebind.incidence_axis_angle_rad is None
+    assert uncalibrated_rebind.scan_calibration_binding_revision is None
+
+    optimized = IncidenceAngleAveragedDetector(quadrature, rebound_components)
+    optimized_total = optimized.evaluate_detector_density_all_roots(column_px, row_px)
+    optimized_detailed = optimized.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    explicit_total = tuple(
+        component.evaluate_detector_density_all_roots(column_px, row_px)
+        for component in rebound_components
+    )
+    np.testing.assert_allclose(
+        optimized_total.density_A2_per_px2,
+        sum(
+            mass * value.density_A2_per_px2
+            for mass, value in zip(
+                quadrature.exposure_probability_mass,
+                explicit_total,
+                strict=True,
+            )
+        ),
+        rtol=4.0e-11,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        optimized_total.density_A2_per_px2,
+        optimized_detailed.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        optimized_total.density_A2_per_px2,
+        evaluated.density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        optimized_total.valid_incident_state_fraction,
+        sum(
+            mass * value.valid_source_count / value.source_state_count
+            for mass, value in zip(
+                quadrature.exposure_probability_mass,
+                explicit_total,
+                strict=True,
+            )
+        ),
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+
 
 def _forward_monte_carlo_fixture(
     *,
     source_count: int = 1,
     worker_count: int = 1,
     sample_angle_deg: float = 5.0,
+    detector_path_linear_attenuation_m_inv: float = 0.0,
+    detector_path_wavelength_A: tuple[float, ...] = (),
+    detector_path_linear_attenuation_m_inv_by_wavelength: tuple[float, ...] = (),
 ) -> tuple[object, tuple[Rod, ...], object]:
     from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
 
@@ -174,7 +964,11 @@ def _forward_monte_carlo_fixture(
     inputs = build_configured_simulation_inputs(
         replace(
             config,
-            source=replace(config.source, sample_count=source_count),
+            source=(
+                _single_mean_test_source(config.source)
+                if source_count == 1
+                else replace(config.source, sample_count=source_count)
+            ),
             instrument=replace(
                 config.instrument,
                 axis_rotations=rotations,
@@ -182,6 +976,16 @@ def _forward_monte_carlo_fixture(
                 detector_row_pitch_m=2.0e-3,
                 detector_column_pitch_m=2.0e-3,
                 detector_reference_coordinate_px=(31.5, 31.5),
+                detector_path_medium_id=(
+                    "standard_dry_air_sensitivity.v1"
+                    if detector_path_linear_attenuation_m_inv or detector_path_wavelength_A
+                    else "vacuum_or_helium_unity.v1"
+                ),
+                detector_path_linear_attenuation_m_inv=(detector_path_linear_attenuation_m_inv),
+                detector_path_wavelength_A=detector_path_wavelength_A,
+                detector_path_linear_attenuation_m_inv_by_wavelength=(
+                    detector_path_linear_attenuation_m_inv_by_wavelength
+                ),
             ),
             bragg=replace(config.bragg, rod_population=0.37),
             weights=replace(config.weights, phase_population=0.41, polarization=0.73),
@@ -200,14 +1004,19 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
     from painted_ewald import wrapped_mosaic_line_density_rad_inv
     from rasim_next.core.scattering import scattering_polarization_weight
     from rasim_next.optics.attenuation import (
+        external_path_attenuation,
+        incident_illuminated_path_weight,
         mode_decay_constant,
         scalar_optical_weight,
         uniform_depth_attenuation,
     )
     from rasim_next.optics.refraction import solve_exit_mode
 
-    inputs, rods, detector = _forward_monte_carlo_fixture()
-    seed = 3565
+    detector_path_mu_m_inv = 1.2
+    inputs, rods, detector = _forward_monte_carlo_fixture(
+        detector_path_linear_attenuation_m_inv=detector_path_mu_m_inv
+    )
+    seed = 3276
     draw_count = 3
     sampled = detector.sample_native_pixel_mass(
         draws_per_source_state=draw_count,
@@ -235,10 +1044,11 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
     alpha = np.abs((signed_tilt + np.pi) % (2.0 * np.pi) - np.pi)
     beta = 2.0 * np.pi * latent_uniform[:, 4]
 
-    oracle = build_nominal_ewald_context(inputs).geometry
+    oracle = _physical_scalar_detector(inputs)
     source_phase_weight = float(
         inputs.incident.states.source_weight[0]
         * inputs.incident.states.footprint_acceptance[0]
+        * incident_illuminated_path_weight(inputs.incident.states.direction_sample[0])
         * inputs.config.weights.phase_population
         * inputs.config.weights.polarization
     )
@@ -287,6 +1097,10 @@ def test_monte_carlo_pixel_mass_matches_the_forward_latent_oracle() -> None:
                     weight = (
                         float(coating.coating_intensity_density_A2_rad2_inv)
                         * optical
+                        * external_path_attenuation(
+                            detector_path_mu_m_inv,
+                            geometry.ray_distance_m,
+                        )
                         * polarization
                         * source_phase_weight
                         / proposal_density
@@ -488,9 +1302,10 @@ def test_bi2te3_compiled_detector_uses_te_factors() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2te3_simulation.yaml")
     inputs = build_configured_simulation_inputs(
-        replace(config, source=replace(config.source, sample_count=1))
+        replace(config, source=_single_mean_test_source(config.source))
     )
     context = build_nominal_ewald_context(inputs)
+    scalar = _physical_scalar_detector(inputs)
     markers = evaluate_nominal_integer_l_markers(context)
     selected = int(
         np.flatnonzero((markers.family_m == 1) & (markers.branch == 2) & (markers.root_sign != 0))[
@@ -501,12 +1316,12 @@ def test_bi2te3_compiled_detector_uses_te_factors() -> None:
     column = np.asarray([markers.column_px[selected]])
     row = np.asarray([markers.row_px[selected]])
 
-    direct = context.geometry.evaluate_detector_coordinates(
+    direct = scalar.evaluate_detector_coordinates(
         column,
         row,
         rods=rods,
     )
-    compiled, count, caustic = context.geometry._evaluate_compiled_coordinates_for_proof(
+    compiled, count, caustic = scalar._evaluate_compiled_coordinates_for_proof(
         column,
         row,
         rods=rods,
@@ -561,6 +1376,8 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     )
     from rasim_next.geometry import project_detector_ray
     from rasim_next.optics.attenuation import (
+        external_path_attenuation,
+        incident_illuminated_path_weight,
         mode_decay_constant,
         scalar_optical_weight,
         uniform_depth_attenuation,
@@ -577,7 +1394,12 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         SourceAveragedDetectorEwaldMeasure,
     )
 
-    inputs = _configured_inputs(sample_count=1)
+    detector_path_mu_m_inv = 1.2
+    inputs = _configured_inputs(
+        sample_count=1,
+        detector_path_linear_attenuation_m_inv=detector_path_mu_m_inv,
+        reference_wavelength_A=1.540592925,
+    )
     samples = inputs.samples
     instrument = inputs.instrument
     crystal = inputs.crystal
@@ -684,11 +1506,23 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
     assert mapped.geometry.column_px == pytest.approx(projection.column_px, abs=2.0e-12)
     assert mapped.geometry.row_px == pytest.approx(projection.row_px, abs=2.0e-12)
     assert mapped.attenuation_weight == pytest.approx(attenuation, abs=2.0e-15)
-    assert mapped.optical_weight == pytest.approx(optical, abs=2.0e-15)
+    path_weight = external_path_attenuation(
+        detector_path_mu_m_inv,
+        mapped.geometry.ray_distance_m,
+    )
+    assert mapped.optical_weight == pytest.approx(optical * path_weight, abs=2.0e-15)
+    expected_source_phase_weight = (
+        incident.states.source_weight[0]
+        * incident.states.footprint_acceptance[0]
+        * incident_illuminated_path_weight(incident.states.direction_sample[0])
+    )
+    assert mapped.source_phase_weight == expected_source_phase_weight
     assert mapped.postoptical_density_A2_rad2_inv == pytest.approx(
         latent.coating_intensity_density_A2_rad2_inv
         * optical
-        * mapped.scattering_polarization_weight,
+        * path_weight
+        * mapped.scattering_polarization_weight
+        * expected_source_phase_weight,
         rel=0.0,
         abs=2.0e-20,
     )
@@ -1588,6 +2422,7 @@ def test_detector_event_envelope_uses_sample_q_after_mosaic_rotation() -> None:
 def _two_state_source_averaged_detector_fixture(
     *,
     detector_shape_rc: tuple[int, int] | None = None,
+    detector_path_linear_attenuation_m_inv_by_wavelength: tuple[float, float] | None = None,
 ) -> tuple[object, tuple[object, ...]]:
     from painted_ewald import (
         BraggSpaceConfig,
@@ -1621,6 +2456,15 @@ def _two_state_source_averaged_detector_fixture(
         layers=7,
         normalization=EventIntensityNormalization.FINITE_TOTAL,
     )
+    if detector_path_linear_attenuation_m_inv_by_wavelength is not None:
+        instrument = replace(
+            instrument,
+            detector_path_medium_id="standard_dry_air_wavelength_table_sensitivity.v1",
+            detector_path_wavelength_A=tuple(float(value) for value in samples.wavelength_A),
+            detector_path_linear_attenuation_m_inv_by_wavelength=(
+                detector_path_linear_attenuation_m_inv_by_wavelength
+            ),
+        )
     singleton_incidents = []
     coatings = []
     for state_index in range(2):
@@ -1705,7 +2549,12 @@ def _two_state_source_averaged_detector_fixture(
 
 
 def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> None:
-    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture()
+    averaged, scalar_detectors = _two_state_source_averaged_detector_fixture(
+        detector_path_linear_attenuation_m_inv_by_wavelength=(
+            1.194448861306956,
+            1.2033257750023947,
+        )
+    )
     rods = averaged.rods
     mapped = tuple(
         detector.map_latent(
@@ -1732,6 +2581,29 @@ def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> N
         incident=averaged.incident,
         material=averaged.material,
         instrument=averaged.instrument,
+    )
+    air_instrument = replace(
+        averaged.instrument,
+        detector_path_linear_attenuation_m_inv_by_wavelength=(1.3, 1.4),
+    )
+    air_response = compile_source_averaged_detector_structure_response(
+        column_px,
+        row_px,
+        reciprocal_basis_Ainv=averaged.strength_model.reciprocal_basis_Ainv,
+        crystal_to_sample=air_instrument.sample_from_crystal.rotation,
+        rods=rods,
+        rod_catalog_revision=averaged.rod_catalog_revision,
+        mosaic=averaged.mosaic,
+        reference_strength_model=averaged.strength_model,
+        intensity_envelope=averaged.intensity_envelope,
+        incident=averaged.incident,
+        material=averaged.material,
+        instrument=air_instrument,
+    )
+    assert air_response.fixed_physics_revision != response.fixed_physics_revision
+    assert not np.array_equal(
+        air_response.term_fixed_density_per_strength_px2_inv,
+        response.term_fixed_density_per_strength_px2_inv,
     )
     actual = response.apply_strength(averaged.strength_model)
     expected = averaged.evaluate_detector_coordinates_all_roots(column_px, row_px)
@@ -1764,6 +2636,35 @@ def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> N
         atol=3.0e-24,
     )
     np.testing.assert_array_equal(actual.caustic, expected.caustic)
+
+    envelope = SampleQIntensityEnvelope(u_radial_A2=0.017, u_normal_A2=0.006)
+    separable_response = compile_source_averaged_detector_structure_response(
+        column_px,
+        row_px,
+        reciprocal_basis_Ainv=averaged.strength_model.reciprocal_basis_Ainv,
+        crystal_to_sample=averaged.instrument.sample_from_crystal.rotation,
+        rods=rods,
+        rod_catalog_revision=averaged.rod_catalog_revision,
+        mosaic=averaged.mosaic,
+        reference_strength_model=averaged.strength_model,
+        intensity_envelope=SampleQIntensityEnvelope(),
+        incident=averaged.incident,
+        material=averaged.material,
+        instrument=averaged.instrument,
+    )
+    replayed_envelope = separable_response.apply_strength(
+        averaged.strength_model,
+        intensity_envelope=envelope,
+    )
+    exact_envelope = averaged.rebind_physics(
+        intensity_envelope=envelope
+    ).evaluate_detector_coordinates_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        replayed_envelope.per_rod_density_A2_per_px2,
+        exact_envelope.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
     np.testing.assert_array_equal(actual.valid_source_count, expected.valid_source_count)
     assert actual.source_revision == expected.source_revision
 
@@ -1780,11 +2681,9 @@ def test_configured_bi2x3_provider_uses_shared_sparse_fitting_detector(
     config = replace(
         base,
         source=replace(
-            base.source,
+            _single_mean_test_source(base.source),
             spatial_sigma_m=(0.0, 0.0),
             divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
         ),
     )
     inputs = build_configured_simulation_inputs(config)
@@ -1806,20 +2705,20 @@ def test_configured_bi2x3_provider_uses_shared_sparse_fitting_detector(
         if rod.h == 0 and rod.k == 0:
             continue
         for branch in (1, 2):
-            candidate = nominal.geometry.map_latent(
+            candidate = nominal.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=math.radians(2.0),
                 beta_rad=math.radians(178.0),
             )
-            if bool(candidate.geometry.valid):
+            if bool(candidate.valid):
                 mapped = candidate
                 break
         if mapped is not None:
             break
     assert mapped is not None
-    column_px = np.asarray((mapped.geometry.column_px,))
-    row_px = np.asarray((mapped.geometry.row_px,))
+    column_px = np.asarray((mapped.column_px,))
+    row_px = np.asarray((mapped.row_px,))
 
     actual = shared.evaluate_detector_coordinates_all_roots(column_px, row_px)
     expected = optimized.evaluate_detector_coordinates_all_roots(column_px, row_px)
@@ -1860,7 +2759,7 @@ def test_configured_generic_cif_detector_matches_direct_all_root_sum(
             cif_path=root / relative_cif,
             phase_id=phase_id,
         ),
-        source=replace(base.source, sample_count=1),
+        source=_single_mean_test_source(base.source),
         structure_factor=replace(
             base.structure_factor,
             model_id="cif_conventional_cell_finite_repeat.v1",
@@ -1875,35 +2774,36 @@ def test_configured_generic_cif_detector_matches_direct_all_root_sum(
     inputs = build_configured_simulation_inputs(config)
     detector = build_source_averaged_structure_detector(inputs)
     nominal = build_nominal_ewald_context(inputs)
+    scalar = _physical_scalar_detector(inputs)
 
     mapped = None
     for rod in nominal.rods:
         if (rod.h, rod.k) == (0, 0):
             continue
         for branch in (1, 2):
-            candidate = nominal.geometry.map_latent(
+            candidate = nominal.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=math.radians(2.0),
                 beta_rad=math.radians(178.0),
             )
-            if bool(candidate.geometry.valid):
+            if bool(candidate.valid):
                 mapped = candidate
                 break
         if mapped is not None:
             break
     assert mapped is not None
-    column_px = np.asarray((float(mapped.geometry.column_px),), dtype=np.float64)
-    row_px = np.asarray((float(mapped.geometry.row_px),), dtype=np.float64)
+    column_px = np.asarray((float(mapped.column_px),), dtype=np.float64)
+    row_px = np.asarray((float(mapped.row_px),), dtype=np.float64)
 
     actual = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
-    lower = nominal.geometry.evaluate_detector_coordinates(
+    lower = scalar.evaluate_detector_coordinates(
         column_px,
         row_px,
         rods=detector.rods,
         branch=1,
     )
-    upper = nominal.geometry.evaluate_detector_coordinates(
+    upper = scalar.evaluate_detector_coordinates(
         column_px,
         row_px,
         rods=detector.rods,
@@ -1978,20 +2878,20 @@ def test_pbi2_parent_mixture_uses_shared_sparse_detector_including_regular_00l()
         if (rod.h, rod.k) == (0, 0):
             continue
         for branch in (1, 2):
-            candidate = nominal.geometry.map_latent(
+            candidate = nominal.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=math.radians(2.0),
                 beta_rad=math.radians(165.0 + 3.0 * len(mapped)),
             )
-            if bool(candidate.geometry.valid):
+            if bool(candidate.valid):
                 mapped.append(candidate)
                 break
         if len(mapped) == 4:
             break
     assert len(mapped) == 4
-    column_px = np.asarray([value.geometry.column_px for value in mapped])
-    row_px = np.asarray([value.geometry.row_px for value in mapped])
+    column_px = np.asarray([value.column_px for value in mapped])
+    row_px = np.asarray([value.row_px for value in mapped])
     response = detector.compile_structure_response(column_px, row_px)
     actual = response.apply_strength(reference)
     pure = tuple(
@@ -2099,13 +2999,13 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
         if (rod.h, rod.k) == (0, 0):
             continue
         for branch in (1, 2):
-            candidate = nominal.geometry.map_latent(
+            candidate = nominal.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=math.radians(2.0),
                 beta_rad=math.radians(178.0),
             )
-            if bool(candidate.geometry.valid):
+            if bool(candidate.valid):
                 mapped = candidate
                 mapped_rod = rod
                 mapped_branch = branch
@@ -2121,8 +3021,8 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
         revision="generic-pbi2-mosaic-proof.v1",
     )
     angles = detector_coordinates_to_angles(
-        np.asarray((mapped.geometry.column_px,)),
-        np.asarray((mapped.geometry.row_px,)),
+        np.asarray((mapped.column_px,)),
+        np.asarray((mapped.row_px,)),
         instrument=inputs.instrument,
         angle_frame=angle_frame,
     )
@@ -2286,16 +3186,16 @@ def test_generic_cif_structure_uses_unchanged_matched_region_fitter() -> None:
     mapped = []
     for rod_hk, beta_deg in requested:
         rod = next(rod for rod in nominal.rods if (rod.h, rod.k) == rod_hk)
-        point = nominal.geometry.map_latent(
+        point = nominal.map_latent_geometry(
             rod=rod,
             branch=2,
             alpha_rad=math.radians(1.0),
             beta_rad=math.radians(beta_deg),
         )
-        assert bool(point.geometry.valid)
+        assert bool(point.valid)
         mapped.append(point)
-    column_px = np.asarray([point.geometry.column_px for point in mapped])
-    row_px = np.asarray([point.geometry.row_px for point in mapped])
+    column_px = np.asarray([point.column_px for point in mapped])
+    row_px = np.asarray([point.row_px for point in mapped])
     signal_count = len(mapped)
     rows_per_dataset = signal_count + 2
     observation_count = 2 * rows_per_dataset
@@ -2454,11 +3354,9 @@ def test_bi2x3_structure_uses_same_parameterized_region_fitter(config_name: str)
     config = replace(
         base,
         source=replace(
-            base.source,
+            _single_mean_test_source(base.source),
             spatial_sigma_m=(0.0, 0.0),
             divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
         ),
         bragg=replace(base.bragg, include_detector_visible_m0=False),
     )
@@ -2475,20 +3373,20 @@ def test_bi2x3_structure_uses_same_parameterized_region_fitter(config_name: str)
         if rod.h == 0 and rod.k == 0:
             continue
         for branch in (1, 2):
-            candidate = nominal.geometry.map_latent(
+            candidate = nominal.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=math.radians(1.5),
                 beta_rad=math.radians(165.0 + 3.0 * len(mapped)),
             )
-            if bool(candidate.geometry.valid):
+            if bool(candidate.valid):
                 mapped.append(candidate)
                 break
         if len(mapped) == 4:
             break
     assert len(mapped) == 4
-    column_px = np.asarray([point.geometry.column_px for point in mapped])
-    row_px = np.asarray([point.geometry.row_px for point in mapped])
+    column_px = np.asarray([point.column_px for point in mapped])
+    row_px = np.asarray([point.row_px for point in mapped])
     signal_count = len(mapped)
     rows_per_dataset = signal_count + 2
     observation_count = 2 * rows_per_dataset
@@ -2700,6 +3598,58 @@ def test_hybrid_cuda_preserves_regular_blocks_and_serializes_local_m0(
     np.testing.assert_array_equal(result.valid_source_count, oracle.valid_source_count)
 
 
+def test_stitched_local_m0_applies_external_path_attenuation_once() -> None:
+    from rasim_next.optics.attenuation import external_path_attenuation
+    from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
+    from rasim_next.pipeline.continuous_detector import evaluate_detector_coordinates_geometry
+
+    mu_m_inv = 1.2
+    baseline_inputs = _configured_inputs(
+        sample_count=1,
+        reference_wavelength_A=1.540592925,
+    )
+    attenuated_inputs = _configured_inputs(
+        sample_count=1,
+        reference_wavelength_A=1.540592925,
+        detector_path_linear_attenuation_m_inv=mu_m_inv,
+    )
+    m0_rods = tuple(rod for rod in baseline_inputs.rods if rod.family_m == 0)
+    stitch = ParrattStitchStack(
+        substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+    )
+    baseline = (
+        build_source_averaged_detector(baseline_inputs)
+        .restrict_rods(m0_rods)
+        .with_specular_stitch(stitch)
+    )
+    attenuated = (
+        build_source_averaged_detector(attenuated_inputs)
+        .restrict_rods(m0_rods)
+        .with_specular_stitch(stitch)
+    )
+    column_px = np.asarray((1448.2, 1448.2), dtype=np.float64)
+    row_px = np.asarray((1182.6, 1400.0), dtype=np.float64)
+    baseline_density = baseline.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    attenuated_density = attenuated.evaluate_detector_coordinates_all_roots(column_px, row_px)
+    geometry = evaluate_detector_coordinates_geometry(
+        column_px,
+        row_px,
+        incident=baseline_inputs.incident,
+        instrument=baseline_inputs.instrument,
+        ki_sample_Ainv=baseline_inputs.incident.states.k_film_phase_sample_Ainv[0],
+        incident_state_index=0,
+    )
+    positive = baseline_density.per_rod_density_A2_per_px2[:, 0] > 0.0
+    assert np.any(positive)
+    np.testing.assert_allclose(
+        attenuated_density.per_rod_density_A2_per_px2[positive, 0]
+        / baseline_density.per_rod_density_A2_per_px2[positive, 0],
+        external_path_attenuation(mu_m_inv, geometry.ray_distance_m[positive]),
+        rtol=4.0e-13,
+        atol=0.0,
+    )
+
+
 def test_source_averaged_detector_density_equals_independent_state_sum() -> None:
     from rasim_next.pipeline.continuous_detector import (
         DetectorEwaldMeasure,
@@ -2726,8 +3676,10 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
         detector.evaluate_detector_coordinates(column_px, row_px, rods=rods, branch=2)
         for detector in scalar_detectors
     )
-    expected_per_rod = 0.5 * (
-        scalar[0].per_rod_density_A2_per_px2 + scalar[1].per_rod_density_A2_per_px2
+    source_weight = averaged.incident.states.source_weight
+    expected_per_rod = (
+        source_weight[0] * scalar[0].per_rod_density_A2_per_px2
+        + source_weight[1] * scalar[1].per_rod_density_A2_per_px2
     )
 
     np.testing.assert_allclose(
@@ -2773,9 +3725,9 @@ def test_source_averaged_detector_density_equals_independent_state_sum() -> None
         detector.evaluate_detector_coordinates(column_px, row_px, rods=rods, branch=2)
         for detector in enveloped_scalar_detectors
     )
-    expected_enveloped = 0.5 * (
-        enveloped_scalar[0].per_rod_density_A2_per_px2
-        + enveloped_scalar[1].per_rod_density_A2_per_px2
+    expected_enveloped = (
+        source_weight[0] * enveloped_scalar[0].per_rod_density_A2_per_px2
+        + source_weight[1] * enveloped_scalar[1].per_rod_density_A2_per_px2
     )
     np.testing.assert_allclose(
         enveloped_result.per_rod_density_A2_per_px2,
@@ -3126,6 +4078,10 @@ def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
         ),
     )
     rebound = full_stitched.rebind_physics(strength_model=changed_strength)
+    assert (
+        rebound.incidence_angle_static_physics_revision
+        != full_stitched.incidence_angle_static_physics_revision
+    )
     m0_index = next(index for index, rod in enumerate(rebound.rods) if rod.family_m == 0)
     rebound_full = rebound.evaluate_detector_coordinates_all_roots(column_px, row_px)
     rebind_then_restrict = rebound.restrict_rods(
@@ -3285,6 +4241,7 @@ def test_source_averaged_detector_rebinds_mosaic_and_structure_with_function_par
     )
     changed_strength = replace(
         reference.coating.bragg_space.strength_model,
+        shared_disorder_epsilon=0.03,
         structure_parameters=replace(
             baseline,
             bi_fractional_z=baseline.bi_fractional_z + 0.001,
@@ -3478,7 +4435,10 @@ def test_total_detector_density_preserves_partial_valid_source_count() -> None:
         build_source_averaged_detector,
     )
 
-    base = _configured_inputs(sample_count=2)
+    base = _configured_inputs(
+        sample_count=2,
+        reference_wavelength_A=1.5419012588932806,
+    )
     points_sample_m = base.instrument.sample_from_lab.apply_point(
         base.incident.states.sample_intersection_lab_m
     )
@@ -3498,17 +4458,17 @@ def test_total_detector_density_preserves_partial_valid_source_count() -> None:
     assert np.count_nonzero(inputs.incident.states.valid) == 1
 
     nominal = build_nominal_ewald_context(inputs)
-    mapped = nominal.geometry.map_latent(
+    mapped = nominal.map_latent_geometry(
         rod=Rod(-1, 1),
         branch=2,
         alpha_rad=math.radians(2.0),
         beta_rad=math.radians(178.0),
     )
-    assert bool(mapped.geometry.valid)
+    assert bool(mapped.valid)
 
     result = build_source_averaged_detector(inputs).evaluate_detector_density_all_roots(
-        np.asarray([mapped.geometry.column_px]),
-        np.asarray([mapped.geometry.row_px]),
+        np.asarray([mapped.column_px]),
+        np.asarray([mapped.row_px]),
     )
     assert result.source_state_count == 2
     np.testing.assert_array_equal(result.valid_source_count, np.asarray([1]))
@@ -3543,9 +4503,11 @@ def test_source_averaged_pixel_integral_is_one_outer_integral_of_state_sum() -> 
         )
         for detector in scalar_detectors
     )
-    expected_image = 0.5 * (scalar[0].image_A2 + scalar[1].image_A2)
-    expected_per_rod = 0.5 * (
-        scalar[0].per_rod_detector_mass_A2 + scalar[1].per_rod_detector_mass_A2
+    source_weight = averaged.incident.states.source_weight
+    expected_image = source_weight[0] * scalar[0].image_A2 + source_weight[1] * scalar[1].image_A2
+    expected_per_rod = (
+        source_weight[0] * scalar[0].per_rod_detector_mass_A2
+        + source_weight[1] * scalar[1].per_rod_detector_mass_A2
     )
 
     np.testing.assert_allclose(result.image_A2, expected_image, rtol=3.0e-11, atol=2.0e-24)
@@ -3752,7 +4714,11 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
     assert np.all(all_roots.per_rod_density_A2_per_px2[..., 0] > 0.0)
     expected_m0 = np.zeros(column_px.shape, dtype=np.float64)
     first_m0_oracle = None
-    for scalar_detector in scalar_detectors:
+    for scalar_detector, source_weight in zip(
+        scalar_detectors,
+        detector.incident.states.source_weight,
+        strict=True,
+    ):
         scalar_bragg = MosaicBraggSpace(
             BraggSpaceConfig(
                 reciprocal_basis_Ainv=(
@@ -3826,7 +4792,7 @@ def test_source_average_all_roots_includes_detector_regularized_m0() -> None:
                 branch=branch,
                 scattering_polarization=scattering_polarization,
             )
-            expected_m0 += 0.5 * density
+            expected_m0 += source_weight * density
     np.testing.assert_allclose(
         all_roots.per_rod_density_A2_per_px2[..., 0],
         expected_m0,
@@ -3972,7 +4938,7 @@ def test_detector_visible_ewald_direction_density_includes_regular_m0() -> None:
 
     assert bool(evaluated.detector_visible)
     assert evaluated.detector_status.item() == "VALID"
-    assert evaluated.detector_visible_m0_q_gap_Ainv == pytest.approx(0.7077572188469623)
+    assert evaluated.detector_visible_m0_q_gap_Ainv == pytest.approx(0.7071558945421385)
     assert evaluated.per_rod_inverse_branch_count.item() == 2
     assert np.isfinite(evaluated.density_A2_per_sr)
     assert np.linalg.norm(evaluated.geometry.q_sample_Ainv) > (
@@ -4038,7 +5004,7 @@ def test_cuda_detector_backend_fails_closed_without_a_device(
         root / "configs" / "bi2se3_simulation.yaml",
         repository_root=root,
     )
-    config = replace(config, source=replace(config.source, sample_count=1))
+    config = replace(config, source=_single_mean_test_source(config.source))
     detector = build_source_averaged_detector(build_configured_simulation_inputs(config))
     monkeypatch.setattr(cuda_backend.cuda, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="no CUDA device is available"):
@@ -4065,7 +5031,12 @@ def test_cuda_forward_monte_carlo_matches_cpu_and_progressive_prefix(
     if not cuda.is_available():
         pytest.skip("requires a CUDA device")
 
-    _, _, detector = _forward_monte_carlo_fixture(source_count=3, worker_count=4)
+    _, _, detector = _forward_monte_carlo_fixture(
+        source_count=3,
+        worker_count=4,
+        detector_path_wavelength_A=(1.540592925, 1.5419012588932806, 1.544427),
+        detector_path_linear_attenuation_m_inv_by_wavelength=(0.4, 1.2, 2.4),
+    )
     detector = detector.rebind_physics(
         intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013)
     )
@@ -4319,10 +5290,24 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
         root / "configs" / "bi2se3_simulation.yaml",
         repository_root=root,
     )
+    config = replace(
+        config,
+        instrument=replace(
+            config.instrument,
+            detector_path_medium_id="standard_dry_air_wavelength_table_sensitivity.v1",
+            detector_path_wavelength_A=(1.540592925, 1.5419012588932806, 1.544427),
+            detector_path_linear_attenuation_m_inv_by_wavelength=(
+                1.194448861306956,
+                1.19747301703896,
+                1.2033257750023947,
+            ),
+        ),
+    )
     inputs = build_configured_simulation_inputs(config)
     baseline = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     candidate_strength = replace(
         inputs.strength,
+        shared_disorder_epsilon=0.001,
         structure_parameters=replace(
             baseline,
             bi_fractional_z=baseline.bi_fractional_z + 0.001,
@@ -4345,7 +5330,7 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
         detector.reachable_rod_count_per_source_state,
         return_counts=True,
     )
-    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {73: 9, 85: 991}
+    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {85: 1000}
 
     panel_rows, panel_columns = detector.instrument.detector_shape_rc
     column_px = np.asarray(
@@ -4493,9 +5478,7 @@ def test_cuda_default_source_blocks_match_cpu_with_shared_disorder() -> None:
     assert np.all(gpu.per_rod_density_A2_per_px2[3:] == 0.0)
 
 
-def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
-    from numba import cuda
-
+def test_three_r_disorder_detector_matches_cpu_proof_and_polarization() -> None:
     from painted_ewald import MosaicBraggSpace
     from rasim_next.core.scattering import (
         THOMSON_UNPOLARIZED_UNANALYSED,
@@ -4528,6 +5511,7 @@ def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
     baseline = Bi2X3QuintupleLayerParameters.from_crystal(inputs.crystal)
     candidate_strength = replace(
         inputs.strength,
+        shared_disorder_epsilon=0.03,
         structure_parameters=replace(
             baseline,
             bi_occupancy=0.82,
@@ -4546,40 +5530,52 @@ def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
             provenance="test site profile",
         ),
     )
-    inputs = replace(
+    candidate_inputs = replace(
         inputs,
         strength=candidate_strength,
         bragg_space=MosaicBraggSpace(inputs.bragg_space.config, candidate_strength),
     )
-    detector = build_source_averaged_detector(inputs).rebind_physics(
-        strength_model=candidate_strength,
-        intensity_envelope=SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013),
-    )
-    if not cuda.is_available():
-        pytest.skip("requires a CUDA device")
+    assert candidate_strength.shared_disorder_epsilon == 0.03
     column_px = np.asarray((1109.5, 1469.5, 2206.820508075689))
     row_px = np.asarray((1349.5, 1469.5, 1272.1794919243112))
-
-    cpu = detector.evaluate_detector_density_all_roots(
-        column_px,
-        row_px,
-        execution_backend="cpu",
-    )
-    gpu = detector.evaluate_detector_density_all_roots(
-        column_px,
-        row_px,
-        execution_backend="cuda",
-    )
-
-    np.testing.assert_allclose(
-        gpu.density_A2_per_px2,
-        cpu.density_A2_per_px2,
-        rtol=6.0e-11,
-        atol=3.0e-24,
-    )
-    np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
-    np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
-
+    envelope = SampleQIntensityEnvelope(u_radial_A2=0.006, u_normal_A2=0.013)
+    for epsilon in (0.0, 0.03):
+        strength = replace(candidate_strength, shared_disorder_epsilon=epsilon)
+        active_inputs = replace(
+            candidate_inputs,
+            strength=strength,
+            bragg_space=MosaicBraggSpace(candidate_inputs.bragg_space.config, strength),
+        )
+        optimized = build_source_averaged_detector(active_inputs).rebind_physics(
+            strength_model=strength,
+            intensity_envelope=envelope,
+        )
+        proof = build_source_averaged_structure_detector(
+            active_inputs,
+            strength_model=strength,
+        )
+        proof = replace(proof, intensity_envelope=envelope)
+        optimized_result = optimized.evaluate_detector_coordinates_all_roots(
+            column_px,
+            row_px,
+            execution_backend="cpu",
+        )
+        proof_result = proof.evaluate_detector_coordinates_all_roots(column_px, row_px)
+        assert np.any(proof_result.per_rod_density_A2_per_px2 > 0.0)
+        np.testing.assert_allclose(
+            optimized_result.per_rod_density_A2_per_px2,
+            proof_result.per_rod_density_A2_per_px2,
+            rtol=6.0e-11,
+            atol=3.0e-24,
+        )
+        np.testing.assert_array_equal(optimized_result.caustic, proof_result.caustic)
+        np.testing.assert_array_equal(
+            optimized_result.valid_source_count,
+            proof_result.valid_source_count,
+        )
+        if epsilon == 0.03:
+            candidate_inputs = active_inputs
+    inputs = candidate_inputs
     state_index = int(np.flatnonzero(inputs.incident.states.valid)[0])
 
     def single_state_inputs(polarization_model_id: str):
@@ -4640,6 +5636,70 @@ def test_fault_free_three_r_detector_matches_cpu_and_cuda() -> None:
     )
 
 
+def test_three_r_disorder_detector_cuda_matches_cpu() -> None:
+    from numba import cuda
+
+    if not cuda.is_available():
+        pytest.skip("requires a CUDA device")
+
+    from painted_ewald import MosaicBraggSpace
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_simulation_inputs,
+        build_source_averaged_detector,
+        load_simulation_config,
+    )
+    from rasim_next.pipeline.continuous_detector import SampleQIntensityEnvelope
+
+    root = Path(__file__).resolve().parents[1]
+    inputs = build_configured_simulation_inputs(
+        load_simulation_config(
+            root / "configs" / "bi2se3_r3_simulation.yaml",
+            repository_root=root,
+        )
+    )
+    strength = replace(inputs.strength, shared_disorder_epsilon=0.03)
+    active_inputs = replace(
+        inputs,
+        strength=strength,
+        bragg_space=MosaicBraggSpace(inputs.bragg_space.config, strength),
+    )
+    detector = build_source_averaged_detector(active_inputs).rebind_physics(
+        strength_model=strength,
+        intensity_envelope=SampleQIntensityEnvelope(
+            u_radial_A2=0.006,
+            u_normal_A2=0.013,
+        ),
+    )
+    column_px = np.asarray((1109.5, 1469.5, 2206.820508075689))
+    row_px = np.asarray((1349.5, 1469.5, 1272.1794919243112))
+    cpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cpu",
+    )
+    gpu = detector.evaluate_detector_coordinates_all_roots(
+        column_px,
+        row_px,
+        execution_backend="cuda",
+    )
+
+    assert np.any(cpu.per_rod_density_A2_per_px2 > 0.0)
+    np.testing.assert_allclose(
+        gpu.per_rod_density_A2_per_px2,
+        cpu.per_rod_density_A2_per_px2,
+        rtol=6.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        gpu.density_A2_per_px2,
+        cpu.density_A2_per_px2,
+        rtol=6.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_array_equal(gpu.caustic, cpu.caustic)
+    np.testing.assert_array_equal(gpu.valid_source_count, cpu.valid_source_count)
+
+
 def test_cuda_compound_detector_tilt_matches_cpu() -> None:
     from numba import cuda
 
@@ -4669,7 +5729,7 @@ def test_cuda_compound_detector_tilt_matches_cpu() -> None:
     )
     config = replace(
         config,
-        source=replace(config.source, sample_count=1),
+        source=_single_mean_test_source(config.source),
         instrument=replace(config.instrument, lab_from_detector=tilted_detector),
     )
     detector = build_source_averaged_detector(build_configured_simulation_inputs(config))
@@ -4758,12 +5818,28 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     assert config.bragg.selection_model == "all_elastic_reachable.v1"
     assert config.bragg.include_detector_visible_m0
     assert config.source.sample_count == 1_000
+    assert config.source.wavelength_model_id == "discrete_gaussian_lines.v1"
+    assert config.source.line_probability == pytest.approx(
+        (0.6587615283267457, 0.3412384716732543),
+        rel=0.0,
+        abs=2.0e-16,
+    )
+    assert config.source.position_divergence_correlation == pytest.approx(
+        (-0.1477984535, 0.3873100736)
+    )
+    assert config.instrument.detector_path_medium_id == "vacuum_or_helium_unity.v1"
+    assert config.instrument.detector_path_linear_attenuation_m_inv == 0.0
+    assert config.instrument.detector_path_wavelength_A == ()
     assert config.numerics.detector_execution_backend == "cpu"
     assert config.mosaic.gaussian_sigma_deg == pytest.approx(1.0)
     assert config.mosaic.lorentzian_probability == 0.0
     assert config.structure_factor.layers == 52
-    assert config.structure_factor.shared_disorder_epsilon == pytest.approx(0.001)
+    assert config.structure_factor.shared_disorder_epsilon == 0.0
     assert not config.output_directory.is_relative_to(root)
+    assert (
+        config.physics_revision
+        == "783487a356e22c414e7ee5683c867ffb806186754662aec2dbefa61642338889"
+    )
 
     with pytest.raises(ValueError, match="active Gaussian mosaic width"):
         build_configured_simulation_inputs(
@@ -4816,7 +5892,7 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
         detector.reachable_rod_count_per_source_state,
         return_counts=True,
     )
-    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {73: 9, 85: 991}
+    assert dict(zip(unique_count.tolist(), frequency.tolist(), strict=True)) == {85: 1000}
     assert not detector.reachable_rod_count_per_source_state.flags.writeable
 
     portable_default = default_path.read_text(encoding="utf-8").replace(
@@ -4830,7 +5906,7 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
             "model_id: r3m_quintuple_finite_2h.v1",
             "model_id: cif_conventional_cell_finite_repeat.v1",
         )
-        .replace("  shared_disorder_epsilon: 0.001\n", "")
+        .replace("  shared_disorder_epsilon: 0.0\n", "")
         .replace("  layers: 52", "  repeats: 5"),
         encoding="utf-8",
     )
@@ -4838,6 +5914,141 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     assert generic_config.structure_factor.shared_disorder_epsilon == 0.0
     assert generic_config.structure_factor.layers is None
     assert generic_config.structure_factor.repeats == 5
+
+    legacy_gaussian_yaml = tmp_path / "legacy-gaussian.yaml"
+    legacy_gaussian_yaml.write_text(
+        portable_default.replace("  wavelength_model_id: discrete_gaussian_lines.v1\n", "")
+        .replace("  wavelength_sigma_A: 0.0\n", "  wavelength_sigma_A: 0.001\n")
+        .replace("  line_wavelength_A: [1.540592925, 1.544427]\n", "")
+        .replace(
+            "  line_probability: [0.6587615283267457, 0.3412384716732543]\n",
+            "",
+        )
+        .replace("  common_line_sigma_A: 0.0\n", ""),
+        encoding="utf-8",
+    )
+    legacy_gaussian = load_simulation_config(legacy_gaussian_yaml, repository_root=root)
+    assert legacy_gaussian.source.wavelength_model_id == "gaussian.v1"
+    legacy_samples = build_configured_simulation_inputs(legacy_gaussian).samples
+    np.testing.assert_array_equal(
+        legacy_samples.source_weight,
+        np.full(legacy_gaussian.source.sample_count, 1.0 / legacy_gaussian.source.sample_count),
+    )
+
+    missing_nominal_air_yaml = tmp_path / "missing-nominal-air-wavelength.yaml"
+    missing_nominal_air_text = portable_default.replace(
+        "  detector_path_medium_id: vacuum_or_helium_unity.v1\n",
+        "  detector_path_medium_id: standard_dry_air_wavelength_table_sensitivity.v1\n",
+    ).replace(
+        "  detector_path_linear_attenuation_m_inv: 0.0\n",
+        "  detector_path_linear_attenuation_m_inv: 0.0\n"
+        "  detector_path_wavelength_A: [1.540592925, 1.544427]\n"
+        "  detector_path_linear_attenuation_m_inv_by_wavelength: "
+        "[1.194448861306956, 1.2033257750023947]\n",
+    )
+    missing_nominal_air_yaml.write_text(missing_nominal_air_text, encoding="utf-8")
+    with pytest.raises(ValueError, match="every source line and the nominal mean wavelength"):
+        load_simulation_config(missing_nominal_air_yaml, repository_root=root)
+
+    dry_air_yaml = tmp_path / "dry-air-wavelength-table.yaml"
+    dry_air_text = missing_nominal_air_text.replace(
+        "detector_path_wavelength_A: [1.540592925, 1.544427]",
+        "detector_path_wavelength_A: [1.540592925, 1.5419012588932806, 1.544427]",
+    ).replace(
+        "[1.194448861306956, 1.2033257750023947]",
+        "[1.194448861306956, 1.19747301703896, 1.2033257750023947]",
+    )
+    dry_air_yaml.write_text(dry_air_text, encoding="utf-8")
+    dry_air = load_simulation_config(dry_air_yaml, repository_root=root)
+    assert dry_air.instrument.detector_path_wavelength_A == (
+        1.540592925,
+        1.5419012588932806,
+        1.544427,
+    )
+    assert dry_air.instrument.detector_path_linear_attenuation_m_inv_by_wavelength == (
+        1.194448861306956,
+        1.19747301703896,
+        1.2033257750023947,
+    )
+    dry_air_inputs = build_configured_simulation_inputs(dry_air)
+    build_nominal_ewald_context(dry_air_inputs)
+    with pytest.raises(ValueError, match="every source line and the nominal mean wavelength"):
+        replace(
+            dry_air,
+            instrument=replace(
+                dry_air.instrument,
+                detector_path_wavelength_A=(1.5419012588932806, 1.544427),
+                detector_path_linear_attenuation_m_inv_by_wavelength=(
+                    1.19747301703896,
+                    1.2033257750023947,
+                ),
+            ),
+        )
+    with pytest.raises(ValueError, match="zero-width source"):
+        replace(
+            dry_air,
+            source=replace(
+                dry_air.source,
+                wavelength_model_id="gaussian.v1",
+                wavelength_sigma_A=0.001,
+                line_wavelength_A=(),
+                line_probability=(),
+            ),
+        )
+    with pytest.raises(ValueError, match="zero-width source lines"):
+        replace(
+            dry_air,
+            source=replace(dry_air.source, common_line_sigma_A=0.001),
+        )
+    duplicate_air_yaml = tmp_path / "duplicate-air-wavelength.yaml"
+    duplicate_air_yaml.write_text(
+        dry_air_text.replace(
+            "detector_path_wavelength_A: [1.540592925, 1.5419012588932806, 1.544427]",
+            "detector_path_wavelength_A: [1.540592925, 1.540592925, 1.544427]",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="strictly increasing"):
+        load_simulation_config(duplicate_air_yaml, repository_root=root)
+
+    with pytest.raises(ValueError, match="wavelength_model_id"):
+        replace(config.source, wavelength_model_id="unknown.v1")
+    with pytest.raises(ValueError, match="unsigned 64-bit"):
+        replace(config.source, seed=2**64)
+    with pytest.raises(ValueError, match="wavelength_sigma_A must be zero"):
+        replace(config.source, wavelength_sigma_A=0.001)
+    with pytest.raises(ValueError, match="discrete line centroid"):
+        replace(config.source, mean_wavelength_A=config.source.mean_wavelength_A + 1.0e-4)
+    with pytest.raises(ValueError, match="Gaussian source"):
+        replace(config.source, wavelength_model_id="gaussian.v1")
+    with pytest.raises(ValueError, match="real number"):
+        replace(config.source, line_wavelength_A=(True, 1.544427))
+    with pytest.raises(ValueError, match="real number"):
+        replace(config.source, line_probability=(True, False))
+    for change in (
+        {"mean_wavelength_A": np.bool_(True)},
+        {"wavelength_sigma_A": np.complex128(0.0 + 1.0j)},
+        {"common_line_sigma_A": np.bool_(False)},
+        {"position_divergence_correlation": (np.bool_(False), 0.0)},
+        {"line_wavelength_A": (np.bool_(True), 1.544427)},
+        {"line_probability": (np.complex128(0.5 + 0.1j), 0.5)},
+    ):
+        with pytest.raises(ValueError, match="real"):
+            replace(config.source, **change)
+    gaussian_with_mutable_empty_lines = replace(
+        config.source,
+        wavelength_model_id="gaussian.v1",
+        wavelength_sigma_A=0.0,
+        line_wavelength_A=[],
+        line_probability=[],
+    )
+    assert gaussian_with_mutable_empty_lines.line_wavelength_A == ()
+    assert gaussian_with_mutable_empty_lines.line_probability == ()
+    with pytest.raises(ValueError, match="too small"):
+        replace(
+            config.source,
+            line_probability=(1.0, np.nextafter(0.0, 1.0)),
+        )
 
     duplicate = tmp_path / "duplicate.yaml"
     duplicate.write_text(
@@ -4888,8 +6099,8 @@ def test_yaml_simulation_config_is_strict_and_plans_all_elastic_rods(
     negative_source_sigma = tmp_path / "negative-source-sigma.yaml"
     negative_source_sigma.write_text(
         portable_default.replace(
-            "spatial_sigma_m: [2.123304500720048e-05, 2.123304500720048e-05]",
-            "spatial_sigma_m: [-1.0, 2.123304500720048e-05]",
+            "spatial_sigma_m: [1.4312946262159279e-4, 1.2325011424826383e-4]",
+            "spatial_sigma_m: [-1.0, 1.2325011424826383e-4]",
         ),
         encoding="utf-8",
     )
@@ -4927,7 +6138,7 @@ def test_nominal_ewald_gap_is_attached_only_to_visible_m0_support() -> None:
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
     config = replace(
         config,
-        source=replace(config.source, sample_count=1),
+        source=_single_mean_test_source(config.source),
         instrument=replace(
             config.instrument,
             detector_reference_coordinate_px=(-1000.0, 1500.0),
@@ -4961,14 +6172,14 @@ def test_nominal_ewald_gap_is_attached_only_to_visible_m0_support() -> None:
         (
             5.0,
             2,
-            np.asarray((1103.80545816, 1802.43454184)),
-            1512.79406073,
+            np.asarray((1103.45904245, 1802.78095755)),
+            1512.7160794,
         ),
         (
             2.0,
             1,
-            np.asarray((1106.00777167, 1800.23222833)),
-            1553.31955165,
+            np.asarray((1105.66640479, 1800.57359521)),
+            1553.2784267,
         ),
     ),
 )
@@ -4988,7 +6199,7 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
     markers = evaluate_nominal_integer_l_markers(context)
     assert markers.definition_id == "peak_mosaic_alpha0_integer_L_center.v3"
     assert markers.source_state_policy == "mean_source_state.v1"
-    assert markers.reference_wavelength_A == pytest.approx(1.540592925, abs=2.0e-15)
+    assert markers.reference_wavelength_A == pytest.approx(1.5419012588932806, abs=2.0e-15)
     if sample_angle_deg == 5.0:
         assert not np.any((markers.family_m == 1) & (markers.integer_L == 1))
         np.testing.assert_array_equal(np.unique(markers.family_m), np.asarray((1, 3, 4)))
@@ -5067,25 +6278,25 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
         phase = math.atan2(sine_coefficient, cosine_coefficient)
         delta = math.acos(-constant / amplitude)
         l1_beta = np.mod(np.asarray((phase - delta, phase + delta)), 2.0 * np.pi)
-        backward_l1 = context.geometry.map_latent(
+        backward_l1 = context.map_latent_geometry(
             rod=l1_rod,
             branch=1,
             alpha_rad=np.zeros(2),
             beta_rad=l1_beta,
         )
         np.testing.assert_allclose(
-            backward_l1.geometry.ewald_geometry.L,
+            backward_l1.ewald_geometry.L,
             1.0,
             rtol=0.0,
             atol=2.0e-13,
         )
         np.testing.assert_array_equal(
-            backward_l1.geometry.exit_status,
+            backward_l1.exit_status,
             np.asarray(("BACKWARD", "BACKWARD")),
         )
         np.testing.assert_allclose(
-            backward_l1.geometry.ewald_geometry.kf_sample_Ainv @ mean_axis_sample,
-            -0.1351386958,
+            backward_l1.ewald_geometry.kf_sample_Ainv @ mean_axis_sample,
+            -0.134836295949742,
             rtol=0.0,
             atol=5.0e-11,
         )
@@ -5158,7 +6369,7 @@ def test_nominal_integer_l_markers_are_exact_visible_roundtrips(
                         L=float(integer_L),
                         k_norm_Ainv=space.config.k_norm_Ainv,
                     ),
-                    maxulp=16,
+                    maxulp=32,
                 )
         kf_film_sample_Ainv = ki_sample_Ainv + markers.q_sample_Ainv[index]
         assert float(kf_film_sample_Ainv @ mean_axis_sample) > 0.0
@@ -5186,7 +6397,7 @@ def test_integer_l_marker_sites_do_not_depend_on_render_sampling_or_strength() -
 
     root = Path(__file__).resolve().parents[1]
     config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
-    one_state = replace(config, source=replace(config.source, sample_count=1))
+    one_state = replace(config, source=_single_mean_test_source(config.source))
     changed_numerics = replace(
         config.numerics,
         detector_macrobin_size_px=100,
@@ -5290,7 +6501,7 @@ def test_yaml_detector_two_axis_tilt_folds_into_canonical_pose(tmp_path: Path) -
     )
     assert tilted.physics_revision != base.physics_revision
 
-    one_sample = replace(tilted, source=replace(tilted.source, sample_count=1))
+    one_sample = replace(tilted, source=_single_mean_test_source(tilted.source))
     instrument = build_configured_simulation_inputs(one_sample).instrument
     np.testing.assert_allclose(
         instrument.lab_from_detector.rotation,
@@ -5410,6 +6621,130 @@ def test_continuous_detector_cli_exposes_mosaic_parameters(
     assert "Gaussian sigma must be positive" in capsys.readouterr().err
 
 
+def test_continuous_detector_reference_requires_complete_identity_and_arrays(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    namespace = runpy.run_path(str(root / "scripts" / "generate_bi2se3_continuous_detector.py"))
+    identity = {
+        "reference_comparison_model_id": "one_ki_selected_rods_detector_mass.v2",
+        "configured_physics_revision": "configured-physics-revision",
+        "result_measure_id": "raw_detector_pixel_mass_A2.v1",
+        "wavelength_A": 1.5419012588932806,
+        "cif_path": "examples/bi2se3/structures/Bi2Se3_vesta.cif",
+        "strength_parent": "3R",
+        "strength_structure_model_revision": "structure-revision",
+        "strength_layer_count": 50,
+        "strength_normalization": "finite_per_layer",
+        "strength_shared_disorder_epsilon": 0.0,
+        "detector_shape_rc": [2, 3],
+        "m1_rod_keys": [[-1, 0], [0, 1]],
+        "branch": 2,
+    }
+    reference_image = np.ones((2, 3))
+    reference_per_rod = np.asarray((2.5, 3.5))
+    identity.update(
+        {
+            "image_sha256": hashlib.sha256(
+                memoryview(np.ascontiguousarray(reference_image)).cast("B")
+            ).hexdigest(),
+            "nonzero_pixel_count": 6,
+            "per_rod_detector_mass_A2": reference_per_rod.tolist(),
+            "total_detector_mass_A2": 6.0,
+        }
+    )
+    manifest_json = np.frombuffer(
+        json.dumps(identity, sort_keys=True).encode("utf-8"),
+        dtype=np.uint8,
+    )
+    reference = tmp_path / "reference.npz"
+    np.savez(
+        reference,
+        manifest_json=manifest_json,
+        image_A2=reference_image,
+        per_rod_detector_mass_A2=reference_per_rod,
+    )
+
+    namespace["_validate_reference_strength"](reference, identity)
+    image, per_rod, image_sha256, diagnostic_sha256 = namespace["_load_reference_arrays"](
+        reference,
+        image_shape=(2, 3),
+        per_rod_shape=(2,),
+        expected_identity=identity,
+    )
+    np.testing.assert_array_equal(image, 1.0)
+    np.testing.assert_array_equal(per_rod, reference_per_rod)
+    assert image_sha256 == identity["image_sha256"]
+    assert diagnostic_sha256 == hashlib.sha256(reference.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="wavelength_A"):
+        namespace["_validate_reference_strength"](
+            reference,
+            {**identity, "wavelength_A": 1.540592925},
+        )
+    with pytest.raises(ValueError, match="configured_physics_revision"):
+        namespace["_validate_reference_strength"](
+            reference,
+            {**identity, "configured_physics_revision": "different-physics"},
+        )
+
+    malformed = tmp_path / "malformed.npz"
+    np.savez(
+        malformed,
+        manifest_json=manifest_json,
+        image_A2=np.ones((2, 3)),
+        per_rod_detector_mass_A2=np.asarray(1.0),
+    )
+    with pytest.raises(ValueError, match="per-rod detector mass shape"):
+        namespace["_load_reference_arrays"](
+            malformed,
+            image_shape=(2, 3),
+            per_rod_shape=(2,),
+            expected_identity=identity,
+        )
+    tampered_image = tmp_path / "tampered-image.npz"
+    np.savez(
+        tampered_image,
+        manifest_json=manifest_json,
+        image_A2=np.full((2, 3), 2.0),
+        per_rod_detector_mass_A2=reference_per_rod,
+    )
+    with pytest.raises(ValueError, match="declared SHA-256"):
+        namespace["_load_reference_arrays"](
+            tampered_image,
+            image_shape=(2, 3),
+            per_rod_shape=(2,),
+            expected_identity=identity,
+        )
+    tampered_per_rod = tmp_path / "tampered-per-rod.npz"
+    np.savez(
+        tampered_per_rod,
+        manifest_json=manifest_json,
+        image_A2=reference_image,
+        per_rod_detector_mass_A2=np.asarray((3.0, 3.0)),
+    )
+    with pytest.raises(ValueError, match="do not match their manifest"):
+        namespace["_load_reference_arrays"](
+            tampered_per_rod,
+            image_shape=(2, 3),
+            per_rod_shape=(2,),
+            expected_identity=identity,
+        )
+    wrong_dtype = tmp_path / "wrong-dtype.npz"
+    np.savez(
+        wrong_dtype,
+        manifest_json=manifest_json,
+        image_A2=reference_image.astype(np.int64),
+        per_rod_detector_mass_A2=reference_per_rod,
+    )
+    with pytest.raises(ValueError, match="float64 dtype"):
+        namespace["_load_reference_arrays"](
+            wrong_dtype,
+            image_shape=(2, 3),
+            per_rod_shape=(2,),
+            expected_identity=identity,
+        )
+
+
 def _instrument(
     *,
     shape_rc: tuple[int, int] = (3, 4),
@@ -5443,7 +6778,29 @@ def _instrument(
 
 
 def test_configured_initial_beam_maps_exactly_to_the_untilted_detector() -> None:
-    inputs = _configured_inputs(sample_count=6)
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
+    gaussian_source = replace(
+        config.source,
+        wavelength_model_id="gaussian.v1",
+        line_wavelength_A=(),
+        line_probability=(),
+        common_line_sigma_A=0.0,
+        wavelength_sigma_A=0.0,
+        position_divergence_correlation=(0.0, 0.0),
+        sample_count=6,
+    )
+    inputs = build_configured_simulation_inputs(
+        replace(
+            config,
+            source=gaussian_source,
+            instrument=replace(
+                config.instrument,
+                detector_path_medium_id="vacuum_or_helium_unity.v1",
+                detector_path_linear_attenuation_m_inv=0.0,
+            ),
+        )
+    )
     samples = inputs.samples
     instrument = inputs.instrument
     sample_angle_rad = math.radians(5.0)
@@ -5521,7 +6878,7 @@ def test_configured_initial_beam_maps_exactly_to_the_untilted_detector() -> None
         atol=2.0e-12,
     )
     wavelength_mean_A = float(np.sum(weights * incident.wavelength_A))
-    assert wavelength_mean_A == pytest.approx(1.540592925, abs=2.0e-15)
+    assert wavelength_mean_A == pytest.approx(config.source.mean_wavelength_A, abs=2.0e-15)
     assert np.sum(weights[projection.valid]) == pytest.approx(1.0, abs=2.0e-15)
 
 
@@ -6335,11 +7692,29 @@ def test_mosaic_runner_separates_nominal_geometry_from_one_shared_source_ensembl
         item.incident.states.source_revision == base.samples.source_revision for item in series
     )
     assert all(np.all(item.incident.states.valid) for item in series)
-    assert np.unique(base.samples.origin_lab_m, axis=0).shape[0] == 4
-    assert np.unique(base.samples.direction_lab, axis=0).shape[0] == 4
-    assert np.unique(base.samples.wavelength_A).size == 4
+    assert np.unique(base.samples.origin_lab_m, axis=0).shape[0] == 2
+    assert np.unique(base.samples.direction_lab, axis=0).shape[0] == 2
+    np.testing.assert_array_equal(
+        np.unique(base.samples.wavelength_A),
+        np.asarray(base.config.source.line_wavelength_A),
+    )
+    for wavelength_A, probability in zip(
+        base.config.source.line_wavelength_A,
+        base.config.source.line_probability,
+        strict=True,
+    ):
+        assert np.sum(
+            base.samples.source_weight[base.samples.wavelength_A == wavelength_A]
+        ) == pytest.approx(probability, rel=0.0, abs=5.0e-16)
     assert all(item.samples.incident_sample_id.size == 1 for item in nominal_series)
-    assert all(item.incident.states.valid.tolist() == [True] for item in nominal_series)
+    from rasim_next.pipeline.configured_simulation import build_geometry_only_ewald_context
+
+    nominal_contexts = tuple(build_geometry_only_ewald_context(item) for item in nominal_series)
+    assert all(item.incident.states.valid.tolist() == [True] for item in nominal_contexts)
+    assert all(
+        item.samples.source_sampling_model_id == "nominal_mean_geometry_reference.v1"
+        for item in nominal_series
+    )
     assert all(
         float(item.samples.wavelength_A[0]) == base.config.source.mean_wavelength_A
         for item in nominal_series
@@ -6494,7 +7869,7 @@ def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -
         position=runner["_case_fixed_position_state"](case),
     )
     physics, geometry = runner["_profile_forward_contexts"](base, (series[0],))
-    nominal_context = build_nominal_ewald_context(nominal_series[0])
+    nominal_context = build_nominal_ewald_context(series[0])
     markers = evaluate_nominal_integer_l_markers(nominal_context)
     candidates = np.flatnonzero((markers.family_m == 1) & (markers.root_sign != 0))
     marker_index = int(candidates[np.argmax(markers.family_strength_weight_A2[candidates])])
@@ -6590,26 +7965,27 @@ def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -
         np.testing.assert_array_equal(singleton.valid, combined.valid)
 
     np.testing.assert_allclose(combined.signal, explicit_signal, rtol=3.0e-11, atol=1.0e-22)
+    from rasim_next.pipeline.configured_simulation import build_geometry_only_ewald_context
+
+    geometry_only_context = build_geometry_only_ewald_context(nominal_series[0])
     nominal_physics = replace(physics, material=nominal_series[0].material)
     nominal_geometry = (
         runner["_ProfileGeometryContext"](
-            incident=nominal_series[0].incident,
+            incident=geometry_only_context.incident,
             instrument=nominal_series[0].instrument,
         ),
     )
-    nominal, _ = runner["_evaluate_profile_series"](
-        nominal_physics,
-        nominal_geometry,
-        (frame,),
-        ((definition,),),
-        mosaic,
-        profile_revision=profile_revision,
-        execution_backend="cpu",
-    )
     assert np.linalg.norm(combined.signal) > 0.0
-    assert (
-        np.linalg.norm(combined.signal - nominal.signal) / np.linalg.norm(combined.signal) > 1.0e-3
-    )
+    with pytest.raises(ValueError, match="cannot contribute to intensity"):
+        runner["_evaluate_profile_series"](
+            nominal_physics,
+            nominal_geometry,
+            (frame,),
+            ((definition,),),
+            mosaic,
+            profile_revision=profile_revision,
+            execution_backend="cpu",
+        )
 
 
 def test_mosaic_runner_passes_nominally_unsupported_m0_to_combined_source_gate() -> None:
@@ -7275,7 +8651,10 @@ def test_interactive_detector_only_change_reuses_incident_transport(
         root / "configs" / "bi2se3_simulation.yaml",
         repository_root=root,
     )
-    bundle = viewer["_build_bundle"](config, 1)
+    bundle = viewer["_build_bundle"](
+        config,
+        config.source.minimum_physical_sample_count,
+    )
     evaluate_bundle = viewer["_evaluate_bundle"]
 
     def fail_incident_rebuild(*_args: object, **_kwargs: object) -> object:
@@ -7340,11 +8719,12 @@ def test_interactive_detector_only_change_reuses_incident_transport(
         prepare_texture=False,
     )
     session._bundle = bundle
+    physical_source_count = config.source.minimum_physical_sample_count
 
     def stage(revision: int, deltas: object) -> object:
         request = viewer["_RenderRequest"](
             revision=revision,
-            source_sample_count=1,
+            source_sample_count=physical_source_count,
             draws_per_source_state=1,
             deltas=deltas,
         )
@@ -7417,7 +8797,14 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
     )
     config = replace(
         config,
-        source=replace(config.source, wavelength_sigma_A=0.2),
+        source=replace(
+            config.source,
+            wavelength_model_id="gaussian.v1",
+            line_wavelength_A=(),
+            line_probability=(),
+            common_line_sigma_A=0.0,
+            wavelength_sigma_A=0.4,
+        ),
         instrument=replace(
             config.instrument,
             sample_support_model_id="finite_rectangle.v1",
@@ -7438,8 +8825,8 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
     assert bundle.detector.rods == base_rods
 
     deltas = viewer["GeometryDeltas"](
-        goniometer_axis_pitch_offset_deg=0.4,
-        sample_in_plane_y_translation_mm=-0.13,
+        goniometer_axis_pitch_offset_deg=-2.0,
+        sample_in_plane_y_translation_mm=1.0,
     )
     changed_instrument = viewer["apply_geometry_deltas"](
         bundle.inputs.instrument,

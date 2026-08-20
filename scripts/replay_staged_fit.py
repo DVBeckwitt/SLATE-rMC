@@ -1239,11 +1239,20 @@ def _stage_source_identity(
 ) -> tuple[int, int, str]:
     if stage != "geometry":
         return case.source_state_count, case.source_seed, case_source_revision
+    from rasim_next.pipeline.configured_simulation import (
+        load_simulation_config,
+        sample_configured_nominal_geometry_source,
+    )
+
     source_state_count = int(case.stage_config["geometry"]["source_state_count"])
+    if source_state_count != 1:
+        raise ValueError("geometry stage must declare one nominal geometry companion")
+    config = load_simulation_config(case.input_paths["simulation_config"])
+    nominal = sample_configured_nominal_geometry_source(config.source)
     return (
         source_state_count,
-        case.source_seed,
-        _source_revision(case, source_state_count=source_state_count),
+        nominal.source_seed,
+        nominal.source_revision,
     )
 
 
@@ -1615,7 +1624,10 @@ def _bi2te3_fixed_inputs(
         FixedPositionState,
         build_fixed_experiment_series,
     )
-    from rasim_next.pipeline.configured_simulation import load_simulation_config
+    from rasim_next.pipeline.configured_simulation import (
+        build_configured_geometry_inputs,
+        load_simulation_config,
+    )
 
     if not isinstance(position, FixedPositionState):
         raise TypeError("position must be FixedPositionState")
@@ -1642,24 +1654,105 @@ def _bi2te3_fixed_inputs(
         source_sample_count=case.source_state_count,
         **mosaic_arguments,
     )
-    nominal_config = replace(
-        config,
-        source=replace(
-            config.source,
-            spatial_sigma_m=(0.0, 0.0),
-            divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
-        ),
-    )
-    nominal_series = build_fixed_experiment_series(
-        nominal_config,
-        position=position,
-        fixed_lattice=fixed_lattice,
-        source_sample_count=1,
-        **mosaic_arguments,
+    nominal_series = tuple(
+        replace(
+            build_configured_geometry_inputs(
+                inputs.config,
+                direct_basis_A=fixed_lattice.direct_basis_override_A,
+            ),
+            instrument=inputs.instrument,
+        )
+        for inputs in series
     )
     return series[0], series, nominal_series
+
+
+def _bi2te3_fixed_state_from_stage(
+    state: dict[str, Any],
+    *,
+    case: ReplayCase | None = None,
+) -> tuple[Any, Any, Path]:
+    """Restore the exact position, lattice, and config bound by a Bi2Te3 stage."""
+
+    from rasim_next.fitting import FixedLatticeState, FixedPositionState
+    from rasim_next.materials import read_crystal
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+    fixed_position = FixedPositionState.from_record(state.get("fixed_position"))
+    fixed_lattice_record = state.get("fixed_lattice")
+    config_record = state.get("simulation_config")
+    if not isinstance(config_record, dict) or set(config_record) != {"path", "sha256"}:
+        raise ValueError("Bi2Te3 stage simulation config identity is invalid")
+    config_path = Path(str(config_record["path"])).resolve()
+    if case is not None and config_path != case.input_paths["simulation_config"].resolve():
+        raise ValueError("Bi2Te3 stage changed its simulation config path")
+    if not config_path.is_file() or _sha256(config_path) != config_record["sha256"]:
+        raise ValueError("Bi2Te3 stage simulation config changed")
+    config = load_simulation_config(config_path)
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    fixed_lattice = FixedLatticeState.from_record(
+        fixed_lattice_record,
+        reference_direct_basis_A=crystal.direct_basis_A,
+    )
+    return fixed_position, fixed_lattice, config_path
+
+
+def _validate_bi2te3_fixed_state_handoff(
+    case: ReplayCase,
+    *,
+    stage: str,
+    state: dict[str, Any],
+    upstream: dict[str, Any] | None,
+) -> None:
+    """Bind persisted Bi2Te3 geometry state to its exact upstream and CIF inputs."""
+
+    from rasim_next.fitting import FixedLatticeState, FixedPositionState
+    from rasim_next.fitting.indexed_series import SharedGeometryCorrections
+    from rasim_next.materials import read_crystal
+    from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+    fixed_position, fixed_lattice, config_path = _bi2te3_fixed_state_from_stage(
+        state,
+        case=case,
+    )
+    if stage == "mosaic":
+        if upstream is None or upstream.get("stage") != "geometry":
+            raise ValueError("Bi2Te3 mosaic stage requires its geometry artifact")
+        config = load_simulation_config(config_path)
+        expected_position = FixedPositionState(
+            artifact_revision=upstream["scientific_revision"],
+            corrections=SharedGeometryCorrections.from_array(upstream["state"]["corrections"]),
+            incidence_angle_delta_rad=0.0,
+            commanded_incidence_angles_rad=tuple(
+                math.radians(value) for value in case.incidence_angles_deg
+            ),
+            beam_center_column_row_px=tuple(
+                float(value) for value in config.instrument.detector_reference_coordinate_px
+            ),
+        )
+        crystal = read_crystal(
+            config.material.cif_path,
+            phase_id=config.material.phase_id,
+            expected_sha256=config.cif_sha256,
+        )
+        expected_lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
+        if fixed_position.to_record() != expected_position.to_record():
+            raise ValueError("Bi2Te3 mosaic stage changed its geometry position handoff")
+        if fixed_lattice.to_record() != expected_lattice.to_record():
+            raise ValueError("Bi2Te3 mosaic stage changed its CIF lattice handoff")
+        return
+    if stage == "ordered_intensity":
+        if upstream is None or upstream.get("stage") != "mosaic":
+            raise ValueError("Bi2Te3 ordered-intensity stage requires its mosaic artifact")
+        for name in ("fixed_position", "fixed_lattice", "simulation_config"):
+            if state.get(name) != upstream["state"].get(name):
+                raise ValueError(f"Bi2Te3 ordered-intensity stage changed its {name} handoff")
+        return
+    raise ValueError(f"Bi2Te3 fixed-state handoff is not defined for stage {stage!r}")
 
 
 def _local_peak_centroid(
@@ -1709,8 +1802,8 @@ def _bi2te3_profile_definitions(
     from rasim_next.geometry import detector_coordinates_to_angles
     from rasim_next.io.osc import read_osc
     from rasim_next.pipeline.configured_simulation import (
-        ConfiguredGeometryInputs,
         build_nominal_ewald_context,
+        build_source_averaged_structure_detector,
         evaluate_nominal_integer_l_markers,
     )
     from rasim_next.selection import build_osc_angle_frame, load_osc_geometry_series
@@ -1760,7 +1853,8 @@ def _bi2te3_profile_definitions(
         effective_incidence_rad = math.radians(
             inputs.config.instrument.axis_rotations[geometry_series.incidence_axis_index].angle_deg
         )
-        context = build_nominal_ewald_context(inputs)
+        context = build_nominal_ewald_context(evaluation_inputs)
+        topology_detector = build_source_averaged_structure_detector(evaluation_inputs)
         frame = build_osc_angle_frame(
             mean_direction_lab=inputs.config.source.mean_direction_lab,
             instrument=inputs.instrument,
@@ -1822,17 +1916,7 @@ def _bi2te3_profile_definitions(
                     phi_gauss_order=int(stage["nonzero_phi_gauss_order"]),
                 )
             )
-        geometry_model = ExactTagGeometryModel(
-            ConfiguredGeometryInputs(
-                config=inputs.config,
-                samples=inputs.samples,
-                instrument=inputs.instrument,
-                crystal=inputs.crystal,
-                material=inputs.material,
-                reciprocal=inputs.reciprocal,
-                rods=inputs.rods,
-            )
-        )
+        geometry_model = ExactTagGeometryModel(inputs)
         m0_rods = tuple(rod for rod in inputs.rods if rod.family_m == 0)
         if len(m0_rods) != 1:
             raise RuntimeError("expected exactly one physical m=0 rod")
@@ -1898,7 +1982,7 @@ def _bi2te3_profile_definitions(
             )
         datasets.append(
             probe_ordered_intensity_inverse_boundary_bins(
-                context.geometry,
+                topology_detector,
                 angle_frame=frame,
                 definitions=tuple(definitions),
             )
@@ -2267,6 +2351,7 @@ def _bi2te3_mosaic(
     if backend != "cuda":
         raise ValueError("the accepted Bi2Te3 mosaic replay is CUDA-qualified only")
     from rasim_next.fitting import (
+        ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION,
         FixedLatticeState,
         FixedPositionState,
         MosaicIdentifiabilityError,
@@ -2315,7 +2400,6 @@ def _bi2te3_mosaic(
         fixed_lattice = FixedLatticeState.implicit_cif(crystal.direct_basis_A)
     if not isinstance(fixed_lattice, FixedLatticeState):
         raise TypeError("fixed_lattice must be FixedLatticeState")
-    corrections = fixed_position.corrections.as_array().tolist()
     base, series, nominal_series = _bi2te3_fixed_inputs(
         case,
         fixed_position,
@@ -2342,6 +2426,7 @@ def _bi2te3_mosaic(
             "analytic_branch_id": definition.identity.analytic_branch_id,
             "center_two_theta_rad": definition.center_two_theta_rad,
             "center_phi_rad": definition.center_phi_rad,
+            "excluded_phi_bin_indices": list(definition.excluded_phi_bin_indices),
         }
         for dataset in definitions
         for definition in dataset
@@ -2357,6 +2442,7 @@ def _bi2te3_mosaic(
                     "physics_revision": base.config.physics_revision,
                     "cif_sha256": base.config.cif_sha256,
                     "source_revision": base.samples.source_revision,
+                    "topology_probe_revision": (ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION),
                     "catalog_sha256": _sha256(case.input_paths[str(stage["catalog_role"])]),
                     "definitions": definition_payload,
                 },
@@ -2505,7 +2591,6 @@ def _bi2te3_mosaic(
         "profile_records": records,
         "profile_scales": result.profile_scales.tolist(),
         "profile_revision": profile_revision,
-        "geometry_corrections": corrections,
         "fixed_position": fixed_position.to_record(),
         "fixed_lattice": fixed_lattice.to_record(),
         "simulation_config": {
@@ -2771,8 +2856,16 @@ def _bi2te3_ordered_intensity(
         "staged_fit_bi2te3_ordered_physics", "recover_bi2se3_mosaic.py"
     )
     mosaic_state = upstream["state"]
-    corrections = [float(value) for value in mosaic_state["geometry_corrections"]]
-    base, series, nominal_series = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    fixed_position, fixed_lattice, config_path = _bi2te3_fixed_state_from_stage(
+        mosaic_state,
+        case=case,
+    )
+    base, series, nominal_series = _bi2te3_fixed_inputs(
+        case,
+        fixed_position,
+        fixed_lattice,
+        simulation_config_path=config_path,
+    )
     if base.samples.source_revision != _source_revision(case):
         raise RuntimeError("Bi2Te3 ordered-intensity replay changed its source realization")
     mosaic_stage = case.stage_config["mosaic"]
@@ -2970,7 +3063,9 @@ def _bi2te3_ordered_intensity(
     state = {
         "parameters": parameter_values,
         "structure_representative": structure_record,
-        "geometry_corrections": corrections,
+        "fixed_position": mosaic_state["fixed_position"],
+        "fixed_lattice": mosaic_state["fixed_lattice"],
+        "simulation_config": mosaic_state["simulation_config"],
         "mosaic_parameters": list(mosaic_state["parameters"]),
         "profile_records": records,
         "cached_vs_fresh_maximum_relative_error": oracle_error,
@@ -3021,8 +3116,16 @@ def _bi2te3_render(
         "staged_fit_bi2te3_render_physics", "recover_bi2se3_mosaic.py"
     )
     state = upstream["state"]
-    corrections = [float(value) for value in state["geometry_corrections"]]
-    base, series, _ = _bi2te3_fixed_inputs(case, corrections, mosaic_runner)
+    fixed_position, fixed_lattice, config_path = _bi2te3_fixed_state_from_stage(
+        state,
+        case=case,
+    )
+    base, series, _ = _bi2te3_fixed_inputs(
+        case,
+        fixed_position,
+        fixed_lattice,
+        simulation_config_path=config_path,
+    )
     physics, profile_geometry = mosaic_runner._profile_forward_contexts(base, series)
     mosaic_parameters = mosaic_runner._mosaic_parameters(
         gaussian_sigma_rad=math.radians(float(state["mosaic_parameters"][0])),
@@ -3269,6 +3372,43 @@ def _validate_stage_envelope(
             },
             "Bi2Se3 ordered-intensity state",
         )
+    if case.material_id == "Bi2Te3" and stage == "geometry":
+        _strict_keys(state, {"corrections"}, "Bi2Te3 geometry state")
+        summary = result.get("scientific_summary")
+        geometry = summary.get("geometry") if isinstance(summary, dict) else None
+        if not isinstance(geometry, dict) or state["corrections"] != geometry.get("corrections"):
+            raise ValueError("Bi2Te3 geometry state changed its fitted corrections")
+    if case.material_id == "Bi2Te3" and stage == "mosaic":
+        _strict_keys(
+            state,
+            {
+                "component_profile_checkpoint_revision",
+                "fixed_lattice",
+                "fixed_position",
+                "identifiability",
+                "parameters",
+                "profile_records",
+                "profile_revision",
+                "profile_scales",
+                "simulation_config",
+            },
+            "Bi2Te3 mosaic state",
+        )
+    if case.material_id == "Bi2Te3" and stage == "ordered_intensity":
+        _strict_keys(
+            state,
+            {
+                "cached_vs_fresh_maximum_relative_error",
+                "fixed_lattice",
+                "fixed_position",
+                "mosaic_parameters",
+                "parameters",
+                "profile_records",
+                "simulation_config",
+                "structure_representative",
+            },
+            "Bi2Te3 ordered-intensity state",
+        )
     artifact = state.get("artifact")
     artifact_sha256 = state.get("artifact_sha256")
     artifact_contract = {
@@ -3458,6 +3598,13 @@ def _validate_stage_result(
             != upstream["state"]["artifact_sha256"]
         ):
             raise ValueError("Bi2Se3 ordered-intensity artifact changed its mosaic provenance")
+    if case.material_id == "Bi2Te3" and stage in {"mosaic", "ordered_intensity"}:
+        _validate_bi2te3_fixed_state_handoff(
+            case,
+            stage=stage,
+            state=result["state"],
+            upstream=upstream,
+        )
 
 
 def _combined_scientific_summary(

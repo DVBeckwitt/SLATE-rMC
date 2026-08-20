@@ -62,8 +62,12 @@ from rasim_next.stacking import (
     RichEpsilonModel,
     StackingState,
     finite_event_intensity,
+    registry_phase,
 )
-from rasim_next.stacking.enumeration import finite_explicit_sequence_intensity
+from rasim_next.stacking.enumeration import (
+    finite_explicit_sequence_intensity,
+    finite_intensity_by_enumeration,
+)
 
 ROOT = Path(__file__).parents[1]
 STRUCTURES = ROOT / "examples"
@@ -711,6 +715,7 @@ def test_bi2se3_structure_parameters_match_directional_direct_sum() -> None:
         (0.001, EventIntensityNormalization.FINITE_TOTAL, Parent.TWO_H),
         (0.001, EventIntensityNormalization.FINITE_PER_LAYER, Parent.TWO_H),
         (0.0, EventIntensityNormalization.FINITE_TOTAL, Parent.THREE_R),
+        (0.02, EventIntensityNormalization.FINITE_TOTAL, Parent.THREE_R),
     ),
 )
 def test_fixed_position_occupancy_quadratic_matches_full_strength(
@@ -986,6 +991,82 @@ def test_bi2se3_near_ideal_two_h_strength_matches_shared_disorder_oracle() -> No
 
     assert model.shared_disorder_epsilon == epsilon
     np.testing.assert_allclose(actual, oracle.scattering_strength_A2, rtol=2.0e-13, atol=2.0e-23)
+
+
+@pytest.mark.parametrize("epsilon", (0.0, 0.02))
+def test_bi2se3_three_r_strength_matches_shared_disorder_oracle(epsilon: float) -> None:
+    crystal = read_crystal(
+        STRUCTURES / "bi2se3" / "structures" / "Bi2Se3_vesta.cif",
+        phase_id="bi2se3",
+    )
+    h = np.asarray((0, 1, -1, 3), dtype=np.int32)
+    k = np.asarray((0, 0, 0, 0), dtype=np.int32)
+    ell = np.asarray((6.2, 4.3, 9.1, -2.7))
+    model = Bi2X3FiniteStackStrength(
+        crystal=crystal,
+        layers=7,
+        normalization=EventIntensityNormalization.FINITE_TOTAL,
+        parent=Parent.THREE_R,
+        shared_disorder_epsilon=epsilon,
+    )
+
+    actual = model.evaluate_hkl(
+        h=h,
+        k=k,
+        L=ell,
+        k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+    )
+    reciprocal = ReciprocalLattice.from_crystal(crystal)
+    q_crystal = reciprocal.q_cartesian_Ainv(np.column_stack((h, k, ell)))
+    layer_normal = np.cross(crystal.direct_basis_A[:, 0], crystal.direct_basis_A[:, 1])
+    layer_normal /= np.linalg.norm(layer_normal)
+    if np.dot(layer_normal, crystal.direct_basis_A[:, 2]) < 0.0:
+        layer_normal = -layer_normal
+    layer_normal_q = q_crystal @ layer_normal
+    event_id = np.arange(ell.size, dtype=np.int64)
+    query = RodQueryBatch(
+        event_id=event_id,
+        rod_id=np.arange(ell.size, dtype=np.int64),
+        phase_id=(crystal.phase_id,) * ell.size,
+        h=h,
+        k=k,
+        q_sample_normal_Ainv=layer_normal_q,
+        l_coordinate=ell,
+        wavelength_A=np.full(ell.size, WAVELENGTH_A),
+    )
+    amplitudes = bi2x3_quintuple_layer_amplitudes(crystal, query)
+    assert amplitudes.f_minus_e is not None
+    law = RichEpsilonModel(Parent.THREE_R, epsilon).transition_law()
+    oracle_e2 = np.asarray(
+        [
+            finite_intensity_by_enumeration(
+                model.layers,
+                amplitudes.f_plus_e[index],
+                amplitudes.f_minus_e[index],
+                registry_phase(h[index], k[index]),
+                np.exp(1j * layer_normal_q[index] * amplitudes.layer_repeat_A),
+                law,
+                InitialPopulation.plus_only(),
+            )
+            for index in range(ell.size)
+        ],
+        dtype=np.float64,
+    )
+    if model.normalization is EventIntensityNormalization.FINITE_PER_LAYER:
+        oracle_e2 /= model.layers
+    oracle = electron_squared_to_scattering_strength_A2(oracle_e2)
+
+    np.testing.assert_allclose(actual, oracle, rtol=5.0e-13, atol=2.0e-23)
+    assert actual[0] == pytest.approx(
+        replace(model, shared_disorder_epsilon=0.0).evaluate_hkl(
+            h=h[:1],
+            k=k[:1],
+            L=ell[:1],
+            k_norm_Ainv=2.0 * np.pi / WAVELENGTH_A,
+        )[0],
+        rel=2.0e-13,
+        abs=2.0e-23,
+    )
 
 
 def test_cif_scalar_amplitude_and_raw_event_measure(tmp_path: Path) -> None:

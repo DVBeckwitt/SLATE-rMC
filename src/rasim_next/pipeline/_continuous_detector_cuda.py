@@ -82,7 +82,7 @@ def _pack_source_average(
     state_count = len(indexed_evaluators)
     ray_origin = np.empty((state_count, 3), dtype=np.float64)
     ki_film = np.empty((state_count, 3), dtype=np.float64)
-    state_real = np.empty((state_count, 26), dtype=np.float64)
+    state_real = np.empty((state_count, 27), dtype=np.float64)
     state_complex = np.empty((state_count, 5), dtype=np.complex128)
     state_block_offset = np.concatenate(
         (
@@ -216,6 +216,7 @@ def _pack_source_average(
             state.specular_scale_factor,
             state.specular_blend_lower_q_over_qc,
             state.specular_blend_upper_q_over_qc,
+            state.detector_path_linear_attenuation_m_inv,
         )
         state_complex[state_index] = (
             state.refractive_index,
@@ -371,6 +372,38 @@ def _wrapped_mosaic_density(
 
 
 @cuda.jit(device=True, inline=True)
+def _coherent_finite_stack_intensity(
+    layers: int,
+    ell: float,
+    registry_index: int,
+) -> float:
+    """Return the stable fault-free geometric-series intensity in constant work."""
+
+    if layers == 1:
+        return 1.0
+    reduced_ell = ell - float(registry_index)
+    reduced_ell -= 3.0 * math.floor(reduced_ell / 3.0 + 0.5)
+    scaled_ell = layers * reduced_ell
+    layer_count = float(layers)
+    layers_squared = layer_count * layer_count
+    if abs(scaled_ell) < 1.0e-4:
+        half_phase = math.pi * reduced_ell / 3.0
+        half_phase_squared = half_phase * half_phase
+        fourth_order = (2.0 * layers_squared * layers_squared - 5.0 * layers_squared + 3.0) / 45.0
+        return layers_squared * (
+            1.0
+            - (layers_squared - 1.0) * half_phase_squared / 3.0
+            + fourth_order * half_phase_squared * half_phase_squared
+        )
+    numerator_ell = scaled_ell - 3.0 * math.floor(scaled_ell / 3.0 + 0.5)
+    denominator = math.sin(math.pi * reduced_ell / 3.0)
+    if denominator == 0.0:
+        return layers_squared
+    ratio = math.sin(math.pi * numerator_ell / 3.0) / denominator
+    return ratio * ratio
+
+
+@cuda.jit(device=True, inline=True)
 def _finite_stack_strength_A2(
     rod_index: int,
     ell: float,
@@ -403,30 +436,29 @@ def _finite_stack_strength_A2(
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
-        phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
         element_factor = element_factor_0 if element == 0 else element_factor_1
         amplitude_plus += occupancy * site_damping * element_factor * phase_plus
-        amplitude_minus += occupancy * site_damping * element_factor * phase_minus
+        if shared_disorder_epsilon != 0.0:
+            phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
+            amplitude_minus += occupancy * site_damping * element_factor * phase_minus
 
-    vertical_phase_angle = 2.0 * math.pi * ell / 3.0
-    vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
     if shared_disorder_epsilon == 0.0:
+        registry_index = 0
         if stacking_parent_code == 1:
             h = int(rod_hk_population[rod_index, 0])
             k = int(rod_hk_population[rod_index, 1])
             registry_index = (h + 2 * k) % 3
-            if registry_index == 1:
-                vertical_phase *= complex(-0.5, -0.5 * math.sqrt(3.0))
-            elif registry_index == 2:
-                vertical_phase *= complex(-0.5, 0.5 * math.sqrt(3.0))
-        phase_power = 1.0 + 0.0j
-        stack_sum = 1.0 + 0.0j
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            stack_sum += phase_power
-        total = amplitude_plus * stack_sum
-        intensity_e2 = total.real * total.real + total.imag * total.imag
+        amplitude_intensity = (
+            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        )
+        intensity_e2 = amplitude_intensity * _coherent_finite_stack_intensity(
+            layers,
+            ell,
+            registry_index,
+        )
     else:
+        vertical_phase_angle = 2.0 * math.pi * ell / 3.0
+        vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
         h = int(rod_hk_population[rod_index, 0])
         k = int(rod_hk_population[rod_index, 1])
         registry_index = (h + 2 * k) % 3
@@ -441,7 +473,10 @@ def _finite_stack_strength_A2(
         parent = 1.0 - shared_disorder_epsilon
         same_probability = parent + 2.0 * alternative
         flip_probability = 2.0 * alternative
-        same_gauge = parent + alternative * inverse_omega + alternative * omega
+        if stacking_parent_code == 0:
+            same_gauge = parent + alternative * inverse_omega + alternative * omega
+        else:
+            same_gauge = parent * omega + alternative * (1.0 + inverse_omega)
         plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
         minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
 
@@ -639,6 +674,8 @@ def _prepare_state_block_geometry_kernel(
     optical_weight = (
         entrance_power * (exit_amplitude.real**2 + exit_amplitude.imag**2) * attenuation
     )
+    if state_real[state_index, 26] != 0.0:
+        optical_weight *= math.exp(-state_real[state_index, 26] * distance)
     incident_normal_squared = (
         air_k0_Ainv * air_k0_Ainv
         - ki_film_sample_Ainv[state_index, 0] ** 2

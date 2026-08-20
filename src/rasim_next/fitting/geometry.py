@@ -32,7 +32,7 @@ from rasim_next.pipeline.configured_simulation import (
     build_nominal_ewald_context,
     build_source_averaged_detector,
     evaluate_nominal_integer_l_markers,
-    sample_configured_source,
+    sample_configured_nominal_geometry_source,
     solve_integer_l_ewald_roots,
     solve_layer_l_ewald_roots,
 )
@@ -2115,8 +2115,7 @@ class _ExactTagGeometry:
     ) -> None:
         if not isinstance(inputs, ConfiguredSimulationInputs):
             raise TypeError("inputs must be ConfiguredSimulationInputs")
-        build_nominal_ewald_context(inputs)
-        nominal_samples = sample_configured_source(inputs.config.source, sample_count=1)
+        nominal_samples = sample_configured_nominal_geometry_source(inputs.config.source)
         nominal_material = material_optics(inputs.crystal, nominal_samples.wavelength_A)
         exact_model = ExactTagGeometryModel(
             ConfiguredGeometryInputs(

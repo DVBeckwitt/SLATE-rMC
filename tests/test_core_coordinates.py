@@ -89,6 +89,8 @@ def test_source_and_incident_contracts_preserve_identity_and_failure_payloads() 
     states = contracts.IncidentStateBatch(
         incident_state_id=np.array([20, 21]),
         incident_sample_id=samples.incident_sample_id,
+        source_origin_lab_m=samples.origin_lab_m,
+        source_direction_lab=samples.direction_lab,
         sample_intersection_lab_m=np.zeros((2, 3)),
         direction_sample=samples.direction_lab,
         k_air_sample_Ainv=2.0 * np.pi * samples.direction_lab,
@@ -106,6 +108,7 @@ def test_source_and_incident_contracts_preserve_identity_and_failure_payloads() 
         source_seed=samples.source_seed,
         source_parameter_provenance=samples.source_parameter_provenance,
         source_parameter_revision=samples.source_parameter_revision,
+        source_weight_revision=samples.source_weight_revision,
         source_revision=samples.source_revision,
         sample_geometry_revision=canonical_revision_sha256(
             ("sample_geometry", "minimal core contract fixture.v1")
@@ -115,9 +118,33 @@ def test_source_and_incident_contracts_preserve_identity_and_failure_payloads() 
         ),
         incident_model_id="one_transmitted_channel.v1",
     )
+    weighted_samples = replace(samples, source_weight=np.array([0.25, 0.75]))
+    np.testing.assert_array_equal(weighted_samples.source_weight, [0.25, 0.75])
+    assert weighted_samples.source_revision != samples.source_revision
+    assert weighted_samples.source_weight_revision != samples.source_weight_revision
+    with pytest.raises(ValueError, match="source_weight_revision"):
+        replace(states, source_weight=np.array([0.25, 0.75]))
+    changed_weight_revision = canonical_revision_sha256(
+        ("incident_sample_id", states.incident_sample_id),
+        ("source_weight", np.array([0.25, 0.75])),
+    )
+    with pytest.raises(ValueError, match="source_revision"):
+        replace(
+            states,
+            source_weight=np.array([0.25, 0.75]),
+            source_weight_revision=changed_weight_revision,
+        )
     for batch in (samples, states):
-        with pytest.raises(ValueError, match="uniform empirical"):
-            replace(batch, source_weight=np.array([0.25, 0.75]))
+        with pytest.raises(ValueError, match="summing to one"):
+            replace(batch, source_weight=np.array([0.25, 0.5]))
+        for invalid_weight in (
+            (True, 0.0),
+            np.asarray((True, False)),
+            np.asarray((0.25 + 0.1j, 0.75)),
+            np.asarray(("0.25", "0.75")),
+        ):
+            with pytest.raises(ValueError, match="real numbers"):
+                replace(batch, source_weight=invalid_weight)
 
     assert states.incident_state_id.tolist() == [20, 21]
     assert states.incident_sample_id.tolist() == [10, 11]
@@ -126,6 +153,7 @@ def test_source_and_incident_contracts_preserve_identity_and_failure_payloads() 
         len(getattr(states, name)) == 64
         for name in (
             "source_parameter_revision",
+            "source_weight_revision",
             "source_revision",
             "sample_geometry_revision",
             "material_revision",

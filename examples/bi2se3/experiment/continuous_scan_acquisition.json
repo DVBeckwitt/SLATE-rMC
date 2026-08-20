@@ -1,0 +1,13 @@
+{
+  "schema_version": "rasim-continuous-incidence-acquisition-v1",
+  "traversal_start_deg": 5.0,
+  "traversal_stop_deg": 25.0,
+  "motor_exposure": "uniform_normalized",
+  "exposure_time_s": 1200.0,
+  "one_way_traversal_count": 40,
+  "complete_cycle_count": 20,
+  "scan_image_step_deg": 0.1,
+  "forward_reverse_speed_difference_percent": 0.0055,
+  "endpoint_excess_exposure_percent": 0.035,
+  "interior_dwell_rms_deviation_percent": 0.214
+}

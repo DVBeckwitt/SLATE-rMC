@@ -33,9 +33,14 @@ from rasim_next.geometry.detector import (
     _detector_incidence_cosine,
     _project_detector_rays,
 )
-from rasim_next.geometry.instrument import CompiledInstrument
+from rasim_next.geometry.instrument import (
+    CompiledInstrument,
+    detector_path_linear_attenuation_at_wavelength_m_inv,
+)
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.optics.attenuation import (
+    external_path_attenuation,
+    incident_illuminated_path_weight,
     mode_decay_constant,
     scalar_optical_weight,
     uniform_depth_attenuation,
@@ -48,6 +53,7 @@ from rasim_next.pipeline._continuous_detector_kernel import (
 )
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.reflectivity import CompiledParrattStitch
+from rasim_next.sampling.source import require_physical_intensity_source_model
 from rasim_next.stacking import Parent
 
 FloatArray = NDArray[np.float64]
@@ -276,6 +282,7 @@ class DetectorCoordinateGeometry:
     kf_air_sample_Ainv: FloatArray
     kf_film_sample_Ainv: FloatArray
     q_sample_Ainv: FloatArray
+    ray_distance_m: FloatArray
     q_surface_jacobian_Ainv2_per_px2: FloatArray
     ewald_residual_Ainv: FloatArray
     status: NDArray[np.str_]
@@ -303,6 +310,7 @@ class DetectorCoordinateGeometry:
                 (*shape, 3),
                 "q_sample_Ainv",
             ),
+            "ray_distance_m": _float_array(self.ray_distance_m, shape, "ray_distance_m"),
             "q_surface_jacobian_Ainv2_per_px2": _float_array(
                 self.q_surface_jacobian_Ainv2_per_px2,
                 shape,
@@ -316,6 +324,8 @@ class DetectorCoordinateGeometry:
         }
         if np.any(arrays["q_surface_jacobian_Ainv2_per_px2"] < 0.0):
             raise ValueError("Q-surface Jacobian must be nonnegative")
+        if np.any(arrays["ray_distance_m"] < 0.0):
+            raise ValueError("ray_distance_m must be nonnegative")
         if np.any(arrays["ewald_residual_Ainv"] < 0.0):
             raise ValueError("Ewald residual must be nonnegative")
         status = _status_array(self.status, shape, "status")
@@ -1144,6 +1154,7 @@ def evaluate_detector_coordinates_geometry(
         kf_air_sample_Ainv=kf_air_sample.reshape((*shape, 3)),
         kf_film_sample_Ainv=kf_film.reshape((*shape, 3)),
         q_sample_Ainv=q_sample.reshape((*shape, 3)),
+        ray_distance_m=distance_m.reshape(shape),
         q_surface_jacobian_Ainv2_per_px2=q_surface_jacobian.reshape(shape),
         ewald_residual_Ainv=ewald_residual.reshape(shape),
         status=status.reshape(shape),
@@ -1498,6 +1509,12 @@ def _compile_detector_state(
         entrance_amplitude=complex(states.entrance_amplitude[state_index]),
         incident_decay_Ainv=incident_decay,
         film_thickness_A=instrument.film_thickness_A,
+        detector_path_linear_attenuation_m_inv=(
+            detector_path_linear_attenuation_at_wavelength_m_inv(
+                instrument,
+                wavelength_A,
+            )
+        ),
         **stitch_values,
         source_phase_weight=source_phase_weight,
         polarization_model_code=polarization_model_code(states.polarization_state_id[state_index]),
@@ -1539,6 +1556,7 @@ class DetectorEwaldMeasure:
         "_coating",
         "_crystal_from_local",
         "_crystal_to_sample",
+        "_detector_path_linear_attenuation_m_inv",
         "_incident",
         "_incident_state_index",
         "_instrument",
@@ -1631,8 +1649,14 @@ class DetectorEwaldMeasure:
         source_phase_weight = float(
             states.source_weight[state_index]
             * states.footprint_acceptance[state_index]
-            * phase_weight
-            * polarization
+            * incident_illuminated_path_weight(states.direction_sample[state_index])
+            * (phase_weight * polarization)
+        )
+        detector_path_linear_attenuation_m_inv = (
+            detector_path_linear_attenuation_at_wavelength_m_inv(
+                instrument,
+                states.wavelength_A[state_index],
+            )
         )
         object.__setattr__(self, "_coating", coating)
         object.__setattr__(self, "_incident", incident)
@@ -1645,6 +1669,11 @@ class DetectorEwaldMeasure:
         object.__setattr__(self, "_air_k0_Ainv", air_k0_Ainv)
         object.__setattr__(self, "_crystal_from_local", crystal_from_local)
         object.__setattr__(self, "_crystal_to_sample", crystal_to_sample)
+        object.__setattr__(
+            self,
+            "_detector_path_linear_attenuation_m_inv",
+            detector_path_linear_attenuation_m_inv,
+        )
         object.__setattr__(self, "_source_phase_weight", source_phase_weight)
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -1678,6 +1707,9 @@ class DetectorEwaldMeasure:
         """Configured physical-rod authority, when this low-level measure has one."""
 
         return self._rod_catalog_revision
+
+    def _require_physical_intensity_source(self) -> None:
+        require_physical_intensity_source_model(self._incident.states.source_sampling_model_id)
 
     def map_ewald_geometry(self, geometry: EwaldLatentGeometry) -> DetectorMappedGeometry:
         """Map already constructed exact Ewald geometry to the active detector."""
@@ -1718,6 +1750,8 @@ class DetectorEwaldMeasure:
     ) -> DetectorLatentIntensity:
         """Map arbitrary continuous latent coordinates onto the active detector."""
 
+        self._require_physical_intensity_source()
+
         intensity = self._coating.evaluate_latent(
             rod=rod,
             branch=branch,
@@ -1752,6 +1786,10 @@ class DetectorEwaldMeasure:
                 self._incident.states.entrance_amplitude[self._incident_state_index],
                 mapped.exit_amplitude[exit_valid],
                 attenuation[exit_valid],
+            )
+            optical[exit_valid] *= external_path_attenuation(
+                self._detector_path_linear_attenuation_m_inv,
+                mapped.geometry.ray_distance_m[exit_valid],
             )
         event_envelope = self._intensity_envelope.evaluate(intensity.geometry.q_sample_Ainv)
         event_polarization = self._event_scattering_polarization(
@@ -1948,6 +1986,10 @@ class DetectorEwaldMeasure:
                     modes.exit_amplitude[mode_valid],
                     attenuation,
                 )
+                optical[valid_rows] *= external_path_attenuation(
+                    self._detector_path_linear_attenuation_m_inv,
+                    geometry.ray_distance_m.reshape(-1)[valid_rows],
+                )
 
         if include_optical:
             valid = status == ValidityCode.VALID
@@ -1962,6 +2004,7 @@ class DetectorEwaldMeasure:
                 kf_air_sample_Ainv=geometry.kf_air_sample_Ainv,
                 kf_film_sample_Ainv=geometry.kf_film_sample_Ainv,
                 q_sample_Ainv=geometry.q_sample_Ainv,
+                ray_distance_m=geometry.ray_distance_m,
                 q_surface_jacobian_Ainv2_per_px2=(geometry.q_surface_jacobian_Ainv2_per_px2),
                 ewald_residual_Ainv=ewald_residual.reshape(shape),
                 status=status.reshape(shape),
@@ -2337,6 +2380,8 @@ class DetectorEwaldMeasure:
         evaluated separately.
         """
 
+        self._require_physical_intensity_source()
+
         selected = self._validated_intensity_rods(rods)
         if branch not in {1, 2}:
             raise ValueError("branch must be 1 or 2")
@@ -2382,6 +2427,8 @@ class DetectorEwaldMeasure:
         rods: tuple[Rod, ...],
     ) -> DetectorStructureResponse:
         """Compile all regular inverse roots without dividing by a reference strength."""
+
+        self._require_physical_intensity_source()
 
         selected = self._validated_configured_rods(rods)
         geometry, optical = self._detector_coordinate_state(column_px, row_px)
@@ -2513,7 +2560,9 @@ class DetectorEwaldMeasure:
         return tuple(result)
 
     def _compiled_evaluator(self, rods: tuple[Rod, ...]) -> CompiledDetectorEvaluator:
-        """Pack one reusable evaluator for the accepted finite parent-2H model."""
+        """Pack one reusable evaluator for the accepted finite-parent model."""
+
+        self._require_physical_intensity_source()
 
         strength = self._coating.bragg_space.strength_model
         if not isinstance(strength, Bi2X3FiniteStackStrength):
@@ -3151,6 +3200,7 @@ class DetectorEwaldMeasure:
     ) -> DetectorPixelMass:
         """Integrate continuous detector density over exact native pixel boxes."""
 
+        self._require_physical_intensity_source()
         if not isinstance(quadrature, DetectorQuadrature):
             raise TypeError("quadrature must be DetectorQuadrature")
         if quadrature.method is PixelIntegrationMethod.FIXED_NUMPY:

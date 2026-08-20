@@ -290,6 +290,7 @@ def test_geometry_renderer_binds_position_to_manifest_and_native_image(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    pytest.importorskip("matplotlib")
     module = _load_render_cli()
     manifest = tmp_path / "series.yaml"
     manifest.write_text("series\n", encoding="utf-8")

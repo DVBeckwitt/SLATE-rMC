@@ -132,3 +132,8 @@ tasks:
     branch: codex/general-cif-pipeline
     status: READY_SHARED_NUMERICAL_PIPELINE_MEASURED_PBI2_MODEL_LIMITED
     depends_on: [T18, T20, T25]
+  - id: T27
+    file: tasks/27_bi2se3_model_remediation.md
+    branch: codex/bi2se3-staged-scan-fit
+    status: CORRECTED_5_TO_25_SCAN_CONVERGENCE_REJECTED_NO_PARAMETER_UPDATE
+    depends_on: [T17, T18, T20, T21, T26]

@@ -129,11 +129,14 @@ def test_integrated_peak_area_fit_sums_conditioned_bins_with_one_scale_per_datas
     signal_family = np.asarray(observations.signal_family)[signal]
     families = tuple(observations.required_signal_families)
     peak_index = np.asarray(
-        [dataset * len(families) + families.index(int(family)) for dataset, family in zip(
-            signal_dataset,
-            signal_family,
-            strict=True,
-        )],
+        [
+            dataset * len(families) + families.index(int(family))
+            for dataset, family in zip(
+                signal_dataset,
+                signal_family,
+                strict=True,
+            )
+        ],
         dtype=np.int64,
     )
     projection = IntegratedPeakAreaProjection(
@@ -208,9 +211,7 @@ def test_integrated_peak_covariance_and_residual_are_partition_invariant() -> No
     root = np.linalg.cholesky(expected_covariance)
     whitened_count = np.linalg.solve(root, expected_count)
     whitened_model = np.linalg.solve(root, expected_model)
-    expected_scale = float(whitened_model @ whitened_count) / float(
-        whitened_model @ whitened_model
-    )
+    expected_scale = float(whitened_model @ whitened_count) / float(whitened_model @ whitened_model)
     expected_residual = whitened_count - expected_scale * whitened_model
 
     split_residual, split_scale, _ = profile_matched_region_nuisance(

@@ -181,7 +181,7 @@ def test_compose_fixed_experiment_writes_resumable_checkpoint(
             recipe_path=ROOT / "examples/bi2se3/experiment/figure7_matched_regions.toml",
             mosaic_state_path=mosaic_path,
             lattice_path=None,
-            source_state_count=1,
+            source_state_count=2,
             destination=destination,
         )
 

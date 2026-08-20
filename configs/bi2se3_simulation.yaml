@@ -10,10 +10,15 @@ source:
   transverse_axes_lab:
     - [1.0, 0.0, 0.0]
     - [0.0, 0.0, 1.0]
-  spatial_sigma_m: [2.123304500720048e-05, 2.123304500720048e-05]
-  divergence_sigma_rad: [0.0003705865455997914, 0.0003705865455997914]
-  mean_wavelength_A: 1.540592925
-  wavelength_sigma_A: 0.010784150474999999
+  spatial_sigma_m: [1.4312946262159279e-4, 1.2325011424826383e-4]
+  divergence_sigma_rad: [9.852413728253700e-4, 7.612068911119583e-4]
+  position_divergence_correlation: [-0.1477984535, 0.3873100736]
+  wavelength_model_id: discrete_gaussian_lines.v1
+  mean_wavelength_A: 1.5419012588932806
+  wavelength_sigma_A: 0.0
+  line_wavelength_A: [1.540592925, 1.544427]
+  line_probability: [0.6587615283267457, 0.3412384716732543]
+  common_line_sigma_A: 0.0
   sample_count: 1000
   seed: 1729
   polarization_state_id: THOMSON_UNPOLARIZED_UNANALYSED
@@ -60,6 +65,11 @@ instrument:
   sample_width_m: null
   sample_length_m: null
   film_thickness_A: 500.0
+  # The OSC metadata does not establish air versus helium/vacuum. Keep the
+  # production baseline at unity; apply the wavelength-resolved dry-air table
+  # only in an explicitly named sensitivity configuration.
+  detector_path_medium_id: vacuum_or_helium_unity.v1
+  detector_path_linear_attenuation_m_inv: 0.0
 
 mosaic:
   gaussian_sigma_deg: 1.0
@@ -74,7 +84,7 @@ structure_factor:
   model_id: r3m_quintuple_finite_2h.v1
   layers: 52
   normalization: FINITE_TOTAL
-  shared_disorder_epsilon: 0.001
+  shared_disorder_epsilon: 0.0
 
 bragg:
   selection_model: all_elastic_reachable.v1

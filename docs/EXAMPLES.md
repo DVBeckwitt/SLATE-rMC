@@ -60,7 +60,11 @@ Generate the reusable four-stage Bi2Se3 publication figure and its exploded proj
   --ewald-worker-count 4
 ```
 
-The defaults use one mean incident beam at 10 degrees, Gaussian sigma 2 degrees, Lorentzian HWHM
+The reciprocal/Ewald panels use the nominal mean incident reference at 10 degrees, while detector
+panels use the two weighted Cu Kalpha lines with one mean ray geometry per line. This minimum
+display quadrature preserves the line probabilities but does not sample the configured source
+position/divergence widths or their correlation. The defaults use Gaussian sigma 2 degrees,
+Lorentzian HWHM
 0.2 degrees, and Lorentzian probability 0.1. The reciprocal panel takes 32 deterministic nodes from
 the compiled, scale-resolved mosaic support, resolves the narrow Lorentzian center, extends to
 nearly 180 degrees, and inserts every in-range integer-L finite-stack maximum and ±0.5/N shoulder
@@ -352,12 +356,15 @@ uv run python scripts/render_continuous_angle_comparison.py `
   --output C:\path\outside\the\repository\bi2se3-detector-angle.png
 ```
 
-The default evaluates two 3,000 × 3,000 center-sampled fields for one nominal source state, every
-configured physical rod, and every retained root. The angle panel displays the normalized
+The default evaluates two 3,000 × 3,000 center-sampled fields with the two weighted Cu Kalpha lines
+at one mean ray geometry per line, every configured physical rod, and every retained root. This
+minimum spectral display does not include the configured source position/divergence broadening;
+increase `--source-sample-count` for a denser physical phase-space quadrature. The angle panel
+displays the normalized
 `I=S/N`, not `S` alone, so its values retain the detector-density units and shared color scale.
 Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on both panels; these
 landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
-runtime of the full incoherent ensemble is intended.
+runtime of a denser incoherent ensemble is intended.
 
 ## Interactive Monte Carlo detector viewer
 
@@ -668,16 +675,22 @@ uv run --frozen python scripts/run_layered_fit.py configs/fit_workflows/bi2te3.t
   --output-directory C:\external\bi2te3-fit
 ```
 
-Each stage runs in child processes and writes a small completion manifest. Rerunning resumes after
-the last completed command. Use `--through geometry`, `--through mosaic`, or `--only sf` for an
+Each stage runs in child processes and writes a small v3 completion manifest. Its plan binds the
+workflow, seed, and every referenced input-file hash; the manifest binds every completed artifact
+hash. Rerunning resumes only after those identities reverify. Use `--through geometry`,
+`--through mosaic`, or `--only sf` for an
 independent boundary; `--only` requires completed upstream stage manifests. Add `--plan` to inspect
 expanded commands without creating output. Both nominal Bi2X3 cases currently consume their
 tracked accepted fixed-mosaic checkpoint. A future material can replace that stage's empty command
 list with its mosaic fitter without changing the runner.
 
-Each workflow also names one tracked `*_current_fit.json` material seed. Its geometry, mosaic,
-structure-factor vector, analytic dataset scales, and final profile-interface convention preserve
-the current nominal result; the runner expands its structure-factor vector directly into the joint
+Each workflow also names one tracked `*_current_fit.json` material seed. Its v2 schema records
+geometry, mosaic, vacancy-coordinate initializer, analytic dataset scales, and the final
+profile-interface convention; the outer plan hashes the whole file. The current runner applies
+the initializer vector and profile-interface convention, while the other fields remain recorded
+provenance rather than asserted cross-checks. The Bi2Se3 vacancy value is the literature occupancy
+prior, not a relabelled fitted antisite estimate or an accepted remediation result. The runner
+expands this initializer vector directly into the joint
 fit command. Both final figures use the same integration-ROI-only renderer. Bi2Te3 keeps the
 fixed-external convention during fitting, then automatically recalculates its continuous profiles
 with the fitted vector and scales frozen under the local-lamella m=0 convention. That profile replay
@@ -711,10 +724,23 @@ uv run --frozen python scripts/fit_layered_quintuple_regions.py prepare `
   --destination C:\external\bi2se3-figure7\matched_regions.ra_diag.npz
 ```
 
-The recipe binds `darkImg.osc.gz` at scale one. Preparation verifies both its file hash and decoded
-native-array hash, projects raw and dark through identical regions, and preserves signed corrected
-counts with their shared-dark covariance. The configured Bi2X3 detector paths apply the
-unpolarized/unanalysed Thomson factor event by event.
+The recipe still hash-verifies `darkImg.osc.gz`, but the available file predates the Bi2Se3
+acquisition and is therefore assigned scale zero with basis `no_acquisition_matched_dark.v1`.
+Preparation projects raw and dark through identical regions, but corrected values equal raw values
+and the dark covariance contribution is exactly zero (`no_dark_contribution.v1`). The configured
+Bi2X3 detector paths apply the unpolarized/unanalysed Thomson factor event by event.
+
+The Bi2Se3 source is a frozen correlated Cu K-alpha1/K-alpha2 weighted doublet. Line probability
+masses are exact. The production even source count gives both lines the same geometry grid; because
+nonzero correlations are declared and each line has at least eight rows, each line is moment-matched
+to the declared four-dimensional source covariance. Zero-correlation LHS grids make no exact
+empirical-covariance claim. Non-divisible exploratory counts are explicitly labeled a finite
+unequal-grid approximation rather than line-independent.
+The flat-film illuminated-volume factor `1/|direction_sample,z|` is applied once and remains
+separate from finite footprint acceptance and the uniform-depth absorption average. Production
+uses `vacuum_or_helium_unity.v1` and zero external detector-path attenuation because the
+sample-to-detector medium is unverified. A wavelength-keyed dry-air coefficient table is a named
+sensitivity only, never a silently activated correction.
 
 If the recipe contains `[parratt_stitch]`, it must declare the fixed substrate index, both
 interface roughnesses, `m0_only` scope, and local-lamella interface assumption. Film optics remain
@@ -731,9 +757,11 @@ and all three OSCs; one scale per OSC is shared by every family in that image. R
 conditioned by their two adjacent anchors and then summed into declared trusted integrated peak
 areas before full-covariance whitening.
 
-The fixed structural state is a 50-layer, fault-free R-centered three-registry parent with no
-4H/6H population and no stacking-disorder fit. The `3R` implementation name expresses the native
-Bi2Se3 R-centering sequence; it does not introduce an additional fitted phase. The recipe freezes
+The fixed structural state is a 50-layer R-centered three-registry parent with no 4H/6H population.
+The optimized model supports a bounded RichEpsilon 3R departure law and preserves the exact
+epsilon-zero path; the remediation screen retained epsilon zero because nonzero values failed the
+per-image gates. The `3R` implementation name expresses the native Bi2Se3 R-centering sequence; it
+does not introduce an additional fitted phase. The recipe freezes
 the approved peak whitelist and its horizon-exclusion provenance. The m=0 phi/2theta data chart
 retains every finite detector coordinate; the forward evaluator independently determines physical
 support, including local-lamella reflection below the mean-plane horizon when the crossover is
@@ -741,8 +769,14 @@ enabled. Exact direct-beam `Q=0` has zero model intensity. Nonzero-m diffraction
 independent one-degree air-exit guard, and the conservative diffraction-peak whitelist keeps its
 separately named one-degree clearance policy. The adapter does not rediscover peaks during fitting.
 
-Stages A, B, and C are modular initializers; the mandatory joint stage is the sole downstream
-structure result. Each later stage requires the exact accepted predecessor:
+The tracked fast workflow uses the v8 `seeded_joint_only.v1` policy: workflow-v1 hashes the tracked
+seed-v2 file and passes its five-coordinate vector as the explicit all-active joint start. The inner
+fit-v14 artifact records the vector and hash, not the seed-file identity. The longer v7 policy remains available when the
+A/B/C diagnostics are desired. Under v7, Stage B owns the outer-chalcogen vacancy fraction; for
+vacancy `v`, occupancy is `1-v` and outer-site Bi substitution is zero. Bi-on-chalcogen
+substitution is only a separate discrete competitor. Under both policies the joint stage is the
+sole eligible downstream result, and only after every gate passes. The following explicit commands
+show the v7 predecessor chain:
 
 ```powershell
 uv run --frozen python scripts/fit_layered_quintuple_regions.py background `
@@ -984,6 +1018,42 @@ of continuous transition probabilities.
 
 Generated images, profiles, benchmark dumps, and diagnostics never belong under these directories or
 elsewhere in the repository.
+
+## Bi2Se3 continuous incidence-exposure prediction
+
+The authoritative Bi2Se3 acquisition is declared by
+`examples/bi2se3/experiment/continuous_scan_acquisition.json` and
+`ContinuousIncidenceAcquisition`: physical support 5--25 degrees and uniform normalized motor
+dwell. Its initial angle rule uses the physical panels 5/10/15/20/25 degrees with 16-point
+Gauss--Legendre quadrature in each panel. Direction reversal canonicalizes to the same prediction;
+`ScanImageStep`, duration, cycles, and the measured endpoint behavior are provenance only and do
+not change nodes or weights. Pass the commanded nodes to
+`build_fixed_incidence_scan_series(...)`, then construct `IncidenceAngleQuadrature` from the
+returned effective nodes, compiled masses, physical panel identities, and the scan's
+`scan_calibration_revision`, with
+`exposure_density_id="uniform_normalized_incidence_angle_density.v1"` for the normalized uniform
+commanded-motor law.
+Also supply both effective support bounds, equal to the commanded bounds plus the exact fitted
+delta, so the quadrature revision and any response cache bind the continuous interval and reject a
+5--20-degree cache. This applies
+the fitted common incidence correction only. The three fitted 5/10/15-degree image trims and their
+dataset scales are discrete-image quantities and are not interpolated.
+
+Build one optimized detector template from any compatible returned input, then apply the fitted
+structure, sample-Q envelope, fitted rod scope, local-lamella m=0 stitch, and execution blocking
+once. Call
+`rebind_source_averaged_detector_incidence_scan(template, scan.inputs)` to derive the complete
+calibrated node tuple, then construct
+`IncidenceAngleAveragedDetector(quadrature, detectors)`. The exact rebind retains static physics but
+consumes each node's upstream-computed incident transport and recomputes the derived evaluator and
+detector-projection geometry. It fails if the source validity
+topology changes; in that case build components independently. Each rebound detector carries the
+calibrated component binding stamped by the scan builder.
+`evaluate_detector_density_all_roots(...)` streams the normalized
+fixed-quadrature point-density estimate in `A2/px2`; it is neither measured counts nor pixel mass.
+Report at least one angular-rule refinement and label the output model-limited and
+`publication_ready=false` unless a measured motor/flux trace and a scan-specific convergence proof
+are supplied.
 
 ## General layered-CIF sparse fitting API
 

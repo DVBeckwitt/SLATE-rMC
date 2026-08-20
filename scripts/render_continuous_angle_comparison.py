@@ -21,6 +21,7 @@ from rasim_next.pipeline.configured_simulation import (
     evaluate_nominal_integer_l_markers,
     load_simulation_config,
 )
+from rasim_next.selection import build_osc_angle_frame
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "bi2se3_simulation.yaml"
@@ -35,19 +36,11 @@ def _external_output_path(path: Path) -> Path:
 
 
 def _nominal_angle_frame(inputs: ConfiguredSimulationInputs) -> AngleFrame:
-    source = inputs.config.source
-    direct_beam = np.asarray(source.mean_direction_lab, dtype=np.float64)
-    direct_beam /= np.linalg.norm(direct_beam)
-    column_right = np.asarray(source.transverse_axes_lab[0], dtype=np.float64)
-    column_right -= float(column_right @ direct_beam) * direct_beam
-    column_right /= np.linalg.norm(column_right)
-    row_down = np.cross(direct_beam, column_right)
     nominal = build_nominal_ewald_context(inputs)
-    return AngleFrame(
-        origin_lab_m=nominal.incident.states.sample_intersection_lab_m[0],
-        row_down_lab=row_down,
-        column_right_lab=column_right,
-        direct_beam_lab=direct_beam,
+    return build_osc_angle_frame(
+        mean_direction_lab=inputs.config.source.mean_direction_lab,
+        instrument=inputs.instrument,
+        sample_intersection_lab_m=nominal.incident.states.sample_intersection_lab_m[0],
         revision="configured-nominal-source-angle-frame.v1",
     )
 
@@ -213,6 +206,7 @@ def _render(
     marker_two_theta_rad: NDArray[np.float64],
     marker_phi_rad: NDArray[np.float64],
     source_sample_count: int,
+    minimum_physical_sample_count: int,
     rod_count: int,
     output_path: Path,
 ) -> None:
@@ -294,8 +288,13 @@ def _render(
         shrink=0.92,
         label=r"raw detector-area-normalized intensity ($\AA^2$/pixel$^2$; shared log scale)",
     )
+    source_label = (
+        f"{source_sample_count} weighted spectral lines at mean ray geometry"
+        if source_sample_count == minimum_physical_sample_count
+        else f"{source_sample_count} configured physical source rows"
+    )
     figure.suptitle(
-        rf"Bi$_2$Se$_3$: {source_sample_count} nominal source state, {rod_count} physical rods, "
+        rf"Bi$_2$Se$_3$: {source_label}, {rod_count} physical rods, "
         "all retained roots\n"
         rf"each field is {detector_image.shape[0]}x{detector_image.shape[1]} center-sampled; "
         r"labels are geometry-visible exact integer-$L$, $\alpha=0$ landmarks (not raster maxima)"
@@ -311,21 +310,31 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image-size", type=int, default=3000)
-    parser.add_argument("--source-sample-count", type=int, default=1)
+    parser.add_argument("--source-sample-count", type=int)
     parser.add_argument("--tile-row-count", type=int, default=16)
     args = parser.parse_args()
     if args.image_size < 2:
         parser.error("--image-size must be at least 2")
-    if args.source_sample_count < 1:
+    if args.source_sample_count is not None and args.source_sample_count < 1:
         parser.error("--source-sample-count must be positive")
     if args.tile_row_count < 1:
         parser.error("--tile-row-count must be positive")
     output_path = _external_output_path(args.output)
 
     config = load_simulation_config(args.config.resolve())
+    if (
+        args.source_sample_count is not None
+        and args.source_sample_count < config.source.minimum_physical_sample_count
+    ):
+        parser.error("--source-sample-count must realize every configured physical source line")
+    source_sample_count = (
+        config.source.minimum_physical_sample_count
+        if args.source_sample_count is None
+        else args.source_sample_count
+    )
     config = replace(
         config,
-        source=replace(config.source, sample_count=args.source_sample_count),
+        source=replace(config.source, sample_count=source_sample_count),
     )
     build_start = perf_counter()
     inputs = build_configured_simulation_inputs(config)
@@ -374,7 +383,8 @@ def main() -> None:
         markers=markers,
         marker_two_theta_rad=marker_angles.two_theta_rad,
         marker_phi_rad=marker_angles.phi_rad,
-        source_sample_count=args.source_sample_count,
+        source_sample_count=source_sample_count,
+        minimum_physical_sample_count=config.source.minimum_physical_sample_count,
         rod_count=len(inputs.rods),
         output_path=output_path,
     )

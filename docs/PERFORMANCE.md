@@ -75,6 +75,45 @@ For selected-center fitting, replace mass/image metrics with response coefficien
 count/revision, anchor count (including `m=0`), compile time, fresh-versus-cached equivalent
 prediction time, certificate error, direct-oracle error, and peak memory.
 
+## Continuous-incidence scan reuse
+
+The optimized Bi2X3 scan path compiles fitted structure, mosaic, rod, envelope, and Parratt state
+once, then exactly rebinds the calibrated incident transport and rigid detector/sample projection
+for every incidence node. For a fault-free finite stack it also evaluates the coherent layer sum
+with the stable constant-work Dirichlet identity instead of a loop over layers. The local-lamella
+`m=0` evaluator passes its outgoing direction as three scalars; this avoids one Numba-managed
+three-element array allocation per source and detector coordinate.
+
+On the RTX 3060 historical pre-acquisition-correction Bi2Se3 view (uniform commanded 5--20 degree
+exposure, composite
+Gauss--Legendre order 16 on four equal subintervals, 64 retained angle nodes, 250 shared source
+states, 19 rods, fitted 50-layer 3R structure, local-lamella `m=0`, and a 200 x 375 stride-8
+detector-coordinate grid), a clean CPython 3.12 process evaluated 4.8 million
+angle--detector-coordinate pairs in `float64` and measured:
+
+- `0.729 s` to build all calibrated scan inputs;
+- `16.069 s` for one fully fitted and stitched detector template;
+- `0.179 s` to derive all 64 calibrated geometry views;
+- `29.639 s` for the full-grid CUDA/CPU hybrid JIT warmup;
+- `1317.646 s` (`21.961 min`) for the public 64-node averaged evaluation; and
+- `1364.373 s` (`22.740 min`) whole-process elapsed after imports.
+
+The prior equivalent retained fine-function run used CPython 3.13.13 and took `3466.78 s`
+(`57.78 min`), including `1656.93 s` spent constructing 64 independent engines. The observed
+same-hardware, cross-runtime wall-time ratio is `2.54x` overall and about `102x` for engine
+construction; those ratios therefore include any CPython/runtime difference. The reusable path
+reproduced the retained 64-node detector field
+to relative L1 `2.91e-15`, relative L2 `2.69e-15`, and maximum absolute `2.54e-20 A2/px2`; all 250
+sources remained valid and no sampled coordinate was caustic. The sampled point-density grid sum
+was `4.119949946223436e-05 A2/px2`; it is not a detector mass because no pixel boxes were
+integrated, and a centroid shift was not retained. A bounded repeat with the same 64-view wrapper
+and one complete 75,000-coordinate node measured peak host RSS `564,613,120 B` (`538.457 MiB`).
+Per-process GPU memory was unavailable under WDDM and is not reported as zero. This is a timing and
+retained-field parity check for the same fixed quadrature, not an angular-convergence claim: the
+retained point-density scan remains model-limited until an independent angle-rule refinement meets
+its declared tolerance. These measurements are not timing or convergence evidence for the
+authoritative 5--25-degree acquisition.
+
 ## Progressive full-native Monte Carlo
 
 Task [T19](../tasks/19_fluid_detector_viewer.md) separates immutable detector physics from one

@@ -24,6 +24,7 @@ from rasim_next.geometry.instrument import (
     axis_rotation_transform,
     compile_instrument,
     compose_intrinsic_xy_rotation,
+    detector_path_linear_attenuation_at_wavelength_m_inv,
 )
 from rasim_next.geometry.sample import SampleIntersection, intersect_sample_ray
 from rasim_next.geometry.transport import (
@@ -52,6 +53,7 @@ __all__ = [
     "compose_intrinsic_xy_rotation",
     "detector_coordinate_to_ray",
     "detector_coordinates_to_angles",
+    "detector_path_linear_attenuation_at_wavelength_m_inv",
     "intersect_sample_ray",
     "project_detector_ray",
     "project_detector_rays",

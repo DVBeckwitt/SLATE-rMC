@@ -26,6 +26,7 @@ from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorEwaldMeasure,
     source_averaged_detector_instrument_revision,
 )
+from rasim_next.pipeline.source_averaged_structure import SourceAveragedStructureDetector
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -49,7 +50,7 @@ _POSITION_PARAMETER_NAMES = (
     "bi_delta_z_fractional",
     "se2_delta_z_fractional",
 )
-_INVERSE_TOPOLOGY_PROBE_REVISION = "inverse_root_signature_grid_17x17.v1"
+ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION = "source_resolved_inverse_root_signature_grid_17x17.v2"
 _RESPONSE_COORDINATE_BLOCK_SIZE = 32_768
 _STRUCTURE_KERNEL_TERM_BLOCK_SIZE = 131_072
 _POINT_RESPONSE_U_NORMAL_MAX_A2 = 0.1
@@ -122,7 +123,7 @@ def _ordered_intensity_observable_revision(
         ("definition_id", "selected_group_angle_roi_mass.v1"),
         ("measure", "integrated_selected_group_detector_density_A2.v1"),
         ("angle_frame_revision", angle_frame_revision),
-        ("topology_probe_revision", _INVERSE_TOPOLOGY_PROBE_REVISION),
+        ("topology_probe_revision", ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION),
         (
             "profile_identity_revision",
             ordered_intensity_profile_catalog_revision(definitions),
@@ -231,28 +232,31 @@ def _mosaic_model_revision(detector: DetectorEwaldMeasure) -> str:
 
 
 def probe_ordered_intensity_inverse_boundary_bins(
-    detector: DetectorEwaldMeasure,
+    detector: DetectorEwaldMeasure | SourceAveragedStructureDetector,
     *,
     angle_frame: AngleFrame,
     definitions: tuple[MosaicProfileDefinition, ...],
 ) -> tuple[MosaicProfileDefinition, ...]:
-    """Omit phi bins where a fixed current-case probe sees inverse-root topology change.
+    """Omit phi bins whose source-resolved inverse-root topology changes.
 
     The fixed 17 by 17 geometry probe includes cell edges and interior points. Classification uses
-    only detector validity, per-rod/root-sign multiplicity, and exact caustic flags; structure
+    detector validity, source-state/rod/root-sign multiplicity, and exact caustic flags; structure
     strength and observed intensity never enter the decision. Finite probing is not a general
-    topology certificate; response-order convergence remains required for each new material/ROI
-    set.
+    topology certificate, so response-order convergence remains required for each material/ROI.
     """
 
-    if not isinstance(detector, DetectorEwaldMeasure):
-        raise TypeError("detector must be a one-state DetectorEwaldMeasure")
+    if not isinstance(detector, (DetectorEwaldMeasure, SourceAveragedStructureDetector)):
+        raise TypeError("detector must expose one-state or source-resolved structure geometry")
     if not isinstance(angle_frame, AngleFrame):
         raise TypeError("angle_frame must be an AngleFrame")
     frozen = tuple(definitions)
     if not frozen or any(not isinstance(item, MosaicProfileDefinition) for item in frozen):
         raise ValueError("definitions must contain MosaicProfileDefinition values")
-    configured_rods = {(rod.h, rod.k): rod for rod in detector.coating.bragg_space.config.rods}
+    if isinstance(detector, DetectorEwaldMeasure):
+        configured = detector.coating.bragg_space.config.rods
+    else:
+        configured = detector.rods
+    configured_rods = {(rod.h, rod.k): rod for rod in configured}
     probe_count = 17
     unit_probe = np.linspace(0.0, 1.0, probe_count)
     classified: list[MosaicProfileDefinition] = []
@@ -288,19 +292,34 @@ def probe_ordered_intensity_inverse_boundary_bins(
             instrument=detector.instrument,
             angle_frame=angle_frame,
         )
-        response = detector.evaluate_detector_structure_response(
-            coordinate_measure.coordinates.column_px.ravel(),
-            coordinate_measure.coordinates.row_px.ravel(),
-            rods=rods,
-        )
+        column = coordinate_measure.coordinates.column_px.ravel()
+        row = coordinate_measure.coordinates.row_px.ravel()
+        if isinstance(detector, DetectorEwaldMeasure):
+            response = detector.evaluate_detector_structure_response(column, row, rods=rods)
+            source_count = 1
+            term_source = np.zeros(response.term_coordinate_index.size, dtype=np.int64)
+            valid = (
+                coordinate_measure.coordinates.valid.ravel() & response.coordinate_valid
+            ).reshape(definition.phi_bin_count, probe_count * probe_count)
+        else:
+            response = detector.restrict_rods(rods).compile_structure_response(column, row)
+            source_count = response.source_state_count
+            term_source = response.term_source_state_index
+            valid = np.column_stack(
+                (
+                    coordinate_measure.coordinates.valid.ravel(),
+                    response.valid_source_count.ravel(),
+                )
+            ).reshape(definition.phi_bin_count, probe_count * probe_count, 2)
         signature = np.zeros(
-            (two_theta.size, len(rods), 3),
-            dtype=np.int32,
+            (two_theta.size, source_count, len(rods), 3),
+            dtype=np.uint16,
         )
         np.add.at(
             signature,
             (
                 response.term_coordinate_index,
+                term_source,
                 response.term_rod_index,
                 response.term_root_sign.astype(np.int64) + 1,
             ),
@@ -309,19 +328,17 @@ def probe_ordered_intensity_inverse_boundary_bins(
         signature = signature.reshape(
             definition.phi_bin_count,
             probe_count * probe_count,
+            source_count,
             len(rods),
             3,
-        )
-        valid = (coordinate_measure.coordinates.valid.ravel() & response.coordinate_valid).reshape(
-            definition.phi_bin_count, probe_count * probe_count
         )
         caustic = response.per_rod_caustic.reshape(
             definition.phi_bin_count,
             probe_count * probe_count,
             len(rods),
         )
-        topology_change = np.any(signature != signature[:, :1, :, :], axis=(1, 2, 3))
-        validity_change = np.any(valid != valid[:, :1], axis=1)
+        topology_change = np.any(signature != signature[:, :1, :, :, :], axis=(1, 2, 3, 4))
+        validity_change = np.any(valid != valid[:, :1, ...], axis=tuple(range(1, valid.ndim)))
         exact_caustic = np.any(caustic, axis=(1, 2))
         excluded = tuple(
             sorted(
@@ -1235,7 +1252,7 @@ def compile_ordered_intensity_response(
             angle_frame_revision=angle_frame.revision,
         ),
         excluded_phi_bin_indices=tuple(item.excluded_phi_bin_indices for item in frozen),
-        topology_probe_revision=_INVERSE_TOPOLOGY_PROBE_REVISION,
+        topology_probe_revision=ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION,
     )
 
 
@@ -2170,6 +2187,7 @@ def fit_ordered_intensity_series(
 
 
 __all__ = [
+    "ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION",
     "STRUCTURE_FACTOR_PARAMETER_NAMES",
     "OrderedIntensityDatasetResponse",
     "OrderedIntensityFitResult",

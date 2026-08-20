@@ -19,7 +19,12 @@ from painted_ewald import (
     wrapped_mosaic_line_density_rad_inv,
 )
 from painted_ewald.ewald import RootStatus, solve_infinite_rod_ewald
-from rasim_next.sampling.source import sample_gaussian_source_rays
+from rasim_next.sampling.source import (
+    NOMINAL_MEAN_GEOMETRY_REFERENCE_MODEL_ID,
+    sample_discrete_gaussian_line_source_rays,
+    sample_gaussian_source_rays,
+    sample_nominal_mean_geometry_source_ray,
+)
 
 BI2SE3_RECIPROCAL_BASIS_AINV = np.array(
     [
@@ -228,8 +233,19 @@ def test_seeded_gaussian_source_has_exact_antithetic_lhs_strata(count: int) -> N
     }
     sampled = sample_gaussian_source_rays(**arguments, seed=1729)
     repeated = sample_gaussian_source_rays(**arguments, seed=1729)
+    explicit_zero = sample_gaussian_source_rays(
+        **arguments,
+        seed=1729,
+        position_divergence_correlation=(0.0, 0.0),
+    )
     changed = sample_gaussian_source_rays(**arguments, seed=2718)
     np.testing.assert_array_equal(sampled.origin_lab_m, repeated.origin_lab_m)
+    np.testing.assert_array_equal(sampled.origin_lab_m, explicit_zero.origin_lab_m)
+    np.testing.assert_array_equal(sampled.direction_lab, explicit_zero.direction_lab)
+    np.testing.assert_array_equal(sampled.wavelength_A, explicit_zero.wavelength_A)
+    np.testing.assert_array_equal(sampled.source_weight, explicit_zero.source_weight)
+    assert sampled.source_parameter_provenance == explicit_zero.source_parameter_provenance
+    assert sampled.source_revision == explicit_zero.source_revision
     assert not np.array_equal(sampled.origin_lab_m, changed.origin_lab_m)
     np.testing.assert_array_equal(sampled.source_weight, np.full(count, 1.0 / count))
 
@@ -259,6 +275,328 @@ def test_seeded_gaussian_source_has_exact_antithetic_lhs_strata(count: int) -> N
     np.testing.assert_allclose(
         unit[:paired_stop:2] + unit[1:paired_stop:2], np.ones((count // 2, 5)), atol=2.0e-15
     )
+    if count == 7:
+        assert (
+            sampled.source_revision
+            == "6f35c8f4e825542df9a4bda148e62a825c54455d0dbfc2c2d5ba3523ebd270de"
+        )
+
+
+@pytest.mark.parametrize(
+    ("sample_count", "seed"),
+    ((8, 1729), (8, 6085), (9, 7390)),
+)
+def test_source_position_angle_correlation_is_the_declared_gaussian_transform(
+    sample_count: int,
+    seed: int,
+) -> None:
+    mean_origin = np.asarray((0.0, -0.02, 0.0))
+    mean_direction = np.asarray((0.0, 1.0, 0.0))
+    axes = np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    spatial_sigma = np.asarray((2.0e-5, 3.0e-5))
+    divergence_sigma = np.asarray((4.0e-4, 5.0e-4))
+    common = {
+        "mean_origin_lab_m": mean_origin,
+        "mean_direction_lab": mean_direction,
+        "transverse_axes_lab": axes,
+        "spatial_sigma_m": spatial_sigma,
+        "divergence_sigma_rad": divergence_sigma,
+        "mean_wavelength_A": 1.54,
+        "wavelength_sigma_A": 0.001,
+        "sample_count": sample_count,
+        "seed": seed,
+        "polarization_state_id": "THOMSON_UNPOLARIZED_UNANALYSED",
+    }
+    correlation = np.asarray((0.25, -0.4))
+    correlated = sample_gaussian_source_rays(
+        **common,
+        position_divergence_correlation=correlation,
+    )
+
+    position_standard = ((correlated.origin_lab_m - mean_origin) @ axes.T) / spatial_sigma
+
+    def standardized_direction(direction: np.ndarray) -> np.ndarray:
+        cosine = np.clip(direction @ mean_direction, -1.0, 1.0)
+        radius = np.arccos(cosine)
+        scale = np.divide(radius, np.sin(radius), out=np.ones_like(radius), where=radius != 0.0)
+        return ((direction @ axes.T) * scale[:, None]) / divergence_sigma
+
+    correlated_direction = standardized_direction(correlated.direction_lab)
+    weight = correlated.source_weight
+    np.testing.assert_allclose(weight @ position_standard, np.zeros(2), atol=2.0e-16)
+    np.testing.assert_allclose(weight @ correlated_direction, np.zeros(2), atol=2.0e-13)
+    standardized = np.column_stack((position_standard, correlated_direction))
+    covariance = standardized.T @ (weight[:, None] * standardized)
+    expected_covariance = np.eye(4)
+    expected_covariance[0, 2] = expected_covariance[2, 0] = correlation[0]
+    expected_covariance[1, 3] = expected_covariance[3, 1] = correlation[1]
+    np.testing.assert_allclose(covariance, expected_covariance, rtol=0.0, atol=3.0e-12)
+    with pytest.raises(ValueError, match="strictly within"):
+        sample_gaussian_source_rays(
+            **common,
+            position_divergence_correlation=(0.0, 1.0),
+        )
+
+
+def test_discrete_source_lines_retain_exact_probability_mass() -> None:
+    lines_A = np.asarray((1.540592925, 1.544427))
+    probabilities = np.asarray((1.0, 0.518), dtype=np.float64)
+    probabilities /= probabilities.sum()
+    sampled = sample_discrete_gaussian_line_source_rays(
+        mean_origin_lab_m=np.asarray((0.0, -0.02, 0.0)),
+        mean_direction_lab=np.asarray((0.0, 1.0, 0.0)),
+        transverse_axes_lab=np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+        spatial_sigma_m=np.asarray((2.0e-5, 3.0e-5)),
+        divergence_sigma_rad=np.asarray((4.0e-4, 5.0e-4)),
+        line_wavelength_A=lines_A,
+        line_probability=probabilities,
+        common_wavelength_sigma_A=0.0,
+        sample_count=7,
+        seed=1729,
+        polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+    )
+
+    assert set(sampled.wavelength_A.tolist()) == set(lines_A.tolist())
+    assert np.sum(sampled.source_weight) == pytest.approx(1.0, rel=0.0, abs=2.0e-16)
+    for line, probability in zip(lines_A, probabilities, strict=True):
+        assert np.sum(sampled.source_weight[sampled.wavelength_A == line]) == pytest.approx(
+            probability,
+            rel=0.0,
+            abs=2.0e-16,
+        )
+    assert np.sum(sampled.source_weight * sampled.wavelength_A) == pytest.approx(
+        float(probabilities @ lines_A),
+        rel=0.0,
+        abs=5.0e-16,
+    )
+    assert "discrete_gaussian_lines.v1" in sampled.source_parameter_provenance
+    assert sampled.source_sampling_model_id == "finite_unequal_line_geometry_quadrature.v1"
+
+    with pytest.raises(ValueError, match="at least the number of source lines"):
+        sample_discrete_gaussian_line_source_rays(
+            mean_origin_lab_m=np.asarray((0.0, -0.02, 0.0)),
+            mean_direction_lab=np.asarray((0.0, 1.0, 0.0)),
+            transverse_axes_lab=np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+            spatial_sigma_m=np.asarray((2.0e-5, 3.0e-5)),
+            divergence_sigma_rad=np.asarray((4.0e-4, 5.0e-4)),
+            line_wavelength_A=lines_A,
+            line_probability=probabilities,
+            common_wavelength_sigma_A=0.0,
+            sample_count=1,
+            seed=1729,
+            polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+        )
+
+    reference = sample_nominal_mean_geometry_source_ray(
+        mean_origin_lab_m=np.asarray((0.0, -0.02, 0.0)),
+        mean_direction_lab=np.asarray((0.0, 1.0, 0.0)),
+        transverse_axes_lab=np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+        spatial_sigma_m=np.asarray((2.0e-5, 3.0e-5)),
+        divergence_sigma_rad=np.asarray((4.0e-4, 5.0e-4)),
+        reference_wavelength_A=1.5418,
+        polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+    )
+    np.testing.assert_array_equal(reference.wavelength_A, np.asarray((1.5418,)))
+    np.testing.assert_array_equal(reference.source_weight, np.ones(1))
+    assert reference.source_sampling_model_id == NOMINAL_MEAN_GEOMETRY_REFERENCE_MODEL_ID
+    assert reference.source_rng_model_id == "no_rng.v1"
+    assert reference.source_seed == 0
+    assert "nominal_geometry_only_no_intensity" in reference.source_parameter_provenance
+
+    finite_small_count = sample_discrete_gaussian_line_source_rays(
+        mean_origin_lab_m=np.asarray((0.0, -0.02, 0.0)),
+        mean_direction_lab=np.asarray((0.0, 1.0, 0.0)),
+        transverse_axes_lab=np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+        spatial_sigma_m=np.asarray((2.0e-5, 3.0e-5)),
+        divergence_sigma_rad=np.asarray((4.0e-4, 5.0e-4)),
+        line_wavelength_A=lines_A,
+        line_probability=probabilities,
+        common_wavelength_sigma_A=0.0,
+        sample_count=6,
+        seed=1729,
+        polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+        position_divergence_correlation=(0.25, -0.4),
+    )
+    assert (
+        finite_small_count.source_sampling_model_id
+        == "gaussian_spatial_angular_stratified_lines_correlated_transform.v1"
+    )
+    assert np.all(np.isfinite(finite_small_count.origin_lab_m))
+    assert np.all(np.isfinite(finite_small_count.direction_lab))
+
+    invalid_common = {
+        "mean_origin_lab_m": np.asarray((0.0, -0.02, 0.0)),
+        "mean_direction_lab": np.asarray((0.0, 1.0, 0.0)),
+        "transverse_axes_lab": np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+        "spatial_sigma_m": np.asarray((2.0e-5, 3.0e-5)),
+        "divergence_sigma_rad": np.asarray((4.0e-4, 5.0e-4)),
+        "common_wavelength_sigma_A": 0.0,
+        "sample_count": 4,
+        "seed": 1729,
+        "polarization_state_id": "THOMSON_UNPOLARIZED_UNANALYSED",
+    }
+    for invalid_lines, invalid_probability in (
+        (np.asarray((1.54 + 0.1j, 1.55)), np.asarray((0.5, 0.5))),
+        ((True, 2.0), (0.5, 0.5)),
+        (np.asarray((True, 2.0), dtype=object), np.asarray((0.5, 0.5))),
+        (np.asarray((1.54, 1.55)), np.asarray((0.5 + 0.1j, 0.5))),
+        ((1.54, 1.55), (True, 0.0)),
+        (np.asarray((1.54, 1.55)), np.asarray((True, False))),
+        (np.asarray(("1.54", "1.55")), np.asarray((0.5, 0.5))),
+        (np.asarray((1.54, 1.55)), np.asarray(("0.5", "0.5"))),
+    ):
+        with pytest.raises(ValueError, match="real numbers"):
+            sample_discrete_gaussian_line_source_rays(
+                **invalid_common,
+                line_wavelength_A=invalid_lines,
+                line_probability=invalid_probability,
+            )
+    with pytest.raises(ValueError, match="must be real"):
+        sample_discrete_gaussian_line_source_rays(
+            **{**invalid_common, "common_wavelength_sigma_A": np.bool_(False)},
+            line_wavelength_A=np.asarray((1.54, 1.55)),
+            line_probability=np.asarray((0.5, 0.5)),
+        )
+    with pytest.raises(ValueError, match="must be real"):
+        sample_discrete_gaussian_line_source_rays(
+            **invalid_common,
+            line_wavelength_A=np.asarray((1.54, 1.55)),
+            line_probability=np.asarray((0.5, 0.5)),
+            position_divergence_correlation=(np.bool_(False), 0.0),
+        )
+    tiny = np.nextafter(0.0, 1.0)
+    with pytest.raises(ValueError, match="too small"):
+        sample_discrete_gaussian_line_source_rays(
+            **invalid_common,
+            line_wavelength_A=np.asarray((1.54, 1.55)),
+            line_probability=np.asarray((1.0, tiny)),
+        )
+
+
+def test_configured_count_discrete_source_matches_moments_without_line_geometry_coupling() -> None:
+    lines_A = np.asarray((1.540592925, 1.544427))
+    probabilities = np.asarray((0.6587615283267457, 0.3412384716732543))
+    mean_origin = np.asarray((0.0, -0.02, 0.0))
+    mean_direction = np.asarray((0.0, 1.0, 0.0))
+    axes = np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
+    spatial_sigma = np.asarray((1.4e-4, 1.2e-4))
+    divergence_sigma = np.asarray((9.8e-4, 7.6e-4))
+    correlation = np.asarray((-0.15, 0.39))
+    sampled = sample_discrete_gaussian_line_source_rays(
+        mean_origin_lab_m=mean_origin,
+        mean_direction_lab=mean_direction,
+        transverse_axes_lab=axes,
+        spatial_sigma_m=spatial_sigma,
+        divergence_sigma_rad=divergence_sigma,
+        line_wavelength_A=lines_A,
+        line_probability=probabilities,
+        common_wavelength_sigma_A=0.0,
+        sample_count=250,
+        seed=20260809,
+        polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+        position_divergence_correlation=correlation,
+    )
+
+    def standardized_direction(direction: np.ndarray) -> np.ndarray:
+        cosine = np.clip(direction @ mean_direction, -1.0, 1.0)
+        radius = np.arccos(cosine)
+        scale = np.divide(radius, np.sin(radius), out=np.ones_like(radius), where=radius != 0.0)
+        return ((direction @ axes.T) * scale[:, None]) / divergence_sigma
+
+    position = ((sampled.origin_lab_m - mean_origin) @ axes.T) / spatial_sigma
+    direction = standardized_direction(sampled.direction_lab)
+    for line, probability in zip(lines_A, probabilities, strict=True):
+        selected = sampled.wavelength_A == line
+        line_weight = sampled.source_weight[selected]
+        normalized = line_weight / np.sum(line_weight)
+        assert np.sum(line_weight) == pytest.approx(probability, rel=0.0, abs=5.0e-16)
+        np.testing.assert_allclose(normalized @ position[selected], np.zeros(2), atol=3.0e-16)
+        np.testing.assert_allclose(normalized @ direction[selected], np.zeros(2), atol=2.0e-13)
+        standardized = np.column_stack((position[selected], direction[selected]))
+        covariance = standardized.T @ (normalized[:, None] * standardized)
+        expected_covariance = np.eye(4)
+        expected_covariance[0, 2] = expected_covariance[2, 0] = correlation[0]
+        expected_covariance[1, 3] = expected_covariance[3, 1] = correlation[1]
+        np.testing.assert_allclose(covariance, expected_covariance, rtol=0.0, atol=3.0e-12)
+
+
+def test_public_configured_source_preserves_declared_line_covariance() -> None:
+    from pathlib import Path
+
+    from rasim_next.pipeline.configured_simulation import (
+        load_simulation_config,
+        sample_configured_source,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    config = load_simulation_config(
+        root / "configs" / "bi2se3_simulation.yaml",
+        repository_root=root,
+    )
+    source = replace(config.source, sample_count=16, seed=6085)
+    sampled = sample_configured_source(source)
+    axes = np.asarray(source.transverse_axes_lab)
+    position = (
+        (sampled.origin_lab_m - np.asarray(source.mean_origin_lab_m)) @ axes.T
+    ) / np.asarray(source.spatial_sigma_m)
+    mean_direction = np.asarray(source.mean_direction_lab)
+    cosine = np.clip(sampled.direction_lab @ mean_direction, -1.0, 1.0)
+    radius = np.arccos(cosine)
+    inverse_sine = np.divide(
+        radius,
+        np.sin(radius),
+        out=np.ones_like(radius),
+        where=radius != 0.0,
+    )
+    direction = (sampled.direction_lab @ axes.T * inverse_sine[:, None]) / np.asarray(
+        source.divergence_sigma_rad
+    )
+    expected = np.eye(4)
+    expected[0, 2] = expected[2, 0] = source.position_divergence_correlation[0]
+    expected[1, 3] = expected[3, 1] = source.position_divergence_correlation[1]
+    for wavelength_A in source.line_wavelength_A:
+        selected = sampled.wavelength_A == wavelength_A
+        weight = sampled.source_weight[selected]
+        weight /= np.sum(weight)
+        standardized = np.column_stack((position[selected], direction[selected]))
+        np.testing.assert_allclose(
+            standardized.T @ (weight[:, None] * standardized),
+            expected,
+            rtol=0.0,
+            atol=3.0e-12,
+        )
+
+
+def test_equal_line_grid_reuses_geometry_and_common_width_nodes() -> None:
+    lines_A = np.asarray((1.53, 1.56))
+    probabilities = np.asarray((0.4, 0.6))
+    line_sigma_A = 1.0e-4
+    sampled = sample_discrete_gaussian_line_source_rays(
+        mean_origin_lab_m=np.asarray((0.0, -0.02, 0.0)),
+        mean_direction_lab=np.asarray((0.0, 1.0, 0.0)),
+        transverse_axes_lab=np.asarray(((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))),
+        spatial_sigma_m=np.asarray((2.0e-5, 3.0e-5)),
+        divergence_sigma_rad=np.asarray((4.0e-4, 5.0e-4)),
+        line_wavelength_A=lines_A,
+        line_probability=probabilities,
+        common_wavelength_sigma_A=line_sigma_A,
+        sample_count=16,
+        seed=1729,
+        polarization_state_id="THOMSON_UNPOLARIZED_UNANALYSED",
+    )
+
+    nearest_line = np.argmin(abs(sampled.wavelength_A[:, None] - lines_A[None, :]), axis=1)
+    first = nearest_line == 0
+    second = nearest_line == 1
+    assert np.count_nonzero(first) == np.count_nonzero(second) == 8
+    assert np.sum(sampled.source_weight[first]) == pytest.approx(probabilities[0])
+    assert np.sum(sampled.source_weight[second]) == pytest.approx(probabilities[1])
+    np.testing.assert_array_equal(sampled.origin_lab_m[first], sampled.origin_lab_m[second])
+    np.testing.assert_array_equal(sampled.direction_lab[first], sampled.direction_lab[second])
+    first_offset = sampled.wavelength_A[first] - lines_A[0]
+    second_offset = sampled.wavelength_A[second] - lines_A[1]
+    np.testing.assert_allclose(first_offset, second_offset, rtol=0.0, atol=2.0e-16)
+    assert np.any(first_offset != 0.0)
 
 
 def test_wrapped_mosaic_probability_is_normalized_without_signed_tilt_duplication() -> None:

@@ -10,9 +10,10 @@ Tolerance selection and required negative controls are authoritative in [ERROR_I
 4. Shared immutable original-RASIM traces.
 5. Tiny end-to-end detector result.
 
-## Current contract-v13 general-CIF fitting runtime
+## Historical contract-v13 general-CIF fitting runtime
 
-Contract v13 adds one shared selected-coordinate fitting authority without changing the v12 full
+This retained contract-v13 evidence introduced one shared selected-coordinate fitting authority
+without changing the v12 full
 detector runtime below. Compact permanent proofs establish:
 
 | Proof | Acceptance |
@@ -1894,13 +1895,14 @@ The chain hashes are A
 `1dfb7945f76eaf5dda706248c767a5800f0a454d5742efd13336f72ec3933ddb`, and alignment hash
 `f4a7fd5a7bd5184e29c4a78a81d27b3a5ab386a1bdbbb4d4f8eb59f88ac85e28`.
 
-The v14 chain is historical evidence only and is not admissible under the current fit-v11
+The v14 chain is historical evidence only and is not admissible under the current
+`rasim-layered-quintuple-matched-region-fit-v14`
 observable. It used center-selected measured count masses while the model used ideal continuous
 rectangles, omitted the induced cross-row count covariance, did not gate anchor-row cubature, and
 also exceeded the declared `m3` cubature limit. Its source paths predate the strict hash-bound
 composer and its transient profile-progress sidecar is absent. A fresh reproduction starts from the
 raw OSCs plus the tracked geometry manifest and configuration, writes a new external v6 position
-artifact, then consumes the tracked mosaic, recipe, and fit-plan inputs. The fit-v11 chain projects
+artifact, then consumes the tracked mosaic, recipe, and fit-plan inputs. The current v14 chain projects
 the verified piecewise-constant OSC field onto the same continuous rectangles as the model, gates
 per-dataset weak rows/support/covariance, excludes every touched boundary pixel from background
 calibration, and tests cubature on the anchor-conditioned `(I-A)m` observable before any new figure
@@ -1926,3 +1928,69 @@ corrections request only nonzero families.
 The old standalone mirror plot and fitted amplitude are retired. Figure generation integrates the
 unified field over the same phi/2theta detector rectangles as the data, displays the result against
 `2theta`, and applies no model rasterization, smoothing, shift, or second count scale.
+
+## Bi2Se3 model remediation and bounded re-evaluation (2026-08-15)
+
+This result corrects the declared detector measure and chemistry semantics but does **not** accept a
+new fitted parameter vector. Permanent proofs establish:
+
+- exact configured Cu K-alpha line masses (within `5e-16` summation tolerance), line-conditional
+  zero source means, unit standardized moments, and the declared position/divergence correlations;
+- `w_illum=1/|direction_sample,z|`, including the analytic 5/20-degree ratio
+  `sin(20 deg)/sin(5 deg)`, and exact-unity external-path attenuation at zero coefficient;
+- exact wavelength-table lookup and `exp(-mu(lambda) ell_ext)` once-only parity across readable,
+  optimized CPU, CUDA, Monte Carlo, sparse-response, and local-`m=0` paths;
+- nonzero-epsilon 3R reduced intensity against direct short-stack enumeration, with optimized CPU
+  and conditional CUDA agreement and an unchanged epsilon-zero fast path; and
+- dark scale zero preserving raw signed mass and contributing exactly zero shared-dark covariance,
+  plus exact vacancy representative/admission semantics (`outer occupancy=1-v`, antisite zero).
+
+The final consolidated diagnostic (SHA-256
+`2429fefad8edc7d9412405c74db4de395b0189348185124a509a6fbe6fed051b`) uses one
+nonnegative scale per OSC and the frozen 29-row working covariance. Its production-profile values
+are:
+
+| state | data half-chi-square | WRMS |
+|---|---:|---:|
+| pure outer Se, `U_radial=0.020` | 5486.733388 | 19.4524 |
+| vacancy `v=0.011`, `U_radial=0.020` | 5340.670257 | 19.1917 |
+| vacancy `v=0.022`, direct anchor | 5200.350534 | 18.9379 |
+| Bi substitution `0.011`, `U_radial=0.020` | 5728.031647 | 19.8755 |
+| pure outer Se, `U_radial=0.025` | 5196.673684 | 18.9312 |
+| pure outer Se, `U_radial=0.030` | 4939.138346 | 18.4562 |
+
+The exact frozen-optics quadratic continuation through direct vacancy states `v={0,.011,.022}`
+still descends at the allowed `v=.03` endpoint (data half-chi-square `5102.149407`, WRMS `18.7583`,
+and half-chi-square derivative `-12064.42` per unit vacancy fraction). This is a censored screening
+direction, not a 3% estimate. At `v=.03`, the independently scaled 10-degree image worsens
+(`WRMS 11.2261 -> 11.4094`), the joint symmetric `m=3` contribution worsens, and the `m=0` rows
+supply most of the production-profile gain. Off-specular-trained scales predict the held-out `m=0`
+rows at WRMS `96.35`. Thus the all-image, reflection-diversity, no-active-bound, and adequate-fit
+gates fail. The apparent `U_radial` gain nearly disappears under family scales, identifying
+`m=0`/off-specular normalization confounding rather than a missing global absorption multiplier.
+
+The superseded pre-acquisition-correction 5--20-degree post-hoc scan retains 258 angle nodes (256
+composite GL nodes plus two
+zero-mass endpoints), 32 source states, 4096 draws per source state, common random numbers, one scan
+scale, dark scale zero, and csc incidence inside the forward model. Candidate C2 improves the full
+uniform-exposure chi-square by `85.860`, but only `0.857` remains after excluding the suspect mirror
+pair and `0.070` after excluding its detector-row band. Uniform exposure wins every grouped
+held-out comparison. Absolute prediction is not numerically qualified: 128-to-256 angle refinement
+changes C2 by `0.928` working sigma and an independent seed by `1.710`, both larger than the
+`0.25` gate; only the common-random-number candidate direction is stable (`0.00144` and `0.00758`
+working sigma respectively).
+
+That historical scan is not validation: angle/flux telemetry is absent, three complete reflection groups cross
+the old folds, one group is incomplete, the exposure alternatives were selected post hoc, and that
+historical run had no source/draw refinement or deterministic selected-region oracle. Production external-path
+attenuation remains unity because the air/helium/vacuum path is unknown.
+
+The corrected deterministic 5--25-degree finite-region baseline, its strict convergence failure,
+and the retained artifact are recorded in `tasks/27_bi2se3_model_remediation.md`.
+
+The corrected scan used 448 total node evaluations and retained 256 fine-rule nodes. Decision:
+`CORRECTED_5_TO_25_SCAN_CONVERGENCE_REJECTED_NO_PARAMETER_UPDATE`. No nonlinear joint optimizer was
+run because no screened state survived the predeclared gates. No accepted parameter vector
+replaces the prior result; the tracked v2 seed uses the literature vacancy prior solely as an
+initializer. `publication_ready=false`, and the next experiment must resolve `m=0`/off-specular
+observation transfer and reflection-dependent scan exposure/response before another fit.

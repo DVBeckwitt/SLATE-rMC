@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from importlib.metadata import version
 from itertools import pairwise
+from numbers import Real
 from pathlib import Path
 from time import perf_counter
 from typing import Any, NamedTuple
@@ -96,7 +97,7 @@ FAMILIES = (0, 1, 3, 4)
 STRUCTURE_PARAMETER_NAMES = (
     "bi_delta_z_fractional",
     "outer_chalcogen_delta_z_fractional",
-    "outer_bi_antisite_fraction",
+    "outer_chalcogen_vacancy_fraction",
     "intensity_envelope_u_radial_A2",
     "intensity_envelope_u_normal_A2",
 )
@@ -119,9 +120,9 @@ MEASURED_PROJECTION_METHOD = "piecewise_constant_native_pixel_field_continuous_c
 NATIVE_PIXEL_CENTER_METHOD = "frozen_native_pixel_center_raw_minus_scaled_dark.v1"
 PREPARED_SCHEMA = "rasim-layered-quintuple-matched-regions-v4"
 BACKGROUND_SCHEMA = "rasim-shared-radial-background-v4"
-FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v13"
-FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v10"
-PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v13"
+FIT_SCHEMA = "rasim-layered-quintuple-matched-region-fit-v14"
+FIT_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-fit-progress-v11"
+PROFILE_SCHEMA = "rasim-layered-quintuple-matched-figure-profiles-v14"
 PROFILE_PROGRESS_SCHEMA = "rasim-layered-quintuple-matched-profile-progress-v7"
 PROFILE_PARAMETER_REPLAY_METHOD = "frozen_fit_parameter_profile_replay.v1"
 PROFILE_PARAMETER_REPLAY_EVIDENCE = "FROZEN_FIT_PARAMETER_REPLAY"
@@ -164,6 +165,20 @@ DARK_CORRECTION_MODEL = "scaled_dark_subtraction_no_clip.v1"
 PEAK_AREA_OBJECTIVE = "background_conditioned_integrated_peak_count_mass.v1"
 FAULT_FREE_THREE_R_MODEL = "rich_epsilon_parent_3r_exact_zero_fault.v1"
 FIXED_EXPERIMENT_SCHEMA = FIXED_EXPERIMENT_STATE_SCHEMA_VERSION
+
+
+def _dark_scale_basis_is_valid(scale: float, scale_basis: object) -> bool:
+    if scale == 0.0:
+        return scale_basis == "no_acquisition_matched_dark.v1"
+    return scale_basis == "matched_exposure_assumed.v1"
+
+
+def _dark_covariance_model(scale: float) -> str:
+    return (
+        "no_dark_contribution.v1"
+        if scale == 0.0
+        else "shared_independent_poisson_dark_across_datasets.v1"
+    )
 
 
 def _detector_horizon_acceptance(policy: Any) -> DetectorHorizonAcceptance:
@@ -871,8 +886,16 @@ def _compile_dataset_continuous_region_plan(
     )
 
 
+def _update_hash_from_file(digest: Any, path: Path) -> None:
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+
+
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    _update_hash_from_file(digest, path)
+    return digest.hexdigest()
 
 
 def _array_sha256(value: np.ndarray) -> str:
@@ -880,8 +903,31 @@ def _array_sha256(value: np.ndarray) -> str:
     digest = hashlib.sha256()
     digest.update(array.dtype.str.encode("ascii"))
     digest.update(json.dumps(array.shape, separators=(",", ":")).encode("ascii"))
-    digest.update(array.tobytes(order="C"))
+    digest.update(memoryview(array).cast("B"))
     return digest.hexdigest()
+
+
+def _raw_array_bytes_sha256(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    return hashlib.sha256(memoryview(array).cast("B")).hexdigest()
+
+
+def _relative_l2(
+    reference: np.ndarray,
+    candidate: np.ndarray,
+    selected: np.ndarray,
+) -> float:
+    denominator = max(np.linalg.norm(reference[selected]), np.finfo(np.float64).tiny)
+    return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
+
+
+def _nonnegative_real(value: Any, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a finite nonnegative real number")
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError(f"{name} must be a finite nonnegative real number")
+    return result
 
 
 def _is_sha256(value: Any) -> bool:
@@ -1185,14 +1231,6 @@ def _conditioned_model_cubature_errors(
     family_by_row = np.asarray(signal_family_m, dtype=np.int64)
     background = np.asarray(is_background, dtype=np.bool_)
 
-    def relative_l2(
-        reference: np.ndarray,
-        candidate: np.ndarray,
-        selected: np.ndarray,
-    ) -> float:
-        denominator = max(np.linalg.norm(reference[selected]), np.finfo(np.float64).tiny)
-        return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
-
     if peak_aggregation is None:
         fit_objective = fit_conditioned
         oracle_objective = oracle_conditioned
@@ -1212,7 +1250,7 @@ def _conditioned_model_cubature_errors(
         objective_row = np.ones(aggregation.shape[0], dtype=np.bool_)
 
     by_family = {
-        str(family): relative_l2(
+        str(family): _relative_l2(
             oracle_objective,
             fit_objective,
             objective_family == family,
@@ -1220,9 +1258,9 @@ def _conditioned_model_cubature_errors(
         for family in FAMILIES
     }
     return (
-        relative_l2(oracle_objective, fit_objective, objective_row),
+        _relative_l2(oracle_objective, fit_objective, objective_row),
         by_family,
-        relative_l2(
+        _relative_l2(
             np.asarray(oracle_model_mass, dtype=np.float64),
             np.asarray(fit_model_mass, dtype=np.float64),
             background,
@@ -1247,7 +1285,8 @@ def _dark_correction_from_recipe(
     counts = read_osc(path).detector_native_counts
     if counts.shape != detector_shape_rc:
         raise ValueError("dark OSC shape differs from the fitted detector")
-    native_sha256 = hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+    native_sha256 = _raw_array_bytes_sha256(counts)
+    scale = _nonnegative_real(settings["scale"], "dark scale")
     record = {
         "model_id": DARK_CORRECTION_MODEL,
         "path": str(path),
@@ -1255,23 +1294,26 @@ def _dark_correction_from_recipe(
         "detector_native_bytes_sha256": native_sha256,
         "detector_native_shape_rc": list(counts.shape),
         "detector_native_dtype": str(counts.dtype),
-        "scale": float(settings["scale"]),
+        "scale": scale,
         "scale_basis": str(settings["scale_basis"]),
         "negative_values_clipped": False,
         "smoothing_applied": False,
-        "covariance_model": "shared_independent_poisson_dark_across_datasets.v1",
+        "covariance_model": _dark_covariance_model(scale),
     }
     return counts, record
 
 
 def _verified_dark_counts(manifest: dict[str, Any]) -> tuple[np.ndarray, float]:
     record = manifest.get("dark_correction")
+    if not isinstance(record, dict):
+        raise ValueError("prepared diagnostic lacks its declared dark correction")
+    scale = _nonnegative_real(record.get("scale"), "dark scale")
     if (
-        not isinstance(record, dict)
-        or record.get("model_id") != DARK_CORRECTION_MODEL
+        record.get("model_id") != DARK_CORRECTION_MODEL
         or record.get("negative_values_clipped") is not False
         or record.get("smoothing_applied") is not False
-        or record.get("covariance_model") != "shared_independent_poisson_dark_across_datasets.v1"
+        or record.get("covariance_model") != _dark_covariance_model(scale)
+        or not _dark_scale_basis_is_valid(scale, record.get("scale_basis"))
     ):
         raise ValueError("prepared diagnostic lacks its declared dark correction")
     path = Path(str(record.get("path"))).resolve()
@@ -1281,13 +1323,9 @@ def _verified_dark_counts(manifest: dict[str, Any]) -> tuple[np.ndarray, float]:
     if (
         list(counts.shape) != record.get("detector_native_shape_rc")
         or str(counts.dtype) != record.get("detector_native_dtype")
-        or hashlib.sha256(counts.tobytes(order="C")).hexdigest()
-        != record.get("detector_native_bytes_sha256")
+        or _raw_array_bytes_sha256(counts) != record.get("detector_native_bytes_sha256")
     ):
         raise ValueError("decoded dark OSC changed after preparation")
-    scale = float(record.get("scale", math.nan))
-    if not math.isfinite(scale) or scale < 0.0:
-        raise ValueError("dark scale is invalid")
     return counts, scale
 
 
@@ -1310,7 +1348,7 @@ def _implementation_identity() -> dict[str, Any]:
         relative = path.relative_to(ROOT).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        _update_hash_from_file(digest, path)
         digest.update(b"\0")
     digest.update(json.dumps(runtime, sort_keys=True, separators=(",", ":")).encode("ascii"))
     return {
@@ -1401,14 +1439,21 @@ def _validated_recipe(document: dict[str, Any]) -> dict[str, Any]:
             interface_assumption=str(stitch["interface_assumption"]),
         )
     dark = document.get("dark_correction")
+    try:
+        dark_scale = _nonnegative_real(
+            dark.get("scale") if isinstance(dark, dict) else None,
+            "dark scale",
+        )
+    except ValueError:
+        dark_scale = math.nan
     if (
         not isinstance(dark, dict)
         or dark.get("model_id") != DARK_CORRECTION_MODEL
         or not isinstance(dark.get("path"), str)
         or not dark["path"]
-        or not math.isfinite(float(dark.get("scale", math.nan)))
-        or float(dark["scale"]) < 0.0
-        or dark.get("scale_basis") != "matched_exposure_assumed.v1"
+        or not math.isfinite(dark_scale)
+        or dark_scale < 0.0
+        or not _dark_scale_basis_is_valid(dark_scale, dark.get("scale_basis"))
     ):
         raise ValueError("Figure-7 recipe requires an explicit no-clip dark correction")
     peaks = document.get("fit_peak")
@@ -1763,6 +1808,168 @@ def _fixed_displacement_gauge_is_admissible(structure: Any) -> bool:
     )
 
 
+def _vacancy_structure_representative_is_admissible(structure: Any) -> bool:
+    """Validate the persisted vacancy coordinate and its derived site fractions."""
+
+    if not isinstance(structure, dict):
+        return False
+    try:
+        vacancy = float(structure["outer_chalcogen_vacancy_fraction"])
+        outer_occupancy = float(structure["outer_chalcogen_occupancy"])
+        outer_fraction = float(structure["outer_chalcogen_fraction"])
+        antisite = float(structure["outer_bi_antisite_fraction"])
+        bi_occupancy = float(structure["bi_occupancy"])
+        central_occupancy = float(structure["central_chalcogen_occupancy"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    expected_outer = 1.0 - vacancy
+    return bool(
+        structure.get("occupancy_rule") == "outer_site_chalcogen_plus_vacancy.v1"
+        and all(
+            math.isfinite(value)
+            for value in (
+                vacancy,
+                outer_occupancy,
+                outer_fraction,
+                antisite,
+                bi_occupancy,
+                central_occupancy,
+            )
+        )
+        and 0.0 <= vacancy <= 1.0
+        and antisite == 0.0
+        and bi_occupancy == 1.0
+        and central_occupancy == 1.0
+        and outer_occupancy == expected_outer
+        and outer_fraction == expected_outer
+    )
+
+
+def _fit_start_is_admissible(
+    document: dict[str, Any],
+    *,
+    expected_stage: str,
+    active_parameter_names: tuple[str, ...],
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    execution_identity: dict[str, Any],
+    final_parameters: np.ndarray,
+) -> bool:
+    """Validate the policy-bound optimizer start independently of the producer."""
+
+    policy = document.get("execution_policy")
+    optimizer = document.get("optimizer")
+    provenance = document.get("provenance")
+    if not isinstance(optimizer, dict) or not isinstance(provenance, dict):
+        return False
+    fit_start = optimizer.get("fit_start")
+    if not isinstance(fit_start, dict):
+        return False
+    kind = fit_start.get("kind")
+    if policy == "seeded_joint_only.v1":
+        if expected_stage != "joint" or kind not in {"explicit", "progress_restart"}:
+            return False
+    elif policy == "staged_A_B_C_joint.v1":
+        if expected_stage not in {"A", "B", "C", "joint"} or kind not in {
+            "default",
+            "progress_restart",
+        }:
+            return False
+    else:
+        return False
+    try:
+        active_index = np.asarray(
+            [STRUCTURE_PARAMETER_NAMES.index(name) for name in active_parameter_names],
+            dtype=np.int64,
+        )
+        initial = np.asarray(fit_start["initial_parameters"], dtype=np.float64)
+        initial_full = np.asarray(fit_start["initial_full_parameters"], dtype=np.float64)
+        maximum_evaluations = fit_start["maximum_function_evaluations"]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if (
+        initial.shape != (active_index.size,)
+        or initial_full.shape != (STRUCTURE_PARAMETER_COUNT,)
+        or np.any(~np.isfinite(initial))
+        or np.any(~np.isfinite(initial_full))
+        or np.any(initial_full < lower_bounds)
+        or np.any(initial_full > upper_bounds)
+        or not np.array_equal(initial, initial_full[active_index])
+        or fit_start.get("initial_parameters_sha256") != _array_sha256(initial)
+        or isinstance(maximum_evaluations, bool)
+        or not isinstance(maximum_evaluations, int)
+        or maximum_evaluations <= 0
+    ):
+        return False
+    frozen_index = np.asarray(
+        [index for index in range(STRUCTURE_PARAMETER_COUNT) if index not in set(active_index)],
+        dtype=np.int64,
+    )
+    if final_parameters.shape != (STRUCTURE_PARAMETER_COUNT,) or not np.array_equal(
+        final_parameters[frozen_index], initial_full[frozen_index]
+    ):
+        return False
+    source = fit_start.get("source_artifact")
+    if kind == "progress_restart":
+        if (
+            not isinstance(source, dict)
+            or not isinstance(source.get("path"), str)
+            or not source["path"]
+            or not _is_sha256(source.get("sha256"))
+            or fit_start.get("semantics")
+            != "restart from a completely evaluated parameter vector; optimizer state is not continued"
+        ):
+            return False
+    elif source is not None or fit_start.get("semantics") != "new optimizer run":
+        return False
+    return provenance.get("fit_run_identity") == {
+        "model_execution": execution_identity,
+        "fit_start": fit_start,
+    }
+
+
+def _restart_progress_is_admissible(
+    document: dict[str, Any],
+    *,
+    expected_execution_identity: dict[str, Any],
+    expected_initial_parameters: np.ndarray,
+    expected_initial_full_parameters: np.ndarray,
+) -> bool:
+    """Validate the exact completed vector used as a same-stage restart."""
+
+    try:
+        active = np.asarray(document["active_parameters"], dtype=np.float64)
+        full = np.asarray(document["full_parameters"], dtype=np.float64)
+        completed = document["completed_model_evaluations"]
+        run_identity = document["fit_run_identity"]
+        devices = document["devices"]
+        backends = document["evaluated_backends"]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        document.get("schema_version") == FIT_PROGRESS_SCHEMA
+        and document.get("execution_identity") == expected_execution_identity
+        and active.shape == expected_initial_parameters.shape
+        and full.shape == expected_initial_full_parameters.shape
+        and np.all(np.isfinite(active))
+        and np.all(np.isfinite(full))
+        and np.array_equal(active, expected_initial_parameters)
+        and np.array_equal(full, expected_initial_full_parameters)
+        and isinstance(completed, int)
+        and not isinstance(completed, bool)
+        and completed > 0
+        and isinstance(run_identity, dict)
+        and run_identity.get("model_execution") == expected_execution_identity
+        and isinstance(run_identity.get("fit_start"), dict)
+        and isinstance(devices, list)
+        and bool(devices)
+        and all(isinstance(value, str) and value for value in devices)
+        and isinstance(backends, list)
+        and bool(backends)
+        and all(isinstance(value, str) and value for value in backends)
+    )
+
+
 def stage_fit_document_is_admissible(
     document: dict[str, Any],
     *,
@@ -1900,6 +2107,7 @@ def stage_fit_document_is_admissible(
         and rod_families == set(FAMILIES)
         and document.get("stacking_model") == _fault_free_three_r_definition()
         and _fixed_displacement_gauge_is_admissible(structure)
+        and _vacancy_structure_representative_is_admissible(structure)
         and execution.get("rod_scope") == "families_m_0_1_3_4"
         and execution.get("rod_count") == len(rod_roster)
         and execution.get("rod_roster_sha256") == rod_roster_sha256
@@ -1990,6 +2198,15 @@ def stage_fit_document_is_admissible(
         and execution.get("stage") == expected_stage
         and tuple(execution.get("active_parameter_names", ())) == active
         and tuple(execution.get("frozen_parameter_names", ())) == frozen
+        and _fit_start_is_admissible(
+            document,
+            expected_stage=expected_stage,
+            active_parameter_names=active,
+            lower_bounds=lower,
+            upper_bounds=upper,
+            execution_identity=execution,
+            final_parameters=parameters,
+        )
         and document.get("model_pixelized") is False
         and document.get("model_measure") == "continuous_detector_chart_area"
         and document.get("smoothing_applied") is False
@@ -2020,15 +2237,18 @@ def fit_document_is_admissible(
     sensitivity_relative_tolerance: float,
     bound_proximity_in_parameter_scales: float,
     maximum_sensitivity_condition: float,
+    expected_execution_policy: str = "seeded_joint_only.v1",
     allow_model_limited_joint: bool = False,
 ) -> bool:
-    """Return whether a saved joint fit can enter fixed-parameter validation."""
+    """Return whether a saved joint fit is locally admissible under the expected policy."""
 
     try:
         diagnostic_sha256 = str(document["diagnostic_sha256"])
     except (KeyError, TypeError, ValueError):
         return False
-    return stage_fit_document_is_admissible(
+    return document.get(
+        "execution_policy"
+    ) == expected_execution_policy and stage_fit_document_is_admissible(
         document,
         expected_stage="joint",
         expected_active_parameter_names=STRUCTURE_PARAMETER_NAMES,
@@ -2061,6 +2281,7 @@ def _qualify_stage_chain_documents(
     adapter_sha256: str,
     implementation_sha256: str,
     load_predecessor: Callable[[Any, str], tuple[dict[str, Any], dict[str, str]]],
+    load_restart: Callable[[Any, str], tuple[dict[str, Any], dict[str, str]]],
     allow_model_limited_joint: bool = False,
 ) -> tuple[tuple[dict[str, Any], dict[str, str]], ...]:
     """Qualify exact staged documents independently of their storage backend."""
@@ -2071,6 +2292,7 @@ def _qualify_stage_chain_documents(
     sensitivity_tolerance = float(fit_plan["sensitivity_relative_tolerance"])
     bound_proximity = float(fit_plan["bound_proximity_in_parameter_scales"])
     maximum_condition = float(fit_plan["maximum_sensitivity_condition"])
+    execution_policy = str(fit_plan["execution_policy"])
     continuous_quadrature = fit_plan["continuous_quadrature"]
     expected_axial_refinement = int(continuous_quadrature["offspecular_axial_refinement"])
     expected_radial_transform = str(continuous_quadrature["offspecular_radial_transform"])
@@ -2090,7 +2312,8 @@ def _qualify_stage_chain_documents(
         active = tuple(fit_plan["stage"][current_stage]["active_parameters"])
         current_execution = current_document.get("provenance", {}).get("execution_identity", {})
         if (
-            current_execution.get("offspecular_axial_refinement") != expected_axial_refinement
+            current_document.get("execution_policy") != execution_policy
+            or current_execution.get("offspecular_axial_refinement") != expected_axial_refinement
             or current_execution.get("offspecular_radial_transform") != expected_radial_transform
             or current_execution.get("offspecular_signal_minimum_radial_nodes_per_side")
             != expected_minimum_radial_nodes
@@ -2114,6 +2337,25 @@ def _qualify_stage_chain_documents(
             )
         ):
             raise ValueError(f"structure stage {current_stage} is not qualified")
+        fit_start = current_document["optimizer"]["fit_start"]
+        if fit_start.get("kind") == "progress_restart":
+            restart_document, restart_identity = load_restart(
+                fit_start.get("source_artifact"),
+                current_stage,
+            )
+            if restart_identity != fit_start.get(
+                "source_artifact"
+            ) or not _restart_progress_is_admissible(
+                restart_document,
+                expected_execution_identity=current_execution,
+                expected_initial_parameters=np.asarray(
+                    fit_start["initial_parameters"], dtype=np.float64
+                ),
+                expected_initial_full_parameters=np.asarray(
+                    fit_start["initial_full_parameters"], dtype=np.float64
+                ),
+            ):
+                raise ValueError(f"structure stage {current_stage} restart source is not qualified")
         if child_document is not None:
             try:
                 child_start = np.asarray(
@@ -2124,14 +2366,6 @@ def _qualify_stage_chain_documents(
                 raise ValueError("structure fit child start is missing") from error
             child_stage = str(child_document.get("stage"))
             child_active = set(fit_plan["stage"][child_stage]["active_parameters"])
-            child_active_index = np.asarray(
-                [
-                    index
-                    for index, name in enumerate(STRUCTURE_PARAMETER_NAMES)
-                    if name in child_active
-                ],
-                dtype=np.int64,
-            )
             child_frozen_index = np.asarray(
                 [
                     index
@@ -2146,15 +2380,12 @@ def _qualify_stage_chain_documents(
                 predecessor_parameters[child_frozen_index],
             ):
                 raise ValueError("structure fit child did not inherit its frozen predecessor state")
-            recorded_active_start = child_document["optimizer"]["fit_start"].get(
-                "initial_parameters"
-            )
-            if recorded_active_start is None:
-                expected_active_start = predecessor_parameters[child_active_index]
-            else:
-                expected_active_start = np.asarray(recorded_active_start, dtype=np.float64)
-            if not np.array_equal(child_start[child_active_index], expected_active_start):
-                raise ValueError("structure fit child did not start from its recorded active state")
+            child_start_kind = child_document["optimizer"]["fit_start"].get("kind")
+            if child_start_kind == "default" and not np.array_equal(
+                child_start,
+                predecessor_parameters,
+            ):
+                raise ValueError("structure fit child did not start from its predecessor")
             child_final = _fit_structure_vector(child_document)
             if not np.array_equal(
                 child_final[child_frozen_index],
@@ -2167,6 +2398,28 @@ def _qualify_stage_chain_documents(
         if predecessor_stage is None:
             if predecessor_record is not None:
                 raise ValueError("structure stage A must not name a predecessor")
+            initial_full = np.asarray(
+                current_document["optimizer"]["fit_start"]["initial_full_parameters"],
+                dtype=np.float64,
+            )
+            baseline = np.asarray(fit_plan["baseline_parameters"], dtype=np.float64)
+            start_kind = current_document["optimizer"]["fit_start"].get("kind")
+            if start_kind == "default" and not np.array_equal(initial_full, baseline):
+                raise ValueError("structure stage A did not start from the plan baseline")
+            if start_kind == "progress_restart":
+                active_names = set(fit_plan["stage"][current_stage]["active_parameters"])
+                frozen_index = np.asarray(
+                    [
+                        index
+                        for index, name in enumerate(STRUCTURE_PARAMETER_NAMES)
+                        if name not in active_names
+                    ],
+                    dtype=np.int64,
+                )
+                if not np.array_equal(initial_full[frozen_index], baseline[frozen_index]):
+                    raise ValueError(
+                        "structure stage A restart changed a frozen baseline parameter"
+                    )
             break
         current_document, current_identity = load_predecessor(
             predecessor_record,
@@ -2240,6 +2493,17 @@ def _load_qualified_stage_chain(
         )
         return predecessor_document, predecessor_identity
 
+    def load_restart(
+        record: Any,
+        stage: str,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        restart_identity = _verified_recorded_file_identity(
+            record,
+            role=f"structure stage {stage} restart",
+        )
+        restart_document = json.loads(Path(restart_identity["path"]).read_text(encoding="utf-8"))
+        return restart_document, restart_identity
+
     return _qualify_stage_chain_documents(
         document,
         identity,
@@ -2252,6 +2516,7 @@ def _load_qualified_stage_chain(
         adapter_sha256=adapter_sha256,
         implementation_sha256=implementation_sha256,
         load_predecessor=load_predecessor,
+        load_restart=load_restart,
         allow_model_limited_joint=allow_model_limited_joint,
     )
 
@@ -2272,6 +2537,7 @@ def _profile_evidence_policy(
     maximum_sensitivity_condition: float,
     expected_dataset_ids: Sequence[str],
     predecessor_chain_complete: bool,
+    expected_execution_policy: str = "seeded_joint_only.v1",
 ) -> dict[str, Any]:
     provenance = fit_document.get("provenance", {})
     execution = provenance.get("execution_identity", {})
@@ -2299,6 +2565,7 @@ def _profile_evidence_policy(
         sensitivity_relative_tolerance=sensitivity_relative_tolerance,
         bound_proximity_in_parameter_scales=bound_proximity_in_parameter_scales,
         maximum_sensitivity_condition=maximum_sensitivity_condition,
+        expected_execution_policy=expected_execution_policy,
         allow_model_limited_joint=True,
     )
     if (
@@ -2544,8 +2811,8 @@ def _fixed_experiment_inputs(
 def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
     schema_version = document.get("schema_version")
     if schema_version not in {
-        "rasim-layered-quintuple-structure-fit-plan-v5",
-        "rasim-layered-quintuple-structure-fit-plan-v6",
+        "rasim-layered-quintuple-structure-fit-plan-v7",
+        "rasim-layered-quintuple-structure-fit-plan-v8",
     }:
         raise ValueError("unsupported layered-quintuple structure fit plan")
     if not isinstance(document.get("material_id"), str) or not document["material_id"]:
@@ -2645,11 +2912,12 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError("continuous_quadrature settings are invalid")
     stages = document.get("stage")
-    if schema_version == "rasim-layered-quintuple-structure-fit-plan-v5":
+    if schema_version == "rasim-layered-quintuple-structure-fit-plan-v7":
         expected = STRUCTURE_STAGE_PARAMETERS
         predecessors = {"A": None, "B": "A", "C": "B", "joint": "C"}
+        execution_policy = "staged_A_B_C_joint.v1"
         if (
-            document.get("execution_policy", "staged_A_B_C_joint.v1") != "staged_A_B_C_joint.v1"
+            document.get("execution_policy", execution_policy) != execution_policy
             or not isinstance(stages, dict)
             or tuple(stages) != tuple(expected)
         ):
@@ -2657,8 +2925,9 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
     else:
         expected = {"joint": STRUCTURE_PARAMETER_NAMES}
         predecessors = {"joint": None}
+        execution_policy = "seeded_joint_only.v1"
         if (
-            document.get("execution_policy") != "seeded_joint_only.v1"
+            document.get("execution_policy") != execution_policy
             or not isinstance(stages, dict)
             or tuple(stages) != ("joint",)
         ):
@@ -2671,12 +2940,29 @@ def _validated_fit_plan(document: dict[str, Any]) -> dict[str, Any]:
             or record.get("predecessor") != predecessors[stage]
         ):
             raise ValueError(f"structure fit stage {stage!r} changed")
+    document["execution_policy"] = execution_policy
     return document
 
 
 def _load_fit_plan(path: Path) -> dict[str, Any]:
     plan_path = path.resolve()
     return _validated_fit_plan(tomllib.loads(plan_path.read_text(encoding="utf-8")))
+
+
+def _require_declared_fit_start(
+    execution_policy: str,
+    *,
+    initial_parameters_override: Sequence[float] | None,
+    resume_path: Path | None,
+) -> None:
+    if execution_policy == "staged_A_B_C_joint.v1" and initial_parameters_override is not None:
+        raise ValueError("staged fit starts are fixed by the baseline or predecessor")
+    if (
+        execution_policy == "seeded_joint_only.v1"
+        and initial_parameters_override is None
+        and resume_path is None
+    ):
+        raise ValueError("seeded joint-only fit requires explicit initial parameters or a restart")
 
 
 def _m0_region(recipe: dict[str, Any]) -> SpecularAngularProfileRegion:
@@ -3403,7 +3689,13 @@ def prepare(
         "incomplete_blocks_excluded": incomplete_blocks,
         "observation_contract": (
             "frozen native-pixel-center raw-minus-scaled-dark count masses with exact "
-            "unit-membership support and full shared-dark overlap covariance; every candidate "
+            "unit-membership support and "
+            + (
+                "no dark covariance contribution"
+                if float(dark_correction["scale"]) == 0.0
+                else "full shared-dark overlap covariance"
+            )
+            + "; every candidate "
             "diffraction model remains an unrasterized continuous chart integral"
             if _uses_native_pixel_center_observations(recipe)
             else "verified native counts projected over continuous phi/two-theta or Qr/L "
@@ -3431,42 +3723,70 @@ def prepare(
     return write_diagnostic(destination, arrays=arrays, manifest=manifest, repository_root=ROOT)
 
 
-def _load_diagnostic(
-    path: Path,
-    *,
-    expected_schema: str,
-) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+def _resolved_diagnostic_path(path: Path) -> Path:
     diagnostic = path.resolve()
     if diagnostic == ROOT or diagnostic.is_relative_to(ROOT):
         raise ValueError("diagnostic must be outside the repository")
     if not diagnostic.name.endswith(".ra_diag.npz") or not diagnostic.is_file():
         raise ValueError("invalid diagnostic path")
+    return diagnostic
+
+
+def _decoded_diagnostic_manifest(
+    archive: Any,
+    *,
+    expected_schema: str,
+) -> dict[str, Any]:
+    if "manifest_json" not in archive.files:
+        raise ValueError("diagnostic lacks an embedded manifest")
+    encoded = np.asarray(archive["manifest_json"])
+    if encoded.dtype != np.uint8 or encoded.ndim != 1:
+        raise ValueError("diagnostic has an invalid embedded manifest")
+    try:
+        manifest = json.loads(encoded.tobytes().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("diagnostic has an invalid embedded manifest") from error
+    if not isinstance(manifest, dict):
+        raise ValueError("diagnostic manifest must be a JSON object")
+    if manifest.get("schema_version") != expected_schema:
+        raise ValueError("unsupported diagnostic schema")
+    return manifest
+
+
+def _load_diagnostic(
+    path: Path,
+    *,
+    expected_schema: str,
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    diagnostic = _resolved_diagnostic_path(path)
     with np.load(diagnostic, allow_pickle=False) as archive:
-        if "manifest_json" not in archive.files:
-            raise ValueError("diagnostic lacks an embedded manifest")
         if any(archive[name].dtype.hasobject for name in archive.files):
             raise ValueError("diagnostic may not contain object arrays")
-        encoded = np.asarray(archive["manifest_json"])
-        if encoded.dtype != np.uint8 or encoded.ndim != 1:
-            raise ValueError("diagnostic has an invalid embedded manifest")
-        try:
-            manifest = json.loads(encoded.tobytes().decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError("diagnostic has an invalid embedded manifest") from error
+        manifest = _decoded_diagnostic_manifest(archive, expected_schema=expected_schema)
         arrays = {
             name: np.array(archive[name], copy=True)
             for name in archive.files
             if name != "manifest_json"
         }
-    if not isinstance(manifest, dict):
-        raise ValueError("diagnostic manifest must be a JSON object")
-    if manifest.get("schema_version") != expected_schema:
-        raise ValueError("unsupported diagnostic schema")
     return arrays, manifest
+
+
+def _load_diagnostic_manifest(
+    path: Path,
+    *,
+    expected_schema: str,
+) -> dict[str, Any]:
+    diagnostic = _resolved_diagnostic_path(path)
+    with np.load(diagnostic, allow_pickle=False) as archive:
+        return _decoded_diagnostic_manifest(archive, expected_schema=expected_schema)
 
 
 def _load_prepared(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     return _load_diagnostic(path, expected_schema=PREPARED_SCHEMA)
+
+
+def _load_prepared_manifest(path: Path) -> dict[str, Any]:
+    return _load_diagnostic_manifest(path, expected_schema=PREPARED_SCHEMA)
 
 
 def _radial_background_parameter_names(dataset_ids: Sequence[str]) -> tuple[str, ...]:
@@ -3885,7 +4205,7 @@ def _load_radial_background(
         or manifest.get("diffraction_model_pixelized") is not False
         or manifest.get("dark_applied") is not True
         or manifest.get("dark_correction")
-        != _load_prepared(Path(diagnostic_identity["path"]))[1].get("dark_correction")
+        != _load_prepared_manifest(Path(diagnostic_identity["path"])).get("dark_correction")
         or manifest.get("smoothing_applied") is not False
         or tuple(manifest.get("beam_center_column_row_px", ()))
         != tuple(float(value) for value in beam_center_column_row_px)
@@ -4123,6 +4443,7 @@ def _profile_manifest_is_admissible(
     manifest: dict[str, Any],
     *,
     trusted_recipe: dict[str, Any],
+    prepared_dark_correction: dict[str, Any],
 ) -> bool:
     try:
         roster = tuple(tuple(value) for value in manifest["model_rod_roster_h_k_m_population"])
@@ -4205,8 +4526,7 @@ def _profile_manifest_is_admissible(
                 == "frozen_parameter_and_dataset_scale_source_only"
                 and fit_parameter_replay.get("profile_role")
                 == "continuous_profile_recalculation_without_optimization"
-                and fit_parameter_replay.get("scope")
-                == "m0_specular_interface_assumption_only"
+                and fit_parameter_replay.get("scope") == "m0_specular_interface_assumption_only"
                 and fit_parameter_replay.get("fit_parameters_reused") is True
                 and fit_parameter_replay.get("optimizer_executed") is False
                 and fit_parameter_replay.get("fit_reexecuted") is False
@@ -4216,8 +4536,7 @@ def _profile_manifest_is_admissible(
                 and fit_parameter_replay.get("source_fit_sha256")
                 == provenance.get("fit_sha256")
                 == execution.get("fit_sha256")
-                and fit_parameter_replay.get("source_fit_status")
-                == manifest.get("fit_status")
+                and fit_parameter_replay.get("source_fit_status") == manifest.get("fit_status")
                 and fit_parameter_replay.get("structure_parameter_vector_sha256")
                 == _array_sha256(structure_parameters)
                 and set(replay_scales) == set(expected_dataset_ids)
@@ -4237,13 +4556,10 @@ def _profile_manifest_is_admissible(
                 and execution.get("fit_parameter_replay") == fit_parameter_replay
                 and execution.get("profile_adapter_sha256") == profile_adapter
                 and execution.get("fit_origin_adapter_sha256") == fit_origin_adapter
-                and execution.get("fit_origin_implementation_sha256")
-                == fit_origin_implementation
+                and execution.get("fit_origin_implementation_sha256") == fit_origin_implementation
             )
     fit_binding_admissible = (
-        parameter_replay_admissible
-        if fit_parameter_replay is not None
-        else native_fit_binding
+        parameter_replay_admissible if fit_parameter_replay is not None else native_fit_binding
     )
     native_observation = _uses_native_pixel_center_observations(trusted_recipe)
     measured_projection_qualification_admissible = bool(
@@ -4416,10 +4732,20 @@ def _profile_manifest_is_admissible(
         and manifest.get("figure_recipe") == effective_trusted_recipe
         and manifest.get("stacking_model") == _fault_free_three_r_definition()
         and _fixed_displacement_gauge_is_admissible(manifest.get("structure_representative"))
+        and _vacancy_structure_representative_is_admissible(
+            manifest.get("structure_representative")
+        )
+        and dark == prepared_dark_correction
         and dark.get("model_id") == DARK_CORRECTION_MODEL
         and dark.get("negative_values_clipped") is False
         and dark.get("smoothing_applied") is False
-        and dark.get("covariance_model") == "shared_independent_poisson_dark_across_datasets.v1"
+        and dark.get("covariance_model")
+        == _dark_covariance_model(float(dark.get("scale", math.nan)))
+        and _dark_scale_basis_is_valid(
+            float(dark.get("scale", math.nan)),
+            dark.get("scale_basis"),
+        )
+        and dark.get("scale_basis") == trusted_recipe["dark_correction"].get("scale_basis")
         and _is_sha256(dark.get("file_sha256"))
         and _is_sha256(dark.get("detector_native_bytes_sha256"))
         and isinstance(dark.get("detector_native_shape_rc"), list)
@@ -4566,6 +4892,12 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     fit_document = json.loads(
         Path(verified_inputs["fit artifact"]["path"]).read_text(encoding="utf-8")
     )
+    prepared_manifest = _load_prepared_manifest(
+        Path(verified_inputs["prepared diagnostic"]["path"])
+    )
+    prepared_dark_correction = prepared_manifest.get("dark_correction")
+    if not isinstance(prepared_dark_correction, dict):
+        raise ValueError("prepared diagnostic lacks a dark-correction record")
     if (
         fit_document.get("model_rod_roster_sha256") != manifest.get("fit_model_rod_roster_sha256")
         or fit_document.get("structure_representative") != manifest.get("structure_representative")
@@ -4616,7 +4948,11 @@ def _load_profiles(path: Path) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
             or render_hashes[name] != _array_sha256(arrays[name])
             for name in PROFILE_RENDER_ARRAY_NAMES
         )
-        or not _profile_manifest_is_admissible(manifest, trusted_recipe=trusted_recipe)
+        or not _profile_manifest_is_admissible(
+            manifest,
+            trusted_recipe=trusted_recipe,
+            prepared_dark_correction=prepared_dark_correction,
+        )
     ):
         raise ValueError("profile diagnostic violates the rendering contract")
     return arrays, manifest
@@ -4663,8 +4999,8 @@ def _candidate_strength(
         se2_fractional_z=baseline.se2_fractional_z + float(values[1]),
         bi_occupancy=1.0,
         se1_occupancy=1.0,
-        se2_occupancy=1.0,
-        outer_bi_antisite_fraction=float(values[2]),
+        se2_occupancy=1.0 - float(values[2]),
+        outer_bi_antisite_fraction=0.0,
         u_radial_A2=0.0,
         u_normal_A2=0.0,
     )
@@ -5264,6 +5600,7 @@ def fit(
     recipe_identity = _file_identity(recipe_path)
     fit_plan_identity = _file_identity(fit_plan_path)
     fit_plan = _load_fit_plan(fit_plan_path)
+    execution_policy = str(fit_plan.get("execution_policy", "staged_A_B_C_joint.v1"))
     if fit_plan["material_id"] != manifest["material_id"]:
         raise ValueError("structure fit plan material differs from the prepared experiment")
     continuous_quadrature = fit_plan["continuous_quadrature"]
@@ -5293,6 +5630,11 @@ def fit(
     expected_predecessor_stage = fit_plan["stage"][stage].get("predecessor")
     if (predecessor_path is None) != (expected_predecessor_stage is None):
         raise ValueError(f"stage {stage!r} predecessor requirement was not satisfied")
+    _require_declared_fit_start(
+        execution_policy,
+        initial_parameters_override=initial_parameters_override,
+        resume_path=resume_path,
+    )
     series = _rebuilt_series(manifest)
     fit_rod_roster = _fitted_rod_roster(series[0])
     if (
@@ -5425,13 +5767,6 @@ def fit(
     data_projection_relative_l2_by_family: dict[str, float] = {}
     data_projection_relative_l2_background_anchor_rows: float | None = None
 
-    def relative_l2(reference: np.ndarray, candidate: np.ndarray, selected: np.ndarray) -> float:
-        denominator = max(
-            np.linalg.norm(reference[selected]),
-            np.finfo(np.float64).tiny,
-        )
-        return float(np.linalg.norm(reference[selected] - candidate[selected]) / denominator)
-
     data_projection_qualification_required = _data_projection_qualification_required(recipe)
     maximum_data_projection_error = float(recipe["model_cubature"]["maximum_oracle_relative_l2"])
     if native_observations:
@@ -5458,12 +5793,12 @@ def fit(
         }
     else:
         for family in FAMILIES:
-            data_projection_relative_l2_by_family[str(family)] = relative_l2(
+            data_projection_relative_l2_by_family[str(family)] = _relative_l2(
                 oracle_peak_count,
                 fit_peak_count,
                 np.asarray(peak_area_projection.peak_signal_family) == family,
             )
-        data_projection_relative_l2_background_anchor_rows = relative_l2(
+        data_projection_relative_l2_background_anchor_rows = _relative_l2(
             np.asarray(observations.count_mass),
             np.asarray(fit_observations.count_mass),
             np.asarray(arrays["is_background"], dtype=np.bool_),
@@ -5935,10 +6270,11 @@ def fit(
         "outer_chalcogen_delta_z_fractional": float(fitted_full[1]),
         "bi_occupancy": 1.0,
         "central_chalcogen_occupancy": 1.0,
-        "outer_chalcogen_occupancy": 1.0,
-        "outer_bi_antisite_fraction": float(fitted_full[2]),
+        "outer_chalcogen_occupancy": 1.0 - float(fitted_full[2]),
+        "outer_chalcogen_vacancy_fraction": float(fitted_full[2]),
+        "outer_bi_antisite_fraction": 0.0,
         "outer_chalcogen_fraction": 1.0 - float(fitted_full[2]),
-        "occupancy_rule": "full_outer_site_chalcogen_plus_bi_antisite.v1",
+        "occupancy_rule": "outer_site_chalcogen_plus_vacancy.v1",
         "intensity_envelope_u_radial_A2": float(fitted_full[3]),
         "intensity_envelope_u_normal_A2": float(fitted_full[4]),
         "intensity_envelope_model": "exp(-U_r*Q_r^2-U_z*Q_z^2).v1",
@@ -6010,6 +6346,7 @@ def fit(
     document = {
         "schema_version": FIT_SCHEMA,
         "stage": stage,
+        "execution_policy": execution_policy,
         "status": (
             ("FIT" if stage == "joint" else "STAGE_CONDITIONED")
             if numerically_converged
@@ -6145,10 +6482,16 @@ def fit(
         },
         "fit_contract": (
             "one five-coordinate structure shared by every retained m=0 and m!=0 peak in all "
-            "three OSCs; staged Wyckoff, constrained outer-site Bi antisite, one physical "
-            "two-component global intensity envelope with fixed anisotropic site ADPs, "
-            "then joint activation; "
-            "one scale per OSC shared across its families; exact candidate-model reevaluation "
+            "three OSCs; "
+            + (
+                "joint activation from one explicit or same-stage restart vector under the "
+                "seeded joint-only policy; "
+                if execution_policy == "seeded_joint_only.v1"
+                else "staged Wyckoff, constrained outer-site vacancy, one physical "
+                "two-component global intensity envelope with fixed anisotropic site ADPs, "
+                "then joint activation; "
+            )
+            + "one scale per OSC shared across its families; exact candidate-model reevaluation "
             "as continuous detector-chart area integrals in phi/2theta for m=0 and signed-side "
             "Qr/L for m!=0; "
             + (
@@ -6430,6 +6773,7 @@ def prepare_profiles(
         maximum_sensitivity_condition=maximum_sensitivity_condition,
         expected_dataset_ids=manifest["dataset_ids"],
         predecessor_chain_complete=bool(fit_chain),
+        expected_execution_policy=str(fit_plan["execution_policy"]),
     )
     fixed_lattice_record = _prepared_lattice_record(manifest, series)
     dataset_ids = tuple(str(value) for value in manifest["dataset_ids"])
@@ -6533,9 +6877,7 @@ def prepare_profiles(
         profile_stitch = profile_recipe.get("parratt_stitch")
         if not isinstance(fit_stitch, dict) or not isinstance(profile_stitch, dict):
             raise ValueError("profile parameter replay requires explicit fit and profile stitches")
-        if fit_stitch.get("interface_assumption") == profile_stitch.get(
-            "interface_assumption"
-        ):
+        if fit_stitch.get("interface_assumption") == profile_stitch.get("interface_assumption"):
             raise ValueError("profile parameter replay must change the m=0 interface assumption")
         replay_scales = {
             dataset_id: float(fit_document["dataset_scales"][dataset_id])
@@ -8249,9 +8591,7 @@ def render(
                 marker="x",
                 markersize=3.0,
                 linewidth=1.0,
-                label=(
-                    f"{model_label} + extrapolated radial BG" if segment_index == 0 else None
-                ),
+                label=(f"{model_label} + extrapolated radial BG" if segment_index == 0 else None),
             )
 
     for identity, axis in axes.items():
@@ -8348,7 +8688,7 @@ def render(
     figure.suptitle(
         f"{manifest['evidence_level']} — fault-free configured ordered parent; "
         f"shared Δθᵢ={math.degrees(float(fixed['incidence_angle_delta_rad'])):+.4f}°; "
-        f"outer Bi antisite x={structure['outer_bi_antisite_fraction']:.4f}",
+        f"outer-chalcogen vacancy v={structure['outer_chalcogen_vacancy_fraction']:.4f}",
         fontsize=12,
     )
     try:

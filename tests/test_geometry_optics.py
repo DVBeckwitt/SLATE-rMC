@@ -33,6 +33,7 @@ from rasim_next.geometry import (
     compile_instrument,
     detector_coordinate_to_ray,
     detector_coordinates_to_angles,
+    detector_path_linear_attenuation_at_wavelength_m_inv,
     intersect_sample_ray,
     project_detector_ray,
     project_detector_rays,
@@ -42,6 +43,8 @@ from rasim_next.io.osc import OscFormatError, read_osc
 from rasim_next.materials import crystal_with_direct_basis, material_optics, read_crystal
 from rasim_next.materials.optics import HC_EV_A, atomic_scattering_factor_e
 from rasim_next.optics import (
+    external_path_attenuation,
+    incident_illuminated_path_weight,
     path_attenuation,
     scalar_optical_weight,
     solve_exit_mode,
@@ -906,6 +909,122 @@ def test_detector_angle_support_frame_and_inverse_statuses() -> None:
 
 
 def test_refraction_and_attenuation_equations() -> None:
+    with pytest.raises(ValueError, match="unity detector path medium"):
+        compile_instrument(
+            replace(
+                _configuration(),
+                detector_path_linear_attenuation_m_inv=1.2,
+            )
+        )
+    air_instrument = compile_instrument(
+        replace(
+            _configuration(),
+            detector_path_medium_id="standard_dry_air_sensitivity.v1",
+            detector_path_linear_attenuation_m_inv=1.2,
+        )
+    )
+    assert air_instrument.detector_path_medium_id == "standard_dry_air_sensitivity.v1"
+    assert air_instrument.detector_path_linear_attenuation_m_inv == 1.2
+    table_instrument = compile_instrument(
+        replace(
+            _configuration(),
+            detector_path_medium_id="standard_dry_air_wavelength_table_sensitivity.v1",
+            detector_path_wavelength_A=(1.540592925, 1.544427),
+            detector_path_linear_attenuation_m_inv_by_wavelength=(
+                1.194448861306956,
+                1.2033257750023947,
+            ),
+        )
+    )
+    generated_table = replace(
+        _configuration(),
+        detector_path_medium_id="standard_dry_air_wavelength_table_sensitivity.v1",
+        detector_path_wavelength_A=(value for value in (1.540592925, 1.544427)),
+        detector_path_linear_attenuation_m_inv_by_wavelength=(
+            value for value in (1.194448861306956, 1.2033257750023947)
+        ),
+    )
+    assert generated_table.detector_path_wavelength_A == (1.540592925, 1.544427)
+    assert generated_table.detector_path_linear_attenuation_m_inv_by_wavelength == (
+        1.194448861306956,
+        1.2033257750023947,
+    )
+    assert (
+        detector_path_linear_attenuation_at_wavelength_m_inv(
+            air_instrument,
+            1.7,
+        )
+        == 1.2
+    )
+    assert (
+        detector_path_linear_attenuation_at_wavelength_m_inv(
+            table_instrument,
+            1.540592925,
+        )
+        == 1.194448861306956
+    )
+    assert (
+        detector_path_linear_attenuation_at_wavelength_m_inv(
+            table_instrument,
+            1.544427,
+        )
+        == 1.2033257750023947
+    )
+    with pytest.raises(ValueError, match="does not contain the exact wavelength"):
+        detector_path_linear_attenuation_at_wavelength_m_inv(table_instrument, 1.541)
+    for change in (
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (1.54,),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (1.54, 1.53),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (1.0, 1.1),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_linear_attenuation_m_inv": 1.0,
+            "detector_path_wavelength_A": (1.54,),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (1.0,),
+        },
+        {
+            "detector_path_wavelength_A": (1.54,),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (1.0,),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_linear_attenuation_m_inv": True,
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (1.54,),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (True,),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (True,),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (1.0,),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (np.bool_(True),),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (1.0,),
+        },
+        {
+            "detector_path_medium_id": "air.v1",
+            "detector_path_wavelength_A": (1.54,),
+            "detector_path_linear_attenuation_m_inv_by_wavelength": (np.complex128(1.0 + 0.1j),),
+        },
+    ):
+        with pytest.raises(ValueError):
+            replace(_configuration(), **change)
+    for invalid_wavelength in (True, np.bool_(True), np.complex128(1.54 + 0.1j)):
+        with pytest.raises(ValueError, match="real number"):
+            detector_path_linear_attenuation_at_wavelength_m_inv(
+                table_instrument,
+                invalid_wavelength,
+            )
     k0_Ainv = 4.078420201221933
     wavelength_A = 2.0 * np.pi / k0_Ainv
     film = _material(wavelength_A)
@@ -961,7 +1080,29 @@ def test_refraction_and_attenuation_equations() -> None:
         atol=5e-13,
     )
     assert uniform_depth_attenuation(0.0, 0.0, thickness_A) == 1.0
+    assert incident_illuminated_path_weight([0.0, 0.0, -1.0]) == 1.0
+    five_deg = incident_illuminated_path_weight(
+        [math.cos(math.radians(5.0)), 0.0, -math.sin(math.radians(5.0))]
+    )
+    twenty_deg = incident_illuminated_path_weight(
+        [math.cos(math.radians(20.0)), 0.0, -math.sin(math.radians(20.0))]
+    )
+    assert five_deg / twenty_deg == pytest.approx(
+        math.sin(math.radians(20.0)) / math.sin(math.radians(5.0)),
+        rel=2.0e-15,
+    )
+    with pytest.raises(ValueError, match="nonzero sample-normal"):
+        incident_illuminated_path_weight([1.0, 0.0, 0.0])
     assert path_attenuation(1e-5, 2e-5, 100.0, 200.0) == pytest.approx(np.exp(-0.01))
+    np.testing.assert_array_equal(
+        external_path_attenuation(0.0, [0.075, 0.15]),
+        np.ones(2),
+    )
+    np.testing.assert_allclose(
+        external_path_attenuation(1.2, [0.075, 0.15]),
+        np.exp(-1.2 * np.asarray((0.075, 0.15))),
+        rtol=2.0e-15,
+    )
     assert scalar_optical_weight(2.0 + 1.0j, 0.5 - 0.25j, 0.8) == pytest.approx(
         abs((2.0 + 1.0j) * (0.5 - 0.25j)) ** 2 * 0.8
     )

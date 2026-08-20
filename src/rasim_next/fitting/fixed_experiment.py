@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import InitVar, dataclass, field, replace
+from itertools import pairwise
 from pathlib import Path
 from typing import Self
 
 import numpy as np
 
 from painted_ewald import MosaicBraggSpace, MosaicParameters
+from rasim_next.core.contracts import (
+    canonical_revision_sha256,
+    incidence_scan_calibration_binding_revision,
+)
 from rasim_next.fitting.fixed_lattice import FixedLatticeState
 from rasim_next.fitting.indexed_series import (
     DETECTOR_CALIBRATION_PARAMETER_NAMES,
@@ -29,6 +34,7 @@ from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
     rebind_configured_simulation_instrument,
 )
+from rasim_next.pipeline.source_averaged_detector import _detector_native_chart_revision
 
 FIXED_EXPERIMENT_STATE_SCHEMA_VERSION = "rasim-fixed-experiment-state-v2"
 FIXED_MOSAIC_STATE_SCHEMA_VERSION = "rasim-fixed-mosaic-state-v1"
@@ -520,17 +526,155 @@ def fixed_position_from_fit_record(
     return position, status, selection
 
 
-def build_fixed_experiment_series(
+INCIDENCE_SCAN_CALIBRATION_MODEL_ID = "common_delta_only_incidence_scan_calibration.v1"
+_FIXED_INCIDENCE_SCAN_BUILDER_TOKEN = object()
+
+
+@dataclass(frozen=True, slots=True)
+class FixedIncidenceScanSeries:
+    """Calibrated incidence nodes and their complete corrected experiments."""
+
+    inputs: tuple[ConfiguredSimulationInputs, ...]
+    commanded_incidence_angles_rad: tuple[float, ...]
+    effective_incidence_angles_rad: tuple[float, ...]
+    calibration_model_id: str
+    position_artifact_revision: str
+    incidence_angle_delta_rad: float
+    _builder_token: InitVar[object | None] = None
+    component_sample_geometry_revision: tuple[str, ...] = field(init=False)
+    detector_panel_revision: str = field(init=False)
+    source_revision: str = field(init=False)
+    source_state_count: int = field(init=False)
+    scan_calibration_revision: str = field(init=False)
+    scan_calibration_binding_revision: str = field(init=False)
+
+    def __post_init__(self, _builder_token: object | None) -> None:
+        if _builder_token is not _FIXED_INCIDENCE_SCAN_BUILDER_TOKEN:
+            raise TypeError("FixedIncidenceScanSeries must be built by its calibrated builder")
+        inputs = tuple(self.inputs)
+        commanded = tuple(float(value) for value in self.commanded_incidence_angles_rad)
+        effective = tuple(float(value) for value in self.effective_incidence_angles_rad)
+        if (
+            not inputs
+            or len(inputs) != len(commanded)
+            or len(inputs) != len(effective)
+            or any(not math.isfinite(value) for value in (*commanded, *effective))
+            or any(stop <= start for start, stop in pairwise(commanded))
+            or any(stop <= start for start, stop in pairwise(effective))
+        ):
+            raise ValueError("fixed incidence scan nodes must be finite, aligned, and increasing")
+        if self.calibration_model_id != INCIDENCE_SCAN_CALIBRATION_MODEL_ID:
+            raise ValueError("unsupported incidence-scan calibration model")
+        position_revision = self.position_artifact_revision
+        if (
+            not isinstance(position_revision, str)
+            or not position_revision.startswith("sha256-")
+            or len(position_revision) != 71
+            or any(character not in "0123456789abcdef" for character in position_revision[7:])
+        ):
+            raise ValueError("position_artifact_revision must identify the fixed position")
+        delta = float(self.incidence_angle_delta_rad)
+        if not math.isfinite(delta):
+            raise ValueError("incidence_angle_delta_rad must be finite")
+        calibrated_effective = tuple(value + delta for value in commanded)
+        if effective != calibrated_effective:
+            raise ValueError("the common-delta calibration requires one shared angle offset")
+        if any(len(item.config.instrument.axis_rotations) != 1 for item in inputs):
+            raise ValueError("fixed incidence scan nodes require one incidence axis")
+        configured_effective = tuple(
+            math.radians(item.config.instrument.axis_rotations[0].angle_deg) for item in inputs
+        )
+        if not np.allclose(configured_effective, effective, rtol=0.0, atol=2.0e-14):
+            raise ValueError("configured scan poses do not match the effective angle axis")
+        for item in inputs:
+            if (
+                item.incident.states.sample_geometry_revision
+                != item.instrument.sample_geometry_revision
+            ):
+                raise ValueError("configured scan incident and instrument geometry disagree")
+        source_revision = inputs[0].samples.source_revision
+        source_state_count = int(inputs[0].samples.incident_sample_id.size)
+        if any(item.samples.source_revision != source_revision for item in inputs[1:]):
+            raise ValueError("fixed incidence scan nodes must share one source realization")
+        if any(item.samples.incident_sample_id.size != source_state_count for item in inputs[1:]):
+            raise ValueError("fixed incidence scan nodes must share one source-state count")
+        component_geometry_revision = tuple(
+            item.incident.states.sample_geometry_revision for item in inputs
+        )
+        if len(set(component_geometry_revision)) != len(component_geometry_revision):
+            raise ValueError("fixed incidence scan nodes must have distinct sample poses")
+        panel_revisions = tuple(_detector_native_chart_revision(item.instrument) for item in inputs)
+        if len(set(panel_revisions)) != 1:
+            raise ValueError("fixed incidence scan nodes must share one detector-native chart")
+        panel_revision = panel_revisions[0]
+        if any(item.scan_calibration_binding_revision is not None for item in inputs):
+            raise ValueError("fixed incidence scan inputs must not be pre-stamped")
+        if any(item.calibrated_incidence_axis_angle_rad is not None for item in inputs):
+            raise ValueError("fixed incidence scan inputs must not carry a calibrated angle")
+        revision = canonical_revision_sha256(
+            ("definition_id", "fixed_incidence_scan_calibration.v1"),
+            ("calibration_model_id", self.calibration_model_id),
+            ("position_artifact_revision", position_revision),
+            ("incidence_angle_delta_rad", delta),
+            ("commanded_incidence_angles_rad", np.asarray(commanded, dtype=np.float64)),
+            ("effective_incidence_angles_rad", np.asarray(effective, dtype=np.float64)),
+            ("source_revision", source_revision),
+            ("source_state_count", source_state_count),
+            ("component_sample_geometry_revision", component_geometry_revision),
+            ("detector_panel_revision", panel_revision),
+        )
+        binding_revision = incidence_scan_calibration_binding_revision(
+            scan_calibration_revision=revision,
+            component_sample_geometry_revision=component_geometry_revision,
+            component_incidence_axis_angle_rad=configured_effective,
+            effective_incidence_angle_rad=effective,
+            detector_panel_revision=panel_revision,
+            source_revision=source_revision,
+            source_state_count=source_state_count,
+        )
+        stamped_inputs_list: list[ConfiguredSimulationInputs] = []
+        for item, configured_angle in zip(inputs, configured_effective, strict=True):
+            stamped = replace(item)
+            object.__setattr__(stamped, "scan_calibration_binding_revision", binding_revision)
+            object.__setattr__(
+                stamped,
+                "calibrated_incidence_axis_angle_rad",
+                configured_angle,
+            )
+            stamped_inputs_list.append(stamped)
+        stamped_inputs = tuple(stamped_inputs_list)
+        object.__setattr__(self, "inputs", stamped_inputs)
+        object.__setattr__(self, "commanded_incidence_angles_rad", commanded)
+        object.__setattr__(self, "effective_incidence_angles_rad", effective)
+        object.__setattr__(self, "incidence_angle_delta_rad", delta)
+        object.__setattr__(
+            self,
+            "component_sample_geometry_revision",
+            component_geometry_revision,
+        )
+        object.__setattr__(self, "scan_calibration_revision", revision)
+        object.__setattr__(self, "detector_panel_revision", panel_revision)
+        object.__setattr__(self, "source_revision", source_revision)
+        object.__setattr__(self, "source_state_count", source_state_count)
+        object.__setattr__(
+            self,
+            "scan_calibration_binding_revision",
+            binding_revision,
+        )
+
+
+def _build_fixed_experiment_series_at_effective_angles(
     config: SimulationConfiguration,
     *,
     position: FixedPositionState,
     fixed_lattice: FixedLatticeState,
+    effective_incidence_angles_rad: tuple[float, ...],
     source_sample_count: int,
     gaussian_sigma_rad: float,
     lorentzian_half_width_rad: float,
     lorentzian_probability: float,
 ) -> tuple[ConfiguredSimulationInputs, ...]:
-    """Build one corrected configured model per fixed effective incidence angle."""
+    """Build corrected configured models at explicit calibrated incidence angles."""
 
     if not isinstance(position, FixedPositionState):
         raise TypeError("position must be FixedPositionState")
@@ -542,6 +686,9 @@ def build_fixed_experiment_series(
         or source_sample_count < 1
     ):
         raise ValueError("source_sample_count must be a positive integer")
+    effective_angles = tuple(float(value) for value in effective_incidence_angles_rad)
+    if not effective_angles or any(not math.isfinite(value) for value in effective_angles):
+        raise ValueError("effective incidence angles must be finite and nonempty")
     if len(config.instrument.axis_rotations) != 1:
         raise ValueError("fixed-experiment series currently requires one incidence axis")
     reference_crystal = read_crystal(
@@ -596,7 +743,7 @@ def build_fixed_experiment_series(
         )
 
     series: list[ConfiguredSimulationInputs] = []
-    for incidence_rad in position.effective_incidence_angles_rad:
+    for incidence_rad in effective_angles:
         angle_config = replace(
             base_config,
             instrument=replace(
@@ -665,10 +812,90 @@ def build_fixed_experiment_series(
     return result
 
 
+def build_fixed_experiment_series(
+    config: SimulationConfiguration,
+    *,
+    position: FixedPositionState,
+    fixed_lattice: FixedLatticeState,
+    source_sample_count: int,
+    gaussian_sigma_rad: float,
+    lorentzian_half_width_rad: float,
+    lorentzian_probability: float,
+) -> tuple[ConfiguredSimulationInputs, ...]:
+    """Build one corrected configured model per fixed effective incidence angle."""
+
+    return _build_fixed_experiment_series_at_effective_angles(
+        config,
+        position=position,
+        fixed_lattice=fixed_lattice,
+        effective_incidence_angles_rad=position.effective_incidence_angles_rad,
+        source_sample_count=source_sample_count,
+        gaussian_sigma_rad=gaussian_sigma_rad,
+        lorentzian_half_width_rad=lorentzian_half_width_rad,
+        lorentzian_probability=lorentzian_probability,
+    )
+
+
+def build_fixed_incidence_scan_series(
+    config: SimulationConfiguration,
+    *,
+    position: FixedPositionState,
+    fixed_lattice: FixedLatticeState,
+    commanded_incidence_angles_rad: tuple[float, ...],
+    source_sample_count: int,
+    gaussian_sigma_rad: float,
+    lorentzian_half_width_rad: float,
+    lorentzian_probability: float,
+    calibration_model_id: str = INCIDENCE_SCAN_CALIBRATION_MODEL_ID,
+) -> FixedIncidenceScanSeries:
+    """Build scan nodes using the fitted common delta, never image-specific trims.
+
+    The discrete fitted-image trims have no continuous interpolation.  This
+    explicit calibration model therefore applies only the shared commanded-
+    angle offset while retaining every detector and shared-geometry correction
+    from the fixed position artifact.
+    """
+
+    if not isinstance(position, FixedPositionState):
+        raise TypeError("position must be FixedPositionState")
+    if calibration_model_id != INCIDENCE_SCAN_CALIBRATION_MODEL_ID:
+        raise ValueError("unsupported incidence-scan calibration model")
+    commanded = tuple(float(value) for value in commanded_incidence_angles_rad)
+    if (
+        not commanded
+        or any(not math.isfinite(value) for value in commanded)
+        or any(stop <= start for start, stop in pairwise(commanded))
+    ):
+        raise ValueError("commanded scan angles must be finite and strictly increasing")
+    effective = tuple(value + position.incidence_angle_delta_rad for value in commanded)
+    inputs = _build_fixed_experiment_series_at_effective_angles(
+        config,
+        position=position,
+        fixed_lattice=fixed_lattice,
+        effective_incidence_angles_rad=effective,
+        source_sample_count=source_sample_count,
+        gaussian_sigma_rad=gaussian_sigma_rad,
+        lorentzian_half_width_rad=lorentzian_half_width_rad,
+        lorentzian_probability=lorentzian_probability,
+    )
+    return FixedIncidenceScanSeries(
+        inputs=inputs,
+        commanded_incidence_angles_rad=commanded,
+        effective_incidence_angles_rad=effective,
+        calibration_model_id=calibration_model_id,
+        position_artifact_revision=position.artifact_revision,
+        incidence_angle_delta_rad=position.incidence_angle_delta_rad,
+        _builder_token=_FIXED_INCIDENCE_SCAN_BUILDER_TOKEN,
+    )
+
+
 __all__ = [
     "FIXED_EXPERIMENT_STATE_SCHEMA_VERSION",
     "FIXED_MOSAIC_STATE_SCHEMA_VERSION",
+    "INCIDENCE_SCAN_CALIBRATION_MODEL_ID",
+    "FixedIncidenceScanSeries",
     "FixedMosaicState",
     "FixedPositionState",
     "build_fixed_experiment_series",
+    "build_fixed_incidence_scan_series",
 ]

@@ -2,7 +2,7 @@
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
-API v13 does not renumber historical evidence.
+API v14 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
@@ -140,13 +140,25 @@ operational provenance and does not enter a stage scientific revision, but a res
 match it exactly so the verifier cannot claim a reused result was executed by its own runtime.
 Geometry records the canonical one-state source batch plus commanded/effective incidence vectors,
 one common delta, fixed gauge, and the full position proof evidence; later stages record the common
-250-state batch and the consumed upstream revision. Fresh and resumed envelopes use the same strict
+250-state batch and the consumed upstream revision. The Bi2Te3 mosaic member additionally binds the
+geometry-stage fixed position, implicit CIF lattice, and case simulation-config identity; its
+ordered member must preserve those records exactly. Fresh and resumed envelopes use the same strict
 validation, and a stage's compact summary is
 verified before that stage is persisted or supplied downstream. Volatile artifact paths and
 path-dependent JSON container hashes, timings, device labels,
 and memory measurements do not enter a scientific revision. Decoded render identities do. Missing
 stages cannot be hidden: verification always covers every stage through the requested terminal
 boundary.
+
+The outer layered-fit runner uses `rasim-layered-fit-workflow-progress-v2` as an exclusive attempt
+marker and `rasim-layered-fit-workflow-stage-v3` as the terminal stage manifest. Progress v2 binds
+the stage, `status=started`, plan revision, live repository/runtime scientific revision, upstream
+revision, and completed-command count. Any surviving progress marker, including count zero,
+rejects reuse and requires a new output directory; partial commands are never resumed. Stage v3
+binds material/model identity, the same plan/repository/upstream revisions, ordered completion
+artifact paths and hashes, and the derived stage revision. Reuse rehashes inputs and artifacts and
+recomputes that revision. These orchestration records are not physics trace stages and do not
+renumber trace schema v4.
 
 The current additive matched-region chain is independent of frozen trace-stage numbering:
 
@@ -161,20 +173,23 @@ The current additive matched-region chain is independent of frozen trace-stage n
   provenance. `rasim-fixed-experiment-state-v2` composes that strict mosaic state with the complete
   v6 position state and `rasim-fixed-lattice-state-v1`; it binds ordered image IDs, commanded/shared/
   trim/effective angles, source-state count, detector shape, and every input hash.
-- `rasim-layered-quintuple-matched-regions-v2` freezes preparation/display row discovery state,
+- `rasim-layered-quintuple-matched-regions-v4` freezes preparation/display row discovery state,
   mixed phi/2theta and Qr/L row identities, selected native-pixel ordering, exact fixed-experiment
   state, chart rectangles, recipe hash, and every input hash. Its center-selected count masses and
-  support are not the fit observable; fit-v11 reprojects the verified raw OSC continuously.
-- `rasim-shared-radial-background-v2` freezes one independently calibrated rise-decay radial halo
+  support are not the fit observable; fit-v14 reprojects the verified raw OSC continuously.
+- `rasim-shared-radial-background-v4` freezes one independently calibrated rise-decay radial halo
   with shared shape, per-OSC amplitude and pedestal, covariance, held-out cells, and exact input
   identities. It binds the fit plan and beam center and excludes every native pixel touched by the
   oracle continuous projection. Its empirical-native-pixel method flags, adapter, and complete
   numerical implementation are hash-bound and reverified on load.
-- `rasim-layered-quintuple-matched-fit-progress-v9` atomically records the last complete stage-specific model
+- `rasim-layered-quintuple-matched-fit-progress-v11` atomically records the last complete stage-specific model
   evaluation and binds diagnostic, recipe, fit plan, full numerical implementation, backend,
   cubature, block, rod-scope, optimizer-start, and stopping-budget identities.
-  `rasim-layered-quintuple-matched-region-fit-v11` records the five-coordinate A -> B -> C -> joint chain,
-  exact active/frozen names, child starts, direct and recursive predecessor hashes, one finite
+  `rasim-layered-quintuple-matched-region-fit-v14` records the declared execution policy: either
+  the v7 five-coordinate A -> B -> C -> joint chain with exact active/frozen names, child starts,
+  and direct/recursive predecessor hashes, or v8 `seeded_joint_only.v1` with an explicit numeric
+  start/hash (or verified same-stage restart) and no fabricated predecessors. Fit-v14 does not
+  claim a seed-file identity; the outer workflow separately hashes seed-v2 into its plan. It also records one finite
   positive scale per recipe-ordered OSC, the exact fitted rod roster, frozen radial-background
   identity, residuals, convergence, and separate parameter-scaled
   data-only and penalized sensitivity. Practical data-only rank and condition determine
@@ -184,14 +199,22 @@ The current additive matched-region chain is independent of frozen trace-stage n
   anchor-conditioned `(I-A)m` observable by family plus raw anchor rows. Every stage must share the
   same background, data projection, and rod roster. Only the joint artifact is eligible downstream,
   and its qualification state is preserved.
-- `rasim-layered-quintuple-matched-profile-progress-v6` reports each completed continuous-profile pass for
-  monitoring but is not a resume source. `rasim-layered-quintuple-matched-figure-profiles-v10` is the atomic
+- `rasim-layered-quintuple-matched-profile-progress-v7` reports each completed continuous-profile pass for
+  monitoring but is not a resume source. `rasim-layered-quintuple-matched-figure-profiles-v14` is the atomic
   completed diagnostic with
   full detector-visible profiles in both L and physical Qz, continuous-support edge exclusions,
   measured/model profiles, the exact fit-bound rod roster, content hashes for every render-critical
   array, and the full verified upstream/predecessor hash chain. Its
   only current evidence level is `FIT_CONDITIONED`; it sets `publication_ready=false` and makes no
   all-configured-rod or full-profile-oracle claim.
+- Typed source and configured-simulation provenance carry the spectral line wavelengths and
+  probability masses, position/divergence correlations, illuminated-path model ID, and external
+  detector-path attenuation model. The matched-fit chain additionally binds the declared dark
+  scale/basis/covariance and the vacancy occupancy rule: outer-chalcogen occupancy `1-v`, outer-site
+  Bi substitution zero. A retained 3R record declares its exact epsilon value; epsilon zero is a
+  gate-retained nested model, not an omitted field or an aggregate-grid optimum claim. These
+  additions use existing typed metadata and do
+  not change trace schema v4 stage numbering.
 - `rasim-layered-quintuple-peak-alignment-v3` reports m=0 offsets in two-theta and nonzero-family offsets in L.
   `rasim-layered-quintuple-matched-figure-output-v1` is promoted last and binds the PNG, PDF, alignment JSON,
   renderer, and profile diagnostic hashes; its presence is the transaction commit marker.
@@ -242,3 +265,9 @@ Optional geometry calibration names/values, configured detector reference coordi
 fixed-position calibration-provenance flag belong to the existing position envelope. Sparse
 response, strength-parameterization, region-model, and fitted-structure SHA-256 revisions map to
 the existing fitting invalidation/provenance fields; they do not create new trace stage IDs.
+
+Acquisition-bound quadrature and averaged-detector records carry acquisition, calibration,
+quadrature, scan, and component revisions. Adaptive records carry source/evaluator revisions,
+covariance, convergence gate, and refinement tree; staged scores carry immutable SHA-256 comparison
+revisions and block shapes. These are typed records or external proof artifacts, not new trace
+stages, so trace-v4 numbering remains unchanged.

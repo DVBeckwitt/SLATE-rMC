@@ -339,7 +339,9 @@ def integrate_shared_native_pixel_field(
     """Project one shared native field and retain cross-projection covariance."""
 
     selected = tuple(projections)
-    if not selected or any(not isinstance(value, NativePixelRegionProjection) for value in selected):
+    if not selected or any(
+        not isinstance(value, NativePixelRegionProjection) for value in selected
+    ):
         raise ValueError("projections must contain at least one native-pixel projection")
     detector_shape = selected[0].detector_shape_rc
     if any(value.detector_shape_rc != detector_shape for value in selected[1:]):

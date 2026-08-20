@@ -34,6 +34,7 @@ from scipy.ndimage import gaussian_filter  # noqa: E402
 from painted_ewald.mosaic import build_mosaic_space  # noqa: E402
 from painted_ewald.rotations import axis_angle_rotation_batch, mosaic_axes  # noqa: E402
 from painted_ewald.types import MosaicParameters, Rod  # noqa: E402
+from rasim_next.pipeline.bragg_space import finite_stack_integer_l_display_nodes  # noqa: E402
 from rasim_next.pipeline.configured_simulation import (  # noqa: E402
     ConfiguredSimulationInputs,
     build_configured_simulation_inputs,
@@ -224,7 +225,10 @@ def _configured_inputs(
     )
     configured = replace(
         base,
-        source=replace(base.source, sample_count=1),
+        source=replace(
+            base.source,
+            sample_count=base.source.minimum_physical_sample_count,
+        ),
         instrument=instrument,
         mosaic=mosaic,
     )
@@ -256,16 +260,15 @@ def _structure_resolved_axial_nodes_Ainv(
     b3_norm = float(np.linalg.norm(inputs.reciprocal.basis_Ainv[:, 2]))
     lower_l = lower / b3_norm
     upper_l = upper / b3_norm
-    integer_l = np.arange(math.ceil(lower_l), math.floor(upper_l) + 1, dtype=np.float64)
-    shoulder = 0.5 / inputs.config.structure_factor.layers
-    resolved_l = (
-        (integer_l[:, None] + (-shoulder, 0.0, shoulder)).reshape(-1)
-        if integer_l.size
-        else np.empty(0, dtype=np.float64)
+    return (
+        finite_stack_integer_l_display_nodes(
+            lower_l,
+            upper_l,
+            layer_count=inputs.config.structure_factor.layers,
+            background_count=background_count,
+        )
+        * b3_norm
     )
-    resolved_l = resolved_l[(resolved_l >= lower_l) & (resolved_l <= upper_l)]
-    background_l = np.linspace(lower_l, upper_l, background_count)
-    return np.unique(np.concatenate((background_l, resolved_l))) * b3_norm
 
 
 def _structure_quadrature_axial_Ainv(

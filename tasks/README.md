@@ -3,8 +3,10 @@
 `tasks/index.yaml` is the authoritative status registry.
 
 T00--T06 and the original four-worktree run are historical proof phases. The contract-v12
-continuous reciprocal and detector observable remains accepted; contract v13 adds the shared
-sparse general-CIF fitting core. The old candidate, selector, event, hit, depositor, raster, and
+continuous reciprocal and detector observable remains accepted; contract v13 added the shared
+sparse general-CIF fitting core, and contract v14 adds the corrected weighted-source, illuminated-
+path, external-path, vacancy, and 3R-remediation contracts. The old candidate, selector, event,
+hit, depositor, raster, and
 sphere-painter APIs have been removed and must not be recreated from historical task text.
 
 T08 is complete under the position-free measured-selection contract recorded in
@@ -50,3 +52,8 @@ scientifically supported measured PbI2 stages. Detector-native stages that canno
 the available raw series remain explicit stop conditions rather than inferred results. Its accepted
 slice is the measured rational-admission API, exact Bi2X3 null regression, and external PbI2
 positional preflight; measured PbI2 geometry, mosaic, structure, and stacking remain blocked.
+
+T27 corrects the Bi2Se3 source and measurement factors, outer-site vacancy semantics, scale-zero
+dark treatment, and native-3R RichEpsilon implementation. Its corrected 5--25-degree deterministic
+scan baseline fails the absolute angular-convergence gate, so no scan-informed candidate or new
+parameter vector is accepted; the retained result remains explicitly not publication-ready.

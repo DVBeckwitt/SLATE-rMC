@@ -3,9 +3,11 @@
 The reciprocal panel samples the continuous configured field. The Ewald panel point-samples the
 exact almost-everywhere intrinsic density only on the internal-film sphere patch seen by the
 configured active detector, including regular nonzero m=0 support. Spawned CPU processes evaluate
-independent row batches. The two detector panels independently evaluate the canonical one-beam
-detector-coordinate density at the configured and incrementally tilted poses; neither image is
-warped from the other. Generated artifacts must remain outside the repository.
+independent row batches. The two detector panels independently evaluate the weighted configured
+spectral lines at one mean ray geometry per line; this minimum display quadrature does not sample
+the configured spatial/divergence widths. The configured and incrementally tilted images are
+evaluated separately rather than warped from one another. Generated artifacts must remain outside
+the repository.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from rasim_next.geometry import (  # noqa: E402
     compose_intrinsic_xy_rotation,
     project_detector_rays,
 )
+from rasim_next.pipeline.bragg_space import finite_stack_integer_l_display_nodes  # noqa: E402
 from rasim_next.pipeline.configured_simulation import (  # noqa: E402
     ConfiguredSimulationInputs,
     NominalEwaldContext,
@@ -580,7 +583,10 @@ def apply_figure_settings(
         base.instrument,
         axis_rotations=(first_axis, *base.instrument.axis_rotations[1:]),
     )
-    source = replace(base.source, sample_count=1)
+    source = replace(
+        base.source,
+        sample_count=base.source.minimum_physical_sample_count,
+    )
     mosaic = replace(
         base.mosaic,
         gaussian_sigma_deg=settings.gaussian_sigma_deg,
@@ -636,15 +642,15 @@ def structure_resolved_axial_nodes_Ainv(
     b3_norm = float(np.linalg.norm(inputs.reciprocal.basis_Ainv[:, 2]))
     lower_l = lower / b3_norm
     upper_l = upper / b3_norm
-    integer_l = np.arange(math.ceil(lower_l), math.floor(upper_l) + 1, dtype=np.float64)
-    if integer_l.size:
-        shoulder_offset_l = 0.5 / inputs.config.structure_factor.layers
-        peak_l = (integer_l[:, None] + (-shoulder_offset_l, 0.0, shoulder_offset_l)).reshape(-1)
-        peak_l = peak_l[(peak_l >= lower_l) & (peak_l <= upper_l)]
-    else:
-        peak_l = np.empty(0, dtype=np.float64)
-    background_l = np.linspace(lower_l, upper_l, background_count)
-    axial = np.unique(np.concatenate((background_l, peak_l))) * b3_norm
+    axial = (
+        finite_stack_integer_l_display_nodes(
+            lower_l,
+            upper_l,
+            layer_count=inputs.config.structure_factor.layers,
+            background_count=background_count,
+        )
+        * b3_norm
+    )
     axial = np.array(axial, dtype=np.float64, copy=True, order="C")
     axial.setflags(write=False)
     return axial
@@ -1162,53 +1168,6 @@ def _coarsened_cell_count(count: int, maximum: int) -> int:
     return min(int(count), int(maximum))
 
 
-def _conservative_uniform_rebin_2d(
-    density: FloatArray,
-    target_shape: tuple[int, int],
-) -> FloatArray:
-    """Area-average a uniform 2D cell density onto another uniform partition."""
-
-    source = np.asarray(density, dtype=np.float64)
-    if source.ndim != 2 or not np.all(np.isfinite(source)) or np.any(source < 0.0):
-        raise ValueError("source density must be a finite nonnegative 2D array")
-    if len(target_shape) != 2 or any(
-        isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 2
-        for value in target_shape
-    ):
-        raise ValueError("target_shape must contain two integer counts of at least two")
-    target_rows, target_columns = (int(value) for value in target_shape)
-    source_rows, source_columns = source.shape
-    if target_rows > source_rows or target_columns > source_columns:
-        raise ValueError("conservative display rebinning may not refine the source density")
-    if target_shape == source.shape:
-        return np.array(source, copy=True, order="C")
-    if source_rows % target_rows == 0 and source_columns % target_columns == 0:
-        row_factor = source_rows // target_rows
-        column_factor = source_columns // target_columns
-        return source.reshape(
-            target_rows,
-            row_factor,
-            target_columns,
-            column_factor,
-        ).mean(axis=(1, 3))
-
-    def overlap_fraction(source_count: int, target_count: int) -> FloatArray:
-        source_edges = np.linspace(0.0, 1.0, source_count + 1)
-        target_edges = np.linspace(0.0, 1.0, target_count + 1)
-        overlap = np.maximum(
-            0.0,
-            np.minimum(target_edges[1:, None], source_edges[None, 1:])
-            - np.maximum(target_edges[:-1, None], source_edges[None, :-1]),
-        )
-        return overlap * source_count
-
-    row_fraction = overlap_fraction(source_rows, target_rows)
-    column_fraction = overlap_fraction(source_columns, target_columns)
-    source_mass = source / (source_rows * source_columns)
-    target_mass = row_fraction @ source_mass @ column_fraction.T
-    return target_mass * (target_rows * target_columns)
-
-
 def _ewald_render_texture(
     display: DetectorVisibleEwaldPatchDisplay,
     *,
@@ -1433,7 +1392,7 @@ def _sample_schematic_rays(
         if rod.family_m == 0:
             continue
         for branch in (1, 2):
-            evaluated = nominal.geometry.map_latent(
+            evaluated = nominal.geometry.map_detector_visible_coating(
                 rod=rod,
                 branch=branch,
                 alpha_rad=alpha_grid,
@@ -2238,7 +2197,8 @@ def _render_four_panel(data: PublicationData) -> object:
     )
     figure.suptitle(
         "Bi$_2$Se$_3$ reciprocal-to-detector intensity mapping at "
-        rf"$\alpha_i={data.settings.incidence_deg:g}^\circ$ (one mean Cu K$\alpha$ beam)"
+        rf"$\alpha_i={data.settings.incidence_deg:g}^\circ$ "
+        r"(a--b: mean Cu K$\alpha$ reference; c--d: weighted K$\alpha$ doublet)"
     )
     caption_axis.text(
         0.5,
@@ -2331,7 +2291,7 @@ def _render_standalone_figures(data: PublicationData) -> Iterator[tuple[str, obj
             data.ideal_detector,
             data.inputs.instrument,
             "Intermediate planar mapping",
-            "configured reference pose (default YAML tilt 0°); one-beam detector density",
+            "configured reference pose (default YAML tilt 0°); weighted K-alpha lines at mean ray geometry",
         ),
         (
             "04-tilted-detector-mapping",
@@ -2654,7 +2614,8 @@ def _save_figure(
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _capture_source_provenance(config_path: Path) -> SourceProvenance:
@@ -2929,6 +2890,33 @@ def _render_staged_schematic_only(
     )
 
 
+def _source_policy_records(
+    inputs: ConfiguredSimulationInputs,
+    nominal: NominalEwaldContext,
+) -> dict[str, dict[str, object]]:
+    reference = nominal.incident.states
+    physical = inputs.samples
+    return {
+        "reciprocal_ewald_reference": {
+            "policy": "nominal_mean_geometry_reference.v1",
+            "source_sampling_model_id": reference.source_sampling_model_id,
+            "source_revision": reference.source_revision,
+            "state_count": int(reference.incident_sample_id.size),
+            "wavelength_A": reference.wavelength_A.tolist(),
+            "source_weight": reference.source_weight.tolist(),
+        },
+        "detector_intensity": {
+            "policy": "weighted_discrete_lines_at_mean_ray_geometry.v1",
+            "phase_space_sampling": "one_mean_geometry_row_per_line; configured spatial and divergence widths are not sampled",
+            "source_sampling_model_id": physical.source_sampling_model_id,
+            "source_revision": physical.source_revision,
+            "state_count": int(physical.incident_sample_id.size),
+            "wavelength_A": physical.wavelength_A.tolist(),
+            "source_weight": physical.source_weight.tolist(),
+        },
+    }
+
+
 def _publication_manifest_payload(
     data: PublicationData,
     *,
@@ -2936,15 +2924,14 @@ def _publication_manifest_payload(
     outputs: Sequence[Path],
 ) -> dict[str, object]:
     return {
-        "schema_version": "rasim-bi2se3-publication-mapping-v5",
+        "schema_version": "rasim-bi2se3-publication-mapping-v6",
         "config_path": provenance.config_identity,
         "config_sha256": provenance.config_sha256,
         "renderer_path": provenance.renderer_identity,
         "renderer_sha256": provenance.renderer_sha256,
         "physics_revision": data.inputs.config.physics_revision,
-        "source_revision": data.inputs.samples.source_revision,
+        "source_policies": _source_policy_records(data.inputs, data.nominal),
         "settings": asdict(data.settings),
-        "one_beam_policy": "configured_mean_source_state.v1",
         "tilt_policy": "configured_pose_plus_intrinsic_column_then_current_row_increment_about_reference.v1",
         "detector_poses": {
             "configured_rotation_lab_from_detector": data.inputs.instrument.lab_from_detector.rotation.tolist(),
@@ -3063,17 +3050,18 @@ def _ewald_only_manifest_payload(
     outputs: Sequence[Path],
 ) -> dict[str, object]:
     return {
-        "schema_version": "rasim-bi2se3-detector-visible-ewald-v1",
+        "schema_version": "rasim-bi2se3-detector-visible-ewald-v2",
         "config_path": provenance.config_identity,
         "config_sha256": provenance.config_sha256,
         "renderer_path": provenance.renderer_identity,
         "renderer_sha256": provenance.renderer_sha256,
         "physics_revision": data.inputs.config.physics_revision,
-        "source_revision": data.inputs.samples.source_revision,
+        "source_policy": _source_policy_records(data.inputs, data.nominal)[
+            "reciprocal_ewald_reference"
+        ],
         "settings": asdict(data.settings),
         "measure": data.ewald.measure_id,
         "selection": data.ewald.selection_id,
-        "one_beam_policy": "configured_mean_source_state.v1",
         "sphere_policy": "canonical_top_exit_and_configured_active_panel_visibility.v1",
         "m0_policy": "regular_nonzero_support_with_positive_Q_gap;collapsed_direct_Q0_excluded.v1",
         "detector_visible_m0_q_gap_Ainv": data.ewald.detector_visible_m0_q_gap_Ainv,
@@ -3117,15 +3105,14 @@ def _schematic_only_manifest_payload(
 ) -> dict[str, object]:
     detector_norm = _detector_norm(data.ideal_detector, data.tilted_detector)
     return {
-        "schema_version": "rasim-bi2se3-projection-schematic-v1",
+        "schema_version": "rasim-bi2se3-projection-schematic-v2",
         "config_path": provenance.config_identity,
         "config_sha256": provenance.config_sha256,
         "renderer_path": provenance.renderer_identity,
         "renderer_sha256": provenance.renderer_sha256,
         "physics_revision": data.inputs.config.physics_revision,
-        "source_revision": data.inputs.samples.source_revision,
+        "source_policies": _source_policy_records(data.inputs, data.nominal),
         "settings": asdict(data.settings),
-        "one_beam_policy": "configured_mean_source_state.v1",
         "build_scope": {
             "reciprocal_space": "not_evaluated",
             "ewald_patch": "evaluated_at_requested_schematic_resolution",

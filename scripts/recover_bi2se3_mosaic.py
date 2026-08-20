@@ -57,6 +57,7 @@ from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredGeometryInputs,
     ConfiguredSimulationInputs,
+    build_configured_geometry_inputs,
     build_configured_simulation_inputs,
     build_nominal_ewald_context,
     configured_rod_catalog_revision,
@@ -97,6 +98,16 @@ _ACCEPTED_FIXED_GEOMETRY_CORRECTIONS = (
     9.999999689372352e-05,
     -2.7732760149498375e-05,
 )
+
+
+def _sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _array_bytes_sha256(value: np.ndarray) -> str:
+    array = np.ascontiguousarray(value)
+    return hashlib.sha256(memoryview(array).cast("B")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +203,12 @@ def _source_model_record(base: ConfiguredSimulationInputs) -> dict[str, object]:
         "spatial_sigma_m": list(source.spatial_sigma_m),
         "divergence_sigma_rad": list(source.divergence_sigma_rad),
         "mean_wavelength_A": source.mean_wavelength_A,
+        "wavelength_model_id": source.wavelength_model_id,
         "wavelength_sigma_A": source.wavelength_sigma_A,
+        "line_wavelength_A": list(source.line_wavelength_A),
+        "line_probability": list(source.line_probability),
+        "common_line_sigma_A": source.common_line_sigma_A,
+        "position_divergence_correlation": list(source.position_divergence_correlation),
         "sampled_wavelength_range_A": [
             float(np.min(samples.wavelength_A)),
             float(np.max(samples.wavelength_A)),
@@ -658,7 +674,7 @@ def _fixed_geometry_inputs(
 ) -> tuple[
     ConfiguredSimulationInputs,
     tuple[ConfiguredSimulationInputs, ...],
-    tuple[ConfiguredSimulationInputs, ...],
+    tuple[ConfiguredGeometryInputs, ...],
 ]:
     if isinstance(source_sample_count, bool) or source_sample_count < 1:
         raise ValueError("source_sample_count must be a positive integer")
@@ -685,28 +701,9 @@ def _fixed_geometry_inputs(
         ),
     )
     base = build_configured_simulation_inputs(config)
-    nominal_config = replace(
-        config,
-        source=replace(
-            config.source,
-            spatial_sigma_m=(0.0, 0.0),
-            divergence_sigma_rad=(0.0, 0.0),
-            wavelength_sigma_A=0.0,
-            sample_count=1,
-        ),
-    )
-    nominal_base = build_configured_simulation_inputs(nominal_config)
-    geometry_base = ConfiguredGeometryInputs(
-        config=nominal_base.config,
-        samples=nominal_base.samples,
-        instrument=nominal_base.instrument,
-        crystal=nominal_base.crystal,
-        material=nominal_base.material,
-        reciprocal=nominal_base.reciprocal,
-        rods=nominal_base.rods,
-    )
+    geometry_base = build_configured_geometry_inputs(config)
     series: list[ConfiguredSimulationInputs] = []
-    nominal_series: list[ConfiguredSimulationInputs] = []
+    nominal_series: list[ConfiguredGeometryInputs] = []
     for commanded_incidence_deg in case["incidence_angles_deg"]:
         effective_incidence_deg = float(commanded_incidence_deg) + incidence_delta_deg
         angle_config = replace(
@@ -719,11 +716,10 @@ def _fixed_geometry_inputs(
                 ),
             ),
         )
-        nominal_angle_config = replace(angle_config, source=nominal_config.source)
-        geometry = rebind_configured_geometry_instrument(geometry_base, nominal_angle_config)
+        geometry = rebind_configured_geometry_instrument(geometry_base, angle_config)
         corrected_instrument = apply_shared_geometry_corrections(
             geometry.instrument,
-            nominal_angle_config.instrument.axis_rotations,
+            angle_config.instrument.axis_rotations,
             corrections,
         )
         incident = build_incident_states(base.samples, base.material, corrected_instrument)
@@ -731,15 +727,6 @@ def _fixed_geometry_inputs(
             np.all(incident.states.valid)
         ):
             raise RuntimeError("every configured source state must produce a valid incident state")
-        nominal_incident = build_incident_states(
-            nominal_base.samples,
-            nominal_base.material,
-            corrected_instrument,
-        )
-        if nominal_incident.states.incident_state_id.size != 1 or not bool(
-            nominal_incident.states.valid[0]
-        ):
-            raise RuntimeError("the nominal geometry companion incident state must be valid")
         series.append(
             replace(
                 base,
@@ -750,10 +737,8 @@ def _fixed_geometry_inputs(
         )
         nominal_series.append(
             replace(
-                nominal_base,
-                config=nominal_angle_config,
+                geometry,
                 instrument=corrected_instrument,
-                incident=nominal_incident,
             )
         )
     return base, tuple(series), tuple(nominal_series)
@@ -951,7 +936,7 @@ def _geometry_excluded_bin_map(
 
 
 def _profile_definitions(
-    inputs: ConfiguredSimulationInputs,
+    inputs: ConfiguredGeometryInputs,
     *,
     source_inputs: ConfiguredSimulationInputs,
     include_nominally_unsupported_m0: bool,
@@ -977,7 +962,7 @@ def _profile_definitions(
             f"commanded-{incidence_deg:g}deg-effective-{effective_incidence_deg:.12g}deg.v2"
         )
     )
-    context = build_nominal_ewald_context(inputs)
+    context = build_nominal_ewald_context(source_inputs)
     frame = build_osc_angle_frame(
         mean_direction_lab=inputs.config.source.mean_direction_lab,
         instrument=inputs.instrument,
@@ -1122,17 +1107,7 @@ def _profile_definitions(
 
     definitions: list[MosaicProfileDefinition] = list(nonzero_candidates)
 
-    model = ExactTagGeometryModel(
-        ConfiguredGeometryInputs(
-            config=inputs.config,
-            samples=inputs.samples,
-            instrument=inputs.instrument,
-            crystal=inputs.crystal,
-            material=inputs.material,
-            reciprocal=inputs.reciprocal,
-            rods=inputs.rods,
-        )
-    )
+    model = ExactTagGeometryModel(inputs)
     wavevector_magnitude_Ainv = (
         float(
             np.max(np.linalg.norm(source_inputs.incident.states.k_film_phase_sample_Ainv, axis=1))
@@ -1351,7 +1326,7 @@ def _profile_definitions(
         record: dict[str, object] = {
             "integer_L": integer_l,
             "reduced_order": integer_l // reduced_order_divisor,
-            "structure_strength_A2": inputs.strength.evaluate(
+            "structure_strength_A2": source_inputs.strength.evaluate(
                 rod=m0_rod,
                 L=float(integer_l),
                 k_norm_Ainv=strength_k_norm,
@@ -1771,14 +1746,14 @@ def _real_osc_profile_observations(
         phi_edges = model_layout.phi_bin_edges_rad[start:stop]
         theta_bounds = model_layout.two_theta_bounds_rad[start:stop]
         osc_path = (case_path.parent / str(record["osc_file"])).resolve()
-        compressed_sha256 = hashlib.sha256(osc_path.read_bytes()).hexdigest()
+        compressed_sha256 = _sha256(osc_path)
         if compressed_sha256 != record["osc_file_sha256"]:
             raise RuntimeError(f"OSC content changed: {osc_path}")
         counts = read_osc(osc_path).detector_native_counts
         expected_shape = tuple(int(value) for value in record["detector_native_shape_rc"])
         if counts.shape != expected_shape or str(counts.dtype) != record["detector_native_dtype"]:
             raise RuntimeError(f"OSC detector-native layout changed: {osc_path}")
-        native_sha256 = hashlib.sha256(counts.tobytes(order="C")).hexdigest()
+        native_sha256 = _array_bytes_sha256(counts)
         if native_sha256 != record["detector_native_bytes_sha256"]:
             raise RuntimeError(f"OSC detector-native values changed: {osc_path}")
         detector_mask = detector_valid_mask_from_counts(counts)
@@ -2834,7 +2809,7 @@ def main(argv: list[str] | None = None) -> None:
     profile_exclusions = tuple(exclusion for item in profile_pairs for exclusion in item[2])
     m0_support_audits = tuple(item[3] for item in profile_pairs)
     simulation_config_path = (case_path.parent / str(case["simulation_config"])).resolve()
-    simulation_config_sha256 = hashlib.sha256(simulation_config_path.read_bytes()).hexdigest()
+    simulation_config_sha256 = _sha256(simulation_config_path)
     profile_revision = _profile_revision(
         definitions,
         frames,

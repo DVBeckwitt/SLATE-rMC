@@ -148,6 +148,7 @@ def _pack_forward_geometry(
                 state.specular_scale_factor,
                 state.specular_blend_lower_q_over_qc,
                 state.specular_blend_upper_q_over_qc,
+                state.detector_path_linear_attenuation_m_inv,
             )
             for state in states
         ],
@@ -284,6 +285,8 @@ def _forward_root_pixel(
     ray_distance = -ray_origin_detector_normal_m[state_index] / direction_normal
     if ray_distance <= 0.0:
         return -1, 0.0, False
+    if state_real[state_index, 26] != 0.0:
+        source_phase_weight *= math.exp(-state_real[state_index, 26] * ray_distance)
     column = (
         ray_origin_detector_column_row_px[state_index, 0] + ray_distance * direction_column_per_m
     )

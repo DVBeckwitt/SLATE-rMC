@@ -227,7 +227,6 @@ def simulation_config_for_osc_image(
     )
     return replace(
         base,
-        source=replace(base.source, sample_count=1),
         instrument=replace(base.instrument, axis_rotations=rotations),
     )
 
@@ -754,7 +753,7 @@ def index_osc_geometry_series(
     track_policy: PeakIndexingPolicy | None = None,
     instrument_by_image_id: dict[str, CompiledInstrument] | None = None,
 ) -> OscGeometryIndexingRun:
-    """Read, discover, and index one arbitrary-length declared OSC series."""
+    """Index one declared OSC series, retaining a preflight run when admission is incomplete."""
 
     if not isinstance(series, OscGeometrySeriesConfiguration):
         raise TypeError("series must be OscGeometrySeriesConfiguration")
@@ -831,6 +830,17 @@ def index_osc_geometry_series(
         )
         models.append(ExactTagGeometryModel(inputs))
     selection = select_confident_branch_tracks(tuple(image_results), policy=track)
+    observation_packs = []
+    if not overrides:
+        for image in series.images:
+            try:
+                observation_packs.append(selection.observations_for(image.image_id))
+            except ValueError as error:
+                expected = f"image {image.image_id!r} has no accepted visible marker observations"
+                if str(error) != expected:
+                    raise
+                observation_packs = []
+                break
     indexed_images = (
         tuple(
             IndexedGeometryImage(
@@ -839,11 +849,16 @@ def index_osc_geometry_series(
                     image.axis_rotation_angles_deg[series.incidence_axis_index]
                 ),
                 model=model,
-                observations=selection.observations_for(image.image_id),
+                observations=observations,
             )
-            for image, model in zip(series.images, models, strict=True)
+            for image, model, observations in zip(
+                series.images,
+                models,
+                observation_packs,
+                strict=True,
+            )
         )
-        if not overrides
+        if observation_packs
         else None
     )
     return OscGeometryIndexingRun(

@@ -3,10 +3,13 @@
 from rasim_next.fitting.fixed_experiment import (
     FIXED_EXPERIMENT_STATE_SCHEMA_VERSION,
     FIXED_MOSAIC_STATE_SCHEMA_VERSION,
+    INCIDENCE_SCAN_CALIBRATION_MODEL_ID,
     POSITION_FIT_RESULT_SCHEMA_VERSION,
+    FixedIncidenceScanSeries,
     FixedMosaicState,
     FixedPositionState,
     build_fixed_experiment_series,
+    build_fixed_incidence_scan_series,
     fixed_position_from_fit_record,
 )
 from rasim_next.fitting.fixed_lattice import (
@@ -110,6 +113,7 @@ from rasim_next.fitting.mosaic import (
     source_averaged_profile_has_support,
 )
 from rasim_next.fitting.ordered_intensity import (
+    ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION,
     SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
     SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
     STRUCTURE_FACTOR_PARAMETER_NAMES,
@@ -163,6 +167,7 @@ __all__ = [
     "FIXED_EXPERIMENT_STATE_SCHEMA_VERSION",
     "FIXED_MOSAIC_STATE_SCHEMA_VERSION",
     "INCIDENCE_ANGLE_DELTA_PARAMETER_NAME",
+    "INCIDENCE_SCAN_CALIBRATION_MODEL_ID",
     "LATTICE_FIT_SCHEMA_VERSION",
     "LATTICE_MAXIMUM_ABSOLUTE_LOG_STRAIN",
     "LATTICE_MAXIMUM_ABSOLUTE_PRIOR_PULL",
@@ -172,6 +177,7 @@ __all__ = [
     "LATTICE_PARAMETER_NAMES",
     "LATTICE_REQUIRED_DATA_PRACTICAL_RANK",
     "LATTICE_SENSITIVITY_RELATIVE_TOLERANCE",
+    "ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION",
     "PBI2_IDEAL_PARENTS",
     "POSITION_FIT_RESULT_SCHEMA_VERSION",
     "SHARED_GEOMETRY_PARAMETER_NAMES",
@@ -189,6 +195,7 @@ __all__ = [
     "DetectorCalibrationCorrections",
     "DetectorHorizonAcceptance",
     "ExactTagGeometryModel",
+    "FixedIncidenceScanSeries",
     "FixedLatticeState",
     "FixedMatchedRegionBackground",
     "FixedMosaicState",
@@ -260,6 +267,7 @@ __all__ = [
     "audit_indexed_geometry_series_roots",
     "audit_integer_l_marker_selection",
     "build_fixed_experiment_series",
+    "build_fixed_incidence_scan_series",
     "build_ideal_pbi2_polytype_landmark_catalogue",
     "build_layer_l_mosaic_profile_definitions",
     "compile_ordered_intensity_response",

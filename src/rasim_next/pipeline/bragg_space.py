@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from operator import index
 from typing import Protocol
@@ -43,6 +44,45 @@ from rasim_next.stacking import (
 from rasim_next.stacking.finite_intensity import finite_intensity_reduced
 
 FloatArray = NDArray[np.float64]
+
+
+def finite_stack_integer_l_display_nodes(
+    lower_l: float,
+    upper_l: float,
+    *,
+    layer_count: int,
+    background_count: int,
+) -> FloatArray:
+    """Return coarse coverage plus integer-L and +/-0.5/N display landmarks."""
+
+    bounds = np.asarray((lower_l, upper_l), dtype=np.float64)
+    if bounds.shape != (2,) or not np.all(np.isfinite(bounds)) or bounds[0] > bounds[1]:
+        raise ValueError("finite-stack display bounds must be finite and ordered")
+    if (
+        isinstance(layer_count, (bool, np.bool_))
+        or isinstance(background_count, (bool, np.bool_))
+        or index(layer_count) < 1
+        or index(background_count) < 2
+    ):
+        raise ValueError("layer_count must be positive and background_count at least two")
+    layer_count = index(layer_count)
+    background_count = index(background_count)
+    integer_l = np.arange(math.ceil(bounds[0]), math.floor(bounds[1]) + 1, dtype=np.float64)
+    if integer_l.size:
+        shoulder_l = 0.5 / layer_count
+        resolved_l = (integer_l[:, None] + (-shoulder_l, 0.0, shoulder_l)).reshape(-1)
+        resolved_l = resolved_l[(resolved_l >= bounds[0]) & (resolved_l <= bounds[1])]
+    else:
+        resolved_l = np.empty(0, dtype=np.float64)
+    background_l = np.linspace(bounds[0], bounds[1], background_count)
+    result = np.array(
+        np.unique(np.concatenate((background_l, resolved_l))),
+        dtype=np.float64,
+        copy=True,
+        order="C",
+    )
+    result.setflags(write=False)
+    return result
 
 
 class RevisionedStructureStrengthModel(BasisBoundStrengthModel, Protocol):
@@ -390,14 +430,11 @@ class Bi2X3FiniteStackStrength:
             raise ValueError("layers must be a positive integer")
         normalization = EventIntensityNormalization(self.normalization)
         if normalization is EventIntensityNormalization.UNIT_CELL:
-            raise ValueError("2H stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER")
+            raise ValueError(
+                "finite stacking normalization must be FINITE_TOTAL or FINITE_PER_LAYER"
+            )
         parent = Parent(self.parent)
         epsilon = RichEpsilonModel(parent, self.shared_disorder_epsilon).epsilon
-        if parent is Parent.THREE_R and epsilon != 0.0:
-            raise ValueError(
-                "the R-centered 3R parent is currently fault-free; "
-                "shared_disorder_epsilon must be zero"
-            )
         parameters = (
             Bi2X3QuintupleLayerParameters.from_crystal(self.crystal)
             if self.structure_parameters is None
@@ -488,7 +525,7 @@ class Bi2X3FiniteStackStrength:
         L: ArrayLike,
         k_norm_Ainv: float,
     ) -> FloatArray:
-        """Evaluate the continuous exact-L 2H profile for one physical rod."""
+        """Evaluate the continuous exact-L finite-stack profile for one physical rod."""
 
         if not isinstance(rod, Rod):
             raise TypeError("rod must be a Rod")

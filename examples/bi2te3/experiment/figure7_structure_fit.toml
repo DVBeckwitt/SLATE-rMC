@@ -1,9 +1,9 @@
-schema_version = "rasim-layered-quintuple-structure-fit-plan-v5"
+schema_version = "rasim-layered-quintuple-structure-fit-plan-v7"
 material_id = "Bi2Te3"
 parameter_names = [
   "bi_delta_z_fractional",
   "outer_chalcogen_delta_z_fractional",
-  "outer_bi_antisite_fraction",
+  "outer_chalcogen_vacancy_fraction",
   "intensity_envelope_u_radial_A2",
   "intensity_envelope_u_normal_A2",
 ]
@@ -51,7 +51,7 @@ offspecular_signal_minimum_radial_nodes_per_side = 24
 active_parameters = ["bi_delta_z_fractional", "outer_chalcogen_delta_z_fractional"]
 
 [stage.B]
-active_parameters = ["outer_bi_antisite_fraction"]
+active_parameters = ["outer_chalcogen_vacancy_fraction"]
 predecessor = "A"
 
 [stage.C]
@@ -65,7 +65,7 @@ predecessor = "B"
 active_parameters = [
   "bi_delta_z_fractional",
   "outer_chalcogen_delta_z_fractional",
-  "outer_bi_antisite_fraction",
+  "outer_chalcogen_vacancy_fraction",
   "intensity_envelope_u_radial_A2",
   "intensity_envelope_u_normal_A2",
 ]

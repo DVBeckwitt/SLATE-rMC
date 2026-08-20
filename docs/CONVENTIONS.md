@@ -41,6 +41,7 @@ wavelength and crystal lengths          angstrom
 wavevectors and reciprocal vectors      inverse angstrom
 angles                                  radian
 continuous detector coordinates         pixel units
+external detector-path linear attenuation coefficient    inverse metre
 ```
 
 Public data fields include unit suffixes or typed unit metadata.

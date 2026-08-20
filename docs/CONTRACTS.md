@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **13**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **14**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -23,9 +23,9 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 
 | Contract | Owner | Essential payload |
 |---|---|---|
-| `SourceConfiguration` / `sample_gaussian_source_rays` | configured pipeline / sampling | validated source parameters and immutable sampled source rows |
-| `IncidentSampleBatch` | sampling | complete source rows, empirical weights, wavelength, polarization, provenance |
-| `InstrumentConfiguration` / `CompiledInstrument` | geometry | canonical transforms, sample support, detector shape/pitch/reference coordinate, revisions |
+| `SourceConfiguration` / `sample_gaussian_source_rays` / `sample_discrete_gaussian_line_source_rays` | configured pipeline / sampling | validated Gaussian phase-space parameters, optional per-axis position--divergence correlation, legacy Gaussian or weighted discrete-line spectrum, and immutable sampled source rows |
+| `IncidentSampleBatch` | sampling | complete source rows, arbitrary finite nonnegative probability masses summing to one, wavelength, polarization, provenance |
+| `InstrumentConfiguration` / `CompiledInstrument` | geometry | canonical transforms, sample support, detector shape/pitch/reference coordinate, detector-path medium plus mutually exclusive scalar or exact-wavelength attenuation table, revisions |
 | `IncidentStateBatch` | geometry | entrance-intersected air and film-phase `ki`, Fresnel amplitude, decay, footprint, source identity |
 | `MaterialOptics` | materials | wavelength-aligned complex refractive index and material revision |
 | `RodCatalog` | reciprocal | every physical `(h,k)` rod and exact family metadata |
@@ -363,10 +363,12 @@ not statistical covariance or uncertainty: this phase declares no noise model. O
 flag is reported for every active coordinate and accepted deterministic recoveries require all of
 them to be false.
 
-The finite-ROI response compiler applies a fixed geometry-only 17-by-17 inverse-root signature probe
-to every phi bin and freezes a conservative exclusion mask before quadrature. This finite probe is
-not a general topology certificate. Each new material/ROI set must additionally pass an independent
-response-order convergence check; topology-split cubature remains future work.
+`probe_ordered_intensity_inverse_boundary_bins(...)` applies a fixed 17-by-17 geometry probe to
+every phi bin. The one-state path and the source-averaged structure path retain physical
+source-state, rod, root-sign, validity, and caustic identity while freezing a conservative
+exclusion mask before quadrature. Structure strength and observed intensity do not decide the
+mask. This finite probe is not a general topology certificate; each new material/ROI set still
+requires an independent response-order convergence check.
 
 `compile_source_averaged_ordered_intensity_response(...)` is the distributed-source companion for
 the synthetic fixed-position proof. For each incidence it evaluates one detector function
@@ -433,12 +435,23 @@ nominal one-state landmark alone from establishing intensity support.
   `rasim-simulation-v2` YAML document. Unknown, duplicate, aliased, or missing fields fail.
 - `build_configured_simulation_inputs(config)` creates source rows, canonical incident states,
   material, rods, the configured finite ordered-parent strength including R-centered 3R, and Bragg
-  space once.
+  space once. The RichEpsilon transition law supports the native 3R parent in proof, compiled CPU,
+  and CUDA paths; `epsilon=0` retains its exact native-sequence fast path.
 - `build_configured_geometry_inputs(config)` creates only source rows, material, reciprocal basis,
   rods, and compiled instrument. `build_geometry_only_ewald_context(...)` adds one nominal incident
   state. Neither boundary constructs structure strength or mosaic probability.
 - `sample_configured_source(source, sample_count=...)` is the one mapping from validated configured
-  source parameters to the canonical source sampler, including the exact one-row nominal state.
+  source parameters to either `gaussian.v1` or `discrete_gaussian_lines.v1`, including optional
+  position--divergence correlations and exact declared line masses. A physical discrete source
+  requires at least one row per line. The separate nominal-geometry source API returns one centroid
+  row at the mean wavelength and that model ID is rejected by every source-weighted detector-
+  measure intensity boundary. Source-free intrinsic coating/locus density is permitted only for
+  geometry displays and reference landmarks, never as source intensity or likelihood evidence. Equal
+  per-line row counts use a shared geometry grid. A declared nonzero correlation is moment-matched
+  to the full four-dimensional covariance only when each line has at least eight rows; zero-correlation
+  LHS grids and smaller correlated grids are finite quadrature approximations, and non-divisible
+  counts carry an explicit unequal-grid model ID. Unknown or mixed declarations fail; no field is
+  silently ignored.
 - `build_source_averaged_detector(inputs)` builds the all-state detector model.
 - `SourceAveragedDetectorEwaldMeasure.sample_native_pixel_mass(...)` returns the optional weighted
   native-pixel Monte Carlo estimate without creating an event table or count calibration.
@@ -677,9 +690,11 @@ pose rather than stale nominal detector axes.
 performs the one clockwise I/O conversion, runs position-free discovery and reciprocal indexing
 with a geometry-only context, and freezes the cross-image selection once. Its
 `OscGeometryIndexingRun` retains the source discoveries, geometry inputs, geometry contexts, and
-exact fit-ready models from that provenance-bound run. Model, discovery, data, mask, policy,
-commanded-angle, and indexing-context hashes are checked together; corrected global-rediscovery
-runs deliberately expose no fit-ready images.
+selection from that provenance-bound run. It exposes exact fit-ready models only when every image
+has accepted visible integer-marker observations; otherwise `indexed_images` is `None` and the run
+is a retained-discovery preflight that cannot enter fitting or frozen-key reindexing. Instrument-
+override global-rediscovery runs likewise expose no fit-ready images. Model, discovery, data, mask,
+policy, commanded-angle, and indexing-context hashes are checked together.
 Missing, extra, duplicate, angle-mismatched, or image-provenance-mismatched IDs fail before fitting.
 Geometry-only inputs recompute and require the exact configured one-row nominal source revision;
 each fit-ready image also recompiles and compares the complete detector, sample, axis, and pivot
@@ -804,6 +819,10 @@ and source-averaged material, optical, reciprocal, rod, and detector state.
 The Bi2Se3 geometry state records the commanded image angles, the one common fitted delta, all three
 effective angles, and the fixed sample-x gauge so mosaic and ordered/SF construction reproduce the
 same transforms exactly.
+The Bi2Te3 mosaic state records the exact geometry-stage position projection, the implicit
+hash-verified CIF lattice, and the case-declared simulation-config path and SHA-256. Resume
+reconstructs and compares all three; ordered intensity must carry those records byte-for-byte from
+the qualified mosaic stage.
 
 This is a nominal scientific-replay contract. It assumes trusted stage implementations and that the
 declared repository inputs are not edited during an active stage; it is not an adversarial
@@ -836,12 +855,14 @@ the canonical ordered-intensity optimizer bounds without activating frozen coord
 |---|---|
 | empirical source mass | source sampler |
 | sample-footprint acceptance and entrance amplitude | incident transport |
+| flat-film illuminated-path `1/|direction_sample,z|` | detector source-phase construction |
 | per-rod population | `MosaicBraggSpace` |
 | CIF/finite-stack structure strength | ordered strength model |
 | wrapped mosaic probability | `MosaicBraggSpace` |
 | Ewald restriction / inverse-map determinant | Ewald or detector pushforward, by declared route |
 | internal-film Ewald solid-angle `k^2` | intrinsic direction pushforward only |
 | exit amplitude and uniform-depth attenuation | detector optical mapping |
+| external detector-path Beer--Lambert factor resolved per sampled wavelength | detector optical mapping |
 | phase and polarization weights | detector measure construction |
 | source-state sum | source-averaged detector measure |
 | detector box integration or weighted hard-bin estimator | selected terminal pixel estimator |
@@ -880,10 +901,13 @@ verified raw OSC over the declared continuous chart regions.
 
 `MatchedRegionObservations` contains projected count mass, continuous detector-area support, full
 projected count covariance, background coordinate, dataset ID, family, and complete-block identity.
-A recipe may bind one acquisition dark OSC and nonnegative exposure scale. Raw and dark are
+A recipe may bind one declared dark OSC and nonnegative exposure scale. Raw and dark are
 projected through identical continuous regions before signed subtraction; neither the corrected
-data nor the conditioned background correction is clipped. Reuse of one dark exposure across OSCs
-is represented in the joint covariance rather than treated as independent noise.
+data nor the conditioned background correction is clipped. A nonzero matched-dark scale propagates
+the shared dark exposure through the joint covariance. The explicit
+`no_acquisition_matched_dark.v1` basis uses scale zero and `no_dark_contribution.v1`; subtraction,
+dark covariance, and cross-OSC dark covariance are then exactly zero although the file identity is
+still verified.
 A separate `RadialBackgroundState` is calibrated from background-only radial-by-azimuth detector
 cells, with held-out azimuth sectors, and frozen before structure fitting. Calibration excludes
 every pixel touched by the oracle continuous-region projection and binds the exact fit plan,
@@ -903,19 +927,25 @@ the fitted peak mass. The configured detector model also applies the event-wise 
 factor `(1 + (ki_hat_air dot kf_hat_air)^2)/2` exactly once, from external-air directions.
 
 The layered Bi2X3 adapter declares five coordinates in one immutable fit plan:
-`bi_delta_z_fractional`, `outer_chalcogen_delta_z_fractional`, `outer_bi_antisite_fraction`,
+`bi_delta_z_fractional`, `outer_chalcogen_delta_z_fractional`,
+`outer_chalcogen_vacancy_fraction`,
 `intensity_envelope_u_radial_A2`, and `intensity_envelope_u_normal_A2`. The crystallographic
 Wyckoff-site ADPs remain fixed inside the atomic amplitude; the last two coordinates instead apply
 the separate `SampleQIntensityEnvelope` factor `exp(-U_r Q_r^2-U_z Q_z^2)` once to each
-event intensity using the fixed-sample-frame Q after mosaic rotation and before source summation. Bi and
-central-chalcogen occupancies are fixed at one; the outer site is the full-occupancy mixture
-`(1-x) X + x Bi`, never a chalcogen vacancy. Stage A activates the two z offsets, B activates `x`,
-C activates the two global intensity-envelope parameters, and
-`joint` activates all five.
-A/B/C are diagnostic initializers, not reportable alternatives to the joint fit. B, C, and joint
-must start exactly from A, B, and C respectively; recursive predecessor hashes and all frozen
-coordinates compare exactly. A completed stage can be supplied only as a predecessor, while a
-same-stage progress artifact is the sole resume source.
+event intensity using the fixed-sample-frame Q after mosaic rotation and before source summation.
+Bi and central-chalcogen occupancies are fixed at one; Stage B's outer site is
+`(1-v) X + v vacancy` with Bi antisite fixed to zero. A Bi-on-X substitution is a separately named
+discrete competitor and never aliases `v`. Persisted representatives must bind this occupancy rule
+and the derived `1-v` occupancy. The v7 chained policy activates the two z offsets in A, `v` in B,
+the two global intensity-envelope parameters in C, and all five in `joint`. A/B/C are diagnostic
+initializers, not reportable alternatives: B, C, and joint start exactly from A, B, and C,
+respectively, with recursive predecessor and frozen-coordinate checks. The v8
+`seeded_joint_only.v1` policy instead requires an explicit five-coordinate start (or a verified
+same-stage progress restart) and exposes only the all-active joint stage; it has no fabricated
+A/B/C predecessors. Fit-v14 records the numeric start and its hash, not a seed-file identity. When
+v8 is launched by the outer workflow, workflow-v1 hashes the tracked seed-v2 file into its plan
+revision and passes that vector explicitly. Under either policy, only a gate-passing joint result is
+eligible downstream. A same-stage progress artifact is the sole resume source.
 
 The fit plan fixes parameter scales, bounds, practical sensitivity tolerance, and maximum condition.
 Admissibility uses the parameter-scaled data-only Jacobian and requires full practical rank and
@@ -946,7 +976,7 @@ scope; a mismatch fails rather than resumes.
 The callable intrinsic solid-angle density added in v12 is a continuous function result; it does
 not restore a retained sphere mesh or texture as model state.
 
-## Contract-v13 general-CIF fitting boundary
+## General-CIF fitting boundary (introduced in contract v13)
 
 `CifFiniteStackStrength`, `Bi2X3FiniteStackStrength`, and
 `Pbi2ParentMixtureStrength` implement one revision-bearing, reciprocal-basis-bound, nonnegative
@@ -1000,3 +1030,69 @@ old numerical and serialized path remains exact. An active pack is applied after
 orientation conversion and before shared pose corrections, survives in `FixedPositionState`, and
 must carry explicit calibration provenance. Its data-scaled Jacobian uses the ordinary rank and
 condition gates.
+
+## Continuous incidence-exposure contract
+
+`ContinuousIncidenceAcquisition` owns the canonical physical support and normalized motor-exposure
+law. Reversing the declared direction preserves its prediction identity while remaining distinct
+serialized provenance. Duration, traversal and cycle counts, `ScanImageStep`, and measured
+endpoint/speed diagnostics are provenance only and are excluded from numerical angle nodes,
+weights, and the prediction revision. An acquisition-bound quadrature binds the acquisition
+prediction revision, calibration revision, nodes, normalized masses, panel partition, and effective
+support; a rule compiled for 5--20 degrees must fail closed for the authoritative 5--25-degree
+request. The adaptive layer does not own a detector-region operator: its caller-supplied evaluation
+revision owns that identity.
+
+`compile_uniform_incidence_angle_legendre_rule(...)` first compiles immutable commanded-angle
+nodes and normalized masses without inventing a calibration identity. Those commanded nodes build
+`FixedIncidenceScanSeries`; its effective nodes and `scan_calibration_revision` then construct
+`IncidenceAngleQuadrature` with
+`exposure_density_id="uniform_normalized_incidence_angle_density.v1"` for a normalized uniform
+motor-exposure law and both effective support bounds (commanded bounds plus the exact calibrated
+delta).
+`IncidenceAngleQuadrature.uniform_legendre(...)` is a standalone analytic-rule constructor. Even
+with an explicit calibration revision it has no acquisition prediction revision. Acquisition-bound
+rules use `ContinuousIncidenceAcquisition.uniform_panel_quadrature(...)` or explicit nodes from
+`FixedIncidenceScanSeries`. There is no default calibration identity. `FixedIncidenceScanSeries`
+binds the position artifact, calibration model,
+commanded nodes, effective nodes, shared source revision, and ordered sample-geometry revisions.
+The current calibration model applies only the fitted common incidence delta. Fitted image-specific
+trims have no continuous interpolation and are never extrapolated into a scan.
+
+`IncidenceAngleAveragedDetector` owns one complete fixed-angle detector view per effective
+quadrature node. The optimized Bi2X3 path may compile one static-physics template and call
+`rebind_source_averaged_detector_incidence_scan(...)` to derive every calibrated node. That exact
+rebind consumes each node's canonical precomputed incident transport and recomputes the engine's
+derived attenuation and rigid detector/sample projection while retaining packed
+structure, rods, mosaic, envelope, Parratt stitch, and execution blocking; it does not interpolate
+an angle field. It requires unchanged source validity topology and fails closed otherwise. The same
+template may serve different calibrated coarse/fine rules.
+
+Construction requires identical source realization, detector-native
+chart, rods and order, material/structure/mosaic/envelope/stitch physics, and requires each engine's
+declared incidence setting to equal its aligned quadrature node. The calibrated builder stamps one
+binding revision onto each configured input and fixed-angle engine. The wrapper derives the
+ordered component identity and rejects missing, differently calibrated, or relabeled components;
+callers do not supply loose expected revisions. It intentionally exposes no single
+pose-bound `instrument`. It composes with the optimized Bi2X3 renderer and generic structure
+detector through their existing all-root detector-coordinate evaluations; the rod-reduced method
+streams each optimized child's reduced kernel without retaining per-angle images.
+
+The returned validity diagnostic is the exposure-weighted fraction
+`sum_j p_j valid_source_count_j/N`, not an integer source count. Invalid contributions stay zero and
+are not survivor-renormalized. The v1 reusable optimized-engine builder requires the source
+validity mask to be identical at every angle node. Exact
+quadrature-node caustics raise `FloatingPointError`. The v1 wrapper is detector-native:
+outgoing-angle adapters, native-center culling based on one sample
+normal, and geometry-bound continuous-fold correction plans are not admitted consumers.
+
+`evaluate_adaptive_scan_oracle(...)` is a separate finite-ROI contract. Every physical panel gets
+a mandatory coarse/fine comparison; only numerically failing or fold/topology/window-event leaves
+are bisected further. All batches share one calibration delta, source revision, and evaluator
+revision. Signed ROI contrast is preserved and convergence requires every terminal leaf plus the
+absolute covariance-whitened total to pass the declared gate.
+
+`run_staged_delayed_acceptance(...)` is material-neutral. Baseline failure stops before proposal
+callbacks, and every candidate passes the exact fixed-dataset gate before an exact scan call.
+Fixed and scan comparison revisions remain frozen. With accepted-iteration limit `K`, the exact
+scan score count is at most `1 + 2K`.

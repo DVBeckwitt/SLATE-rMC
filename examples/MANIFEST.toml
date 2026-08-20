@@ -42,13 +42,13 @@ sha256 = "6cfed1e0e7a00ecc3c3d4d2d18de7de4696c78a11de5ad842e31368d5e986fd1"
 
 [[file]]
 path = "examples/bi2se3/experiment/figure7_matched_regions.toml"
-size_bytes = 5114
-sha256 = "94aa322cd8ac33872eca6b84b5fa81c272e69a68804ab85e1e576c558a882fc8"
+size_bytes = 5117
+sha256 = "1bc9e6cd96592e667f4fbbf835c386a74b46af0d92a1f0f0daaae78b936755fc"
 
 [[file]]
 path = "examples/bi2se3/experiment/figure7_structure_fit.toml"
-size_bytes = 2465
-sha256 = "2b5fb4de427929cbc823ea058f9972bf4df93f844fb9415b5d04bb1f6291a387"
+size_bytes = 2552
+sha256 = "d2bf25dc1926404407f1dd76f4a679eeb3959af2ba2547500f065818921ee44d"
 
 [[file]]
 path = "examples/bi2se3/experiment/forward_case.toml"
@@ -78,7 +78,7 @@ sha256 = "9235bde4018eac8784855d79d93644c331f701a308ab63055edcbc90637caaf3"
 [[file]]
 path = "examples/bi2se3/experiment/staged_fit_replay.toml"
 size_bytes = 9348
-sha256 = "3275c24150bf21e3fe8f769feb5304d486ed33e6f60689946acd6832adf0c417"
+sha256 = "53bf72fb25b0d3d007535c5b7ec719b0201265d898cd6b7c226f84a86e4a64bb"
 
 [[file]]
 path = "examples/bi2se3/observations/legacy_peak_selections.csv"
@@ -182,8 +182,8 @@ sha256 = "84cca62c5fb85c423a13aced8060a8bbe400ae5ae77ed51cb517398309eaa048"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_fast_seeded_joint_fit.toml"
-size_bytes = 1969
-sha256 = "0e4a25edc41d47907444ca4e8ad6559632acfe2f7252843202b2b6707d571c8b"
+size_bytes = 1981
+sha256 = "0ad6654b9341d4fb48df4dac19c7e1ca837b6df2225190428e3a4f073c77b5de"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_matched_regions.toml"
@@ -192,8 +192,8 @@ sha256 = "479fa1ececfa1e5cba7bde013834b6038f12ed61f409ae3b9acdee2e85c50abb"
 
 [[file]]
 path = "examples/bi2te3/experiment/figure7_structure_fit.toml"
-size_bytes = 2282
-sha256 = "5e1f53c1888d500951f2803648e2b5274b79d9f47d770f4ce8b077c182fa4440"
+size_bytes = 2300
+sha256 = "bf5cdbb6ed7e59ec5bb37d56005a2d8adb90be9b03c7ec05ef0aec1ff33530e0"
 
 [[file]]
 path = "examples/bi2te3/experiment/staged_fit_replay.toml"
@@ -202,13 +202,18 @@ sha256 = "9158f06eb1f415c53214d74b11e72174ddfe52ca142db50201b1f8d6ed9ac275"
 
 [[file]]
 path = "examples/bi2se3/experiment/figure7_fast_seeded_joint_fit.toml"
-size_bytes = 2189
-sha256 = "3b5893746fbf88e92ba1ff654c340f0746425b9e59069cf81d8a4736d424000f"
+size_bytes = 2270
+sha256 = "e93a9dc4b286ac06dfaa77dfd126ed93a7ee7851b0ad65a296efcffb57c05b67"
 
 [[file]]
 path = "examples/bi2se3/experiment/fixed_mosaic.json"
 size_bytes = 300
 sha256 = "e0ac04b482f994842a2a01f5fd3e145355093bd536ade781ba4d2124be1e8b25"
+
+[[file]]
+path = "examples/bi2se3/experiment/continuous_scan_acquisition.json"
+size_bytes = 440
+sha256 = "9555b9b9a0cb862dbdb6393d59667ecaca9080be513d81aaa74a4e9cd2df9ad1"
 
 [[file]]
 path = "examples/bi2te3/experiment/fixed_mosaic.json"

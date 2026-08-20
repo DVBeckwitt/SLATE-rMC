@@ -54,6 +54,7 @@ class _ForwardDetectorState(NamedTuple):
     entrance_power: float
     incident_decay_Ainv: float
     film_thickness_A: float
+    detector_path_linear_attenuation_m_inv: float
     specular_stitch_code: int
     specular_substrate_refractive_index: complex
     specular_top_roughness_A: float
@@ -112,6 +113,7 @@ class CompiledDetectorState:
     entrance_amplitude: complex
     incident_decay_Ainv: float
     film_thickness_A: float
+    detector_path_linear_attenuation_m_inv: float
     specular_stitch_code: int
     specular_substrate_refractive_index: complex
     specular_top_roughness_A: float
@@ -199,6 +201,7 @@ class CompiledDetectorState:
             "air_k0_Ainv",
             "incident_decay_Ainv",
             "film_thickness_A",
+            "detector_path_linear_attenuation_m_inv",
             "specular_top_roughness_A",
             "specular_bottom_roughness_A",
             "specular_qc_Ainv",
@@ -236,8 +239,6 @@ class CompiledDetectorState:
         parent_code = int(self.stacking_parent_code)
         if isinstance(self.stacking_parent_code, bool) or parent_code not in {0, 1}:
             raise ValueError("stacking_parent_code must be 0 (2H-AA) or 1 (R-centered 3R)")
-        if parent_code == 1 and self.shared_disorder_epsilon != 0.0:
-            raise ValueError("R-centered 3R compiled state must be fault-free")
         object.__setattr__(self, "stacking_parent_code", parent_code)
         polarization_code = int(self.polarization_model_code)
         if isinstance(self.polarization_model_code, bool) or polarization_code not in {0, 1}:
@@ -752,6 +753,38 @@ def _wrapped_mosaic_density(
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
+def _coherent_finite_stack_intensity(
+    layers: int,
+    ell: float,
+    registry_index: int,
+) -> float:
+    """Return the stable fault-free geometric-series intensity in constant work."""
+
+    if layers == 1:
+        return 1.0
+    reduced_ell = ell - float(registry_index)
+    reduced_ell -= 3.0 * math.floor(reduced_ell / 3.0 + 0.5)
+    scaled_ell = layers * reduced_ell
+    layer_count = float(layers)
+    layers_squared = layer_count * layer_count
+    if abs(scaled_ell) < 1.0e-4:
+        half_phase = math.pi * reduced_ell / 3.0
+        half_phase_squared = half_phase * half_phase
+        fourth_order = (2.0 * layers_squared * layers_squared - 5.0 * layers_squared + 3.0) / 45.0
+        return layers_squared * (
+            1.0
+            - (layers_squared - 1.0) * half_phase_squared / 3.0
+            + fourth_order * half_phase_squared * half_phase_squared
+        )
+    numerator_ell = scaled_ell - 3.0 * math.floor(scaled_ell / 3.0 + 0.5)
+    denominator = math.sin(math.pi * reduced_ell / 3.0)
+    if denominator == 0.0:
+        return layers_squared
+    ratio = math.sin(math.pi * numerator_ell / 3.0) / denominator
+    return ratio * ratio
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False, inline="always")
 def _finite_stack_strength_A2(
     rod_index: int,
     ell: float,
@@ -784,30 +817,29 @@ def _finite_stack_strength_A2(
         phase_z = 2.0 * math.pi * ell * atom_fractional_offset[atom, 2]
         inplane_factor = rod_atom_inplane_factor[rod_index, atom]
         phase_plus = inplane_factor * complex(math.cos(phase_z), math.sin(phase_z))
-        phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
         element_factor = element_factor_0 if element == 0 else element_factor_1
         amplitude_plus += occupancy * site_damping * element_factor * phase_plus
-        amplitude_minus += occupancy * site_damping * element_factor * phase_minus
+        if shared_disorder_epsilon != 0.0:
+            phase_minus = inplane_factor * complex(math.cos(phase_z), -math.sin(phase_z))
+            amplitude_minus += occupancy * site_damping * element_factor * phase_minus
 
-    vertical_phase_angle = 2.0 * math.pi * ell / 3.0
-    vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
     if shared_disorder_epsilon == 0.0:
+        registry_index = 0
         if stacking_parent_code == 1:
             h = int(rod_hk_population[rod_index, 0])
             k = int(rod_hk_population[rod_index, 1])
             registry_index = (h + 2 * k) % 3
-            if registry_index == 1:
-                vertical_phase *= complex(-0.5, -0.5 * math.sqrt(3.0))
-            elif registry_index == 2:
-                vertical_phase *= complex(-0.5, 0.5 * math.sqrt(3.0))
-        phase_power = 1.0 + 0.0j
-        stack_sum = 1.0 + 0.0j
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            stack_sum += phase_power
-        total = amplitude_plus * stack_sum
-        intensity_e2 = total.real * total.real + total.imag * total.imag
+        amplitude_intensity = (
+            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        )
+        intensity_e2 = amplitude_intensity * _coherent_finite_stack_intensity(
+            layers,
+            ell,
+            registry_index,
+        )
     else:
+        vertical_phase_angle = 2.0 * math.pi * ell / 3.0
+        vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
         h = int(rod_hk_population[rod_index, 0])
         k = int(rod_hk_population[rod_index, 1])
         registry_index = (h + 2 * k) % 3
@@ -822,7 +854,13 @@ def _finite_stack_strength_A2(
         parent = 1.0 - shared_disorder_epsilon
         same_probability = parent + 2.0 * alternative
         flip_probability = 2.0 * alternative
-        same_gauge = parent + alternative * inverse_omega + alternative * omega
+        if stacking_parent_code == 0:
+            same_gauge = parent + alternative * inverse_omega + alternative * omega
+        else:
+            # Native 3R is the b-minus parent.  This is the exact reduced
+            # Fourier-block coefficient in the compiled moment convention;
+            # it is not the 2H same-registry coefficient above.
+            same_gauge = parent * omega + alternative * (1.0 + inverse_omega)
         plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
         minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
 
@@ -923,7 +961,9 @@ def _scattering_polarization_weight(
 
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="never")
 def _local_stitched_m0_density_A2_per_px2(
-    outgoing_air_direction_sample: FloatArray,
+    outgoing_air_direction_sample_x: float,
+    outgoing_air_direction_sample_y: float,
+    outgoing_air_direction_sample_z: float,
     pixel_solid_angle_sr: float,
     ki_film_sample_Ainv: FloatArray,
     air_k0_Ainv: float,
@@ -985,9 +1025,9 @@ def _local_stitched_m0_density_A2_per_px2(
         math.sqrt(incident_air_normal_squared),
         ki_film_sample_Ainv[2],
     )
-    outgoing_air_x = air_k0_Ainv * outgoing_air_direction_sample[0]
-    outgoing_air_y = air_k0_Ainv * outgoing_air_direction_sample[1]
-    outgoing_air_z = air_k0_Ainv * outgoing_air_direction_sample[2]
+    outgoing_air_x = air_k0_Ainv * outgoing_air_direction_sample_x
+    outgoing_air_y = air_k0_Ainv * outgoing_air_direction_sample_y
+    outgoing_air_z = air_k0_Ainv * outgoing_air_direction_sample_z
     delta_x = outgoing_air_x - ki_film_sample_Ainv[0]
     delta_y = outgoing_air_y - ki_film_sample_Ainv[1]
     delta_z = outgoing_air_z - incident_air_z
@@ -1108,9 +1148,9 @@ def _local_stitched_m0_density_A2_per_px2(
     polarization = _scattering_polarization_weight(
         ki_film_sample_Ainv,
         air_k0_Ainv,
-        outgoing_air_direction_sample[0],
-        outgoing_air_direction_sample[1],
-        outgoing_air_direction_sample[2],
+        outgoing_air_direction_sample_x,
+        outgoing_air_direction_sample_y,
+        outgoing_air_direction_sample_z,
         polarization_model_code,
     )
     denominator = external_q * external_q * sin_alpha
@@ -1167,6 +1207,7 @@ def _evaluate_point_into(
     specular_blend_lower_q_over_qc: float,
     specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
+    detector_path_linear_attenuation_m_inv: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
@@ -1237,6 +1278,9 @@ def _evaluate_point_into(
     )
     if distance == 0.0:
         return False
+    path_source_phase_weight = source_phase_weight
+    if detector_path_linear_attenuation_m_inv != 0.0:
+        path_source_phase_weight *= math.exp(-detector_path_linear_attenuation_m_inv * distance)
     direction_x = displacement_x / distance
     direction_y = displacement_y / distance
     direction_z = displacement_z / distance
@@ -1276,17 +1320,18 @@ def _evaluate_point_into(
     local_m0_caustic = False
     local_m0_valid = False
     if specular_stitch_code == 1:
-        outgoing_air_direction_sample = np.empty(3, dtype=np.float64)
-        outgoing_air_direction_sample[0] = kf_air_x / air_k0_Ainv
-        outgoing_air_direction_sample[1] = kf_air_y / air_k0_Ainv
-        outgoing_air_direction_sample[2] = kf_air_z / air_k0_Ainv
+        outgoing_air_direction_sample_x = kf_air_x / air_k0_Ainv
+        outgoing_air_direction_sample_y = kf_air_y / air_k0_Ainv
+        outgoing_air_direction_sample_z = kf_air_z / air_k0_Ainv
         (
             local_m0_index,
             local_m0_density,
             local_m0_caustic,
             local_m0_valid,
         ) = _local_stitched_m0_density_A2_per_px2(
-            outgoing_air_direction_sample,
+            outgoing_air_direction_sample_x,
+            outgoing_air_direction_sample_y,
+            outgoing_air_direction_sample_z,
             pixel_solid_angle,
             ki_film_sample_Ainv,
             air_k0_Ainv,
@@ -1300,7 +1345,7 @@ def _evaluate_point_into(
             specular_scale_factor,
             specular_blend_lower_q_over_qc,
             specular_blend_upper_q_over_qc,
-            source_phase_weight,
+            path_source_phase_weight,
             polarization_model_code,
             sample_from_local,
             rod_hk_population,
@@ -1562,7 +1607,7 @@ def _evaluate_point_into(
                         continue
                     caustic[rod_index] = True
                     if (
-                        source_phase_weight > 0.0
+                        path_source_phase_weight > 0.0
                         and rod_hk_population[rod_index, 2] > 0.0
                         and area_jacobian > 0.0
                         and optical_weight > 0.0
@@ -1578,7 +1623,7 @@ def _evaluate_point_into(
                     * strength
                     * area_jacobian
                     * optical_weight
-                    * source_phase_weight
+                    * path_source_phase_weight
                     * event_intensity_envelope
                     / jacobian
                 )
@@ -1618,6 +1663,7 @@ def _evaluate_points_kernel(
     specular_blend_lower_q_over_qc: float,
     specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
+    detector_path_linear_attenuation_m_inv: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
@@ -1690,6 +1736,7 @@ def _evaluate_points_kernel(
             specular_blend_lower_q_over_qc,
             specular_blend_upper_q_over_qc,
             source_phase_weight,
+            detector_path_linear_attenuation_m_inv,
             polarization_model_code,
             sample_from_local,
             rod_hk_population,
@@ -1800,6 +1847,11 @@ def _forward_root_pixel(
     ray_distance = -state.ray_origin_detector_normal_m / direction_normal
     if ray_distance <= 0.0:
         return -1, 0.0, False
+    path_source_phase_weight = state.source_phase_weight
+    if state.detector_path_linear_attenuation_m_inv != 0.0:
+        path_source_phase_weight *= math.exp(
+            -state.detector_path_linear_attenuation_m_inv * ray_distance
+        )
     column = state.ray_origin_detector_column_row_px[0] + ray_distance * direction_column_per_m
     row = state.ray_origin_detector_column_row_px[1] + ray_distance * direction_row_per_m
     rows, columns = state.detector_shape_rc
@@ -1882,7 +1934,7 @@ def _forward_root_pixel(
         - state.intensity_envelope_u_normal_A2 * q_z * q_z
     )
     importance_weight = (
-        state.source_phase_weight
+        path_source_phase_weight
         * state.rod_hk_population[rod_index, 2]
         * strength
         * coarea_jacobian
@@ -2104,6 +2156,7 @@ def _integrate_pixel_boxes_kernel(
     specular_blend_lower_q_over_qc: float,
     specular_blend_upper_q_over_qc: float,
     source_phase_weight: float,
+    detector_path_linear_attenuation_m_inv: float,
     polarization_model_code: int,
     sample_from_local: FloatArray,
     rod_hk_population: FloatArray,
@@ -2203,6 +2256,7 @@ def _integrate_pixel_boxes_kernel(
                     specular_blend_lower_q_over_qc,
                     specular_blend_upper_q_over_qc,
                     source_phase_weight,
+                    detector_path_linear_attenuation_m_inv,
                     polarization_model_code,
                     sample_from_local,
                     rod_hk_population,
@@ -2283,6 +2337,7 @@ def _integrate_pixel_boxes_kernel(
                 specular_blend_lower_q_over_qc,
                 specular_blend_upper_q_over_qc,
                 source_phase_weight,
+                detector_path_linear_attenuation_m_inv,
                 polarization_model_code,
                 sample_from_local,
                 rod_hk_population,
@@ -2475,6 +2530,7 @@ class CompiledDetectorEvaluator:
             state.specular_blend_lower_q_over_qc,
             state.specular_blend_upper_q_over_qc,
             state.source_phase_weight,
+            state.detector_path_linear_attenuation_m_inv,
             state.polarization_model_code,
             state.sample_from_local,
             state.rod_hk_population,
@@ -2589,6 +2645,7 @@ class CompiledDetectorEvaluator:
             state.entrance_amplitude.real**2 + state.entrance_amplitude.imag**2,
             state.incident_decay_Ainv,
             state.film_thickness_A,
+            state.detector_path_linear_attenuation_m_inv,
             state.specular_stitch_code,
             state.specular_substrate_refractive_index,
             state.specular_top_roughness_A,
@@ -2684,6 +2741,7 @@ class CompiledDetectorEvaluator:
             state.specular_blend_lower_q_over_qc,
             state.specular_blend_upper_q_over_qc,
             state.source_phase_weight,
+            state.detector_path_linear_attenuation_m_inv,
             state.polarization_model_code,
             state.sample_from_local,
             state.rod_hk_population,

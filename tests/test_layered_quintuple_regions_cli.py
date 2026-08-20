@@ -370,6 +370,28 @@ def test_native_pixel_center_statistics_preserve_overlap_and_shared_dark_covaria
     )
     assert len(plans) == 2
 
+    zero_dark_mass, zero_dark_covariance, zero_dark_support, _ = (
+        ADAPTER._native_pixel_center_count_statistics(
+            arrays,
+            dataset_ids=("a", "b"),
+            counts_by_dataset=counts_by_dataset,
+            dark_counts=np.asarray(((1.0, 2.0, 0.0), (0.0, 0.0, 0.0))),
+            dark_scale=0.0,
+        )
+    )
+    np.testing.assert_array_equal(zero_dark_mass, arrays["count_sum"])
+    np.testing.assert_array_equal(zero_dark_support, arrays["support_px2"])
+    np.testing.assert_allclose(
+        zero_dark_covariance,
+        np.diag((4.0, 5.0, 12.0)),
+        rtol=3.0e-16,
+        atol=0.0,
+    )
+    assert ADAPTER._dark_covariance_model(0.0) == "no_dark_contribution.v1"
+    assert ADAPTER._dark_scale_basis_is_valid(0.0, "no_acquisition_matched_dark.v1")
+    assert not ADAPTER._dark_scale_basis_is_valid(0.0, "matched_exposure_assumed.v1")
+    assert not ADAPTER._dark_scale_basis_is_valid(1.0, "no_acquisition_matched_dark.v1")
+
     changed = copy.deepcopy(arrays)
     changed["count_sum"][0] += 1.0
     with pytest.raises(ValueError, match="prepared count sums"):
@@ -380,6 +402,61 @@ def test_native_pixel_center_statistics_preserve_overlap_and_shared_dark_covaria
             dark_counts=np.asarray(((1.0, 2.0, 0.0), (0.0, 0.0, 0.0))),
             dark_scale=1.0,
         )
+
+    for invalid_scale in (True, "1.0"):
+        with pytest.raises(ValueError, match="finite nonnegative real"):
+            ADAPTER._verified_dark_counts({"dark_correction": {"scale": invalid_scale}})
+
+
+def test_continuous_observations_make_zero_dark_an_exact_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counts = np.asarray(((4.0, 5.0, 6.0), (7.0, 8.0, 9.0)))
+    coordinate = np.asarray((0.0, 0.0, 0.0, 0.0, -1.0, 1.0))
+    quadrature = ContinuousRegionQuadrature(
+        column_px=np.asarray((0.0, 1.0, 2.0, 0.0, 1.0, 2.0)),
+        row_px=np.asarray((0.0, 0.0, 0.0, 1.0, 1.0, 1.0)),
+        detector_area_weight_px2=np.ones(6),
+        observation_row=np.arange(6),
+        background_coordinate=coordinate,
+        observation_count=6,
+        chart_revision="continuous-zero-dark.test.v1",
+    )
+    plan = ADAPTER._DatasetContinuousRegionPlan(
+        dataset_index=0,
+        dataset_id="a",
+        global_observation_row=np.arange(6),
+        quadrature=quadrature,
+        fold_bands=(),
+        rectangle_count=6,
+    )
+    arrays = {
+        "count_sum": np.arange(6, dtype=np.float64),
+        "dataset_index": np.zeros(6, dtype=np.int64),
+        "block_index": np.zeros(6, dtype=np.int64),
+        "signal_family_m": np.asarray((0, 1, 3, 4, -1, -1), dtype=np.int64),
+        "is_background": np.asarray((False, False, False, False, True, True)),
+    }
+    monkeypatch.setattr(
+        ADAPTER,
+        "_verified_dark_counts",
+        lambda _manifest: (np.full_like(counts, 1000.0), 0.0),
+    )
+
+    observations, _, _ = ADAPTER._continuous_matched_observations(
+        arrays,
+        {"dataset_ids": ["a"]},
+        (plan,),
+        {"a": counts},
+    )
+    projection = ADAPTER.compile_native_pixel_region_projection(quadrature, counts.shape)
+    expected_mass, expected_covariance = projection.integrate_counts(counts)
+
+    np.testing.assert_array_equal(observations.count_mass, expected_mass)
+    np.testing.assert_array_equal(
+        observations.count_covariance_count2,
+        expected_covariance,
+    )
 
 
 def test_conditioned_cubature_gate_detects_anchor_cancellation() -> None:
@@ -524,13 +601,24 @@ def _accepted_fit_document() -> dict[str, object]:
     rod_roster_sha256 = ADAPTER._rod_roster_sha256(rod_roster)
     peak_revision = f"sha256-{'d' * 64}.integrated-peak-area.v1"
     peak_mapping_sha256 = "e" * 64
-    return {
+    full_parameters = np.asarray((0.001, -0.001, 0.012, 0.004, 0.006))
+    fit_start = {
+        "kind": "explicit",
+        "initial_parameters": full_parameters.tolist(),
+        "initial_full_parameters": full_parameters.tolist(),
+        "initial_parameters_sha256": ADAPTER._array_sha256(full_parameters),
+        "maximum_function_evaluations": 50,
+        "source_artifact": None,
+        "semantics": "new optimizer run",
+    }
+    document = {
         "schema_version": ADAPTER.FIT_SCHEMA,
         "stage": "joint",
+        "execution_policy": "seeded_joint_only.v1",
         "status": "FIT",
         "active_parameter_names": list(ADAPTER.STRUCTURE_PARAMETER_NAMES),
         "frozen_parameter_names": [],
-        "optimizer": {"success": True},
+        "optimizer": {"success": True, "fit_start": fit_start},
         "numerical_convergence": {
             "converged": True,
             "optimizer_converged": True,
@@ -659,7 +747,13 @@ def _accepted_fit_document() -> dict[str, object]:
         "structure_representative": {
             "bi_delta_z_fractional": 0.001,
             "outer_chalcogen_delta_z_fractional": -0.001,
-            "outer_bi_antisite_fraction": 0.012,
+            "bi_occupancy": 1.0,
+            "central_chalcogen_occupancy": 1.0,
+            "outer_chalcogen_occupancy": 0.988,
+            "outer_chalcogen_vacancy_fraction": 0.012,
+            "outer_bi_antisite_fraction": 0.0,
+            "outer_chalcogen_fraction": 0.988,
+            "occupancy_rule": "outer_site_chalcogen_plus_vacancy.v1",
             "intensity_envelope_u_radial_A2": 0.004,
             "intensity_envelope_u_normal_A2": 0.006,
             "displacement_gauge": {
@@ -688,7 +782,7 @@ def _accepted_fit_document() -> dict[str, object]:
                 ],
             },
         },
-        "full_parameter_vector": [0.001, -0.001, 0.012, 0.004, 0.006],
+        "full_parameter_vector": full_parameters.tolist(),
         "diagnostic_sha256": "diagnostic",
         "dataset_scales": {"a": 2.0, "b": 3.0, "c": 4.0},
         "fitted_model_count": [4.0, 9.0, 16.0],
@@ -706,13 +800,82 @@ def _accepted_fit_document() -> dict[str, object]:
         "model_pixelized": False,
         "smoothing_applied": False,
     }
+    provenance = document["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["fit_run_identity"] = {
+        "model_execution": copy.deepcopy(provenance["execution_identity"]),
+        "fit_start": copy.deepcopy(fit_start),
+    }
+    return document
+
+
+def _set_fit_start(
+    document: dict[str, object],
+    *,
+    execution_policy: str,
+    kind: str,
+    initial_full_parameters: np.ndarray | None = None,
+    source_artifact: dict[str, str] | None = None,
+) -> None:
+    active = tuple(document["active_parameter_names"])
+    active_index = np.asarray(
+        [ADAPTER.STRUCTURE_PARAMETER_NAMES.index(name) for name in active],
+        dtype=np.int64,
+    )
+    full = (
+        np.asarray(document["full_parameter_vector"], dtype=np.float64)
+        if initial_full_parameters is None
+        else np.asarray(initial_full_parameters, dtype=np.float64)
+    )
+    initial = full[active_index]
+    fit_start = {
+        "kind": kind,
+        "initial_parameters": initial.tolist(),
+        "initial_full_parameters": full.tolist(),
+        "initial_parameters_sha256": ADAPTER._array_sha256(initial),
+        "maximum_function_evaluations": 50,
+        "source_artifact": copy.deepcopy(source_artifact),
+        "semantics": (
+            "restart from a completely evaluated parameter vector; optimizer state is not continued"
+            if kind == "progress_restart"
+            else "new optimizer run"
+        ),
+    }
+    document["execution_policy"] = execution_policy
+    optimizer = document["optimizer"]
+    assert isinstance(optimizer, dict)
+    optimizer["fit_start"] = fit_start
+    provenance = document["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["fit_run_identity"] = {
+        "model_execution": copy.deepcopy(provenance["execution_identity"]),
+        "fit_start": copy.deepcopy(fit_start),
+    }
+
+
+def _set_document_structure_vector(
+    document: dict[str, object],
+    parameters: np.ndarray,
+) -> None:
+    values = np.asarray(parameters, dtype=np.float64)
+    document["full_parameter_vector"] = values.tolist()
+    representative = document["structure_representative"]
+    assert isinstance(representative, dict)
+    for name, value in zip(ADAPTER.STRUCTURE_PARAMETER_NAMES, values, strict=True):
+        representative[name] = float(value)
+    representative["outer_chalcogen_occupancy"] = float(1.0 - values[2])
+    representative["outer_chalcogen_fraction"] = float(1.0 - values[2])
 
 
 @pytest.mark.parametrize(
     ("path", "value"),
     (
         (("status",), "MODEL_LIMITED_FIT"),
+        (("execution_policy",), "invented.v1"),
         (("optimizer", "success"), False),
+        (("optimizer", "fit_start", "kind"), "default"),
+        (("optimizer", "fit_start", "initial_parameters_sha256"), "0" * 64),
+        (("provenance", "fit_run_identity"), {}),
         (("numerical_convergence", "converged"), False),
         (("numerical_convergence", "optimizer_converged"), False),
         (("numerical_convergence", "identifiable"), False),
@@ -730,6 +893,9 @@ def _accepted_fit_document() -> dict[str, object]:
         (("data_projection", "diffraction_model_pixelized"), True),
         (("data_projection", "relative_l2_by_family_m", "0"), 0.04),
         (("dataset_scales", "b"), float("nan")),
+        (("structure_representative", "occupancy_rule"), "substitution.v1"),
+        (("structure_representative", "outer_bi_antisite_fraction"), 0.01),
+        (("structure_representative", "outer_chalcogen_occupancy"), 1.0),
         (("model_rod_roster_sha256",), "9" * 64),
         (("sensitivity", "rank"), 4),
         (("parameters_on_bounds",), ["intensity_envelope_u_normal_A2"]),
@@ -774,6 +940,27 @@ def test_fit_document_admissibility_fails_closed(path: tuple[str, ...], value: o
 def test_fit_document_admissibility_accepts_complete_evidence() -> None:
     assert ADAPTER.fit_document_is_admissible(
         _accepted_fit_document(),
+        trusted_recipe=TRUSTED_RECIPE,
+        recipe_sha256="recipe",
+        adapter_sha256="adapter",
+        fit_plan_sha256="fit-plan",
+        implementation_sha256="implementation",
+        lower_bounds=STRUCTURE_LOWER_BOUNDS,
+        upper_bounds=STRUCTURE_UPPER_BOUNDS,
+        parameter_scales=STRUCTURE_PARAMETER_SCALES,
+        sensitivity_relative_tolerance=1.0e-5,
+        bound_proximity_in_parameter_scales=1.0e-6,
+        maximum_sensitivity_condition=1.0e5,
+    )
+
+    wrong_policy = _accepted_fit_document()
+    _set_fit_start(
+        wrong_policy,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="default",
+    )
+    assert not ADAPTER.fit_document_is_admissible(
+        wrong_policy,
         trusted_recipe=TRUSTED_RECIPE,
         recipe_sha256="recipe",
         adapter_sha256="adapter",
@@ -883,6 +1070,11 @@ def test_stage_predecessor_contract_fails_closed() -> None:
     execution["stage"] = "A"
     execution["active_parameter_names"] = list(ADAPTER.STRUCTURE_PARAMETER_NAMES[:2])
     execution["frozen_parameter_names"] = list(ADAPTER.STRUCTURE_PARAMETER_NAMES[2:])
+    _set_fit_start(
+        document,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="default",
+    )
 
     assert ADAPTER.stage_fit_document_is_admissible(
         document,
@@ -1043,6 +1235,11 @@ def test_bound_limited_intermediate_stage_can_initialize_successor() -> None:
     execution["stage"] = "A"
     execution["active_parameter_names"] = list(active)
     execution["frozen_parameter_names"] = list(ADAPTER.STRUCTURE_PARAMETER_NAMES[2:])
+    _set_fit_start(
+        document,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="default",
+    )
 
     assert ADAPTER.stage_fit_document_is_admissible(
         document,
@@ -1071,11 +1268,18 @@ def _in_memory_stage_chain() -> tuple[
     plan = ADAPTER._validated_fit_plan(tomllib.loads(plan_path.read_text(encoding="utf-8")))
     predecessor_identity = None
     predecessor_chain: list[dict[str, str]] = []
-    predecessor_parameters = np.asarray((0.001, -0.001, 0.012, 0.004, 0.006))
+    predecessor_parameters = np.asarray(plan["baseline_parameters"], dtype=np.float64)
     records = {}
     for stage in ("A", "B", "C", "joint"):
         document = _accepted_fit_document()
         active = tuple(plan["stage"][stage]["active_parameters"])
+        active_index = np.asarray(
+            [ADAPTER.STRUCTURE_PARAMETER_NAMES.index(name) for name in active], dtype=np.int64
+        )
+        final_parameters = np.array(predecessor_parameters, copy=True)
+        candidate_parameters = np.asarray(document["full_parameter_vector"], dtype=np.float64)
+        final_parameters[active_index] = candidate_parameters[active_index]
+        _set_document_structure_vector(document, final_parameters)
         frozen = tuple(name for name in ADAPTER.STRUCTURE_PARAMETER_NAMES if name not in active)
         document["stage"] = stage
         document["status"] = "FIT" if stage == "joint" else "STAGE_CONDITIONED"
@@ -1121,16 +1325,24 @@ def _in_memory_stage_chain() -> tuple[
         execution["predecessor_chain_sha256"] = [
             identity["sha256"] for identity in predecessor_chain
         ]
+        _set_fit_start(
+            document,
+            execution_policy="staged_A_B_C_joint.v1",
+            kind="default",
+            initial_full_parameters=predecessor_parameters,
+        )
         identity = {"path": stage, "sha256": f"sha-{stage}"}
         records[stage] = (document, identity)
         predecessor_identity = identity
         predecessor_chain = [identity, *predecessor_chain]
+        predecessor_parameters = np.asarray(document["full_parameter_vector"], dtype=np.float64)
     return plan, records
 
 
 def _qualify_in_memory_chain(
     plan: dict[str, object],
     records: dict[str, tuple[dict[str, object], dict[str, str]]],
+    restart_records: dict[str, tuple[dict[str, object], dict[str, str]]] | None = None,
 ) -> tuple[tuple[dict[str, object], dict[str, str]], ...]:
     def load_predecessor(
         recorded_identity: object,
@@ -1139,6 +1351,17 @@ def _qualify_in_memory_chain(
         document, identity = records[stage]
         if recorded_identity != identity:
             raise ValueError("stale recorded identity")
+        return document, identity
+
+    def load_restart(
+        recorded_identity: object,
+        stage: str,
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        if restart_records is None or stage not in restart_records:
+            raise ValueError("missing restart record")
+        document, identity = restart_records[stage]
+        if recorded_identity != identity:
+            raise ValueError("stale restart identity")
         return document, identity
 
     joint, joint_identity = records["joint"]
@@ -1154,6 +1377,7 @@ def _qualify_in_memory_chain(
         adapter_sha256="adapter",
         implementation_sha256="implementation",
         load_predecessor=load_predecessor,
+        load_restart=load_restart,
     )
 
 
@@ -1165,23 +1389,79 @@ def test_stage_chain_requires_exact_ordered_predecessors() -> None:
     assert tuple(document["stage"] for document, _ in chain) == ("joint", "C", "B", "A")
 
 
-def test_stage_chain_allows_recorded_active_warm_start_only() -> None:
+def test_stage_chain_rejects_unversioned_active_warm_start() -> None:
     plan, records = _in_memory_stage_chain()
     stage_b = records["B"][0]
     warm = np.asarray(stage_b["optimizer"]["fit_start"]["initial_full_parameters"])
     warm[2] += 0.001
-    stage_b["optimizer"]["fit_start"]["initial_full_parameters"] = warm.tolist()
-    stage_b["optimizer"]["fit_start"]["initial_parameters"] = [float(warm[2])]
+    _set_fit_start(
+        stage_b,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="default",
+        initial_full_parameters=warm,
+    )
 
-    chain = _qualify_in_memory_chain(plan, records)
+    with pytest.raises(ValueError, match="did not start from its predecessor"):
+        _qualify_in_memory_chain(plan, records)
 
+
+def test_stage_chain_accepts_same_stage_progress_restart() -> None:
+    plan, records = _in_memory_stage_chain()
+    stage_b = records["B"][0]
+    warm = np.asarray(stage_b["optimizer"]["fit_start"]["initial_full_parameters"])
+    warm[2] += 0.001
+    restart_identity = {"path": "B.progress.json", "sha256": "a" * 64}
+    _set_fit_start(
+        stage_b,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="progress_restart",
+        initial_full_parameters=warm,
+        source_artifact=restart_identity,
+    )
+    restart_document = {
+        "schema_version": ADAPTER.FIT_PROGRESS_SCHEMA,
+        "execution_identity": copy.deepcopy(stage_b["provenance"]["execution_identity"]),
+        "fit_run_identity": {
+            "model_execution": copy.deepcopy(stage_b["provenance"]["execution_identity"]),
+            "fit_start": {"kind": "default"},
+        },
+        "active_parameters": [warm[2]],
+        "full_parameters": warm.tolist(),
+        "completed_model_evaluations": 1,
+        "devices": ["cpu"],
+        "evaluated_backends": ["numba_cpu"],
+    }
+
+    chain = _qualify_in_memory_chain(
+        plan,
+        records,
+        restart_records={"B": (restart_document, restart_identity)},
+    )
     assert tuple(document["stage"] for document, _ in chain) == ("joint", "C", "B", "A")
+
+    restart_document["active_parameters"] = [warm[2] + 0.001]
+    with pytest.raises(ValueError, match="restart source is not qualified"):
+        _qualify_in_memory_chain(
+            plan,
+            records,
+            restart_records={"B": (restart_document, restart_identity)},
+        )
 
 
 def test_stage_chain_rejects_changed_child_start_and_stale_ancestor() -> None:
     plan, records = _in_memory_stage_chain()
     joint = records["joint"][0]
-    joint["optimizer"]["fit_start"]["initial_full_parameters"][0] += 1.0e-4
+    changed_start = np.asarray(
+        joint["optimizer"]["fit_start"]["initial_full_parameters"],
+        dtype=np.float64,
+    )
+    changed_start[0] += 1.0e-4
+    _set_fit_start(
+        joint,
+        execution_policy="staged_A_B_C_joint.v1",
+        kind="default",
+        initial_full_parameters=changed_start,
+    )
     with pytest.raises(ValueError, match="did not start"):
         _qualify_in_memory_chain(plan, records)
 
@@ -1195,9 +1475,19 @@ def test_stage_chain_rejects_child_that_changes_a_frozen_parameter() -> None:
     plan, records = _in_memory_stage_chain()
     records["C"][0]["full_parameter_vector"][0] += 1.0e-4
     records["C"][0]["structure_representative"]["bi_delta_z_fractional"] += 1.0e-4
-    records["joint"][0]["optimizer"]["fit_start"]["initial_full_parameters"][0] += 1.0e-4
+    with pytest.raises(ValueError, match="stage C is not qualified"):
+        _qualify_in_memory_chain(plan, records)
 
-    with pytest.raises(ValueError, match="changed a frozen parameter"):
+
+def test_stage_chain_rejects_root_stage_that_changes_a_frozen_parameter() -> None:
+    plan, records = _in_memory_stage_chain()
+    stage_a = records["A"][0]
+    stage_a["full_parameter_vector"][2] += 0.001
+    stage_a["structure_representative"]["outer_chalcogen_vacancy_fraction"] += 0.001
+    stage_a["structure_representative"]["outer_chalcogen_occupancy"] -= 0.001
+    stage_a["structure_representative"]["outer_chalcogen_fraction"] -= 0.001
+
+    with pytest.raises(ValueError, match="stage A is not qualified"):
         _qualify_in_memory_chain(plan, records)
 
 
@@ -1205,6 +1495,9 @@ def test_stage_chain_rejects_internally_stale_lineage() -> None:
     plan, records = _in_memory_stage_chain()
     records["joint"][0]["provenance"]["execution_identity"]["predecessor_chain_sha256"][-1] = (
         "stale"
+    )
+    records["joint"][0]["provenance"]["fit_run_identity"]["model_execution"] = copy.deepcopy(
+        records["joint"][0]["provenance"]["execution_identity"]
     )
 
     with pytest.raises(ValueError, match="lineage is internally inconsistent"):
@@ -1245,6 +1538,12 @@ def test_recipe_peak_coordinates_and_horizon_catalog_are_consistent() -> None:
     invalid["fit_peak"][0]["dataset_id"] = "unknown"
     with pytest.raises(ValueError, match="dataset_id"):
         ADAPTER._validated_recipe(invalid)
+
+    for invalid_scale in (True, "1.0"):
+        invalid = copy.deepcopy(recipe)
+        invalid["dark_correction"]["scale"] = invalid_scale
+        with pytest.raises(ValueError, match="explicit no-clip dark correction"):
+            ADAPTER._validated_recipe(invalid)
 
     external = copy.deepcopy(recipe)
     external["parratt_stitch"]["interface_assumption"] = "fixed_external_qz_m0_strength.v1"
@@ -1312,9 +1611,11 @@ def test_fit_conditioned_profile_policy_accepts_complete_fit_evidence() -> None:
 def test_fit_conditioned_profile_policy_accepts_declared_bound_limited_joint() -> None:
     document = _accepted_fit_document()
     document["status"] = "MODEL_LIMITED_FIT"
-    document["parameters_on_bounds"] = ["outer_bi_antisite_fraction"]
+    document["parameters_on_bounds"] = ["outer_chalcogen_vacancy_fraction"]
     document["full_parameter_vector"][2] = 0.03
-    document["structure_representative"]["outer_bi_antisite_fraction"] = 0.03
+    document["structure_representative"]["outer_chalcogen_vacancy_fraction"] = 0.03
+    document["structure_representative"]["outer_chalcogen_occupancy"] = 0.97
+    document["structure_representative"]["outer_chalcogen_fraction"] = 0.97
     document["numerical_convergence"]["converged"] = False
 
     policy = ADAPTER._profile_evidence_policy(
@@ -1479,6 +1780,7 @@ def _accepted_profile_manifest() -> dict[str, object]:
             "detector_native_shape_rc": [3000, 3000],
             "detector_native_dtype": "int32",
             "scale": 1.0,
+            "scale_basis": "matched_exposure_assumed.v1",
             "negative_values_clipped": False,
             "smoothing_applied": False,
             "covariance_model": "shared_independent_poisson_dark_across_datasets.v1",
@@ -1584,7 +1886,12 @@ def _accepted_profile_manifest() -> dict[str, object]:
         (("fit_model_rod_roster_sha256",), "9" * 64),
         (("background_model", "conditioned_revision"), ""),
         (("dark_correction", "file_sha256"), "7" * 64),
+        (("dark_correction", "path"), "C:/wrong-dark.osc.gz"),
+        (("dark_correction", "detector_native_bytes_sha256"), "6" * 64),
+        (("dark_correction", "detector_native_shape_rc"), [1, 1]),
+        (("dark_correction", "detector_native_dtype"), "float32"),
         (("dark_correction", "covariance_model"), "independent_per_dataset"),
+        (("dark_correction", "scale_basis"), "invented_basis.v1"),
         (("m0_signal_only_display", "background_conditioning"), "sideband-subtracted"),
     ),
 )
@@ -1593,9 +1900,11 @@ def test_profile_manifest_admission_is_bound_to_trusted_evidence(
     value: object,
 ) -> None:
     accepted = _accepted_profile_manifest()
+    prepared_dark = copy.deepcopy(accepted["dark_correction"])
     assert ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
+        prepared_dark_correction=prepared_dark,
     )
     target: dict[str, object] = accepted
     for key in path[:-1]:
@@ -1607,11 +1916,13 @@ def test_profile_manifest_admission_is_bound_to_trusted_evidence(
     assert not ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
+        prepared_dark_correction=prepared_dark,
     )
 
 
 def test_profile_manifest_retains_covariance_refinement_as_diagnostic() -> None:
     accepted = _accepted_profile_manifest()
+    prepared_dark = copy.deepcopy(accepted["dark_correction"])
     refinement = accepted["measured_data_projection"]["refinement_oracle"]
     refinement["covariance_refinement_converged"] = False
     refinement["by_dataset"]["a"]["maximum_covariance_row_relative_l2"] = 8.0
@@ -1619,11 +1930,51 @@ def test_profile_manifest_retains_covariance_refinement_as_diagnostic() -> None:
     assert ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
+        prepared_dark_correction=prepared_dark,
     )
+
+
+def test_profile_manifest_admits_only_the_declared_zero_dark_contract() -> None:
+    trusted_recipe = copy.deepcopy(TRUSTED_RECIPE)
+    trusted_recipe["dark_correction"].update(
+        {
+            "scale": 0.0,
+            "scale_basis": "no_acquisition_matched_dark.v1",
+        }
+    )
+    accepted = _accepted_profile_manifest()
+    accepted["figure_recipe"] = copy.deepcopy(trusted_recipe)
+    accepted["dark_correction"].update(
+        {
+            "scale": 0.0,
+            "scale_basis": "no_acquisition_matched_dark.v1",
+            "covariance_model": "no_dark_contribution.v1",
+        }
+    )
+    accepted["provenance"]["execution_identity"]["dark_scale"] = 0.0
+    prepared_dark = copy.deepcopy(accepted["dark_correction"])
+
+    assert ADAPTER._profile_manifest_is_admissible(
+        accepted,
+        trusted_recipe=trusted_recipe,
+        prepared_dark_correction=prepared_dark,
+    )
+    for key, wrong_value in (
+        ("scale_basis", "matched_exposure_assumed.v1"),
+        ("covariance_model", "shared_independent_poisson_dark_across_datasets.v1"),
+    ):
+        tampered = copy.deepcopy(accepted)
+        tampered["dark_correction"][key] = wrong_value
+        assert not ADAPTER._profile_manifest_is_admissible(
+            tampered,
+            trusted_recipe=trusted_recipe,
+            prepared_dark_correction=prepared_dark,
+        )
 
 
 def test_profile_manifest_accepts_an_empty_m0_signal_only_supplement() -> None:
     accepted = _accepted_profile_manifest()
+    prepared_dark = copy.deepcopy(accepted["dark_correction"])
     supplement = accepted["m0_signal_only_display"]
     supplement.update(
         {
@@ -1652,11 +2003,13 @@ def test_profile_manifest_accepts_an_empty_m0_signal_only_supplement() -> None:
     assert ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
+        prepared_dark_correction=prepared_dark,
     )
     supplement["execution"] = {}
     assert not ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=TRUSTED_RECIPE,
+        prepared_dark_correction=prepared_dark,
     )
 
 
@@ -1666,6 +2019,7 @@ def test_profile_manifest_accepts_only_declared_frozen_parameter_replay() -> Non
         "interface_assumption": ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE,
     }
     accepted = _accepted_profile_manifest()
+    prepared_dark = copy.deepcopy(accepted["dark_correction"])
     execution = accepted["provenance"]["execution_identity"]
     structure_parameters = np.asarray((0.001, -0.001, 0.012, 0.004, 0.006))
     dataset_scales = {"a": 2.0, "b": 3.0, "c": 4.0}
@@ -1716,11 +2070,13 @@ def test_profile_manifest_accepts_only_declared_frozen_parameter_replay() -> Non
     assert ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=trusted_recipe,
+        prepared_dark_correction=prepared_dark,
     )
     replay["optimizer_executed"] = True
     assert not ADAPTER._profile_manifest_is_admissible(
         accepted,
         trusted_recipe=trusted_recipe,
+        prepared_dark_correction=prepared_dark,
     )
 
 
@@ -1763,9 +2119,7 @@ def test_profile_specular_replay_changes_only_the_interface_assumption() -> None
         ADAPTER.LOCAL_LAMELLA_INTERFACE,
     )
 
-    assert recipe["parratt_stitch"]["interface_assumption"] == (
-        ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE
-    )
+    assert recipe["parratt_stitch"]["interface_assumption"] == (ADAPTER.FIXED_EXTERNAL_QZ_INTERFACE)
     assert replay == {
         **recipe,
         "parratt_stitch": {
@@ -1896,8 +2250,8 @@ def test_five_coordinate_structure_adapter_separates_site_adps_and_intensity_env
     assert candidate.se2_fractional_z == pytest.approx(baseline.se2_fractional_z - 0.002)
     assert candidate.bi_occupancy == 1.0
     assert candidate.se1_occupancy == 1.0
-    assert candidate.se2_occupancy == 1.0
-    assert candidate.outer_bi_antisite_fraction == 0.012
+    assert candidate.se2_occupancy == pytest.approx(0.988)
+    assert candidate.outer_bi_antisite_fraction == 0.0
     assert candidate.u_radial_A2 == 0.0
     assert candidate.u_normal_A2 == 0.0
     profile = candidate_strength.site_displacement_profile
@@ -1949,6 +2303,23 @@ def test_structure_fit_plan_declares_stages_priors_and_bounds() -> None:
     invalid_seeded_plan["execution_policy"] = "staged_A_B_C_joint.v1"
     with pytest.raises(ValueError, match="seeded joint-only"):
         ADAPTER._validated_fit_plan(invalid_seeded_plan)
+    with pytest.raises(ValueError, match="explicit initial parameters or a restart"):
+        ADAPTER._require_declared_fit_start(
+            seeded_plan["execution_policy"],
+            initial_parameters_override=None,
+            resume_path=None,
+        )
+    ADAPTER._require_declared_fit_start(
+        seeded_plan["execution_policy"],
+        initial_parameters_override=seeded_plan["baseline_parameters"],
+        resume_path=None,
+    )
+    with pytest.raises(ValueError, match="fixed by the baseline or predecessor"):
+        ADAPTER._require_declared_fit_start(
+            plan["execution_policy"],
+            initial_parameters_override=plan["baseline_parameters"],
+            resume_path=None,
+        )
 
     unbound = copy.deepcopy(plan)
     del unbound["material_id"]

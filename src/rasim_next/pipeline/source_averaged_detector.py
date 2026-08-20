@@ -20,7 +20,12 @@ from painted_ewald.validation import integer, positive_integer
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
-from rasim_next.optics import mode_decay_constant
+from rasim_next.optics import (
+    DETECTOR_PATH_ATTENUATION_MODEL_ID,
+    INCIDENT_ILLUMINATED_PATH_MODEL_ID,
+    incident_illuminated_path_weight,
+    mode_decay_constant,
+)
 from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorEvaluator,
     _compile_detector_projection,
@@ -43,6 +48,7 @@ from rasim_next.reflectivity import (
     compile_parratt_stitch,
     parratt_stitch_interface_assumption,
 )
+from rasim_next.sampling.source import require_physical_intensity_source_model
 
 FloatArray = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
@@ -121,7 +127,7 @@ def _instrument_revision(instrument: CompiledInstrument) -> str:
     if not isinstance(instrument, CompiledInstrument):
         raise TypeError("instrument must be CompiledInstrument")
     return canonical_revision_sha256(
-        ("definition_id", "source_averaged_detector_instrument.v1"),
+        ("definition_id", "source_averaged_detector_instrument.v3"),
         ("lab_from_sample_rotation", instrument.lab_from_sample.rotation),
         ("lab_from_sample_translation_m", instrument.lab_from_sample.translation_m),
         ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
@@ -147,6 +153,41 @@ def _instrument_revision(instrument: CompiledInstrument) -> str:
             0.0 if instrument.sample_length_m is None else instrument.sample_length_m,
         ),
         ("film_thickness_A", instrument.film_thickness_A),
+        ("detector_path_medium_id", instrument.detector_path_medium_id),
+        (
+            "detector_path_linear_attenuation_m_inv",
+            instrument.detector_path_linear_attenuation_m_inv,
+        ),
+        (
+            "detector_path_wavelength_A",
+            np.asarray(instrument.detector_path_wavelength_A, dtype=np.float64),
+        ),
+        (
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+            np.asarray(
+                instrument.detector_path_linear_attenuation_m_inv_by_wavelength,
+                dtype=np.float64,
+            ),
+        ),
+    )
+
+
+def _detector_native_chart_revision(instrument: CompiledInstrument) -> str:
+    """Hash only the detector-native chart shared across sample poses."""
+
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    return canonical_revision_sha256(
+        ("definition_id", "detector_native_chart.v1"),
+        ("lab_from_detector_rotation", instrument.lab_from_detector.rotation),
+        ("lab_from_detector_translation_m", instrument.lab_from_detector.translation_m),
+        ("detector_shape_rc", np.asarray(instrument.detector_shape_rc, dtype=np.int64)),
+        ("detector_row_pitch_m", instrument.detector_row_pitch_m),
+        ("detector_column_pitch_m", instrument.detector_column_pitch_m),
+        (
+            "detector_reference_coordinate_px",
+            np.asarray(instrument.detector_reference_coordinate_px, dtype=np.float64),
+        ),
     )
 
 
@@ -183,6 +224,89 @@ def source_averaged_detector_geometry_revision(
         ("active_rod_k", np.asarray([rod.k for rod in rods], dtype=np.int64)),
         ("active_rod_population", np.asarray([rod.population for rod in rods], dtype=np.float64)),
     )
+
+
+def _incidence_angle_static_physics_revision(
+    *,
+    reciprocal_basis_Ainv: ArrayLike,
+    strength_model_revision: str,
+    mosaic: MosaicParameters,
+    intensity_envelope: SampleQIntensityEnvelope,
+    material_revision: str,
+    incident_model_id: str,
+    instrument: CompiledInstrument,
+    phase_polarization_weight: float,
+    specular_stitch_stack: ParrattStitchStack | None,
+) -> str:
+    """Hash detector physics that must remain fixed while incidence pose varies."""
+
+    fields: list[tuple[str, object]] = [
+        ("definition_id", "incidence_angle_static_detector_physics.v2"),
+        ("reciprocal_basis_Ainv", np.asarray(reciprocal_basis_Ainv, dtype=np.float64)),
+        ("strength_model_revision", strength_model_revision),
+        ("material_revision", material_revision),
+        ("incident_model_id", incident_model_id),
+        ("mosaic_gaussian_sigma_rad", mosaic.gaussian_sigma_rad),
+        ("mosaic_lorentzian_half_width_rad", mosaic.lorentzian_half_width_rad),
+        ("mosaic_lorentzian_probability", mosaic.lorentzian_probability),
+        ("mosaic_alpha_panel_count", mosaic.alpha_panel_count),
+        ("mosaic_alpha_gauss_order", mosaic.alpha_gauss_order),
+        ("mosaic_azimuth_count", mosaic.azimuth_count),
+        ("mosaic_azimuth_phase_rad", mosaic.azimuth_phase_rad),
+        ("intensity_envelope_u_radial_A2", intensity_envelope.u_radial_A2),
+        ("intensity_envelope_u_normal_A2", intensity_envelope.u_normal_A2),
+        ("phase_polarization_weight", phase_polarization_weight),
+        ("incident_illuminated_path_model_id", INCIDENT_ILLUMINATED_PATH_MODEL_ID),
+        ("detector_path_attenuation_model_id", DETECTOR_PATH_ATTENUATION_MODEL_ID),
+        ("sample_from_crystal_rotation", instrument.sample_from_crystal.rotation),
+        ("sample_from_crystal_translation_m", instrument.sample_from_crystal.translation_m),
+        ("sample_support_model_id", instrument.sample_support_model_id),
+        ("sample_width_is_unbounded", int(instrument.sample_width_m is None)),
+        (
+            "sample_width_m",
+            0.0 if instrument.sample_width_m is None else instrument.sample_width_m,
+        ),
+        ("sample_length_is_unbounded", int(instrument.sample_length_m is None)),
+        (
+            "sample_length_m",
+            0.0 if instrument.sample_length_m is None else instrument.sample_length_m,
+        ),
+        ("film_thickness_A", instrument.film_thickness_A),
+        ("detector_path_medium_id", instrument.detector_path_medium_id),
+        (
+            "detector_path_linear_attenuation_m_inv",
+            instrument.detector_path_linear_attenuation_m_inv,
+        ),
+        (
+            "detector_path_wavelength_A",
+            np.asarray(instrument.detector_path_wavelength_A, dtype=np.float64),
+        ),
+        (
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+            np.asarray(
+                instrument.detector_path_linear_attenuation_m_inv_by_wavelength,
+                dtype=np.float64,
+            ),
+        ),
+        ("specular_stitch_present", int(specular_stitch_stack is not None)),
+    ]
+    if specular_stitch_stack is not None:
+        fields.extend(
+            (
+                (
+                    "specular_substrate_refractive_index",
+                    specular_stitch_stack.substrate_refractive_index,
+                ),
+                ("specular_top_roughness_A", specular_stitch_stack.top_roughness_A),
+                ("specular_bottom_roughness_A", specular_stitch_stack.bottom_roughness_A),
+                ("specular_model_id", specular_stitch_stack.model_id),
+                (
+                    "specular_interface_assumption",
+                    specular_stitch_stack.interface_assumption,
+                ),
+            )
+        )
+    return canonical_revision_sha256(*fields)
 
 
 def _detector_pose_arrays(
@@ -222,6 +346,11 @@ def _geometry_rebind_instrument_invariants(
         and new.sample_width_m == old.sample_width_m
         and new.sample_length_m == old.sample_length_m
         and new.film_thickness_A == old.film_thickness_A
+        and new.detector_path_medium_id == old.detector_path_medium_id
+        and new.detector_path_linear_attenuation_m_inv == old.detector_path_linear_attenuation_m_inv
+        and new.detector_path_wavelength_A == old.detector_path_wavelength_A
+        and new.detector_path_linear_attenuation_m_inv_by_wavelength
+        == old.detector_path_linear_attenuation_m_inv_by_wavelength
         and np.array_equal(
             new.sample_from_crystal.rotation,
             old.sample_from_crystal.rotation,
@@ -392,11 +521,13 @@ class SourceAveragedDetectorCoordinateDensity:
     valid_source_count: NDArray[np.int64]
     source_state_count: int
     source_revision: str
+    rod_catalog_revision: str | None = field(default=None, kw_only=True)
     root_policy: str = "all_retained_roots.v1"
     detector_visible_m0_q_gap_Ainv: float | None = None
     measure_id: str = "raw_detector_coordinate_density_A2_per_px2.v1"
     execution_backend: str = "numba_cpu_source_averaged.v1"
     execution_device: str | None = None
+    branch: None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         supplied_column = np.asarray(self.column_px)
@@ -412,6 +543,10 @@ class SourceAveragedDetectorCoordinateDensity:
             raise ValueError("rods must contain at least one Rod")
         if len({(rod.h, rod.k) for rod in rods}) != len(rods):
             raise ValueError("rods must not repeat a physical rod")
+        if self.rod_catalog_revision is not None and (
+            not isinstance(self.rod_catalog_revision, str) or not self.rod_catalog_revision
+        ):
+            raise ValueError("rod_catalog_revision must be None or nonempty")
         supplied_density = np.asarray(self.density_A2_per_px2)
         if np.iscomplexobj(supplied_density) and np.any(supplied_density.imag != 0.0):
             raise ValueError("detector density must be real")
@@ -963,6 +1098,8 @@ class SourceAveragedDetectorEwaldMeasure:
     __slots__ = (
         "_detector_visible_m0_q_gap_Ainv",
         "_evaluator_blocks",
+        "_incidence_angle_static_physics_revision",
+        "_incidence_axis_angle_rad",
         "_incident",
         "_instrument",
         "_intensity_envelope",
@@ -972,6 +1109,7 @@ class SourceAveragedDetectorEwaldMeasure:
         "_reachable_rod_count_per_source_state",
         "_rod_catalog_revision",
         "_rods",
+        "_scan_calibration_binding_revision",
         "_specular_stitch_stack",
         "_strength_model",
         "_valid_state_count",
@@ -999,6 +1137,8 @@ class SourceAveragedDetectorEwaldMeasure:
         polarization_weight: float = 1.0,
         worker_count: int = 1,
         specular_stitch_stack: ParrattStitchStack | None = None,
+        incidence_axis_angle_rad: float | None = None,
+        scan_calibration_binding_revision: str | None = None,
     ) -> None:
         if not isinstance(incident, IncidentTransportResult):
             raise TypeError("incident must be IncidentTransportResult")
@@ -1033,7 +1173,14 @@ class SourceAveragedDetectorEwaldMeasure:
         if not isfinite(polarization) or polarization < 0.0:
             raise ValueError("polarization_weight must be finite and nonnegative")
         workers = positive_integer(worker_count, "worker_count")
+        axis_angle = None if incidence_axis_angle_rad is None else float(incidence_axis_angle_rad)
+        if axis_angle is not None and not isfinite(axis_angle):
+            raise ValueError("incidence_axis_angle_rad must be finite when provided")
+        scan_binding = scan_calibration_binding_revision
+        if scan_binding is not None and (not isinstance(scan_binding, str) or not scan_binding):
+            raise ValueError("scan_calibration_binding_revision must be nonempty when provided")
         states = incident.states
+        require_physical_intensity_source_model(states.source_sampling_model_id)
         if states.material_revision != material.material_revision:
             raise ValueError("incident states and material must have the same revision")
         if states.sample_geometry_revision != instrument.sample_geometry_revision:
@@ -1129,8 +1276,8 @@ class SourceAveragedDetectorEwaldMeasure:
             source_phase_weight = float(
                 states.source_weight[state_index]
                 * states.footprint_acceptance[state_index]
-                * phase_weight
-                * polarization
+                * incident_illuminated_path_weight(states.direction_sample[state_index])
+                * (phase_weight * polarization)
             )
             packed = (
                 atom_offsets,
@@ -1195,6 +1342,23 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(self, "_incident", incident)
         object.__setattr__(self, "_instrument", instrument)
         object.__setattr__(self, "_intensity_envelope", envelope)
+        object.__setattr__(self, "_incidence_axis_angle_rad", axis_angle)
+        object.__setattr__(self, "_scan_calibration_binding_revision", scan_binding)
+        object.__setattr__(
+            self,
+            "_incidence_angle_static_physics_revision",
+            _incidence_angle_static_physics_revision(
+                reciprocal_basis_Ainv=reference_config.reciprocal_basis_Ainv,
+                strength_model_revision=strength_model.structure_model_revision,
+                mosaic=mosaic,
+                intensity_envelope=envelope,
+                material_revision=material.material_revision,
+                incident_model_id=states.incident_model_id,
+                instrument=instrument,
+                phase_polarization_weight=phase_weight * polarization,
+                specular_stitch_stack=specular_stitch_stack,
+            ),
+        )
         object.__setattr__(self, "_material", material)
         object.__setattr__(self, "_mosaic", mosaic)
         object.__setattr__(self, "_phase_polarization_weight", phase_weight * polarization)
@@ -1253,6 +1417,22 @@ class SourceAveragedDetectorEwaldMeasure:
         return int(self._incident.states.incident_state_id.size)
 
     @property
+    def source_revision(self) -> str:
+        return self._incident.states.source_revision
+
+    @property
+    def sample_geometry_revision(self) -> str:
+        return self._incident.states.sample_geometry_revision
+
+    @property
+    def detector_shape_rc(self) -> tuple[int, int]:
+        return self._instrument.detector_shape_rc
+
+    @property
+    def detector_panel_revision(self) -> str:
+        return _detector_native_chart_revision(self._instrument)
+
+    @property
     def valid_source_state_count(self) -> int:
         return self._valid_state_count
 
@@ -1267,6 +1447,24 @@ class SourceAveragedDetectorEwaldMeasure:
         """Infimum of supported ``|Q|``; zero only for local-lamella stitched m=0."""
 
         return self._detector_visible_m0_q_gap_Ainv
+
+    @property
+    def incidence_angle_static_physics_revision(self) -> str:
+        """Physics identity required to be common to every incidence node."""
+
+        return self._incidence_angle_static_physics_revision
+
+    @property
+    def incidence_axis_angle_rad(self) -> float | None:
+        """Calibrated scalar incidence-axis setting, when configured."""
+
+        return self._incidence_axis_angle_rad
+
+    @property
+    def scan_calibration_binding_revision(self) -> str | None:
+        """Calibrated scan lineage carried by a canonical scan component."""
+
+        return self._scan_calibration_binding_revision
 
     def sample_native_pixel_mass(
         self,
@@ -1411,6 +1609,22 @@ class SourceAveragedDetectorEwaldMeasure:
             "_specular_stitch_stack",
             self._specular_stitch_stack if contains_m0 else None,
         )
+        if not contains_m0 and self._specular_stitch_stack is not None:
+            object.__setattr__(
+                restricted,
+                "_incidence_angle_static_physics_revision",
+                _incidence_angle_static_physics_revision(
+                    reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
+                    strength_model_revision=self._strength_model.structure_model_revision,
+                    mosaic=self._mosaic,
+                    intensity_envelope=self._intensity_envelope,
+                    material_revision=self._material.material_revision,
+                    incident_model_id=self._incident.states.incident_model_id,
+                    instrument=self._instrument,
+                    phase_polarization_weight=self._phase_polarization_weight,
+                    specular_stitch_stack=None,
+                ),
+            )
         object.__setattr__(
             restricted,
             "_reachable_rod_count_per_source_state",
@@ -1450,10 +1664,10 @@ class SourceAveragedDetectorEwaldMeasure:
             or rebound_strength.layers != reference.layers
             or rebound_strength.parent is not reference.parent
             or rebound_strength.normalization != reference.normalization
-            or rebound_strength.shared_disorder_epsilon != reference.shared_disorder_epsilon
         ):
             raise ValueError(
-                "physics rebinding requires unchanged crystal, stacking, and normalization"
+                "physics rebinding requires unchanged crystal, layer count, parent, and "
+                "normalization"
             )
         valid_state_index = np.flatnonzero(self._incident.states.valid)
         (
@@ -1510,6 +1724,21 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_mosaic", rebound_mosaic)
         object.__setattr__(rebound, "_strength_model", rebound_strength)
         object.__setattr__(rebound, "_intensity_envelope", rebound_envelope)
+        object.__setattr__(
+            rebound,
+            "_incidence_angle_static_physics_revision",
+            _incidence_angle_static_physics_revision(
+                reciprocal_basis_Ainv=rebound_strength.reciprocal_basis_Ainv,
+                strength_model_revision=rebound_strength.structure_model_revision,
+                mosaic=rebound_mosaic,
+                intensity_envelope=rebound_envelope,
+                material_revision=self._material.material_revision,
+                incident_model_id=self._incident.states.incident_model_id,
+                instrument=self._instrument,
+                phase_polarization_weight=self._phase_polarization_weight,
+                specular_stitch_stack=self._specular_stitch_stack,
+            ),
+        )
         return rebound
 
     def with_specular_stitch(
@@ -1537,6 +1766,8 @@ class SourceAveragedDetectorEwaldMeasure:
             polarization_weight=1.0,
             worker_count=self._worker_count,
             specular_stitch_stack=stack,
+            incidence_axis_angle_rad=self._incidence_axis_angle_rad,
+            scan_calibration_binding_revision=self._scan_calibration_binding_revision,
         )
         return rebuilt.with_maximum_state_block_count(len(self._evaluator_blocks))
 
@@ -1623,9 +1854,12 @@ class SourceAveragedDetectorEwaldMeasure:
             mode_decay_constant(new_states.kz_film_Ainv, propagation_direction),
             dtype=np.float64,
         )
-        source_phase_weight = (
-            new_states.source_weight
-            * new_states.footprint_acceptance
+        source_phase_weight = np.zeros_like(new_states.source_weight)
+        valid_state = np.asarray(new_states.valid, dtype=np.bool_)
+        source_phase_weight[valid_state] = (
+            new_states.source_weight[valid_state]
+            * new_states.footprint_acceptance[valid_state]
+            * incident_illuminated_path_weight(new_states.direction_sample[valid_state])
             * self._phase_polarization_weight
         )
         internal_k_Ainv = np.linalg.norm(new_states.k_film_phase_sample_Ainv, axis=1)
@@ -1689,6 +1923,44 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(rebound, "_incident", incident)
         object.__setattr__(rebound, "_instrument", instrument)
+        object.__setattr__(rebound, "_incidence_axis_angle_rad", None)
+        object.__setattr__(rebound, "_scan_calibration_binding_revision", None)
+        object.__setattr__(
+            rebound,
+            "_incidence_angle_static_physics_revision",
+            _incidence_angle_static_physics_revision(
+                reciprocal_basis_Ainv=self._strength_model.reciprocal_basis_Ainv,
+                strength_model_revision=self._strength_model.structure_model_revision,
+                mosaic=self._mosaic,
+                intensity_envelope=self._intensity_envelope,
+                material_revision=self._material.material_revision,
+                incident_model_id=incident.states.incident_model_id,
+                instrument=instrument,
+                phase_polarization_weight=self._phase_polarization_weight,
+                specular_stitch_stack=self._specular_stitch_stack,
+            ),
+        )
+        return rebound
+
+    def _rebind_calibrated_incidence_scan_geometry(
+        self,
+        *,
+        incident: IncidentTransportResult,
+        instrument: CompiledInstrument,
+        incidence_axis_angle_rad: float,
+        scan_calibration_binding_revision: str,
+    ) -> SourceAveragedDetectorEwaldMeasure:
+        """Internal calibrated-scan rebind used only by the configured builder."""
+
+        angle = float(incidence_axis_angle_rad)
+        if not isfinite(angle):
+            raise ValueError("incidence_axis_angle_rad must be finite")
+        binding = scan_calibration_binding_revision
+        if not isinstance(binding, str) or not binding:
+            raise ValueError("scan_calibration_binding_revision must be nonempty")
+        rebound = self.rebind_geometry(incident=incident, instrument=instrument)
+        object.__setattr__(rebound, "_incidence_axis_angle_rad", angle)
+        object.__setattr__(rebound, "_scan_calibration_binding_revision", binding)
         return rebound
 
     def _thread_pool(self) -> ThreadPoolExecutor | None:
@@ -2157,6 +2429,7 @@ class SourceAveragedDetectorEwaldMeasure:
             detector_visible_m0_q_gap_Ainv=self._detector_visible_m0_q_gap_Ainv,
             execution_backend=backend_id,
             execution_device=execution_device,
+            rod_catalog_revision=self._rod_catalog_revision,
         )
 
     def integrate_native_pixels(

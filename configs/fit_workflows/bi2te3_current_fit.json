@@ -1,5 +1,5 @@
 {
-  "schema_version": "rasim-layered-material-fit-seed-v1",
+  "schema_version": "rasim-layered-material-fit-seed-v2",
   "material_id": "Bi2Te3",
   "model_family": "bi2x3_quintuple.v1",
   "fixed_position": {
@@ -54,14 +54,14 @@
     "parameter_names": [
       "bi_delta_z_fractional",
       "outer_chalcogen_delta_z_fractional",
-      "outer_bi_antisite_fraction",
+      "outer_chalcogen_vacancy_fraction",
       "intensity_envelope_u_radial_A2",
       "intensity_envelope_u_normal_A2"
     ],
     "parameter_values": [
       -0.001162090487461725,
       0.00031406741941366175,
-      6.495052402753281e-18,
+      0.0,
       0.0069180465240175374,
       0.0022818835705743445
     ],
@@ -85,6 +85,7 @@
     "joint_fit_artifact": "sf/joint.json",
     "joint_fit_sha256": "1061765148faaca04866127e6d935d8ec28b59654f252fe2b3a260cddbb8260c",
     "joint_fit_status": "MODEL_LIMITED_FIT",
+    "structure_seed_semantics": "z and envelope coordinates replay the prior model-limited fit; vacancy is reset to zero and is not a relabelled antisite estimate",
     "profile_artifact": "sf/profiles.local_lamella.ra_diag.npz",
     "profile_sha256": "043b0bf9fc9f56212ff312d4c215cc12ce5f3dc3a08fd57e52594f4359d248cd",
     "profile_evidence": "FROZEN_FIT_PARAMETER_REPLAY",

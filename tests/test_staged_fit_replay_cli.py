@@ -124,6 +124,67 @@ def _bi2se3_fixed_position(case, geometry_stage: dict) -> dict:
     }
 
 
+def _bi2te3_mock_stage_state(case, stage: str, upstream: dict | None) -> dict:
+    if stage == "geometry":
+        return {"corrections": list(case.expected_scientific_summary["geometry"]["corrections"])}
+    if stage == "mosaic":
+        assert upstream is not None
+        import numpy as np
+
+        from rasim_next.fitting import FixedLatticeState, FixedPositionState
+        from rasim_next.fitting.indexed_series import SharedGeometryCorrections
+        from rasim_next.materials import read_crystal
+        from rasim_next.pipeline.configured_simulation import load_simulation_config
+
+        config_path = case.input_paths["simulation_config"]
+        config = load_simulation_config(config_path)
+        crystal = read_crystal(
+            config.material.cif_path,
+            phase_id=config.material.phase_id,
+            expected_sha256=config.cif_sha256,
+        )
+        position = FixedPositionState(
+            artifact_revision=upstream["scientific_revision"],
+            corrections=SharedGeometryCorrections.from_array(
+                np.asarray(upstream["state"]["corrections"], dtype=np.float64)
+            ),
+            incidence_angle_delta_rad=0.0,
+            commanded_incidence_angles_rad=tuple(
+                math.radians(value) for value in case.incidence_angles_deg
+            ),
+            beam_center_column_row_px=tuple(
+                float(value) for value in config.instrument.detector_reference_coordinate_px
+            ),
+        )
+        return {
+            "component_profile_checkpoint_revision": "sha256-" + "2" * 64,
+            "fixed_lattice": FixedLatticeState.implicit_cif(crystal.direct_basis_A).to_record(),
+            "fixed_position": position.to_record(),
+            "identifiability": {},
+            "parameters": [],
+            "profile_records": [],
+            "profile_revision": "sha256-" + "3" * 64,
+            "profile_scales": [],
+            "simulation_config": {
+                "path": str(config_path),
+                "sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+            },
+        }
+    if stage == "ordered_intensity":
+        assert upstream is not None
+        return {
+            "cached_vs_fresh_maximum_relative_error": 0.0,
+            "fixed_lattice": copy.deepcopy(upstream["state"]["fixed_lattice"]),
+            "fixed_position": copy.deepcopy(upstream["state"]["fixed_position"]),
+            "mosaic_parameters": [],
+            "parameters": [],
+            "profile_records": [],
+            "simulation_config": copy.deepcopy(upstream["state"]["simulation_config"]),
+            "structure_representative": {},
+        }
+    return {}
+
+
 def _profile_record(identity: str) -> dict:
     dataset_id, family_m, integer_l, analytic_branch, side = identity.split("|")
     return {
@@ -144,7 +205,10 @@ def test_bi2te3_mosaic_inputs_preserve_effective_incidence_angles() -> None:
         zero_sum_helmert_basis,
     )
     from rasim_next.materials import read_crystal
-    from rasim_next.pipeline.configured_simulation import load_simulation_config
+    from rasim_next.pipeline.configured_simulation import (
+        ConfiguredGeometryInputs,
+        load_simulation_config,
+    )
 
     module = _load_replay_cli()
     case = SimpleNamespace(
@@ -192,6 +256,238 @@ def test_bi2te3_mosaic_inputs_preserve_effective_incidence_angles() -> None:
     for candidate in (series, nominal_series):
         actual_deg = [inputs.config.instrument.axis_rotations[0].angle_deg for inputs in candidate]
         assert np.allclose(actual_deg, expected_deg, rtol=0.0, atol=1.0e-13)
+    for physical, geometry in zip(series, nominal_series, strict=True):
+        assert isinstance(geometry, ConfiguredGeometryInputs)
+        assert geometry.instrument is physical.instrument
+        assert geometry.config is physical.config
+        assert geometry.samples.incident_sample_id.size == 1
+        assert geometry.samples.source_sampling_model_id == "nominal_mean_geometry_reference.v1"
+        assert geometry.samples.source_rng_model_id == "no_rng.v1"
+        assert geometry.samples.source_seed == 0
+
+    restored_position, restored_lattice, restored_config = module._bi2te3_fixed_state_from_stage(
+        {
+            "fixed_position": position.to_record(),
+            "fixed_lattice": lattice.to_record(),
+            "simulation_config": {
+                "path": str(case.input_paths["simulation_config"]),
+                "sha256": hashlib.sha256(
+                    case.input_paths["simulation_config"].read_bytes()
+                ).hexdigest(),
+            },
+        }
+    )
+    assert restored_position.to_record() == position.to_record()
+    assert restored_lattice == lattice
+    assert restored_config == case.input_paths["simulation_config"].resolve()
+
+    geometry = {
+        "stage": "geometry",
+        "scientific_revision": "sha256-" + "a" * 64,
+        "state": {"corrections": [0.0] * 9},
+    }
+    expected_position = FixedPositionState(
+        artifact_revision=geometry["scientific_revision"],
+        corrections=SharedGeometryCorrections.from_array(np.zeros(9)),
+        incidence_angle_delta_rad=0.0,
+        commanded_incidence_angles_rad=tuple(
+            math.radians(value) for value in case.incidence_angles_deg
+        ),
+        beam_center_column_row_px=tuple(
+            float(value) for value in config.instrument.detector_reference_coordinate_px
+        ),
+    )
+    mosaic_state = {
+        "fixed_position": expected_position.to_record(),
+        "fixed_lattice": lattice.to_record(),
+        "simulation_config": {
+            "path": str(case.input_paths["simulation_config"]),
+            "sha256": hashlib.sha256(
+                case.input_paths["simulation_config"].read_bytes()
+            ).hexdigest(),
+        },
+    }
+    module._validate_bi2te3_fixed_state_handoff(
+        case,
+        stage="mosaic",
+        state=mosaic_state,
+        upstream=geometry,
+    )
+    changed_position = copy.deepcopy(mosaic_state)
+    changed_position["fixed_position"]["corrections"]["detector_column_tilt_rad"] = 1.0e-4
+    with pytest.raises(ValueError, match="geometry position handoff"):
+        module._validate_bi2te3_fixed_state_handoff(
+            case,
+            stage="mosaic",
+            state=changed_position,
+            upstream=geometry,
+        )
+
+    mosaic = {"stage": "mosaic", "state": mosaic_state}
+    module._validate_bi2te3_fixed_state_handoff(
+        case,
+        stage="ordered_intensity",
+        state=copy.deepcopy(mosaic_state),
+        upstream=mosaic,
+    )
+    with pytest.raises(ValueError, match="fixed_position handoff"):
+        module._validate_bi2te3_fixed_state_handoff(
+            case,
+            stage="ordered_intensity",
+            state=changed_position,
+            upstream=mosaic,
+        )
+
+
+def test_bi2te3_ordered_stage_passes_geometry_and_physical_series_to_profile_builder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import numpy as np
+
+    from rasim_next.io import osc as osc_module
+
+    class ProfileBoundaryReached(RuntimeError):
+        pass
+
+    module = _load_replay_cli()
+    fixed_position = SimpleNamespace(
+        corrections=SimpleNamespace(as_array=lambda: np.zeros(9)),
+    )
+    fixed_lattice = object()
+    config_path = tmp_path / "simulation.yaml"
+    base = SimpleNamespace(samples=SimpleNamespace(source_revision="source-revision"))
+    physical_series = (base, SimpleNamespace())
+    geometry_series = (SimpleNamespace(), SimpleNamespace())
+    runner = object()
+    case = SimpleNamespace(
+        source_state_count=2,
+        stage_config={"mosaic": {"dark_role": "dark"}},
+        input_paths={"dark": tmp_path / "dark.osc"},
+    )
+    upstream = {"state": {"fixed": "state"}}
+
+    monkeypatch.setattr(module, "_load_script_module", lambda *_args: runner)
+    monkeypatch.setattr(
+        module,
+        "_bi2te3_fixed_state_from_stage",
+        lambda state, *, case: (fixed_position, fixed_lattice, config_path),
+    )
+
+    def fixed_inputs(
+        actual_case,
+        actual_position,
+        actual_lattice,
+        *,
+        simulation_config_path,
+    ):
+        assert actual_case is case
+        assert actual_position is fixed_position
+        assert actual_lattice is fixed_lattice
+        assert simulation_config_path is config_path
+        return base, physical_series, geometry_series
+
+    monkeypatch.setattr(module, "_bi2te3_fixed_inputs", fixed_inputs)
+    monkeypatch.setattr(module, "_source_revision", lambda _case: "source-revision")
+    monkeypatch.setattr(
+        osc_module,
+        "read_osc",
+        lambda _path: SimpleNamespace(detector_native_counts="dark-counts"),
+    )
+
+    def profiles(
+        actual_case,
+        actual_geometry_series,
+        actual_physical_series,
+        dark_counts,
+        actual_runner,
+    ):
+        assert actual_case is case
+        assert actual_geometry_series is geometry_series
+        assert actual_physical_series is physical_series
+        assert dark_counts == "dark-counts"
+        assert actual_runner is runner
+        raise ProfileBoundaryReached
+
+    monkeypatch.setattr(module, "_bi2te3_profile_definitions", profiles)
+
+    with pytest.raises(ProfileBoundaryReached):
+        module._bi2te3_ordered_intensity(case, upstream, "cuda", tmp_path)
+
+
+def test_bi2te3_profile_builder_uses_source_resolved_ordered_topology(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from rasim_next import selection
+    from rasim_next.pipeline import configured_simulation
+
+    class SourceTopologyBoundaryReached(RuntimeError):
+        pass
+
+    module = _load_replay_cli()
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text('{"rows":[]}', encoding="utf-8")
+    geometry_series = SimpleNamespace(
+        incidence_axis_index=0,
+        images=(
+            SimpleNamespace(
+                image_id="image-5deg",
+                axis_rotation_angles_deg=(5.0,),
+            ),
+        ),
+    )
+    monkeypatch.setattr(selection, "load_osc_geometry_series", lambda _path: geometry_series)
+    monkeypatch.setattr(
+        configured_simulation,
+        "build_nominal_ewald_context",
+        lambda _inputs: object(),
+    )
+    physical_inputs = object()
+
+    def source_topology_detector(actual_inputs):
+        assert actual_inputs is physical_inputs
+        raise SourceTopologyBoundaryReached
+
+    monkeypatch.setattr(
+        configured_simulation,
+        "build_source_averaged_structure_detector",
+        source_topology_detector,
+    )
+    geometry_inputs = SimpleNamespace(
+        config=SimpleNamespace(
+            source=SimpleNamespace(mean_direction_lab=(0.0, 1.0, 0.0)),
+            instrument=SimpleNamespace(
+                axis_rotations=(SimpleNamespace(angle_deg=5.0),),
+            ),
+        ),
+        instrument=object(),
+    )
+    case = SimpleNamespace(
+        incidence_angles_deg=(5.0,),
+        input_paths={
+            "geometry_series": tmp_path / "geometry.json",
+            "catalog": catalog_path,
+        },
+        stage_config={
+            "mosaic": {
+                "catalog_role": "catalog",
+                "m1_integer_l_5deg": [],
+                "extra_nonzero_profiles": [],
+                "osc_roles": ("osc",),
+                "dataset_ids": ("dataset",),
+            }
+        },
+    )
+
+    with pytest.raises(SourceTopologyBoundaryReached):
+        module._bi2te3_profile_definitions(
+            case,
+            (geometry_inputs,),
+            (physical_inputs,),
+            object(),
+            object(),
+        )
 
 
 def test_replay_recovers_only_an_explicit_global_mosaic_alias() -> None:
@@ -1163,7 +1459,7 @@ def test_replay_runs_stages_in_order_and_chains_scientific_revisions(
         def run(*, case, upstream, backend, output_directory):
             upstream_revision = None if upstream is None else upstream["scientific_revision"]
             calls.append((name, upstream_revision, backend))
-            state = {}
+            state = _bi2te3_mock_stage_state(case, name, upstream)
             if name == "render":
                 pixels = bytes((1, 2, 3, 4))
                 artifact = tmp_path / "ordered_stage_render.png"
@@ -1183,7 +1479,7 @@ def test_replay_runs_stages_in_order_and_chains_scientific_revisions(
                 case,
                 name,
                 upstream,
-                summary={},
+                summary=copy.deepcopy(case.expected_scientific_summary.get(name, {})),
                 state=state,
             )
 
@@ -1214,12 +1510,17 @@ def test_replay_runs_stages_in_order_and_chains_scientific_revisions(
     assert calls[2][1] == result["stages"]["mosaic"]["scientific_revision"]
     assert calls[3][1] == result["stages"]["ordered_intensity"]["scientific_revision"]
     geometry = result["stages"]["geometry"]
-    assert geometry["source_state_count"] == 1
-    assert geometry["source_seed"] == 1729
-    assert geometry["source_revision"] == module._source_revision(
+    geometry_source_identity = module._stage_source_identity(
         case,
-        source_state_count=1,
+        "geometry",
+        case_source_revision=module._source_revision(case),
     )
+    assert (
+        geometry["source_state_count"],
+        geometry["source_seed"],
+        geometry["source_revision"],
+    ) == geometry_source_identity
+    assert geometry_source_identity[:2] == (1, 0)
     assert geometry["source_revision"] != result["stages"]["mosaic"]["source_revision"]
     assert all(
         stage["source_state_count"] == 250
@@ -2085,7 +2386,7 @@ def test_render_resume_rejects_changed_decoded_pixels(
 
     def runner(stage: str):
         def run(*, case, upstream, backend, output_directory):
-            state = {}
+            state = _bi2te3_mock_stage_state(case, stage, upstream)
             if stage == "render":
                 Image.frombytes("L", (2, 2), pixels).save(image_path)
                 state = {
@@ -2103,7 +2404,7 @@ def test_render_resume_rejects_changed_decoded_pixels(
                 case,
                 stage,
                 upstream,
-                summary={},
+                summary=copy.deepcopy(case.expected_scientific_summary.get(stage, {})),
                 state=state,
             )
 

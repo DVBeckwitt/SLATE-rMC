@@ -9,10 +9,10 @@ and weighted Monte Carlo are explicit terminal estimators of that shared physics
 
 ```text
 strict YAML + CIF
-  -> sampled source rows
+  -> weighted correlated source rows and declared spectral lines
   -> canonical entrance transport and incident film-phase ki
   -> physical reciprocal rods + continuous mosaic/finite-stack strength
-  -> analytic rod/Ewald roots and exit optics
+  -> analytic rod/Ewald roots, exit optics, illuminated-path weight, and external-path attenuation
   -> per-source, per-physical-rod continuous detector-coordinate density
   -> all-source, all-rod, all-root intensity sum on the detector function
   -> selected-center comparison, display-only center sampling, or detector-pixel box integration
@@ -43,11 +43,13 @@ contributing rod/orientation branches on the active detector panel.
 - `geometry`: instrument compilation, source/sample intersection, incident transport, detector rays,
   and forward detector intersection.
 - `materials` and `optics`: CIF-derived material data, shared complex-normal mode selection,
-  refraction, Fresnel amplitudes, and uniform-depth attenuation.
+  refraction, Fresnel amplitudes, uniform-depth film attenuation, flat-film illuminated-path
+  weight, and optional external detector-path Beer--Lambert attenuation.
 - `ordered`, `stacking`, and `reflectivity`: structure amplitudes, finite stacks, stacking models,
   separately named scalar specular calculations, and the immutable optional Parratt handoff state.
 - `reciprocal`: reciprocal basis and complete physical rod catalogs.
-- `sampling`: deterministic source phase-space sampling only.
+- `sampling`: deterministic weighted Gaussian phase-space sampling, optional per-axis
+  position--divergence correlation, and legacy Gaussian or discrete-line wavelength laws.
 - `pipeline/bragg_space.py`: binds CIF- or adopted-lattice ordered-parent strength, including the
   supported 2H and R-centered 3R catalogues, to rods and mosaic geometry.
 - `pipeline/continuous_detector.py`: shared inverse latent pushforward to intrinsic internal-film
@@ -61,6 +63,11 @@ contributing rod/orientation branches on the active detector panel.
 - `pipeline/source_averaged_structure.py`: sparse selected-coordinate source averaging with fixed
   detector transfer and revision-bearing candidate structure strength for mosaic and ordered-
   intensity fitting.
+- `pipeline/incidence_acquisition.py`: canonical continuous-incidence support, traversal
+  provenance, and normalized deterministic quadrature.
+- `pipeline/incidence_angle_average.py`: calibrated reduction of complete fixed-angle all-root
+  detector engines over an already compiled quadrature, with one shared source realization and no
+  angle Monte Carlo or retained per-angle image.
 - `pipeline/configured_simulation.py`: strict YAML boundary, canonical model construction, and
   quantitative pixel integration or display-only native-center density sampling. Its geometry-only
   input/context builders stop before structure strength or mosaic construction.
@@ -71,6 +78,10 @@ contributing rod/orientation branches on the active detector panel.
   commensurate-rational-L tagged landmarks,
     the shared public site-plus-line objective diagnostic, detector-coordinate and line-angle pose
     fitting, rank diagnostics, and post-fit root re-enumeration.
+- `fitting/adaptive_scan.py`: material-neutral finite-ROI node records and panelwise
+  covariance-whitened angular refinement with frozen calibration, source, and evaluator identity.
+- `fitting/staged_scan.py`: generic fixed/scan scores and fixed-first delayed acceptance with a
+  bounded exact-scan work count.
 - `fitting/pbi2_geometry.py`: ideal 2H/4H/6H parent-period support in one declared single-trilayer
   PbI2 metric, exact detector-locus deduplication, and hash-bound signed-rod/parent provenance; no
   structure intensity, population weight, mosaic, or measured-centroid ownership.
@@ -119,13 +130,19 @@ contributing rod/orientation branches on the active detector panel.
    `CompiledMonteCarloDetectorSampler` is an explicit mutable execution resource, never hidden state
    on that immutable model. It retains a prefix-stable accumulator and either four-or-fewer stable
    CPU blocks or one thread-confined persistent CUDA workspace.
-5. `configured_simulation` assembles those objects from one validated YAML document.
-6. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
+5. `IncidenceAngleAveragedDetector` streams a fixed probability quadrature over complete
+   detector-native all-root engine views. The optimized Bi2X3 path may reuse one immutable static
+   engine and exactly rebind every calibrated geometry node. The wrapper has no representative pose
+   and cannot consume a geometry-bound outgoing-angle chart or fold plan.
+6. `configured_simulation` assembles fixed-angle engines from one validated YAML document and owns
+   the provenance-safe optimized scan rebind; the incidence wrapper composes an already calibrated
+   node series without owning fitting state.
+7. `ContinuousDetectorGeometryModel` binds callable reference and trial fields while reusing packed
    structure/mosaic state; its private exact-tag geometry rebuilds only canonical incident,
    exit-refraction, and detector geometry for each landmark trial.
-7. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
+8. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
    coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
-8. The mosaic-profile adapter evaluates only frozen angular quadrature nodes, integrates `S` and
+9. The mosaic-profile adapter evaluates only frozen angular quadrature nodes, integrates `S` and
    `N` before division, and caches exact component responses by width. CUDA performs the expensive
    detector evaluations; the small deterministic profile search remains on the CPU. The measured
    path projects only cropped raw-OSC pixels into the identical local-bin layout with exact polygon
@@ -135,18 +152,18 @@ contributing rod/orientation branches on the active detector panel.
    selection, while branchless `00L` profiles require raw-significant observed support and a
    representable fixed-model landmark. Geometry-audited inverse-support boundary bins may be frozen
    out identically from every simulated component.
-9. Measured selection discovers peaks without predicted coordinates, refines them on the native
+10. Measured selection discovers peaks without predicted coordinates, refines them on the native
    detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
    fitting consumes them.
-10. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
+11. The OSC-series boundary joins declared files, motor angles, geometry-only material contexts, and
    frozen observations by image ID. The joint fitter concatenates canonical per-image residual
    blocks while applying one shared rigid correction vector, one common incidence delta, and
    canonical Helmert trim contrasts whose per-image values sum to zero.
-11. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
+12. Post-fit proof brackets the fixed-`L` elastic equation independently of the production root
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
-12. The retained historical synthetic ordered-intensity proof uses the finite-ROI mass path and a
+13. The retained historical synthetic ordered-intensity proof uses the finite-ROI mass path and a
    certified source-averaged
     selected-center path. The latter produces one combined detector function per incidence before
     any dataset scale or residual, retains every weak nonzero anchor and admitted `m=0` anchor, and
@@ -157,13 +174,13 @@ contributing rod/orientation branches on the active detector panel.
     including six `m=0`; a measured-mosaic handoff instead propagates its exact fit-eligible
     identity set. Both prove synthetic selected-component recovery, not unresolved raw-OSC
     intensity recovery.
-13. The synthetic PbI2 rational-landmark SF boundary collapses detector-root duplicates to one
+14. The synthetic PbI2 rational-landmark SF boundary collapses detector-root duplicates to one
     intrinsic structural query, sums every unique signed rod once, and fits one fixed-parent amount
     vector and scale per specimen. Exact parent overlaps stay inside one response row. Detector
     transport and arbitrary transition-law refinement remain downstream work.
-14. Native-center rendering samples the final combined detector density once per native pixel. It
+15. Native-center rendering samples the final combined detector density once per native pixel. It
     is display-only `A^2/px^2`, not pixel-integrated mass, OSC counts, or a count-calibrated fit.
-15. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
+16. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
     worker. Detector-only controls compile one batched projection and swap only four projection
     buffers; even after a nonzero sample correction they retain the already-bound incident
     transport. Sample/goniometer controls rebuild incident transport and re-enumerate rods only
@@ -178,7 +195,9 @@ module-global or import-time side effects.
 
 ## Invalidation boundaries
 
-- Source changes rebuild source rows and incident transport.
+- Source line, probability, correlation, or phase-space changes rebuild source rows and incident
+  transport. Detector-path medium, scalar coefficient, or exact-wavelength table changes rebuild
+  every detector evaluator while leaving sample geometry unchanged.
 - Sample entrance geometry or material optics changes rebuild incident transport.
 - CIF, finite-stack, mosaic, wavelength, or sample/crystal orientation changes rebuild Bragg and
   detector evaluator state.
@@ -229,14 +248,21 @@ mosaic, and intensity stages. It rebuilds one immutable source/material/reciproc
 only the commanded incidence geometry for each image, and rejects incomplete predecessor state.
 The current adapter covers the tracked R-3m Bi2X3 layered-quintuple family. Material recipes freeze
 measured regions and site-specific constants; the common numerical path refines five shared
-coordinates against all three OSCs: Stage A fits two Wyckoff-z offsets, Stage B one full-occupancy
-outer-site cation antisite fraction, Stage C the radial and normal sample-Q intensity envelope, and
-the mandatory joint stage refits all five. Crystallographic site ADPs are a separate fixed profile
+coordinates against all three OSCs. The v7 diagnostic chain fits two Wyckoff-z offsets in A, one
+outer-chalcogen vacancy fraction in B with occupancy `1-v` and Bi antisite fixed to zero, the
+radial/normal sample-Q envelope in C, and all five in joint. The tracked fast workflow uses the v8
+`seeded_joint_only.v1` policy: the outer workflow hashes seed-v2 and passes its five-coordinate
+vector as the explicit all-active joint start, without synthetic initializer predecessors. The
+inner fit-v14 artifact records that numeric start and hash, not the seed-file identity.
+Crystallographic site ADPs are a separate fixed profile
 inside the atomic amplitude. The sample-Q envelope is applied once from sample-frame Q after mosaic
 rotation and is never folded into site ADPs.
 
-A/B/C are initializers only. Every child binds the exact predecessor bytes, starts from that
-predecessor, and keeps all inactive coordinates unchanged. Fit stages checkpoint resumably;
+A/B/C are initializers only under the v7 policy. Each v7 child binds the exact predecessor bytes,
+starts from that predecessor, and keeps all inactive coordinates unchanged. V8 instead binds an
+explicit numeric start and has no predecessor chain; only the outer workflow binds seed-v2.
+Under either policy only the joint result may proceed,
+and fit stages checkpoint resumably;
 profiles publish atomically and restart as a whole. Completed stages are immutable predecessors.
 Prepare, background calibration, and render
 publish atomically. Pixel-center membership is only preparation/display discovery state. The fit
@@ -250,14 +276,17 @@ arrays.
 The terminal profile is explicitly `FIT_CONDITIONED`: it evaluates complete Qz branches with the
 fitted rod roster, records cubature evidence, remains `publication_ready=false`, and makes no
 all-configured-rod claim. The detector panel still shows the actual integration regions. The
-fault-free R-centered parent is explicit CPU/CUDA finite-stack state, not a fitted 4H/6H population.
+R-centered RichEpsilon parent is explicit proof/CPU/CUDA finite-stack state with an exact-zero fast
+path. The retained production model keeps `epsilon=0` because screened nonzero values failed the
+cross-image gates; it is not a fitted 4H/6H population.
 If the optional lattice stage accepts a changed basis, every lattice-dependent material,
 reciprocal, rod, optical, and detector object is rebuilt before downstream fitting; otherwise the
 CIF basis is retained exactly.
 
 ## General-CIF sparse fitting core
 
-Contract v13 inserts one material-neutral strength seam before detector fitting:
+Contract v13 introduced one material-neutral strength seam before detector fitting; contract v14
+retains it unchanged:
 
 ```text
 explicit CIF/model declaration

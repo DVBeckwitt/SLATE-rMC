@@ -36,13 +36,16 @@ Expected detection: OSC mapping, rigid transform, detector ray, or detector roun
 ### Source and incident transport
 
 - Duplicate or omit a source stratum.
+- Uniformize a declared weighted spectral mixture, alter or omit a line mass, couple line identity
+  to source geometry, or reverse/swap a declared position--divergence correlation.
 - Recompute or slice a parent revision instead of preserving the complete realization.
 - Let detector-only state invalidate incident `ki`.
 - Accept a changed sample pose through the detector-projection-only rebind, or copy transport arrays
   during a detector-only revision.
 - Erase accepted geometry when a later optical stage fails.
 
-Expected detection: exact strata, revision ownership, causal invalidation, or status payload.
+Expected detection: exact strata and line masses, configured weighted moments and conditional
+means, revision ownership, causal invalidation, or status payload.
 
 ### Optics
 
@@ -51,8 +54,14 @@ Expected detection: exact strata, revision ownership, causal invalidation, or st
 - Omit or duplicate entrance/exit transmission or attenuation.
 - Use full thickness independently for entrance and exit rather than the uniform-depth average.
 - Use a complex wavevector directly in real elastic geometry.
+- Omit or duplicate the incident illuminated-path factor, use refracted/detector-ray `z` instead of
+  the sampled incident sample-frame `z`, or hide it inside footprint acceptance or depth decay.
+- Omit, duplicate, or square external detector-path attenuation; use panel-normal distance; accept
+  scalar and table coefficients together; interpolate/fallback an unlisted wavelength; or attach a
+  nonzero coefficient to the declared unity medium.
 
-Expected detection: mode dispersion, tangential conservation, amplitude, attenuation, or exit
+Expected detection: mode dispersion, tangential conservation, amplitude, analytic csc and
+Beer--Lambert identities, exact wavelength lookup, once-only CPU/CUDA/oracle parity, or exit
 geometry before detector integration.
 
 ### Mosaic, rods, and Ewald restriction
@@ -91,6 +100,7 @@ detector-to-sphere change-of-measure identity.
 - Normalize a reflection to 100, round it, prune a weak rod, or fabricate a fractional reflection.
 - Omit occupancy, anomalous scattering, displacement, layer phase, or registry phase.
 - Reverse the transition convention, use the wrong finite-layer exponent, or mix parent amplitudes.
+- Reuse the 2H same-gauge coefficient for nonzero-epsilon 3R, or change the exact epsilon-zero path.
 - Reuse a different complex-normal branch in Parratt or blend outside the named handoff.
 
 Expected detection: raw amplitude, systematic absence, finite-stack/direct enumeration,
@@ -101,6 +111,8 @@ normalization, or reflectivity limit.
 - Use `Q=ki-kf`, transform Q twice, or use air `kf` where film `kf` is required.
 - Drop an inverse latent branch, rod, retained root, source state, or wavelength.
 - Apply source, phase, polarization, optical, surface-Jacobian, or Ewald factor zero or two times.
+- Apply the illuminated-path or external detector-path factor zero or two times in any NumPy, CPU,
+  CUDA, Monte Carlo, sparse-response, or local-`m=0` path.
 - Multiply detector solid-angle metadata into the raw field again.
 - Swap detector row/column, reverse a tilt, evaluate outside the active panel, or assign intensity to
   an invalid/back-facing ray.
@@ -309,7 +321,8 @@ common-scale-gauge rejection, and rank/condition/bound diagnostics.
   selection provenance.
 - Reorder stages, substitute a non-immediate upstream revision, edit compact state after writing,
   change backend during resume, modify or remove a required stage artifact reference, or return a
-  malformed fresh-stage envelope.
+  malformed fresh-stage envelope. For Bi2Te3, substitute a self-hashed simulation config, a
+  different valid lattice, or a self-consistent position record that did not come from geometry.
 - Perturb a fit parameter within and beyond its declared tolerance; change decoded render pixels
   while preserving PNG metadata or container bytes; set a render CUDA chunk/block size nonpositive.
 
@@ -331,8 +344,11 @@ validation, and external-artifact content hashes.
   retaining the conventional three-quintuple-layer cell.
 - Change the declared fitted rod roster between stages or silently label a fitted-scope result as an
   all-rod/publication result.
-- Skip or reorder A/B/C, substitute a stale predecessor, change a child's exact start or frozen
-  coordinates, or feed any initializer rather than the mandatory joint result downstream.
+- Under v7, skip or reorder A/B/C, substitute a stale predecessor, inject an explicit override, or
+  change a child's exact start or frozen coordinates. Under v8, omit or mutate the explicit start,
+  alter its hash, or fabricate an initializer predecessor. At the outer-workflow boundary, mutate
+  seed-v2 without changing the plan revision. Under either policy, feed anything other than the
+  joint result downstream.
 - Permute parameter scales, let priors create apparent rank, accept a practically rank-deficient or
   ill-conditioned data Jacobian, or accept a structure coordinate on its active bound.
 - Reuse model mass across an implementation/runtime change, alter a profile-checkpoint prefix or
@@ -342,6 +358,10 @@ validation, and external-artifact content hashes.
   fixed-experiment rebuild into structure physics while independently binding the mosaic state.
 - Swap a fixed crystallographic site ADP with the sample-Q envelope, apply either twice, vary a site
   ADP in the five-coordinate joint fit, or omit the event-frame Q rotation before the envelope.
+- Reinterpret vacancy as Bi substitution, fit both without an identifiable composition chart, or
+  serialize an outer occupancy other than `1-v` or a nonzero antisite in the vacancy model.
+- At declared dark scale zero, subtract dark counts, add dark covariance, or accept a dark
+  scale/basis/covariance record that does not match the trusted recipe.
 - Substitute independent incidence offsets for the shared delta plus zero-sum trims, reorder image
   IDs, or use an unbound mosaic record instead of the strict provided-mosaic checkpoint.
 
@@ -350,6 +370,8 @@ chart quadrature and detector-area-Jacobian checks, expanded-CIF/explicit-regist
 wrong-hand injection, CPU/CUDA fault-free-parent parity, exact recursive lineage/cache/checkpoint
 identities, parameter-scaled data-only sensitivity gates, strict fixed position/mosaic/lattice
 handoffs, and separate site-ADP/sample-Q-envelope tests.
+Vacancy representative/admission checks and the scale-zero dark invariant detect the added
+composition and observation-contract mutations.
 
 ## Control record
 
@@ -376,3 +398,15 @@ collections are external proof work and are removed after review.
 Expected first detection is strict config validation, calibration provenance/rank, response basis
 and revision checks, strength validation, block ownership, parameterized-fit identifiability, or
 the public nonhexagonal indexing regression respectively.
+
+## Continuous-incidence and staged-scan controls
+
+- Reverse traversal while preserving prediction support, reuse a 5--20-degree rule for 5--25
+  degrees, change normalized masses, or vary the common calibration, source, or evaluator revision.
+- Clip signed contrast, accept a terminal topology/fold/window event, or replace absolute
+  covariance-whitened convergence with a relative criterion.
+- Evaluate a scan candidate before its fixed-data gate, change either comparison layout, invoke a
+  proposal after baseline failure, or exceed the exact-scan bound `1 + 2K`.
+
+Expected detection is acquisition/quadrature revision rejection, immutable adaptive-result
+validation, or the fixed-first acceptance policy before any affected result can be admitted.

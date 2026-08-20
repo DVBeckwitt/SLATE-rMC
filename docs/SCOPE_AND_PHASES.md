@@ -9,7 +9,9 @@ detector geometry.
 ## Implemented core
 
 - Strict YAML configuration and immutable compiled state.
-- Source phase-space sampling with direction, position, wavelength, weight, and polarization
+- Weighted Gaussian source phase-space sampling with optional per-axis position--divergence
+  correlation, either a legacy Gaussian wavelength law or exactly weighted discrete Gaussian
+  spectral lines, and complete direction, position, wavelength, weight, and polarization
   provenance.
 - Canonical source/sample intersection and entrance refraction.
 - CIF parsing, reciprocal basis, complete physical rod catalogs, and finite ordered/stacked
@@ -17,7 +19,9 @@ detector geometry.
 - Wrapped Gaussian/Lorentzian mosaic probability in continuous latent coordinates.
 - Analytic infinite-rod Ewald roots, detector-visible latent coating diagnostics, and an exact
   almost-everywhere full-sphere intrinsic density in internal-film `A2/sr`.
-- Continuous detector-coordinate inverse mapping with exit refraction and uniform-depth attenuation.
+- Continuous detector-coordinate inverse mapping with exit refraction, uniform-depth film
+  attenuation, one flat-film illuminated-volume weight `1/|direction_sample,z|`, and optional
+  scalar or exact-wavelength Beer--Lambert attenuation along the external detector ray.
 - Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
   normalization densities before division.
 - Prepared finite-bin angle profiles that integrate signal and detector-area normalization
@@ -27,6 +31,8 @@ detector geometry.
   integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
 - Incoherent source/wavelength/phase summation before selected-center comparison, display-only
   center sampling, or deterministic detector box integration.
+- Normalized continuous-incidence acquisition and calibrated detector averaging, with a separate
+  evaluator-driven adaptive finite-region oracle and bounded fixed-first delayed acceptance.
 - Optional streaming Monte Carlo estimation of all-source, all-rod, all-root native-pixel mass by
   weighted forward sampling of the declared mosaic law and exact hard pixel ownership.
 - Prefix-stable progressive CPU/CUDA execution through an explicit mutable compiled sampler,
@@ -47,13 +53,16 @@ detector geometry.
 - Material-neutral matched-region observations that combine angular `m=0` and signed-side
   reciprocal `m!=0` charts, continuous chart-region cubature, one scale per image across
   families, an independently frozen radial-background calibration, and staged hash-bound
-  fit/profile artifacts. The Bi2X3 layered-quintuple adapter runs modular Wyckoff-z, physical
-  outer-site Bi-antisite, and sample-Q intensity-envelope initializer fits followed by one mandatory
-  joint five-coordinate refinement. Crystallographic site ADPs remain separate and fixed; only the
-  joint result is authoritative.
-- Explicit fault-free R-centered three-registry finite stacks in the proof, compiled CPU, and CUDA
-  detector paths. This is the tracked R-3m Bi2X3 conventional-cell centering law, not a fitted
-  4H/6H mixture or stacking-disorder population.
+  fit/profile artifacts. Under the v7 diagnostic policy, the Bi2X3 layered-quintuple adapter runs
+  modular Wyckoff-z, physical outer-chalcogen vacancy, and sample-Q intensity-envelope initializers
+  followed by one joint five-coordinate refinement. Under v8, an explicit five-coordinate start
+  enters only the joint stage. The vacancy fraction `v` gives outer-chalcogen
+  occupancy `1-v`; Bi substitution is fixed to zero and is tested only as a separate discrete
+  competitor. Crystallographic site ADPs remain separate and fixed; only a gate-qualified joint
+  result is authoritative.
+- Exact RichEpsilon finite stacks for the R-centered three-registry parent in the proof, compiled
+  CPU, and CUDA detector paths, including a bit-preserving epsilon-zero fast path. The tracked
+  Bi2X3 production model retains `epsilon=0`; this is not a fitted 4H/6H population.
 - The historical synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five
   fixed 2H/4H/6H near-parent responses at exact rational structural landmarks. Contract v13 can
   now apply those same fixed parents through the shared selected-coordinate detector/source/optics
@@ -91,8 +100,8 @@ observable, and any sphere mesh or raster is only a display sample of that funct
 
 ## Deferred work
 
-- Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and
-  acquisition-matched/general backgrounds beyond the implemented frozen radial halo.
+- Calibrated detector efficiency, PSF/resolution, masks, beamstop, saturation, and matched-session
+  dark/blank backgrounds beyond the implemented frozen radial halo and explicit zero-dark path.
 - Multiple scattering, extinction, and full distorted-wave off-specular fields.
 - Multi-phase optical environments beyond the declared single-film model.
 - Arbitrary 3-D single-crystal or powder peak identities, multi-axis mechanics, mixed-specimen

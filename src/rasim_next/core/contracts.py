@@ -7,6 +7,7 @@ import re
 import struct
 from dataclasses import dataclass, field
 from enum import StrEnum
+from numbers import Complex, Real
 from typing import Any
 
 import numpy as np
@@ -14,7 +15,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from rasim_next.core.validity import ValidityCode
 
-CONTRACT_API_VERSION = 13
+CONTRACT_API_VERSION = 14
 _ArraySpec = tuple[str, np.dtype[Any] | type[np.generic], tuple[int, ...], bool]
 
 
@@ -41,9 +42,54 @@ def _array(
 ) -> NDArray[Any]:
     supplied = np.asarray(value)
     target = np.dtype(dtype)
-    if np.issubdtype(target, np.integer) and supplied.dtype.kind not in "iu":
+    inspect_elements = not isinstance(value, np.ndarray) or supplied.dtype.kind == "O"
+    supplied_object = np.asarray(value, dtype=object) if inspect_elements else None
+    if np.issubdtype(target, np.integer) and not (
+        supplied.dtype.kind in "iu"
+        and (
+            supplied_object is None
+            or all(
+                isinstance(item, (int, np.integer)) and not isinstance(item, (bool, np.bool_))
+                for item in supplied_object.flat
+            )
+        )
+    ):
         raise ValueError(f"{name} must contain integers")
-    array = np.array(value, dtype=target, copy=True, order="C")
+    if np.issubdtype(target, np.integer):
+        limits = np.iinfo(target)
+        if np.any(supplied < limits.min) or np.any(supplied > limits.max):
+            raise ValueError(f"{name} values are outside the {target.name} range")
+    if np.issubdtype(target, np.floating) and not (
+        supplied.dtype.kind in "iuf"
+        and (
+            supplied_object is None
+            or all(
+                isinstance(item, Real) and not isinstance(item, (bool, np.bool_))
+                for item in supplied_object.flat
+            )
+        )
+    ):
+        raise ValueError(f"{name} must contain real numbers")
+    if np.issubdtype(target, np.complexfloating) and not (
+        supplied.dtype.kind in "iufc"
+        and (
+            supplied_object is None
+            or all(
+                isinstance(item, Complex) and not isinstance(item, (bool, np.bool_))
+                for item in supplied_object.flat
+            )
+        )
+    ):
+        raise ValueError(f"{name} must contain numeric values")
+    if np.issubdtype(target, np.bool_) and not (
+        supplied.dtype.kind == "b"
+        and (
+            supplied_object is None
+            or all(isinstance(item, (bool, np.bool_)) for item in supplied_object.flat)
+        )
+    ):
+        raise ValueError(f"{name} must contain booleans")
+    array = np.array(supplied, dtype=target, copy=True, order="C")
     if array.ndim != len(shape) or any(
         expected is not None and actual != expected
         for actual, expected in zip(array.shape, shape, strict=True)
@@ -129,6 +175,76 @@ def canonical_revision_sha256(*fields: tuple[str, object]) -> str:
         update_bytes(struct.pack(f"<{array.ndim}Q", *array.shape))
         update_bytes(array.tobytes(order="C"))
     return digest.hexdigest()
+
+
+def incidence_scan_calibration_binding_revision(
+    *,
+    scan_calibration_revision: str,
+    component_sample_geometry_revision: tuple[str, ...],
+    component_incidence_axis_angle_rad: ArrayLike,
+    effective_incidence_angle_rad: ArrayLike,
+    detector_panel_revision: str,
+    source_revision: str,
+    source_state_count: int,
+) -> str:
+    """Hash the complete calibrated identity of one incidence-node series."""
+
+    if not isinstance(scan_calibration_revision, str) or not scan_calibration_revision:
+        raise ValueError("scan_calibration_revision must be nonempty")
+    geometry_revisions = tuple(component_sample_geometry_revision)
+    if not geometry_revisions or any(
+        not isinstance(value, str) or not value for value in geometry_revisions
+    ):
+        raise ValueError("component sample-geometry revisions must be nonempty strings")
+
+    def real_vector(value: ArrayLike, name: str) -> NDArray[np.float64]:
+        supplied = np.asarray(value)
+        if np.iscomplexobj(supplied) and np.any(supplied.imag != 0.0):
+            raise ValueError(f"{name} must be real")
+        result = np.asarray(supplied.real, dtype=np.float64)
+        if result.ndim != 1 or not np.all(np.isfinite(result)):
+            raise ValueError(f"{name} must be a finite one-dimensional array")
+        return result
+
+    component_angles = real_vector(
+        component_incidence_axis_angle_rad,
+        "component_incidence_axis_angle_rad",
+    )
+    effective_angles = real_vector(
+        effective_incidence_angle_rad,
+        "effective_incidence_angle_rad",
+    )
+    if component_angles.size != len(geometry_revisions) or effective_angles.shape != (
+        len(geometry_revisions),
+    ):
+        raise ValueError("incidence calibration vectors and component revisions must align")
+    if any(
+        not isinstance(value, str) or not value
+        for value in (detector_panel_revision, source_revision)
+    ):
+        raise ValueError("detector-panel and source revisions must be nonempty")
+    if (
+        isinstance(source_state_count, (bool, np.bool_))
+        or not isinstance(source_state_count, (int, np.integer))
+        or int(source_state_count) < 1
+    ):
+        raise ValueError("source_state_count must be a positive integer")
+    return canonical_revision_sha256(
+        ("definition_id", "incidence_angle_component_calibration_binding.v1"),
+        ("scan_calibration_revision", scan_calibration_revision),
+        ("component_sample_geometry_revision", geometry_revisions),
+        (
+            "component_incidence_axis_angle_rad",
+            component_angles,
+        ),
+        (
+            "effective_incidence_angle_rad",
+            effective_angles,
+        ),
+        ("detector_panel_revision", detector_panel_revision),
+        ("source_revision", source_revision),
+        ("source_state_count", source_state_count),
+    )
 
 
 def source_realization_revision(
@@ -285,6 +401,7 @@ class IncidentSampleBatch:
     source_seed: int
     source_parameter_provenance: str
     source_parameter_revision: str = field(init=False)
+    source_weight_revision: str = field(init=False)
     source_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -303,8 +420,15 @@ class IncidentSampleBatch:
             np.linalg.norm(self.direction_lab, axis=1), 1.0, rtol=0.0, atol=1e-12
         ):
             raise ValueError("wavelengths must be positive and directions unit length")
-        if size == 0 or not np.all(self.source_weight == 1.0 / size):
-            raise ValueError("source_weight must be uniform empirical mass 1/N")
+        if size == 0 or not np.isclose(
+            np.sum(self.source_weight, dtype=np.float64),
+            1.0,
+            rtol=0.0,
+            atol=2.0e-15,
+        ):
+            raise ValueError(
+                "source_weight must be finite nonnegative probability mass summing to one"
+            )
         object.__setattr__(
             self,
             "source_sampling_model_id",
@@ -332,6 +456,15 @@ class IncidentSampleBatch:
             ("source_parameter_provenance", self.source_parameter_provenance),
         )
         object.__setattr__(self, "source_parameter_revision", parameter_revision)
+        weight_revision = canonical_revision_sha256(
+            ("incident_sample_id", self.incident_sample_id),
+            ("source_weight", self.source_weight),
+        )
+        object.__setattr__(
+            self,
+            "source_weight_revision",
+            weight_revision,
+        )
         source_revision = source_realization_revision(
             source_sampling_model_id=self.source_sampling_model_id,
             source_rng_model_id=self.source_rng_model_id,
@@ -389,6 +522,8 @@ class MaterialOptics:
 class IncidentStateBatch:
     incident_state_id: NDArray[np.int64]
     incident_sample_id: NDArray[np.int64]
+    source_origin_lab_m: NDArray[np.float64]
+    source_direction_lab: NDArray[np.float64]
     sample_intersection_lab_m: NDArray[np.float64]
     direction_sample: NDArray[np.float64]
     k_air_sample_Ainv: NDArray[np.float64]
@@ -406,6 +541,7 @@ class IncidentStateBatch:
     source_seed: int
     source_parameter_provenance: str
     source_parameter_revision: str
+    source_weight_revision: str
     source_revision: str
     sample_geometry_revision: str
     material_revision: str
@@ -417,6 +553,8 @@ class IncidentStateBatch:
             "incident_state_id",
             (
                 ("incident_sample_id", np.int64, (), True),
+                ("source_origin_lab_m", np.float64, (3,), False),
+                ("source_direction_lab", np.float64, (3,), False),
                 ("sample_intersection_lab_m", np.float64, (3,), False),
                 ("direction_sample", np.float64, (3,), False),
                 ("k_air_sample_Ainv", np.float64, (3,), False),
@@ -430,10 +568,24 @@ class IncidentStateBatch:
             ),
             ("polarization_state_id",),
         )
-        if size == 0 or not np.all(self.source_weight == 1.0 / size):
-            raise ValueError("source_weight must be uniform empirical mass 1/N")
+        if size == 0 or not np.isclose(
+            np.sum(self.source_weight, dtype=np.float64),
+            1.0,
+            rtol=0.0,
+            atol=2.0e-15,
+        ):
+            raise ValueError(
+                "source_weight must be finite nonnegative probability mass summing to one"
+            )
         if np.any(self.wavelength_A == 0):
             raise ValueError("wavelength_A must be positive")
+        if not np.allclose(
+            np.linalg.norm(self.source_direction_lab, axis=1),
+            1.0,
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError("source_direction_lab must contain unit vectors")
 
         status = tuple(ValidityCode(item) for item in self.status)
         if len(status) != size:
@@ -462,6 +614,7 @@ class IncidentStateBatch:
             raise ValueError("source_parameter_provenance must be nonempty canonical text")
         for name in (
             "source_parameter_revision",
+            "source_weight_revision",
             "source_revision",
             "sample_geometry_revision",
             "material_revision",
@@ -472,13 +625,18 @@ class IncidentStateBatch:
         )
         if self.source_parameter_revision != expected_parameter_revision:
             raise ValueError("source_parameter_revision does not match canonical provenance")
-
-        if self.incident_model_id != "one_transmitted_channel.v1":
-            raise ValueError("unsupported incident_model_id")
         if np.unique(self.incident_sample_id).size != size:
             raise ValueError(
                 "one_transmitted_channel.v1 requires one state per unique source sample"
             )
+        expected_weight_revision = canonical_revision_sha256(
+            ("incident_sample_id", self.incident_sample_id),
+            ("source_weight", self.source_weight),
+        )
+        if self.source_weight_revision != expected_weight_revision:
+            raise ValueError("source_weight_revision does not match the transported source mass")
+        if self.incident_model_id != "one_transmitted_channel.v1":
+            raise ValueError("unsupported incident_model_id")
 
         geometry_failure = np.fromiter(
             (
@@ -557,6 +715,22 @@ class IncidentStateBatch:
             atol=wavevector_atol,
         ):
             raise ValueError("film phase normal must equal real(kz_film_Ainv)")
+        expected_source_revision = source_realization_revision(
+            source_sampling_model_id=self.source_sampling_model_id,
+            source_rng_model_id=self.source_rng_model_id,
+            source_seed=self.source_seed,
+            source_parameter_revision=self.source_parameter_revision,
+            incident_sample_id=self.incident_sample_id,
+            origin_lab_m=self.source_origin_lab_m,
+            direction_lab=self.source_direction_lab,
+            wavelength_A=self.wavelength_A,
+            source_weight=self.source_weight,
+            polarization_state_id=self.polarization_state_id,
+        )
+        if self.source_revision != expected_source_revision:
+            raise ValueError(
+                "source_revision does not bind the transported source support and mass"
+            )
 
 
 @dataclass(frozen=True, slots=True)

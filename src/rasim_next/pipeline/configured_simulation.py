@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, field, replace
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ from rasim_next.geometry.instrument import (
     InstrumentConfiguration,
     compile_instrument,
     compose_intrinsic_xy_rotation,
+    validate_detector_path_attenuation_declaration,
 )
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.materials import (
@@ -48,6 +50,10 @@ from rasim_next.materials import (
     crystal_with_direct_basis,
     material_optics,
     read_crystal,
+)
+from rasim_next.optics import (
+    DETECTOR_PATH_ATTENUATION_MODEL_ID,
+    INCIDENT_ILLUMINATED_PATH_MODEL_ID,
 )
 from rasim_next.pipeline.bragg_space import (
     Bi2X3FiniteStackStrength,
@@ -64,7 +70,13 @@ from rasim_next.pipeline.continuous_detector import (
 from rasim_next.pipeline.source_averaged_detector import SourceAveragedDetectorEwaldMeasure
 from rasim_next.pipeline.source_averaged_structure import SourceAveragedStructureDetector
 from rasim_next.reciprocal.lattice import ReciprocalLattice
-from rasim_next.sampling.source import sample_gaussian_source_rays
+from rasim_next.sampling.source import (
+    SOURCE_QUADRATURE_MODEL_ID,
+    require_physical_intensity_source_model,
+    sample_discrete_gaussian_line_source_rays,
+    sample_gaussian_source_rays,
+    sample_nominal_mean_geometry_source_ray,
+)
 from rasim_next.stacking import Parent
 
 FloatArray = NDArray[np.float64]
@@ -135,6 +147,33 @@ class MaterialConfiguration:
     phase_id: str
 
 
+def _source_real_scalar(value: object, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or np.iscomplexobj(value):
+        raise ValueError(f"{name} must be a real number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _source_real_tuple(value: object, size: int, name: str) -> tuple[float, ...]:
+    try:
+        entries = tuple(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain {size} real numbers") from exc
+    if len(entries) != size:
+        raise ValueError(f"{name} must contain {size} real numbers")
+    return tuple(_source_real_scalar(item, name) for item in entries)
+
+
+def _source_real_sequence(value: object, name: str) -> tuple[float, ...]:
+    try:
+        entries = tuple(value)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(f"{name} must contain real numbers") from exc
+    return tuple(_source_real_scalar(item, name) for item in entries)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceConfiguration:
     mean_origin_lab_m: tuple[float, float, float]
@@ -147,6 +186,169 @@ class SourceConfiguration:
     sample_count: int
     seed: int
     polarization_state_id: str
+    wavelength_model_id: str = "gaussian.v1"
+    line_wavelength_A: tuple[float, ...] = ()
+    line_probability: tuple[float, ...] = ()
+    common_line_sigma_A: float = 0.0
+    position_divergence_correlation: tuple[float, float] = (0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        if self.wavelength_model_id not in {"gaussian.v1", "discrete_gaussian_lines.v1"}:
+            raise ValueError(
+                "wavelength_model_id must be gaussian.v1 or discrete_gaussian_lines.v1"
+            )
+        object.__setattr__(
+            self,
+            "mean_origin_lab_m",
+            _source_real_tuple(self.mean_origin_lab_m, 3, "mean_origin_lab_m"),
+        )
+        object.__setattr__(
+            self,
+            "mean_direction_lab",
+            _source_real_tuple(self.mean_direction_lab, 3, "mean_direction_lab"),
+        )
+        try:
+            axes = tuple(self.transverse_axes_lab)
+        except TypeError as exc:
+            raise ValueError("transverse_axes_lab must contain two 3-vectors") from exc
+        if len(axes) != 2:
+            raise ValueError("transverse_axes_lab must contain two 3-vectors")
+        object.__setattr__(
+            self,
+            "transverse_axes_lab",
+            tuple(_source_real_tuple(axis, 3, "transverse_axes_lab") for axis in axes),
+        )
+        spatial_sigma_m = _source_real_tuple(self.spatial_sigma_m, 2, "spatial_sigma_m")
+        divergence_sigma_rad = _source_real_tuple(
+            self.divergence_sigma_rad,
+            2,
+            "divergence_sigma_rad",
+        )
+        if any(value < 0.0 for value in (*spatial_sigma_m, *divergence_sigma_rad)):
+            raise ValueError("source spatial and divergence widths must be nonnegative")
+        object.__setattr__(self, "spatial_sigma_m", spatial_sigma_m)
+        object.__setattr__(self, "divergence_sigma_rad", divergence_sigma_rad)
+        for name in (
+            "mean_wavelength_A",
+            "wavelength_sigma_A",
+            "common_line_sigma_A",
+        ):
+            object.__setattr__(self, name, _source_real_scalar(getattr(self, name), name))
+        object.__setattr__(
+            self,
+            "line_wavelength_A",
+            _source_real_sequence(self.line_wavelength_A, "source line wavelengths"),
+        )
+        object.__setattr__(
+            self,
+            "line_probability",
+            _source_real_sequence(self.line_probability, "source line probabilities"),
+        )
+        if self.mean_wavelength_A <= 0.0:
+            raise ValueError("mean_wavelength_A must be positive")
+        if self.wavelength_sigma_A < 0.0 or self.common_line_sigma_A < 0.0:
+            raise ValueError("source wavelength widths must be nonnegative")
+        if (
+            isinstance(self.sample_count, (bool, np.bool_))
+            or not isinstance(self.sample_count, (int, np.integer))
+            or self.sample_count <= 0
+        ):
+            raise ValueError("sample_count must be a positive integer")
+        object.__setattr__(self, "sample_count", int(self.sample_count))
+        if (
+            isinstance(self.seed, (bool, np.bool_))
+            or not isinstance(self.seed, (int, np.integer))
+            or self.seed < 0
+            or self.seed > 2**64 - 1
+        ):
+            raise ValueError("seed must be a nonnegative unsigned 64-bit integer")
+        object.__setattr__(self, "seed", int(self.seed))
+        if not isinstance(self.polarization_state_id, str) or not self.polarization_state_id:
+            raise ValueError("polarization_state_id must be a nonempty string")
+        correlation = _source_real_tuple(
+            self.position_divergence_correlation,
+            2,
+            "position_divergence_correlation",
+        )
+        if any(abs(value) >= 1.0 for value in correlation):
+            raise ValueError("position_divergence_correlation must lie within (-1, 1)")
+        object.__setattr__(self, "position_divergence_correlation", correlation)
+        if self.wavelength_model_id == "gaussian.v1":
+            if self.line_wavelength_A or self.line_probability or self.common_line_sigma_A != 0.0:
+                raise ValueError("Gaussian source must not declare discrete line parameters")
+            return
+        if self.wavelength_sigma_A != 0.0:
+            raise ValueError("wavelength_sigma_A must be zero for discrete_gaussian_lines.v1")
+        if len(self.line_wavelength_A) < 2 or len(self.line_probability) != len(
+            self.line_wavelength_A
+        ):
+            raise ValueError(
+                "discrete source must declare matching wavelength and probability lines"
+            )
+        if self.sample_count < len(self.line_wavelength_A):
+            raise ValueError("sample_count must be at least the number of source lines")
+        if any(value <= 0.0 for value in self.line_wavelength_A):
+            raise ValueError("source line wavelengths must be finite and positive")
+        if len(set(self.line_wavelength_A)) != len(self.line_wavelength_A):
+            raise ValueError("source line wavelengths must be distinct")
+        if any(value <= 0.0 for value in self.line_probability):
+            raise ValueError("source line probabilities must be finite and positive")
+        if not math.isclose(
+            math.fsum(self.line_probability),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=2.0e-15,
+        ):
+            raise ValueError("source line probabilities must sum to one")
+        line_counts = [self.sample_count // len(self.line_probability)] * len(self.line_probability)
+        for index in range(self.sample_count % len(line_counts)):
+            line_counts[index] += 1
+        for probability, line_count in zip(
+            self.line_probability,
+            line_counts,
+            strict=True,
+        ):
+            row_mass = probability / line_count
+            if row_mass <= 0.0 or not math.isclose(
+                math.fsum([row_mass] * line_count),
+                probability,
+                rel_tol=8.0 * np.finfo(np.float64).eps,
+                abs_tol=0.0,
+            ):
+                raise ValueError("source line probability is too small for its allocated rows")
+        centroid_A = math.fsum(
+            probability * wavelength_A
+            for probability, wavelength_A in zip(
+                self.line_probability,
+                self.line_wavelength_A,
+                strict=True,
+            )
+        )
+        if not math.isclose(self.mean_wavelength_A, centroid_A, rel_tol=0.0, abs_tol=2.0e-15):
+            raise ValueError("mean_wavelength_A must equal the discrete line centroid")
+
+    @property
+    def minimum_physical_sample_count(self) -> int:
+        """Return the smallest source ensemble that realizes the declared spectrum."""
+
+        if self.wavelength_model_id == "discrete_gaussian_lines.v1":
+            return len(self.line_wavelength_A)
+        return 1
+
+
+def _source_revision_payload(source: SourceConfiguration) -> dict[str, Any]:
+    payload = asdict(source)
+    if source.wavelength_model_id == "gaussian.v1":
+        for name in (
+            "wavelength_model_id",
+            "line_wavelength_A",
+            "line_probability",
+            "common_line_sigma_A",
+        ):
+            payload.pop(name)
+    if source.position_divergence_correlation == (0.0, 0.0):
+        payload.pop("position_divergence_correlation")
+    return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +366,26 @@ class InstrumentInputConfiguration:
     sample_width_m: float | None
     sample_length_m: float | None
     film_thickness_A: float
+    detector_path_medium_id: str = "vacuum_or_helium_unity.v1"
+    detector_path_linear_attenuation_m_inv: float = 0.0
+    detector_path_wavelength_A: tuple[float, ...] = ()
+    detector_path_linear_attenuation_m_inv_by_wavelength: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        path = validate_detector_path_attenuation_declaration(
+            self.detector_path_medium_id,
+            self.detector_path_linear_attenuation_m_inv,
+            self.detector_path_wavelength_A,
+            self.detector_path_linear_attenuation_m_inv_by_wavelength,
+        )
+        object.__setattr__(self, "detector_path_medium_id", path[0])
+        object.__setattr__(self, "detector_path_linear_attenuation_m_inv", path[1])
+        object.__setattr__(self, "detector_path_wavelength_A", path[2])
+        object.__setattr__(
+            self,
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+            path[3],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,17 +472,42 @@ class SimulationConfiguration:
     render_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
+        detector_path_wavelengths = self.instrument.detector_path_wavelength_A
+        if detector_path_wavelengths:
+            if self.source.wavelength_model_id == "gaussian.v1":
+                if self.source.wavelength_sigma_A != 0.0:
+                    raise ValueError(
+                        "exact detector-path attenuation tables require a zero-width source"
+                    )
+                required_wavelengths = (self.source.mean_wavelength_A,)
+            else:
+                if self.source.common_line_sigma_A != 0.0:
+                    raise ValueError(
+                        "exact detector-path attenuation tables require zero-width source lines"
+                    )
+                required_wavelengths = (
+                    *self.source.line_wavelength_A,
+                    self.source.mean_wavelength_A,
+                )
+            if any(value not in detector_path_wavelengths for value in required_wavelengths):
+                raise ValueError(
+                    "detector-path attenuation table must contain every source line and the "
+                    "nominal mean wavelength"
+                )
         cif_sha256 = hashlib.sha256(self.material.cif_path.read_bytes()).hexdigest()
         payload = {
             "schema_version": self.schema_version,
             "cif_sha256": cif_sha256,
             "material_phase_id": self.material.phase_id,
-            "source": asdict(self.source),
+            "source": _source_revision_payload(self.source),
             "instrument": asdict(self.instrument),
             "mosaic": asdict(self.mosaic),
             "structure_factor": asdict(self.structure_factor),
             "bragg": asdict(self.bragg),
             "weights": asdict(self.weights),
+            "source_quadrature_model_id": SOURCE_QUADRATURE_MODEL_ID,
+            "incident_illuminated_path_model_id": INCIDENT_ILLUMINATED_PATH_MODEL_ID,
+            "detector_path_attenuation_model_id": DETECTOR_PATH_ATTENUATION_MODEL_ID,
         }
         encoded = json.dumps(
             payload,
@@ -366,6 +613,19 @@ def _nonnegative_vector(value: Any, path: str, length: int) -> tuple[float, ...]
     if any(item < 0.0 for item in values):
         raise ValueError(f"{path} entries must be nonnegative")
     return values
+
+
+def _number_sequence(
+    value: Any,
+    path: str,
+    *,
+    positive: bool = False,
+    nonnegative: bool = False,
+) -> tuple[float, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be a sequence")
+    parser = _positive if positive else _nonnegative if nonnegative else _finite
+    return tuple(parser(item, f"{path}[{index}]") for index, item in enumerate(value))
 
 
 def _matrix(value: Any, path: str, rows: int, columns: int) -> tuple[tuple[float, ...], ...]:
@@ -504,7 +764,46 @@ def load_simulation_config(
             "seed",
             "polarization_state_id",
         },
+        optional={
+            "wavelength_model_id",
+            "line_wavelength_A",
+            "line_probability",
+            "common_line_sigma_A",
+            "position_divergence_correlation",
+        },
     )
+    wavelength_model_id = _string(
+        source_data.get("wavelength_model_id", "gaussian.v1"),
+        "source.wavelength_model_id",
+    )
+    if wavelength_model_id not in {"gaussian.v1", "discrete_gaussian_lines.v1"}:
+        raise ValueError(
+            "source.wavelength_model_id must be gaussian.v1 or discrete_gaussian_lines.v1"
+        )
+    raw_line_wavelength = source_data.get("line_wavelength_A", [])
+    raw_line_probability = source_data.get("line_probability", [])
+    if not isinstance(raw_line_wavelength, list) or not isinstance(raw_line_probability, list):
+        raise ValueError("source line wavelengths and probabilities must be sequences")
+    line_wavelength_A = tuple(
+        _positive(value, f"source.line_wavelength_A[{index}]")
+        for index, value in enumerate(raw_line_wavelength)
+    )
+    line_probability = tuple(
+        _positive(value, f"source.line_probability[{index}]")
+        for index, value in enumerate(raw_line_probability)
+    )
+    if wavelength_model_id == "gaussian.v1":
+        if line_wavelength_A or line_probability or "common_line_sigma_A" in source_data:
+            raise ValueError("Gaussian source must not declare discrete line parameters")
+    else:
+        if len(line_wavelength_A) < 2 or len(line_probability) != len(line_wavelength_A):
+            raise ValueError(
+                "discrete source must declare matching wavelength and probability lines"
+            )
+        if len(set(line_wavelength_A)) != len(line_wavelength_A):
+            raise ValueError("source line wavelengths must be distinct")
+        if not math.isclose(sum(line_probability), 1.0, rel_tol=0.0, abs_tol=2.0e-15):
+            raise ValueError("source line probabilities must sum to one")
     source = SourceConfiguration(
         mean_origin_lab_m=_vector(source_data["mean_origin_lab_m"], "source.mean_origin_lab_m", 3),
         mean_direction_lab=_vector(
@@ -528,10 +827,26 @@ def load_simulation_config(
         polarization_state_id=_string(
             source_data["polarization_state_id"], "source.polarization_state_id"
         ),
+        wavelength_model_id=wavelength_model_id,
+        line_wavelength_A=line_wavelength_A,
+        line_probability=line_probability,
+        common_line_sigma_A=_nonnegative(
+            source_data.get("common_line_sigma_A", 0.0),
+            "source.common_line_sigma_A",
+        ),
+        position_divergence_correlation=_vector(
+            source_data.get("position_divergence_correlation", [0.0, 0.0]),
+            "source.position_divergence_correlation",
+            2,
+        ),
     )
     polarization_model_code(source.polarization_state_id)
     if source.seed < 0:
         raise ValueError("source.seed must be nonnegative")
+    if source.wavelength_model_id == "discrete_gaussian_lines.v1" and source.wavelength_sigma_A:
+        raise ValueError("source.wavelength_sigma_A must be zero for discrete_gaussian_lines.v1")
+    if any(abs(value) >= 1.0 for value in source.position_divergence_correlation):
+        raise ValueError("source.position_divergence_correlation must lie within (-1, 1)")
 
     instrument_data = _mapping(
         document["instrument"],
@@ -551,7 +866,13 @@ def load_simulation_config(
             "sample_length_m",
             "film_thickness_A",
         },
-        optional={"detector_tilt"},
+        optional={
+            "detector_tilt",
+            "detector_path_medium_id",
+            "detector_path_linear_attenuation_m_inv",
+            "detector_path_wavelength_A",
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+        },
     )
     raw_rotations = instrument_data["axis_rotations"]
     if not isinstance(raw_rotations, list):
@@ -617,6 +938,27 @@ def load_simulation_config(
         sample_length_m=optional_widths["sample_length_m"],
         film_thickness_A=_nonnegative(
             instrument_data["film_thickness_A"], "instrument.film_thickness_A"
+        ),
+        detector_path_medium_id=_string(
+            instrument_data.get("detector_path_medium_id", "vacuum_or_helium_unity.v1"),
+            "instrument.detector_path_medium_id",
+        ),
+        detector_path_linear_attenuation_m_inv=_nonnegative(
+            instrument_data.get("detector_path_linear_attenuation_m_inv", 0.0),
+            "instrument.detector_path_linear_attenuation_m_inv",
+        ),
+        detector_path_wavelength_A=_number_sequence(
+            instrument_data.get("detector_path_wavelength_A", []),
+            "instrument.detector_path_wavelength_A",
+            positive=True,
+        ),
+        detector_path_linear_attenuation_m_inv_by_wavelength=_number_sequence(
+            instrument_data.get(
+                "detector_path_linear_attenuation_m_inv_by_wavelength",
+                [],
+            ),
+            "instrument.detector_path_linear_attenuation_m_inv_by_wavelength",
+            nonnegative=True,
         ),
     )
 
@@ -876,6 +1218,24 @@ def sample_configured_source(
     *,
     sample_count: int | None = None,
 ) -> IncidentSampleBatch:
+    count = source.sample_count if sample_count is None else sample_count
+    if source.wavelength_model_id == "discrete_gaussian_lines.v1":
+        return sample_discrete_gaussian_line_source_rays(
+            mean_origin_lab_m=np.asarray(source.mean_origin_lab_m),
+            mean_direction_lab=np.asarray(source.mean_direction_lab),
+            transverse_axes_lab=np.asarray(source.transverse_axes_lab),
+            spatial_sigma_m=np.asarray(source.spatial_sigma_m),
+            divergence_sigma_rad=np.asarray(source.divergence_sigma_rad),
+            line_wavelength_A=np.asarray(source.line_wavelength_A),
+            line_probability=np.asarray(source.line_probability),
+            common_wavelength_sigma_A=source.common_line_sigma_A,
+            sample_count=count,
+            seed=source.seed,
+            polarization_state_id=source.polarization_state_id,
+            position_divergence_correlation=source.position_divergence_correlation,
+        )
+    if source.wavelength_model_id != "gaussian.v1":
+        raise ValueError(f"unsupported wavelength_model_id {source.wavelength_model_id!r}")
     return sample_gaussian_source_rays(
         mean_origin_lab_m=np.asarray(source.mean_origin_lab_m),
         mean_direction_lab=np.asarray(source.mean_direction_lab),
@@ -884,9 +1244,27 @@ def sample_configured_source(
         divergence_sigma_rad=np.asarray(source.divergence_sigma_rad),
         mean_wavelength_A=source.mean_wavelength_A,
         wavelength_sigma_A=source.wavelength_sigma_A,
-        sample_count=source.sample_count if sample_count is None else sample_count,
+        sample_count=count,
         seed=source.seed,
         polarization_state_id=source.polarization_state_id,
+        position_divergence_correlation=source.position_divergence_correlation,
+    )
+
+
+def sample_configured_nominal_geometry_source(
+    source: SourceConfiguration,
+) -> IncidentSampleBatch:
+    """Build the explicit centroid companion used by geometry and nominal Ewald tags."""
+
+    return sample_nominal_mean_geometry_source_ray(
+        mean_origin_lab_m=np.asarray(source.mean_origin_lab_m),
+        mean_direction_lab=np.asarray(source.mean_direction_lab),
+        transverse_axes_lab=np.asarray(source.transverse_axes_lab),
+        spatial_sigma_m=np.asarray(source.spatial_sigma_m),
+        divergence_sigma_rad=np.asarray(source.divergence_sigma_rad),
+        reference_wavelength_A=source.mean_wavelength_A,
+        polarization_state_id=source.polarization_state_id,
+        position_divergence_correlation=source.position_divergence_correlation,
     )
 
 
@@ -929,6 +1307,14 @@ def _compile_instrument(configured: InstrumentInputConfiguration) -> CompiledIns
             sample_width_m=configured.sample_width_m,
             sample_length_m=configured.sample_length_m,
             film_thickness_A=configured.film_thickness_A,
+            detector_path_medium_id=configured.detector_path_medium_id,
+            detector_path_linear_attenuation_m_inv=(
+                configured.detector_path_linear_attenuation_m_inv
+            ),
+            detector_path_wavelength_A=configured.detector_path_wavelength_A,
+            detector_path_linear_attenuation_m_inv_by_wavelength=(
+                configured.detector_path_linear_attenuation_m_inv_by_wavelength
+            ),
         )
     )
 
@@ -964,7 +1350,7 @@ class ConfiguredGeometryInputs:
             raise TypeError("samples must be IncidentSampleBatch")
         if self.samples.incident_sample_id.size != 1:
             raise ValueError("configured geometry requires exactly one source sample")
-        expected_samples = sample_configured_source(self.config.source, sample_count=1)
+        expected_samples = sample_configured_nominal_geometry_source(self.config.source)
         if self.samples.source_revision != expected_samples.source_revision:
             raise ValueError(
                 "configured geometry sample must be the source-center, zero-divergence, "
@@ -1124,7 +1510,7 @@ def build_configured_geometry_inputs(
 
     if not isinstance(config, SimulationConfiguration):
         raise TypeError("config must be SimulationConfiguration")
-    samples = sample_configured_source(config.source, sample_count=1)
+    samples = sample_configured_nominal_geometry_source(config.source)
     instrument = _compile_instrument(config.instrument)
     crystal = read_crystal(
         config.material.cif_path,
@@ -1241,6 +1627,8 @@ class ConfiguredSimulationInputs:
     bragg_space: MosaicBraggSpace
     material: MaterialOptics
     commanded_instrument_rebindable: bool = True
+    scan_calibration_binding_revision: str | None = field(init=False, default=None)
+    calibrated_incidence_axis_angle_rad: float | None = field(init=False, default=None)
 
 
 def configured_rod_catalog_revision(
@@ -1306,11 +1694,6 @@ def build_configured_simulation_inputs(
     )
     if generic_cif and config.structure_factor.shared_disorder_epsilon != 0.0:
         raise ValueError("generic CIF finite repeats do not accept a stacking-disorder epsilon")
-    if stacking_parent is Parent.THREE_R and config.structure_factor.shared_disorder_epsilon != 0.0:
-        raise ValueError(
-            "r3m_quintuple_finite_3r.v1 is a deterministic fault-free parent; "
-            "shared_disorder_epsilon must be zero"
-        )
     if config.mosaic.lorentzian_probability < 1.0 and config.mosaic.gaussian_sigma_deg == 0.0:
         raise ValueError("active Gaussian mosaic width must be nonzero for intensity")
     if config.mosaic.lorentzian_probability > 0.0 and config.mosaic.lorentzian_hwhm_deg == 0.0:
@@ -1451,6 +1834,27 @@ def rebind_configured_simulation_instrument(
     )
 
 
+def _configured_incidence_scan_metadata(
+    inputs: ConfiguredSimulationInputs,
+) -> tuple[float | None, str | None]:
+    """Return one builder-owned calibrated scan stamp, or no stamp at all."""
+
+    angle = inputs.calibrated_incidence_axis_angle_rad
+    binding = inputs.scan_calibration_binding_revision
+    if (angle is None) != (binding is None):
+        raise ValueError("configured incidence-scan metadata must be present as one pair")
+    if angle is None:
+        return None, None
+    if not isinstance(binding, str) or not binding:
+        raise ValueError("configured incidence-scan binding must be nonempty")
+    if len(inputs.config.instrument.axis_rotations) != 1:
+        raise ValueError("configured incidence-scan metadata requires one incidence axis")
+    declared_angle = math.radians(inputs.config.instrument.axis_rotations[0].angle_deg)
+    if not math.isfinite(float(angle)) or float(angle) != declared_angle:
+        raise ValueError("configured incidence-scan angle does not match its calibrated pose")
+    return float(angle), binding
+
+
 def _source_reachable_rods(inputs: ConfiguredSimulationInputs) -> tuple[Rod, ...]:
     """Return the configured catalog subset reachable by at least one valid source state."""
 
@@ -1476,6 +1880,7 @@ def build_source_averaged_structure_detector(
 
     reachable_rods = _source_reachable_rods(inputs)
     active_strength = inputs.strength if strength_model is None else strength_model
+    incidence_axis_angle_rad, scan_binding_revision = _configured_incidence_scan_metadata(inputs)
     return SourceAveragedStructureDetector(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
@@ -1488,6 +1893,8 @@ def build_source_averaged_structure_detector(
         instrument=inputs.instrument,
         phase_population_weight=inputs.config.weights.phase_population,
         polarization_weight=inputs.config.weights.polarization,
+        incidence_axis_angle_rad=incidence_axis_angle_rad,
+        scan_calibration_binding_revision=scan_binding_revision,
     )
 
 
@@ -1502,6 +1909,7 @@ def build_source_averaged_detector(
             "build_source_averaged_structure_detector for a general CIF"
         )
     reachable_rods = _source_reachable_rods(inputs)
+    incidence_axis_angle_rad, scan_binding_revision = _configured_incidence_scan_metadata(inputs)
     return SourceAveragedDetectorEwaldMeasure(
         reciprocal_basis_Ainv=inputs.reciprocal.basis_Ainv,
         crystal_to_sample=inputs.instrument.sample_from_crystal.rotation,
@@ -1515,7 +1923,54 @@ def build_source_averaged_detector(
         phase_population_weight=inputs.config.weights.phase_population,
         polarization_weight=inputs.config.weights.polarization,
         worker_count=inputs.config.numerics.worker_count,
+        incidence_axis_angle_rad=incidence_axis_angle_rad,
+        scan_calibration_binding_revision=scan_binding_revision,
     )
+
+
+def rebind_source_averaged_detector_incidence_scan(
+    template_detector: SourceAveragedDetectorEwaldMeasure,
+    scan_inputs: tuple[ConfiguredSimulationInputs, ...],
+) -> tuple[SourceAveragedDetectorEwaldMeasure, ...]:
+    """Reuse one compiled optimized detector across a calibrated incidence scan.
+
+    ``scan_inputs`` must be the ordered, builder-stamped inputs from a calibrated scan. The
+    template may already carry a rod restriction, candidate physics, execution blocking, and a
+    specular stitch. Those immutable states are retained while each input's precomputed incident
+    transport and rigid detector/sample geometry are rebound in input order. Scan nodes must keep
+    the same source-validity topology; callers needing changing validity must build each component
+    independently.
+    """
+
+    if not isinstance(template_detector, SourceAveragedDetectorEwaldMeasure):
+        raise TypeError("template_detector must be SourceAveragedDetectorEwaldMeasure")
+    if not isinstance(scan_inputs, tuple):
+        raise TypeError("scan_inputs must be a tuple of ConfiguredSimulationInputs")
+    if not scan_inputs:
+        raise ValueError("scan_inputs must not be empty")
+    if not all(isinstance(item, ConfiguredSimulationInputs) for item in scan_inputs):
+        raise TypeError("scan_inputs must contain only ConfiguredSimulationInputs")
+
+    first_angle, first_binding = _configured_incidence_scan_metadata(scan_inputs[0])
+    if first_angle is None or first_binding is None:
+        raise ValueError("scan_inputs must carry calibrated incidence-scan metadata")
+
+    components: list[SourceAveragedDetectorEwaldMeasure] = []
+    static_revision = template_detector.incidence_angle_static_physics_revision
+    for item in scan_inputs:
+        angle, binding = _configured_incidence_scan_metadata(item)
+        if angle is None or binding != first_binding:
+            raise ValueError("all scan_inputs must carry one calibrated incidence-scan binding")
+        rebound = template_detector._rebind_calibrated_incidence_scan_geometry(
+            incident=item.incident,
+            instrument=item.instrument,
+            incidence_axis_angle_rad=angle,
+            scan_calibration_binding_revision=binding,
+        )
+        if rebound.incidence_angle_static_physics_revision != static_revision:
+            raise ValueError("only incidence geometry may vary across the scan")
+        components.append(rebound)
+    return tuple(components)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1572,10 +2027,15 @@ class NominalEwaldContext:
         )
 
 
-def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEwaldContext:
-    """Build the explicitly nominal mean incident state for one Ewald visualization."""
+def _build_single_ewald_context(
+    inputs: ConfiguredSimulationInputs,
+    samples: IncidentSampleBatch,
+) -> NominalEwaldContext:
+    """Build one Ewald context from an explicitly declared source row."""
 
-    samples = sample_configured_source(inputs.config.source, sample_count=1)
+    if samples.wavelength_A.shape != (1,):
+        raise ValueError("a single Ewald context requires exactly one source row")
+
     material = material_optics(inputs.crystal, samples.wavelength_A)
     incident = build_incident_states(samples, material, inputs.instrument)
     if not bool(incident.states.valid[0]):
@@ -1623,6 +2083,26 @@ def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEw
         polarization_weight=inputs.config.weights.polarization,
     )
     return NominalEwaldContext(geometry=geometry, incident=incident)
+
+
+def build_nominal_ewald_context(inputs: ConfiguredSimulationInputs) -> NominalEwaldContext:
+    """Build the geometry-only nominal mean incident state for Ewald landmarks."""
+
+    return _build_single_ewald_context(
+        inputs,
+        sample_configured_nominal_geometry_source(inputs.config.source),
+    )
+
+
+def build_single_source_ewald_context(
+    inputs: ConfiguredSimulationInputs,
+) -> NominalEwaldContext:
+    """Build intensity-capable geometry for an exact configured one-row source."""
+
+    require_physical_intensity_source_model(inputs.samples.source_sampling_model_id)
+    if inputs.samples.wavelength_A.shape != (1,):
+        raise ValueError("configured source must contain exactly one physical row")
+    return _build_single_ewald_context(inputs, inputs.samples)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2014,16 +2494,16 @@ def evaluate_nominal_integer_l_markers(
             if not candidates:
                 continue
             beta_values = np.asarray([item[1] for item in candidates])
-            mapped = geometry.map_latent(
+            mapped = geometry.map_latent_geometry(
                 rod=rod,
                 branch=branch,
                 alpha_rad=np.zeros(beta_values.size, dtype=np.float64),
                 beta_rad=beta_values,
             )
             for beta_index, (integer_l, beta_rad, root_sign) in enumerate(candidates):
-                if not bool(mapped.geometry.valid[beta_index]):
+                if not bool(mapped.valid[beta_index]):
                     continue
-                actual_l = float(mapped.geometry.ewald_geometry.L[beta_index])
+                actual_l = float(mapped.ewald_geometry.L[beta_index])
                 if abs(actual_l - integer_l) > integer_l_solver_tolerance * max(abs(actual_l), 1.0):
                     raise FloatingPointError("analytic integer-L root disagrees with Ewald solver")
                 visible_roots.append(
@@ -2032,8 +2512,8 @@ def evaluate_nominal_integer_l_markers(
                         branch,
                         root_sign,
                         beta_rad,
-                        float(mapped.geometry.column_px[beta_index]),
-                        float(mapped.geometry.row_px[beta_index]),
+                        float(mapped.column_px[beta_index]),
+                        float(mapped.row_px[beta_index]),
                     )
                 )
         if not visible_roots:
@@ -2678,6 +3158,7 @@ __all__ = [
     "build_configured_simulation_inputs",
     "build_geometry_only_ewald_context",
     "build_nominal_ewald_context",
+    "build_single_source_ewald_context",
     "build_source_averaged_detector",
     "build_source_averaged_structure_detector",
     "configured_rod_catalog_revision",
@@ -2689,6 +3170,8 @@ __all__ = [
     "rebind_configured_geometry_direct_basis",
     "rebind_configured_geometry_instrument",
     "rebind_configured_simulation_instrument",
+    "rebind_source_averaged_detector_incidence_scan",
+    "sample_configured_nominal_geometry_source",
     "sample_detector_pixel_center_density",
     "sample_reciprocal_space",
     "solve_layer_l_ewald_roots",

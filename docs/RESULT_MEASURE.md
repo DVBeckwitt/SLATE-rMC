@@ -5,10 +5,25 @@ may silently renormalize one of these measures.
 
 ## Source measure
 
-`IncidentSampleBatch.source_weight` is an empirical probability mass over complete source rows.
-Valid source weights sum to one. Entrance transport multiplies it by the declared sample-footprint
-acceptance. Independent source rows, wavelengths, phases, and polarization states add as
-intensities.
+`IncidentSampleBatch.source_weight` is a probability/quadrature mass over complete source rows.
+Valid source weights are finite, nonnegative, and sum to one; they need not equal `1/N`. In the
+discrete-line model each declared line probability is divided among that line's geometry rows so
+the realized line masses are exact. Entrance transport retains source mass and declared
+sample-footprint acceptance as separate fields. Detector source-phase construction multiplies
+those fields once with the flat-film illuminated-path factor
+`w_illum = 1/|direction_sample,z|`, phase population, and configured polarization. Independent
+source rows, wavelengths, phases, and polarization states add as intensities.
+
+Physical discrete-source sampling requires at least one row per declared line. A separate nominal
+geometry API returns one mean-wavelength companion row and rejects it at every source-weighted
+detector-measure intensity boundary. Source-free intrinsic coating/locus densities may use that
+row only to draw geometry or reference landmarks; they are not an empirical source intensity or a
+likelihood observable.
+Equal per-line row counts reuse the same geometry grid. When a nonzero position/divergence
+correlation is declared and a line has at least eight rows, that line is moment-matched to the full
+declared four-dimensional covariance. Zero-correlation antithetic LHS grids and smaller correlated
+grids remain finite quadrature approximations; non-divisible line counts additionally carry an
+explicit unequal-grid model ID.
 
 ## Continuous Bragg measure
 
@@ -143,15 +158,18 @@ pre-binned density is
 d_r(c,r) = sum_inverse_branches [
     b_r(alpha,beta,u)
     * J_Qsurface(c,r) / |J_latent(alpha,beta,u)|
-    * |t_in * t_out|^2 * attenuation
-    * source_weight * footprint * phase_population * polarization
+    * |t_in * t_out|^2 * uniform_depth_attenuation
+    * exp[-mu_external(wavelength) * ray_distance]
+    * source_weight * footprint * w_illum * phase_population * polarization
 ]
 ```
 
 This direct change of variables is equivalent to the intrinsic Ewald coarea restriction followed
 by the surface-to-detector map; it does not apply the coarea factor twice. The result is
 `raw_detector_coordinate_density_A2_per_px2.v1` and is callable at arbitrary detector coordinates.
-All inverse branches and rods sum as intensities.
+All inverse branches and rods sum as intensities. External attenuation uses an intensity
+coefficient in inverse metres; table mode requires an exact sampled-wavelength key and never
+interpolates, clamps, or falls back to a scalar.
 
 On the common non-specular subset, the same identity can be written
 
@@ -191,11 +209,12 @@ d_m0(c,r) = p_plane(alpha) * population_00 * S_stitch(L)
             / (|Q_air|^2 * sin(alpha)).
 ```
 
-The source phase weight already contains source probability, footprint acceptance, and phase
-population. Parratt contains the applicable interface optics, so entrance/exit transmission is not
-multiplied again. Every actual sampled direction and wavelength is evaluated before incoherent
-reduction. Exact direct-beam `Q=0` is rejected; positive mirror-map caustics remain explicit and are
-resolved by later finite-bin integration. The output stays in the same
+The source phase weight already contains source probability, footprint acceptance, illuminated-path
+weight, and phase population. External detector-path attenuation is applied separately once using
+the actual sample-intersection-to-detector ray length. Parratt contains the applicable interface
+optics, so entrance/exit transmission is not multiplied again. Every actual sampled direction and
+wavelength is evaluated before incoherent reduction. Exact direct-beam `Q=0` is rejected; positive
+mirror-map caustics remain explicit and are resolved by later finite-bin integration. The output stays in the same
 `raw_detector_coordinate_density_A2_per_px2.v1` measure as every other rod. There is no second
 count scale, horizontal shift, detector raster, smoothing, or resolution convolution.
 
@@ -290,9 +309,10 @@ Ihat_P = sum_s (1/M) sum_m sum_(r,j)
 ```
 
 `r` is a physical signed rod, `j` is every retained analytic root, `T` is the canonical forward
-exit/refraction and detector map, and `W` contains source/footprint/phase/polarization mass, rod
-population, finite-stack strength, the Ewald coarea factor once, and entrance/exit optical and
-attenuation factors. Because the proposal is exactly the mosaic law, its density cancels and is not
+exit/refraction and detector map, and `W` contains source/footprint/illuminated-path/
+phase/polarization mass, rod population, finite-stack strength, the Ewald coarea factor once,
+entrance/exit optical and film attenuation, and external detector-path attenuation. Because the
+proposal is exactly the mosaic law, its density cancels and is not
 multiplied into `W`. No detector-coordinate Jacobian or detector solid-angle factor belongs to a
 forward deposit. Invalid, no-root, and off-panel draws have zero weight and remain in the divisor.
 
@@ -317,20 +337,73 @@ the completed all-source, all-rod, all-root function once at each native center 
 `raw_detector_coordinate_density_A2_per_px2.v1`. It is a display-only coordinate-density sample,
 not a pixel-box mass, macrobin mass, calibrated count expectation, or raw OSC count image.
 
+## Continuous incidence-exposure estimate
+
+For a declared normalized motor exposure density `q(theta)` over one incidence interval, the
+detector-native scan observable is
+
+```text
+d_scan(c,r) = integral q(theta) d_theta(c,r) dtheta,
+integral q(theta) dtheta = 1.
+```
+
+`IncidenceAngleQuadrature` represents this probability measure with fixed positive dimensionless
+node masses that already sum to one and an explicit calibration revision; it never silently
+normalizes either quantity or supplies a default angle-axis identity. Uniform exposure uses
+`q=1/(theta_upper-theta_lower)`. The estimate retains
+`raw_detector_coordinate_density_A2_per_px2.v1`; total fluence or dwell is a separate dataset
+scale. Its reduction ID is
+`fixed_quadrature_estimate_of_incoherent_incidence_angle_probability_average.v1`.
+
+Each node carries the complete corrected sample pose and incident transport, including footprint,
+refraction, attenuation, detector mapping, inverse roots, and finite-stack strength. The optimized
+path may compile angle-invariant detector physics once. The calibrated scan builder computes each
+node's incident transport upstream; its exact engine rebind then recomputes transport-derived
+evaluator fields, detector projection, and m=0 support gap. All
+nodes reuse the exact same source rows and empirical source weights. Incidence angle is not added to the
+source Monte Carlo coordinates. Invalid source/node contributions remain zero under the original
+source and exposure divisors; surviving contributions are never renormalized. The v1 calibrated
+configured-series builder is stricter and fails closed unless every source state is valid at every
+angle node; wrappers assembled through another declared calibration path may retain partial
+validity with the original full-source divisor. Physical rods,
+retained roots, sources, and incidence nodes add incoherently as intensities.
+
+The detector-coordinate point-density wrapper uses one immutable composite Gauss--Legendre rule;
+its `h`/`p` convergence remains an external audit. The separate finite-region
+`evaluate_adaptive_scan_oracle(...)` performs deterministic physical-panel refinement using
+covariance-whitened absolute coarse/fine error and caller-declared topology, fold, and window
+events. It preserves normalized exposure mass and signed ROI contrast while holding source and
+evaluator revisions fixed. Neither path claims native-pixel mass. A node
+landing exactly on an inverse-density caustic fails closed; it is never skipped, shifted, clipped,
+or assigned zero. Intervals that need finite-region fold correction require node-specific fold
+plans or an incidence-fold substitution. A single fixed-pose fold plan cannot be applied to a
+multi-pose scan. The initial API is therefore authoritative for detector-native point-density and
+display sampling, not native-pixel mass or the current corrected-region fitting path.
+
+For the local-lamella stitched `m=0` term, the moving specular caustic can cross a fixed continuous
+detector coordinate. Its `1/sin(alpha)` factor then makes the incidence-averaged point density
+logarithmically singular on the swept trace. More angle nodes cannot turn that exact pointwise
+observable into a finite value. A finite scan image at that trace requires the distinct joint
+incidence-angle by detector-pixel-box mass integral; it must not be obtained by clipping or shifting
+the point singularity.
+
 No undeclared or unweighted histogram, general point-deposition API, pixel supersampling claim,
 per-reflection normalization, or image maximum normalization belongs to the physical result. Masks,
 saturation, detector efficiency, detector PSF, and general acquisition-matched backgrounds remain
-separate future operators. The matched-region comparison below explicitly applies its hash-bound
-acquisition dark and one frozen radial halo.
+separate future operators. The matched-region comparison below hash-verifies the declared dark;
+the current Bi2Se3 basis sets its scale to zero because it is not acquisition-matched, then applies
+one frozen radial halo.
 
 ## Matched-region count comparison
 
-For row `r`, verified native OSC pixels and the shared dark OSC define the signed field
+For row `r`, verified native OSC pixels and the declared dark OSC define the signed field
 `D = raw - s_dark dark`. Raw and dark use the same sparse continuous-region projector `W`; no
 negative value is clipped. Independent raw/dark counting covariance propagates as
 `W diag(max(raw,1) + s_dark^2 max(dark,1)) W^T`, including the cross-OSC covariance induced by
-reusing the same dark exposure. The corrected native pixels define a piecewise-constant measured
-count-density field.
+reusing the same dark exposure when `s_dark` is nonzero. When no acquisition-matched dark exists,
+the explicit `s_dark=0` basis keeps the dark bytes hash-verified while its subtraction, covariance,
+and cross-OSC contribution are exactly zero. The corrected native pixels define a piecewise-constant
+measured count-density field.
 A sparse data-only operator integrates that field over the declared phi/two-theta or signed-Qr/L
 rectangle. Its weights are detector areas of pixel/region overlap under independently refined
 continuous cubature, so `C_r` and its support use the same rectangle as the model without smoothing.

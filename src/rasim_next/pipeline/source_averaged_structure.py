@@ -19,6 +19,10 @@ from painted_ewald.validation import positive_integer, reject_complex
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
+from rasim_next.optics import (
+    DETECTOR_PATH_ATTENUATION_MODEL_ID,
+    INCIDENT_ILLUMINATED_PATH_MODEL_ID,
+)
 from rasim_next.pipeline.bragg_space import RevisionedStructureStrengthModel
 from rasim_next.pipeline.continuous_detector import (
     DetectorEwaldMeasure,
@@ -27,9 +31,12 @@ from rasim_next.pipeline.continuous_detector import (
 )
 from rasim_next.pipeline.source_averaged_detector import (
     SourceAveragedDetectorCoordinateIntensity,
+    _detector_native_chart_revision,
+    _incidence_angle_static_physics_revision,
     _instrument_revision,
     _reachable_master_rod_indices,
 )
+from rasim_next.sampling.source import require_physical_intensity_source_model
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -72,6 +79,8 @@ class SourceAveragedDetectorStructureResponse:
     term_source_state_index: NDArray[np.int64]
     term_L: FloatArray
     term_k_norm_Ainv: FloatArray
+    term_q_radial_squared_Ainv2: FloatArray
+    term_q_normal_squared_Ainv2: FloatArray
     term_fixed_density_per_strength_px2_inv: FloatArray
     term_root_sign: NDArray[np.int8]
     source_state_k_norm_Ainv: FloatArray
@@ -85,6 +94,8 @@ class SourceAveragedDetectorStructureResponse:
     fixed_physics_revision: str
     reference_structure_model_revision: str
     detector_visible_m0_q_gap_Ainv: float | None
+    reference_intensity_envelope_u_radial_A2: float = 0.0
+    reference_intensity_envelope_u_normal_A2: float = 0.0
     root_policy: str = "all_retained_roots.v1"
     measure_id: str = "fixed_source_averaged_detector_density_per_structure_strength_px2_inv.v1"
     response_revision: str = field(init=False)
@@ -134,6 +145,18 @@ class SourceAveragedDetectorStructureResponse:
         )
         term_l = np.array(self.term_L, dtype=np.float64, copy=True, order="C")
         term_k = np.array(self.term_k_norm_Ainv, dtype=np.float64, copy=True, order="C")
+        term_q_radial_squared = np.array(
+            self.term_q_radial_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        term_q_normal_squared = np.array(
+            self.term_q_normal_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
         term_fixed = np.array(
             self.term_fixed_density_per_strength_px2_inv,
             dtype=np.float64,
@@ -148,6 +171,8 @@ class SourceAveragedDetectorStructureResponse:
             or term_source.shape != term_shape
             or term_l.shape != term_shape
             or term_k.shape != term_shape
+            or term_q_radial_squared.shape != term_shape
+            or term_q_normal_squared.shape != term_shape
             or term_fixed.shape != term_shape
             or term_root.shape != term_shape
         ):
@@ -172,6 +197,10 @@ class SourceAveragedDetectorStructureResponse:
             or np.any(~np.isfinite(term_l))
             or np.any(~np.isfinite(term_k))
             or np.any(term_k <= 0.0)
+            or np.any(~np.isfinite(term_q_radial_squared))
+            or np.any(term_q_radial_squared < 0.0)
+            or np.any(~np.isfinite(term_q_normal_squared))
+            or np.any(term_q_normal_squared < 0.0)
             or np.any(~np.isfinite(term_fixed))
             or np.any(term_fixed < 0.0)
             or np.any(~np.isin(term_root, (-1, 0, 1)))
@@ -179,6 +208,15 @@ class SourceAveragedDetectorStructureResponse:
             raise ValueError("sparse source-response terms are invalid")
         if term_source.size and not np.array_equal(term_k, state_k[term_source]):
             raise ValueError("term k norms must match their exact source states")
+        reference_u_radial = float(self.reference_intensity_envelope_u_radial_A2)
+        reference_u_normal = float(self.reference_intensity_envelope_u_normal_A2)
+        if (
+            not isfinite(reference_u_radial)
+            or reference_u_radial < 0.0
+            or not isfinite(reference_u_normal)
+            or reference_u_normal < 0.0
+        ):
+            raise ValueError("reference intensity-envelope coefficients must be nonnegative")
 
         valid_count = np.array(
             self.valid_source_count,
@@ -225,7 +263,7 @@ class SourceAveragedDetectorStructureResponse:
             raise ValueError("a 00L support gap requires the (0, 0) rod")
 
         response_revision = canonical_revision_sha256(
-            ("definition_id", "source_averaged_sparse_structure_response.v1"),
+            ("definition_id", "source_averaged_sparse_structure_response.v2"),
             ("fixed_physics_revision", self.fixed_physics_revision),
             ("reference_structure_model_revision", self.reference_structure_model_revision),
             ("column_px", column),
@@ -235,7 +273,11 @@ class SourceAveragedDetectorStructureResponse:
             ("term_source_state_index", term_source),
             ("term_L", term_l),
             ("term_k_norm_Ainv", term_k),
+            ("term_q_radial_squared_Ainv2", term_q_radial_squared),
+            ("term_q_normal_squared_Ainv2", term_q_normal_squared),
             ("term_fixed_density_per_strength_px2_inv", term_fixed),
+            ("reference_intensity_envelope_u_radial_A2", reference_u_radial),
+            ("reference_intensity_envelope_u_normal_A2", reference_u_normal),
             ("term_root_sign", term_root),
             ("valid_source_count", valid_count),
             ("per_rod_caustic", caustic),
@@ -249,6 +291,8 @@ class SourceAveragedDetectorStructureResponse:
             term_source,
             term_l,
             term_k,
+            term_q_radial_squared,
+            term_q_normal_squared,
             term_fixed,
             term_root,
             state_k,
@@ -265,18 +309,32 @@ class SourceAveragedDetectorStructureResponse:
         object.__setattr__(self, "term_source_state_index", term_source)
         object.__setattr__(self, "term_L", term_l)
         object.__setattr__(self, "term_k_norm_Ainv", term_k)
+        object.__setattr__(self, "term_q_radial_squared_Ainv2", term_q_radial_squared)
+        object.__setattr__(self, "term_q_normal_squared_Ainv2", term_q_normal_squared)
         object.__setattr__(self, "term_fixed_density_per_strength_px2_inv", term_fixed)
         object.__setattr__(self, "term_root_sign", term_root)
         object.__setattr__(self, "source_state_k_norm_Ainv", state_k)
         object.__setattr__(self, "valid_source_count", valid_count)
         object.__setattr__(self, "per_rod_caustic", caustic)
         object.__setattr__(self, "source_state_count", state_count)
+        object.__setattr__(
+            self,
+            "reference_intensity_envelope_u_radial_A2",
+            reference_u_radial,
+        )
+        object.__setattr__(
+            self,
+            "reference_intensity_envelope_u_normal_A2",
+            reference_u_normal,
+        )
         object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "response_revision", response_revision)
 
     def apply_strength(
         self,
         strength_model: RevisionedStructureStrengthModel,
+        *,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Apply one revisioned structure provider to the frozen detector transfer."""
 
@@ -307,12 +365,32 @@ class SourceAveragedDetectorStructureResponse:
         if np.any(~np.isfinite(term_strength)) or np.any(term_strength < 0.0):
             raise ValueError("structure strength must be finite and nonnegative")
 
+        envelope_factor: FloatArray | float = 1.0
+        if intensity_envelope is not None:
+            if not isinstance(intensity_envelope, SampleQIntensityEnvelope):
+                raise TypeError("intensity_envelope must be SampleQIntensityEnvelope")
+            delta_radial = (
+                intensity_envelope.u_radial_A2 - self.reference_intensity_envelope_u_radial_A2
+            )
+            delta_normal = (
+                intensity_envelope.u_normal_A2 - self.reference_intensity_envelope_u_normal_A2
+            )
+            with np.errstate(over="ignore", under="ignore"):
+                envelope_factor = np.exp(
+                    -delta_radial * self.term_q_radial_squared_Ainv2
+                    - delta_normal * self.term_q_normal_squared_Ainv2
+                )
+            if np.any(~np.isfinite(envelope_factor)):
+                raise ValueError("requested intensity envelope overflows the sparse response")
+
         coordinate_count = self.column_px.size
         rod_count = len(self.rods)
         flat_index = self.term_coordinate_index * rod_count + self.term_rod_index
         flat_per_rod = np.bincount(
             flat_index,
-            weights=(self.term_fixed_density_per_strength_px2_inv * term_strength),
+            weights=(
+                self.term_fixed_density_per_strength_px2_inv * term_strength * envelope_factor
+            ),
             minlength=coordinate_count * rod_count,
         )
         per_rod = flat_per_rod.reshape((*self.column_px.shape, rod_count))
@@ -356,7 +434,19 @@ class SourceAveragedStructureDetector:
     intensity_envelope: SampleQIntensityEnvelope = field(default_factory=SampleQIntensityEnvelope)
     phase_population_weight: float = 1.0
     polarization_weight: float = 1.0
+    incidence_axis_angle_rad: float | None = None
+    scan_calibration_binding_revision: str | None = None
+    _detector_visible_m0_q_gap_Ainv: float | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
     _fixed_physics_revision: str = field(init=False, repr=False, compare=False)
+    _incidence_angle_static_physics_revision: str = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         basis = np.array(
@@ -405,6 +495,14 @@ class SourceAveragedStructureDetector:
             raise ValueError("phase_population_weight must be finite and nonnegative")
         if not isfinite(polarization) or polarization < 0.0:
             raise ValueError("polarization_weight must be finite and nonnegative")
+        axis_angle = (
+            None if self.incidence_axis_angle_rad is None else float(self.incidence_axis_angle_rad)
+        )
+        if axis_angle is not None and not isfinite(axis_angle):
+            raise ValueError("incidence_axis_angle_rad must be finite when provided")
+        scan_binding = self.scan_calibration_binding_revision
+        if scan_binding is not None and (not isinstance(scan_binding, str) or not scan_binding):
+            raise ValueError("scan_calibration_binding_revision must be nonempty when provided")
         crystal_to_sample = np.array(
             self.crystal_to_sample,
             dtype=np.float64,
@@ -422,6 +520,7 @@ class SourceAveragedStructureDetector:
         ):
             raise ValueError("crystal_to_sample must be the canonical instrument rotation")
         states = self.incident.states
+        require_physical_intensity_source_model(states.source_sampling_model_id)
         if states.material_revision != self.material.material_revision:
             raise ValueError("incident states and material revisions disagree")
         if states.sample_geometry_revision != self.instrument.sample_geometry_revision:
@@ -439,6 +538,29 @@ class SourceAveragedStructureDetector:
             phase_population_weight=phase_weight,
             polarization_weight=polarization,
         )
+        m0_gap: float | None = None
+        if any(rod.h == 0 and rod.k == 0 for rod in rods):
+            valid_state_index = np.flatnonzero(states.valid)
+            if not valid_state_index.size:
+                raise ValueError("detector-visible 00L requires a valid incident state")
+            incident_normal = states.k_film_phase_sample_Ainv[valid_state_index, 2]
+            if np.any(incident_normal >= 0.0):
+                raise ValueError(
+                    "detector-visible 00L requires every valid source state to enter "
+                    "through the negative sample-normal half-space"
+                )
+            m0_gap = float(np.min(-incident_normal))
+        incidence_static_revision = _incidence_angle_static_physics_revision(
+            reciprocal_basis_Ainv=basis,
+            strength_model_revision=_structure_model_revision(self.strength_model),
+            mosaic=self.mosaic,
+            intensity_envelope=envelope,
+            material_revision=self.material.material_revision,
+            incident_model_id=states.incident_model_id,
+            instrument=self.instrument,
+            phase_polarization_weight=phase_weight * polarization,
+            specular_stitch_stack=None,
+        )
         basis.setflags(write=False)
         crystal_to_sample.setflags(write=False)
         object.__setattr__(self, "reciprocal_basis_Ainv", basis)
@@ -446,7 +568,15 @@ class SourceAveragedStructureDetector:
         object.__setattr__(self, "rods", rods)
         object.__setattr__(self, "phase_population_weight", phase_weight)
         object.__setattr__(self, "polarization_weight", polarization)
+        object.__setattr__(self, "incidence_axis_angle_rad", axis_angle)
+        object.__setattr__(self, "scan_calibration_binding_revision", scan_binding)
+        object.__setattr__(self, "_detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "_fixed_physics_revision", fixed_revision)
+        object.__setattr__(
+            self,
+            "_incidence_angle_static_physics_revision",
+            incidence_static_revision,
+        )
 
     def restrict_rods(self, rods: tuple[Rod, ...]) -> SourceAveragedStructureDetector:
         """Return the same physical detector over an explicit signed-rod subset."""
@@ -467,6 +597,38 @@ class SourceAveragedStructureDetector:
     @property
     def fixed_physics_revision(self) -> str:
         return self._fixed_physics_revision
+
+    @property
+    def detector_visible_m0_q_gap_Ainv(self) -> float | None:
+        """Infimum of supported ``|Q|`` for an included detector-visible 00L rod."""
+
+        return self._detector_visible_m0_q_gap_Ainv
+
+    @property
+    def source_revision(self) -> str:
+        return self.incident.states.source_revision
+
+    @property
+    def source_state_count(self) -> int:
+        return int(self.incident.states.incident_state_id.size)
+
+    @property
+    def sample_geometry_revision(self) -> str:
+        return self.incident.states.sample_geometry_revision
+
+    @property
+    def detector_shape_rc(self) -> tuple[int, int]:
+        return self.instrument.detector_shape_rc
+
+    @property
+    def detector_panel_revision(self) -> str:
+        return _detector_native_chart_revision(self.instrument)
+
+    @property
+    def incidence_angle_static_physics_revision(self) -> str:
+        """Physics identity required to be common to every incidence node."""
+
+        return self._incidence_angle_static_physics_revision
 
     def compile_structure_response(
         self,
@@ -501,9 +663,12 @@ class SourceAveragedStructureDetector:
         row_px: ArrayLike,
         *,
         execution_backend: str = "cpu",
+        cuda_coordinate_chunk_size: int | None = None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
         if execution_backend != "cpu":
             raise ValueError("the sparse structure detector currently requires the CPU backend")
+        if cuda_coordinate_chunk_size is not None:
+            raise ValueError("the sparse structure detector does not use CUDA coordinate chunks")
         return self.compile_structure_response(column_px, row_px).apply_strength(
             self.strength_model
         )
@@ -526,7 +691,9 @@ def _source_averaged_sparse_fixed_physics_revision(
     """Hash the structure-independent state frozen by one sparse response."""
 
     return canonical_revision_sha256(
-        ("definition_id", "source_averaged_sparse_fixed_physics.v1"),
+        ("definition_id", "source_averaged_sparse_fixed_physics.v2"),
+        ("detector_path_attenuation_model_id", DETECTOR_PATH_ATTENUATION_MODEL_ID),
+        ("incident_illuminated_path_model_id", INCIDENT_ILLUMINATED_PATH_MODEL_ID),
         ("source_revision", incident.states.source_revision),
         ("material_revision", material.material_revision),
         ("sample_geometry_revision", incident.states.sample_geometry_revision),
@@ -578,6 +745,7 @@ def compile_source_averaged_detector_structure_response(
 
     if not isinstance(incident, IncidentTransportResult):
         raise TypeError("incident must be IncidentTransportResult")
+    require_physical_intensity_source_model(incident.states.source_sampling_model_id)
     if not isinstance(material, MaterialOptics):
         raise TypeError("material must be MaterialOptics")
     if not isinstance(instrument, CompiledInstrument):
@@ -662,6 +830,8 @@ def compile_source_averaged_detector_structure_response(
     term_sources: list[NDArray[np.int64]] = []
     term_l_values: list[FloatArray] = []
     term_k_values: list[FloatArray] = []
+    term_q_radial_squared_values: list[FloatArray] = []
+    term_q_normal_squared_values: list[FloatArray] = []
     term_fixed_values: list[FloatArray] = []
     term_root_signs: list[NDArray[np.int8]] = []
     for supplied_state_index in valid_state_index:
@@ -712,11 +882,23 @@ def compile_source_averaged_detector_structure_response(
             continue
         local_rod_index = state_response.term_rod_index
         term_count = local_rod_index.size
+        state_geometry = detector.evaluate_detector_geometry(
+            column,
+            row,
+            include_surface_jacobian=False,
+        )
+        term_q_sample = np.asarray(state_geometry.q_sample_Ainv).reshape(-1, 3)[
+            state_response.term_coordinate_index
+        ]
         term_coordinates.append(state_response.term_coordinate_index)
         term_rods.append(active_index[local_rod_index])
         term_sources.append(np.full(term_count, state_index, dtype=np.int64))
         term_l_values.append(state_response.term_L)
         term_k_values.append(np.full(term_count, k_norm, dtype=np.float64))
+        term_q_radial_squared_values.append(
+            np.sum(term_q_sample[:, :2] ** 2, axis=1, dtype=np.float64)
+        )
+        term_q_normal_squared_values.append(term_q_sample[:, 2] ** 2)
         term_fixed_values.append(state_response.term_fixed_density_per_strength_px2_inv)
         term_root_signs.append(state_response.term_root_sign)
 
@@ -733,9 +915,16 @@ def compile_source_averaged_detector_structure_response(
     term_source = concatenate_or_empty(term_sources, np.int64)
     term_l = concatenate_or_empty(term_l_values, np.float64)
     term_k = concatenate_or_empty(term_k_values, np.float64)
+    term_q_radial_squared = concatenate_or_empty(
+        term_q_radial_squared_values,
+        np.float64,
+    )
+    term_q_normal_squared = concatenate_or_empty(
+        term_q_normal_squared_values,
+        np.float64,
+    )
     term_fixed = concatenate_or_empty(term_fixed_values, np.float64)
     term_root = concatenate_or_empty(term_root_signs, np.int8)
-
     m0_gap: float | None = None
     if any(rod.h == 0 and rod.k == 0 for rod in selected):
         incident_normal = states.k_film_phase_sample_Ainv[valid_state_index, 2]
@@ -771,6 +960,8 @@ def compile_source_averaged_detector_structure_response(
         term_source_state_index=term_source,
         term_L=term_l,
         term_k_norm_Ainv=term_k,
+        term_q_radial_squared_Ainv2=term_q_radial_squared,
+        term_q_normal_squared_Ainv2=term_q_normal_squared,
         term_fixed_density_per_strength_px2_inv=term_fixed,
         term_root_sign=term_root,
         source_state_k_norm_Ainv=source_state_k,
@@ -784,4 +975,6 @@ def compile_source_averaged_detector_structure_response(
         fixed_physics_revision=fixed_physics_revision,
         reference_structure_model_revision=reference_structure_revision,
         detector_visible_m0_q_gap_Ainv=m0_gap,
+        reference_intensity_envelope_u_radial_A2=envelope.u_radial_A2,
+        reference_intensity_envelope_u_normal_A2=envelope.u_normal_A2,
     )

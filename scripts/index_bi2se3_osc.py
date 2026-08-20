@@ -54,9 +54,10 @@ def _inputs_for_incidence(
     if not config.instrument.axis_rotations:
         raise ValueError("the Bi2Se3 configuration must declare an incidence rotation")
     rotation = replace(config.instrument.axis_rotations[0], angle_deg=incidence_deg)
+    minimum_physical_source_count = config.source.minimum_physical_sample_count
     configured = replace(
         config,
-        source=replace(config.source, sample_count=1),
+        source=replace(config.source, sample_count=minimum_physical_source_count),
         instrument=replace(
             config.instrument,
             axis_rotations=(rotation, *config.instrument.axis_rotations[1:]),
@@ -285,13 +286,13 @@ def _simulation_qualification_payload(
         raise ValueError("simulation diagnostic is neither converged nor an unresolved audit")
     config = load_simulation_config(ROOT / "configs" / "bi2se3_simulation.yaml")
     inputs = _inputs_for_incidence(config, incidence_deg)
+    context = build_nominal_ewald_context(inputs)
     frame = build_osc_angle_frame(
         mean_direction_lab=inputs.config.source.mean_direction_lab,
         instrument=inputs.instrument,
-        sample_intersection_lab_m=inputs.incident.states.sample_intersection_lab_m[0],
+        sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
         revision=(f"bi2se3-detector-image-angle-frame.simulated-{incidence_deg:g}deg.v1"),
     )
-    context = build_nominal_ewald_context(inputs)
     if (
         detector_image.shape != inputs.instrument.detector_shape_rc
         or detector_mask.shape != detector_image.shape
@@ -608,12 +609,13 @@ def main(argv: list[str] | None = None) -> int:
         strict=True,
     ):
         inputs = _inputs_for_incidence(config, incidence_deg)
+        context = build_nominal_ewald_context(inputs)
         osc = read_osc(osc_directory / filename)
         image_id = filename.removesuffix(".gz").removesuffix(".osc")
         frame = build_osc_angle_frame(
             mean_direction_lab=inputs.config.source.mean_direction_lab,
             instrument=inputs.instrument,
-            sample_intersection_lab_m=inputs.incident.states.sample_intersection_lab_m[0],
+            sample_intersection_lab_m=context.incident.states.sample_intersection_lab_m[0],
             revision=f"bi2se3-detector-image-angle-frame.{image_id}.v1",
         )
         discovery = discover_measured_cake_peaks(
@@ -629,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
         image_results.append(
             index_discovered_integer_l_peaks(
                 discovery,
-                ewald_context=build_nominal_ewald_context(inputs),
+                ewald_context=context,
                 angle_frame=frame,
                 incidence_angle_rad=math.radians(incidence_deg),
             )

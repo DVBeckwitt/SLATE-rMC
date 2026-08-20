@@ -19,7 +19,9 @@ def polarization_model_code(model_id: str) -> int:
         return POLARIZATION_MODEL_CODES[model_id]
     except (KeyError, TypeError) as error:
         supported = ", ".join(POLARIZATION_MODEL_CODES)
-        raise ValueError(f"unsupported polarization model {model_id!r}; expected {supported}") from error
+        raise ValueError(
+            f"unsupported polarization model {model_id!r}; expected {supported}"
+        ) from error
 
 
 def scattering_polarization_weight(

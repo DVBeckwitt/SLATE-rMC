@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from itertools import pairwise
+from numbers import Real
 
 import numpy as np
 from numpy.typing import NDArray
@@ -35,9 +37,18 @@ def _shape_rc(value: tuple[int, int]) -> tuple[int, int]:
 
 
 def _positive(value: float, name: str) -> float:
-    result = float(value)
+    result = _real_scalar(value, name)
     if not math.isfinite(result) or result <= 0.0:
         raise ValueError(f"{name} must be finite and positive")
+    return result
+
+
+def _real_scalar(value: object, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or np.iscomplexobj(value):
+        raise ValueError(f"{name} must be a real number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
     return result
 
 
@@ -66,6 +77,50 @@ def _detector_reference(value: tuple[float, float]) -> tuple[float, float]:
     if len(coordinate) != 2 or not all(math.isfinite(item) for item in coordinate):
         raise ValueError("detector_reference_coordinate_px must contain finite (column_px, row_px)")
     return coordinate
+
+
+def validate_detector_path_attenuation_declaration(
+    medium_id: str,
+    linear_attenuation_m_inv: float,
+    wavelength_A: tuple[float, ...],
+    linear_attenuation_m_inv_by_wavelength: tuple[float, ...],
+) -> tuple[str, float, tuple[float, ...], tuple[float, ...]]:
+    if not isinstance(medium_id, str) or not medium_id:
+        raise ValueError("detector_path_medium_id must be a nonempty string")
+    raw_wavelengths = tuple(wavelength_A)
+    raw_coefficients = tuple(linear_attenuation_m_inv_by_wavelength)
+    coefficient = _real_scalar(
+        linear_attenuation_m_inv,
+        "detector_path_linear_attenuation_m_inv",
+    )
+    if coefficient < 0.0:
+        raise ValueError("detector_path_linear_attenuation_m_inv must be finite and nonnegative")
+    wavelengths = tuple(
+        _real_scalar(value, "detector-path wavelength") for value in raw_wavelengths
+    )
+    coefficients = tuple(
+        _real_scalar(value, "detector-path attenuation coefficient") for value in raw_coefficients
+    )
+    if bool(wavelengths) != bool(coefficients) or len(wavelengths) != len(coefficients):
+        raise ValueError(
+            "detector-path wavelength and attenuation tables must be equally sized and both "
+            "empty or both nonempty"
+        )
+    if any(value <= 0.0 for value in wavelengths):
+        raise ValueError("detector-path wavelengths must be finite and positive")
+    if any(right <= left for left, right in pairwise(wavelengths)):
+        raise ValueError("detector-path wavelengths must be strictly increasing")
+    if any(value < 0.0 for value in coefficients):
+        raise ValueError("detector-path attenuation coefficients must be finite and nonnegative")
+    if wavelengths and coefficient != 0.0:
+        raise ValueError(
+            "detector-path scalar and wavelength-table attenuation modes are mutually exclusive"
+        )
+    if medium_id == "vacuum_or_helium_unity.v1" and (
+        coefficient != 0.0 or any(value != 0.0 for value in coefficients)
+    ):
+        raise ValueError("unity detector path medium requires zero attenuation")
+    return medium_id, coefficient, wavelengths, coefficients
 
 
 def compose_intrinsic_xy_rotation(
@@ -134,6 +189,10 @@ class InstrumentConfiguration:
     sample_width_m: float | None
     sample_length_m: float | None
     film_thickness_A: float
+    detector_path_medium_id: str = "vacuum_or_helium_unity.v1"
+    detector_path_linear_attenuation_m_inv: float = 0.0
+    detector_path_wavelength_A: tuple[float, ...] = ()
+    detector_path_linear_attenuation_m_inv_by_wavelength: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         rotations = tuple(self.axis_rotations)
@@ -169,6 +228,20 @@ class InstrumentConfiguration:
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
         object.__setattr__(self, "film_thickness_A", thickness)
+        path = validate_detector_path_attenuation_declaration(
+            self.detector_path_medium_id,
+            self.detector_path_linear_attenuation_m_inv,
+            self.detector_path_wavelength_A,
+            self.detector_path_linear_attenuation_m_inv_by_wavelength,
+        )
+        object.__setattr__(self, "detector_path_medium_id", path[0])
+        object.__setattr__(self, "detector_path_linear_attenuation_m_inv", path[1])
+        object.__setattr__(self, "detector_path_wavelength_A", path[2])
+        object.__setattr__(
+            self,
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+            path[3],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +265,10 @@ class CompiledInstrument:
     sample_length_m: float | None
     sample_geometry_revision: str = field(init=False)
     film_thickness_A: float
+    detector_path_medium_id: str = "vacuum_or_helium_unity.v1"
+    detector_path_linear_attenuation_m_inv: float = 0.0
+    detector_path_wavelength_A: tuple[float, ...] = ()
+    detector_path_linear_attenuation_m_inv_by_wavelength: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         expected_frames = (
@@ -222,6 +299,20 @@ class CompiledInstrument:
         if not math.isfinite(thickness) or thickness < 0.0:
             raise ValueError("film_thickness_A must be finite and nonnegative")
         object.__setattr__(self, "film_thickness_A", thickness)
+        path = validate_detector_path_attenuation_declaration(
+            self.detector_path_medium_id,
+            self.detector_path_linear_attenuation_m_inv,
+            self.detector_path_wavelength_A,
+            self.detector_path_linear_attenuation_m_inv_by_wavelength,
+        )
+        object.__setattr__(self, "detector_path_medium_id", path[0])
+        object.__setattr__(self, "detector_path_linear_attenuation_m_inv", path[1])
+        object.__setattr__(self, "detector_path_wavelength_A", path[2])
+        object.__setattr__(
+            self,
+            "detector_path_linear_attenuation_m_inv_by_wavelength",
+            path[3],
+        )
         object.__setattr__(
             self,
             "sample_geometry_revision",
@@ -233,6 +324,26 @@ class CompiledInstrument:
                 sample_length_m=self.sample_length_m,
             ),
         )
+
+
+def detector_path_linear_attenuation_at_wavelength_m_inv(
+    instrument: InstrumentConfiguration | CompiledInstrument,
+    wavelength_A: float,
+) -> float:
+    """Resolve the declared external-path intensity coefficient for one exact wavelength."""
+
+    if not isinstance(instrument, (InstrumentConfiguration, CompiledInstrument)):
+        raise TypeError("instrument must be InstrumentConfiguration or CompiledInstrument")
+    wavelength = _real_scalar(wavelength_A, "wavelength_A")
+    if wavelength <= 0.0:
+        raise ValueError("wavelength_A must be finite and positive")
+    wavelengths = instrument.detector_path_wavelength_A
+    if not wavelengths:
+        return instrument.detector_path_linear_attenuation_m_inv
+    position = int(np.searchsorted(np.asarray(wavelengths), wavelength))
+    if position >= len(wavelengths) or wavelengths[position] != wavelength:
+        raise ValueError("detector-path attenuation table does not contain the exact wavelength")
+    return instrument.detector_path_linear_attenuation_m_inv_by_wavelength[position]
 
 
 def _rotation_matrix(rotation: AxisRotation) -> NDArray[np.float64]:
@@ -298,4 +409,12 @@ def compile_instrument(configuration: InstrumentConfiguration) -> CompiledInstru
         sample_width_m=configuration.sample_width_m,
         sample_length_m=configuration.sample_length_m,
         film_thickness_A=configuration.film_thickness_A,
+        detector_path_medium_id=configuration.detector_path_medium_id,
+        detector_path_linear_attenuation_m_inv=(
+            configuration.detector_path_linear_attenuation_m_inv
+        ),
+        detector_path_wavelength_A=configuration.detector_path_wavelength_A,
+        detector_path_linear_attenuation_m_inv_by_wavelength=(
+            configuration.detector_path_linear_attenuation_m_inv_by_wavelength
+        ),
     )
