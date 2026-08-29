@@ -2637,6 +2637,49 @@ def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> N
     )
     np.testing.assert_array_equal(actual.caustic, expected.caustic)
 
+    class _CountingStrength:
+        reciprocal_basis_Ainv = averaged.strength_model.reciprocal_basis_Ainv
+        structure_model_revision = averaged.strength_model.structure_model_revision
+
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def evaluate_hkl(self, **kwargs: object) -> np.ndarray:
+            self.call_count += 1
+            return averaged.strength_model.evaluate_hkl(
+                h=kwargs["h"],
+                k=kwargs["k"],
+                L=kwargs["L"],
+                k_norm_Ainv=kwargs["k_norm_Ainv"],
+            )
+
+    wider_mosaic = replace(
+        averaged.mosaic,
+        gaussian_sigma_rad=1.3 * averaged.mosaic.gaussian_sigma_rad,
+        lorentzian_half_width_rad=0.7 * averaged.mosaic.lorentzian_half_width_rad,
+    )
+    counting_strength = _CountingStrength()
+    rebound = response.apply_strength_for_mosaics(
+        counting_strength,
+        (averaged.mosaic, wider_mosaic),
+    )
+    assert counting_strength.call_count == 1
+    rebound_expected = averaged.rebind_physics(
+        mosaic=wider_mosaic
+    ).evaluate_detector_coordinates_all_roots(column_px, row_px)
+    np.testing.assert_allclose(
+        rebound[0].per_rod_density_A2_per_px2,
+        actual.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+    np.testing.assert_allclose(
+        rebound[1].per_rod_density_A2_per_px2,
+        rebound_expected.per_rod_density_A2_per_px2,
+        rtol=4.0e-11,
+        atol=3.0e-24,
+    )
+
     envelope = SampleQIntensityEnvelope(u_radial_A2=0.017, u_normal_A2=0.006)
     separable_response = compile_source_averaged_detector_structure_response(
         column_px,
@@ -2982,6 +3025,7 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
         MosaicProfileDefinition,
         MosaicProfileIdentity,
         MosaicReflectionGroupKey,
+        compile_continuous_mosaic_component_profile_bank,
         evaluate_continuous_mosaic_profiles,
         fit_refined_mosaic_component_profiles,
     )
@@ -3118,6 +3162,71 @@ def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
         execution_device=None,
         observation_revision="generic-pbi2-synthetic-observation.v1",
     )
+    gaussian_widths = np.radians((0.8, 1.0))
+    lorentzian_widths = np.radians((0.4, 0.5))
+    mixed_dataset_definition = replace(
+        definitions[1],
+        identity=replace(
+            definitions[1].identity,
+            dataset_id="generic-pbi2-mosaic-proof-other",
+        ),
+    )
+    with pytest.raises(ValueError, match="only one dataset"):
+        compile_continuous_mosaic_component_profile_bank(
+            detector,
+            angle_frame=angle_frame,
+            definitions=(definitions[0], mixed_dataset_definition),
+            observations=observations,
+            gaussian_sigma_rad=gaussian_widths,
+            lorentzian_half_width_rad=lorentzian_widths,
+            profile_revision="generic-pbi2-mosaic-proof.v1",
+        )
+    stale_two_theta_bounds = np.array(observations.two_theta_bounds_rad, copy=True)
+    stale_two_theta_bounds[0, 0] -= 1.0e-8
+    with pytest.raises(ValueError, match="different layouts"):
+        compile_continuous_mosaic_component_profile_bank(
+            detector,
+            angle_frame=angle_frame,
+            definitions=definitions,
+            observations=replace(
+                observations,
+                two_theta_bounds_rad=stale_two_theta_bounds,
+            ),
+            gaussian_sigma_rad=gaussian_widths,
+            lorentzian_half_width_rad=lorentzian_widths,
+            profile_revision="generic-pbi2-mosaic-proof.v1",
+        )
+    compiled_bank = compile_continuous_mosaic_component_profile_bank(
+        detector,
+        angle_frame=angle_frame,
+        definitions=definitions,
+        observations=observations,
+        gaussian_sigma_rad=gaussian_widths,
+        lorentzian_half_width_rad=lorentzian_widths,
+        profile_revision="generic-pbi2-mosaic-proof.v1",
+    )
+    exact_gaussian = tuple(
+        evaluate_component(float(width), truth_lorentzian, 0.0) for width in gaussian_widths
+    )
+    exact_lorentzian = tuple(
+        evaluate_component(truth_gaussian, float(width), 1.0) for width in lorentzian_widths
+    )
+    for compiled, exact in zip(
+        compiled_bank.gaussian_profiles,
+        exact_gaussian,
+        strict=True,
+    ):
+        np.testing.assert_allclose(compiled.profile.signal, exact.signal, rtol=4.0e-11)
+        np.testing.assert_array_equal(compiled.profile.valid, exact.valid)
+        np.testing.assert_array_equal(compiled.profile.normalization, exact.normalization)
+    for compiled, exact in zip(
+        compiled_bank.lorentzian_profiles,
+        exact_lorentzian,
+        strict=True,
+    ):
+        np.testing.assert_allclose(compiled.profile.signal, exact.signal, rtol=4.0e-11)
+        np.testing.assert_array_equal(compiled.profile.valid, exact.valid)
+        np.testing.assert_array_equal(compiled.profile.normalization, exact.normalization)
     result = fit_refined_mosaic_component_profiles(
         observations,
         evaluate_gaussian_profile=lambda width: evaluate_component(

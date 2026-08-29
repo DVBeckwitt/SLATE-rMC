@@ -101,6 +101,47 @@ def test_short_stack_direct_full_and_reduced_results_agree() -> None:
     np.testing.assert_allclose(finite_intensity_reduced(*arguments), direct, rtol=0.0, atol=limit)
 
 
+def test_large_reduced_batch_matches_equivalent_sub_batches() -> None:
+    event_count = 131_073
+    coordinate = np.linspace(0.0, 1.0, event_count)
+    f_plus = 1.1 + 0.2j + 0.03 * coordinate
+    f_minus = 0.8 - 0.3j - 0.02j * coordinate
+    omega = np.full(event_count, complex(registry_phase(1, 0)))
+    vertical_phase = np.exp(1j * (0.2 + 0.6 * coordinate))
+    law = TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18)
+    initial = InitialPopulation(0.8, 0.2)
+
+    observed = finite_intensity_reduced(
+        6,
+        f_plus,
+        f_minus,
+        omega,
+        vertical_phase,
+        law,
+        initial,
+    )
+    split = event_count // 2
+    expected = np.concatenate(
+        tuple(
+            finite_intensity_reduced(
+                6,
+                f_plus[selection],
+                f_minus[selection],
+                omega[selection],
+                vertical_phase[selection],
+                law,
+                initial,
+            )
+            for selection in (slice(None, split), slice(split, None))
+        )
+    )
+
+    assert observed.shape == (event_count,)
+    assert not observed.flags.writeable
+    assert np.all(observed >= 0.0)
+    np.testing.assert_array_equal(observed, expected)
+
+
 def test_single_layer_uses_only_the_declared_initial_population() -> None:
     f_plus = 1.2 + 0.3j
     f_minus = 0.8 - 0.4j

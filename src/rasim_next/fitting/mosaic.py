@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import ClassVar, Protocol
 
 import numpy as np
@@ -14,9 +14,17 @@ from scipy.optimize import brentq, direct, minimize_scalar
 from painted_ewald.types import Rod
 from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.fitting.geometry import LayerLMarkerObservations
-from rasim_next.geometry.angles import AngleFrame, detector_coordinates_to_angles
+from rasim_next.geometry.angles import (
+    AngleFrame,
+    angles_to_detector_coordinate_area_measure,
+    detector_coordinates_to_angles,
+)
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.measurement import evaluate_continuous_per_rod_angle_signal
+from rasim_next.pipeline.source_averaged_detector import (
+    SourceAveragedDetectorCoordinateIntensity,
+)
+from rasim_next.pipeline.source_averaged_structure import SourceAveragedStructureDetector
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -1042,6 +1050,218 @@ class MosaicComponentProfileBank:
         )
 
 
+def compile_continuous_mosaic_component_profile_bank(
+    detector: SourceAveragedStructureDetector,
+    *,
+    angle_frame: AngleFrame,
+    definitions: tuple[MosaicProfileDefinition, ...],
+    observations: MosaicProfileSet,
+    gaussian_sigma_rad: ArrayLike,
+    lorentzian_half_width_rad: ArrayLike,
+    profile_revision: str,
+) -> MosaicComponentProfileBank:
+    """Compile geometry and structure once, then stream exact mosaic widths.
+
+    The inverse Ewald roots, source/optical transfer, and structure strength are
+    independent of mosaic width. This compiler evaluates those terms once and
+    applies the authoritative wrapped Gaussian or Lorentzian line density for
+    each requested width before reducing directly into finite angle bins.
+    """
+
+    if not isinstance(detector, SourceAveragedStructureDetector):
+        raise TypeError("detector must be a SourceAveragedStructureDetector")
+    if not isinstance(angle_frame, AngleFrame):
+        raise TypeError("angle_frame must be an AngleFrame")
+    frozen = tuple(definitions)
+    if not frozen or any(not isinstance(item, MosaicProfileDefinition) for item in frozen):
+        raise ValueError("definitions must contain MosaicProfileDefinition values")
+    if len({item.identity for item in frozen}) != len(frozen):
+        raise ValueError("mosaic profile definitions must have unique identities")
+    if len({item.identity.dataset_id for item in frozen}) != 1:
+        raise ValueError("one continuous profile compilation may contain only one dataset")
+    if len({item.identity.incidence_angle_rad for item in frozen}) != 1:
+        raise ValueError("one dataset must contain exactly one incidence angle")
+    if not isinstance(observations, MosaicProfileSet):
+        raise TypeError("observations must be a MosaicProfileSet")
+    if not isinstance(profile_revision, str) or not profile_revision:
+        raise ValueError("profile_revision must be a nonempty string")
+    if observations.profile_revision != profile_revision:
+        raise ValueError("observations and requested profile revision disagree")
+    expected_identities = tuple(item.identity for item in frozen)
+    expected_frame_revisions = (angle_frame.revision,) * len(frozen)
+    if (
+        observations.identities != expected_identities
+        or observations.angle_frame_revisions != expected_frame_revisions
+    ):
+        raise ValueError("observations and profile definitions have different provenance")
+    definition_catalog_revisions = {item.identity.group_key.rod_catalog_revision for item in frozen}
+    if definition_catalog_revisions != {detector.rod_catalog_revision}:
+        raise ValueError("profile definitions do not match the detector rod catalog revision")
+    gaussian_widths = _validated_widths(gaussian_sigma_rad, "gaussian_sigma_rad")
+    lorentzian_widths = _validated_widths(
+        lorentzian_half_width_rad,
+        "lorentzian_half_width_rad",
+    )
+    layouts = {
+        (item.phi_bin_count, item.two_theta_gauss_order, item.phi_gauss_order) for item in frozen
+    }
+    if len(layouts) != 1:
+        raise ValueError("compiled component profiles require one shared quadrature layout")
+
+    requested_hk = {
+        rod_hk for definition in frozen for rod_hk in definition.identity.group_key.member_rod_hk
+    }
+    configured_by_hk = {(rod.h, rod.k): rod for rod in detector.rods}
+    missing_hk = requested_hk - configured_by_hk.keys()
+    if missing_hk:
+        raise ValueError(f"profile references unconfigured rods {sorted(missing_hk)}")
+    active = detector.restrict_rods(
+        tuple(rod for rod in detector.rods if (rod.h, rod.k) in requested_hk)
+    )
+
+    (
+        two_theta,
+        phi,
+        integration_weight,
+        included_node,
+        phi_bin_edges,
+        two_theta_bounds,
+    ) = _mosaic_profile_quadrature(frozen)
+    shape = two_theta.shape
+    included_flat = np.flatnonzero(included_node.ravel())
+    coordinate_measure = angles_to_detector_coordinate_area_measure(
+        two_theta.ravel()[included_flat],
+        phi.ravel()[included_flat],
+        instrument=active.instrument,
+        angle_frame=angle_frame,
+    )
+    coordinates = coordinate_measure.coordinates
+    compact_normalization = coordinate_measure.detector_area_jacobian_px2_per_rad2
+    compact_valid = np.flatnonzero(coordinates.valid & (compact_normalization > 0.0))
+    flat_valid = included_flat[compact_valid]
+    normalization_density = np.zeros(shape, dtype=np.float64)
+    normalization_density.ravel()[flat_valid] = compact_normalization[compact_valid]
+    normalization = np.sum(
+        normalization_density * integration_weight,
+        axis=(2, 3),
+        dtype=np.float64,
+    )
+    valid = normalization > 0.0
+    if (
+        not np.array_equal(observations.phi_bin_edges_rad, phi_bin_edges)
+        or not np.array_equal(observations.two_theta_bounds_rad, two_theta_bounds)
+        or not np.array_equal(observations.valid, valid)
+    ):
+        raise ValueError("observations and compiled profile geometry have different layouts")
+    if observations.source_revision is not None and (
+        observations.source_revision != active.source_revision
+        or observations.execution_backend != "numpy_cpu_sparse_source_averaged.v1"
+        or observations.execution_device is not None
+        or not np.array_equal(observations.normalization, normalization)
+    ):
+        raise ValueError("observations and detector have different source provenance")
+    response = active.compile_structure_response(
+        coordinates.column_px[compact_valid],
+        coordinates.row_px[compact_valid],
+    )
+
+    base_mosaic = active.mosaic
+    gaussian_mosaics = tuple(
+        replace(
+            base_mosaic,
+            gaussian_sigma_rad=float(width),
+            lorentzian_probability=0.0,
+        )
+        for width in gaussian_widths
+    )
+    lorentzian_mosaics = tuple(
+        replace(
+            base_mosaic,
+            lorentzian_half_width_rad=float(width),
+            lorentzian_probability=1.0,
+        )
+        for width in lorentzian_widths
+    )
+    evaluated = response.apply_strength_for_mosaics(
+        active.strength_model,
+        gaussian_mosaics + lorentzian_mosaics,
+    )
+
+    profile_at_node = np.broadcast_to(
+        np.arange(len(frozen), dtype=np.int64)[:, None, None, None],
+        shape,
+    ).ravel()[flat_valid]
+    rod_lookup = {(rod.h, rod.k): index for index, rod in enumerate(active.rods)}
+
+    def reduce_profile(result: SourceAveragedDetectorCoordinateIntensity) -> MosaicProfileSet:
+        per_rod = np.asarray(
+            result.per_rod_density_A2_per_px2,
+            dtype=np.float64,
+        )
+        expected_shape = (compact_valid.size, len(active.rods))
+        if per_rod.shape != expected_shape:
+            raise RuntimeError("compiled mosaic response changed coordinate or rod axes")
+        signal_density = np.zeros(shape, dtype=np.float64)
+        flat_signal_density = signal_density.ravel()
+        for profile_index, definition in enumerate(frozen):
+            rod_indices = np.asarray(
+                [rod_lookup[rod_hk] for rod_hk in definition.identity.group_key.member_rod_hk],
+                dtype=np.int64,
+            )
+            selected_rows = np.flatnonzero(profile_at_node == profile_index)
+            flat_signal_density[flat_valid[selected_rows]] = np.sum(
+                per_rod[np.ix_(selected_rows, rod_indices)]
+                * compact_normalization[compact_valid[selected_rows], None],
+                axis=1,
+                dtype=np.float64,
+            )
+        signal = np.sum(
+            signal_density * integration_weight,
+            axis=(2, 3),
+            dtype=np.float64,
+        )
+        signal[~valid] = 0.0
+        return MosaicProfileSet(
+            identities=tuple(item.identity for item in frozen),
+            signal=signal,
+            normalization=normalization,
+            valid=valid,
+            profile_revision=profile_revision,
+            phi_bin_edges_rad=phi_bin_edges,
+            two_theta_bounds_rad=two_theta_bounds,
+            angle_frame_revisions=(angle_frame.revision,) * len(frozen),
+            source_revision=active.source_revision,
+            execution_backend=result.execution_backend,
+            execution_device=result.execution_device,
+        )
+
+    profiles = tuple(reduce_profile(result) for result in evaluated)
+    gaussian_count = gaussian_widths.size
+    gaussian_profiles = tuple(
+        MosaicComponentProfile("gaussian", float(width), profile)
+        for width, profile in zip(
+            gaussian_widths,
+            profiles[:gaussian_count],
+            strict=True,
+        )
+    )
+    lorentzian_profiles = tuple(
+        MosaicComponentProfile("lorentzian", float(width), profile)
+        for width, profile in zip(
+            lorentzian_widths,
+            profiles[gaussian_count:],
+            strict=True,
+        )
+    )
+    return MosaicComponentProfileBank(
+        observations=observations,
+        gaussian_sigma_rad=gaussian_widths,
+        gaussian_profiles=gaussian_profiles,
+        lorentzian_half_width_rad=lorentzian_widths,
+        lorentzian_profiles=lorentzian_profiles,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MosaicCompetingParameterSet:
     """One exact physical parameter set in a globally aliased mosaic solution."""
@@ -1483,13 +1703,19 @@ def _best_eta(
     cache: dict[float, tuple[FloatArray, float]] = {}
 
     def sigmoid(value: float | FloatArray) -> float | FloatArray:
+        if np.isscalar(value):
+            supplied_scalar = float(value)
+            if supplied_scalar >= 0.0:
+                return 1.0 / (1.0 + math.exp(-supplied_scalar))
+            exponential_scalar = math.exp(supplied_scalar)
+            return exponential_scalar / (1.0 + exponential_scalar)
         supplied = np.asarray(value, dtype=np.float64)
         positive = supplied >= 0.0
         result = np.empty(supplied.shape, dtype=np.float64)
         result[positive] = 1.0 / (1.0 + np.exp(-supplied[positive]))
         exponential = np.exp(supplied[~positive])
         result[~positive] = exponential / (1.0 + exponential)
-        return float(result) if result.ndim == 0 else result
+        return result
 
     def physical_eta(centered_logit: float) -> float:
         return float(sigmoid(centered_logit - log_component_ratio))
@@ -1548,29 +1774,42 @@ def _best_eta(
     def scalar_coefficient_derivative(centered_logit: float) -> float:
         intrinsic_probability = float(sigmoid(centered_logit))
         gaussian_probability = 1.0 - intrinsic_probability
-        numerator = np.maximum(
-            0.0,
-            gaussian_probability * gaussian_observed + intrinsic_probability * lorentzian_observed,
-        )
-        denominator = (
-            gaussian_probability * gaussian_probability * gaussian_gaussian
-            + 2.0 * gaussian_probability * intrinsic_probability * gaussian_lorentzian
-            + intrinsic_probability * intrinsic_probability * lorentzian_lorentzian
-        )
-        if np.any(denominator <= np.finfo(np.float64).tiny):
-            return math.nan
-        numerator_derivative = lorentzian_observed - gaussian_observed
-        denominator_derivative = 2.0 * (
-            gaussian_lorentzian
-            - gaussian_gaussian
-            + intrinsic_probability
-            * (gaussian_gaussian - 2.0 * gaussian_lorentzian + lorentzian_lorentzian)
-        )
-        derivative_in_probability = -np.sum(
-            numerator
-            * (2.0 * numerator_derivative * denominator - numerator * denominator_derivative)
-            / (denominator * denominator)
-        )
+        derivative_in_probability = 0.0
+        energy_floor = np.finfo(np.float64).tiny
+        for profile_index in range(profile_count):
+            gaussian_observed_value = float(gaussian_observed[profile_index])
+            lorentzian_observed_value = float(lorentzian_observed[profile_index])
+            gaussian_gaussian_value = float(gaussian_gaussian[profile_index])
+            gaussian_lorentzian_value = float(gaussian_lorentzian[profile_index])
+            lorentzian_lorentzian_value = float(lorentzian_lorentzian[profile_index])
+            numerator = max(
+                0.0,
+                gaussian_probability * gaussian_observed_value
+                + intrinsic_probability * lorentzian_observed_value,
+            )
+            denominator = (
+                gaussian_probability * gaussian_probability * gaussian_gaussian_value
+                + 2.0 * gaussian_probability * intrinsic_probability * gaussian_lorentzian_value
+                + intrinsic_probability * intrinsic_probability * lorentzian_lorentzian_value
+            )
+            if denominator <= energy_floor:
+                return math.nan
+            numerator_derivative = lorentzian_observed_value - gaussian_observed_value
+            denominator_derivative = 2.0 * (
+                gaussian_lorentzian_value
+                - gaussian_gaussian_value
+                + intrinsic_probability
+                * (
+                    gaussian_gaussian_value
+                    - 2.0 * gaussian_lorentzian_value
+                    + lorentzian_lorentzian_value
+                )
+            )
+            derivative_in_probability -= (
+                numerator
+                * (2.0 * numerator_derivative * denominator - numerator * denominator_derivative)
+                / (denominator * denominator)
+            )
         return float(
             intrinsic_probability * (1.0 - intrinsic_probability) * derivative_in_probability
         )

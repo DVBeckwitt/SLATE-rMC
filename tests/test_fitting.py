@@ -5213,6 +5213,33 @@ def test_pbi2_stacking_profile_response_matches_direct_enumeration_and_rejects_m
         rtol=2.0e-14,
         atol=1.0e-20,
     )
+
+    pure_two_h = provider.rebind_domain_fraction((1.0, 0.0, 0.0, 0.0, 0.0))
+    pure_two_h_response = pure_two_h.evaluate_hkl(
+        h=signed_hk[:2, 0],
+        k=signed_hk[:2, 1],
+        L=ell[:2],
+        k_norm_Ainv=2.0 * np.pi / wavelength[:2],
+    )
+    np.testing.assert_allclose(
+        pure_two_h_response,
+        response.component_response_A2[:2, 0],
+        rtol=2.0e-14,
+        atol=1.0e-20,
+    )
+    sparse_fraction = np.asarray((0.4, 0.0, 0.0, 0.0, 0.6))
+    sparse_response = provider.rebind_domain_fraction(sparse_fraction).evaluate_hkl(
+        h=signed_hk[:4, 0],
+        k=signed_hk[:4, 1],
+        L=ell[:4],
+        k_norm_Ainv=2.0 * np.pi / wavelength[:4],
+    )
+    np.testing.assert_allclose(
+        sparse_response,
+        response.component_response_A2[:4] @ sparse_fraction,
+        rtol=2.0e-14,
+        atol=1.0e-20,
+    )
     np.testing.assert_allclose(
         np.ptp(response.component_response_A2[:2], axis=1),
         0.0,

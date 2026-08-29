@@ -26,6 +26,8 @@ from rasim_next.stacking.transition import (
     registry_phase,
 )
 
+_REDUCED_MOMENT_EVENT_CHUNK_SIZE = 131_072
+
 
 def _layers(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or int(value) < 1:
@@ -72,65 +74,58 @@ def _reduced_moment_intensity(
     law: TransitionLaw,
     initial: InitialPopulation,
 ) -> NDArray[np.float64]:
-    """Propagate exact orientation-conditioned amplitude moments in a registry gauge."""
+    """Propagate exact unnormalized amplitude moments in a registry gauge."""
 
     amplitudes = np.stack((f_plus, f_minus), axis=-1)
     probability = initial.as_array().copy()
-    mean = np.array(amplitudes, dtype=np.complex128, copy=True, order="C")
-    variance = np.zeros(amplitudes.shape, dtype=np.float64)
+    first_moment = probability * amplitudes
+    second_moment = probability * np.abs(amplitudes) ** 2
     inverse = np.conj(omega)
-    edges = (
-        (0, 0, law.a, 1.0 + 0.0j),
-        (0, 0, law.b_plus, inverse),
-        (0, 0, law.b_minus, omega),
-        (0, 1, law.d_plus, inverse),
-        (0, 1, law.d_minus, omega),
-        (1, 1, law.a, 1.0 + 0.0j),
-        (1, 1, law.b_plus, inverse),
-        (1, 1, law.b_minus, omega),
-        (1, 0, law.d_plus, omega),
-        (1, 0, law.d_minus, inverse),
-    )
+    stay_gauge = law.a + law.b_plus * inverse + law.b_minus * omega
+    plus_to_minus_gauge = law.d_plus * inverse + law.d_minus * omega
+    minus_to_plus_gauge = law.d_plus * omega + law.d_minus * inverse
     phase_power = np.ones_like(vertical_phase)
     orientation_transition = orientation_transition_matrix(law)
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+    with np.errstate(over="ignore", invalid="ignore"):
         for _ in range(1, layers):
             phase_power *= vertical_phase
             contribution = phase_power[..., None] * amplitudes
             next_probability = probability @ orientation_transition
-            next_mean = np.zeros_like(mean)
-            for source, target, transition_probability, registry_gauge in edges:
-                weight = probability[source] * transition_probability
-                if weight:
-                    next_mean[..., target] += weight * (
-                        registry_gauge * mean[..., source] + contribution[..., target]
-                    )
-            next_mean = np.divide(
-                next_mean,
-                next_probability,
-                out=np.zeros_like(next_mean),
-                where=next_probability > 0.0,
+            gauged_first_moment = np.empty_like(first_moment)
+            gauged_first_moment[..., 0] = (
+                stay_gauge * first_moment[..., 0] + minus_to_plus_gauge * first_moment[..., 1]
             )
-            next_variance = np.zeros_like(variance)
-            for source, target, transition_probability, registry_gauge in edges:
-                weight = probability[source] * transition_probability
-                if weight:
-                    candidate_mean = registry_gauge * mean[..., source] + contribution[..., target]
-                    next_variance[..., target] += weight * (
-                        variance[..., source] + np.abs(candidate_mean - next_mean[..., target]) ** 2
-                    )
-            variance = np.divide(
-                next_variance,
-                next_probability,
-                out=np.zeros_like(next_variance),
-                where=next_probability > 0.0,
+            gauged_first_moment[..., 1] = (
+                plus_to_minus_gauge * first_moment[..., 0] + stay_gauge * first_moment[..., 1]
             )
+            next_second_moment = np.empty_like(second_moment)
+            next_second_moment[..., 0] = (
+                orientation_transition[0, 0] * second_moment[..., 0]
+                + orientation_transition[1, 0] * second_moment[..., 1]
+            )
+            next_second_moment[..., 1] = (
+                orientation_transition[0, 1] * second_moment[..., 0]
+                + orientation_transition[1, 1] * second_moment[..., 1]
+            )
+            next_second_moment += next_probability * np.abs(contribution) ** 2 + 2.0 * np.real(
+                np.conj(gauged_first_moment) * contribution
+            )
+            first_moment = gauged_first_moment + next_probability * contribution
+            second_moment = next_second_moment
             probability = next_probability
-            mean = next_mean
-        intensity = np.sum(
-            probability * (variance + np.abs(mean) ** 2),
-            axis=-1,
+        intensity = np.sum(second_moment, axis=-1)
+    roundoff_scale = float(layers) ** 2 * np.maximum(np.abs(f_plus) ** 2, np.abs(f_minus) ** 2)
+    roundoff_tolerance = (
+        256.0
+        * np.finfo(np.float64).eps
+        * np.maximum(
+            1.0,
+            roundoff_scale,
         )
+    )
+    if np.any(intensity < -roundoff_tolerance):
+        raise ValueError("finite reduced moment intensity is negative beyond roundoff")
+    intensity = np.maximum(intensity, 0.0)
     return _readonly_nonnegative(intensity, "finite reduced moment intensity")
 
 
@@ -197,6 +192,27 @@ def finite_intensity_reduced(
     f_plus_array, f_minus_array, omega_array, phase_array = _broadcast_inputs(
         f_plus, f_minus, omega, vertical_phase
     )
+    if f_plus_array.size > _REDUCED_MOMENT_EVENT_CHUNK_SIZE:
+        shape = f_plus_array.shape
+        result = np.empty(f_plus_array.size, dtype=np.float64)
+        flattened = tuple(
+            np.ravel(value) for value in (f_plus_array, f_minus_array, omega_array, phase_array)
+        )
+        for start in range(0, result.size, _REDUCED_MOMENT_EVENT_CHUNK_SIZE):
+            stop = min(start + _REDUCED_MOMENT_EVENT_CHUNK_SIZE, result.size)
+            result[start:stop] = _reduced_moment_intensity(
+                count,
+                flattened[0][start:stop],
+                flattened[1][start:stop],
+                flattened[2][start:stop],
+                flattened[3][start:stop],
+                law,
+                initial,
+            )
+        return _readonly_nonnegative(
+            result.reshape(shape),
+            "finite reduced moment intensity",
+        )
     return _reduced_moment_intensity(
         count,
         f_plus_array,

@@ -15,6 +15,7 @@ from painted_ewald import Rod
 from painted_ewald.validation import reject_complex
 from rasim_next.core.contracts import (
     EventIntensityNormalization,
+    EventIntensityResult,
     LayerNormalQBatch,
     RodQueryBatch,
     canonical_revision_sha256,
@@ -565,9 +566,12 @@ class Pbi2ParentMixtureStrength:
             raise ValueError("h and k must fit signed 32-bit integers")
         if ell.size == 0:
             return np.empty(ell.shape, dtype=np.float64)
-        response = compile_pbi2_stacking_profile_response(
+        parents = _parent_populations()
+        active_indices = tuple(
+            int(component_index) for component_index in np.flatnonzero(self.domain_fraction > 0.0)
+        )
+        components, _, _, _, layer_count = _compile_pbi2_population_profile_components(
             self.crystal,
-            self.source_cif_sha256,
             signed_hk=np.column_stack(
                 (
                     h_value.ravel().astype(np.int32),
@@ -577,11 +581,29 @@ class Pbi2ParentMixtureStrength:
             l_coordinate=ell.ravel(),
             wavelength_A=(2.0 * pi / k_norm).ravel(),
             layers=self.layers,
+            populations=tuple(parents[component_index] for component_index in active_indices),
         )
-        if response.fixed_model_revision != self.fixed_parent_model_revision:
+        if (
+            _pbi2_fixed_parent_model_revision(
+                self.crystal,
+                self.source_cif_sha256,
+                layer_count,
+            )
+            != self.fixed_parent_model_revision
+        ):
             raise RuntimeError("PbI2 parent physics changed while evaluating a bound provider")
+        component_ids = tuple(component.model_component_id for component in components)
+        expected_ids = tuple(STACKING_COMPONENT_IDS[index] for index in active_indices)
+        if component_ids != expected_ids:
+            raise RuntimeError(
+                "finite stacking components did not preserve the active parent order"
+            )
+        active_fraction = self.domain_fraction[np.asarray(active_indices)]
+        component_response_A2 = np.column_stack(
+            tuple(component.scattering_strength_A2 for component in components)
+        )
         return np.asarray(
-            (response.component_response_A2 @ self.domain_fraction).reshape(ell.shape),
+            (component_response_A2 @ active_fraction).reshape(ell.shape),
             dtype=np.float64,
         )
 
@@ -696,25 +718,19 @@ class Pbi2ParentLogRatioParameterization:
         return self.reference_strength.rebind_domain_fraction(fraction)
 
 
-def compile_pbi2_stacking_profile_response(
+def _compile_pbi2_population_profile_components(
     crystal: CrystalStructure,
-    crystal_revision: str,
     *,
     signed_hk: ArrayLike,
     l_coordinate: ArrayLike,
     wavelength_A: ArrayLike,
     layers: int,
-) -> CompiledStackingResponse:
-    """Evaluate the five fixed PbI2 parents directly at signed-rod/L points."""
+    populations: tuple[StackingPopulation, ...],
+) -> tuple[tuple[EventIntensityResult, ...], IntArray, FloatArray, FloatArray, int]:
+    """Evaluate selected fixed PbI2 parents through the shared finite-stack physics."""
 
     if not isinstance(crystal, CrystalStructure):
         raise TypeError("crystal must be CrystalStructure")
-    if (
-        not isinstance(crystal_revision, str)
-        or len(crystal_revision) != 64
-        or any(character not in "0123456789abcdef" for character in crystal_revision)
-    ):
-        raise ValueError("crystal_revision must be a lowercase SHA-256 digest")
     layer_count = _positive_integer(layers, "layers")
     hk = _readonly_int(signed_hk, (None, 2), "signed_hk")
     if hk.shape[0] == 0:
@@ -755,7 +771,7 @@ def compile_pbi2_stacking_profile_response(
     components = finite_population_event_intensity(
         query,
         amplitudes,
-        _parent_populations(),
+        populations,
         layer_normal_q=LayerNormalQBatch(
             event_id=event_id,
             rod_id=query.rod_id,
@@ -767,6 +783,34 @@ def compile_pbi2_stacking_profile_response(
         population_group_id="pbi2-stacking-parents",
         normalization=EventIntensityNormalization.FINITE_PER_LAYER,
         phase_model=RegistryPhaseModel.FORWARD_H_PLUS_2K,
+    )
+    return components, hk, ell, wavelength, layer_count
+
+
+def compile_pbi2_stacking_profile_response(
+    crystal: CrystalStructure,
+    crystal_revision: str,
+    *,
+    signed_hk: ArrayLike,
+    l_coordinate: ArrayLike,
+    wavelength_A: ArrayLike,
+    layers: int,
+) -> CompiledStackingResponse:
+    """Evaluate the five fixed PbI2 parents directly at signed-rod/L points."""
+
+    if (
+        not isinstance(crystal_revision, str)
+        or len(crystal_revision) != 64
+        or any(character not in "0123456789abcdef" for character in crystal_revision)
+    ):
+        raise ValueError("crystal_revision must be a lowercase SHA-256 digest")
+    components, hk, ell, wavelength, layer_count = _compile_pbi2_population_profile_components(
+        crystal,
+        signed_hk=signed_hk,
+        l_coordinate=l_coordinate,
+        wavelength_A=wavelength_A,
+        layers=layers,
+        populations=_parent_populations(),
     )
     if tuple(value.model_component_id for value in components) != STACKING_COMPONENT_IDS:
         raise RuntimeError("finite stacking components did not preserve canonical order")

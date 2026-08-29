@@ -643,6 +643,10 @@ class DetectorStructureResponse:
     term_coordinate_index: IntArray
     term_rod_index: IntArray
     term_L: FloatArray
+    term_alpha_rad: FloatArray
+    term_q_radial_squared_Ainv2: FloatArray
+    term_q_normal_squared_Ainv2: FloatArray
+    term_fixed_density_per_mosaic_density_per_strength_px2_inv: FloatArray
     term_fixed_density_per_strength_px2_inv: FloatArray
     term_root_sign: NDArray[np.int8]
     per_rod_caustic: BoolArray
@@ -668,6 +672,25 @@ class DetectorStructureResponse:
         )
         term_rod = np.array(self.term_rod_index, dtype=np.int64, copy=True, order="C")
         term_l = np.array(self.term_L, dtype=np.float64, copy=True, order="C")
+        term_alpha = np.array(self.term_alpha_rad, dtype=np.float64, copy=True, order="C")
+        term_q_radial_squared = np.array(
+            self.term_q_radial_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        term_q_normal_squared = np.array(
+            self.term_q_normal_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        term_fixed_per_mosaic = np.array(
+            self.term_fixed_density_per_mosaic_density_per_strength_px2_inv,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
         term_fixed = np.array(
             self.term_fixed_density_per_strength_px2_inv,
             dtype=np.float64,
@@ -680,6 +703,10 @@ class DetectorStructureResponse:
             term_coordinate.ndim != 1
             or term_rod.shape != term_shape
             or term_l.shape != term_shape
+            or term_alpha.shape != term_shape
+            or term_q_radial_squared.shape != term_shape
+            or term_q_normal_squared.shape != term_shape
+            or term_fixed_per_mosaic.shape != term_shape
             or term_fixed.shape != term_shape
             or root_sign.shape != term_shape
         ):
@@ -692,6 +719,14 @@ class DetectorStructureResponse:
             raise ValueError("structure-response terms must reference valid coordinates and rods")
         if (
             not np.all(np.isfinite(term_l))
+            or not np.all(np.isfinite(term_alpha))
+            or np.any((term_alpha < 0.0) | (term_alpha > np.pi))
+            or not np.all(np.isfinite(term_q_radial_squared))
+            or np.any(term_q_radial_squared < 0.0)
+            or not np.all(np.isfinite(term_q_normal_squared))
+            or np.any(term_q_normal_squared < 0.0)
+            or not np.all(np.isfinite(term_fixed_per_mosaic))
+            or np.any(term_fixed_per_mosaic < 0.0)
             or not np.all(np.isfinite(term_fixed))
             or np.any(term_fixed < 0.0)
             or np.any(~np.isin(root_sign, (-1, 0, 1)))
@@ -712,6 +747,10 @@ class DetectorStructureResponse:
             term_coordinate,
             term_rod,
             term_l,
+            term_alpha,
+            term_q_radial_squared,
+            term_q_normal_squared,
+            term_fixed_per_mosaic,
             term_fixed,
             root_sign,
             caustic,
@@ -722,6 +761,14 @@ class DetectorStructureResponse:
         object.__setattr__(self, "term_coordinate_index", term_coordinate)
         object.__setattr__(self, "term_rod_index", term_rod)
         object.__setattr__(self, "term_L", term_l)
+        object.__setattr__(self, "term_alpha_rad", term_alpha)
+        object.__setattr__(self, "term_q_radial_squared_Ainv2", term_q_radial_squared)
+        object.__setattr__(self, "term_q_normal_squared_Ainv2", term_q_normal_squared)
+        object.__setattr__(
+            self,
+            "term_fixed_density_per_mosaic_density_per_strength_px2_inv",
+            term_fixed_per_mosaic,
+        )
         object.__setattr__(self, "term_fixed_density_per_strength_px2_inv", term_fixed)
         object.__setattr__(self, "term_root_sign", root_sign)
         object.__setattr__(self, "per_rod_caustic", caustic)
@@ -2024,7 +2071,17 @@ class DetectorEwaldMeasure:
         source_phase_weight: float,
         rod: Rod,
         branch: int,
-        response_blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]]
+        response_blocks: list[
+            tuple[
+                IntArray,
+                IntArray,
+                FloatArray,
+                FloatArray,
+                FloatArray,
+                FloatArray,
+                NDArray[np.int8],
+            ]
+        ]
         | None = None,
         rod_index: int | None = None,
         scattering_polarization: FloatArray | None = None,
@@ -2176,9 +2233,8 @@ class DetectorEwaldMeasure:
                         beta_rad=beta[regular],
                         u_Ainv=u_value[regular],
                     )
-                    fixed_density = (
-                        mosaic_density
-                        * rod.population
+                    fixed_density_per_mosaic = (
+                        rod.population
                         * area_jacobian[regular]
                         * optical[regular]
                         * event_envelope[regular]
@@ -2186,11 +2242,18 @@ class DetectorEwaldMeasure:
                         * source_phase_weight
                         / jacobian[regular]
                     )
+                    fixed_density = mosaic_density * fixed_density_per_mosaic
                     response_blocks.append(
                         (
                             np.array(selected_rows, dtype=np.int64, copy=True),
                             np.full(selected_rows.size, int(rod_index), dtype=np.int64),
                             np.array(ell, dtype=np.float64, copy=True),
+                            np.array(alpha[regular], dtype=np.float64, copy=True),
+                            np.array(
+                                fixed_density_per_mosaic,
+                                dtype=np.float64,
+                                copy=True,
+                            ),
                             np.array(fixed_density, dtype=np.float64, copy=True),
                             np.sign(root_sign[regular]).astype(np.int8, copy=False),
                         )
@@ -2438,7 +2501,17 @@ class DetectorEwaldMeasure:
         )
         coordinate_count = geometry.column_px.size
         caustic = np.zeros((coordinate_count, len(selected)), dtype=np.bool_)
-        blocks: list[tuple[IntArray, IntArray, FloatArray, FloatArray, NDArray[np.int8]]] = []
+        blocks: list[
+            tuple[
+                IntArray,
+                IntArray,
+                FloatArray,
+                FloatArray,
+                FloatArray,
+                FloatArray,
+                NDArray[np.int8],
+            ]
+        ] = []
         for response_rod_index, rod in enumerate(selected):
             _, _, rod_caustic = self._inverse_rod_density(
                 q_sample_Ainv=geometry.q_sample_Ainv,
@@ -2459,20 +2532,30 @@ class DetectorEwaldMeasure:
             term_coordinate = np.concatenate([block[0] for block in blocks])
             term_rod = np.concatenate([block[1] for block in blocks])
             term_l = np.concatenate([block[2] for block in blocks])
-            term_fixed = np.concatenate([block[3] for block in blocks])
-            term_root_sign = np.concatenate([block[4] for block in blocks])
-            positive = term_fixed > 0.0
+            term_alpha = np.concatenate([block[3] for block in blocks])
+            term_fixed_per_mosaic = np.concatenate([block[4] for block in blocks])
+            term_fixed = np.concatenate([block[5] for block in blocks])
+            term_root_sign = np.concatenate([block[6] for block in blocks])
+            positive = term_fixed_per_mosaic > 0.0
             term_coordinate = term_coordinate[positive]
             term_rod = term_rod[positive]
             term_l = term_l[positive]
+            term_alpha = term_alpha[positive]
+            term_fixed_per_mosaic = term_fixed_per_mosaic[positive]
             term_fixed = term_fixed[positive]
             term_root_sign = term_root_sign[positive]
         else:
             term_coordinate = np.empty(0, dtype=np.int64)
             term_rod = np.empty(0, dtype=np.int64)
             term_l = np.empty(0, dtype=np.float64)
+            term_alpha = np.empty(0, dtype=np.float64)
+            term_fixed_per_mosaic = np.empty(0, dtype=np.float64)
             term_fixed = np.empty(0, dtype=np.float64)
             term_root_sign = np.empty(0, dtype=np.int8)
+
+        term_q_sample = geometry.q_sample_Ainv.reshape(-1, 3)[term_coordinate]
+        term_q_radial_squared = np.sum(term_q_sample[:, :2] ** 2, axis=1, dtype=np.float64)
+        term_q_normal_squared = term_q_sample[:, 2] ** 2
 
         m0_rod_index = np.asarray(
             [rod_index for rod_index, rod in enumerate(selected) if rod.h == 0 and rod.k == 0],
@@ -2494,6 +2577,10 @@ class DetectorEwaldMeasure:
             term_coordinate_index=term_coordinate,
             term_rod_index=term_rod,
             term_L=term_l,
+            term_alpha_rad=term_alpha,
+            term_q_radial_squared_Ainv2=term_q_radial_squared,
+            term_q_normal_squared_Ainv2=term_q_normal_squared,
+            term_fixed_density_per_mosaic_density_per_strength_px2_inv=(term_fixed_per_mosaic),
             term_fixed_density_per_strength_px2_inv=term_fixed,
             term_root_sign=term_root_sign,
             per_rod_caustic=caustic,

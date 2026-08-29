@@ -14,6 +14,7 @@ from painted_ewald import (
     MosaicBraggSpace,
     MosaicParameters,
     Rod,
+    wrapped_mosaic_line_density_rad_inv,
 )
 from painted_ewald.validation import positive_integer, reject_complex
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
@@ -78,9 +79,11 @@ class SourceAveragedDetectorStructureResponse:
     term_rod_index: NDArray[np.int64]
     term_source_state_index: NDArray[np.int64]
     term_L: FloatArray
+    term_alpha_rad: FloatArray
     term_k_norm_Ainv: FloatArray
     term_q_radial_squared_Ainv2: FloatArray
     term_q_normal_squared_Ainv2: FloatArray
+    term_fixed_density_per_mosaic_density_per_strength_px2_inv: FloatArray
     term_fixed_density_per_strength_px2_inv: FloatArray
     term_root_sign: NDArray[np.int8]
     source_state_k_norm_Ainv: FloatArray
@@ -144,6 +147,7 @@ class SourceAveragedDetectorStructureResponse:
             order="C",
         )
         term_l = np.array(self.term_L, dtype=np.float64, copy=True, order="C")
+        term_alpha = np.array(self.term_alpha_rad, dtype=np.float64, copy=True, order="C")
         term_k = np.array(self.term_k_norm_Ainv, dtype=np.float64, copy=True, order="C")
         term_q_radial_squared = np.array(
             self.term_q_radial_squared_Ainv2,
@@ -153,6 +157,12 @@ class SourceAveragedDetectorStructureResponse:
         )
         term_q_normal_squared = np.array(
             self.term_q_normal_squared_Ainv2,
+            dtype=np.float64,
+            copy=True,
+            order="C",
+        )
+        term_fixed_per_mosaic = np.array(
+            self.term_fixed_density_per_mosaic_density_per_strength_px2_inv,
             dtype=np.float64,
             copy=True,
             order="C",
@@ -170,9 +180,11 @@ class SourceAveragedDetectorStructureResponse:
             or term_rod.shape != term_shape
             or term_source.shape != term_shape
             or term_l.shape != term_shape
+            or term_alpha.shape != term_shape
             or term_k.shape != term_shape
             or term_q_radial_squared.shape != term_shape
             or term_q_normal_squared.shape != term_shape
+            or term_fixed_per_mosaic.shape != term_shape
             or term_fixed.shape != term_shape
             or term_root.shape != term_shape
         ):
@@ -195,12 +207,16 @@ class SourceAveragedDetectorStructureResponse:
             or np.any((term_rod < 0) | (term_rod >= len(rods)))
             or np.any((term_source < 0) | (term_source >= state_count))
             or np.any(~np.isfinite(term_l))
+            or np.any(~np.isfinite(term_alpha))
+            or np.any((term_alpha < 0.0) | (term_alpha > np.pi))
             or np.any(~np.isfinite(term_k))
             or np.any(term_k <= 0.0)
             or np.any(~np.isfinite(term_q_radial_squared))
             or np.any(term_q_radial_squared < 0.0)
             or np.any(~np.isfinite(term_q_normal_squared))
             or np.any(term_q_normal_squared < 0.0)
+            or np.any(~np.isfinite(term_fixed_per_mosaic))
+            or np.any(term_fixed_per_mosaic < 0.0)
             or np.any(~np.isfinite(term_fixed))
             or np.any(term_fixed < 0.0)
             or np.any(~np.isin(term_root, (-1, 0, 1)))
@@ -263,7 +279,7 @@ class SourceAveragedDetectorStructureResponse:
             raise ValueError("a 00L support gap requires the (0, 0) rod")
 
         response_revision = canonical_revision_sha256(
-            ("definition_id", "source_averaged_sparse_structure_response.v2"),
+            ("definition_id", "source_averaged_sparse_structure_response.v3"),
             ("fixed_physics_revision", self.fixed_physics_revision),
             ("reference_structure_model_revision", self.reference_structure_model_revision),
             ("column_px", column),
@@ -272,9 +288,14 @@ class SourceAveragedDetectorStructureResponse:
             ("term_rod_index", term_rod),
             ("term_source_state_index", term_source),
             ("term_L", term_l),
+            ("term_alpha_rad", term_alpha),
             ("term_k_norm_Ainv", term_k),
             ("term_q_radial_squared_Ainv2", term_q_radial_squared),
             ("term_q_normal_squared_Ainv2", term_q_normal_squared),
+            (
+                "term_fixed_density_per_mosaic_density_per_strength_px2_inv",
+                term_fixed_per_mosaic,
+            ),
             ("term_fixed_density_per_strength_px2_inv", term_fixed),
             ("reference_intensity_envelope_u_radial_A2", reference_u_radial),
             ("reference_intensity_envelope_u_normal_A2", reference_u_normal),
@@ -290,9 +311,11 @@ class SourceAveragedDetectorStructureResponse:
             term_rod,
             term_source,
             term_l,
+            term_alpha,
             term_k,
             term_q_radial_squared,
             term_q_normal_squared,
+            term_fixed_per_mosaic,
             term_fixed,
             term_root,
             state_k,
@@ -308,9 +331,15 @@ class SourceAveragedDetectorStructureResponse:
         object.__setattr__(self, "term_rod_index", term_rod)
         object.__setattr__(self, "term_source_state_index", term_source)
         object.__setattr__(self, "term_L", term_l)
+        object.__setattr__(self, "term_alpha_rad", term_alpha)
         object.__setattr__(self, "term_k_norm_Ainv", term_k)
         object.__setattr__(self, "term_q_radial_squared_Ainv2", term_q_radial_squared)
         object.__setattr__(self, "term_q_normal_squared_Ainv2", term_q_normal_squared)
+        object.__setattr__(
+            self,
+            "term_fixed_density_per_mosaic_density_per_strength_px2_inv",
+            term_fixed_per_mosaic,
+        )
         object.__setattr__(self, "term_fixed_density_per_strength_px2_inv", term_fixed)
         object.__setattr__(self, "term_root_sign", term_root)
         object.__setattr__(self, "source_state_k_norm_Ainv", state_k)
@@ -330,14 +359,12 @@ class SourceAveragedDetectorStructureResponse:
         object.__setattr__(self, "detector_visible_m0_q_gap_Ainv", m0_gap)
         object.__setattr__(self, "response_revision", response_revision)
 
-    def apply_strength(
+    def _weighted_term_strength(
         self,
         strength_model: RevisionedStructureStrengthModel,
         *,
         intensity_envelope: SampleQIntensityEnvelope | None = None,
-    ) -> SourceAveragedDetectorCoordinateIntensity:
-        """Apply one revisioned structure provider to the frozen detector transfer."""
-
+    ) -> FloatArray:
         _structure_model_revision(strength_model)
         basis = np.asarray(getattr(strength_model, "reciprocal_basis_Ainv", None))
         basis_scale = max(float(np.linalg.norm(self.reciprocal_basis_Ainv)), 1.0)
@@ -382,15 +409,17 @@ class SourceAveragedDetectorStructureResponse:
                 )
             if np.any(~np.isfinite(envelope_factor)):
                 raise ValueError("requested intensity envelope overflows the sparse response")
+        return np.asarray(term_strength * envelope_factor, dtype=np.float64)
 
+    def _coordinate_intensity(
+        self, term_density: FloatArray
+    ) -> SourceAveragedDetectorCoordinateIntensity:
         coordinate_count = self.column_px.size
         rod_count = len(self.rods)
         flat_index = self.term_coordinate_index * rod_count + self.term_rod_index
         flat_per_rod = np.bincount(
             flat_index,
-            weights=(
-                self.term_fixed_density_per_strength_px2_inv * term_strength * envelope_factor
-            ),
+            weights=term_density,
             minlength=coordinate_count * rod_count,
         )
         per_rod = flat_per_rod.reshape((*self.column_px.shape, rod_count))
@@ -410,6 +439,48 @@ class SourceAveragedDetectorStructureResponse:
             root_policy=self.root_policy,
             detector_visible_m0_q_gap_Ainv=self.detector_visible_m0_q_gap_Ainv,
             execution_backend="numpy_cpu_sparse_source_averaged.v1",
+        )
+
+    def apply_strength(
+        self,
+        strength_model: RevisionedStructureStrengthModel,
+        *,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
+    ) -> SourceAveragedDetectorCoordinateIntensity:
+        """Apply one revisioned structure provider to the frozen detector transfer."""
+
+        weighted_strength = self._weighted_term_strength(
+            strength_model,
+            intensity_envelope=intensity_envelope,
+        )
+        return self._coordinate_intensity(
+            self.term_fixed_density_per_strength_px2_inv * weighted_strength
+        )
+
+    def apply_strength_for_mosaics(
+        self,
+        strength_model: RevisionedStructureStrengthModel,
+        mosaics: tuple[MosaicParameters, ...],
+        *,
+        intensity_envelope: SampleQIntensityEnvelope | None = None,
+    ) -> tuple[SourceAveragedDetectorCoordinateIntensity, ...]:
+        """Apply one structure evaluation to several continuous mosaic densities."""
+
+        requested = tuple(mosaics)
+        if not requested or any(not isinstance(item, MosaicParameters) for item in requested):
+            raise ValueError("mosaics must contain at least one MosaicParameters value")
+        if any(item.zero_tilt_probability_mass != 0.0 for item in requested):
+            raise ValueError("sparse mosaic rebinding does not support zero-tilt atoms")
+        weighted_strength = self._weighted_term_strength(
+            strength_model,
+            intensity_envelope=intensity_envelope,
+        )
+        fixed = self.term_fixed_density_per_mosaic_density_per_strength_px2_inv * weighted_strength
+        return tuple(
+            self._coordinate_intensity(
+                fixed * (wrapped_mosaic_line_density_rad_inv(self.term_alpha_rad, mosaic) / np.pi)
+            )
+            for mosaic in requested
         )
 
 
@@ -829,9 +900,11 @@ def compile_source_averaged_detector_structure_response(
     term_rods: list[NDArray[np.int64]] = []
     term_sources: list[NDArray[np.int64]] = []
     term_l_values: list[FloatArray] = []
+    term_alpha_values: list[FloatArray] = []
     term_k_values: list[FloatArray] = []
     term_q_radial_squared_values: list[FloatArray] = []
     term_q_normal_squared_values: list[FloatArray] = []
+    term_fixed_per_mosaic_values: list[FloatArray] = []
     term_fixed_values: list[FloatArray] = []
     term_root_signs: list[NDArray[np.int8]] = []
     for supplied_state_index in valid_state_index:
@@ -882,23 +955,17 @@ def compile_source_averaged_detector_structure_response(
             continue
         local_rod_index = state_response.term_rod_index
         term_count = local_rod_index.size
-        state_geometry = detector.evaluate_detector_geometry(
-            column,
-            row,
-            include_surface_jacobian=False,
-        )
-        term_q_sample = np.asarray(state_geometry.q_sample_Ainv).reshape(-1, 3)[
-            state_response.term_coordinate_index
-        ]
         term_coordinates.append(state_response.term_coordinate_index)
         term_rods.append(active_index[local_rod_index])
         term_sources.append(np.full(term_count, state_index, dtype=np.int64))
         term_l_values.append(state_response.term_L)
+        term_alpha_values.append(state_response.term_alpha_rad)
         term_k_values.append(np.full(term_count, k_norm, dtype=np.float64))
-        term_q_radial_squared_values.append(
-            np.sum(term_q_sample[:, :2] ** 2, axis=1, dtype=np.float64)
+        term_q_radial_squared_values.append(state_response.term_q_radial_squared_Ainv2)
+        term_q_normal_squared_values.append(state_response.term_q_normal_squared_Ainv2)
+        term_fixed_per_mosaic_values.append(
+            state_response.term_fixed_density_per_mosaic_density_per_strength_px2_inv
         )
-        term_q_normal_squared_values.append(term_q_sample[:, 2] ** 2)
         term_fixed_values.append(state_response.term_fixed_density_per_strength_px2_inv)
         term_root_signs.append(state_response.term_root_sign)
 
@@ -914,6 +981,7 @@ def compile_source_averaged_detector_structure_response(
     term_rod = concatenate_or_empty(term_rods, np.int64)
     term_source = concatenate_or_empty(term_sources, np.int64)
     term_l = concatenate_or_empty(term_l_values, np.float64)
+    term_alpha = concatenate_or_empty(term_alpha_values, np.float64)
     term_k = concatenate_or_empty(term_k_values, np.float64)
     term_q_radial_squared = concatenate_or_empty(
         term_q_radial_squared_values,
@@ -921,6 +989,10 @@ def compile_source_averaged_detector_structure_response(
     )
     term_q_normal_squared = concatenate_or_empty(
         term_q_normal_squared_values,
+        np.float64,
+    )
+    term_fixed_per_mosaic = concatenate_or_empty(
+        term_fixed_per_mosaic_values,
         np.float64,
     )
     term_fixed = concatenate_or_empty(term_fixed_values, np.float64)
@@ -959,9 +1031,11 @@ def compile_source_averaged_detector_structure_response(
         term_rod_index=term_rod,
         term_source_state_index=term_source,
         term_L=term_l,
+        term_alpha_rad=term_alpha,
         term_k_norm_Ainv=term_k,
         term_q_radial_squared_Ainv2=term_q_radial_squared,
         term_q_normal_squared_Ainv2=term_q_normal_squared,
+        term_fixed_density_per_mosaic_density_per_strength_px2_inv=(term_fixed_per_mosaic),
         term_fixed_density_per_strength_px2_inv=term_fixed,
         term_root_sign=term_root,
         source_state_k_norm_Ainv=source_state_k,
