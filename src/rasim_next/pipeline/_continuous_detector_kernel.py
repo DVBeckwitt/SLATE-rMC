@@ -21,11 +21,15 @@ from rasim_next.materials.optics import HC_EV_A, _f0_species
 from rasim_next.ordered.motifs import _parameterized_bi2se3_quintuple_layer
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.reflectivity import CompiledParrattStitch
+from rasim_next.stacking.finite_intensity import _finite_moment_intensity
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 BoolArray = NDArray[np.bool_]
 _FLOAT_TINY = float(np.finfo(np.float64).tiny)
+_finite_moment_intensity_cpu = numba.njit(nogil=True, fastmath=False, cache=False)(
+    _finite_moment_intensity
+)
 
 
 class CompiledPixelIntegral(NamedTuple):
@@ -802,11 +806,12 @@ def _finite_stack_strength_A2(
     rod_hk_population: FloatArray,
     normalization_divisor: float,
 ) -> float:
+    # Explicit packed-index casts avoid the cross-target builtin-int overload cache.
     amplitude_plus = 0.0 + 0.0j
     amplitude_minus = 0.0 + 0.0j
     for atom in range(atom_fractional_offset.shape[0]):
         occupancy = atom_occupancy_element[atom, 0]
-        element = int(atom_occupancy_element[atom, 1])
+        element = np.int64(atom_occupancy_element[atom, 1])
         site_damping = math.exp(
             -0.5
             * (
@@ -826,8 +831,8 @@ def _finite_stack_strength_A2(
     if shared_disorder_epsilon == 0.0:
         registry_index = 0
         if stacking_parent_code == 1:
-            h = int(rod_hk_population[rod_index, 0])
-            k = int(rod_hk_population[rod_index, 1])
+            h = np.int64(rod_hk_population[rod_index, 0])
+            k = np.int64(rod_hk_population[rod_index, 1])
             registry_index = (h + 2 * k) % 3
         amplitude_intensity = (
             amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
@@ -840,8 +845,8 @@ def _finite_stack_strength_A2(
     else:
         vertical_phase_angle = 2.0 * math.pi * ell / 3.0
         vertical_phase = complex(math.cos(vertical_phase_angle), math.sin(vertical_phase_angle))
-        h = int(rod_hk_population[rod_index, 0])
-        k = int(rod_hk_population[rod_index, 1])
+        h = np.int64(rod_hk_population[rod_index, 0])
+        k = np.int64(rod_hk_population[rod_index, 1])
         registry_index = (h + 2 * k) % 3
         if registry_index == 0:
             omega = 1.0 + 0.0j
@@ -849,77 +854,25 @@ def _finite_stack_strength_A2(
             omega = complex(-0.5, 0.5 * math.sqrt(3.0))
         else:
             omega = complex(-0.5, -0.5 * math.sqrt(3.0))
-        inverse_omega = omega.conjugate()
         alternative = 0.25 * shared_disorder_epsilon
         parent = 1.0 - shared_disorder_epsilon
-        same_probability = parent + 2.0 * alternative
-        flip_probability = 2.0 * alternative
-        if stacking_parent_code == 0:
-            same_gauge = parent + alternative * inverse_omega + alternative * omega
-        else:
-            # Native 3R is the b-minus parent.  This is the exact reduced
-            # Fourier-block coefficient in the compiled moment convention;
-            # it is not the 2H same-registry coefficient above.
-            same_gauge = parent * omega + alternative * (1.0 + inverse_omega)
-        plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
-        minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
-
-        probability_plus = 1.0
-        probability_minus = 0.0
-        first_moment_plus = amplitude_plus
-        first_moment_minus = 0.0 + 0.0j
-        second_moment_plus = (
-            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        # The native 3R parent is b-minus; 2H is the same-registry a event.
+        a = parent if stacking_parent_code == 0 else alternative
+        b_minus = alternative if stacking_parent_code == 0 else parent
+        intensity_e2 = _finite_moment_intensity_cpu(
+            layers,
+            amplitude_plus,
+            amplitude_minus,
+            omega,
+            vertical_phase,
+            a,
+            alternative,
+            b_minus,
+            alternative,
+            alternative,
+            1.0,
+            0.0,
         )
-        second_moment_minus = 0.0
-        phase_power = 1.0 + 0.0j
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            contribution_plus = phase_power * amplitude_plus
-            contribution_minus = phase_power * amplitude_minus
-            next_probability_plus = (
-                probability_plus * same_probability + probability_minus * flip_probability
-            )
-            next_probability_minus = (
-                probability_minus * same_probability + probability_plus * flip_probability
-            )
-            propagated_plus = (
-                same_gauge * first_moment_plus + minus_to_plus_gauge * first_moment_minus
-            )
-            propagated_minus = (
-                same_gauge * first_moment_minus + plus_to_minus_gauge * first_moment_plus
-            )
-            next_first_moment_plus = propagated_plus + next_probability_plus * contribution_plus
-            next_first_moment_minus = propagated_minus + next_probability_minus * contribution_minus
-            contribution_plus_squared = (
-                contribution_plus.real * contribution_plus.real
-                + contribution_plus.imag * contribution_plus.imag
-            )
-            contribution_minus_squared = (
-                contribution_minus.real * contribution_minus.real
-                + contribution_minus.imag * contribution_minus.imag
-            )
-            cross_plus = contribution_plus * propagated_plus.conjugate()
-            cross_minus = contribution_minus * propagated_minus.conjugate()
-            next_second_moment_plus = (
-                same_probability * second_moment_plus
-                + flip_probability * second_moment_minus
-                + next_probability_plus * contribution_plus_squared
-                + 2.0 * cross_plus.real
-            )
-            next_second_moment_minus = (
-                same_probability * second_moment_minus
-                + flip_probability * second_moment_plus
-                + next_probability_minus * contribution_minus_squared
-                + 2.0 * cross_minus.real
-            )
-            probability_plus = next_probability_plus
-            probability_minus = next_probability_minus
-            first_moment_plus = next_first_moment_plus
-            first_moment_minus = next_first_moment_minus
-            second_moment_plus = next_second_moment_plus
-            second_moment_minus = next_second_moment_minus
-        intensity_e2 = max(second_moment_plus + second_moment_minus, 0.0)
     return (
         CLASSICAL_ELECTRON_RADIUS_A**2
         * common_damping

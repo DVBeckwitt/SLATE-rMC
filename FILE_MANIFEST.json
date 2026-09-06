@@ -188,8 +188,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "c3caed60edb3b619a723facf8d1ce695bb07f16aa53f542a5715e6194754ab15",
-      "size_bytes": 143119
+      "sha256": "960cfb5ab4fc9d46c2929ec61e21e7af58cca16f4ce48153e4eaf78c2b4a0e98",
+      "size_bytes": 146809
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -1138,13 +1138,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
-      "sha256": "2f8d1e3caf2ac6c7e0dbc016c51c5e7e15197a021a1875e766af660cd2a7a5d6",
-      "size_bytes": 63420
+      "sha256": "157bf279d02caa62dc670da9a6bd1601a13abaac8dafc4337e8afb2f79d81e63",
+      "size_bytes": 60663
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "cc870b0cb677b3b9de6e3e74a1b5998186a2b61ba308d13e84d5ef288a2cd24c",
-      "size_bytes": 114490
+      "sha256": "3b335d9c121dee645499fac643b098bc6a02bc3625514132c36992a231c9a38f",
+      "size_bytes": 111807
     },
     {
       "path": "src/rasim_next/pipeline/_forward_detector_cuda.py",
@@ -1318,8 +1318,8 @@
     },
     {
       "path": "src/rasim_next/stacking/finite_intensity.py",
-      "sha256": "a509ae05c52cffbf8cfe597249374f23ae46f0e5657d944c029c3aa8f6cb0094",
-      "size_bytes": 16007
+      "sha256": "898a63f4f1c657d85aaf2d24caefbf91b0729561c3d1f2cfcf8f538a26cb650d",
+      "size_bytes": 18198
     },
     {
       "path": "src/rasim_next/stacking/parent_models.py",
@@ -1688,8 +1688,8 @@
     },
     {
       "path": "tests/test_ordered_reflectivity.py",
-      "sha256": "b801397164fa73824eb02d014b5f9d5af524949aca0483b36276791bdead6f32",
-      "size_bytes": 59683
+      "sha256": "c240ef841c2a853770ba886cdb405e96479a69d029bbce6dcbe398e045504c60",
+      "size_bytes": 62839
     },
     {
       "path": "tests/test_osc_lattice_cli.py",
@@ -1718,8 +1718,8 @@
     },
     {
       "path": "tests/test_stacking_transition.py",
-      "sha256": "75b2a3b766f28afa077fc608e6254da1683bf8e0f3fe6cf55bf57224276164ec",
-      "size_bytes": 15535
+      "sha256": "5ceae0b46ce63ed613af9f726f037e1ede22e456f56aa9a7530ef1a9f1f32d29",
+      "size_bytes": 16145
     },
     {
       "path": "tests/test_staged_fit_replay_cli.py",

@@ -2011,8 +2011,9 @@ also reproduces on unchanged `8c70f3c`: the reduced raw-second-moment recurrence
 near an extinction, and the occupancy positive-semidefinite guard correctly rejects its result.
 The existing stable full-state evaluator and an independent coherent sum give approximately
 `3.15e-37` and `3.19e-37 A2`, versus the reduced result `4.68e-27 A2` for the audited candidate.
-Do not weaken that guard. Integration remains **BLOCKED** pending a separately proved numerical
-stabilization and a passing full suite. No shared-mosaic or reflectivity fit is promoted here.
+Do not weaken that guard. At this cleanup checkpoint integration was **BLOCKED** pending a
+separately proved numerical stabilization and a passing full suite; the repair below resolves
+that numerical blocker. No shared-mosaic or reflectivity fit is promoted here.
 
 A matched CPU check with 128 coordinates, two source states, and six Bi2Te3 `m=1` rods gives
 bit-identical density, valid-state counts, and caustic flags before/after cleanup. Seven warmed
@@ -2024,3 +2025,49 @@ Two unused untracked B4 scratch scripts were moved from the main checkout to the
 external `2026/09/06/repo_cleanup_archive` visualization folder. Active B4 fit sources and the
 compiled replay dependency remain in place until their library consumers can be migrated.
 No new tests, dependencies, diagnostic tools, or generated scientific outputs are added.
+
+## Finite-stack cancellation repair (2026-09-06)
+
+The reduced finite-stack evaluator now propagates conditional complex means and centered
+variances in the registry gauge. Each transition's gauge variance is a positive pairwise sum
+of squared gauge differences, followed by the law of total variance. Transition weights are
+normalized before products, preserving valid rare transitions such as `1e-200`. This avoids
+subtracting large raw second moments at a coherent extinction. NumPy, compiled CPU, and CUDA
+use one arithmetic implementation; the independent six-state evaluator remains an oracle.
+The zero-disorder closed-form equations, physical transition laws, amplitude conventions,
+normalization, public APIs, frozen tolerances, and occupancy positive-semidefinite guard are
+unchanged. No intensity floor, peak mask, or tolerance relaxation suppresses the failure.
+
+The cancellation witness is **CORRECTED**: amplitudes, phases, and transition probabilities agree
+before the first divergence at `stacking.finite_intensity`. The repaired result follows direct
+complex-amplitude summation and short-stack enumeration. The immutable synthetic reference
+remains **MATCH** (165 intensities, maximum error `3.20e-14 electron2`; 60 transition probabilities,
+zero error). Existing legacy classifications remain unchanged. All seven registered stacking
+error injections are detected. This is exact finite algebra, with no quadrature refinement
+variable; enumeration at 1, 3, and 6 layers and coherent-null checks through 512 layers provide
+independent finite-size evidence. No fitted sample parameters or publication status change.
+
+Permanent proof additions are limited to mixed-law near-extinction and rare-transition cases in
+the existing stacking tests, and one CPU/CUDA execution-boundary test that protects both the
+coherent null and its positive neighbors for 2H and 3R. The original failing occupancy test is
+retained unchanged. Actual CUDA execution, 3R detector/proof parity, and the 1,000-source CPU/CUDA
+case pass. An independent Numba 0.66 CPU-after-CUDA compilation failure was reproduced without
+the scientific package; explicit `np.int64` packed-index casts avoid it with identical integer
+width and values. No compiler registry, dependency, or physical equation was changed.
+
+An alternating seven-run comparison against the pre-fix implementation in the frozen-lock
+Python 3.13.13 environment evaluates 10,000 events over 52 layers. Median wall time decreases
+from 24.22 to 10.47 ms; peak traced allocations increase from 3,362,848 to 3,523,664 bytes.
+The regular-case maximum absolute difference is `1.21e-13 electron2` (scaled `3.19e-15`).
+The registered 48-event, 24-layer proof measures 70.56/3.11 ms for independent full/reduced
+evaluation and 35,244/22,476 peak traced bytes, with maximum difference `8.53e-14 electron2`.
+Traced allocations are not total process or GPU memory. No benchmark or diagnostic files are
+retained. The supported homogeneous finite-stack model is unchanged; shared-mosaic and
+reflectivity refitting remain separate scientific work.
+
+Final frozen-lock validation: **473 passed**, 12 GPU-underutilization warnings, in 367.87 s;
+no skips or failures. Run `python -B -m pytest -p no:cacheprovider` with an external `--basetemp`,
+the checkout's `src` on `PYTHONPATH`, `PYTHONDONTWRITEBYTECODE=1`, and `OPENBLAS_NUM_THREADS=1`.
+The focused CPU-after-CUDA sequence also passes (3 tests). Formatting, Ruff, documentation,
+and seed-inventory checks accompany the compact registered proof commands
+`python -B -m rasim_next.proof <command> --json`; no type checker is configured.

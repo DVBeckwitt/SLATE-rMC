@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
+from rasim_next.stacking.finite_intensity import _finite_moment_intensity
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
@@ -23,6 +24,7 @@ _FLOAT_TINY = float(np.finfo(np.float64).tiny)
 _ANGULAR_TOLERANCE = 2048.0 * _FLOAT_EPS
 _THREADS_PER_BLOCK = 128
 _DEFAULT_COORDINATE_CHUNK_SIZE = 50_000
+_finite_moment_intensity_cuda = cuda.jit(device=True, inline=True)(_finite_moment_intensity)
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,77 +470,25 @@ def _finite_stack_strength_A2(
             omega = complex(-0.5, 0.5 * math.sqrt(3.0))
         else:
             omega = complex(-0.5, -0.5 * math.sqrt(3.0))
-        inverse_omega = complex(omega.real, -omega.imag)
         alternative = 0.25 * shared_disorder_epsilon
         parent = 1.0 - shared_disorder_epsilon
-        same_probability = parent + 2.0 * alternative
-        flip_probability = 2.0 * alternative
-        if stacking_parent_code == 0:
-            same_gauge = parent + alternative * inverse_omega + alternative * omega
-        else:
-            same_gauge = parent * omega + alternative * (1.0 + inverse_omega)
-        plus_to_minus_gauge = alternative * inverse_omega + alternative * omega
-        minus_to_plus_gauge = alternative * omega + alternative * inverse_omega
-
-        probability_plus = 1.0
-        probability_minus = 0.0
-        first_moment_plus = amplitude_plus
-        first_moment_minus = 0.0 + 0.0j
-        second_moment_plus = (
-            amplitude_plus.real * amplitude_plus.real + amplitude_plus.imag * amplitude_plus.imag
+        # The native 3R parent is b-minus; 2H is the same-registry a event.
+        a = parent if stacking_parent_code == 0 else alternative
+        b_minus = alternative if stacking_parent_code == 0 else parent
+        intensity_e2 = _finite_moment_intensity_cuda(
+            layers,
+            amplitude_plus,
+            amplitude_minus,
+            omega,
+            vertical_phase,
+            a,
+            alternative,
+            b_minus,
+            alternative,
+            alternative,
+            1.0,
+            0.0,
         )
-        second_moment_minus = 0.0
-        phase_power = 1.0 + 0.0j
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            contribution_plus = phase_power * amplitude_plus
-            contribution_minus = phase_power * amplitude_minus
-            next_probability_plus = (
-                probability_plus * same_probability + probability_minus * flip_probability
-            )
-            next_probability_minus = (
-                probability_minus * same_probability + probability_plus * flip_probability
-            )
-            propagated_plus = (
-                same_gauge * first_moment_plus + minus_to_plus_gauge * first_moment_minus
-            )
-            propagated_minus = (
-                same_gauge * first_moment_minus + plus_to_minus_gauge * first_moment_plus
-            )
-            next_first_moment_plus = propagated_plus + next_probability_plus * contribution_plus
-            next_first_moment_minus = propagated_minus + next_probability_minus * contribution_minus
-            contribution_plus_squared = (
-                contribution_plus.real * contribution_plus.real
-                + contribution_plus.imag * contribution_plus.imag
-            )
-            contribution_minus_squared = (
-                contribution_minus.real * contribution_minus.real
-                + contribution_minus.imag * contribution_minus.imag
-            )
-            cross_plus = contribution_plus * complex(propagated_plus.real, -propagated_plus.imag)
-            cross_minus = contribution_minus * complex(
-                propagated_minus.real, -propagated_minus.imag
-            )
-            next_second_moment_plus = (
-                same_probability * second_moment_plus
-                + flip_probability * second_moment_minus
-                + next_probability_plus * contribution_plus_squared
-                + 2.0 * cross_plus.real
-            )
-            next_second_moment_minus = (
-                same_probability * second_moment_minus
-                + flip_probability * second_moment_plus
-                + next_probability_minus * contribution_minus_squared
-                + 2.0 * cross_minus.real
-            )
-            probability_plus = next_probability_plus
-            probability_minus = next_probability_minus
-            first_moment_plus = next_first_moment_plus
-            first_moment_minus = next_first_moment_minus
-            second_moment_plus = next_second_moment_plus
-            second_moment_minus = next_second_moment_minus
-        intensity_sum = second_moment_plus + second_moment_minus
-        intensity_e2 = intensity_sum if intensity_sum > 0.0 else 0.0
     return (
         CLASSICAL_ELECTRON_RADIUS_A**2
         * common_damping

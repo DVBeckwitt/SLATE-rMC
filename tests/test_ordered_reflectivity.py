@@ -1559,6 +1559,90 @@ def test_kinematic_scale_stitch_recovers_the_high_branch_exactly() -> None:
     assert result.composite_normalization == "kinematic finite-stack strength A2"
 
 
+@pytest.mark.parametrize("backend", ("cpu", "cuda"))
+def test_compiled_finite_stack_preserves_coherent_null_and_neighbors(backend: str) -> None:
+    from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+    from rasim_next.pipeline._continuous_detector_kernel import _finite_stack_strength_A2
+
+    layers = 512
+    ell = 3.0 * (2.0 * np.pi / layers + np.asarray((-1e-10, 0.0, 1e-10))) / (2.0 * np.pi)
+    atom_inplane = np.ones((1, 1), dtype=np.complex128)
+    atom_offset = np.zeros((1, 3), dtype=np.float64)
+    atom_occupancy = np.asarray(((1.0, 0.0, 0.0, 0.0),))
+    rod_hk = np.asarray(((0.0, 0.0, 1.0),))
+    values = np.empty((2, ell.size), dtype=np.float64)
+    if backend == "cuda":
+        from numba import cuda
+
+        from rasim_next.pipeline._continuous_detector_cuda import (
+            _finite_stack_strength_A2 as cuda_strength,
+        )
+
+        if not cuda.is_available():
+            pytest.skip("requires a CUDA device")
+
+        @cuda.jit
+        def evaluate(ell_values, inplane, offsets, occupancy, hk, output):
+            index = cuda.grid(1)
+            if index < ell_values.size:
+                for parent_code in range(2):
+                    output[parent_code, index] = cuda_strength(
+                        0,
+                        ell_values[index],
+                        1.0,
+                        0.0,
+                        0.0,
+                        1.0 + 0.0j,
+                        1.0 + 0.0j,
+                        inplane,
+                        offsets,
+                        occupancy,
+                        512,
+                        parent_code,
+                        0.1,
+                        hk,
+                        1.0,
+                    )
+
+        device_values = cuda.device_array(values.shape, dtype=np.float64)
+        evaluate[1, 32](
+            cuda.to_device(ell),
+            cuda.to_device(atom_inplane),
+            cuda.to_device(atom_offset),
+            cuda.to_device(atom_occupancy),
+            cuda.to_device(rod_hk),
+            device_values,
+        )
+        values = device_values.copy_to_host()
+    else:
+        for parent_code in range(2):
+            for index, coordinate in enumerate(ell):
+                values[parent_code, index] = _finite_stack_strength_A2(
+                    0,
+                    float(coordinate),
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0 + 0.0j,
+                    1.0 + 0.0j,
+                    atom_inplane,
+                    atom_offset,
+                    atom_occupancy,
+                    layers,
+                    parent_code,
+                    0.1,
+                    rod_hk,
+                    1.0,
+                )
+    values /= CLASSICAL_ELECTRON_RADIUS_A**2
+    phases = np.exp(2j * np.pi * ell / 3.0)
+    direct = np.abs(np.sum(phases[:, None] ** np.arange(layers), axis=1)) ** 2
+    amplitude_error = 16.0 * np.finfo(np.float64).eps * layers**2
+    limits = 2.0 * np.sqrt(direct) * amplitude_error + amplitude_error**2
+    assert np.all(values[:, (0, 2)] > 0.0)
+    assert np.all(np.abs(values - direct) <= limits)
+
+
 @pytest.mark.parametrize("film_index", (0.999979 + 3.2e-7j, 0.999979 + 0.0j))
 def test_compiled_parratt_strength_matches_the_continuous_proof_path(
     film_index: complex,

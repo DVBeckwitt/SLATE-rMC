@@ -22,7 +22,6 @@ from rasim_next.stacking.transition import (
     TransitionLaw,
     _validated_registry_phase,
     full_transition_matrix,
-    orientation_transition_matrix,
     registry_phase,
 )
 
@@ -65,68 +64,105 @@ def _broadcast_inputs(
     return broadcast[0], broadcast[1], omega_array, broadcast[3]
 
 
-def _reduced_moment_intensity(
+def _finite_moment_intensity(
     layers: int,
-    f_plus: NDArray[np.complex128],
-    f_minus: NDArray[np.complex128],
-    omega: NDArray[np.complex128],
-    vertical_phase: NDArray[np.complex128],
-    law: TransitionLaw,
-    initial: InitialPopulation,
-) -> NDArray[np.float64]:
-    """Propagate exact unnormalized amplitude moments in a registry gauge."""
+    f_plus: complex | NDArray[np.complex128],
+    f_minus: complex | NDArray[np.complex128],
+    omega: complex | NDArray[np.complex128],
+    vertical_phase: complex | NDArray[np.complex128],
+    a: float,
+    b_plus: float,
+    b_minus: float,
+    d_plus: float,
+    d_minus: float,
+    probability_plus: float,
+    probability_minus: float,
+) -> float | NDArray[np.float64]:
+    """Exact centered registry-gauge recurrence for arrays or compiled scalar lanes.
 
-    amplitudes = np.stack((f_plus, f_minus), axis=-1)
-    probability = initial.as_array().copy()
-    first_moment = probability * amplitudes
-    second_moment = probability * np.abs(amplitudes) ** 2
-    inverse = np.conj(omega)
-    stay_gauge = law.a + law.b_plus * inverse + law.b_minus * omega
-    plus_to_minus_gauge = law.d_plus * inverse + law.d_minus * omega
-    minus_to_plus_gauge = law.d_plus * omega + law.d_minus * inverse
-    phase_power = np.ones_like(vertical_phase)
-    orientation_transition = orientation_transition_matrix(law)
-    with np.errstate(over="ignore", invalid="ignore"):
-        for _ in range(1, layers):
-            phase_power *= vertical_phase
-            contribution = phase_power[..., None] * amplitudes
-            next_probability = probability @ orientation_transition
-            gauged_first_moment = np.empty_like(first_moment)
-            gauged_first_moment[..., 0] = (
-                stay_gauge * first_moment[..., 0] + minus_to_plus_gauge * first_moment[..., 1]
-            )
-            gauged_first_moment[..., 1] = (
-                plus_to_minus_gauge * first_moment[..., 0] + stay_gauge * first_moment[..., 1]
-            )
-            next_second_moment = np.empty_like(second_moment)
-            next_second_moment[..., 0] = (
-                orientation_transition[0, 0] * second_moment[..., 0]
-                + orientation_transition[1, 0] * second_moment[..., 1]
-            )
-            next_second_moment[..., 1] = (
-                orientation_transition[0, 1] * second_moment[..., 0]
-                + orientation_transition[1, 1] * second_moment[..., 1]
-            )
-            next_second_moment += next_probability * np.abs(contribution) ** 2 + 2.0 * np.real(
-                np.conj(gauged_first_moment) * contribution
-            )
-            first_moment = gauged_first_moment + next_probability * contribution
-            second_moment = next_second_moment
-            probability = next_probability
-        intensity = np.sum(second_moment, axis=-1)
-    roundoff_scale = float(layers) ** 2 * np.maximum(np.abs(f_plus) ** 2, np.abs(f_minus) ** 2)
-    roundoff_tolerance = (
-        256.0
-        * np.finfo(np.float64).eps
-        * np.maximum(
-            1.0,
-            roundoff_scale,
+    Inputs are validated by the caller. CPU and CUDA compile this same arithmetic;
+    the independent full-state recurrence remains the proof oracle.
+    """
+
+    inverse = omega.real - 1j * omega.imag
+    same = a + b_plus + b_minus
+    flip = d_plus + d_minus
+    same_gauge = 0.0j
+    same_gauge_variance = 0.0
+    flip_gauge_plus = 0.0j
+    flip_gauge_minus = 0.0j
+    flip_gauge_variance = 0.0
+    if same > 0.0:
+        weight_a, weight_b_plus, weight_b_minus = a / same, b_plus / same, b_minus / same
+        same_gauge = 1.0 + weight_b_plus * (inverse - 1.0) + weight_b_minus * (omega - 1.0)
+        # Positive pairwise variance avoids cancellation and is exactly zero
+        # when registry is invisible. Normalize before multiplying tiny weights.
+        same_gauge_variance = (
+            weight_a * weight_b_plus * abs(1.0 - inverse) ** 2
+            + weight_a * weight_b_minus * abs(1.0 - omega) ** 2
+            + weight_b_plus * weight_b_minus * abs(inverse - omega) ** 2
         )
+    if flip > 0.0:
+        weight_d_plus, weight_d_minus = d_plus / flip, d_minus / flip
+        flip_gauge_plus = omega + weight_d_minus * (inverse - omega)
+        flip_gauge_minus = inverse + weight_d_minus * (omega - inverse)
+        flip_gauge_variance = weight_d_plus * weight_d_minus * abs(inverse - omega) ** 2
+
+    mean_plus, mean_minus = f_plus, f_minus
+    variance_plus = 0.0 * f_plus.real
+    variance_minus = 0.0 * f_minus.real
+    phase_power = 1.0 + 0.0j
+    for _ in range(1, layers):
+        phase_power = phase_power * vertical_phase
+        next_probability_plus = probability_plus * same + probability_minus * flip
+        next_probability_minus = probability_minus * same + probability_plus * flip
+        stay_plus, stay_minus = same_gauge * mean_plus, same_gauge * mean_minus
+        flipped_plus = flip_gauge_plus * mean_minus
+        flipped_minus = flip_gauge_minus * mean_plus
+        plus_squared, minus_squared = abs(mean_plus) ** 2, abs(mean_minus) ** 2
+        if next_probability_plus > 0.0:
+            stay_weight = probability_plus * same / next_probability_plus
+            flip_weight = probability_minus * flip / next_probability_plus
+            difference = flipped_plus - stay_plus
+            # Anchor on the heavier component; identical means remain identical.
+            transported_plus = (
+                stay_plus + flip_weight * difference
+                if stay_weight >= flip_weight
+                else flipped_plus - stay_weight * difference
+            )
+            next_variance_plus = (
+                stay_weight * (variance_plus + same_gauge_variance * plus_squared)
+                + flip_weight * (variance_minus + flip_gauge_variance * minus_squared)
+                + stay_weight * flip_weight * abs(difference) ** 2
+            )
+            next_mean_plus = transported_plus + phase_power * f_plus
+        else:
+            next_mean_plus = 0.0 * f_plus
+            next_variance_plus = 0.0 * f_plus.real
+        if next_probability_minus > 0.0:
+            stay_weight = probability_minus * same / next_probability_minus
+            flip_weight = probability_plus * flip / next_probability_minus
+            difference = flipped_minus - stay_minus
+            transported_minus = (
+                stay_minus + flip_weight * difference
+                if stay_weight >= flip_weight
+                else flipped_minus - stay_weight * difference
+            )
+            next_variance_minus = (
+                stay_weight * (variance_minus + same_gauge_variance * minus_squared)
+                + flip_weight * (variance_plus + flip_gauge_variance * plus_squared)
+                + stay_weight * flip_weight * abs(difference) ** 2
+            )
+            next_mean_minus = transported_minus + phase_power * f_minus
+        else:
+            next_mean_minus = 0.0 * f_minus
+            next_variance_minus = 0.0 * f_minus.real
+        probability_plus, probability_minus = next_probability_plus, next_probability_minus
+        mean_plus, mean_minus = next_mean_plus, next_mean_minus
+        variance_plus, variance_minus = next_variance_plus, next_variance_minus
+    return probability_plus * (variance_plus + abs(mean_plus) ** 2) + probability_minus * (
+        variance_minus + abs(mean_minus) ** 2
     )
-    if np.any(intensity < -roundoff_tolerance):
-        raise ValueError("finite reduced moment intensity is negative beyond roundoff")
-    intensity = np.maximum(intensity, 0.0)
-    return _readonly_nonnegative(intensity, "finite reduced moment intensity")
 
 
 def _full_moment_intensity(
@@ -192,6 +228,15 @@ def finite_intensity_reduced(
     f_plus_array, f_minus_array, omega_array, phase_array = _broadcast_inputs(
         f_plus, f_minus, omega, vertical_phase
     )
+    probabilities = (
+        law.a,
+        law.b_plus,
+        law.b_minus,
+        law.d_plus,
+        law.d_minus,
+        initial.plus,
+        initial.minus,
+    )
     if f_plus_array.size > _REDUCED_MOMENT_EVENT_CHUNK_SIZE:
         shape = f_plus_array.shape
         result = np.empty(f_plus_array.size, dtype=np.float64)
@@ -200,27 +245,30 @@ def finite_intensity_reduced(
         )
         for start in range(0, result.size, _REDUCED_MOMENT_EVENT_CHUNK_SIZE):
             stop = min(start + _REDUCED_MOMENT_EVENT_CHUNK_SIZE, result.size)
-            result[start:stop] = _reduced_moment_intensity(
+            result[start:stop] = _finite_moment_intensity(
                 count,
                 flattened[0][start:stop],
                 flattened[1][start:stop],
                 flattened[2][start:stop],
                 flattened[3][start:stop],
-                law,
-                initial,
+                *probabilities,
             )
         return _readonly_nonnegative(
             result.reshape(shape),
             "finite reduced moment intensity",
         )
-    return _reduced_moment_intensity(
-        count,
-        f_plus_array,
-        f_minus_array,
-        omega_array,
-        phase_array,
-        law,
-        initial,
+    with np.errstate(over="ignore", invalid="ignore"):
+        result = _finite_moment_intensity(
+            count,
+            f_plus_array,
+            f_minus_array,
+            omega_array,
+            phase_array,
+            *probabilities,
+        )
+    return _readonly_nonnegative(
+        result,
+        "finite reduced moment intensity",
     )
 
 

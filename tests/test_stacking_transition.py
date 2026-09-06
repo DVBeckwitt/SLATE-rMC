@@ -82,13 +82,16 @@ def test_transition_matrix_is_stochastic_in_the_declared_state_order() -> None:
     np.testing.assert_allclose(transition.sum(axis=1), 1.0, rtol=0.0, atol=1e-15)
 
 
-def test_short_stack_direct_full_and_reduced_results_agree() -> None:
+@pytest.mark.parametrize(
+    "law",
+    (TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18), TransitionLaw(1.0, 0.0, 0.0, 1e-200, 0.0)),
+)
+def test_short_stack_direct_full_and_reduced_results_agree(law: TransitionLaw) -> None:
     layers = 6
     f_plus = 1.2 + 0.3j
     f_minus = 0.7 - 0.5j
     omega = complex(registry_phase(1, 0))
     vertical_phase = np.exp(0.43j)
-    law = TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18)
     initial = InitialPopulation(0.8, 0.2)
     arguments = (layers, f_plus, f_minus, omega, vertical_phase, law, initial)
     direct = finite_intensity_by_enumeration(*arguments)
@@ -161,8 +164,11 @@ def test_single_layer_uses_only_the_declared_initial_population() -> None:
         np.testing.assert_allclose(evaluator(*arguments), expected, rtol=0.0, atol=limit)
 
 
-def test_coherent_extinction_never_erases_nearby_positive_intensity() -> None:
-    law = TransitionLaw.for_parent(Parent.TWO_H)
+@pytest.mark.parametrize(
+    "law",
+    (TransitionLaw.for_parent(Parent.TWO_H), TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18)),
+)
+def test_coherent_extinction_never_erases_nearby_positive_intensity(law: TransitionLaw) -> None:
     initial = InitialPopulation.plus_only()
     for layers in (8, 64, 512):
         exact_phase = 2.0 * np.pi / layers
@@ -186,6 +192,11 @@ def test_coherent_extinction_never_erases_nearby_positive_intensity() -> None:
                     assert observed > 0.0
                 limit = _TOLERANCES["stacking.pair_kernel"].bind(float(layers**2)).limit
                 np.testing.assert_allclose(observed, direct, rtol=0.0, atol=limit)
+                # At a coherent null, bound amplitude roundoff before squaring;
+                # an intensity-scale tolerance can hide cancellation residue.
+                amplitude_error = 16.0 * np.finfo(np.float64).eps * layers**2
+                null_limit = 2.0 * np.sqrt(direct) * amplitude_error + amplitude_error**2
+                np.testing.assert_allclose(observed, direct, rtol=0.0, atol=null_limit)
 
 
 def test_event_intensity_uses_shared_alignment_measure_and_layer_normal_q() -> None:
