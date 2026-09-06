@@ -1,4 +1,41 @@
-# Repository-wide simplification plan (2026-09-06)
+# Full physical-intensity refit plan (2026-09-06)
+
+Base: `04489309c606e9cd87505dcc4d8482b26060ce50`.
+One writer, isolated branch `codex/full-physical-intensity-refit`.
+The user authorizes corrections and new six-sample fits/figures after the intensity audit.
+
+## Current scope and acceptance
+
+1. Correct the compiled Parratt equal-zero interface limit and replace silent model substitution
+   with explicit numerical failure. Verify against the existing independent scalar oracle and CUDA.
+2. Reconcile one normalized mosaic probability measure for every rod and stitched `m=0`, reusing
+   the existing plane-normal implementation where valid. Prove normalization, detector transfer,
+   finite-area convergence, and one common parameter state before fitting.
+3. Reuse the six existing sample loaders, geometry/source states, raw observations, physical
+   structure/phase providers, nonnegative backgrounds, and region quadrature. Evaluate every
+   declared rod in every region; remove independent empirical Q damping and all simulation-side
+   sideband subtraction. Fit one common mosaic and physical structure state per sample, with one
+   count calibration per exposure. Fit and render must consume identical physics.
+4. Rerun Bi2Te3, Bi2Se3, GD1, SiD1, Clean1, and B4 using prior physical parameters as initial guesses.
+   Compare old and new results on the identical raw-data support; do not hide failed bins or
+   remove inconvenient peaks. Retain low-angle reflectivity. Keep old results immutable.
+5. Reproduce log-view `m=1+/-,3+/-,4+/-` profiles with full-width `m=0` below and transparent
+   detector-region overlays. Validate `total = scale * full simulation + background`, saved model
+   identity, support, and quadrature convergence. Nonpositive observations remain explicit rather
+   than being floored for a log plot.
+6. Independent review, compact regression suite, registered proofs, formatting/lint, inventory,
+   timing/memory evidence, and one coherent commit. All generated output remains external.
+
+The physically valid detector domain and predeclared integration regions remain geometry, not
+intensity-dependent masks. Historical transformed-observable proofs remain historical, never
+evidence for a raw-count fit. New numerical or scientific failures block promotion, not visibility.
+The two untracked B4 sources and source-less replay cache in main are preserved.
+
+## Previous completed cleanup
+
+The cleanup plan below was completed at `04489309c606e9cd87505dcc4d8482b26060ce50`.
+
+## Repository-wide simplification plan (2026-09-06)
 
 Base: `229f1bcef4a54166313c090da8bd31175ef0ca16`.
 One writer, isolated branch `codex/repo-wide-simplification`.

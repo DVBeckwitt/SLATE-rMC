@@ -35,6 +35,56 @@ BI2SE3_RECIPROCAL_BASIS_AINV = np.array(
 )
 
 
+def test_spherical_mosaic_preserves_component_mass_and_antipodal_pushforward() -> None:
+    from scipy.integrate import quad
+
+    from painted_ewald.normal_density import SphericalMosaicDensity
+
+    for sigma, gamma, eta in ((0.003, 0.01, 0.37), (0.3, 0.6, 0.81), (2.0, 4.0, 0.2)):
+        law = SphericalMosaicDensity(MosaicParameters(sigma, gamma, eta))
+        directed_mass = (
+            2
+            * np.pi
+            * quad(
+                lambda a, law=law: float(law.latent_density_rad_inv2(a)),
+                0,
+                np.pi,
+                points=[sigma, gamma],
+                epsabs=1e-12,
+            )[0]
+        )
+        plane_mass = (
+            2
+            * np.pi
+            * quad(
+                lambda a, law=law: float(law.plane_density_sr_inv(a)) * np.sin(a),
+                0,
+                np.pi / 2,
+                points=[x for x in (sigma, gamma) if x < np.pi / 2],
+                epsabs=1e-12,
+            )[0]
+        )
+        assert directed_mass == pytest.approx(1.0, abs=2e-11)
+        assert plane_mass == pytest.approx(1.0, abs=2e-11)
+        # Independent analytic integral of the wrapped Cauchy against sin(alpha).
+        expected = 2 * np.sinh(gamma) / np.pi * np.log(1 / np.tanh(gamma / 2))
+        assert law.lorentzian_normalization == pytest.approx(expected, rel=2e-12)
+        alpha = np.array([0.0, min(sigma, 0.8), 0.4, np.pi / 2])
+        np.testing.assert_allclose(
+            law.plane_density_sr_inv(alpha),
+            law.directed_density_sr_inv(alpha) + law.directed_density_sr_inv(np.pi - alpha),
+        )
+        gaussian = SphericalMosaicDensity(MosaicParameters(sigma, gamma, 0.0))
+        lorentzian = SphericalMosaicDensity(MosaicParameters(sigma, gamma, 1.0))
+        np.testing.assert_allclose(
+            law.directed_density_sr_inv(alpha),
+            (1 - eta) * gaussian.directed_density_sr_inv(alpha)
+            + eta * lorentzian.directed_density_sr_inv(alpha),
+        )
+        assert np.isfinite(law.plane_density_sr_inv(0.0))
+        assert law.latent_density_rad_inv2(0.0) == 0.0
+
+
 def test_latent_geometry_accepts_numpy_string_root_statuses() -> None:
     status = np.asarray(
         [RootStatus.REGULAR.value, RootStatus.NO_ROOT.value],

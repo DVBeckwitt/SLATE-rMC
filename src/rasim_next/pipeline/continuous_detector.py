@@ -2003,11 +2003,21 @@ class DetectorEwaldMeasure:
             valid_rows = reachable_rows[mode_valid]
             if valid_rows.size:
                 roundtrip_scale = max(self._air_k0_Ainv, 1.0)
-                if not np.allclose(
-                    modes.k_air_phase_sample_Ainv[mode_valid],
-                    kf_air_sample[valid_rows],
-                    rtol=0.0,
-                    atol=512.0 * np.finfo(np.float64).eps * roundtrip_scale,
+                roundtrip_budget = 512.0 * np.finfo(np.float64).eps
+                recovered = modes.k_air_phase_sample_Ainv[mode_valid]
+                expected = kf_air_sample[valid_rows]
+                # Near the horizon sqrt(k0²-k_parallel²) is ill-conditioned.
+                # Certify the dispersion equation, not absolute error in its inverse.
+                normal_squared_error = np.abs(
+                    (recovered[:, 2] - expected[:, 2]) * (recovered[:, 2] + expected[:, 2])
+                )
+                if not (
+                    np.all(
+                        np.abs(recovered[:, :2] - expected[:, :2])
+                        <= roundtrip_budget * roundtrip_scale
+                    )
+                    and np.all(np.signbit(recovered[:, 2]) == np.signbit(expected[:, 2]))
+                    and np.all(normal_squared_error <= roundtrip_budget * roundtrip_scale**2)
                 ):
                     raise FloatingPointError("detector ray failed the canonical exit round trip")
                 incident_direction = (

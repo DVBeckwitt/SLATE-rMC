@@ -162,6 +162,34 @@ def _physical_scalar_detector(inputs: object) -> DetectorEwaldMeasure:
     )
 
 
+def test_grazing_detector_exit_checks_dispersion_not_ill_conditioned_normal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rasim_next.pipeline import continuous_detector as module
+
+    inputs = _configured_inputs(sample_count=1, reference_wavelength_A=0.7107)
+    detector = _physical_scalar_detector(inputs)
+    # A canonical projected ray at 0.1748 degree sample-frame exit elevation.
+    column = np.array([1329.3503816762632])
+    row = np.array([1528.4682896715926])
+    rods = (Rod(1, 0),)
+    result = detector.evaluate_detector_coordinates(column, row, rods=rods)
+    assert bool(result.geometry.valid[0])
+    assert np.isfinite(result.density_A2_per_px2[0])
+
+    solve = module._solve_exit_mode_arrays
+
+    def inconsistent_normal(*args: object, **kwargs: object) -> object:
+        modes = solve(*args, **kwargs)
+        wavevector = modes.k_air_phase_sample_Ainv.copy()
+        wavevector[:, 2] += 1.0e-5
+        return replace(modes, k_air_phase_sample_Ainv=wavevector)
+
+    monkeypatch.setattr(module, "_solve_exit_mode_arrays", inconsistent_normal)
+    with pytest.raises(FloatingPointError, match="canonical exit round trip"):
+        detector.evaluate_detector_coordinates(column, row, rods=rods)
+
+
 def _generic_pbi2_config(*, include_detector_visible_m0: bool) -> SimulationConfiguration:
     root = Path(__file__).resolve().parents[1]
     base = load_simulation_config(root / "configs" / "bi2se3_simulation.yaml")
@@ -2633,6 +2661,38 @@ def test_source_averaged_sparse_structure_response_matches_compiled_bi2x3() -> N
     )
     np.testing.assert_array_equal(actual.caustic, expected.caustic)
 
+    from painted_ewald.normal_density import SphericalMosaicDensity
+
+    law = SphericalMosaicDensity(averaged.mosaic)
+    term_hk = np.asarray([(rod.h, rod.k) for rod in response.rods])[response.term_rod_index]
+    term_strength = averaged.strength_model.evaluate_hkl(
+        h=term_hk[:, 0],
+        k=term_hk[:, 1],
+        L=response.term_L,
+        k_norm_Ainv=response.term_k_norm_Ainv,
+    )
+    term_density = (
+        response.term_fixed_density_per_mosaic_density_per_strength_px2_inv
+        * term_strength
+        * law.latent_density_rad_inv2(response.term_alpha_rad)
+    )
+    rod_count = len(response.rods)
+    spherical_sparse = np.bincount(
+        response.term_coordinate_index * rod_count + response.term_rod_index,
+        weights=term_density,
+        minlength=column_px.size * rod_count,
+    ).reshape(column_px.size, rod_count)
+    spherical_compiled = np.zeros_like(spherical_sparse)
+    for block in averaged._evaluator_blocks:
+        for indexed in block:
+            per_source = indexed.evaluator.evaluate_all_roots(
+                column_px,
+                row_px,
+                mosaic_density=law,
+            )[0]
+            spherical_compiled[:, indexed.master_rod_index] += per_source
+    np.testing.assert_allclose(spherical_sparse, spherical_compiled, rtol=4e-11, atol=3e-24)
+
     class _CountingStrength:
         reciprocal_basis_Ainv = averaged.strength_model.reciprocal_basis_Ainv
         structure_model_revision = averaged.strength_model.structure_model_revision
@@ -4087,6 +4147,183 @@ def test_fixed_external_qz_parratt_stitch_is_m0_only_and_preserves_cuda_dispatch
         assert gpu.execution_backend == "numba_cuda_source_averaged.v1"
 
 
+def test_parratt_undefined_intensity_reaches_the_public_failure_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from numba import cuda
+
+    from rasim_next.pipeline import source_averaged_detector as module
+
+    inputs = _configured_inputs(sample_count=1)
+    plain = build_source_averaged_detector(inputs)
+    compile_stitch = module.compile_parratt_stitch
+
+    def overflowing_stitch(*args: object, **kwargs: object) -> CompiledParrattStitch:
+        return replace(
+            compile_stitch(*args, **kwargs),
+            qc_Ainv=1.0,
+            blend_bounds_q_over_qc=(3.0, 6.0),
+            zero_strength_A2=1e200,
+            dimensionless_scale_factor=1e-200,
+        )
+
+    monkeypatch.setattr(module, "compile_parratt_stitch", overflowing_stitch)
+    overflowed = plain.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=0.9999929532364343 + 9.672907455164902e-8j,
+            interface_assumption="fixed_external_qz_m0_strength.v1",
+        )
+    )
+    for backend in ("cpu", "cuda") if cuda.is_available() else ("cpu",):
+        for evaluate in (
+            overflowed.evaluate_detector_density_all_roots,
+            overflowed.evaluate_detector_coordinates_all_roots,
+        ):
+            with pytest.raises(
+                FloatingPointError, match=r"nonfinite Parratt|undefined physical intensity"
+            ):
+                evaluate(np.array([1448.2]), np.array([1400.0]), execution_backend=backend)
+
+
+def test_compiled_parratt_preserves_equal_zero_limit_and_rejects_undefined_recursion() -> None:
+    """A singular representation must never substitute unrelated kinematic strength."""
+    from rasim_next.pipeline._continuous_detector_kernel import _empirical_parratt_strength_A2
+    from rasim_next.reflectivity import parratt_reflectivity
+
+    film = complex(0.999999)
+    qz = 2.0 * math.sqrt(1.0 - film.real**2)
+    arguments = (7.0, qz, 1.0, film, film, 20.0, 0.0, 0.0, qz, 2.0, 1.0, 3.0, 6.0)
+    oracle = parratt_reflectivity(
+        qz,
+        2.0 * math.pi,
+        refractive_index=(1.0, film, film),
+        thickness_A=(None, 20.0, None),
+        roughness_A=(0.0, 0.0),
+    )
+    expected = qz**2 * float(oracle.reflectivity) * 2.0
+    assert _empirical_parratt_strength_A2(*arguments) == pytest.approx(expected, rel=1e-14)
+    singular = (*arguments[:4], complex(1.0), *arguments[5:])
+    with pytest.raises(ZeroDivisionError, match="Parratt recursion denominator is zero"):
+        _empirical_parratt_strength_A2(*singular)
+
+    from numba import cuda
+
+    if cuda.is_available():
+        from rasim_next.pipeline._continuous_detector_cuda import (
+            _empirical_parratt_strength_A2 as device_strength,
+        )
+
+        @cuda.jit
+        def evaluate_limits(output):
+            output[0] = device_strength(
+                7.0, qz, 1.0, film, film, 20.0, 0.0, 0.0, qz, 2.0, 1.0, 3.0, 6.0
+            )
+            output[1] = device_strength(
+                7.0, qz, 1.0, film, complex(1.0), 20.0, 0.0, 0.0, qz, 2.0, 1.0, 3.0, 6.0
+            )
+
+        output = cuda.device_array(2, dtype=np.float64)
+        evaluate_limits[1, 1](output)
+        result = output.copy_to_host()
+        assert result[0] == pytest.approx(expected, rel=1e-14)
+        assert np.isnan(result[1])
+
+
+def test_local_m0_preserves_signed_atomic_strength_and_positive_caustics() -> None:
+    from painted_ewald import MosaicParameters
+    from painted_ewald.normal_density import SphericalMosaicDensity
+    from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
+    from rasim_next.pipeline._continuous_detector_kernel import CompiledDetectorEvaluator
+
+    inputs = _configured_inputs(sample_count=1)
+    detector = build_source_averaged_detector(inputs).restrict_rods((Rod(0, 0),))
+    stitched = detector.with_specular_stitch(
+        ParrattStitchStack(
+            substrate_refractive_index=0.99999 + 1e-8j,
+        )
+    )
+    template = next(item.evaluator.state for block in stitched._evaluator_blocks for item in block)
+    alpha = 0.3
+    normal = np.array([-math.sin(alpha), 0.0, math.cos(alpha)])
+    ki = np.array([math.sqrt(0.99), 0.0, -0.1])
+    outgoing = ki - 2 * np.dot(ki, normal) * normal
+    q = np.linalg.norm(outgoing - ki)
+    f0 = np.zeros((2, 11))
+    f0[:, 0] = 1.0
+    state = replace(
+        template,
+        detector_zero_lab_m=outgoing,
+        detector_column_step_lab_m=np.array([0.001, 0.0, 0.0]),
+        detector_row_step_lab_m=np.array([0.0, 0.001, 0.0]),
+        detector_pixel_area_vector_lab_m2=np.array([0.0, 0.0, 1e-6]),
+        ray_origin_lab_m=np.zeros(3),
+        sample_from_lab=np.eye(3),
+        sample_from_local=np.eye(3),
+        ki_film_sample_Ainv=ki,
+        internal_k_Ainv=1.0,
+        air_k0_Ainv=1.0,
+        refractive_index=1 + 0j,
+        entrance_amplitude=1 + 0j,
+        incident_decay_Ainv=0.0,
+        source_phase_weight=1.0,
+        polarization_model_code=0,
+        detector_path_linear_attenuation_m_inv=0.0,
+        specular_qc_Ainv=1e-6,
+        specular_substrate_refractive_index=1 + 0j,
+        rod_u_bounds_Ainv=np.array([[-2.0, 2.0]]),
+        b3_norm_Ainv=q,
+        atom_fractional_offset=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.25]]),
+        atom_occupancy_element=np.array([[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]]),
+        rod_atom_inplane_factor=np.ones((1, 2), dtype=np.complex128),
+        f0_parameters=f0,
+        anomalous_factor_e=np.array([0j, 1j]),
+        layers=1,
+        shared_disorder_epsilon=0.0,
+        normalization_divisor=1.0,
+        u_radial_A2=0.0,
+        u_normal_A2=0.0,
+        intensity_envelope_u_radial_A2=0.0,
+        intensity_envelope_u_normal_A2=0.0,
+        gaussian_sigma_rad=0.3,
+        lorentzian_hwhm_rad=0.6,
+        lorentzian_probability=0.4,
+    )
+    evaluator = CompiledDetectorEvaluator(state, (1, 1))
+    law = SphericalMosaicDensity(MosaicParameters(0.3, 0.6, 0.4))
+    coordinate = np.zeros(1)
+    actual = evaluator.evaluate_all_roots(coordinate, coordinate, mosaic_density=law)[0][0, 0]
+    # ell=1: |1+(1+i)exp(i*pi/2)|²=1; ell=-1 gives 5.
+    expected = (
+        CLASSICAL_ELECTRON_RADIUS_A**2
+        * (1e-6 * outgoing[2])
+        / q**2
+        * (law.directed_density_sr_inv(alpha) + 5 * law.directed_density_sr_inv(math.pi - alpha))
+    )
+    assert actual == pytest.approx(float(expected), rel=2e-12, abs=0.0)
+
+    small_f0 = np.zeros((2, 11))
+    small_f0[0, 0] = math.sqrt(np.nextafter(0.0, 1.0) / CLASSICAL_ELECTRON_RADIUS_A**2)
+    properties = state.atom_occupancy_element.copy()
+    properties[1, 0] = 0.0
+    small = replace(
+        state,
+        detector_zero_lab_m=np.array([0.6, 0.0, 0.8]),
+        ki_film_sample_Ainv=np.array([0.6, 0.0, -0.8]),
+        b3_norm_Ainv=1.6,
+        gaussian_sigma_rad=2.0,
+        lorentzian_hwhm_rad=1.0,
+        lorentzian_probability=0.0,
+        f0_parameters=small_f0,
+        anomalous_factor_e=np.zeros(2, dtype=np.complex128),
+        atom_occupancy_element=properties,
+    )
+    density, _, caustic, valid = CompiledDetectorEvaluator(small, (1, 1)).evaluate_all_roots(
+        coordinate,
+        coordinate,
+    )
+    assert np.isposinf(density[0, 0]) and caustic[0, 0] and valid[0]
+
+
 def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
     from rasim_next.pipeline.configured_simulation import build_source_averaged_detector
 
@@ -4099,6 +4336,23 @@ def test_parratt_stitch_is_one_continuous_low_and_high_q_m0_field() -> None:
     )
     stitched = plain.with_specular_stitch(stack)
     full_stitched = build_source_averaged_detector(inputs).with_specular_stitch(stack)
+
+    from painted_ewald.normal_density import SphericalMosaicDensity
+
+    law = SphericalMosaicDensity(plain.mosaic)
+    m0_evaluator = next(item.evaluator for block in stitched._evaluator_blocks for item in block)
+    column = np.array([1448.2, 1420.0, 1460.0])
+    row = np.array([1400.0, 1430.0, 1450.0])
+    transfer = m0_evaluator.compile_local_m0_transfer(column, row, mosaic_density=law)
+    direct = m0_evaluator.evaluate_all_roots(column, row, mosaic_density=law)[0][:, 0]
+    np.testing.assert_allclose(
+        transfer[:, 1] * law.directed_density_sr_inv(transfer[:, 0])
+        + transfer[:, 2] * law.directed_density_sr_inv(np.pi - transfer[:, 0]),
+        direct,
+        rtol=2e-12,
+        atol=2e-24,
+    )
+    assert np.all(np.isfinite(direct)) and np.any(direct > 0)
     non_m0_rod = next(rod for rod in full_stitched.rods if rod.family_m != 0)
     non_m0_only = full_stitched.restrict_rods((non_m0_rod,))
     assert non_m0_only.specular_stitch_stack is None

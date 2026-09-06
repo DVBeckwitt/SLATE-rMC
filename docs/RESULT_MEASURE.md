@@ -1,5 +1,64 @@
 # Result measure
 
+## Explicit shared spherical mosaic and raw-count refits
+
+`painted_ewald.normal_density.SphericalMosaicDensity` declares the opt-in
+`spherical_wrapped_tied_orientation.v1` model. It is a restricted orientation law,
+not a complete SO(3) distribution. For each existing wrapped component `g_i(alpha)`,
+`Z_i = 2 integral_0^pi g_i(alpha) sin(alpha) d(alpha)`. The directed density per
+spherical area is `F(alpha) = sum_i p_i g_i(alpha)/(pi Z_i)`. Each component has
+unit mass, so the Lorentzian probability remains its integrated mass fraction.
+The nonzero-rod inverse uses `F(alpha) sin(alpha)` per `d(alpha) d(beta)` and
+retains the established tied crystal rotation and every inverse preimage.
+
+The local-lamella stitched `m=0` calculation uses that same directed law. Its
+two plane-normal preimages have separate signed structure strengths:
+`I = C_plus F(alpha) + C_minus F(pi-alpha)`. Do not replace both strengths with
+`S(+L)`: even an ordered CIF can have unequal signed intensities with complex
+atomic factors. In this spherical measure the `sin(alpha)` Jacobian cancels
+analytically; the remaining normal-transfer denominator is `|Q_air|^2`.
+`CompiledDetectorEvaluator.compile_local_m0_transfer` exposes the two physical
+coefficients before probability multiplication, bound to its immutable source,
+geometry, structure and optical state. Recompile after changing those inputs.
+
+This named model is available through the CPU compiled evaluator and explicit
+sparse-term reduction. It does not silently redefine the older flat-latent
+mosaic APIs, CUDA mosaic model, or immutable reference results. The permanent
+proofs check spherical mass, signed two-atom interference, sparse/compiled
+nonzero agreement, and positive caustics independently.
+
+For the six-sample physical-intensity refit, the declared observable is raw
+counts averaged over each fixed detector-area region:
+`prediction = exposure_scale * full_physical_simulation + nonnegative_background`.
+Every nonzero rod and local stitched `m=0` contributes inside every region.
+One common mosaic and physical phase population describe the entire exposure.
+Only instrument-invalid data and predeclared geometric support are excluded.
+No simulation-side sideband subtraction, extra empirical sample-Q damping,
+peak suppression, positive-L selection, intensity-dependent mask, or per-region
+rescaling is part of this observable. CIF displacement factors remain physical
+structure inputs. Log plots do not floor nonpositive data; the raw values remain
+in the objective and archive.
+
+Earlier sideband-conditioned fitting commands implement a different observable;
+they are not an implementation or acceptance oracle for this raw-count refit.
+Historical outputs remain provenance only. Numerical qualification must compare
+region shapes, not just their summed mass: the six-sample rerun found material
+q2-to-q4 changes in nonzero peaks even when specular profiles were stable;
+selected Bi2Te3 `m=3` peaks still changed by about 27-30% at q8-to-q16.
+Nominal-family fold coordinates are not sufficient for source-shifted support
+edges. Source-specific finite-region integration must be qualified before these
+candidate fits are promoted.
+Neither an optimizer success flag nor a lower objective certifies convergence
+or physical identifiability. A bound-active or zero-probability mosaic component
+must be reported as unresolved rather than as a measured width.
+
+Compiled Parratt evaluators use zero reflection for an equal-zero interface
+normal pair. Other undefined denominators and nonfinite recursion outputs fail
+explicitly, including at the CUDA host boundary; they never substitute an
+unrelated kinematic strength. Canonical exit round-trip checks retain tangential
+conservation and outward sign, but test the normal dispersion residual in
+squared-wavevector units to avoid amplifying rounding error near the horizon.
+
 This document defines the factors and units of every current forward result. No downstream caller
 may silently renormalize one of these measures.
 

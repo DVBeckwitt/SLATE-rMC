@@ -1,5 +1,5 @@
 {
-  "file_count": 351,
+  "file_count": 352,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -103,8 +103,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "b0988e871575a3b51979bb8b4f4184068dec6ec15e1788a039ec60a850bf088e",
-      "size_bytes": 23555
+      "sha256": "4ac22436b9dbc349ef29e63f9bcd7563aeb45a8cbc11a3d212409da3919d0f3d",
+      "size_bytes": 23748
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -118,8 +118,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "8db384914b7642ae0fd19d77b9edcb859f2e334f8a98b222ff07d0e7a2d8a1d0",
-      "size_bytes": 83476
+      "sha256": "4325c40c0fe513a3353585da7d7e93a176f86ff0711eab0347db3489230a0ebf",
+      "size_bytes": 83713
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -173,8 +173,8 @@
     },
     {
       "path": "docs/RESULT_MEASURE.md",
-      "sha256": "6d51428f63cca691462cb5104c8bbcd8ad43c24d9e583665eadf7b3112b037cd",
-      "size_bytes": 25605
+      "sha256": "76236dbe98add8b7838bd9b424784c57e0c875ac55d14726435f127b0dd6ce0f",
+      "size_bytes": 29480
     },
     {
       "path": "docs/SCOPE_AND_PHASES.md",
@@ -817,6 +817,11 @@
       "size_bytes": 13317
     },
     {
+      "path": "src/painted_ewald/normal_density.py",
+      "sha256": "17de29b3d3ea7110a4f9cc4f67291a301f1b23c52830beff27b277ced161e6f3",
+      "size_bytes": 4310
+    },
+    {
       "path": "src/painted_ewald/py.typed",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "size_bytes": 0
@@ -1138,13 +1143,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_cuda.py",
-      "sha256": "8cc2d3ae4afb1a7ccab7730ec6389332a4c8c32477d2e50553c6aee9391879b6",
-      "size_bytes": 58329
+      "sha256": "0bf1d2df1e94693fff24c0f396430547070f440e01f912e748eb4b2265857d80",
+      "size_bytes": 59065
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "3b335d9c121dee645499fac643b098bc6a02bc3625514132c36992a231c9a38f",
-      "size_bytes": 111807
+      "sha256": "02c86443b261690a21c3ec6b9d1cae6ace58017adb9de94bbf9f02796bba2908",
+      "size_bytes": 117251
     },
     {
       "path": "src/rasim_next/pipeline/_forward_detector_cuda.py",
@@ -1163,8 +1168,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "a5f7601c3511b90ad6d1331524147445c844a6016240321ffe0e9df4a0af28df",
-      "size_bytes": 145211
+      "sha256": "f5b7a9cc724014a96a667fca76e4808108b8513e08911d42f78877fca7d20112",
+      "size_bytes": 145859
     },
     {
       "path": "src/rasim_next/pipeline/continuous_fold.py",
@@ -1528,8 +1533,8 @@
     },
     {
       "path": "tasks/plan.md",
-      "sha256": "c5b48689000312fe761095d996684a50a70b6eef4bb7c906ba94365e7c65a057",
-      "size_bytes": 4918
+      "sha256": "522012f57a78a168311330ab0e8b4c63703f10f1d23c20ae66775de3a5850e3f",
+      "size_bytes": 7425
     },
     {
       "path": "tasks/prompts/bootstrap.md",
@@ -1608,8 +1613,8 @@
     },
     {
       "path": "tasks/todo.md",
-      "sha256": "8eef50bc378df5be0135fd5f9d7dc2f67ba60139dd6a462b4f0e0e3838011195",
-      "size_bytes": 1218
+      "sha256": "23f36acf8f23131b26e8b1e89f7b0d8517c5d327841637e332df2ef109d94bac",
+      "size_bytes": 3548
     },
     {
       "path": "tests/README.md",
@@ -1663,8 +1668,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "794fe3a17631b4b230d0429b2ca3345d8ba49ce724dbff28998340897888feff",
-      "size_bytes": 358869
+      "sha256": "324e144a0e5d22cc44dbdb953f7877e80bca6e15370b50e21100cf4a030a09c7",
+      "size_bytes": 369393
     },
     {
       "path": "tests/test_layered_fit_workflow.py",
@@ -1683,8 +1688,8 @@
     },
     {
       "path": "tests/test_mosaic_ewald.py",
-      "sha256": "d50d1cf7cf9c5abbcd60049a6a2da6119932e5a9ff9ec95064372503a8019ef5",
-      "size_bytes": 33343
+      "sha256": "124289f3d0122874ca6701f0e9298da4f66234762aaf011a478cc8ee64c5406b",
+      "size_bytes": 35432
     },
     {
       "path": "tests/test_ordered_reflectivity.py",

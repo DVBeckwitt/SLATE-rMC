@@ -14,6 +14,7 @@ import xraydb
 from numpy.typing import ArrayLike, NDArray
 
 from painted_ewald import MosaicParameters
+from painted_ewald.normal_density import SphericalMosaicDensity
 from rasim_next.core.contracts import EventIntensityNormalization
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
@@ -628,10 +629,18 @@ def _empirical_parratt_strength_A2(
     )
     top_denominator = complex(external_half, 0.0) + film_kz
     bottom_denominator = film_kz + substrate_kz
-    if top_denominator == 0.0 or bottom_denominator == 0.0:
-        return phase_strength_A2
-    top = (complex(external_half, 0.0) - film_kz) / top_denominator
-    bottom = (film_kz - substrate_kz) / bottom_denominator
+    if external_half == 0.0 and film_kz == 0.0:
+        top = 0.0j
+    elif top_denominator == 0.0:
+        raise FloatingPointError("Parratt interface has a zero Fresnel denominator")
+    else:
+        top = (complex(external_half, 0.0) - film_kz) / top_denominator
+    if film_kz == 0.0 and substrate_kz == 0.0:
+        bottom = 0.0j
+    elif bottom_denominator == 0.0:
+        raise FloatingPointError("Parratt interface has a zero Fresnel denominator")
+    else:
+        bottom = (film_kz - substrate_kz) / bottom_denominator
     if top_roughness_A != 0.0:
         top *= cmath.exp(-2.0 * complex(external_half, 0.0) * film_kz * top_roughness_A**2)
     if bottom_roughness_A != 0.0:
@@ -639,12 +648,14 @@ def _empirical_parratt_strength_A2(
     propagated = bottom * cmath.exp(2.0j * film_kz * film_thickness_A)
     recursion_denominator = 1.0 + top * propagated
     if recursion_denominator == 0.0:
-        return phase_strength_A2
+        raise ZeroDivisionError("Parratt recursion denominator is zero")
     amplitude = (top + propagated) / recursion_denominator
     reflectivity = amplitude.real * amplitude.real + amplitude.imag * amplitude.imag
     low_strength = (
         external_qz * external_qz * reflectivity * zero_strength_A2 / dimensionless_scale_factor
     )
+    if not math.isfinite(reflectivity) or not math.isfinite(low_strength):
+        raise FloatingPointError("nonfinite Parratt recursion result")
     if q_over_qc <= blend_lower_q_over_qc:
         return low_strength
     coordinate = (q_over_qc - blend_lower_q_over_qc) / (
@@ -956,6 +967,8 @@ def _local_stitched_m0_density_A2_per_px2(
     stacking_parent_code: int,
     shared_disorder_epsilon: float,
     normalization_divisor: float,
+    spherical_density: bool = False,
+    m0_transfer: FloatArray | None = None,
 ) -> tuple[int, float, bool, bool]:
     """Evaluate the stitched ``(0,0)`` strength on its local-lamella air Ewald chart."""
 
@@ -1072,7 +1085,41 @@ def _local_stitched_m0_density_A2_per_px2(
         specular_blend_lower_q_over_qc,
         specular_blend_upper_q_over_qc,
     )
-    plane_density = _wrapped_mosaic_density(
+    negative_strength = strength
+    if spherical_density:
+        negative_phase_strength = _finite_stack_strength_A2(
+            m0_index,
+            -ell,
+            common_damping,
+            0.0,
+            -phase_q,
+            element_factor_0,
+            element_factor_1,
+            rod_atom_inplane_factor,
+            atom_fractional_offset,
+            atom_occupancy_element,
+            layers,
+            stacking_parent_code,
+            shared_disorder_epsilon,
+            rod_hk_population,
+            normalization_divisor,
+        )
+        negative_strength = _empirical_parratt_strength_A2(
+            negative_phase_strength,
+            external_q,
+            air_k0_Ainv,
+            film_refractive_index,
+            specular_substrate_refractive_index,
+            film_thickness_A,
+            specular_top_roughness_A,
+            specular_bottom_roughness_A,
+            specular_qc_Ainv,
+            specular_zero_strength_A2,
+            specular_scale_factor,
+            specular_blend_lower_q_over_qc,
+            specular_blend_upper_q_over_qc,
+        )
+    positive_density = _wrapped_mosaic_density(
         alpha,
         gaussian_sigma_rad,
         gaussian_probability,
@@ -1081,7 +1128,8 @@ def _local_stitched_m0_density_A2_per_px2(
         lorentzian_rho,
         lorentzian_one_minus_rho,
         lorentzian_numerator,
-    ) + _wrapped_mosaic_density(
+    )
+    negative_density = _wrapped_mosaic_density(
         math.pi - alpha,
         gaussian_sigma_rad,
         gaussian_probability,
@@ -1106,20 +1154,22 @@ def _local_stitched_m0_density_A2_per_px2(
         outgoing_air_direction_sample_z,
         polarization_model_code,
     )
-    denominator = external_q * external_q * sin_alpha
+    denominator = external_q * external_q
+    if not spherical_density:
+        denominator *= sin_alpha
     positive = (
         rod_hk_population[m0_index, 2] > 0.0
-        and strength > 0.0
-        and plane_density > 0.0
+        and (
+            (strength > 0.0 and positive_density > 0.0)
+            or (negative_strength > 0.0 and negative_density > 0.0)
+        )
         and event_envelope > 0.0
         and polarization > 0.0
     )
     if denominator == 0.0:
         return m0_index, np.inf if positive else 0.0, positive, True
-    density = (
-        plane_density
-        * rod_hk_population[m0_index, 2]
-        * strength
+    factor = (
+        rod_hk_population[m0_index, 2]
         * air_k0_Ainv
         * air_k0_Ainv
         * pixel_solid_angle_sr
@@ -1128,7 +1178,18 @@ def _local_stitched_m0_density_A2_per_px2(
         * event_envelope
         / denominator
     )
-    return m0_index, density, False, True
+    positive_coefficient = strength * factor
+    negative_coefficient = negative_strength * factor
+    if m0_transfer is not None:
+        m0_transfer[0] = alpha
+        m0_transfer[1] = positive_coefficient
+        m0_transfer[2] = negative_coefficient
+    return (
+        m0_index,
+        (positive_density * positive_coefficient + negative_density * negative_coefficient),
+        False,
+        True,
+    )
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
@@ -1194,6 +1255,8 @@ def _evaluate_point_into(
     density: FloatArray,
     inverse_count: IntArray,
     caustic: BoolArray,
+    spherical_density: bool = False,
+    m0_transfer: FloatArray | None = None,
 ) -> bool:
     rod_count = rod_hk_population.shape[0]
     for rod_index in range(rod_count):
@@ -1324,6 +1387,8 @@ def _evaluate_point_into(
             stacking_parent_code,
             shared_disorder_epsilon,
             normalization_divisor,
+            spherical_density,
+            m0_transfer,
         )
     if kf_air_z <= 0.0:
         if local_m0_valid:
@@ -1529,6 +1594,8 @@ def _evaluate_point_into(
                     lorentzian_one_minus_rho,
                     lorentzian_numerator,
                 )
+                if spherical_density:
+                    mosaic_density *= math.sin(alpha)
                 jacobian = abs(w_value * x_value)
                 if jacobian == 0.0:
                     cos_beta = math.cos(beta)
@@ -1641,13 +1708,17 @@ def _evaluate_points_kernel(
     shared_disorder_epsilon: float,
     normalization_divisor: float,
     branch: int,
-) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
+    spherical_density: bool = False,
+    spherical_gaussian_normalization: float = 1.0,
+    spherical_lorentzian_normalization: float = 1.0,
+) -> tuple[FloatArray, IntArray, BoolArray, BoolArray, FloatArray]:
     size = column_px.size
     rod_count = rod_hk_population.shape[0]
     density = np.zeros((size, rod_count), dtype=np.float64)
     inverse_count = np.zeros((size, rod_count), dtype=np.int64)
     caustic = np.zeros((size, rod_count), dtype=np.bool_)
     valid = np.zeros(size, dtype=np.bool_)
+    m0_transfer = np.zeros((size, 3), dtype=np.float64)
     ki_norm = math.sqrt(
         ki_film_sample_Ainv[0] ** 2 + ki_film_sample_Ainv[1] ** 2 + ki_film_sample_Ainv[2] ** 2
     )
@@ -1656,6 +1727,9 @@ def _evaluate_points_kernel(
     internal_k_squared_Ainv2 = internal_k_Ainv * internal_k_Ainv
     refractive_air_k_squared_Ainv2 = (refractive_index * air_k0_Ainv) ** 2
     gaussian_probability = 1.0 - lorentzian_probability
+    if spherical_density:
+        gaussian_probability /= spherical_gaussian_normalization
+        lorentzian_probability /= spherical_lorentzian_normalization
     gaussian_normalization = math.sqrt(2.0 * math.pi) * gaussian_sigma_rad
     lorentzian_rho = math.exp(-lorentzian_hwhm_rad)
     lorentzian_one_minus_rho = -math.expm1(-lorentzian_hwhm_rad)
@@ -1723,8 +1797,10 @@ def _evaluate_points_kernel(
             density[point],
             inverse_count[point],
             caustic[point],
+            spherical_density,
+            m0_transfer[point],
         )
-    return density, inverse_count, caustic, valid
+    return density, inverse_count, caustic, valid, m0_transfer
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
@@ -2450,12 +2526,30 @@ class CompiledDetectorEvaluator:
         row_px: NDArray[np.float64],
         *,
         root_selector: int,
-    ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
+        mosaic_density: SphericalMosaicDensity | None = None,
+    ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray, FloatArray]:
         column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
         row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
         if column.shape != row.shape:
             raise ValueError("compiled detector coordinates must have equal shapes")
         state = self._state
+        gaussian_normalization = lorentzian_normalization = 1.0
+        if mosaic_density is not None:
+            if not isinstance(mosaic_density, SphericalMosaicDensity):
+                raise TypeError("mosaic_density must be SphericalMosaicDensity")
+            if np.any(np.all(state.rod_hk_population[:, :2] == 0.0, axis=1)) and (
+                state.specular_stitch_code != 1
+            ):
+                raise ValueError("spherical m0 requires the local-lamella stitched channel")
+            parameters = mosaic_density.parameters
+            if (
+                parameters.gaussian_sigma_rad != state.gaussian_sigma_rad
+                or parameters.lorentzian_half_width_rad != state.lorentzian_hwhm_rad
+                or parameters.lorentzian_probability != state.lorentzian_probability
+            ):
+                raise ValueError("spherical parameters must match the compiled mosaic state")
+            gaussian_normalization = mosaic_density.gaussian_normalization
+            lorentzian_normalization = mosaic_density.lorentzian_normalization
         return _evaluate_points_kernel(
             column,
             row,
@@ -2508,6 +2602,9 @@ class CompiledDetectorEvaluator:
             state.shared_disorder_epsilon,
             state.normalization_divisor,
             root_selector,
+            mosaic_density is not None,
+            gaussian_normalization,
+            lorentzian_normalization,
         )
 
     def evaluate(
@@ -2525,12 +2622,14 @@ class CompiledDetectorEvaluator:
             column_px,
             row_px,
             root_selector=branch,
-        )
+        )[:4]
 
     def evaluate_all_roots(
         self,
         column_px: NDArray[np.float64],
         row_px: NDArray[np.float64],
+        *,
+        mosaic_density: SphericalMosaicDensity | None = None,
     ) -> tuple[FloatArray, IntArray, BoolArray, BoolArray]:
         """Sum both nonzero roots and both m=0 latent inverse preimages."""
 
@@ -2538,7 +2637,34 @@ class CompiledDetectorEvaluator:
             column_px,
             row_px,
             root_selector=0,
+            mosaic_density=mosaic_density,
+        )[:4]
+
+    def compile_local_m0_transfer(
+        self,
+        column_px: NDArray[np.float64],
+        row_px: NDArray[np.float64],
+        *,
+        mosaic_density: SphericalMosaicDensity,
+    ) -> FloatArray:
+        """Return [tilt_rad, positive_L_coefficient, negative_L_coefficient].
+
+        Coefficients bind this immutable source/geometry/strength/optical state.
+        Spherical probability is not included. Recompile when bound state changes.
+        Zeros follow physical support or structure extinctions, never an
+        empirical intensity threshold.
+        """
+        if self._state.specular_stitch_code != 1 or np.any(
+            self._state.rod_hk_population[:, :2] != 0
+        ):
+            raise ValueError("local m0 transfer requires only the local-lamella stitched rod")
+        density, _, caustic, _, transfer = self._evaluate_with_root_selector(
+            column_px, row_px, root_selector=0, mosaic_density=mosaic_density
         )
+        if np.any(caustic) or not np.all(np.isfinite(density)):
+            raise FloatingPointError("undefined local m0 transfer")
+        transfer.setflags(write=False)
+        return transfer
 
     def accumulate_latent_pixel_mass(
         self,

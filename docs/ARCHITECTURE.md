@@ -32,6 +32,8 @@ contributing rod/orientation branches on the active detector panel.
 - `types.py`: immutable rods, mosaic parameters, root status, and strength protocols.
 - `rotations.py`: column-vector active rotations.
 - `mosaic.py`: normalized folded-alpha/full-beta probability law and compact quadrature helpers.
+- `normal_density.py`: opt-in spherical-area mosaic law reusing those component densities and
+  quadrature; one shared probability for directed rods and signed local-lamella specular transfer.
 - `rods.py`: detector-independent elastic-reach rod enumeration.
 - `bragg.py`: continuous `(alpha, beta, u)` map and per-rod mosaic × population × strength density.
 - `ewald.py`: stable analytic line/sphere roots with tangent and no-root status.

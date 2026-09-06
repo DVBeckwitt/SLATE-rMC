@@ -29,6 +29,7 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `IncidentStateBatch` | geometry | entrance-intersected air and film-phase `ki`, Fresnel amplitude, decay, footprint, source identity |
 | `MaterialOptics` | materials | wavelength-aligned complex refractive index and material revision |
 | `RodCatalog` | reciprocal | every physical `(h,k)` rod and exact family metadata |
+| `SphericalMosaicDensity` | painted_ewald | explicitly named directed spherical-area law, component mass normalizers, latent and antipodal densities; shared CPU raw-count refit measure described in [RESULT_MEASURE](RESULT_MEASURE.md) |
 | `RodQueryBatch` | ordered/stacking | rod-aligned `L` queries with stable IDs |
 | `EventIntensityResult` | ordered/stacking | query-aligned amplitude, intensity, normalization, and model revision |
 | `ParrattResult` / `SpecularResult` / `KinematicScaleSpecularResult` | reflectivity | separately named pure and unit-preserving composite specular outputs |

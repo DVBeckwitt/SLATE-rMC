@@ -308,10 +308,18 @@ def _empirical_parratt_strength_A2(
     )
     top_denominator = complex(external_half, 0.0) + film_kz
     bottom_denominator = film_kz + substrate_kz
-    if top_denominator == 0.0 or bottom_denominator == 0.0:
-        return phase_strength_A2
-    top = (complex(external_half, 0.0) - film_kz) / top_denominator
-    bottom = (film_kz - substrate_kz) / bottom_denominator
+    if external_half == 0.0 and film_kz == 0.0:
+        top = 0.0j
+    elif top_denominator == 0.0:
+        return math.nan
+    else:
+        top = (complex(external_half, 0.0) - film_kz) / top_denominator
+    if film_kz == 0.0 and substrate_kz == 0.0:
+        bottom = 0.0j
+    elif bottom_denominator == 0.0:
+        return math.nan
+    else:
+        bottom = (film_kz - substrate_kz) / bottom_denominator
     if top_roughness_A != 0.0:
         top *= _complex_exponential(
             -2.0 * complex(external_half, 0.0) * film_kz * top_roughness_A**2
@@ -321,12 +329,14 @@ def _empirical_parratt_strength_A2(
     propagated = bottom * _complex_exponential(2.0j * film_kz * film_thickness_A)
     recursion_denominator = 1.0 + top * propagated
     if recursion_denominator == 0.0:
-        return phase_strength_A2
+        return math.nan
     amplitude = (top + propagated) / recursion_denominator
     reflectivity = amplitude.real * amplitude.real + amplitude.imag * amplitude.imag
     low_strength = (
         external_qz * external_qz * reflectivity * zero_strength_A2 / dimensionless_scale_factor
     )
+    if not math.isfinite(reflectivity) or not math.isfinite(low_strength):
+        return math.nan
     if q_over_qc <= blend_lower_q_over_qc:
         return low_strength
     coordinate = (q_over_qc - blend_lower_q_over_qc) / (
@@ -821,6 +831,9 @@ def _accumulate_state_block_kernel(
                         state_real[state_index, 24],
                         state_real[state_index, 25],
                     )
+                if not math.isfinite(strength):
+                    density[rod_index, point] = math.nan
+                    return
                 mosaic_density = _wrapped_mosaic_density(
                     alpha,
                     gaussian_sigma_rad,
@@ -1126,6 +1139,8 @@ def _evaluate_source_averaged_all_roots_cuda(
             density[start:stop] = device_density.copy_to_host()
             caustic[start:stop] = device_caustic.copy_to_host()
         valid_source_count[start:stop] = device_valid_count.copy_to_host()
+    if np.any(np.isnan(density) | np.isneginf(density)):
+        raise FloatingPointError("CUDA detector evaluation produced undefined physical intensity")
     return density, caustic, valid_source_count, device_name
 
 
@@ -1329,6 +1344,8 @@ def evaluate_selected_source_rod_groups_all_roots_cuda(
             sorted_density[start:stop] = device_density.copy_to_host()
             sorted_caustic[start:stop] = device_caustic.copy_to_host()
             sorted_valid[start:stop] = device_valid_count.copy_to_host() == 1
+    if np.any(np.isnan(sorted_density) | np.isneginf(sorted_density)):
+        raise FloatingPointError("CUDA detector evaluation produced undefined physical intensity")
     if order is None:
         return sorted_density, sorted_caustic, sorted_valid, device_name
     inverse_order = np.empty(order.shape, dtype=np.int64)
