@@ -321,14 +321,23 @@ class NativePixelRegionProjection:
             ),
             shape=(self.observation_count, self.flat_pixel_index.size),
         )
-        mass = np.asarray(projector @ selected_value, dtype=np.float64)
-        root_variance = np.sqrt(selected_variance)
-        weighted = projector.multiply(root_variance[None, :])
-        covariance = np.asarray((weighted @ weighted.T).toarray(), dtype=np.float64)
-        covariance = 0.5 * (covariance + covariance.T)
-        mass.setflags(write=False)
-        covariance.setflags(write=False)
-        return mass, covariance
+        return _project_native_pixel_field(projector, selected_value, selected_variance)
+
+
+def _project_native_pixel_field(
+    projector: csr_matrix,
+    value: FloatArray,
+    variance: FloatArray,
+) -> tuple[FloatArray, FloatArray]:
+    """Apply one linear pixel projection to its mean and independent-pixel variance."""
+
+    mass = np.asarray(projector @ value, dtype=np.float64)
+    weighted = projector.multiply(np.sqrt(variance)[None, :])
+    covariance = np.asarray((weighted @ weighted.T).toarray(), dtype=np.float64)
+    covariance = 0.5 * (covariance + covariance.T)
+    mass.setflags(write=False)
+    covariance.setflags(write=False)
+    return mass, covariance
 
 
 def integrate_shared_native_pixel_field(
@@ -377,13 +386,7 @@ def integrate_shared_native_pixel_field(
     )
     flat_value = value.reshape(-1)[shared_flat_pixel]
     flat_variance = variance.reshape(-1)[shared_flat_pixel]
-    mass = np.asarray(projector @ flat_value, dtype=np.float64)
-    weighted = projector.multiply(np.sqrt(flat_variance)[None, :])
-    covariance = np.asarray((weighted @ weighted.T).toarray(), dtype=np.float64)
-    covariance = 0.5 * (covariance + covariance.T)
-    mass.setflags(write=False)
-    covariance.setflags(write=False)
-    return mass, covariance
+    return _project_native_pixel_field(projector, flat_value, flat_variance)
 
 
 def compile_native_pixel_region_projection(

@@ -56,10 +56,12 @@ contributing rod/orientation branches on the active detector panel.
   solid angle or one-incident-state detector coordinates, plus native-pixel integration.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
   fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and an optional
-  wavelength-resolved local-lamella `(0,0)` field compiled once per source wavelength and retained
-  unchanged across candidate structure rebinding. The stitched
-  field owns all `(0,0)` momentum transfer; nonzero rods keep the regular path. Forward Monte Carlo
-  fails closed for this optional field until it has an equivalent implementation.
+  wavelength-resolved `(0,0)` stitch compiled once per source wavelength and retained unchanged
+  across candidate structure rebinding. Its explicit interface convention is either
+  `local_lamella_follows_mosaic.v1`, which owns the complete local-reflection inverse map and rejects
+  forward Monte Carlo, or `fixed_external_qz_m0_strength.v1`, which replaces only the `(0,0)`
+  strength on the regular inverse map and supports compiled CPU/CUDA and forward sampling.
+  Nonzero rods keep the regular path; these interface assumptions are not interchangeable.
 - `pipeline/source_averaged_structure.py`: sparse selected-coordinate source averaging with fixed
   detector transfer and revision-bearing candidate structure strength for mosaic and ordered-
   intensity fitting.

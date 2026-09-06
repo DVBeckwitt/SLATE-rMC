@@ -13,6 +13,12 @@ from numpy.typing import NDArray
 
 from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
+from rasim_next.pipeline._continuous_detector_kernel import (
+    _coherent_finite_stack_intensity as _cpu_coherent_finite_stack_intensity,
+)
+from rasim_next.pipeline._continuous_detector_kernel import (
+    _wrapped_mosaic_density as _cpu_wrapped_mosaic_density,
+)
 from rasim_next.stacking.finite_intensity import _finite_moment_intensity
 
 FloatArray = NDArray[np.float64]
@@ -332,77 +338,12 @@ def _empirical_parratt_strength_A2(
     return math.exp((1.0 - weight) * math.log(low_for_log) + weight * math.log(phase_for_log))
 
 
-@cuda.jit(device=True, inline=True)
-def _wrapped_mosaic_density(
-    alpha: float,
-    gaussian_sigma: float,
-    gaussian_probability: float,
-    gaussian_normalization: float,
-    lorentzian_probability: float,
-    lorentzian_rho: float,
-    lorentzian_one_minus_rho: float,
-    lorentzian_numerator: float,
-) -> float:
-    two_pi = 2.0 * math.pi
-    wrapped = (alpha + math.pi) % two_pi - math.pi
-    density = 0.0
-    if gaussian_probability > 0.0 and gaussian_sigma > 0.0:
-        if gaussian_sigma >= 1.0:
-            gaussian = 1.0
-            harmonic = 1
-            while harmonic <= 100_000:
-                amplitude = 2.0 * math.exp(-0.5 * (harmonic * gaussian_sigma) ** 2)
-                gaussian += amplitude * math.cos(harmonic * wrapped)
-                next_amplitude = 2.0 * math.exp(-0.5 * ((harmonic + 1) * gaussian_sigma) ** 2)
-                if next_amplitude <= 1.0e-15 * gaussian:
-                    break
-                harmonic += 1
-            gaussian /= two_pi
-        else:
-            scaled = math.exp(-0.5 * (wrapped / gaussian_sigma) ** 2)
-            scaled += math.exp(-0.5 * ((wrapped + two_pi) / gaussian_sigma) ** 2)
-            scaled += math.exp(-0.5 * ((wrapped - two_pi) / gaussian_sigma) ** 2)
-            gaussian = scaled / gaussian_normalization
-        density += gaussian_probability * gaussian
-    if lorentzian_probability > 0.0 and lorentzian_numerator > 0.0:
-        denominator = two_pi * (
-            lorentzian_one_minus_rho * lorentzian_one_minus_rho
-            + 4.0 * lorentzian_rho * math.sin(0.5 * wrapped) ** 2
-        )
-        density += lorentzian_probability * lorentzian_numerator / denominator
-    return density / math.pi
+# Compile the same undecorated arithmetic for CUDA, not the CPU dispatcher.
+_wrapped_mosaic_density = cuda.jit(device=True, inline=True)(_cpu_wrapped_mosaic_density.py_func)
 
-
-@cuda.jit(device=True, inline=True)
-def _coherent_finite_stack_intensity(
-    layers: int,
-    ell: float,
-    registry_index: int,
-) -> float:
-    """Return the stable fault-free geometric-series intensity in constant work."""
-
-    if layers == 1:
-        return 1.0
-    reduced_ell = ell - float(registry_index)
-    reduced_ell -= 3.0 * math.floor(reduced_ell / 3.0 + 0.5)
-    scaled_ell = layers * reduced_ell
-    layer_count = float(layers)
-    layers_squared = layer_count * layer_count
-    if abs(scaled_ell) < 1.0e-4:
-        half_phase = math.pi * reduced_ell / 3.0
-        half_phase_squared = half_phase * half_phase
-        fourth_order = (2.0 * layers_squared * layers_squared - 5.0 * layers_squared + 3.0) / 45.0
-        return layers_squared * (
-            1.0
-            - (layers_squared - 1.0) * half_phase_squared / 3.0
-            + fourth_order * half_phase_squared * half_phase_squared
-        )
-    numerator_ell = scaled_ell - 3.0 * math.floor(scaled_ell / 3.0 + 0.5)
-    denominator = math.sin(math.pi * reduced_ell / 3.0)
-    if denominator == 0.0:
-        return layers_squared
-    ratio = math.sin(math.pi * numerator_ell / 3.0) / denominator
-    return ratio * ratio
+_coherent_finite_stack_intensity = cuda.jit(device=True, inline=True)(
+    _cpu_coherent_finite_stack_intensity.py_func
+)
 
 
 @cuda.jit(device=True, inline=True)

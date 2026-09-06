@@ -124,7 +124,7 @@ def _sample_antithetic_geometry(
             )
         )
         try:
-            origin, direction, _, moment_matched = _sample_origin_and_direction(
+            origin, direction, moment_matched = _sample_origin_and_direction(
                 gaussian[:, :4],
                 mean_origin=mean_origin,
                 mean_direction=mean_direction,
@@ -177,7 +177,7 @@ def _sample_origin_and_direction(
     divergence_sigma: np.ndarray,
     position_divergence_correlation: np.ndarray,
     source_weight: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+) -> tuple[np.ndarray, np.ndarray, bool]:
     if gaussian.ndim != 2 or gaussian.shape[1] != 4:
         raise ValueError("gaussian source geometry must have shape (N, 4)")
     has_correlation = bool(np.any(position_divergence_correlation != 0.0))
@@ -225,7 +225,7 @@ def _sample_origin_and_direction(
     radius = np.linalg.norm(tangent, axis=1)
     sine_scale = np.divide(np.sin(radius), radius, out=np.ones_like(radius), where=radius != 0.0)
     direction = np.cos(radius)[:, None] * mean_direction + sine_scale[:, None] * tangent
-    return origin, direction, gaussian, moment_matched
+    return origin, direction, moment_matched
 
 
 def _source_batch(

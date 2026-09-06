@@ -196,7 +196,7 @@ named and apply its correction once.
 
 ## Unified local-lamella `m=0` detector measure
 
-When a `ParrattStitchStack` is supplied, the local-lamella inverse-reflection map owns the complete
+When a `ParrattStitchStack` declares `local_lamella_follows_mosaic.v1`, its inverse-reflection map owns the complete
 nonzero `(0,0)` detector field. For each sampled incident direction and detector ray, their external
 momentum-transfer direction defines the unoriented local normal. The internal film normal mode gives
 `L = 2 Re(kz_film) / |b3|`. The roughened Parratt--kinematic crossover is evaluated as one strength
@@ -217,6 +217,13 @@ wavelength is evaluated before incoherent reduction. Exact direct-beam `Q=0` is 
 mirror-map caustics remain explicit and are resolved by later finite-bin integration. The output stays in the same
 `raw_detector_coordinate_density_A2_per_px2.v1` measure as every other rod. There is no second
 count scale, horizontal shift, detector raster, smoothing, or resolution convolution.
+
+The separate `fixed_external_qz_m0_strength.v1` convention retains the ordinary regular inverse
+map, its positive-Q support gap, mosaic measure, and detector transfer. It replaces only the
+`(0,0)` kinematic strength with the empirical Parratt--kinematic crossover, using
+`|Q_air dot Q_film_hat|` for the external normal transfer. Nonzero rods are unchanged. This path
+supports compiled CPU/CUDA and forward sampling; the local-lamella path rejects forward sampling.
+The two interface conventions express different assumptions, not equivalent implementations.
 
 ## Continuous angle-coordinate measure
 

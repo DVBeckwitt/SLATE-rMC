@@ -81,6 +81,18 @@ def _readonly_float_array(value: ArrayLike, shape: tuple[int, ...], name: str) -
     return array
 
 
+def _marker_whitening(covariance: FloatArray, subject: str) -> FloatArray:
+    if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
+        raise ValueError(f"each {subject} covariance must be symmetric")
+    try:
+        cholesky = np.linalg.cholesky(covariance)
+    except np.linalg.LinAlgError as error:
+        raise ValueError(f"each {subject} covariance must be positive definite") from error
+    whitening = np.linalg.inv(cholesky)
+    whitening.setflags(write=False)
+    return whitening
+
+
 @dataclass(frozen=True, slots=True)
 class GeometryCorrections:
     """Identifiable local pose corrections relative to one frozen instrument."""
@@ -369,14 +381,7 @@ class IntegerLMarkerObservations:
         _validate_tag_key_pack(keys, "observation")
         coordinates = _readonly_float_array(self.coordinates_px, (len(keys), 2), "coordinates_px")
         covariance = _readonly_float_array(self.covariance_px2, (len(keys), 2, 2), "covariance_px2")
-        if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
-            raise ValueError("each marker covariance must be symmetric")
-        try:
-            cholesky = np.linalg.cholesky(covariance)
-        except np.linalg.LinAlgError as error:
-            raise ValueError("each marker covariance must be positive definite") from error
-        whitening = np.linalg.inv(cholesky)
-        whitening.setflags(write=False)
+        whitening = _marker_whitening(covariance, "marker")
         wavelength = float(self.reference_wavelength_A)
         if not math.isfinite(wavelength) or wavelength <= 0.0:
             raise ValueError("reference_wavelength_A must be finite and positive")
@@ -551,14 +556,7 @@ class LayerLMarkerObservations:
             (size, 2, 2),
             "covariance_px2",
         )
-        if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
-            raise ValueError("each marker covariance must be symmetric")
-        try:
-            cholesky = np.linalg.cholesky(covariance)
-        except np.linalg.LinAlgError as error:
-            raise ValueError("each marker covariance must be positive definite") from error
-        whitening = np.linalg.inv(cholesky)
-        whitening.setflags(write=False)
+        whitening = _marker_whitening(covariance, "marker")
         wavelength = float(self.reference_wavelength_A)
         if not math.isfinite(wavelength) or wavelength <= 0.0:
             raise ValueError("reference_wavelength_A must be finite and positive")
@@ -810,14 +808,7 @@ class M0IntegerLObservations:
             (size, 2, 2),
             "covariance_px2",
         )
-        if not np.allclose(covariance, np.swapaxes(covariance, -1, -2), rtol=0.0, atol=0.0):
-            raise ValueError("each m=0 landmark covariance must be symmetric")
-        try:
-            cholesky = np.linalg.cholesky(covariance)
-        except np.linalg.LinAlgError as error:
-            raise ValueError("each m=0 landmark covariance must be positive definite") from error
-        whitening = np.linalg.inv(cholesky)
-        whitening.setflags(write=False)
+        whitening = _marker_whitening(covariance, "m=0 landmark")
         wavelength = float(self.reference_wavelength_A)
         if not math.isfinite(wavelength) or wavelength <= 0.0:
             raise ValueError("reference_wavelength_A must be finite and positive")
@@ -1856,29 +1847,6 @@ def _direct_layer_l_root_coordinates(
     return coordinates, False
 
 
-def _direct_integer_l_root_coordinates(
-    *,
-    rod: Rod,
-    integer_l: int,
-    reciprocal_basis_Ainv: FloatArray,
-    crystal_to_sample: FloatArray,
-    ki_sample_Ainv: FloatArray,
-    incident: IncidentTransportResult,
-    material: MaterialOptics,
-    instrument: CompiledInstrument,
-) -> tuple[dict[tuple[int, int], FloatArray], bool]:
-    return _direct_layer_l_root_coordinates(
-        rod=rod,
-        layer_order=CommensurateLayerOrder(integer_l),
-        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
-        crystal_to_sample=crystal_to_sample,
-        ki_sample_Ainv=ki_sample_Ainv,
-        incident=incident,
-        material=material,
-        instrument=instrument,
-    )
-
-
 def audit_exact_tag_geometry_roots(
     model: ExactTagGeometryModel,
     expected_keys: tuple[IntegerLMarkerKey, ...],
@@ -1926,9 +1894,9 @@ def audit_exact_tag_geometry_roots(
         problem = (key.representative_rod_hk, key.integer_L)
         if problem in direct_by_problem:
             continue
-        direct_by_problem[problem] = _direct_integer_l_root_coordinates(
+        direct_by_problem[problem] = _direct_layer_l_root_coordinates(
             rod=rod,
-            integer_l=key.integer_L,
+            layer_order=CommensurateLayerOrder(key.integer_L),
             reciprocal_basis_Ainv=basis,
             crystal_to_sample=crystal_to_sample,
             ki_sample_Ainv=ki_sample,
@@ -2143,16 +2111,6 @@ class _ExactTagGeometry:
     def reference_wavelength_A(self) -> float:
         return float(self._nominal_samples.wavelength_A[0])
 
-    @staticmethod
-    def _frozen_nonzero_keys(
-        keys: tuple[IntegerLMarkerKey, ...],
-    ) -> tuple[IntegerLMarkerKey, ...]:
-        return _frozen_nonzero_keys(keys)
-
-    @staticmethod
-    def _frozen_m0_integer_l(integer_L: tuple[int, ...]) -> tuple[int, ...]:
-        return _frozen_m0_integer_l(integer_L)
-
     def predict(
         self,
         keys: tuple[IntegerLMarkerKey, ...],
@@ -2196,8 +2154,8 @@ class _ExactTagGeometry:
     ) -> tuple[IntegerLMarkerPrediction, M0IntegerLPrediction]:
         """Predict both exact tag groups for one correction state."""
 
-        frozen_keys = self._frozen_nonzero_keys(nonzero_keys)
-        frozen_l = self._frozen_m0_integer_l(m0_integer_L)
+        frozen_keys = _frozen_nonzero_keys(nonzero_keys)
+        frozen_l = _frozen_m0_integer_l(m0_integer_L)
         instrument = _corrected_instrument(
             self._inputs.instrument,
             corrections,

@@ -339,9 +339,6 @@ def evaluate_continuous_per_rod_angle_signal(
     valid = coordinates.valid & (normalization > 0.0)
     signal = np.zeros((*two_theta.shape, len(rods)), dtype=np.float64)
     caustic = np.zeros(signal.shape, dtype=np.bool_)
-    result_backend: str | None = None
-    result_device: str | None = None
-    source_revision: str | None = None
     flat_valid = np.flatnonzero(valid)
     evaluated = detector_function.evaluate_detector_coordinates_all_roots(
         coordinates.column_px.ravel()[flat_valid],

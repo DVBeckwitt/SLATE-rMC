@@ -8166,7 +8166,7 @@ def test_mosaic_runner_passes_nominally_unsupported_m0_to_combined_source_gate()
         )
 
 
-def test_ordered_renderer_validates_gate_v2_measured_profile_catalog() -> None:
+def test_ordered_recovery_validates_gate_v2_measured_profile_catalog() -> None:
     root = Path(__file__).resolve().parents[1]
     runner = runpy.run_path(root / "scripts" / "recover_bi2se3_ordered_intensity.py")
     case_path = root / "examples" / "bi2se3" / "experiment" / "ordered_intensity_fit_truth.toml"
@@ -8571,56 +8571,8 @@ def test_normalized_field_freezes_masks_losses_divide_order_and_phi_permutation(
     )
 
 
-def test_interactive_detector_raster_uses_native_monte_carlo_pixel_mass() -> None:
-    from types import SimpleNamespace
-
+def test_interactive_detector_texture_preserves_native_pixel_ownership() -> None:
     viewer = runpy.run_path(DETECTOR_VIEWER_SCRIPT)
-    sample_detector_raster = viewer["sample_detector_raster"]
-
-    class MonteCarloDetectorSpy:
-        def __init__(self) -> None:
-            self.call: tuple[int, int] | None = None
-            self.estimate = SimpleNamespace(image_A2=np.asarray(((0.0, 1.0, 0.0), (2.0, 0.0, 3.0))))
-
-        def sample_native_pixel_mass(
-            self,
-            *,
-            draws_per_source_state: int,
-            seed: int,
-        ) -> object:
-            self.call = (draws_per_source_state, seed)
-            return self.estimate
-
-        def evaluate_detector_density_all_roots(
-            self,
-            *_args: object,
-            **_kwargs: object,
-        ) -> object:
-            raise AssertionError("the display must not sample continuous detector density")
-
-        def evaluate_detector_coordinates_all_roots(
-            self, *_args: object, **_kwargs: object
-        ) -> object:
-            raise AssertionError("the display must not request per-rod coordinate evidence")
-
-        def integrate_native_pixels(self, **_kwargs: object) -> object:
-            raise AssertionError("the display must not integrate detector pixels")
-
-    detector = MonteCarloDetectorSpy()
-    raster = sample_detector_raster(
-        detector,
-        draws_per_source_state=49,
-        seed=20260728,
-    )
-
-    assert detector.call == (49, 20260728)
-    assert raster.estimate is detector.estimate
-    np.testing.assert_array_equal(
-        raster.estimate.image_A2,
-        np.asarray(((0.0, 1.0, 0.0), (2.0, 0.0, 3.0))),
-    )
-    assert raster.wall_time_s >= 0.0
-
     source = np.asarray(((1.0, 2.0, 3.0), (4.0, 5.0, 6.0)), dtype=np.float64)
     source_bytes = source.tobytes()
     texture = viewer["_prepare_full_native_texture"](source)
@@ -8760,22 +8712,19 @@ def test_interactive_detector_only_change_reuses_incident_transport(
         config,
         config.source.minimum_physical_sample_count,
     )
-    evaluate_bundle = viewer["_evaluate_bundle"]
+    detector_for_deltas = viewer["_detector_for_deltas"]
 
     def fail_incident_rebuild(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("detector-only controls must reuse incident transport")
 
-    original_incident_builder = evaluate_bundle.__globals__["build_incident_states"]
-    evaluate_bundle.__globals__["build_incident_states"] = fail_incident_rebuild
-    evaluate_bundle.__globals__["sample_detector_raster"] = lambda detector, **_kwargs: detector
-    detector = evaluate_bundle(
+    original_incident_builder = detector_for_deltas.__globals__["build_incident_states"]
+    detector_for_deltas.__globals__["build_incident_states"] = fail_incident_rebuild
+    detector = detector_for_deltas(
         bundle,
         viewer["GeometryDeltas"](
             detector_pitch_offset_deg=0.25,
             detector_column_translation_mm=0.5,
         ),
-        draws_per_source_state=1,
-        seed=7,
     )
 
     assert detector.incident is bundle.inputs.incident
@@ -8816,7 +8765,7 @@ def test_interactive_detector_only_change_reuses_incident_transport(
         <= viewer["_DETECTOR_ONLY_DELTA_FIELDS"]
     )
 
-    evaluate_bundle.__globals__["build_incident_states"] = original_incident_builder
+    detector_for_deltas.__globals__["build_incident_states"] = original_incident_builder
     session = viewer["_DetectorRenderSession"](
         config,
         detector_seed=7,
@@ -8844,7 +8793,7 @@ def test_interactive_detector_only_change_reuses_incident_transport(
         sample_in_plane_x_translation_mm=0.1,
     )
     session.render(stage(1, sample_corrected), stop_requested=viewer["threading"].Event())
-    evaluate_bundle.__globals__["build_incident_states"] = fail_incident_rebuild
+    detector_for_deltas.__globals__["build_incident_states"] = fail_incident_rebuild
     mixed_revision = replace(sample_corrected, detector_pitch_offset_deg=0.2)
     cancelled_revision = stage(2, mixed_revision)
     sampler_type = type(session._sampler)
@@ -8958,17 +8907,8 @@ def test_interactive_detector_viewer_reenumerates_rods_after_validity_change() -
         (rod.h, rod.k) for rod in bundle.inputs.rods
     }
 
-    evaluate_bundle = viewer["_evaluate_bundle"]
-    evaluate_bundle.__globals__["sample_detector_raster"] = lambda detector, **_kwargs: len(
-        detector.rods
-    )
-    changed_rod_count = evaluate_bundle(
-        bundle,
-        deltas,
-        draws_per_source_state=2,
-        seed=7,
-    )
-    assert changed_rod_count == len(changed_rods)
+    detector = viewer["_detector_for_deltas"](bundle, deltas)
+    assert len(detector.rods) == len(changed_rods)
 
 
 def test_interactive_geometry_deltas_use_domain_names_and_apply_base_local_pose() -> None:

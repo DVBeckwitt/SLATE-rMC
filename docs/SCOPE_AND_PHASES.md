@@ -68,10 +68,11 @@ detector geometry.
   now apply those same fixed parents through the shared selected-coordinate detector/source/optics
   transfer; it still does not refine continuous transition-law parameters or supply measured
   observation/background data.
-- An optional unified local-lamella `(0,0)` detector field that evaluates the Parratt--kinematic
-  strength at internal phase `L` for every actual sampled incident direction and wavelength.
-  Interface roughness is physical Nevot--Croce roughness; no auxiliary count scale, model raster,
-  smoothing, or detector-resolution convolution is implied.
+- Optional Parratt--kinematic `(0,0)` stitching with an explicit interface convention: a unified
+  local-lamella field following the mosaic, or fixed-external-Qz strength on the regular inverse
+  map. Both retain wavelength-resolved strength in `A2`; the conventions are not interchangeable.
+  Interface roughness is physical Nevot--Croce roughness; neither implies an auxiliary count scale,
+  model raster, smoothing, or detector-resolution convolution.
 - NumPy proof, compiled CPU, and CUDA detector evaluators.
 - Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
 

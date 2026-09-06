@@ -29,36 +29,19 @@ from rasim_next.selection.indexing import (
     PeakIndexingPolicy,
     _array_hash,
     _Candidate,
+    _finite,
     _float_token,
     _is_sha256_identifier,
     _merge_candidates,
     _native_refinement,
+    _positive,
+    _positive_integer,
     _robust_sigma,
     _sha256_payload,
 )
 
 FloatArray = NDArray[np.float64]
 type _GeometryIndexingContext = NominalEwaldContext | GeometryOnlyEwaldContext
-
-
-def _finite(value: float, name: str) -> float:
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{name} must be finite")
-    return result
-
-
-def _positive(value: float, name: str) -> float:
-    result = _finite(value, name)
-    if result <= 0.0:
-        raise ValueError(f"{name} must be positive")
-    return result
-
-
-def _positive_integer(value: int, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-    return int(value)
 
 
 def _circular_distance(first: float, second: float) -> float:

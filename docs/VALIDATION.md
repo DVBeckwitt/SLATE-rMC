@@ -2071,3 +2071,66 @@ the checkout's `src` on `PYTHONPATH`, `PYTHONDONTWRITEBYTECODE=1`, and `OPENBLAS
 The focused CPU-after-CUDA sequence also passes (3 tests). Formatting, Ruff, documentation,
 and seed-inventory checks accompany the compact registered proof commands
 `python -B -m rasim_next.proof <command> --json`; no type checker is configured.
+
+## Repository-wide simplification audit (2026-09-06)
+
+Base `229f1bc`; audit scope covers both production packages, fitting/figure scripts, measurement
+and selection, interactive tools, all tracked tests/proofs, dependencies, and active documentation.
+Five read-only subsystem reviews and an AST consumer/duplicate scan informed the one-writer changes.
+The scan covered 148 non-reference Python files (122,148 lines at the base); it is dependency and
+structural evidence, not a claim that static analysis proves every possible external use absent.
+
+Removed the unused orientation-transition helper left by the centered-moment repair, four private
+geometry/mosaic forwarding wrappers, and the obsolete synchronous viewer sampling chain. Viewer
+tests now call the live geometry helper directly; native texture ownership and progressive
+render/cancellation/rebind tests remain. Three exact selection validators now reuse their existing
+indexing-module owner. Sampling drops only an ignored private return element; angle evaluation
+drops overwritten initializations. Motif reflection updates only its changed immutable field.
+
+CUDA now compiles the undecorated Python arithmetic already used by the CPU for wrapped mosaic
+density and fault-free finite-stack strength. The equations, operation order, compiler precision,
+Gaussian stopping rule, and Lorentzian normalization are unchanged. No CPU dispatcher is called
+inside CUDA, and neither helper compiles or initializes a device during module import. Local
+geometry whitening and native-pixel mean/covariance projection each have one arithmetic owner;
+their validation, exception messages/causes, ordering, and read-only results remain unchanged.
+Four proof hash loops use the existing standard-library streaming file-digest operation.
+
+Active documentation now distinguishes the existing local-lamella and fixed-external-Qz specular
+conventions. Neither convention was changed or silently substituted. The generic historical plan
+and checklist are compacted, preserving the accepted Checkpoint K link/provenance, all six
+previously unchecked downstream obligations, and exact Git recovery coordinates for full detail.
+
+Intentionally retained: immutable examples/reference evidence; independent full-state, enumeration,
+scalar optics and geometry oracles; live v7/v8 fitting/replay workflows and figure scripts; both
+interactive viewers; video tooling; all declared dependencies; and active/source-less replay
+dependencies in the main checkout. Similar validators with different input/error contracts were
+not combined. Repeated reflectivity setup calls require a separate validation-preserving redesign,
+not deletion in this cleanup. No new module, dependency, permanent test, or diagnostic artifact was
+added. Removed wrapper-only assertions do not retire any scientific invariant or live integration
+boundary. Public scientific interfaces, revision definitions, tolerances, models, and saved fits
+are unchanged.
+
+Independent reviews found no required changes. Focused runs passed: 81 core/selection/fitting
+tests, 19 covariance/projection checks, nine viewer/recovery checks, and five selected CPU/CUDA
+integration tests. Separate CPU-after-CUDA compilation probes and 512 mixed arithmetic cases
+matched the former CUDA definitions bit-for-bit. Valid, asymmetric, indefinite, and empty
+covariance batches retained their former outputs or errors.
+
+Final frozen-lock Python 3.13.13 suite: **473 passed**, 12 GPU-underutilization warnings, no skips,
+in 358.85 s. The commands and external-cache setup are the same as the preceding repair gate.
+Registered scientific proof gates retain their existing `MATCH`/`CORRECTED`/`NO_ORACLE`
+classifications and error-injection detection; this cleanup introduces no first divergent
+scientific stage. Existing convergence limits and independent oracles are unchanged.
+
+An alternating nine-run CUDA microbenchmark compares the base definitions with shared arithmetic
+for 65,536 coordinates (131,072 scalar outputs): **bit-identical**, maximum absolute error zero.
+Median launch-plus-synchronization time is 0.681/0.678 ms before/after; peak traced host allocations
+are 8,807/8,807 bytes. Fixed device arrays use 1,572,864 input bytes and 1,048,576 output bytes per
+variant; these figures exclude driver/compiler memory. This supports parity, not a fitter-wide
+speedup claim. CPU helpers remain lazily uncompiled after CUDA-only import/evaluation.
+No additional convergence variable or numerical approximation was introduced.
+
+Formatting, Ruff, documentation links/schema checks, and the 351-file/12-reference-case inventory
+pass. An offline wheel build also succeeds with output outside the repository. No type checker is
+configured. The main checkout's two active B4 source files and compiled replay dependency remain
+untouched; the isolated cleanup worktree contains no generated files.

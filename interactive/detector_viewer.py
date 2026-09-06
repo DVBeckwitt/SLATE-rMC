@@ -304,25 +304,6 @@ def _prepare_full_native_texture(image_A2: NDArray[np.generic]) -> _FullNativeTe
     return _FullNativeTextureFrame(image, low, high)
 
 
-def sample_detector_raster(
-    detector: SourceAveragedDetectorEwaldMeasure,
-    *,
-    draws_per_source_state: int,
-    seed: int,
-) -> DetectorRaster:
-    """Sample the mosaic law and sum weighted roots into native pixels."""
-
-    start = perf_counter()
-    estimate = detector.sample_native_pixel_mass(
-        draws_per_source_state=draws_per_source_state,
-        seed=seed,
-    )
-    return DetectorRaster(
-        estimate=estimate,
-        wall_time_s=perf_counter() - start,
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class _DetectorBundle:
     inputs: ConfiguredSimulationInputs
@@ -406,20 +387,6 @@ def _detector_for_deltas(
             )
             detector = build_source_averaged_detector(changed_inputs)
     return detector
-
-
-def _evaluate_bundle(
-    bundle: _DetectorBundle,
-    deltas: GeometryDeltas,
-    *,
-    draws_per_source_state: int,
-    seed: int,
-) -> DetectorRaster:
-    return sample_detector_raster(
-        _detector_for_deltas(bundle, deltas),
-        draws_per_source_state=draws_per_source_state,
-        seed=seed,
-    )
 
 
 @dataclass(frozen=True, slots=True)

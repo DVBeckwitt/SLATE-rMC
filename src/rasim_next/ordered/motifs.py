@@ -338,19 +338,13 @@ def _reflected_atoms(
     atoms: tuple[MotifAtom, ...],
 ) -> tuple[MotifAtom, ...]:
     return tuple(
-        MotifAtom(
-            site_index=atom.site_index,
-            source_label=atom.source_label,
-            species=atom.species,
-            element=atom.element,
-            charge=atom.charge,
-            occupancy=atom.occupancy,
+        replace(
+            atom,
             fractional_offset=(
                 atom.fractional_offset[0],
                 atom.fractional_offset[1],
                 -atom.fractional_offset[2],
             ),
-            u_iso_A2=atom.u_iso_A2,
         )
         for atom in atoms
     )

@@ -173,14 +173,6 @@ def full_transition_matrix(law: TransitionLaw) -> NDArray[np.float64]:
     return result
 
 
-def orientation_transition_matrix(law: TransitionLaw) -> NDArray[np.float64]:
-    same = law.a + law.b_plus + law.b_minus
-    flip = law.d_plus + law.d_minus
-    result = np.array([[same, flip], [flip, same]], dtype=np.float64)
-    result.setflags(write=False)
-    return result
-
-
 def _validated_registry_phase(omega: ArrayLike) -> NDArray[np.complex128]:
     phase = np.asarray(omega, dtype=np.complex128)
     if not np.all(np.isfinite(phase)):

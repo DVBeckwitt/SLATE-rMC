@@ -227,10 +227,6 @@ def _mosaic_parameters_revision(mosaic: MosaicParameters) -> str:
     )
 
 
-def _mosaic_model_revision(detector: DetectorEwaldMeasure) -> str:
-    return _mosaic_parameters_revision(detector.coating.bragg_space.config.mosaic)
-
-
 def probe_ordered_intensity_inverse_boundary_bins(
     detector: DetectorEwaldMeasure | SourceAveragedStructureDetector,
     *,
@@ -1242,7 +1238,9 @@ def compile_ordered_intensity_response(
         fixed_structure_parameters=fixed_structure,
         rod_catalog_revision=rod_catalog_revision,
         structure_model_revision=ordered_intensity_structure_model_revision(strength),
-        mosaic_model_revision=_mosaic_model_revision(detector),
+        mosaic_model_revision=_mosaic_parameters_revision(
+            detector.coating.bragg_space.config.mosaic
+        ),
         angle_frame_revision=angle_frame.revision,
         source_revision=detector.incident.states.source_revision,
         sample_geometry_revision=detector.incident.states.sample_geometry_revision,
