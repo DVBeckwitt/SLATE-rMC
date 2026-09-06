@@ -5,7 +5,7 @@ CIF-derived reciprocal rods, mosaic probability, finite-stack structure strength
 attenuation directly to a continuous detector-coordinate density and then integrates that density
 over detector pixels.
 
-The production path is continuous and deterministic. It does not construct an Ewald-sphere mesh,
+The deterministic production path does not construct an Ewald-sphere mesh,
 sample an orientation cloud, create scattering-event rows, resample candidates, or deposit points
 onto pixels. The Ewald sphere appears only through the elastic equation, solved analytically for
 each rod and incident state.
@@ -57,7 +57,7 @@ fixture, so there is only one default authority.
 
 The current real-OSC workflow is modular and resumable. It fits positions first, optionally tests a
 tightly bounded lattice change, combines that result with an explicitly provided mosaic state, and
-then calibrates background and runs the A/B/C/joint structure fit. The same adapter and state
+then calibrates background and runs the joint structure fit. The same adapter and state
 contracts serve the tracked Bi2Se3 and Bi2Te3 layered-quintuple recipes. Model evaluation stays
 continuous; only measured OSC data and detector displays are pixel arrays. The measured pixels are
 a piecewise-constant count field projected over the same continuous mixed-chart rectangles as the

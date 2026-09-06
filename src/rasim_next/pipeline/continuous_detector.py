@@ -2670,33 +2670,6 @@ class DetectorEwaldMeasure:
         )
         return CompiledDetectorEvaluator(state, self._instrument.detector_shape_rc)
 
-    def _evaluate_compiled_coordinates_for_proof(
-        self,
-        column_px: ArrayLike,
-        row_px: ArrayLike,
-        *,
-        rods: tuple[Rod, ...],
-        branch: int,
-    ) -> tuple[FloatArray, NDArray[np.int64], NDArray[np.bool_]]:
-        """Return packed-kernel arrays for optimized-path parity proofs."""
-
-        selected = self._validated_intensity_rods(rods)
-        supplied_column, supplied_row = np.broadcast_arrays(
-            np.asarray(column_px, dtype=np.float64),
-            np.asarray(row_px, dtype=np.float64),
-        )
-        shape = supplied_column.shape
-        density, counts, caustic, _ = self._compiled_evaluator(selected).evaluate(
-            supplied_column,
-            supplied_row,
-            branch=branch,
-        )
-        return (
-            density.reshape((*shape, len(selected))),
-            counts.reshape((*shape, len(selected))),
-            caustic.reshape((*shape, len(selected))),
-        )
-
     def _fold_candidate_mask(
         self,
         *,

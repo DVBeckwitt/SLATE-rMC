@@ -1321,10 +1321,9 @@ def test_bi2te3_compiled_detector_uses_te_factors() -> None:
         row,
         rods=rods,
     )
-    compiled, count, caustic = scalar._evaluate_compiled_coordinates_for_proof(
+    compiled, count, caustic, _ = scalar._compiled_evaluator(rods).evaluate(
         column,
         row,
-        rods=rods,
         branch=2,
     )
 
@@ -2025,13 +2024,12 @@ def test_continuous_upper_m1_maps_through_canonical_exit_before_pixel_binning(
         proof_row,
         rods=m1_rods,
     )
-    compiled_density, compiled_count, compiled_caustic = (
-        detector._evaluate_compiled_coordinates_for_proof(
-            proof_column,
-            proof_row,
-            rods=m1_rods,
-            branch=2,
-        )
+    compiled_density, compiled_count, compiled_caustic, _ = detector._compiled_evaluator(
+        m1_rods
+    ).evaluate(
+        proof_column,
+        proof_row,
+        branch=2,
     )
     np.testing.assert_allclose(
         compiled_density,
@@ -2403,16 +2401,14 @@ def test_detector_event_envelope_uses_sample_q_after_mosaic_rotation() -> None:
         / baseline_result.per_rod_density_A2_per_px2[0, 0]
     )
     assert actual == pytest.approx(expected, rel=3.0e-13, abs=0.0)
-    baseline_compiled, _, _ = baseline._evaluate_compiled_coordinates_for_proof(
+    baseline_compiled, _, _, _ = baseline._compiled_evaluator(rods).evaluate(
         column_px,
         row_px,
-        rods=rods,
         branch=2,
     )
-    damped_compiled, _, _ = damped._evaluate_compiled_coordinates_for_proof(
+    damped_compiled, _, _, _ = damped._compiled_evaluator(rods).evaluate(
         column_px,
         row_px,
-        rods=rods,
         branch=2,
     )
     np.testing.assert_allclose(baseline_compiled, baseline_result.per_rod_density_A2_per_px2)

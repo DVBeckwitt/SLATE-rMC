@@ -346,25 +346,23 @@ draws. `estimate.image_A2` is weighted raw pixel mass in `A2`; `visible_hit_coun
 ledger, not a photon-count image. Increase the draw count and compare independent seeds or a refined
 latent oracle when quantitative stochastic accuracy matters.
 
-## Matched continuous detector and angle views
+## Continuous detector and angle evaluation
 
-Render the same continuous detector density on native detector coordinates and canonical
-`(phi, 2theta)` coordinates:
+Given a bound detector function and its matching `AngleFrame`, use the same continuous model in
+either chart:
 
-```powershell
-uv run python scripts/render_continuous_angle_comparison.py `
-  --output C:\path\outside\the\repository\bi2se3-detector-angle.png
+```python
+from rasim_next.measurement import ContinuousNormalizedAngleFunction
+
+detector_values = detector_function.evaluate_detector_coordinates(column_px, row_px)
+angle_function = ContinuousNormalizedAngleFunction(detector_function, angle_frame)
+angle_values = angle_function(two_theta_rad, phi_rad)
 ```
 
-The default evaluates two 3,000 × 3,000 center-sampled fields with the two weighted Cu Kalpha lines
-at one mean ray geometry per line, every configured physical rod, and every retained root. This
-minimum spectral display does not include the configured source position/divergence broadening;
-increase `--source-sample-count` for a denser physical phase-space quadrature. The angle panel
-displays the normalized
-`I=S/N`, not `S` alone, so its values retain the detector-density units and shared color scale.
-Every positive-strength nominal `alpha=0` exact-integer-L marker is labeled on both panels; these
-landmarks are not inferred raster maxima. Increase `--source-sample-count` only when the additional
-runtime of a denser incoherent ensemble is intended.
+`angle_values.intensity_A2_per_px2` is the normalized `I=S/N`, in the same detector-density units.
+Point samples are display values, not finite-bin intensities. For a region, integrate signal `S`
+and detector-area normalization `N` separately before division, using the existing continuous
+region/profile operators. The standalone side-by-side diagnostic renderer is no longer shipped.
 
 ## Interactive Monte Carlo detector viewer
 

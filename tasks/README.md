@@ -15,8 +15,10 @@ it implements the sample/goniometer part of the staged roadmap, fits the two ide
 tilts, and keeps detector center, distance, and pitch calibration-owned and fixed. T12 contains the
 250-state model-limited real-OSC mosaic slice. T13 contains the fixed-position 250-state synthetic
 selected-center occupancy and directional Debye-Waller recovery slice; raw-OSC ordered-intensity
-recovery remains unclaimed. T09--T11 and T14--T15 remain design notes rather than executable
-assignments. The broader mosaic qualification matrix also remains proposed. Each future stage
+recovery remains unclaimed. T09--T11 and T15 remain design notes rather than executable
+assignments. T14 completed synthetic fixed-parent population fitting on direct profiles with
+independent short-stack validation; it does not establish measured detector-forward SF recovery.
+The broader mosaic qualification matrix also remains proposed. Each future stage
 requires a fresh plan against the current continuous contracts and must use physical rods, analytic
 Ewald roots, callable detector-coordinate density, and explicitly declared observation measures.
 T26 preserves the T18 null path and adds an optional, explicitly provenance-bound native center and

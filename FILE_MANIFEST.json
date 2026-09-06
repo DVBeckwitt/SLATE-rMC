@@ -1,5 +1,5 @@
 {
-  "file_count": 349,
+  "file_count": 351,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -23,8 +23,8 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "dd663943e8640138a2d6c418a8bb94745cf5597365bc10533e3335f510e34f9f",
-      "size_bytes": 10543
+      "sha256": "7e6775dfd02daae23291811a636a41a279c32a196a58e538606d16e58a97bd72",
+      "size_bytes": 12334
     },
     {
       "path": "PLANS.md",
@@ -33,8 +33,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "87b4e0cf15457aaa9d9158e553699f2161f330989a8715cf792c64390ce47167",
-      "size_bytes": 5736
+      "sha256": "0765b4d2bd23320bd8bf2f40f89ea1dd4a618bf5e0c6735ff4339958285fabc8",
+      "size_bytes": 5708
     },
     {
       "path": "SEED_CONTENTS.md",
@@ -143,8 +143,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "0bc9aa272037109e04effdb5b2b8fed74022a8fd81b56f9d89b6e05d9540ac64",
-      "size_bytes": 64156
+      "sha256": "bce7a2389ba1ddba9b1db00cbf58fc00a6f8cf411707d0b244be65a857d03a2e",
+      "size_bytes": 63930
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -188,8 +188,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "c7599b0c040c3a2fa775e75430758ebe4b3cfb6b7721cdb1ac1fee980bdeae30",
-      "size_bytes": 140809
+      "sha256": "c3caed60edb3b619a723facf8d1ce695bb07f16aa53f542a5715e6194754ab15",
+      "size_bytes": 143119
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -767,11 +767,6 @@
       "size_bytes": 11175
     },
     {
-      "path": "scripts/render_continuous_angle_comparison.py",
-      "sha256": "51653fadbd0da8e47f72c2d2b05ef66599335cb03424825868b29f5c2d2e0391",
-      "size_bytes": 15276
-    },
-    {
       "path": "scripts/render_osc_geometry_fit.py",
       "sha256": "64645b9990d85c23238a2b77224a3fc626445ca47d614f3a9873ef0884a6d751",
       "size_bytes": 10139
@@ -913,8 +908,8 @@
     },
     {
       "path": "src/rasim_next/fitting/__init__.py",
-      "sha256": "1806b1e7833bc51b9027e80d72263e8f63c7aed605134bfcf990f2386d98d825",
-      "size_bytes": 11156
+      "sha256": "5c99576bad024ffc0f0c360a47d8d4e5555dbe15e5140f708ace748ed5c62ff3",
+      "size_bytes": 11266
     },
     {
       "path": "src/rasim_next/fitting/_scan_validation.py",
@@ -953,8 +948,8 @@
     },
     {
       "path": "src/rasim_next/fitting/mosaic.py",
-      "sha256": "034d2db4ecb961584c7a844da55ae0ddb2d0bbe230e2eef4aec38b2fab13c57a",
-      "size_bytes": 114149
+      "sha256": "304f481282d8e6387d6ceeeabb9c3aa85d8987c390bb29387f179d3d79334480",
+      "size_bytes": 124619
     },
     {
       "path": "src/rasim_next/fitting/ordered_intensity.py",
@@ -983,8 +978,8 @@
     },
     {
       "path": "src/rasim_next/fitting/stacking_intensity.py",
-      "sha256": "6704d0e056328fd18618856404b4cfcf6d56a886e1efea620839db920f41c323",
-      "size_bytes": 62396
+      "sha256": "e44f2b5e20d6574e32fb0944ba3cc42ec3a178dcee8e121b142dca5f00e4ea37",
+      "size_bytes": 64138
     },
     {
       "path": "src/rasim_next/fitting/staged_scan.py",
@@ -1168,8 +1163,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "6cd9c4214cfb2d75f8c7d2ad2614fa2e7b44b928118d8dabd17c54571d80acb8",
-      "size_bytes": 142541
+      "sha256": "a5f7601c3511b90ad6d1331524147445c844a6016240321ffe0e9df4a0af28df",
+      "size_bytes": 145211
     },
     {
       "path": "src/rasim_next/pipeline/continuous_fold.py",
@@ -1198,8 +1193,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_structure.py",
-      "sha256": "3379e0f13b1b4665044ac9d7d4dcf28225f8037dd1528dd5c1554e97d17e4f70",
-      "size_bytes": 43981
+      "sha256": "6041a7f926137e7ce7f66c0beee353f116725e8e756487cb48f22053a64f3155",
+      "size_bytes": 47352
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1323,8 +1318,8 @@
     },
     {
       "path": "src/rasim_next/stacking/finite_intensity.py",
-      "sha256": "82a391348ff50df096c1fac82ef970533e389b14e4dfb7c445425b78496d3f3b",
-      "size_bytes": 15162
+      "sha256": "a509ae05c52cffbf8cfe597249374f23ae46f0e5657d944c029c3aa8f6cb0094",
+      "size_bytes": 16007
     },
     {
       "path": "src/rasim_next/stacking/parent_models.py",
@@ -1423,8 +1418,8 @@
     },
     {
       "path": "tasks/17_continuous_angle_measure.md",
-      "sha256": "67c2886e9c99b37cd4654806857158e82562ece25f43f92fde1cf704ad4c2d12",
-      "size_bytes": 2318
+      "sha256": "e8cf5a3b0865fd6e1a24f87bdcca7008e696672ad1e942b872025ebbb6fe0893",
+      "size_bytes": 2513
     },
     {
       "path": "tasks/18_multi_osc_geometry_fit.md",
@@ -1483,8 +1478,8 @@
     },
     {
       "path": "tasks/README.md",
-      "sha256": "ad41c2c4b29e5581e67c645e15647d147336c158a96b67531cc9764a1cb9ced8",
-      "size_bytes": 4290
+      "sha256": "2b489bc35b80a1e8052b840dd9474e84798edff9ba44878897c50eed1bbf7b34",
+      "size_bytes": 4462
     },
     {
       "path": "tasks/continuous_ewald_coating_replacement_plan.md",
@@ -1648,8 +1643,8 @@
     },
     {
       "path": "tests/test_fitting.py",
-      "sha256": "6bf2f68c449b2542628a092dab45a1288a5efa4cda37f8860722e872738a1978",
-      "size_bytes": 206233
+      "sha256": "893c3419abf4c23ea357f37d2a1707e88f84fba27526b9a70fb80734a7c677a6",
+      "size_bytes": 207095
     },
     {
       "path": "tests/test_fixed_experiment.py",
@@ -1668,8 +1663,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "75aa167316275b71e8d0083b4896a0c49cd95cf60df245e57ae7b0329bd599f0",
-      "size_bytes": 356605
+      "sha256": "ec6f7ffbc7578bdb0506e5180e98edaea7a7249329eecd52940ffcf61251400f",
+      "size_bytes": 360831
     },
     {
       "path": "tests/test_layered_fit_workflow.py",
@@ -1723,8 +1718,8 @@
     },
     {
       "path": "tests/test_stacking_transition.py",
-      "sha256": "5450f46b504fd90989a85700120a6f6a639b9beab47034a7c0a8d3a3335c96fc",
-      "size_bytes": 14314
+      "sha256": "75b2a3b766f28afa077fc608e6254da1683bf8e0f3fe6cf55bf57224276164ec",
+      "size_bytes": 15535
     },
     {
       "path": "tests/test_staged_fit_replay_cli.py",
@@ -1740,6 +1735,21 @@
       "path": "tools/check_docs.py",
       "sha256": "6dae4a8e609521b8722369e7c099b20cf7148865cbf5597783962886718ba40b",
       "size_bytes": 3685
+    },
+    {
+      "path": "tools/video_ai/Install_Video_AI.bat",
+      "sha256": "307af444a468425c52c06bb7c3e688634e986f4c4b7ac593bf97f2cbcdd709f9",
+      "size_bytes": 4351
+    },
+    {
+      "path": "tools/video_ai/README.md",
+      "sha256": "7d748abaae0d04546d224f9c89d34a75da42a75c25b2d27e61a3ea6bbab8c118",
+      "size_bytes": 4139
+    },
+    {
+      "path": "tools/video_ai/Video_to_AI_Context.bat",
+      "sha256": "11ba5cb00aa34118755b2f3b952f58755e83ae89a027f19dc3e3399e9c566a7c",
+      "size_bytes": 9897
     },
     {
       "path": "uv.lock",

@@ -1994,3 +1994,33 @@ run because no screened state survived the predeclared gates. No accepted parame
 replaces the prior result; the tracked v2 seed uses the literature vacancy prior solely as an
 initializer. `publication_ready=false`, and the next experiment must resolve `m=0`/off-specular
 observation transfer and reflection-dependent scan exposure/response before another fit.
+
+## Repository residue cleanup (2026-09-06)
+
+The cleanup based on `8c70f3c` removes the unconsumed standalone detector/angle comparison
+renderer and the private compiled-coordinate proof wrapper. Existing tests call the same compiled
+evaluator directly. Public numerical APIs, equations, 1,002 assertion/exception-check nodes, and
+all reference/example bytes remain unchanged. Historical legacy classifications and first
+divergences therefore remain unchanged; this is not a new physics correction or fitted result.
+Current workflow descriptions replace stale implementation claims. The file inventory also
+repairs pre-existing omissions and stale hashes without changing those source files.
+
+All 469 permanent tests are retained. The frozen-lock Python 3.13.13 run gives **468 passed,
+1 failed** in 356.12 s. The failure, `test_occupancy_quadratic_retains_a_disorder_extinction_as_nonnegative`,
+also reproduces on unchanged `8c70f3c`: the reduced raw-second-moment recurrence loses precision
+near an extinction, and the occupancy positive-semidefinite guard correctly rejects its result.
+The existing stable full-state evaluator and an independent coherent sum give approximately
+`3.15e-37` and `3.19e-37 A2`, versus the reduced result `4.68e-27 A2` for the audited candidate.
+Do not weaken that guard. Integration remains **BLOCKED** pending a separately proved numerical
+stabilization and a passing full suite. No shared-mosaic or reflectivity fit is promoted here.
+
+A matched CPU check with 128 coordinates, two source states, and six Bi2Te3 `m=1` rods gives
+bit-identical density, valid-state counts, and caustic flags before/after cleanup. Seven warmed
+evaluations have median times 1.141/1.195 ms; traced setup peaks are 82,583,833/82,535,276 bytes.
+These are parity measurements, not a speedup or new convergence claim. Existing registered
+numerical proof gates pass; no convergence rule, tolerance, or error-injection check changes.
+
+Two unused untracked B4 scratch scripts were moved from the main checkout to the recoverable
+external `2026/09/06/repo_cleanup_archive` visualization folder. Active B4 fit sources and the
+compiled replay dependency remain in place until their library consumers can be migrated.
+No new tests, dependencies, diagnostic tools, or generated scientific outputs are added.

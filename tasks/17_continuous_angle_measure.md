@@ -33,8 +33,11 @@ acceptance correction. Invalid/off-panel directions and the exact polar coordina
 - `src/rasim_next/measurement/continuous_angle.py`
 - `src/rasim_next/measurement/__init__.py`
 - the pose-bound instrument exposure in `src/rasim_next/fitting/geometry.py`
-- `scripts/render_continuous_angle_comparison.py`
 - compact permanent tests and the contract/proof documentation for this slice
+
+The standalone comparison renderer was retired during repository cleanup. Its numerical
+detector/angle APIs and all coordinate-measure proofs remain supported; the external figure is
+historical acceptance evidence, not a required runtime tool.
 
 ## Acceptance
 
