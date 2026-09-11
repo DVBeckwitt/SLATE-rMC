@@ -77,6 +77,10 @@ def _finite_moment_intensity(
     d_minus: float,
     probability_plus: float,
     probability_minus: float,
+    first_plus=None,
+    first_minus=None,
+    last_plus=None,
+    last_minus=None,
 ) -> float | NDArray[np.float64]:
     """Exact centered registry-gauge recurrence for arrays or compiled scalar lanes.
 
@@ -108,12 +112,15 @@ def _finite_moment_intensity(
         flip_gauge_minus = inverse + weight_d_minus * (omega - inverse)
         flip_gauge_variance = weight_d_plus * weight_d_minus * abs(inverse - omega) ** 2
 
-    mean_plus, mean_minus = f_plus, f_minus
+    mean_plus = f_plus if first_plus is None else first_plus
+    mean_minus = f_minus if first_minus is None else first_minus
     variance_plus = 0.0 * f_plus.real
     variance_minus = 0.0 * f_minus.real
     phase_power = 1.0 + 0.0j
-    for _ in range(1, layers):
+    for layer in range(1, layers):
         phase_power = phase_power * vertical_phase
+        amplitude_plus = last_plus if layer == layers - 1 and last_plus is not None else f_plus
+        amplitude_minus = last_minus if layer == layers - 1 and last_minus is not None else f_minus
         next_probability_plus = probability_plus * same + probability_minus * flip
         next_probability_minus = probability_minus * same + probability_plus * flip
         stay_plus, stay_minus = same_gauge * mean_plus, same_gauge * mean_minus
@@ -135,7 +142,7 @@ def _finite_moment_intensity(
                 + flip_weight * (variance_minus + flip_gauge_variance * minus_squared)
                 + stay_weight * flip_weight * abs(difference) ** 2
             )
-            next_mean_plus = transported_plus + phase_power * f_plus
+            next_mean_plus = transported_plus + phase_power * amplitude_plus
         else:
             next_mean_plus = 0.0 * f_plus
             next_variance_plus = 0.0 * f_plus.real
@@ -153,7 +160,7 @@ def _finite_moment_intensity(
                 + flip_weight * (variance_plus + flip_gauge_variance * plus_squared)
                 + stay_weight * flip_weight * abs(difference) ** 2
             )
-            next_mean_minus = transported_minus + phase_power * f_minus
+            next_mean_minus = transported_minus + phase_power * amplitude_minus
         else:
             next_mean_minus = 0.0 * f_minus
             next_variance_minus = 0.0 * f_minus.real
@@ -221,13 +228,45 @@ def finite_intensity_reduced(
     vertical_phase: ArrayLike,
     law: TransitionLaw,
     initial: InitialPopulation,
+    *,
+    first_amplitudes_e: tuple[ArrayLike, ArrayLike] | None = None,
+    last_amplitudes_e: tuple[ArrayLike, ArrayLike] | None = None,
 ) -> NDArray[np.float64]:
-    """Evaluate an exact two-orientation finite moment recurrence."""
+    """Evaluate exact finite moments with optional distinct endpoint motifs.
+
+    ``layers`` counts amplitude slots. With endpoints both pairs are required,
+    in (plus, minus) order, and at least two slots must be present. No thickness
+    or per-repeat normalization is implicit in this raw intensity calculation.
+    """
 
     count = _layers(layers)
     f_plus_array, f_minus_array, omega_array, phase_array = _broadcast_inputs(
         f_plus, f_minus, omega, vertical_phase
     )
+    endpoints = ()
+    if first_amplitudes_e is not None or last_amplitudes_e is not None:
+        if (
+            first_amplitudes_e is None
+            or last_amplitudes_e is None
+            or count < 2
+            or len(first_amplitudes_e) != 2
+            or len(last_amplitudes_e) != 2
+        ):
+            raise ValueError("endpoint motifs require two orientation pairs and at least two slots")
+        arrays = np.broadcast_arrays(
+            f_plus_array,
+            f_minus_array,
+            omega_array,
+            phase_array,
+            *(
+                np.asarray(a, dtype=np.complex128)
+                for a in (*first_amplitudes_e, *last_amplitudes_e)
+            ),
+        )
+        if any(np.any(~np.isfinite(a)) for a in arrays):
+            raise ValueError("endpoint amplitudes must be finite")
+        f_plus_array, f_minus_array, omega_array, phase_array = arrays[:4]
+        endpoints = tuple(arrays[4:])
     probabilities = (
         law.a,
         law.b_plus,
@@ -241,7 +280,8 @@ def finite_intensity_reduced(
         shape = f_plus_array.shape
         result = np.empty(f_plus_array.size, dtype=np.float64)
         flattened = tuple(
-            np.ravel(value) for value in (f_plus_array, f_minus_array, omega_array, phase_array)
+            np.ravel(value)
+            for value in (f_plus_array, f_minus_array, omega_array, phase_array, *endpoints)
         )
         for start in range(0, result.size, _REDUCED_MOMENT_EVENT_CHUNK_SIZE):
             stop = min(start + _REDUCED_MOMENT_EVENT_CHUNK_SIZE, result.size)
@@ -252,6 +292,7 @@ def finite_intensity_reduced(
                 flattened[2][start:stop],
                 flattened[3][start:stop],
                 *probabilities,
+                *(a[start:stop] for a in flattened[4:]),
             )
         return _readonly_nonnegative(
             result.reshape(shape),
@@ -265,6 +306,7 @@ def finite_intensity_reduced(
             omega_array,
             phase_array,
             *probabilities,
+            *endpoints,
         )
     return _readonly_nonnegative(
         result,

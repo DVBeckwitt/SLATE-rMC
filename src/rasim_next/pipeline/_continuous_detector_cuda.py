@@ -439,6 +439,10 @@ def _finite_stack_strength_A2(
             alternative,
             1.0,
             0.0,
+            None,
+            None,
+            None,
+            None,
         )
     return (
         CLASSICAL_ELECTRON_RADIUS_A**2

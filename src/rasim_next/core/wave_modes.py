@@ -13,6 +13,22 @@ from numpy.typing import ArrayLike, NDArray
 ComplexArray = NDArray[np.complex128]
 
 
+def _phase_shell_offset_Ainv2(
+    refractive_index: complex, air_k0_Ainv: float, incident_decay_Ainv: float
+) -> float:
+    """Return |ki_phase|²-k0² without subtracting the nearly equal bulk squares.
+
+    Complex dispersion gives Re(kzi)²-Im(kzi)² = Re(n²)k0²-|ki_parallel|².
+    The fixed real-phase sphere therefore retains the incident decay square.
+    This scalar arithmetic is also compiled directly for CPU and CUDA kernels.
+    """
+
+    return (
+        (refractive_index.real - 1.0) * (refractive_index.real + 1.0)
+        - refractive_index.imag * refractive_index.imag
+    ) * (air_k0_Ainv * air_k0_Ainv) + incident_decay_Ainv * incident_decay_Ainv
+
+
 def select_normal_wavevector(
     squared_normal_wavevector: ArrayLike, propagation_direction: int
 ) -> complex | ComplexArray:

@@ -161,6 +161,8 @@ def _solve_exit_mode_arrays(
     k_film_phase_sample_Ainv: ArrayLike,
     wavelength_A: ArrayLike,
     material: MaterialOptics,
+    *,
+    phase_shell_offset_Ainv2: float | None = None,
 ) -> _ExitModeArrays:
     k_film_phase = _vectors3(
         k_film_phase_sample_Ainv,
@@ -179,19 +181,31 @@ def _solve_exit_mode_arrays(
         propagation_direction,
     )
     squared_parallel = np.sum(k_parallel**2, axis=1)
-    squared_air_normal = k0_Ainv**2 - squared_parallel
+    if phase_shell_offset_Ainv2 is None:
+        squared_air_normal = k0_Ainv**2 - squared_parallel
+    else:
+        if not np.isfinite(phase_shell_offset_Ainv2):
+            raise ValueError("phase_shell_offset_Ainv2 must be finite")
+        squared_air_normal = k_film_phase[:, 2] ** 2 - phase_shell_offset_Ainv2
     roundoff_tolerance = (
         16.0
         * np.finfo(np.float64).eps
         * np.maximum.reduce((k0_Ainv**2, squared_parallel, np.ones(k0_Ainv.size)))
     )
     nonpropagating = squared_air_normal < -roundoff_tolerance
-    kz_air = _normal_wavevectors(
-        k0_Ainv,
-        np.ones(k0_Ainv.size, dtype=np.complex128),
-        k_parallel,
-        propagation_direction,
-    )
+    if phase_shell_offset_Ainv2 is None:
+        kz_air = _normal_wavevectors(
+            k0_Ainv,
+            np.ones(k0_Ainv.size, dtype=np.complex128),
+            k_parallel,
+            propagation_direction,
+        )
+    else:
+        kz_air = np.empty(k0_Ainv.size, dtype=np.complex128)
+        for direction in (-1, 1):
+            selected = propagation_direction == direction
+            if np.any(selected):
+                kz_air[selected] = select_normal_wavevector(squared_air_normal[selected], direction)
     rounded_to_critical = (squared_air_normal < 0.0) & ~nonpropagating
     for direction in (-1, 1):
         selected = rounded_to_critical & (propagation_direction == direction)

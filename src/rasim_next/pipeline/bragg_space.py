@@ -33,6 +33,8 @@ from rasim_next.ordered import (
     uniform_finite_stack,
     unit_cell_amplitude,
 )
+from rasim_next.ordered.amplitudes import _validated_site_displacement_tensors
+from rasim_next.ordered.motifs import pbi2_surface_motif_crystals
 from rasim_next.reciprocal.lattice import ReciprocalLattice
 from rasim_next.stacking import (
     InitialPopulation,
@@ -42,6 +44,7 @@ from rasim_next.stacking import (
     registry_phase,
 )
 from rasim_next.stacking.finite_intensity import finite_intensity_reduced
+from rasim_next.stacking.parent_models import StackingPopulation
 
 FloatArray = NDArray[np.float64]
 
@@ -101,6 +104,214 @@ class RevisionedStructureStrengthModel(BasisBoundStrengthModel, Protocol):
     ) -> FloatArray: ...
 
 
+@dataclass(frozen=True, slots=True)
+class IncoherentStructureMixture:
+    """Independent finite structures with explicit intensity population fractions.
+
+    Components remain available because the named specular composite must be
+    compiled and applied to each structure before averaging intensities.
+    """
+
+    components: tuple[RevisionedStructureStrengthModel, ...]
+    probabilities: tuple[float, ...]
+    structure_model_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        models = tuple(self.components)
+        probabilities = tuple(float(p) for p in self.probabilities)
+        if (
+            not models
+            or len(models) != len(probabilities)
+            or any(isinstance(model, IncoherentStructureMixture) for model in models)
+            or any(not np.isfinite(p) or p < 0 for p in probabilities)
+            or not np.isclose(sum(probabilities), 1.0, rtol=0, atol=1e-12)
+        ):
+            raise ValueError("a flat independent structure mixture requires unit population mass")
+        basis = np.asarray(models[0].reciprocal_basis_Ainv)
+        for model in models:
+            if not np.array_equal(model.reciprocal_basis_Ainv, basis):
+                raise ValueError("independent structures must use one reciprocal basis")
+            if (
+                not isinstance(model.structure_model_revision, str)
+                or not model.structure_model_revision
+            ):
+                raise ValueError("independent structures require explicit revisions")
+        object.__setattr__(self, "components", models)
+        object.__setattr__(self, "probabilities", probabilities)
+        object.__setattr__(
+            self,
+            "structure_model_revision",
+            canonical_revision_sha256(
+                ("definition_id", "independent_structure_intensity_mixture.v1"),
+                ("components", tuple(m.structure_model_revision for m in models)),
+                ("probabilities", np.asarray(probabilities)),
+            ),
+        )
+
+    @property
+    def reciprocal_basis_Ainv(self) -> FloatArray:
+        return self.components[0].reciprocal_basis_Ainv
+
+    def evaluate_hkl(
+        self, *, h: ArrayLike, k: ArrayLike, L: ArrayLike, k_norm_Ainv: ArrayLike
+    ) -> FloatArray:
+        values = [
+            model.evaluate_hkl(h=h, k=k, L=L, k_norm_Ainv=k_norm_Ainv) for model in self.components
+        ]
+        return np.einsum("c,c...->...", self.probabilities, np.asarray(values))
+
+    def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+        return float(self.evaluate_hkl(h=rod.h, k=rod.k, L=L, k_norm_Ainv=k_norm_Ainv))
+
+
+@dataclass(frozen=True, slots=True)
+class Pbi2FiniteSurfaceStrength:
+    """Mixed stacking with explicit finite endpoints and physical repeat count.
+
+    Surface fractions are in whole/lower-cut/upper-cut order. Populations carry
+    their own transition law and initial orientation; no specimen convention is
+    inferred from normalization. Independent surface/population terms sum as
+    intensities. Partial endpoints span ``repeats`` translations and use
+    ``repeats + 1`` amplitude slots, with normalization by physical repeats.
+    """
+
+    crystal: CrystalStructure
+    repeats: int
+    populations: tuple[StackingPopulation, ...]
+    population_fractions: tuple[float, ...]
+    surface_fractions: tuple[float, float, float]
+    normalization: EventIntensityNormalization
+    unknown_u_iso_A2: float | None = None
+    _motifs: tuple[tuple[CrystalStructure, ...], ...] = field(init=False, repr=False)
+    _lattice: ReciprocalLattice = field(init=False, repr=False)
+    structure_model_revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.repeats, bool) or index(self.repeats) < 1:
+            raise ValueError("repeats must be a positive integer")
+        populations = tuple(self.populations)
+        if not populations or any(not isinstance(p, StackingPopulation) for p in populations):
+            raise ValueError("explicit stacking populations are required")
+        object.__setattr__(self, "populations", populations)
+        for name, count in (("population_fractions", len(populations)), ("surface_fractions", 3)):
+            values = np.asarray(getattr(self, name), dtype=np.float64)
+            if (
+                values.shape != (count,)
+                or np.any(~np.isfinite(values))
+                or np.any(values < 0)
+                or not np.isclose(values.sum(), 1.0, rtol=0, atol=1e-12)
+            ):
+                raise ValueError(f"{name} must be nonnegative and sum to one")
+            object.__setattr__(self, name, tuple(float(v) for v in values))
+        normalization = EventIntensityNormalization(self.normalization)
+        if normalization is EventIntensityNormalization.UNIT_CELL:
+            raise ValueError("finite surface strength requires a finite-stack normalization")
+        object.__setattr__(self, "normalization", normalization)
+        object.__setattr__(self, "repeats", index(self.repeats))
+        object.__setattr__(self, "_motifs", pbi2_surface_motif_crystals(self.crystal))
+        object.__setattr__(self, "_lattice", ReciprocalLattice.from_crystal(self.crystal))
+        object.__setattr__(
+            self,
+            "structure_model_revision",
+            canonical_revision_sha256(
+                ("definition_id", "pbi2_finite_surface_strength.v1"),
+                ("crystal", crystal_structure_revision(self.crystal)),
+                ("repeats", self.repeats),
+                ("normalization", normalization.value),
+                ("population_ids", tuple(p.population_id for p in populations)),
+                ("laws", np.array([p.model.as_array() for p in populations])),
+                ("initial", np.array([[p.initial.plus, p.initial.minus] for p in populations])),
+                ("population_fractions", np.array(self.population_fractions)),
+                ("surface_fractions", np.array(self.surface_fractions)),
+                (
+                    "unknown_u_iso_A2",
+                    "from_crystal" if self.unknown_u_iso_A2 is None else self.unknown_u_iso_A2,
+                ),
+            ),
+        )
+
+    @property
+    def reciprocal_basis_Ainv(self) -> FloatArray:
+        return self._lattice.basis_Ainv
+
+    def evaluate_components_hkl(
+        self,
+        *,
+        h: ArrayLike,
+        k: ArrayLike,
+        L: ArrayLike,
+        k_norm_Ainv: ArrayLike,
+    ) -> FloatArray:
+        """Return [surface,population,...query] before independent mixture weights."""
+        for value, name in ((h, "h"), (k, "k"), (L, "L"), (k_norm_Ainv, "k_norm_Ainv")):
+            reject_complex(value, name)
+        h, k, ell, knorm = np.broadcast_arrays(h, k, L, k_norm_Ainv)
+        if (
+            any(np.any(~np.isfinite(a)) for a in (h, k, ell, knorm))
+            or np.any(knorm <= 0)
+            or np.any(h != np.rint(h))
+            or np.any(k != np.rint(k))
+        ):
+            raise ValueError("finite signed rod coordinates and positive k are required")
+        limits = np.iinfo(np.int32)
+        if any(np.any((a < limits.min) | (a > limits.max)) for a in (h, k)):
+            raise ValueError("h and k must fit signed 32-bit integers")
+        h, k = h.astype(np.int32), k.astype(np.int32)
+        hkl = np.stack((h, k, ell), axis=-1)
+        amplitudes = np.array(
+            [
+                [
+                    unit_cell_amplitude(
+                        m, hkl, 2 * np.pi / knorm, unknown_u_iso_A2=self.unknown_u_iso_A2
+                    ).amplitude_e
+                    for m in orientation
+                ]
+                for orientation in self._motifs
+            ]
+        )
+        full, lower, upper = (amplitudes[:, i] for i in range(3))
+        windows = ((full, np.zeros_like(full)), (full - lower, lower), (upper, full - upper))
+        omega, vertical = registry_phase(h, k), np.exp(2j * np.pi * ell)
+        result = np.array(
+            [
+                [
+                    finite_intensity_reduced(
+                        self.repeats + 1,
+                        full[0],
+                        full[1],
+                        omega,
+                        vertical,
+                        p.model,
+                        p.initial,
+                        first_amplitudes_e=(first[0], first[1]),
+                        last_amplitudes_e=(last[0], last[1]),
+                    )
+                    for p in self.populations
+                ]
+                for first, last in windows
+            ]
+        )
+        if self.normalization is EventIntensityNormalization.FINITE_PER_LAYER:
+            result /= self.repeats
+        return electron_squared_to_scattering_strength_A2(result)
+
+    def evaluate_hkl(
+        self,
+        *,
+        h: ArrayLike,
+        k: ArrayLike,
+        L: ArrayLike,
+        k_norm_Ainv: ArrayLike,
+    ) -> FloatArray:
+        components = self.evaluate_components_hkl(h=h, k=k, L=L, k_norm_Ainv=k_norm_Ainv)
+        return np.einsum(
+            "s,p,sp...->...", self.surface_fractions, self.population_fractions, components
+        )
+
+    def evaluate(self, *, rod: Rod, L: float, k_norm_Ainv: float) -> float:
+        return float(self.evaluate_hkl(h=rod.h, k=rod.k, L=L, k_norm_Ainv=k_norm_Ainv))
+
+
 class StructureStrengthParameterization(Protocol):
     """Bind one explicit parameter vector to a basis-bound strength model."""
 
@@ -127,6 +338,7 @@ class CifFiniteStackStrength:
     repeats: int
     normalization: EventIntensityNormalization = EventIntensityNormalization.FINITE_TOTAL
     unknown_u_iso_A2: float | None = None
+    site_displacement_tensors_A2: FloatArray | None = None
     _lattice: ReciprocalLattice = field(init=False, repr=False, compare=False)
     structure_model_revision: str = field(init=False)
 
@@ -147,12 +359,26 @@ class CifFiniteStackStrength:
             unknown_u = finite_scalar(unknown_u, "unknown_u_iso_A2")
             if unknown_u < 0.0:
                 raise ValueError("unknown_u_iso_A2 must be nonnegative")
-        if unknown_u is None and any(site.u_iso_A2 is None for site in self.crystal.sites):
+        tensors = self.site_displacement_tensors_A2
+        if tensors is not None:
+            if unknown_u is not None:
+                raise ValueError("site tensors and unknown isotropic displacement are exclusive")
+            tensors = _validated_site_displacement_tensors(tensors, len(self.crystal.sites))
+        if (
+            tensors is None
+            and unknown_u is None
+            and any(site.u_iso_A2 is None for site in self.crystal.sites)
+        ):
             raise ValueError("unknown CIF displacement requires explicit unknown_u_iso_A2")
 
         lattice = ReciprocalLattice.from_crystal(self.crystal)
         effective_u_iso_A2 = np.asarray(
-            [unknown_u if site.u_iso_A2 is None else site.u_iso_A2 for site in self.crystal.sites],
+            [
+                (0.0 if tensors is not None else unknown_u)
+                if site.u_iso_A2 is None
+                else site.u_iso_A2
+                for site in self.crystal.sites
+            ],
             dtype=np.float64,
         )
         revision = canonical_revision_sha256(
@@ -182,7 +408,14 @@ class CifFiniteStackStrength:
         object.__setattr__(self, "repeats", repeats)
         object.__setattr__(self, "normalization", normalization)
         object.__setattr__(self, "unknown_u_iso_A2", unknown_u)
+        object.__setattr__(self, "site_displacement_tensors_A2", tensors)
         object.__setattr__(self, "_lattice", lattice)
+        if tensors is not None:
+            revision = canonical_revision_sha256(
+                ("definition_id", "cif_finite_periodic_stack_site_tensors.v1"),
+                ("base_structure", revision),
+                ("site_displacement_tensors_A2", tensors),
+            )
         object.__setattr__(self, "structure_model_revision", revision)
 
     @property
@@ -257,6 +490,7 @@ class CifFiniteStackStrength:
             hkl,
             2.0 * np.pi / k_norm,
             unknown_u_iso_A2=self.unknown_u_iso_A2,
+            site_displacement_tensors_A2=self.site_displacement_tensors_A2,
         ).amplitude_e
         repeat = finite_periodic_repeat_amplitude_factor(ell, self.repeats)
         strength = electron_squared_to_scattering_strength_A2(np.abs(amplitude * repeat) ** 2)

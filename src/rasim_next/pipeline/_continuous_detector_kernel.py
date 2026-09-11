@@ -927,6 +927,97 @@ def _scattering_polarization_weight(
     return 0.5 * (1.0 + cosine * cosine)
 
 
+class LocalM0Geometry(NamedTuple):
+    valid: bool
+    alpha_rad: float
+    phase_q_Ainv: float
+    external_q_Ainv: float
+    phase_q_radial_squared_Ainv2: float
+    phase_q_normal_squared_Ainv2: float
+    density_geometry_per_px2: float
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def local_m0_phase_q_Ainv(
+    external_q_Ainv: float, air_k0_Ainv: float, film_refractive_index: complex
+) -> float:
+    """Symmetric local-plane phase transfer on the shared normal-root branch."""
+    tangential_squared = max(air_k0_Ainv**2 - 0.25 * external_q_Ainv**2, 0.0)
+    normal = _positive_normal_root((film_refractive_index * air_k0_Ainv) ** 2 - tangential_squared)
+    return 2.0 * max(normal.real, 0.0)
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def local_m0_geometry(
+    outgoing_air_direction_sample_x: float,
+    outgoing_air_direction_sample_y: float,
+    outgoing_air_direction_sample_z: float,
+    pixel_solid_angle_sr: float,
+    ki_film_sample_Ainv: FloatArray,
+    air_k0_Ainv: float,
+    film_refractive_index: complex,
+    sample_from_local: FloatArray,
+    polarization_model_code: int,
+) -> LocalM0Geometry:
+    """Strength-independent local-lamella m0 geometry on the air Ewald sphere.
+
+    Geometry includes k0²*dOmega/Qair² and event polarization, but no source,
+    population, mosaic, SF, envelope or stitch factor. Reciprocal support is
+    checked by the caller in phase-Q units, independent of its crystallographic
+    L convention. A tilted local lamella may exit below the macroscopic surface.
+    """
+    invalid = LocalM0Geometry(False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    if pixel_solid_angle_sr <= 0:
+        return invalid
+    incident_air_normal_squared = (
+        air_k0_Ainv * air_k0_Ainv
+        - ki_film_sample_Ainv[0] * ki_film_sample_Ainv[0]
+        - ki_film_sample_Ainv[1] * ki_film_sample_Ainv[1]
+    )
+    if incident_air_normal_squared < 0:
+        return invalid
+    incident_air_z = math.copysign(math.sqrt(incident_air_normal_squared), ki_film_sample_Ainv[2])
+    outgoing_x = air_k0_Ainv * outgoing_air_direction_sample_x
+    outgoing_y = air_k0_Ainv * outgoing_air_direction_sample_y
+    outgoing_z = air_k0_Ainv * outgoing_air_direction_sample_z
+    delta_x, delta_y = outgoing_x - ki_film_sample_Ainv[0], outgoing_y - ki_film_sample_Ainv[1]
+    delta_z = outgoing_z - incident_air_z
+    external_q = math.sqrt(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z)
+    tolerance = 1e-14 * max(air_k0_Ainv, 1.0)
+    if external_q <= tolerance:
+        return invalid
+    nx, ny, nz = delta_x / external_q, delta_y / external_q, delta_z / external_q
+    mx, my, mz = sample_from_local[0, 2], sample_from_local[1, 2], sample_from_local[2, 2]
+    if nx * mx + ny * my + nz * mz < 0:
+        nx, ny, nz = -nx, -ny, -nz
+    alpha = math.acos(min(max(nx * mx + ny * my + nz * mz, 0.0), 1.0))
+    incoming = -(ki_film_sample_Ainv[0] * nx + ki_film_sample_Ainv[1] * ny + incident_air_z * nz)
+    outgoing = outgoing_x * nx + outgoing_y * ny + outgoing_z * nz
+    if incoming <= tolerance or outgoing <= tolerance:
+        return invalid
+    phase_q = local_m0_phase_q_Ainv(external_q, air_k0_Ainv, film_refractive_index)
+    polarization = _scattering_polarization_weight(
+        ki_film_sample_Ainv,
+        air_k0_Ainv,
+        outgoing_air_direction_sample_x,
+        outgoing_air_direction_sample_y,
+        outgoing_air_direction_sample_z,
+        polarization_model_code,
+    )
+    factor = (
+        air_k0_Ainv * air_k0_Ainv * pixel_solid_angle_sr * polarization / (external_q * external_q)
+    )
+    return LocalM0Geometry(
+        True,
+        alpha,
+        phase_q,
+        external_q,
+        phase_q * phase_q * (nx * nx + ny * ny),
+        phase_q * phase_q * nz * nz,
+        factor,
+    )
+
+
 @numba.njit(nogil=True, fastmath=False, cache=False, inline="never")
 def _local_stitched_m0_density_A2_per_px2(
     outgoing_air_direction_sample_x: float,
@@ -984,60 +1075,23 @@ def _local_stitched_m0_density_A2_per_px2(
     if m0_index < 0 or pixel_solid_angle_sr <= 0.0 or source_phase_weight <= 0.0:
         return m0_index, 0.0, False, False
 
-    incident_air_normal_squared = (
-        air_k0_Ainv * air_k0_Ainv
-        - ki_film_sample_Ainv[0] * ki_film_sample_Ainv[0]
-        - ki_film_sample_Ainv[1] * ki_film_sample_Ainv[1]
+    geometry = local_m0_geometry(
+        outgoing_air_direction_sample_x,
+        outgoing_air_direction_sample_y,
+        outgoing_air_direction_sample_z,
+        pixel_solid_angle_sr,
+        ki_film_sample_Ainv,
+        air_k0_Ainv,
+        film_refractive_index,
+        sample_from_local,
+        polarization_model_code,
     )
-    if incident_air_normal_squared < 0.0:
+    if not geometry.valid:
         return m0_index, 0.0, False, False
-    incident_air_z = math.copysign(
-        math.sqrt(incident_air_normal_squared),
-        ki_film_sample_Ainv[2],
-    )
-    outgoing_air_x = air_k0_Ainv * outgoing_air_direction_sample_x
-    outgoing_air_y = air_k0_Ainv * outgoing_air_direction_sample_y
-    outgoing_air_z = air_k0_Ainv * outgoing_air_direction_sample_z
-    delta_x = outgoing_air_x - ki_film_sample_Ainv[0]
-    delta_y = outgoing_air_y - ki_film_sample_Ainv[1]
-    delta_z = outgoing_air_z - incident_air_z
-    external_q = math.sqrt(delta_x * delta_x + delta_y * delta_y + delta_z * delta_z)
-    direction_tolerance = 1.0e-14 * max(air_k0_Ainv, 1.0)
-    if external_q <= direction_tolerance:
-        return m0_index, 0.0, False, False
-
-    normal_x = delta_x / external_q
-    normal_y = delta_y / external_q
-    normal_z = delta_z / external_q
-    mean_x = sample_from_local[0, 2]
-    mean_y = sample_from_local[1, 2]
-    mean_z = sample_from_local[2, 2]
-    if normal_x * mean_x + normal_y * mean_y + normal_z * mean_z < 0.0:
-        normal_x = -normal_x
-        normal_y = -normal_y
-        normal_z = -normal_z
-    mean_cosine = min(
-        max(normal_x * mean_x + normal_y * mean_y + normal_z * mean_z, 0.0),
-        1.0,
-    )
-    alpha = math.acos(mean_cosine)
+    alpha = geometry.alpha_rad
     sin_alpha = math.sin(alpha)
-    incident_air_normal = -(
-        ki_film_sample_Ainv[0] * normal_x
-        + ki_film_sample_Ainv[1] * normal_y
-        + incident_air_z * normal_z
-    )
-    exit_air_normal = (
-        outgoing_air_x * normal_x + outgoing_air_y * normal_y + outgoing_air_z * normal_z
-    )
-    if incident_air_normal <= direction_tolerance or exit_air_normal <= direction_tolerance:
-        return m0_index, 0.0, False, False
-
-    tangential_squared = max(air_k0_Ainv * air_k0_Ainv - incident_air_normal**2, 0.0)
-    film_normal = _positive_normal_root(
-        (film_refractive_index * air_k0_Ainv) ** 2 - tangential_squared
-    )
-    phase_q = 2.0 * max(film_normal.real, 0.0)
+    phase_q = geometry.phase_q_Ainv
+    external_q = geometry.external_q_Ainv
     lower_u = rod_u_bounds_Ainv[m0_index, 0]
     upper_u = rod_u_bounds_Ainv[m0_index, 1]
     u_tolerance = 1024.0 * np.finfo(np.float64).eps * max(abs(lower_u), abs(upper_u), 1.0)
@@ -1144,23 +1198,10 @@ def _local_stitched_m0_density_A2_per_px2(
         lorentzian_numerator,
     )
     event_envelope = math.exp(
-        -intensity_envelope_u_radial_A2
-        * phase_q
-        * phase_q
-        * (normal_x * normal_x + normal_y * normal_y)
-        - intensity_envelope_u_normal_A2 * phase_q * phase_q * normal_z * normal_z
+        -intensity_envelope_u_radial_A2 * geometry.phase_q_radial_squared_Ainv2
+        - intensity_envelope_u_normal_A2 * geometry.phase_q_normal_squared_Ainv2
     )
-    polarization = _scattering_polarization_weight(
-        ki_film_sample_Ainv,
-        air_k0_Ainv,
-        outgoing_air_direction_sample_x,
-        outgoing_air_direction_sample_y,
-        outgoing_air_direction_sample_z,
-        polarization_model_code,
-    )
-    denominator = external_q * external_q
-    if not spherical_density:
-        denominator *= sin_alpha
+    denominator = 1.0 if spherical_density else sin_alpha
     positive = (
         rod_hk_population[m0_index, 2] > 0.0
         and (
@@ -1168,17 +1209,14 @@ def _local_stitched_m0_density_A2_per_px2(
             or (negative_strength > 0.0 and negative_density > 0.0)
         )
         and event_envelope > 0.0
-        and polarization > 0.0
+        and geometry.density_geometry_per_px2 > 0.0
     )
     if denominator == 0.0:
         return m0_index, np.inf if positive else 0.0, positive, True
     factor = (
         rod_hk_population[m0_index, 2]
-        * air_k0_Ainv
-        * air_k0_Ainv
-        * pixel_solid_angle_sr
         * source_phase_weight
-        * polarization
+        * geometry.density_geometry_per_px2
         * event_envelope
         / denominator
     )

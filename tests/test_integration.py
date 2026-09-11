@@ -9492,3 +9492,39 @@ def test_interactive_goniometer_axis_deltas_rebuild_the_pivoted_commanded_motion
             GeometryDeltas(goniometer_axis_pitch_offset_deg=1.0),
             configured_axis_rotations=configured_axes * 2,
         )
+
+
+def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field() -> None:
+    from scipy.integrate import quad
+
+    from painted_ewald import MosaicParameters
+    from rasim_next.pipeline.fiber_detector import sample_conditional_fiber_coordinates
+
+    arguments = dict(
+        axial_bounds_Ainv=(0.2, 1.0),
+        axial_peak_centers_Ainv=[0.4, 0.7],
+        axial_peak_half_width_Ainv=0.2,
+        radial_Ainv=0.3,
+        ki_sample_Ainv=[0, 0, -2],
+        normal_sample=[0, 0, 1],
+        source_region_bounds=[[0, 4, 0, 2 * np.pi]],
+        reference_mosaic=MosaicParameters(0.4, 0.7, 0.3),
+        axial_power=12,
+        angular_power=5,
+        axial_seed=66546,
+        angular_shift_seed=1104,
+    )
+    nodes = sample_conditional_fiber_coordinates(**arguments)
+    axial = nodes.positive_axial_Ainv[nodes.axial_index]
+    actual = nodes.weight_Ainv_rad @ np.exp(axial * nodes.ewald_azimuth_rad / (2 * np.pi))
+    expected = 2 * np.pi * quad(lambda t: np.expm1(t) / t, 0.2, 1.0, epsabs=1e-13)[0]
+    assert actual == pytest.approx(expected, rel=2e-5)
+    assert nodes.weight_Ainv_rad.sum() == pytest.approx(0.8 * 2 * np.pi, rel=1e-7)
+    assert not nodes.positive_axial_Ainv.flags.writeable
+    repeated = sample_conditional_fiber_coordinates(**arguments)
+    np.testing.assert_array_equal(repeated.weight_Ainv_rad, nodes.weight_Ainv_rad)
+    empty = sample_conditional_fiber_coordinates(
+        **(arguments | {"source_region_bounds": [[3.0, 4.0, 0, 2 * np.pi]]})
+    )
+    assert not len(empty.weight_Ainv_rad)
+    np.testing.assert_array_equal(empty.positive_axial_Ainv, nodes.positive_axial_Ainv)

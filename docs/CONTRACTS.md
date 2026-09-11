@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **14**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **15**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -1107,3 +1107,63 @@ absolute covariance-whitened total to pass the declared gate.
 callbacks, and every candidate passes the exact fixed-dataset gate before an exact scan call.
 Fixed and scan comparison revisions remain frozen. With accepted-iteration limit `K`, the exact
 scan score count is at most `1 + 2K`.
+
+## Native Bi cell, site and morphology refinement (v15)
+
+This additive contract leaves the historical fixed-cell affine-CIF and five-coordinate
+sample-Q-envelope fits unchanged. `fitting.bi_native.BiCellSiteParameters` declares a,c (A),
+the signed Bi and outer-chalcogen 6c z coordinates, all three orbit occupancies, and one
+radial/normal displacement pair (A2) for each 6c/3a/6c orbit. `BiNativeStructureModel`
+preserves the complete expanded conventional-cell orbit rows and fixed integer termination
+lifts. It rebuilds the reciprocal basis and composition/volume-derived optics; individual
+physical rods retain their identities. `validate_rod_coverage` proves the supplied roster
+complete over the declared cell box using an absorption-aware elastic bound and exhaustive
+integer enumeration. Expanded search bounds require a new coverage check.
+
+`CifFiniteStackStrength.site_displacement_tensors_A2` is optional immutable per-site crystal-frame
+state. It uses the existing unit-cell amplitude's `exp(-Q.T U Q/2)` and coherent finite-repeat
+equation. Tensors are real, symmetric, positive semidefinite and exclusive with unknown-U
+substitution. Isotropic tensors reproduce the original path. The per-orbit transverse-isotropic
+projector has one implementation in `SiteDisplacementProfile.tensors_A2`.
+
+`pipeline.conditional_detector.ConditionalStructureDetector` integrates individual rods, both
+signed axial sheets, independent uniform crystal azimuth, spherical mosaic, wavelength/source
+mass, scalar optics and conditional Gaussian source position on fixed detector-native pixel
+support. The local m0 output is the named empirical Parratt/kinematic composite. Its phase-Q
+conversion and local geometry share the existing detector arithmetic. `NativeFiberResponse`
+retains sparse native region probabilities and continuous cone/attenuation coefficients.
+Strength, mosaic density, film thickness and interface roughness may be recomputed on those
+coefficients while proposal/source/material/basis/geometry/support remain fixed. A changed
+material or basis requires a fresh response. Parallel projection is bounded and consumed in
+the identical serial batch order; no source survivor renormalization occurs.
+
+`fitting.native_observations.NativeFitObservations` freezes net native counts, supported rows and
+the full count covariance plus one background-mode covariance. GLS uses a Cholesky factor on
+supported rows. Historical F/G losses and guards remain separate measures. Nonnegative scale is
+profiled analytically; when guards are enforced, their exact quadratic scale intervals are
+intersected before profiling. An empty intersection denotes an infeasible shape, never a
+relaxed guard. The versioned numeric loader verifies array/projection hashes and unchanged net
+observations. No executable checkpoint is admitted.
+
+`fitting.bi_joint.BiJointCandidate` has the 13 atomic coordinates plus Gaussian width,
+Lorentzian width/mass, two bounded surface-mixture coordinates, extra film thickness and two
+interface roughnesses. Surface fractions are `(s0,(1-s0)s1,(1-s0)(1-s1))`; physical film
+thickness is `N*c + extra`, so a coherent stack cannot exceed the film. N is an integer
+conventional-cell repeat count, never a rounded continuous parameter. `BiNativeFitEvaluator`
+is an explicit execution resource retaining at most two immutable responses with material/basis
+keys and 64 small immutable prediction vectors keyed by the complete candidate. The latter
+avoids duplicate objective/constraint finite differences; its scientific inputs are frozen.
+`fit_bi_joint` requires physical bounds, exposes the
+active coordinates and returns optimizer status, predictions and separate guards. The CLI
+`scripts/fit_bi_native.py` accepts a numeric plan, optional initialization blocks, all-active
+joint stages and independent continuous refits at selected integer N values. Conditional
+repeat checks are labeled separately. All output is one external diagnostic NPZ per run with
+an embedded manifest, never an automatic replacement of an accepted fit.
+
+Local sensitivity uses range-scaled, covariance-whitened prediction derivatives with profiled
+scale. The CLI records SVD directions and each perturbation's empirical stitch selection,
+interval and normalization; changed intervals flag a possible nonsmooth derivative. These are
+diagnostics, not posterior uncertainties or numerical qualification. Bounds do not establish
+identification. Full occupancy scale remains active through density-derived optics, and may
+still be weakly constrained. Source/mounting calibration, PSF, strain distributions, additional
+off-specular channels and stacking disorder are outside this first ordered Bi milestone.

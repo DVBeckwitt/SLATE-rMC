@@ -317,3 +317,20 @@ may change strength but not those authorities. This path is CPU sparse fitting a
 replacement for the optimized Bi2X3 full-image renderer. Raw-image discovery, background/mask
 policy, fitted-coordinate declarations, and any non-CIF stacking law remain explicit experiment
 inputs rather than per-material Python files.
+
+## Native Bi fitting extension
+
+Contract v15 adds `fitting.bi_native` for symmetry-preserving 13-coordinate candidate construction
+and `fitting.bi_joint` for explicitly bounded optimization. `fitting.native_input` reads typed
+numerical experiment inputs; `fitting.native_observations` owns frozen native support, full GLS
+covariance and historical guards. Their prediction path is `pipeline.conditional_detector`
+through `fiber_detector` and `source_spatial`: conditional position is integrated over native
+pixels, while signed atomic strength and spherical cone probability remain distinct factors.
+The same physical evaluator supports native fits and rendering.
+
+Generic finite-CIF strength delegates site tensors to the authoritative ordered amplitude.
+Local m0 geometry and phase-Q, complex exit branches, detector revisions and finite Pb endpoint
+arithmetic remain shared with their existing owners. Current main's beam-position viewer and
+configured sampled-source routes are preserved. The explicit Bi execution resource may reuse
+unchanged material/basis responses; cell and occupancy candidates rebuild transport. There is
+no plugin backend, hidden global cache, new dependency or imported legacy runtime.

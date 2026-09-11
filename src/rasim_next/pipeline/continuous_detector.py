@@ -27,6 +27,7 @@ from rasim_next.core.scattering import (
     scattering_polarization_weight,
 )
 from rasim_next.core.validity import ValidityCode
+from rasim_next.core.wave_modes import _phase_shell_offset_Ainv2
 from rasim_next.geometry.detector import (
     _DETECTOR_INCIDENCE_COSINE_TOL,
     _detector_coordinates_to_lab_points,
@@ -45,7 +46,7 @@ from rasim_next.optics.attenuation import (
     scalar_optical_weight,
     uniform_depth_attenuation,
 )
-from rasim_next.optics.refraction import _solve_exit_mode_arrays
+from rasim_next.optics.refraction import _material_indices, _solve_exit_mode_arrays
 from rasim_next.pipeline._continuous_detector_kernel import (
     CompiledDetectorEvaluator,
     CompiledDetectorState,
@@ -3304,3 +3305,15 @@ __all__ = [
     "evaluate_detector_coordinates_geometry",
     "map_ewald_geometry_to_detector",
 ]
+
+
+def _incident_phase_shell_offset_Ainv2(
+    incident: IncidentTransportResult, material: MaterialOptics, state_index: int
+) -> float:
+    wavelengths = incident.states.wavelength_A[state_index : state_index + 1]
+    material_index = int(_material_indices(material, wavelengths)[0])
+    return _phase_shell_offset_Ainv2(
+        complex(material.n_complex[material_index]),
+        2.0 * np.pi / float(wavelengths[0]),
+        abs(complex(incident.states.kz_film_Ainv[state_index]).imag),
+    )

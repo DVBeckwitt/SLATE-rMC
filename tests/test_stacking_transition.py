@@ -425,3 +425,51 @@ def test_ideal_pbi2_polytype_cifs_match_pure_transition_parent_intensities() -> 
         assert polytype["support_disagreement_count"] == 0
         assert polytype["wrong_parent_nrmse"] > 1.0e-3
         assert polytype["registry_sectors"] == [0, 1, 2]
+
+
+def test_finite_surface_endpoints_match_explicit_paths_and_physical_repeats() -> None:
+    from itertools import pairwise, product
+
+    law, initial = TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18), InitialPopulation(0.8, 0.2)
+    transition = full_transition_matrix(law)
+    omega = np.asarray(registry_phase(np.arange(3), 0))[None, :]
+    vertical = np.exp(1j * np.array([-0.7, 0.29]))[:, None]
+    full = (1.2 + 0.3j, 0.7 - 0.5j)
+    first = (np.array([0.4 + 0.2j, 0.8 - 0.1j])[:, None], 0.2 - 0.7j)
+    last = (0.3 + 0.8j, np.array([0.1 - 0.4j, 0.9 + 0.2j, -0.2 + 0.6j])[None, :])
+    for slots in (2, 4):
+        expected = np.zeros((2, 3))
+        for start, tail in product((0, 3), product(range(6), repeat=slots - 1)):
+            path = (start, *tail)
+            probability = (initial.plus, initial.minus)[start // 3] * np.prod(
+                [transition[a, b] for a, b in pairwise(path)]
+            )
+            amplitude = first[start // 3] + sum(
+                vertical**j * omega ** (s % 3) * (last if j == slots - 1 else full)[s // 3]
+                for j, s in enumerate(tail, 1)
+            )
+            expected += probability * abs(amplitude) ** 2
+        actual = finite_intensity_reduced(
+            slots,
+            *full,
+            omega,
+            vertical,
+            law,
+            initial,
+            first_amplitudes_e=first,
+            last_amplitudes_e=last,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-13)
+    for repeats in (1, 7, 286):
+        ordinary = finite_intensity_reduced(repeats, *full, omega, vertical, law, initial)
+        window = finite_intensity_reduced(
+            repeats + 1,
+            *full,
+            omega,
+            vertical,
+            law,
+            initial,
+            first_amplitudes_e=full,
+            last_amplitudes_e=(0j, 0j),
+        )
+        np.testing.assert_allclose(window, ordinary, rtol=2e-13, atol=2e-13)

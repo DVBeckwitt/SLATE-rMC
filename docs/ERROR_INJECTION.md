@@ -410,3 +410,19 @@ the public nonhexagonal indexing regression respectively.
 
 Expected detection is acquisition/quadrature revision rejection, immutable adaptive-result
 validation, or the fixed-first acceptance policy before any affected result can be admitted.
+
+## Native Bi cell/site controls (v15)
+
+- Wrap the retained surface z lifts, exchange displacement tensor axes, allow an indefinite
+  tensor, or substitute a sample-Q intensity envelope for atomic amplitude damping.
+- Change occupancy while retaining old optics/transport, change a/c without reciprocal
+  rebuilding, omit a potentially elastic rod, or let coherent height exceed the film.
+- Duplicate background covariance, move native support, transpose historical guard arrays,
+  silently cast complex counts, or profile scale beyond the guard-feasible interval.
+- Freeze an optimizer coordinate accidentally or hide a discrete m0 stitch interval change
+  in a smooth local sensitivity estimate.
+
+Expected first detection: signed direct-amplitude/isotropic/termination proof, complete-candidate
+dependency and native reuse tests, roster bound validation, immutable candidate/observation
+validation, correlated GLS/scale oracle, planted all-coordinate recovery, or recorded sensitivity
+interval changes. Measured guard failure is retained as rejection evidence, never waived.

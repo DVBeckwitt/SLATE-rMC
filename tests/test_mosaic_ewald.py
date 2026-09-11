@@ -827,3 +827,59 @@ def test_mosaic_public_inputs_reject_invalid_probability_and_geometry() -> None:
             crystal_to_sample=np.diag([1.0, 1.0, 2.0]),
             parameters=MosaicParameters(0.1, 0.2, 0.1),
         )
+
+
+def test_uniform_crystal_azimuth_cone_average_and_convergence() -> None:
+    from scipy.integrate import quad
+
+    from painted_ewald.normal_density import SphericalMosaicDensity
+
+    # Includes a cone touching the narrow normal peak, an offset cone, both
+    # directed poles, and the broad-component isotropic limit.
+    polar = np.array([0.0, 0.6, 0.61, 1.3, np.pi / 2, np.pi])
+    cone = np.array([0.0, 0.6, 0.6, 0.2, np.pi / 2, 0.0])
+    for sigma, gamma in ((np.deg2rad(0.03), np.deg2rad(0.03)), (0.3, 0.6), (4.0, 4.0)):
+        for eta in (0.0, 1.0, 0.37):
+            law = SphericalMosaicDensity(MosaicParameters(sigma, gamma, eta))
+            actual = law.cone_average_sr_inv(polar, cone)
+            refined = law.cone_average_sr_inv(polar, cone, quadrature_order=32)
+            np.testing.assert_allclose(actual, refined, rtol=2e-11, atol=1e-300)
+            exact_circle = (
+                (1 - eta) / law.gaussian_normalization + eta / law.lorentzian_normalization
+            ) / (2 * np.pi**2)
+            assert actual[4] == pytest.approx(exact_circle, rel=2e-12)
+            np.testing.assert_allclose(
+                actual[[0, -1]], law.directed_density_sr_inv(polar[[0, -1]]), rtol=2e-12
+            )
+            # Independent adaptive psi integral, with a near-tangent split.
+            a, k = polar[1], cone[1]
+            scale = min(sigma, gamma) / np.sin(k)
+
+            def integrand(psi: float, a: float, k: float, law: SphericalMosaicDensity) -> float:
+                sine = np.sin((a - k) / 2) ** 2 + np.sin(a) * np.sin(k) * np.sin(psi / 2) ** 2
+                angle = 2 * np.arctan2(np.sqrt(sine), np.sqrt(1 - sine))
+                return float(law.directed_density_sr_inv(angle)) / np.pi
+
+            oracle = sum(
+                quad(integrand, lo, hi, args=(a, k, law), epsabs=1e-11, epsrel=1e-11)[0]
+                for lo, hi in ((0.0, min(scale, np.pi)), (min(scale, np.pi), np.pi))
+            )
+            assert actual[1] == pytest.approx(oracle, rel=2e-11)
+
+    # A complete cone remains a unit-mass spherical distribution, including
+    # the negative axial sheet. This is independent of the pointwise circle rule.
+    law = SphericalMosaicDensity(MosaicParameters(0.3, 0.6, 0.37))
+    np.testing.assert_allclose(
+        law.cone_average_sr_inv(polar, np.pi),
+        law.directed_density_sr_inv(np.pi - polar),
+        rtol=2e-12,
+    )
+    for opening in (0.6, 2.1):
+        mass = quad(
+            lambda a, k: 2 * np.pi * np.sin(a) * float(law.cone_average_sr_inv(a, k)),
+            0.0,
+            np.pi,
+            args=(opening,),
+            epsabs=1e-11,
+        )[0]
+        assert mass == pytest.approx(1.0, abs=2e-11)

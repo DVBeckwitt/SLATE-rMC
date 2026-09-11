@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass, field
 from numbers import Real
 
 import numpy as np
 from numpy.typing import ArrayLike
 from scipy.special import ndtri
 
-from rasim_next.core.contracts import IncidentSampleBatch
+from rasim_next.core.contracts import IncidentSampleBatch, canonical_revision_sha256
 
 _DIMENSION_COUNT = 5
 SOURCE_QUADRATURE_MODEL_ID = "weighted_correlated_gaussian_source_quadrature.v2"
@@ -36,11 +37,316 @@ _FINITE_UNEQUAL_MATCHED_DISCRETE_LINE_SAMPLING_MODEL_ID = (
 NOMINAL_MEAN_GEOMETRY_REFERENCE_MODEL_ID = "nominal_mean_geometry_reference.v1"
 
 
+CONDITIONAL_SOURCE_MODEL_ID = "conditional_position_gaussian_angular_spectral_lhs.v1"
+CONDITIONAL_HERMITE_SOURCE_MODEL_ID = "conditional_position_gaussian_hermite_quadrature.v1"
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionalSourceSamples:
+    """Angular/spectral quadrature with source position retained as a Gaussian law.
+
+    Mean rays start at E[position|angular draw]; they are not a complete intensity
+    source without the spatial factor. That factor maps two independent standard
+    normals into source-plane displacement in lab metres. Angular latents are the
+    coordinates actually used by the exponential direction map, never inverted
+    from an outgoing direction or reconstructed from provenance text.
+    """
+
+    mean_rays: IncidentSampleBatch
+    standardized_divergence: ArrayLike
+    conditional_origin_factor_lab_m: ArrayLike
+    revision: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mean_rays, IncidentSampleBatch):
+            raise TypeError("mean_rays must be IncidentSampleBatch")
+        if self.mean_rays.source_sampling_model_id not in (
+            CONDITIONAL_SOURCE_MODEL_ID,
+            CONDITIONAL_HERMITE_SOURCE_MODEL_ID,
+        ):
+            raise ValueError("mean rays must declare conditional Gaussian source position")
+        z = _finite_real(
+            self.standardized_divergence,
+            (len(self.mean_rays.wavelength_A), 2),
+            "standardized_divergence",
+        )
+        factor = _finite_real(
+            self.conditional_origin_factor_lab_m, (3, 2), "conditional_origin_factor_lab_m"
+        )
+        for name, value in (
+            ("standardized_divergence", z),
+            ("conditional_origin_factor_lab_m", factor),
+        ):
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+        object.__setattr__(
+            self,
+            "revision",
+            canonical_revision_sha256(
+                ("mean_rays", self.mean_rays.source_revision),
+                ("standardized_divergence", z),
+                ("conditional_origin_factor_lab_m", factor),
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ConditionalSourceParameters:
+    origin_m: np.ndarray
+    direction: np.ndarray
+    axes: np.ndarray
+    spatial_sigma_m: np.ndarray
+    divergence_sigma_rad: np.ndarray
+    correlation: np.ndarray
+    lines_A: np.ndarray
+    line_probability: np.ndarray
+    bandwidth_A: float
+    polarization_state_id: str
+
+
+def _conditional_parameters(
+    *,
+    mean_origin_lab_m: ArrayLike,
+    mean_direction_lab: ArrayLike,
+    transverse_axes_lab: ArrayLike,
+    spatial_sigma_m: ArrayLike,
+    divergence_sigma_rad: ArrayLike,
+    line_wavelength_A: ArrayLike,
+    line_probability: ArrayLike,
+    common_wavelength_sigma_A: float,
+    polarization_state_id: str,
+    position_divergence_correlation: ArrayLike = (0.0, 0.0),
+) -> _ConditionalSourceParameters:
+    if not isinstance(polarization_state_id, str) or not polarization_state_id:
+        raise ValueError("polarization_state_id must be a nonempty string")
+    origin, direction, axes, spatial_sigma, divergence_sigma = _validated_source_geometry(
+        mean_origin_lab_m=mean_origin_lab_m,
+        mean_direction_lab=mean_direction_lab,
+        transverse_axes_lab=transverse_axes_lab,
+        spatial_sigma_m=spatial_sigma_m,
+        divergence_sigma_rad=divergence_sigma_rad,
+    )
+    rho = _finite_real(position_divergence_correlation, (2,), "position_divergence_correlation")
+    if np.any(np.abs(rho) >= 1):
+        raise ValueError("position_divergence_correlation must lie strictly within (-1, 1)")
+    supplied_lines = np.asarray(line_wavelength_A)
+    if supplied_lines.ndim != 1 or not len(supplied_lines):
+        raise ValueError("source lines must be a nonempty vector")
+    lines = _finite_real(line_wavelength_A, supplied_lines.shape, "line_wavelength_A")
+    probability = _finite_real(line_probability, lines.shape, "line_probability")
+    width = float(_finite_real(common_wavelength_sigma_A, (), "common_wavelength_sigma_A"))
+    if np.any(lines <= 0) or np.unique(lines).size != lines.size or width < 0:
+        raise ValueError("distinct positive wavelengths and nonnegative line width are required")
+    if np.any(probability <= 0) or not np.isclose(probability.sum(), 1.0, rtol=0, atol=2e-15):
+        raise ValueError("line probabilities must be positive and sum to one")
+    arrays = (origin, direction, axes, spatial_sigma, divergence_sigma, rho, lines, probability)
+    for array in arrays:
+        array.setflags(write=False)
+    return _ConditionalSourceParameters(*arrays, width, polarization_state_id)
+
+
+def _assemble_conditional_source(
+    p, z, wavelength, masses, *, model_id, seed, numerical_parameters, rng_model_id
+):
+    if np.any(wavelength <= 0):
+        raise ValueError("source wavelengths must be positive")
+    mean_position = p.origin_m + (z * p.correlation * p.spatial_sigma_m) @ p.axes
+    factor = p.axes.T * (p.spatial_sigma_m * np.sqrt(1 - p.correlation**2))
+    tangent = (z * p.divergence_sigma_rad) @ p.axes
+    angle = np.linalg.norm(tangent, axis=1)
+    direction = np.cos(angle)[:, None] * p.direction + np.sinc(angle / np.pi)[:, None] * tangent
+    provenance = json.dumps(
+        {
+            "model_id": model_id,
+            "position_integration": "conditional_gaussian.v1",
+            "mean_origin_lab_m": p.origin_m.tolist(),
+            "mean_direction_lab": p.direction.tolist(),
+            "transverse_axes_lab": p.axes.tolist(),
+            "spatial_sigma_m": p.spatial_sigma_m.tolist(),
+            "divergence_sigma_rad": p.divergence_sigma_rad.tolist(),
+            "position_divergence_correlation": p.correlation.tolist(),
+            "line_wavelength_A": p.lines_A.tolist(),
+            "line_probability": p.line_probability.tolist(),
+            "common_wavelength_sigma_A": p.bandwidth_A,
+            "sample_count": len(wavelength),
+            "polarization_state_id": p.polarization_state_id,
+            **numerical_parameters,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    batch = _source_batch(
+        origin=mean_position,
+        direction=direction,
+        wavelength_A=wavelength,
+        source_weight=masses,
+        polarization_state_id=p.polarization_state_id,
+        source_sampling_model_id=model_id,
+        seed=seed,
+        parameter_provenance=provenance,
+        rng_model_id=rng_model_id,
+    )
+    return ConditionalSourceSamples(batch, z, factor)
+
+
+def sample_conditional_gaussian_source(
+    *,
+    mean_origin_lab_m: ArrayLike,
+    mean_direction_lab: ArrayLike,
+    transverse_axes_lab: ArrayLike,
+    spatial_sigma_m: ArrayLike,
+    divergence_sigma_rad: ArrayLike,
+    line_wavelength_A: ArrayLike,
+    line_probability: ArrayLike,
+    common_wavelength_sigma_A: float,
+    sample_count: int,
+    seed: int,
+    polarization_state_id: str,
+    position_divergence_correlation: ArrayLike = (0.0, 0.0),
+) -> ConditionalSourceSamples:
+    """Sample divergence/bandwidth only, preserving exact spectral-line masses.
+
+    sample_count is the total number of spectral rows. Equal-size line grids use
+    the same angular and bandwidth latents. Position has no Monte Carlo draws;
+    its conditional mean is rho*sigma*z and covariance sigma²*(1-rho²).
+    A single line also covers the monochromatic or Gaussian-wavelength source.
+    """
+    if (
+        isinstance(sample_count, (bool, np.bool_))
+        or not isinstance(sample_count, (int, np.integer))
+        or sample_count <= 0
+    ):
+        raise ValueError("sample_count must be a positive integer")
+    if (
+        isinstance(seed, (bool, np.bool_))
+        or not isinstance(seed, (int, np.integer))
+        or not 0 <= seed < 2**64
+    ):
+        raise ValueError("seed must be a nonnegative unsigned 64-bit integer")
+    p = _conditional_parameters(
+        mean_origin_lab_m=mean_origin_lab_m,
+        mean_direction_lab=mean_direction_lab,
+        transverse_axes_lab=transverse_axes_lab,
+        spatial_sigma_m=spatial_sigma_m,
+        divergence_sigma_rad=divergence_sigma_rad,
+        line_wavelength_A=line_wavelength_A,
+        line_probability=line_probability,
+        common_wavelength_sigma_A=common_wavelength_sigma_A,
+        polarization_state_id=polarization_state_id,
+        position_divergence_correlation=position_divergence_correlation,
+    )
+    lines, probability, width = p.lines_A, p.line_probability, p.bandwidth_A
+    if sample_count < len(lines):
+        raise ValueError("sample_count must be at least the number of source lines")
+    counts = np.full(len(lines), int(sample_count) // len(lines), dtype=np.int64)
+    counts[: int(sample_count) % len(lines)] += 1
+    latents, wavelengths, masses = [], [], []
+    for line, mass, count in zip(lines, probability, counts, strict=True):
+        gaussian = ndtri(_antithetic_lhs(size=int(count), dimension_count=3, seed=int(seed)))
+        latents.append(gaussian[:, :2])
+        wavelengths.append(line + width * gaussian[:, 2])
+        row_mass = float(mass) / int(count)
+        if row_mass <= 0 or not math.isclose(
+            math.fsum([row_mass] * int(count)), float(mass), rel_tol=8 * np.finfo(float).eps
+        ):
+            raise ValueError("line probability is too small for the allocated source rows")
+        masses.append(np.full(int(count), row_mass))
+    z, wavelength = np.concatenate(latents), np.concatenate(wavelengths)
+    return _assemble_conditional_source(
+        p,
+        z,
+        wavelength,
+        np.concatenate(masses),
+        model_id=CONDITIONAL_SOURCE_MODEL_ID,
+        seed=int(seed),
+        numerical_parameters={},
+        rng_model_id=_RNG_MODEL_ID,
+    )
+
+
+def quadrature_conditional_gaussian_source(
+    *,
+    mean_origin_lab_m: ArrayLike,
+    mean_direction_lab: ArrayLike,
+    transverse_axes_lab: ArrayLike,
+    spatial_sigma_m: ArrayLike,
+    divergence_sigma_rad: ArrayLike,
+    line_wavelength_A: ArrayLike,
+    line_probability: ArrayLike,
+    common_wavelength_sigma_A: float,
+    polarization_state_id: str,
+    position_divergence_correlation: ArrayLike = (0.0, 0.0),
+    divergence_order: int = 6,
+    wavelength_order: int = 6,
+) -> ConditionalSourceSamples:
+    """Tensor Gaussian quadrature of divergence/bandwidth; position stays continuous.
+
+    Each line has divergence_order² angular nodes. A zero bandwidth uses one
+    spectral node; otherwise wavelength_order nodes integrate its Gaussian law.
+    No moment matching, angular Jacobian or survivor renormalization is applied.
+    """
+    for order in (divergence_order, wavelength_order):
+        if type(order) is not int or order <= 0:
+            raise ValueError("Gaussian quadrature orders must be positive integers")
+    p = _conditional_parameters(
+        mean_origin_lab_m=mean_origin_lab_m,
+        mean_direction_lab=mean_direction_lab,
+        transverse_axes_lab=transverse_axes_lab,
+        spatial_sigma_m=spatial_sigma_m,
+        divergence_sigma_rad=divergence_sigma_rad,
+        line_wavelength_A=line_wavelength_A,
+        line_probability=line_probability,
+        common_wavelength_sigma_A=common_wavelength_sigma_A,
+        polarization_state_id=polarization_state_id,
+        position_divergence_correlation=position_divergence_correlation,
+    )
+    x, w = np.polynomial.hermite.hermgauss(divergence_order)
+    angular_z = np.sqrt(2.0) * x
+    angular_mass = w / np.sqrt(np.pi)
+    effective_order = 1 if p.bandwidth_A == 0 else wavelength_order
+    x, w = np.polynomial.hermite.hermgauss(effective_order)
+    spectral_z = np.sqrt(2.0) * x
+    spectral_mass = w / np.sqrt(np.pi)
+    gaussian = np.stack(
+        np.meshgrid(angular_z, angular_z, spectral_z, indexing="ij"), axis=-1
+    ).reshape(-1, 3)
+    row_weight = (
+        angular_mass[:, None, None] * angular_mass[None, :, None] * spectral_mass[None, None, :]
+    ).ravel()
+    count = len(row_weight)
+    line_index = np.repeat(np.arange(len(p.lines_A)), count)
+    gaussian = np.tile(gaussian, (len(p.lines_A), 1))
+    wavelength = p.lines_A[line_index] + p.bandwidth_A * gaussian[:, 2]
+    mass = p.line_probability[line_index] * np.tile(row_weight, len(p.lines_A))
+    return _assemble_conditional_source(
+        p,
+        gaussian[:, :2],
+        wavelength,
+        mass,
+        model_id=CONDITIONAL_HERMITE_SOURCE_MODEL_ID,
+        seed=0,
+        rng_model_id=_NO_RNG_MODEL_ID,
+        numerical_parameters=dict(
+            divergence_order=divergence_order,
+            wavelength_order=wavelength_order,
+            effective_wavelength_order=effective_order,
+        ),
+    )
+
+
 def require_physical_intensity_source_model(source_sampling_model_id: str) -> None:
-    """Reject the geometry-only centroid companion at intensity boundaries."""
+    """Reject incomplete ray representatives at point-source intensity boundaries."""
 
     if source_sampling_model_id == NOMINAL_MEAN_GEOMETRY_REFERENCE_MODEL_ID:
         raise ValueError("nominal mean geometry reference cannot contribute to intensity")
+    if source_sampling_model_id in (
+        CONDITIONAL_SOURCE_MODEL_ID,
+        CONDITIONAL_HERMITE_SOURCE_MODEL_ID,
+    ):
+        raise ValueError(
+            "conditional mean rays cannot contribute to point-source intensity without "
+            "integrating their retained position distribution"
+        )
 
 
 def _contains_only_real_numbers(supplied: np.ndarray) -> bool:

@@ -88,6 +88,22 @@ class SiteDisplacementProfile:
                 )
         raise ValueError(f"site displacement profile lacks source label {source_label!r}")
 
+    def tensors_A2(self, source_labels: tuple[str, ...], normal_crystal: np.ndarray) -> np.ndarray:
+        """Expand orbit components into Cartesian crystal-frame site tensors."""
+        normal = np.asarray(normal_crystal, dtype=np.float64)
+        if normal.shape != (3,) or not np.all(np.isfinite(normal)) or np.linalg.norm(normal) == 0:
+            raise ValueError("normal_crystal must be a finite nonzero three-vector")
+        normal = normal / np.linalg.norm(normal)
+        normal_projector = np.outer(normal, normal)
+        radial_projector = np.eye(3) - normal_projector
+        components = np.array([self.components_A2(label) for label in source_labels])
+        tensors = (
+            components[:, 0, None, None] * radial_projector
+            + components[:, 1, None, None] * normal_projector
+        )
+        tensors.setflags(write=False)
+        return tensors
+
 
 @dataclass(frozen=True, slots=True)
 class Bi2X3QuintupleLayerParameters:
@@ -409,6 +425,34 @@ def _motif_crystal(
     )
 
 
+def pbi2_surface_motif_crystals(
+    crystal: CrystalStructure,
+) -> tuple[tuple[CrystalStructure, ...], ...]:
+    """Return plus/minus motifs, each ordered as whole, lower iodine, upper iodine.
+
+    Partial motifs keep the Pb-centered gauge. Their amplitudes can form
+    complementary finite-surface windows without shifting any registry phase.
+    """
+    motifs = extract_pbi2_motifs(crystal)
+    if len(motifs) != 1:
+        raise ValueError("surface motifs require exactly one PbI2 motif per unit cell")
+    plus = _canonical_plus_atoms(crystal, motifs)
+    result = []
+    for orientation, atoms in (("plus", plus), ("minus", _reflected_atoms(plus))):
+        subsets = (
+            ("whole", atoms),
+            ("lower", tuple(a for a in atoms if a.fractional_offset[2] < 0)),
+            ("upper", tuple(a for a in atoms if a.fractional_offset[2] > 0)),
+        )
+        result.append(
+            tuple(
+                _motif_crystal(crystal, subset, f"{crystal.phase_id}:{orientation}:{name}")
+                for name, subset in subsets
+            )
+        )
+    return tuple(result)
+
+
 def pbi2_layer_amplitudes(
     crystal: CrystalStructure,
     query: RodQueryBatch,
@@ -679,18 +723,8 @@ def bi2x3_quintuple_layer_amplitudes(
             raise ValueError(
                 "site-resolved and shared quintuple-layer displacements are mutually exclusive"
             )
-        normal_projector = np.outer(layer_normal, layer_normal)
-        radial_projector = np.eye(3) - normal_projector
-        site_displacement_tensors = np.asarray(
-            [
-                (
-                    site_displacement_profile.components_A2(atom.source_label)[0] * radial_projector
-                    + site_displacement_profile.components_A2(atom.source_label)[1]
-                    * normal_projector
-                )
-                for atom in plus_atoms
-            ],
-            dtype=np.float64,
+        site_displacement_tensors = site_displacement_profile.tensors_A2(
+            tuple(atom.source_label for atom in plus_atoms), layer_normal
         )
         displacement_tensor = None
     elif parameters.u_radial_A2 == parameters.u_normal_A2:

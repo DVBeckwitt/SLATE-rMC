@@ -90,6 +90,76 @@ class SphericalMosaicDensity:
         """Probability density with respect to d(alpha) d(beta), before pushforward."""
         return self.directed_density_sr_inv(alpha_rad) * np.sin(np.asarray(alpha_rad))
 
+    def cone_average_sr_inv(
+        self,
+        polar_angle_rad: ArrayLike,
+        cone_angle_rad: ArrayLike,
+        *,
+        quadrature_order: int = 16,
+    ) -> NDArray[np.float64]:
+        """Average the directed normal law over a unit-mass orientation circle.
+
+        The circle is centred on Q-hat, at polar_angle_rad from the mean normal,
+        and has opening cone_angle_rad. Its normals obey
+        n dot mean_axis = cos(polar)*cos(cone) + sin(polar)*sin(cone)*cos(psi).
+        This integrates the independent uniform crystal azimuth, not an image
+        convolution. Lorentzian averaging is analytic; the Gaussian uses complete
+        scale-resolved quadrature on [0, pi], with no angular tail truncation.
+        """
+        reject_complex(polar_angle_rad, "polar_angle_rad")
+        reject_complex(cone_angle_rad, "cone_angle_rad")
+        polar, cone = np.broadcast_arrays(
+            np.asarray(polar_angle_rad, dtype=np.float64),
+            np.asarray(cone_angle_rad, dtype=np.float64),
+        )
+        if any(np.any(~np.isfinite(x)) or np.any((x < 0) | (x > np.pi)) for x in (polar, cone)):
+            raise ValueError("polar and cone angles must be finite and lie in [0, pi]")
+        if type(quadrature_order) is not int or quadrature_order < 4:
+            raise ValueError("quadrature_order must be an integer of at least four")
+        shape = polar.shape
+        polar, cone = polar.ravel(), cone.ravel()
+        delta = abs(polar - cone)
+        b = np.sin(polar) * np.sin(cone)
+        out = np.zeros(polar.size)
+        eta = self.parameters.lorentzian_probability
+        if eta > 0:
+            gamma = self.parameters.lorentzian_half_width_rad
+            rho, h, numerator = np.exp(-gamma), -np.expm1(-gamma), -np.expm1(-2 * gamma)
+            # Factor the denominator at both circle endpoints. Subtracting A²-B²
+            # would lose the narrow peak when the cone touches the mean normal.
+            low = h * h + 4 * rho * np.sin(delta / 2) ** 2
+            high = h * h + 4 * rho * np.sin((polar + cone) / 2) ** 2
+            out += (
+                eta
+                * numerator
+                / (2 * np.pi**2 * self.lorentzian_normalization * np.sqrt(low) * np.sqrt(high))
+            )
+        if eta < 1:
+            sigma = self.parameters.gaussian_sigma_rad
+            node, weight = np.polynomial.legendre.leggauss(quadrature_order)
+            # Bounded batches keep the angle workspace independent of image size.
+            for start in range(0, polar.size, 2048):
+                stop = min(start + 2048, polar.size)
+                bb, dd = b[start:stop], delta[start:stop]
+                curvature = bb / np.sinc(dd / np.pi)
+                scale = np.minimum(
+                    np.pi, sigma / np.sqrt(np.maximum(curvature, np.finfo(float).tiny))
+                )
+                lower = np.zeros(stop - start)
+                upper = scale.copy()
+                total = np.zeros(stop - start)
+                while np.any(lower < np.pi):
+                    half = (upper - lower) / 2
+                    psi = (upper + lower)[:, None] / 2 + half[:, None] * node
+                    sine_squared = np.sin(dd[:, None] / 2) ** 2 + bb[:, None] * np.sin(psi / 2) ** 2
+                    sine_squared = np.clip(sine_squared, 0, 1)
+                    angle = 2 * np.arctan2(np.sqrt(sine_squared), np.sqrt(1 - sine_squared))
+                    total += half * (_wrapped_gaussian_density(angle, sigma) @ weight)
+                    lower = upper
+                    upper = np.minimum(np.pi, 2 * upper)
+                out[start:stop] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
+        return out.reshape(shape)
+
     def plane_density_sr_inv(self, alpha_rad: ArrayLike) -> NDArray[np.float64]:
         """Antipodal sum per spherical area on the unoriented-normal hemisphere."""
         reject_complex(alpha_rad, "alpha_rad")

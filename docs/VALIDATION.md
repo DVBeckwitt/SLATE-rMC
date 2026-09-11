@@ -2134,3 +2134,54 @@ Formatting, Ruff, documentation links/schema checks, and the 351-file/12-referen
 pass. An offline wheel build also succeeds with output outside the repository. No type checker is
 configured. The main checkout's two active B4 source files and compiled replay dependency remain
 untouched; the isolated cleanup worktree contains no generated files.
+
+## Native Bi cell/site joint fitting (contract v15)
+
+Task T29 starts from `e6b36b5a5a89c54aa0852434f1ea59d2ad3cc4dc` in
+`codex/bi13-native-joint`. Its additive native detector path preserves the accepted main
+beam-position viewer, source routines and existing configured model behavior. All six ADPs
+reach the common atomic amplitude; cell/occupancy changes rebuild their material and detector
+dependencies. Frozen native observations use one full count/background covariance.
+
+Permanent additions protect distinct behavior: signed direct atom/repeat enumeration with
+site tensors and retained termination lifts; all 13 parameter dependencies and coherent-height
+validity; correlated GLS/guard scale and planted recovery of all 21 continuous coordinates;
+actual native reuse versus rebuild, including occupancy/cell invalidation; conditional Gaussian
+moments, native spatial mass, empty-support behavior, continuous fiber/sign/mosaic integration,
+fit/render parity and independent Pb endpoint enumeration. Parallel probabilities and serial
+probabilities are bitwise identical. The suite retains no measured image snapshots or timing
+assertions. Existing isotropic/beam/CUDA behavior remains covered by its original regressions.
+
+The full suite passed **498 tests**, with 14 expected GPU-underutilization warnings and no skips,
+in 619.98 s while numerical experiments also ran. A preceding run's two failures and one skip
+were due solely to the missing optional Matplotlib installation; installing the existing
+lockfile versions resolved them without changing dependencies or figure code. The subsequent
+focused native/caching suite passed **13 tests** in 18.29 s. Ruff, formatting and whitespace
+checks pass. No type checker is configured.
+
+All eight registered proof commands pass their scientific checks and retain existing reference
+classifications. The historical geometry/optics and mosaic/Ewald wrappers additionally require
+a clean commit and are rerun after the final coherent commit. The tracked reference pack and
+examples are unchanged. New measured fitting has **NO_ORACLE** for physical parameter truth;
+the fixed archived-response replay through the new atomic strength is **MATCH** with maximum
+relative error 2.2176e-12. This replay does not validate rebuilding the response away from that
+fixed cell/material/mosaic state; the fresh production-order rebuild is checked separately.
+This branch does not introduce a corrected legacy first-divergent physical stage.
+
+The fresh p12/g5 baseline passes all historical guards at archived scale. Relative native L2
+change is 0.00321102 and covariance-whitened RMS change is 0.459141 per supported row.
+Its first demonstrated divergence is numerical proposal construction: axial width, m0 proposal
+centers and angular proposal widths differ from the archived generator, with the corresponding
+importance densities applied in both. Neither proposal is a converged oracle; this comparison
+is **NO_ORACLE**, with qualification pending. The first full prediction took 2122.419 s
+(1295.866 s compilation) and 4.37 GB peak working set. Its retained checkpoint is complete;
+the pre-memoization process was stopped during a redundant second evaluation. The external
+comparison artifact records that distinction and preserves the checkpoint's SHA256.
+
+Full experimental details, numeric input plans, separate guards, roster coverage and external
+artifact identities are recorded in `tasks/29_bi13_native_joint.md`. The exploratory all-active
+fit reduced its coarse GLS loss but failed guards and its iteration budget. Independent axial,
+angular and seeded finer checks changed predictions by 7.87--15.75 covariance-whitened RMS
+units per supported row. **No new measured fit or parameter uncertainty is accepted.**
+The numerical core exposes the requested degrees of freedom; adequate integration and
+identifiability remain acceptance requirements before replacing the nominal fit.

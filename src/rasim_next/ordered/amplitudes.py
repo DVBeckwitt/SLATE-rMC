@@ -30,6 +30,28 @@ class StructureAmplitudeResult:
         object.__setattr__(self, "amplitude_e", amplitude)
 
 
+def _validated_site_displacement_tensors(value: ArrayLike, site_count: int) -> NDArray[np.float64]:
+    """Own the crystal-Cartesian site-tensor validation used by amplitude providers."""
+    supplied = np.asarray(value)
+    if np.iscomplexobj(supplied):
+        raise ValueError("site displacement tensors must be real")
+    tensors = np.array(supplied, dtype=np.float64, copy=True)
+    if tensors.shape != (site_count, 3, 3) or not np.all(np.isfinite(tensors)):
+        raise ValueError(
+            "site_displacement_tensors_A2 must be finite with shape (site_count, 3, 3)"
+        )
+    scale = max(float(np.linalg.norm(tensors, ord=2, axis=(1, 2)).max()), 1.0)
+    tolerance = 256.0 * np.finfo(np.float64).eps * scale
+    if (
+        not np.allclose(tensors, np.swapaxes(tensors, 1, 2), rtol=0.0, atol=tolerance)
+        or np.min(np.linalg.eigvalsh(tensors)) < -tolerance
+    ):
+        raise ValueError("site_displacement_tensors_A2 must be symmetric positive semidefinite")
+    tensors = 0.5 * (tensors + np.swapaxes(tensors, 1, 2))
+    tensors.setflags(write=False)
+    return tensors
+
+
 def unit_cell_amplitude(
     crystal: CrystalStructure,
     hkl: ArrayLike,
@@ -89,31 +111,8 @@ def unit_cell_amplitude(
         displacement_tensor = 0.5 * (displacement_tensor + displacement_tensor.T)
     site_displacement_tensors = None
     if site_displacement_tensors_A2 is not None:
-        site_displacement_tensors = np.asarray(site_displacement_tensors_A2, dtype=np.float64)
-        expected_shape = (len(crystal.sites), 3, 3)
-        if site_displacement_tensors.shape != expected_shape or not np.all(
-            np.isfinite(site_displacement_tensors)
-        ):
-            raise ValueError(
-                "site_displacement_tensors_A2 must be finite with shape (site_count, 3, 3)"
-            )
-        scale = max(
-            float(np.linalg.norm(site_displacement_tensors, ord=2, axis=(1, 2)).max()),
-            1.0,
-        )
-        tolerance = 256.0 * np.finfo(np.float64).eps * scale
-        if (
-            not np.allclose(
-                site_displacement_tensors,
-                np.swapaxes(site_displacement_tensors, 1, 2),
-                rtol=0.0,
-                atol=tolerance,
-            )
-            or np.min(np.linalg.eigvalsh(site_displacement_tensors)) < -tolerance
-        ):
-            raise ValueError("site_displacement_tensors_A2 must be symmetric positive semidefinite")
-        site_displacement_tensors = 0.5 * (
-            site_displacement_tensors + np.swapaxes(site_displacement_tensors, 1, 2)
+        site_displacement_tensors = _validated_site_displacement_tensors(
+            site_displacement_tensors_A2, len(crystal.sites)
         )
     has_unknown_u_iso = any(site.u_iso_A2 is None for site in crystal.sites)
     if (
