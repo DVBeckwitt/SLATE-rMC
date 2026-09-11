@@ -29,6 +29,7 @@ from rasim_next.geometry import (
     compose_intrinsic_xy_rotation,
 )
 from rasim_next.geometry.instrument import CompiledInstrument
+from rasim_next.pipeline.beam_position import ConditionalBeamPosition
 from rasim_next.pipeline.configured_simulation import (
     AxisRotationConfiguration,
     ConfiguredSimulationInputs,
@@ -46,7 +47,8 @@ from rasim_next.pipeline.source_averaged_detector import (
 )
 
 DEFAULT_CONFIG = ROOT / "configs" / "bi2se3_simulation.yaml"
-DEFAULT_DRAWS_PER_SOURCE_STATE = 49
+DEFAULT_SMOOTH_SOURCE_SAMPLE_COUNT = 128
+DEFAULT_DRAWS_PER_SOURCE_STATE = 8
 DEFAULT_DETECTOR_SEED = 20260728
 _INCIDENCE_CONTROL_FIELD = "effective_incidence_angle_offset_deg"
 _INCIDENCE_CONTROL_MINIMUM_DEG = 0.0
@@ -308,22 +310,36 @@ def _prepare_full_native_texture(image_A2: NDArray[np.generic]) -> _FullNativeTe
 class _DetectorBundle:
     inputs: ConfiguredSimulationInputs
     detector: SourceAveragedDetectorEwaldMeasure
+    beam_position: ConditionalBeamPosition | None = None
 
 
 def _build_bundle(
     config: SimulationConfiguration,
     source_sample_count: int,
+    *,
+    beam_position_mode: str = "sampled",
 ) -> _DetectorBundle:
     if not config.bragg.include_detector_visible_m0:
         raise ValueError(
             "interactive all-m display requires bragg.include_detector_visible_m0=true"
         )
+    if beam_position_mode not in {"smooth", "sampled"}:
+        raise ValueError("beam_position_mode must be smooth or sampled")
     configured = replace(
         config,
         source=replace(config.source, sample_count=source_sample_count),
     )
-    inputs = build_configured_simulation_inputs(configured)
-    return _DetectorBundle(inputs, build_source_averaged_detector(inputs))
+    inputs = build_configured_simulation_inputs(
+        configured, conditional_source_position=beam_position_mode == "smooth"
+    )
+    beam_position = (
+        ConditionalBeamPosition.from_source(
+            configured.source, source_revision=inputs.samples.source_revision
+        )
+        if beam_position_mode == "smooth"
+        else None
+    )
+    return _DetectorBundle(inputs, build_source_averaged_detector(inputs), beam_position)
 
 
 def _instrument_for_deltas(
@@ -570,8 +586,10 @@ class _DetectorRenderSession:
         detector_seed: int,
         execution_backend: str,
         prepare_texture: bool,
+        beam_position_mode: str = "sampled",
     ) -> None:
         self._config = config
+        self._beam_position_mode = beam_position_mode
         self._detector_seed = detector_seed
         self._execution_backend = execution_backend
         self._prepare_texture = prepare_texture
@@ -590,12 +608,17 @@ class _DetectorRenderSession:
 
         if cancel_requested():
             raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
+        start = perf_counter()
         request = stage.request
         if (
             self._bundle is None
             or self._bundle.inputs.config.source.sample_count != request.source_sample_count
         ):
-            self._bundle = _build_bundle(self._config, request.source_sample_count)
+            self._bundle = _build_bundle(
+                self._config,
+                request.source_sample_count,
+                beam_position_mode=self._beam_position_mode,
+            )
             self._bound_deltas = None
             self._sampler = None
         if cancel_requested():
@@ -621,6 +644,7 @@ class _DetectorRenderSession:
                     self._sampler = detector.compile_monte_carlo_sampler(
                         execution_backend=self._execution_backend,
                         seed=self._detector_seed,
+                        beam_position=self._bundle.beam_position,
                     )
                 else:
                     try:
@@ -629,6 +653,7 @@ class _DetectorRenderSession:
                         self._sampler = detector.compile_monte_carlo_sampler(
                             execution_backend=self._execution_backend,
                             seed=self._detector_seed,
+                            beam_position=self._bundle.beam_position,
                         )
             self._bound_deltas = request.deltas
             if cancel_requested():
@@ -639,8 +664,7 @@ class _DetectorRenderSession:
             stage.draws_per_source_state,
             self._sampler.draws_completed,
         )
-        start = perf_counter()
-        if stage.materialize_result or not self._prepare_texture:
+        if stage.materialize_result:
             estimate: MonteCarloDetectorPixelMass | MonteCarloDetectorPresentation = (
                 self._sampler.advance_to(
                     target_draw_count,
@@ -652,12 +676,11 @@ class _DetectorRenderSession:
                 target_draw_count,
                 cancel_requested=cancel_requested,
             )
-        raster = DetectorRaster(estimate=estimate, wall_time_s=perf_counter() - start)
         if cancel_requested():
             self._sampler.reset()
             raise MonteCarloSamplingCancelled("forward Monte Carlo sampling was cancelled")
         texture = _prepare_full_native_texture(estimate.image_A2) if self._prepare_texture else None
-        return raster, texture
+        return DetectorRaster(estimate=estimate, wall_time_s=perf_counter() - start), texture
 
     def reset_after_cancellation(self) -> None:
         if self._sampler is not None and self._sampler.draws_completed > 0:
@@ -675,6 +698,7 @@ class _DetectorRenderWorker:
         execution_backend: str,
         prepare_texture: bool,
         outcomes: queue.SimpleQueue[_RenderOutcome],
+        beam_position_mode: str = "sampled",
     ) -> None:
         self._commands: queue.SimpleQueue[_ScheduledRender | None] = queue.SimpleQueue()
         self._outcomes = outcomes
@@ -684,6 +708,7 @@ class _DetectorRenderWorker:
             detector_seed,
             execution_backend,
             prepare_texture,
+            beam_position_mode,
         )
         self._thread = threading.Thread(
             target=self._run,
@@ -702,7 +727,9 @@ class _DetectorRenderWorker:
             self._thread.join()
 
     def _run(self) -> None:
-        config, detector_seed, execution_backend, prepare_texture = self._session_arguments
+        config, detector_seed, execution_backend, prepare_texture, beam_position_mode = (
+            self._session_arguments
+        )
         session: _DetectorRenderSession | None = None
         while True:
             stage = self._commands.get()
@@ -715,6 +742,7 @@ class _DetectorRenderWorker:
                         detector_seed=detector_seed,
                         execution_backend=execution_backend,
                         prepare_texture=prepare_texture,
+                        beam_position_mode=beam_position_mode,
                     )
                 raster, texture = session.render(stage, stop_requested=self._stop_event)
                 outcome = _RenderOutcome(stage, raster, texture, None)
@@ -1162,7 +1190,12 @@ class InteractiveDetectorViewer:
         detector_seed: int,
         execution_backend: str,
         presentation_backend: str,
+        beam_position_mode: str = "smooth",
     ) -> None:
+        if initial_source_sample_count < config.source.minimum_physical_sample_count:
+            raise ValueError("source samples must include every configured spectral line")
+        if beam_position_mode not in {"smooth", "sampled"}:
+            raise ValueError("beam_position_mode must be smooth or sampled")
         from matplotlib import pyplot as plt
         from matplotlib.colors import LogNorm
         from matplotlib.widgets import Button, Slider
@@ -1281,7 +1314,9 @@ class InteractiveDetectorViewer:
         self.figure.text(
             0.70,
             source_samples_y + slider_label_offset,
-            r"incident-ray samples $N_{\rm ray}$",
+            r"divergence / wavelength states $N$"
+            if beam_position_mode == "smooth"
+            else r"incident-ray samples $N_{\rm ray}$",
             ha="left",
             va="bottom",
             fontsize=9,
@@ -1290,7 +1325,7 @@ class InteractiveDetectorViewer:
         self._source_sample_slider = Slider(
             source_samples_axis,
             "",
-            1,
+            config.source.minimum_physical_sample_count,
             max(1000, initial_source_sample_count * 4),
             valinit=initial_source_sample_count,
             valstep=1,
@@ -1370,6 +1405,7 @@ class InteractiveDetectorViewer:
             execution_backend=execution_backend,
             prepare_texture=presentation_backend == "opengl",
             outcomes=self._outcomes,
+            beam_position_mode=beam_position_mode,
         )
         self._poll_timer = self.figure.canvas.new_timer(interval=5)
         self._poll_timer.add_callback(self._poll_render)
@@ -1395,13 +1431,10 @@ class InteractiveDetectorViewer:
     @staticmethod
     def _display_values(raster: DetectorRaster) -> tuple[np.ma.MaskedArray, float, float]:
         image_A2 = raster.estimate.image_A2
-        positive = image_A2[image_A2 > 0.0]
-        if not positive.size:
+        high = float(np.max(image_A2))
+        if high <= 0.0:
             return np.ma.masked_all(image_A2.shape), 1.0e-8, 1.0
-        high = float(np.max(positive))
-        low = max(float(np.min(positive)), high * 1.0e-8)
-        if low >= high:
-            low = max(np.finfo(np.float64).tiny, 0.1 * high)
+        low = max(np.finfo(np.float64).tiny, high * 1.0e-8)
         return np.ma.array(image_A2, mask=image_A2 <= 0.0), low, high
 
     def _cache_backgrounds(self) -> None:
@@ -1516,8 +1549,13 @@ class InteractiveDetectorViewer:
             else len(estimate.rods)
         )
         device = f" on {estimate.execution_device}" if estimate.execution_device else ""
+        position_label = (
+            "SMOOTH BEAM POSITION"
+            if estimate.position_integration_model_id == "conditional_gaussian_pixel_integral.v1"
+            else "SAMPLED BEAM POSITION"
+        )
         self._image_axis.set_title(
-            f"MONTE CARLO NATIVE PIXEL MASS: {estimate.source_state_count} $k_i$ states x "
+            f"{position_label}: {estimate.source_state_count} $k_i$ states x "
             f"{estimate.draws_per_source_state} draws, {rod_count} physical rods\n"
             f"{estimate.visible_hit_count:,} visible root deposits; seed {estimate.seed}; "
             f"{raster.wall_time_s:.3f} s; {estimate.execution_backend}{device}; "
@@ -1739,11 +1777,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
+        "--beam-position",
+        choices=("smooth", "sampled"),
+        default="smooth",
+        help="smooth conditional beam-profile integration (default), or sampled ray positions",
+    )
+    parser.add_argument(
         "--source-samples",
         "--ki-samples",
         dest="source_sample_count",
         type=_positive_integer,
-        help="incident-wavevector states (default: configured source count)",
+        help="incident-wavevector states (default: 128 smooth; configured count sampled)",
     )
     parser.add_argument(
         "--draws-per-ki",
@@ -1751,7 +1795,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         dest="draws_per_source_state",
         type=_positive_integer,
         default=DEFAULT_DRAWS_PER_SOURCE_STATE,
-        help="Monte Carlo mosaic draws for each fixed ki state (default: 49)",
+        help="Monte Carlo mosaic draws for each fixed ki state (default: 8)",
     )
     parser.add_argument(
         "--seed",
@@ -1772,6 +1816,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="full-native raster presenter (default: opengl; matplotlib is the explicit fallback)",
     )
     args = parser.parse_args(argv)
+    config = load_simulation_config(args.config.resolve(), repository_root=ROOT)
+    source_sample_count = args.source_sample_count
+    if source_sample_count is None:
+        source_sample_count = (
+            max(DEFAULT_SMOOTH_SOURCE_SAMPLE_COUNT, config.source.minimum_physical_sample_count)
+            if args.beam_position == "smooth"
+            else config.source.sample_count
+        )
+    if source_sample_count < config.source.minimum_physical_sample_count:
+        parser.error("--source-samples must represent every configured spectral line")
     if args.presentation_backend == "opengl":
         try:
             import matplotlib
@@ -1786,10 +1840,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         surface_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
         QSurfaceFormat.setDefaultFormat(surface_format)
         matplotlib.use("qtagg", force=True)
-    config = load_simulation_config(args.config.resolve(), repository_root=ROOT)
-    source_sample_count = (
-        config.source.sample_count if args.source_sample_count is None else args.source_sample_count
-    )
     viewer = InteractiveDetectorViewer(
         config,
         draws_per_source_state=args.draws_per_source_state,
@@ -1797,6 +1847,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         detector_seed=args.seed,
         execution_backend=args.execution_backend,
         presentation_backend=args.presentation_backend,
+        beam_position_mode=args.beam_position,
     )
     viewer.show()
 

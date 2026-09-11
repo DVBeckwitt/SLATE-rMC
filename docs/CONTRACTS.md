@@ -171,7 +171,7 @@ stability but do not assert finite variance or a Gaussian confidence interval ne
 It also records the explicit CPU/CUDA backend, CUDA device when applicable, and bounded CPU worker
 count. CUDA selection fails closed and never changes to CPU implicitly.
 
-`compile_monte_carlo_sampler(*, execution_backend, seed)` creates the explicit mutable,
+`compile_monte_carlo_sampler(*, execution_backend, seed, beam_position=None)` creates the explicit mutable,
 thread-confined `CompiledMonteCarloDetectorSampler`. `advance_to(...)` returns the authoritative
 float64 result; `advance_preview_to(...)` leases a full-native contiguous float32 presentation frame
 until the sampler's next operation. `reset(...)` retains compiled state.
@@ -183,6 +183,16 @@ calibration, sample support, film, and crystal mounting. A superseded request ra
 private full-native accumulators and stable block-order reduction. The CUDA backend owns persistent
 packed state and raw/presentation buffers, deposits roots directly without an event table, and
 uses separate failure-atomic projection and transport buffers on a valid rebind.
+
+`beam_position=ConditionalBeamPosition.from_source(config.source, source_revision=...)` enables
+conditional Gaussian pixel integration for source inputs built with
+`build_configured_simulation_inputs(..., conditional_source_position=True)`. The source revision,
+conditional-source model and residual covariance must agree. Unsupported finite sample support,
+external-path absorption or insufficient forward-flight margin fail explicitly. Conditional-mean
+inputs cannot enter the sampled-position or continuous-density terminals without their residual
+position integral. The result records `position_integration_model_id` and the distinct measure
+defined in `RESULT_MEASURE.md`; hit counts count roots with positive panel mass, and the maximum
+root deposit is its total panel mass. Geometry rebinds also update the small spatial projection.
 
 `evaluate_detector_density_all_roots(...)` completes this source reduction and returns one detector
 function. Downstream peak-center comparison, display sampling, and pixel integration consume that

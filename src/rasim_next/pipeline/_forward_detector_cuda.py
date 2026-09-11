@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 import numpy as np
-from numba import cuda
+from numba import cuda, float64
 from numpy.typing import NDArray
 
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
@@ -18,6 +18,10 @@ from rasim_next.pipeline._continuous_detector_cuda import (
     require_cuda_available,
 )
 from rasim_next.pipeline._continuous_detector_kernel import _DetectorProjection
+from rasim_next.pipeline.beam_position import (
+    _projected_position_factor,
+    gaussian_pixel_probability,
+)
 
 FloatArray = NDArray[np.float64]
 
@@ -25,6 +29,7 @@ _FLOAT_EPS = float(np.finfo(np.float64).eps)
 _THREADS_PER_BLOCK = 128
 _MAXIMUM_STATE_CHUNK_SIZE = 1_000
 _TARGET_STATE_DRAW_WORK = 4_096
+_TARGET_SMOOTH_STATE_DRAW_WORK = 128
 
 
 def _flatten_evaluators(evaluator_blocks: tuple[tuple[Any, ...], ...]) -> tuple[Any, ...]:
@@ -170,6 +175,74 @@ def _pack_forward_geometry(
     return (*projection, sample_from_local, ki_film, state_real, state_complex)
 
 
+gaussian_pixel_probability_cuda = cuda.jit(device=True)(gaussian_pixel_probability)
+_projected_position_factor_cuda = cuda.jit(device=True, inline=True)(_projected_position_factor)
+
+
+@cuda.jit(device=True)
+def _deposit_root_mass(image, column, row, weight, rows, columns, f00, f01, f10, f11, parallel):
+    transposed = f00 * f00 + f01 * f01 > f10 * f10 + f11 * f11
+    if transposed:
+        column, row = row, column
+        rows, columns = columns, rows
+        f00, f01, f10, f11 = f10, f11, f00, f01
+    sigma_column = math.sqrt(f00 * f00 + f01 * f01)
+    sigma_row = math.sqrt(f10 * f10 + f11 * f11)
+    if sigma_column == 0.0 and sigma_row == 0.0:
+        if parallel and cuda.threadIdx.x != 0:
+            return 0.0
+        pixel_column = math.floor(column + 0.5)
+        pixel_column = pixel_column if pixel_column < columns else columns - 1
+        pixel_row = math.floor(row + 0.5)
+        pixel_row = pixel_row if pixel_row < rows else rows - 1
+        cuda.atomic.add(image, pixel_row * columns + pixel_column, weight)
+        return weight
+    lower_column = math.floor(column - 6.0 * sigma_column + 0.5)
+    lower_column = lower_column if lower_column > 0 else 0
+    upper_column = math.floor(column + 6.0 * sigma_column + 0.5)
+    upper_column = upper_column if upper_column < columns else columns - 1
+    lower_row = math.floor(row - 6.0 * sigma_row + 0.5)
+    lower_row = lower_row if lower_row > 0 else 0
+    upper_row = math.floor(row + 6.0 * sigma_row + 0.5)
+    upper_row = upper_row if upper_row < rows else rows - 1
+    if sigma_column == 0.0 and column == columns - 0.5:
+        lower_column = columns - 1
+        upper_column = columns - 1
+        column = float(columns - 1)
+    if sigma_row == 0.0 and row == rows - 0.5:
+        lower_row = rows - 1
+        upper_row = rows - 1
+        row = float(rows - 1)
+    deposited = 0.0
+    slope = 0.0
+    conditional_column_sigma = sigma_column
+    if sigma_row > 0.0:
+        slope = (f00 * f10 + f01 * f11) / (sigma_row * sigma_row)
+        conditional_column_sigma = abs(f00 * f11 - f01 * f10) / sigma_row
+    first_row = lower_row + (cuda.threadIdx.x if parallel else 0)
+    row_step = cuda.blockDim.x if parallel else 1
+    for pixel_row in range(first_row, upper_row + 1, row_step):
+        center_column = column + slope * (pixel_row - row)
+        half_width_column = 6.0 * conditional_column_sigma + 0.5 * abs(slope)
+        first_column = math.floor(center_column - half_width_column + 0.5)
+        last_column = math.floor(center_column + half_width_column + 0.5)
+        first_column = first_column if first_column > lower_column else lower_column
+        last_column = last_column if last_column < upper_column else upper_column
+        for pixel_column in range(first_column, last_column + 1):
+            probability = gaussian_pixel_probability_cuda(
+                pixel_column - column, pixel_row - row, f00, f01, f10, f11
+            )
+            value = weight * probability
+            pixel = (
+                pixel_column * rows + pixel_row
+                if transposed
+                else pixel_row * columns + pixel_column
+            )
+            cuda.atomic.add(image, pixel, value)
+            deposited += value
+    return deposited
+
+
 @cuda.jit(device=True, inline=True)
 def _forward_root_pixel(
     state_index: int,
@@ -196,15 +269,16 @@ def _forward_root_pixel(
     rod_atom_inplane_factor: Any,
     f0_parameters: Any,
     layers: int,
-) -> tuple[int, float, bool]:
+    position_projection: Any,
+) -> tuple[float, float, float, bool, float, float, float, float]:
     if kf_film_z <= 0.0 or coarea_jacobian <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     internal_k_Ainv = state_real[state_index, 0]
     kf_norm = math.sqrt(kf_film_x * kf_film_x + kf_film_y * kf_film_y + kf_film_z * kf_film_z)
     residual_scale = internal_k_Ainv if internal_k_Ainv > 1.0 else 1.0
     residual_limit = 512.0 * _FLOAT_EPS * residual_scale
     if abs(kf_norm - internal_k_Ainv) > residual_limit:
-        return -1, 0.0, True
+        return 0.0, 0.0, 0.0, True, 0.0, 0.0, 0.0, 0.0
 
     air_k0_Ainv = state_real[state_index, 1]
     parallel_squared = kf_film_x * kf_film_x + kf_film_y * kf_film_y
@@ -216,14 +290,14 @@ def _forward_root_pixel(
         critical_scale = 1.0
     critical_tolerance = 16.0 * _FLOAT_EPS * critical_scale
     if air_normal_squared < -critical_tolerance:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     kf_air_z = math.sqrt(air_normal_squared if air_normal_squared > 0.0 else 0.0)
 
     refractive_index = state_complex[state_index, 0]
     kz_film = _positive_normal_root((refractive_index * air_k0_Ainv) ** 2 - parallel_squared)
     denominator = kz_film + complex(kf_air_z, 0.0)
     if denominator == 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     exit_amplitude = 2.0 * kz_film / denominator
     exponent = (
         2.0
@@ -238,7 +312,7 @@ def _forward_root_pixel(
     )
     source_phase_weight = state_real[state_index, 4]
     if optical_weight <= 0.0 or source_phase_weight <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
 
     direction_sample_x = kf_film_x / air_k0_Ainv
     direction_sample_y = kf_film_y / air_k0_Ainv
@@ -281,18 +355,33 @@ def _forward_root_pixel(
         + detector_normal_sample[2] * direction_sample_z
     )
     if direction_normal <= _DETECTOR_INCIDENCE_COSINE_TOL:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     ray_distance = -ray_origin_detector_normal_m[state_index] / direction_normal
     if ray_distance <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     if state_real[state_index, 26] != 0.0:
         source_phase_weight *= math.exp(-state_real[state_index, 26] * ray_distance)
     column = (
         ray_origin_detector_column_row_px[state_index, 0] + ray_distance * direction_column_per_m
     )
     row = ray_origin_detector_column_row_px[state_index, 1] + ray_distance * direction_row_per_m
-    if column < -0.5 or column > detector_columns - 0.5 or row < -0.5 or row > detector_rows - 0.5:
-        return -1, 0.0, False
+    f00, f01, f10, f11 = _projected_position_factor_cuda(
+        column,
+        row,
+        ray_origin_detector_column_row_px[state_index, 0],
+        ray_origin_detector_column_row_px[state_index, 1],
+        ray_origin_detector_normal_m[state_index],
+        position_projection[state_index],
+    )
+    column_radius = 6.0 * math.sqrt(f00 * f00 + f01 * f01)
+    row_radius = 6.0 * math.sqrt(f10 * f10 + f11 * f11)
+    if (
+        column + column_radius < -0.5
+        or column - column_radius > detector_columns - 0.5
+        or row + row_radius < -0.5
+        or row - row_radius > detector_rows - 0.5
+    ):
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
 
     q_x = kf_film_x - ki_film_sample_Ainv[state_index, 0]
     q_y = kf_film_y - ki_film_sample_Ainv[state_index, 1]
@@ -388,16 +477,10 @@ def _forward_root_pixel(
         * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):
-        return -1, 0.0, True
+        return 0.0, 0.0, 0.0, True, 0.0, 0.0, 0.0, 0.0
     if importance_weight <= 0.0:
-        return -1, 0.0, False
-    pixel_column = math.floor(column + 0.5)
-    pixel_row = math.floor(row + 0.5)
-    if pixel_column >= detector_columns:
-        pixel_column = detector_columns - 1
-    if pixel_row >= detector_rows:
-        pixel_row = detector_rows - 1
-    return pixel_row * detector_columns + pixel_column, importance_weight, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
+    return column, row, importance_weight, False, f00, f01, f10, f11
 
 
 @cuda.jit(fastmath=False)
@@ -433,14 +516,20 @@ def _accumulate_forward_monte_carlo_kernel(
     visible_hit_count: Any,
     maximum_root_weight_A2: Any,
     numeric_failure: Any,
+    position_projection: Any,
+    smooth_position: bool,
 ) -> None:
-    linear_index = cuda.grid(1)
+    linear_index = cuda.blockIdx.x if smooth_position else cuda.grid(1)
+    shared_root = cuda.shared.array(9, dtype=float64)
     draw_count = alpha_rad.shape[1]
     local_state_count = state_stop - state_start
-    if linear_index >= local_state_count * draw_count:
+    rod_count = rod_hk_population.shape[0]
+    if linear_index >= local_state_count * draw_count * rod_count:
         return
-    local_state = linear_index // draw_count
-    local_draw = linear_index - local_state * draw_count
+    owned_rod = linear_index % rod_count
+    state_draw = linear_index // rod_count
+    local_state = state_draw // draw_count
+    local_draw = state_draw - local_state * draw_count
     state_index = state_start + local_state
     alpha = alpha_rad[state_index, local_draw]
     beta = beta_rad[state_index, local_draw]
@@ -482,7 +571,7 @@ def _accumulate_forward_monte_carlo_kernel(
     local_visible_hit_count = 0
     local_maximum_root_weight = 0.0
 
-    for rod_index in range(rod_hk_population.shape[0]):
+    for rod_index in range(owned_rod, owned_rod + 1):
         if not active_state_rod[state_index, rod_index]:
             continue
         a = rod_parallel_local_Ainv[rod_index, 0]
@@ -529,40 +618,75 @@ def _accumulate_forward_monte_carlo_kernel(
             kf_film_y = ki_film_sample_Ainv[state_index, 1] + u_value * direction_sample_y
             kf_film_z = ki_film_sample_Ainv[state_index, 2] + u_value * direction_sample_z
             coarea = state_real[state_index, 0] / abs(incident_dot_direction)
-            pixel, weight, failed = _forward_root_pixel(
-                state_index,
-                rod_index,
-                detector_rows,
-                detector_columns,
-                u_value,
-                kf_film_x,
-                kf_film_y,
-                kf_film_z,
-                coarea,
-                detector_column_row_covectors_sample_per_m,
-                detector_normal_sample,
-                ray_origin_detector_column_row_px,
-                ray_origin_detector_normal_m,
-                ki_film_sample_Ainv,
-                state_real,
-                state_complex,
-                rod_hk_population,
-                rod_parallel_local_Ainv,
-                rod_inverse_constants,
-                atom_fractional_offset,
-                atom_occupancy_element,
-                rod_atom_inplane_factor,
-                f0_parameters,
-                layers,
-            )
+            column = row = weight = f00 = f01 = f10 = f11 = 0.0
+            failed = False
+            if not smooth_position or cuda.threadIdx.x == 0:
+                column, row, weight, failed, f00, f01, f10, f11 = _forward_root_pixel(
+                    state_index,
+                    rod_index,
+                    detector_rows,
+                    detector_columns,
+                    u_value,
+                    kf_film_x,
+                    kf_film_y,
+                    kf_film_z,
+                    coarea,
+                    detector_column_row_covectors_sample_per_m,
+                    detector_normal_sample,
+                    ray_origin_detector_column_row_px,
+                    ray_origin_detector_normal_m,
+                    ki_film_sample_Ainv,
+                    state_real,
+                    state_complex,
+                    rod_hk_population,
+                    rod_parallel_local_Ainv,
+                    rod_inverse_constants,
+                    atom_fractional_offset,
+                    atom_occupancy_element,
+                    rod_atom_inplane_factor,
+                    f0_parameters,
+                    layers,
+                    position_projection,
+                )
+                if smooth_position:
+                    shared_root[0] = column
+                    shared_root[1] = row
+                    shared_root[2] = weight
+                    shared_root[3] = 1.0 if failed else 0.0
+                    shared_root[4] = f00
+                    shared_root[5] = f01
+                    shared_root[6] = f10
+                    shared_root[7] = f11
+                    shared_root[8] = 0.0
+            if smooth_position:
+                cuda.syncthreads()
+                column, row, weight = shared_root[0], shared_root[1], shared_root[2]
+                failed = shared_root[3] != 0.0
+                f00, f01, f10, f11 = shared_root[4], shared_root[5], shared_root[6], shared_root[7]
             if failed:
                 cuda.atomic.max(numeric_failure, 0, 1)
-            if pixel >= 0:
-                cuda.atomic.add(raw_image_A2, pixel, weight)
-                local_replicate_total += weight
-                local_visible_hit_count += 1
-                if weight > local_maximum_root_weight:
-                    local_maximum_root_weight = weight
+            if weight > 0.0:
+                deposited = _deposit_root_mass(
+                    raw_image_A2,
+                    column,
+                    row,
+                    weight,
+                    detector_rows,
+                    detector_columns,
+                    f00,
+                    f01,
+                    f10,
+                    f11,
+                    smooth_position,
+                )
+                if smooth_position:
+                    cuda.atomic.add(shared_root, 8, deposited)
+                    cuda.syncthreads()
+                    deposited = shared_root[8] if cuda.threadIdx.x == 0 else 0.0
+                local_replicate_total += deposited
+                local_visible_hit_count += int(deposited > 0.0)
+                if deposited > local_maximum_root_weight:
+                    local_maximum_root_weight = deposited
             continue
 
         q0_perpendicular_x = q0_sample_x - q0_parallel * direction_sample_x
@@ -607,40 +731,77 @@ def _accumulate_forward_monte_carlo_kernel(
             kf_film_x = sphere_perpendicular_x + signed_root * direction_sample_x
             kf_film_y = sphere_perpendicular_y + signed_root * direction_sample_y
             kf_film_z = sphere_perpendicular_z + signed_root * direction_sample_z
-            pixel, weight, failed = _forward_root_pixel(
-                state_index,
-                rod_index,
-                detector_rows,
-                detector_columns,
-                u_value,
-                kf_film_x,
-                kf_film_y,
-                kf_film_z,
-                coarea,
-                detector_column_row_covectors_sample_per_m,
-                detector_normal_sample,
-                ray_origin_detector_column_row_px,
-                ray_origin_detector_normal_m,
-                ki_film_sample_Ainv,
-                state_real,
-                state_complex,
-                rod_hk_population,
-                rod_parallel_local_Ainv,
-                rod_inverse_constants,
-                atom_fractional_offset,
-                atom_occupancy_element,
-                rod_atom_inplane_factor,
-                f0_parameters,
-                layers,
-            )
+            column = row = weight = f00 = f01 = f10 = f11 = 0.0
+            failed = False
+            if not smooth_position or cuda.threadIdx.x == 0:
+                column, row, weight, failed, f00, f01, f10, f11 = _forward_root_pixel(
+                    state_index,
+                    rod_index,
+                    detector_rows,
+                    detector_columns,
+                    u_value,
+                    kf_film_x,
+                    kf_film_y,
+                    kf_film_z,
+                    coarea,
+                    detector_column_row_covectors_sample_per_m,
+                    detector_normal_sample,
+                    ray_origin_detector_column_row_px,
+                    ray_origin_detector_normal_m,
+                    ki_film_sample_Ainv,
+                    state_real,
+                    state_complex,
+                    rod_hk_population,
+                    rod_parallel_local_Ainv,
+                    rod_inverse_constants,
+                    atom_fractional_offset,
+                    atom_occupancy_element,
+                    rod_atom_inplane_factor,
+                    f0_parameters,
+                    layers,
+                    position_projection,
+                )
+                if smooth_position:
+                    shared_root[0] = column
+                    shared_root[1] = row
+                    shared_root[2] = weight
+                    shared_root[3] = 1.0 if failed else 0.0
+                    shared_root[4] = f00
+                    shared_root[5] = f01
+                    shared_root[6] = f10
+                    shared_root[7] = f11
+                    shared_root[8] = 0.0
+            if smooth_position:
+                cuda.syncthreads()
+                column, row, weight = shared_root[0], shared_root[1], shared_root[2]
+                failed = shared_root[3] != 0.0
+                f00, f01, f10, f11 = shared_root[4], shared_root[5], shared_root[6], shared_root[7]
             if failed:
                 cuda.atomic.max(numeric_failure, 0, 1)
-            if pixel >= 0:
-                cuda.atomic.add(raw_image_A2, pixel, weight)
-                local_replicate_total += weight
-                local_visible_hit_count += 1
-                if weight > local_maximum_root_weight:
-                    local_maximum_root_weight = weight
+            if weight > 0.0:
+                deposited = _deposit_root_mass(
+                    raw_image_A2,
+                    column,
+                    row,
+                    weight,
+                    detector_rows,
+                    detector_columns,
+                    f00,
+                    f01,
+                    f10,
+                    f11,
+                    smooth_position,
+                )
+                if smooth_position:
+                    cuda.atomic.add(shared_root, 8, deposited)
+                    cuda.syncthreads()
+                    deposited = shared_root[8] if cuda.threadIdx.x == 0 else 0.0
+                local_replicate_total += deposited
+                local_visible_hit_count += int(deposited > 0.0)
+                if deposited > local_maximum_root_weight:
+                    local_maximum_root_weight = deposited
+            if smooth_position:
+                cuda.syncthreads()
 
     if local_replicate_total > 0.0:
         cuda.atomic.add(
@@ -681,6 +842,7 @@ class CudaForwardMonteCarloWorkspace:
         *,
         detector_shape_rc: tuple[int, int],
         master_rod_count: int,
+        position_projection: FloatArray | None = None,
     ) -> None:
         self.device_name = require_cuda_available()
         packed = _pack_source_average(
@@ -689,6 +851,7 @@ class CudaForwardMonteCarloWorkspace:
             master_rod_count=master_rod_count,
         )
         projection = _pack_forward_projection(evaluator_blocks)
+        self._smooth_position = position_projection is not None
         self._detector_shape_rc = tuple(detector_shape_rc)
         self._master_rod_count = int(master_rod_count)
         self._state_count = packed.state_real.shape[0]
@@ -730,6 +893,11 @@ class CudaForwardMonteCarloWorkspace:
             self._device_state_real,
             self._device_state_complex,
         ) = active_transport
+        self._device_position_projection = cuda.to_device(
+            np.zeros((self._state_count, 3, 2))
+            if position_projection is None
+            else np.ascontiguousarray(position_projection[list(self._state_order)])
+        )
         self._device_active_state_rod = cuda.to_device(packed.active_state_rod)
         self._device_rod_u_bounds = cuda.to_device(packed.rod_u_bounds_Ainv)
         self._device_rod_u_tolerance = cuda.to_device(packed.rod_u_tolerance_Ainv)
@@ -859,6 +1027,12 @@ class CudaForwardMonteCarloWorkspace:
         self._active_projection_buffer = next_buffer_index
         self._draw_count = 0
 
+    def rebind_position_projection(self, projection: FloatArray) -> None:
+        """Stage the small conditional footprint after a validated geometry rebind."""
+        staged = cuda.to_device(np.ascontiguousarray(projection[list(self._state_order)]))
+        cuda.synchronize()
+        self._device_position_projection = staged
+
     def advance(
         self,
         alpha_rad: FloatArray,
@@ -878,10 +1052,13 @@ class CudaForwardMonteCarloWorkspace:
             raise ValueError("CUDA progressive draw range is not contiguous")
         draw_count = draw_stop - draw_start
         if state_chunk_size is None:
+            target_work = (
+                _TARGET_SMOOTH_STATE_DRAW_WORK if self._smooth_position else _TARGET_STATE_DRAW_WORK
+            )
             state_chunk_size = min(
                 self._state_count,
                 _MAXIMUM_STATE_CHUNK_SIZE,
-                max(1, _TARGET_STATE_DRAW_WORK // draw_count),
+                max(1, target_work // draw_count),
             )
         elif state_chunk_size < 1:
             raise ValueError("state_chunk_size must be positive")
@@ -900,9 +1077,12 @@ class CudaForwardMonteCarloWorkspace:
         rows, columns = self._detector_shape_rc
         for state_start in range(0, self._state_count, state_chunk_size):
             state_stop = min(state_start + state_chunk_size, self._state_count)
-            work_count = (state_stop - state_start) * draw_count
-            blocks = (work_count + _THREADS_PER_BLOCK - 1) // _THREADS_PER_BLOCK
-            _accumulate_forward_monte_carlo_kernel[blocks, _THREADS_PER_BLOCK](
+            work_count = (
+                (state_stop - state_start) * draw_count * self._device_rod_hk_population.shape[0]
+            )
+            threads = 32 if self._smooth_position else _THREADS_PER_BLOCK
+            blocks = work_count if self._smooth_position else (work_count + threads - 1) // threads
+            _accumulate_forward_monte_carlo_kernel[blocks, threads](
                 state_start,
                 state_stop,
                 draw_start,
@@ -934,6 +1114,8 @@ class CudaForwardMonteCarloWorkspace:
                 self._device_visible_hit_count,
                 self._device_maximum_root_weight,
                 self._device_numeric_failure,
+                self._device_position_projection,
+                self._smooth_position,
             )
             cuda.synchronize()
             if cancel_requested is not None and cancel_requested():

@@ -376,11 +376,14 @@ uv run --extra visualization python interactive/detector_viewer.py `
   --presentation-backend opengl
 ```
 
-The default Bi2Se3 view uses the configured 1,000 incident-wavevector states, 49 Monte Carlo mosaic
-draws per state, detector seed `20260728`, and the full 3,000 x 3,000 native detector. The two
-numerical controls are **incident-ray samples** (`N_ray`) and **mosaic draws per ki state** (`M`). A
-source row contains origin, direction, wavelength, and empirical weight; `M` controls only the
-stochastic detector estimator. Geometry and draw controls coalesce at 5 ms cadence into latest-only
+The default Bi2Se3 view integrates smooth conditional Gaussian beam-position profiles using 128
+divergence/wavelength states, 8 Monte Carlo mosaic draws per state, detector seed `20260728`, and
+the full 3,000 x 3,000 native detector. The numerical controls set divergence/wavelength states
+(`N`) and mosaic draws per state (`M`). Position/divergence correlations are preserved by projecting
+each conditional spatial profile through the sample and detector planes. Smooth mode requires an
+unbounded sample and zero external-path absorption; `--beam-position sampled` selects the original
+ray-position method for comparison or other configurations. Geometry and draw controls coalesce
+at 5 ms cadence into latest-only
 full-native previews with draw prefixes 1, 4, and 8; release appends the exact requested settled draw
 count without restarting an accepted prefix. A newer revision cancels unfinished work, and a stale
 frame cannot publish. Source-count changes still commit on release because they rebuild the source
@@ -420,11 +423,12 @@ goniometer angles and remains outside the current fitting contract.
 
 Every view samples the declared mosaic distribution for all selected incident-wavevector states,
 enumerates every elastically reachable physical `(h,k)` rod and retained Ewald root, and sums the
-weighted raw mass directly into the exact native `[row, column]` pixel owner. The displayed array is
-`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`; nearest-pixel rendering and the logarithmic
-color scale do not change or normalize it. Values are raw `A2` mass estimates, not photon counts,
-detector-coordinate quadrature, a PSF, or a calibrated detector response. Empty pixels received no
-sampled deposit at the chosen draw count. Configurations that disable detector-visible `m=0` are
+weighted raw mass into native `[row, column]` pixel boxes. Smooth mode integrates the projected
+beam probability over each box, including influx from roots centered outside the panel. It reports
+`raw_detector_pixel_mass_conditional_position_estimate_A2.v1`; sampled mode retains
+`raw_detector_pixel_mass_monte_carlo_estimate_A2.v1`. Nearest-pixel rendering and the logarithmic
+color scale do not change or normalize either measure. Values are raw `A2` mass estimates, not
+photon counts, a detector PSF, or a calibrated response. Configurations that disable detector-visible `m=0` are
 rejected because this viewer's contract is the all-`m` physical-rod catalogue.
 
 CUDA execution and OpenGL presentation are separate explicit choices. CUDA keeps compiled physics

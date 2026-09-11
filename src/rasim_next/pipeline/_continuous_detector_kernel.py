@@ -20,6 +20,10 @@ from rasim_next.core.scattering import CLASSICAL_ELECTRON_RADIUS_A
 from rasim_next.geometry.detector import _DETECTOR_INCIDENCE_COSINE_TOL
 from rasim_next.materials.optics import HC_EV_A, _f0_species
 from rasim_next.ordered.motifs import _parameterized_bi2se3_quintuple_layer
+from rasim_next.pipeline.beam_position import (
+    _projected_position_factor,
+    gaussian_pixel_probability,
+)
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.reflectivity import CompiledParrattStitch
 from rasim_next.stacking.finite_intensity import _finite_moment_intensity
@@ -1803,6 +1807,58 @@ def _evaluate_points_kernel(
     return density, inverse_count, caustic, valid, m0_transfer
 
 
+gaussian_pixel_probability_cpu = numba.njit(nogil=True, fastmath=False, cache=False)(
+    gaussian_pixel_probability
+)
+_projected_position_factor_cpu = numba.njit(nogil=True, fastmath=False, cache=False)(
+    _projected_position_factor
+)
+
+
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _deposit_root_mass(image, column, row, weight, rows, columns, f00, f01, f10, f11):
+    sigma_column = math.sqrt(f00 * f00 + f01 * f01)
+    sigma_row = math.sqrt(f10 * f10 + f11 * f11)
+    if sigma_column == 0.0 and sigma_row == 0.0:
+        pixel_column = min(math.floor(column + 0.5), columns - 1)
+        pixel_row = min(math.floor(row + 0.5), rows - 1)
+        image[pixel_row * columns + pixel_column] += weight
+        return weight
+    lower_column = max(0, math.floor(column - 6.0 * sigma_column + 0.5))
+    upper_column = min(columns - 1, math.floor(column + 6.0 * sigma_column + 0.5))
+    lower_row = max(0, math.floor(row - 6.0 * sigma_row + 0.5))
+    upper_row = min(rows - 1, math.floor(row + 6.0 * sigma_row + 0.5))
+    if sigma_column == 0.0 and column == columns - 0.5:
+        lower_column = columns - 1
+        upper_column = columns - 1
+        column = float(columns - 1)
+    if sigma_row == 0.0 and row == rows - 0.5:
+        lower_row = rows - 1
+        upper_row = rows - 1
+        row = float(rows - 1)
+    deposited = 0.0
+    slope = 0.0
+    conditional_column_sigma = sigma_column
+    if sigma_row > 0.0:
+        slope = (f00 * f10 + f01 * f11) / (sigma_row * sigma_row)
+        conditional_column_sigma = abs(f00 * f11 - f01 * f10) / sigma_row
+    for pixel_row in range(lower_row, upper_row + 1):
+        center_column = column + slope * (pixel_row - row)
+        half_width_column = 6.0 * conditional_column_sigma + 0.5 * abs(slope)
+        first_column = math.floor(center_column - half_width_column + 0.5)
+        last_column = math.floor(center_column + half_width_column + 0.5)
+        first_column = first_column if first_column > lower_column else lower_column
+        last_column = last_column if last_column < upper_column else upper_column
+        for pixel_column in range(first_column, last_column + 1):
+            probability = gaussian_pixel_probability_cpu(
+                pixel_column - column, pixel_row - row, f00, f01, f10, f11
+            )
+            value = weight * probability
+            image[pixel_row * columns + pixel_column] += value
+            deposited += value
+    return deposited
+
+
 @numba.njit(nogil=True, fastmath=False, cache=False)
 def _forward_root_pixel(
     rod_index: int,
@@ -1812,15 +1868,16 @@ def _forward_root_pixel(
     kf_film_z: float,
     coarea_jacobian: float,
     state: _ForwardDetectorState,
-) -> tuple[int, float, bool]:
+    position_projection: FloatArray,
+) -> tuple[float, float, float, bool, float, float, float, float]:
     """Map one regular latent root and return its exact native-pixel owner and mass."""
 
     if kf_film_z <= 0.0 or coarea_jacobian <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     kf_norm = math.sqrt(kf_film_x * kf_film_x + kf_film_y * kf_film_y + kf_film_z * kf_film_z)
     residual_limit = 512.0 * np.finfo(np.float64).eps * max(state.internal_k_Ainv, 1.0)
     if abs(kf_norm - state.internal_k_Ainv) > residual_limit:
-        return -1, 0.0, True
+        return 0.0, 0.0, 0.0, True, 0.0, 0.0, 0.0, 0.0
     parallel_squared = kf_film_x * kf_film_x + kf_film_y * kf_film_y
     air_normal_squared = state.air_k0_Ainv * state.air_k0_Ainv - parallel_squared
     critical_tolerance = (
@@ -1833,7 +1890,7 @@ def _forward_root_pixel(
         )
     )
     if air_normal_squared < -critical_tolerance:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     kf_air_z = math.sqrt(max(air_normal_squared, 0.0))
     optical_weight = _exit_optical_weight(
         (state.refractive_index * state.air_k0_Ainv) ** 2 - parallel_squared,
@@ -1843,7 +1900,7 @@ def _forward_root_pixel(
         state.film_thickness_A,
     )
     if optical_weight <= 0.0 or state.source_phase_weight <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
 
     direction_sample_x = kf_film_x / state.air_k0_Ainv
     direction_sample_y = kf_film_y / state.air_k0_Ainv
@@ -1872,10 +1929,10 @@ def _forward_root_pixel(
         + state.detector_normal_sample[2] * direction_sample_z
     )
     if direction_normal <= _DETECTOR_INCIDENCE_COSINE_TOL:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     ray_distance = -state.ray_origin_detector_normal_m / direction_normal
     if ray_distance <= 0.0:
-        return -1, 0.0, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
     path_source_phase_weight = state.source_phase_weight
     if state.detector_path_linear_attenuation_m_inv != 0.0:
         path_source_phase_weight *= math.exp(
@@ -1883,9 +1940,24 @@ def _forward_root_pixel(
         )
     column = state.ray_origin_detector_column_row_px[0] + ray_distance * direction_column_per_m
     row = state.ray_origin_detector_column_row_px[1] + ray_distance * direction_row_per_m
+    f00, f01, f10, f11 = _projected_position_factor_cpu(
+        column,
+        row,
+        state.ray_origin_detector_column_row_px[0],
+        state.ray_origin_detector_column_row_px[1],
+        state.ray_origin_detector_normal_m,
+        position_projection,
+    )
+    column_radius = 6.0 * math.sqrt(f00 * f00 + f01 * f01)
+    row_radius = 6.0 * math.sqrt(f10 * f10 + f11 * f11)
     rows, columns = state.detector_shape_rc
-    if column < -0.5 or column > columns - 0.5 or row < -0.5 or row > rows - 0.5:
-        return -1, 0.0, False
+    if (
+        column + column_radius < -0.5
+        or column - column_radius > columns - 0.5
+        or row + row_radius < -0.5
+        or row - row_radius > rows - 0.5
+    ):
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
 
     q_x = kf_film_x - state.ki_film_sample_Ainv[0]
     q_y = kf_film_y - state.ki_film_sample_Ainv[1]
@@ -1972,12 +2044,10 @@ def _forward_root_pixel(
         * event_intensity_envelope
     )
     if not math.isfinite(importance_weight):
-        return -1, 0.0, True
+        return 0.0, 0.0, 0.0, True, 0.0, 0.0, 0.0, 0.0
     if importance_weight <= 0.0:
-        return -1, 0.0, False
-    pixel_column = min(math.floor(column + 0.5), columns - 1)
-    pixel_row = min(math.floor(row + 0.5), rows - 1)
-    return pixel_row * columns + pixel_column, importance_weight, False
+        return 0.0, 0.0, 0.0, False, 0.0, 0.0, 0.0, 0.0
+    return column, row, importance_weight, False, f00, f01, f10, f11
 
 
 @numba.njit(nogil=True, fastmath=False, cache=False)
@@ -1988,6 +2058,7 @@ def _accumulate_latent_pixel_mass_kernel(
     replicate_total_mass_A2: FloatArray,
     inverse_draw_count: float,
     state: _ForwardDetectorState,
+    position_projection: FloatArray,
 ) -> tuple[int, float]:
     draw_count = alpha_rad.size
     rod_count = state.rod_hk_population.shape[0]
@@ -2076,7 +2147,7 @@ def _accumulate_latent_pixel_mass_kernel(
                 kf_film_y = state.ki_film_sample_Ainv[1] + u_value * direction_sample_y
                 kf_film_z = state.ki_film_sample_Ainv[2] + u_value * direction_sample_z
                 coarea = state.internal_k_Ainv / abs(incident_dot_direction)
-                pixel, weight, numeric_failure = _forward_root_pixel(
+                column, row, weight, numeric_failure, f00, f01, f10, f11 = _forward_root_pixel(
                     rod_index,
                     u_value,
                     kf_film_x,
@@ -2084,15 +2155,26 @@ def _accumulate_latent_pixel_mass_kernel(
                     kf_film_z,
                     coarea,
                     state,
+                    position_projection,
                 )
                 if numeric_failure:
                     raise FloatingPointError("invalid Monte Carlo root numerics")
-                if pixel >= 0:
-                    deposit = weight * inverse_draw_count
-                    image_A2[pixel] += deposit
-                    replicate_total_mass_A2[draw] += weight
-                    visible_hit_count += 1
-                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposit)
+                if weight > 0.0:
+                    deposited = _deposit_root_mass(
+                        image_A2,
+                        column,
+                        row,
+                        weight * inverse_draw_count,
+                        state.detector_shape_rc[0],
+                        state.detector_shape_rc[1],
+                        f00,
+                        f01,
+                        f10,
+                        f11,
+                    )
+                    replicate_total_mass_A2[draw] += deposited / inverse_draw_count
+                    visible_hit_count += int(deposited > 0.0)
+                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposited)
                 continue
 
             q0_perpendicular_x = q0_sample_x - q0_parallel * direction_sample_x
@@ -2135,7 +2217,7 @@ def _accumulate_latent_pixel_mass_kernel(
                 kf_film_x = sphere_perpendicular_x + signed_root * direction_sample_x
                 kf_film_y = sphere_perpendicular_y + signed_root * direction_sample_y
                 kf_film_z = sphere_perpendicular_z + signed_root * direction_sample_z
-                pixel, weight, numeric_failure = _forward_root_pixel(
+                column, row, weight, numeric_failure, f00, f01, f10, f11 = _forward_root_pixel(
                     rod_index,
                     u_value,
                     kf_film_x,
@@ -2143,15 +2225,26 @@ def _accumulate_latent_pixel_mass_kernel(
                     kf_film_z,
                     coarea,
                     state,
+                    position_projection,
                 )
                 if numeric_failure:
                     raise FloatingPointError("invalid Monte Carlo root numerics")
-                if pixel >= 0:
-                    deposit = weight * inverse_draw_count
-                    image_A2[pixel] += deposit
-                    replicate_total_mass_A2[draw] += weight
-                    visible_hit_count += 1
-                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposit)
+                if weight > 0.0:
+                    deposited = _deposit_root_mass(
+                        image_A2,
+                        column,
+                        row,
+                        weight * inverse_draw_count,
+                        state.detector_shape_rc[0],
+                        state.detector_shape_rc[1],
+                        f00,
+                        f01,
+                        f10,
+                        f11,
+                    )
+                    replicate_total_mass_A2[draw] += deposited / inverse_draw_count
+                    visible_hit_count += int(deposited > 0.0)
+                    maximum_root_deposit_A2 = max(maximum_root_deposit_A2, deposited)
     return visible_hit_count, maximum_root_deposit_A2
 
 
@@ -2674,6 +2767,7 @@ class CompiledDetectorEvaluator:
         replicate_total_mass_A2: NDArray[np.float64],
         *,
         image_weight_scale: float | None = None,
+        position_projection: FloatArray | None = None,
     ) -> tuple[int, float]:
         """Accumulate sampled root weights into exact native-pixel owners."""
 
@@ -2763,6 +2857,7 @@ class CompiledDetectorEvaluator:
             replicate,
             weight_scale,
             forward_state,
+            np.zeros((3, 2)) if position_projection is None else position_projection,
         )
 
     def integrate_pixel_boxes(

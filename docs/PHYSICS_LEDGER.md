@@ -18,7 +18,7 @@ Owners are `bootstrap`, `characterization`, `geometry`, `mosaic`, `ordered`, `st
 | PHY-IO-003 | 90-degree measured-image conversion | `runtime_session.py:558-565`; `gui/background.py` | experimental convention | bootstrap/geometry | CORRECTED, centralized |
 | PHY-IO-004 | raw OSC versus detector indices | distributed | n/a | bootstrap | CORRECTED |
 | PHY-IO-005 | continuous detector coordinate | `diffraction.py:2302-2306` | geometry figures | bootstrap/geometry | CORRECTED |
-| PHY-SRC-001 | spatial beam distribution | `simulation/mosaic_profiles.py:15-63` | Methods line 18 | mosaic | CORRECTED, seeded empirical |
+| PHY-SRC-001 | spatial beam distribution | `simulation/mosaic_profiles.py:15-63` | Methods line 18 | mosaic | CORRECTED, seeded empirical; optional conditional Gaussian pixel integration is NEW / NO_ORACLE in the legacy pack, with explicit tail cutoff and source correlations |
 | PHY-SRC-002 | divergence distribution | same | Methods line 18 | mosaic | CORRECTED, normalized |
 | PHY-SRC-003 | wavelength distribution | same and GUI bandwidth settings | `eq:detector_sum_lambda_main` | mosaic | CORRECTED active; either the legacy Gaussian law or a declared weighted discrete-Gaussian line mixture |
 | PHY-SRC-004 | independent wavelength intensity sum | downstream sample loop | `eq:detector_sum_lambda_main` | mosaic/integration | MATCH |

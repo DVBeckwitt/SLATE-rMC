@@ -26,6 +26,20 @@ use `--execution-backend cpu --presentation-backend matplotlib` for the software
 to render, `0` to reset, or `Q` to close. See `docs/EXAMPLES.md` for the scientific measure and the
 complete control semantics.
 
+Beam positions now use a smooth Gaussian profile by default (`--beam-position smooth`). Each
+scattering contribution projects and integrates its conditional beam profile into native pixels;
+Monte Carlo samples divergence, wavelength and mosaic. Position/divergence correlations are
+preserved. The qualitative starting budget is 128 source states and 8 mosaic draws per state;
+increase `--source-samples` and `--draws-per-ki` or their sliders for refinement.
+
+Smooth profiles require an unbounded planar sample and no external-path absorption. For other
+configurations, or for the previous point-sampling method, use `--beam-position sampled`.
+The former sampling budget is `--source-samples 1000 --draws-per-ki 49`. Smooth mode retains
+off-panel contributions and lets beam intensity leave the panel without renormalization. A
+six-standard-deviation integration cutoff omits at most approximately 6e-9 of each Gaussian's
+mass, in addition to numerical quadrature error. This is a qualitative preview, not a fitted or
+converged result.
+
 ## Bi2Se3/Bi2Te3 Ewald viewer
 
 Open synchronized Ewald spheres and detector planes for Bi2Se3 and Bi2Te3 at 5, 10, and 15 degrees:

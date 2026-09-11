@@ -111,6 +111,7 @@ def _sample_antithetic_geometry(
     divergence_sigma: np.ndarray,
     position_divergence_correlation: np.ndarray,
     source_weight: np.ndarray,
+    conditional_position: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
     attempt_count = 32 if np.any(position_divergence_correlation != 0.0) and size >= 8 else 1
     failure: RuntimeError | None = None
@@ -133,6 +134,7 @@ def _sample_antithetic_geometry(
                 divergence_sigma=divergence_sigma,
                 position_divergence_correlation=position_divergence_correlation,
                 source_weight=source_weight,
+                conditional_position=conditional_position,
             )
         except RuntimeError as error:
             failure = error
@@ -177,6 +179,7 @@ def _sample_origin_and_direction(
     divergence_sigma: np.ndarray,
     position_divergence_correlation: np.ndarray,
     source_weight: np.ndarray,
+    conditional_position: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
     if gaussian.ndim != 2 or gaussian.shape[1] != 4:
         raise ValueError("gaussian source geometry must have shape (N, 4)")
@@ -220,6 +223,11 @@ def _sample_origin_and_direction(
             position_divergence_correlation * position
             + np.sqrt(1.0 - position_divergence_correlation**2) * independent_divergence
         )
+    if conditional_position:
+        effective_correlation = np.where(
+            divergence_sigma > 0.0, position_divergence_correlation, 0.0
+        )
+        position = effective_correlation * correlated_divergence
     origin = mean_origin + (position * spatial_sigma) @ axes
     tangent = (correlated_divergence * divergence_sigma) @ axes
     radius = np.linalg.norm(tangent, axis=1)
@@ -268,8 +276,12 @@ def sample_gaussian_source_rays(
     seed: int,
     polarization_state_id: str,
     position_divergence_correlation: ArrayLike = (0.0, 0.0),
+    conditional_position: bool = False,
 ) -> IncidentSampleBatch:
     """Sample Gaussian source rays with optional per-axis position-angle correlation."""
+
+    if not isinstance(conditional_position, bool):
+        raise TypeError("conditional_position must be bool")
 
     if (
         isinstance(sample_count, bool)
@@ -319,6 +331,7 @@ def sample_gaussian_source_rays(
         divergence_sigma=divergence_sigma,
         position_divergence_correlation=correlation,
         source_weight=source_weight,
+        conditional_position=conditional_position,
     )
     wavelength = mean_wavelength + wavelength_sigma * gaussian[:, 4]
     if np.any(wavelength <= 0.0):
@@ -373,7 +386,9 @@ def sample_gaussian_source_rays(
         source_weight=source_weight,
         polarization_state_id=polarization_state_id,
         source_sampling_model_id=(
-            _CORRELATED_SAMPLING_MODEL_ID
+            "conditional_position_mean.v1"
+            if conditional_position
+            else _CORRELATED_SAMPLING_MODEL_ID
             if np.any(correlation != 0.0) and moment_matched
             else _FINITE_CORRELATED_SAMPLING_MODEL_ID
             if np.any(correlation != 0.0)
@@ -445,8 +460,12 @@ def sample_discrete_gaussian_line_source_rays(
     seed: int,
     polarization_state_id: str,
     position_divergence_correlation: ArrayLike = (0.0, 0.0),
+    conditional_position: bool = False,
 ) -> IncidentSampleBatch:
     """Sample Gaussian ray geometry and an exactly weighted discrete line mixture."""
+
+    if not isinstance(conditional_position, bool):
+        raise TypeError("conditional_position must be bool")
 
     if (
         isinstance(sample_count, bool)
@@ -535,6 +554,7 @@ def sample_discrete_gaussian_line_source_rays(
                 divergence_sigma=divergence_sigma,
                 position_divergence_correlation=correlation,
                 source_weight=np.full(int(line_count), 1.0 / float(line_count)),
+                conditional_position=conditional_position,
             )
         )
         local_wavelength = np.full(int(line_count), lines[index], dtype=np.float64)
@@ -599,7 +619,9 @@ def sample_discrete_gaussian_line_source_rays(
         source_weight=source_weight,
         polarization_state_id=polarization_state_id,
         source_sampling_model_id=(
-            _FINITE_UNEQUAL_MATCHED_DISCRETE_LINE_SAMPLING_MODEL_ID
+            "conditional_position_mean.v1"
+            if conditional_position
+            else _FINITE_UNEQUAL_MATCHED_DISCRETE_LINE_SAMPLING_MODEL_ID
             if size % lines.size != 0 and np.any(correlation != 0.0) and moment_matched
             else _FINITE_UNEQUAL_CORRELATED_DISCRETE_LINE_SAMPLING_MODEL_ID
             if size % lines.size != 0 and np.any(correlation != 0.0)

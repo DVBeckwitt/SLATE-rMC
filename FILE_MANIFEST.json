@@ -1,5 +1,5 @@
 {
-  "file_count": 352,
+  "file_count": 355,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -103,8 +103,8 @@
     },
     {
       "path": "docs/ARCHITECTURE.md",
-      "sha256": "4ac22436b9dbc349ef29e63f9bcd7563aeb45a8cbc11a3d212409da3919d0f3d",
-      "size_bytes": 23748
+      "sha256": "041f41e578fdb44b1c44b6ba0b9fa4a1258e4c4f442ad17dff94789ad43c4a33",
+      "size_bytes": 24034
     },
     {
       "path": "docs/CODEX_EXECUTION.md",
@@ -118,8 +118,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "4325c40c0fe513a3353585da7d7e93a176f86ff0711eab0347db3489230a0ebf",
-      "size_bytes": 83713
+      "sha256": "32030322b31cfe56a744ffa89877e758ea6dca54cd099b250c1a7e97e6bb8321",
+      "size_bytes": 84574
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -143,8 +143,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "bce7a2389ba1ddba9b1db00cbf58fc00a6f8cf411707d0b244be65a857d03a2e",
-      "size_bytes": 63930
+      "sha256": "acb03ae095ccced6e39c1cf139b2d433b22c429d20c6a52736f5c7665c16964a",
+      "size_bytes": 64246
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -168,13 +168,13 @@
     },
     {
       "path": "docs/PHYSICS_LEDGER.md",
-      "sha256": "fa2af6a112d1b162811df065f0db9690109aed767539964b3742be6716d2972c",
-      "size_bytes": 40811
+      "sha256": "d2772706b20322ca93d5b67acd169dfe77b6ca68ae2130f0bf60d540c2cecc8b",
+      "size_bytes": 40949
     },
     {
       "path": "docs/RESULT_MEASURE.md",
-      "sha256": "76236dbe98add8b7838bd9b424784c57e0c875ac55d14726435f127b0dd6ce0f",
-      "size_bytes": 29480
+      "sha256": "7c18f9725c4cf615e113c530d24930e9aad235fb3e11824bb29b3455541595d9",
+      "size_bytes": 30531
     },
     {
       "path": "docs/SCOPE_AND_PHASES.md",
@@ -453,13 +453,13 @@
     },
     {
       "path": "interactive/README.md",
-      "sha256": "9406562e6daa25f670e5ea9e24448a6d34ceb523640fa5c652faae46b8b0de4e",
-      "size_bytes": 1653
+      "sha256": "f30a4f4c7ec85b8ba29d8443d07ab7a4171c8a31a72fbafcb808371fd01d6361",
+      "size_bytes": 2689
     },
     {
       "path": "interactive/detector_viewer.py",
-      "sha256": "0d159fee83cfa4751f59dbf2d185b1a160a63743a39ffd4b793cbf57ae9e7276",
-      "size_bytes": 69616
+      "sha256": "e2fcb480019f10d5fdc2a2220857df747fbb19309426420873fe7f8d537635ce",
+      "size_bytes": 71981
     },
     {
       "path": "interactive/ewald_sphere_viewer.py",
@@ -1148,13 +1148,18 @@
     },
     {
       "path": "src/rasim_next/pipeline/_continuous_detector_kernel.py",
-      "sha256": "02c86443b261690a21c3ec6b9d1cae6ace58017adb9de94bbf9f02796bba2908",
-      "size_bytes": 117251
+      "sha256": "5e1c9c97ff5911f49e9b7173b295c849c2e2cfa05f7fd492815396f7fe1f37ac",
+      "size_bytes": 121562
     },
     {
       "path": "src/rasim_next/pipeline/_forward_detector_cuda.py",
-      "sha256": "404e8f0c3edb0e81f1bd7454779e95d1489215504fd52e8642aa4ce8a2eeb39f",
-      "size_bytes": 40545
+      "sha256": "0ab25ad6a4e63ddc5b7f471afb1fe557e646d39fe3225a2ed751bcdb442c96fe",
+      "size_bytes": 49222
+    },
+    {
+      "path": "src/rasim_next/pipeline/beam_position.py",
+      "sha256": "032bbd047760141c5e0e8c40d773d7cce1a11c973efff4c4b3bed450dcaacd65",
+      "size_bytes": 9803
     },
     {
       "path": "src/rasim_next/pipeline/bragg_space.py",
@@ -1163,8 +1168,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
-      "sha256": "583c72e03b5d59f2802b53085e6571a3c5a0611491d4465ffd2f86c2c69a7cdd",
-      "size_bytes": 132011
+      "sha256": "66bd5febb454dd324b63c5ce6d110715c1a72586f8b81de34c3eae1f38acf238",
+      "size_bytes": 132268
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
@@ -1193,8 +1198,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "932bba138e96133d6030052920317ef0c2ec0577ff2c5284ec5caa9fd0e87837",
-      "size_bytes": 137560
+      "sha256": "f93016476b597ce6cf16258d98d0337cc13fb0c33fcf431e7e38bf766e9e059c",
+      "size_bytes": 141399
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_structure.py",
@@ -1283,8 +1288,8 @@
     },
     {
       "path": "src/rasim_next/sampling/source.py",
-      "sha256": "2040d3447c02fc031e4e5bbf2a28a1fc523bf8c55ad288be46c4bc8bb106c67d",
-      "size_bytes": 25820
+      "sha256": "e81c49b2963093d243228b8d9fd6d591e4b290b804632f925eda7f0cb11efa2f",
+      "size_bytes": 26762
     },
     {
       "path": "src/rasim_next/selection/__init__.py",
@@ -1612,6 +1617,11 @@
       "size_bytes": 144
     },
     {
+      "path": "tasks/smooth_beam_viewer.md",
+      "sha256": "1f0cc2c395d61bf383566a3df94c1d0339a0cd1d2b1da55494d3a2f362b8ca66",
+      "size_bytes": 5535
+    },
+    {
       "path": "tasks/todo.md",
       "sha256": "23f36acf8f23131b26e8b1e89f7b0d8517c5d327841637e332df2ef109d94bac",
       "size_bytes": 3548
@@ -1620,6 +1630,11 @@
       "path": "tests/README.md",
       "sha256": "55751692fe825b4013c14495da41bf525d27aaef52ea650d3bf79d67dd1e4697",
       "size_bytes": 2871
+    },
+    {
+      "path": "tests/test_beam_position.py",
+      "sha256": "31fc3e2ba78b65c08a7b8e0ff9170331240632c2002881ca9fe5da631b9ff1e7",
+      "size_bytes": 10475
     },
     {
       "path": "tests/test_compose_fixed_experiment_cli.py",

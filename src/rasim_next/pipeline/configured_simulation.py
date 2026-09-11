@@ -1217,6 +1217,7 @@ def sample_configured_source(
     source: SourceConfiguration,
     *,
     sample_count: int | None = None,
+    conditional_position: bool = False,
 ) -> IncidentSampleBatch:
     count = source.sample_count if sample_count is None else sample_count
     if source.wavelength_model_id == "discrete_gaussian_lines.v1":
@@ -1233,6 +1234,7 @@ def sample_configured_source(
             seed=source.seed,
             polarization_state_id=source.polarization_state_id,
             position_divergence_correlation=source.position_divergence_correlation,
+            conditional_position=conditional_position,
         )
     if source.wavelength_model_id != "gaussian.v1":
         raise ValueError(f"unsupported wavelength_model_id {source.wavelength_model_id!r}")
@@ -1248,6 +1250,7 @@ def sample_configured_source(
         seed=source.seed,
         polarization_state_id=source.polarization_state_id,
         position_divergence_correlation=source.position_divergence_correlation,
+        conditional_position=conditional_position,
     )
 
 
@@ -1658,6 +1661,7 @@ def build_configured_simulation_inputs(
     config: SimulationConfiguration,
     *,
     direct_basis_A: ArrayLike | None = None,
+    conditional_source_position: bool = False,
 ) -> ConfiguredSimulationInputs:
     """Build shared immutable physics once, without allocating any rendered field."""
 
@@ -1698,7 +1702,9 @@ def build_configured_simulation_inputs(
         raise ValueError("active Gaussian mosaic width must be nonzero for intensity")
     if config.mosaic.lorentzian_probability > 0.0 and config.mosaic.lorentzian_hwhm_deg == 0.0:
         raise ValueError("active Lorentzian mosaic width must be nonzero for intensity")
-    samples = sample_configured_source(config.source)
+    samples = sample_configured_source(
+        config.source, conditional_position=conditional_source_position
+    )
     instrument = _compile_instrument(config.instrument)
     crystal = read_crystal(
         config.material.cif_path,

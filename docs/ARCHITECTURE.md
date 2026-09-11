@@ -56,6 +56,9 @@ contributing rod/orientation branches on the active detector panel.
   supported 2H and R-centered 3R catalogues, to rods and mosaic geometry.
 - `pipeline/continuous_detector.py`: shared inverse latent pushforward to intrinsic internal-film
   solid angle or one-incident-state detector coordinates, plus native-pixel integration.
+- `pipeline/beam_position.py`: conditional Gaussian source covariance, affine sample/detector
+  projection and one scalar pixel-probability quadrature shared by CPU/CUDA forward terminals.
+  It changes only the terminal position integral and reuses the canonical root and optical work.
 - `pipeline/source_averaged_detector.py`: incoherent summation of complete incident-state detector
   fields, linear rod restriction/physics rebinding, compiled CPU/CUDA evaluation, and an optional
   wavelength-resolved `(0,0)` stitch compiled once per source wavelength and retained unchanged

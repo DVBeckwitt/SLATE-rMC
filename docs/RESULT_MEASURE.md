@@ -392,6 +392,18 @@ is integrable while its second moment may diverge. The result therefore makes no
 central-limit or standard-error claim. Refined deterministic latent integration is the acceptance
 oracle.
 
+The optional conditional-position terminal replaces `1[T in P]` by the probability that the
+projected Gaussian beam position lies in pixel box `P`, conditional on the sampled direction.
+Its measure is `raw_detector_pixel_mass_conditional_position_estimate_A2.v1` and its position model
+is `conditional_gaussian_pixel_integral.v1`. Source rows contain conditional position means;
+the residual covariance is integrated, preserving position/divergence correlation. Divergence,
+wavelength and mosaic remain sampled. This requires an unbounded planar sample, zero external-path
+absorption and forward-flight margins exceeding eight spatial standard deviations when nonzero.
+Six-sigma marginal/conditional cutoffs omit at most `6*Phi(-6)` (approximately `5.92e-9`) of each
+Gaussian's mass, in addition to numerical box-quadrature error. Off-panel mass is lost, never
+renormalized, and profiles centered outside the panel can contribute. A zero-width profile uses
+the existing exact pixel owner. This is a separately declared approximation, not image blur.
+
 `MonteCarloDetectorPresentation` is not a second scientific measure. It is a transient full-native
 float32 rendering lease obtained from the same unnormalized accumulator, divided by the completed
 draw count. It performs no spatial resampling, detector Jacobian, solid-angle correction,

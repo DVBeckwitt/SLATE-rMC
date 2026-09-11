@@ -31,6 +31,7 @@ from rasim_next.pipeline._continuous_detector_kernel import (
     _compile_detector_projection,
     pack_bi2se3_two_h_structures,
 )
+from rasim_next.pipeline.beam_position import ConditionalBeamPosition
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.continuous_detector import (
     DetectorPixelMass,
@@ -625,6 +626,7 @@ class MonteCarloDetectorPixelMass:
     execution_backend: str = "numba_cpu_forward_monte_carlo.v2"
     execution_device: str | None = None
     execution_worker_count: int | None = 1
+    position_integration_model_id: str = "sampled_position.v1"
     _array_ownership_token: InitVar[object | None] = None
     measure_id: str = field(
         init=False,
@@ -637,6 +639,15 @@ class MonteCarloDetectorPixelMass:
     )
 
     def __post_init__(self, _array_ownership_token: object | None) -> None:
+        if self.position_integration_model_id not in {
+            "sampled_position.v1",
+            "conditional_gaussian_pixel_integral.v1",
+        }:
+            raise ValueError("unsupported position integration model")
+        if self.position_integration_model_id == "conditional_gaussian_pixel_integral.v1":
+            object.__setattr__(
+                self, "measure_id", "raw_detector_pixel_mass_conditional_position_estimate_A2.v1"
+            )
         if _array_ownership_token is _ARRAY_OWNERSHIP_TOKEN:
             image = np.asarray(self.image_A2, dtype=np.float64, order="C")
             if image.base is not None or not image.flags.owndata:
@@ -744,8 +755,14 @@ class MonteCarloDetectorPresentation:
     rod_count: int
     execution_backend: str
     execution_device: str | None
+    position_integration_model_id: str = "sampled_position.v1"
 
     def __post_init__(self) -> None:
+        if self.position_integration_model_id not in {
+            "sampled_position.v1",
+            "conditional_gaussian_pixel_integral.v1",
+        }:
+            raise ValueError("unsupported position integration model")
         image = np.asarray(self.image_A2)
         if image.dtype != np.float32 or image.ndim != 2 or not image.flags.c_contiguous:
             raise ValueError(
@@ -975,6 +992,7 @@ def _accumulate_forward_monte_carlo_block(
     beta_rad: FloatArray,
     detector_pixel_count: int,
     cancel_requested: Callable[[], bool] | None,
+    position_projection: FloatArray | None = None,
 ) -> _ForwardMonteCarloBlockResult:
     """Accumulate one fixed source block into private full-native scratch."""
 
@@ -993,6 +1011,11 @@ def _accumulate_forward_monte_carlo_block(
             raw_image,
             replicate_total,
             image_weight_scale=1.0,
+            position_projection=(
+                None
+                if position_projection is None
+                else position_projection[indexed.incident_state_index]
+            ),
         )
         state_rods = indexed.evaluator.state.rod_hk_population
         m0_count = int(np.count_nonzero((state_rods[:, 0] == 0.0) & (state_rods[:, 1] == 0.0)))
@@ -1496,6 +1519,7 @@ class SourceAveragedDetectorEwaldMeasure:
         *,
         execution_backend: str,
         seed: int,
+        beam_position: ConditionalBeamPosition | None = None,
     ) -> CompiledMonteCarloDetectorSampler:
         """Compile a mutable progressive execution resource for this immutable detector."""
 
@@ -1508,6 +1532,7 @@ class SourceAveragedDetectorEwaldMeasure:
             self,
             execution_backend=execution_backend,
             seed=seed,
+            beam_position=beam_position,
         )
 
     def restrict_rods(
@@ -1963,6 +1988,10 @@ class SourceAveragedDetectorEwaldMeasure:
         object.__setattr__(rebound, "_scan_calibration_binding_revision", binding)
         return rebound
 
+    def _require_sampled_positions(self) -> None:
+        if self._incident.states.source_sampling_model_id == "conditional_position_mean.v1":
+            raise ValueError("conditional source positions require the smooth Monte Carlo sampler")
+
     def _thread_pool(self) -> ThreadPoolExecutor | None:
         if self._worker_count <= 1 or len(self._evaluator_blocks) <= 1:
             return None
@@ -2185,6 +2214,8 @@ class SourceAveragedDetectorEwaldMeasure:
     ) -> SourceAveragedDetectorCoordinateIntensity:
         """Evaluate one nonzero-rod root at arbitrary detector coordinates."""
 
+        self._require_sampled_positions()
+
         if branch not in {1, 2}:
             raise ValueError("branch must be 1 or 2")
         if any(rod.family_m == 0 for rod in self._rods):
@@ -2231,6 +2262,8 @@ class SourceAveragedDetectorEwaldMeasure:
         a continuous fold change of variables.  Coordinates remain continuous;
         no native-pixel identity enters this API.
         """
+
+        self._require_sampled_positions()
 
         column = np.ascontiguousarray(column_px, dtype=np.float64).reshape(-1)
         row = np.ascontiguousarray(row_px, dtype=np.float64).reshape(-1)
@@ -2339,6 +2372,8 @@ class SourceAveragedDetectorEwaldMeasure:
     ) -> SourceAveragedDetectorCoordinateDensity:
         """Reduce every source, physical rod, and retained root at each coordinate."""
 
+        self._require_sampled_positions()
+
         supplied_column = np.asarray(column_px)
         supplied_row = np.asarray(row_px)
         if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
@@ -2441,6 +2476,8 @@ class SourceAveragedDetectorEwaldMeasure:
     ) -> DetectorPixelMass:
         """Integrate detailed per-rod pixel evidence after explicit opt-in."""
 
+        self._require_sampled_positions()
+
         if include_per_rod_evidence is not True:
             raise ValueError(
                 "per-rod pixel evidence is disabled by default; pass "
@@ -2528,6 +2565,7 @@ class CompiledMonteCarloDetectorSampler:
     __slots__ = (
         "_attempted_root_count",
         "_attempted_root_count_per_draw",
+        "_beam_position",
         "_bound_instrument",
         "_cuda_workspace",
         "_detector",
@@ -2538,6 +2576,7 @@ class CompiledMonteCarloDetectorSampler:
         "_forward_blocks",
         "_maximum_root_weight_A2",
         "_poisoned",
+        "_position_projection",
         "_presentation_image_A2",
         "_raw_image_A2",
         "_replicate_total_mass_A2",
@@ -2551,6 +2590,7 @@ class CompiledMonteCarloDetectorSampler:
         *,
         execution_backend: str,
         seed: int,
+        beam_position: ConditionalBeamPosition | None = None,
     ) -> None:
         if not isinstance(detector, SourceAveragedDetectorEwaldMeasure):
             raise TypeError("detector must be a SourceAveragedDetectorEwaldMeasure")
@@ -2559,6 +2599,21 @@ class CompiledMonteCarloDetectorSampler:
         detector_seed = integer(seed, "seed")
         if not 0 <= detector_seed < 2**64:
             raise ValueError("seed must be an integer in [0, 2**64)")
+        if beam_position is not None and not isinstance(beam_position, ConditionalBeamPosition):
+            raise TypeError("beam_position must be ConditionalBeamPosition")
+        if (
+            beam_position is None
+            and detector.incident.states.source_sampling_model_id == "conditional_position_mean.v1"
+        ):
+            raise ValueError(
+                "conditional-mean source rows require residual beam-position integration"
+            )
+        self._beam_position = beam_position
+        self._position_projection = (
+            None
+            if beam_position is None
+            else beam_position.compile_projection(detector.incident.states, detector.instrument)
+        )
         forward_blocks = _forward_monte_carlo_blocks(detector._evaluator_blocks)
         rows, columns = detector.instrument.detector_shape_rc
         self._detector = detector
@@ -2574,6 +2629,7 @@ class CompiledMonteCarloDetectorSampler:
                 detector._evaluator_blocks,
                 detector_shape_rc=detector.instrument.detector_shape_rc,
                 master_rod_count=len(detector.rods),
+                position_projection=self._position_projection,
             )
             self._cuda_workspace = workspace
             self._execution_backend = "numba_cuda_forward_monte_carlo.v1"
@@ -2714,12 +2770,20 @@ class CompiledMonteCarloDetectorSampler:
                 )
                 projection_index += 1
             rebound_blocks.append(tuple(rebound_block))
+        position_projection = (
+            None
+            if self._beam_position is None
+            else self._beam_position.compile_projection(self._detector.incident.states, instrument)
+        )
         if self._cuda_workspace is not None:
             try:
                 self._cuda_workspace.rebind_detector_projection(projection)
+                if position_projection is not None:
+                    self._cuda_workspace.rebind_position_projection(position_projection)
             except Exception:
                 self._poisoned = True
                 raise
+        self._position_projection = position_projection
         self._forward_blocks = tuple(rebound_blocks)
         self._bound_instrument = instrument
         if self._cuda_workspace is None:
@@ -2777,12 +2841,22 @@ class CompiledMonteCarloDetectorSampler:
                 "geometry rebind requires unchanged source, rods, physics, and detector shape"
             )
         forward_blocks = _forward_monte_carlo_blocks(detector._evaluator_blocks)
+        position_projection = (
+            None
+            if self._beam_position is None
+            else self._beam_position.compile_projection(
+                detector.incident.states, detector.instrument
+            )
+        )
         if self._cuda_workspace is not None:
             try:
                 self._cuda_workspace.rebind_geometry(detector._evaluator_blocks)
+                if position_projection is not None:
+                    self._cuda_workspace.rebind_position_projection(position_projection)
             except Exception:
                 self._poisoned = True
                 raise
+        self._position_projection = position_projection
         self._detector = detector
         self._bound_instrument = detector.instrument
         self._forward_blocks = forward_blocks
@@ -2921,6 +2995,7 @@ class CompiledMonteCarloDetectorSampler:
                 beta_rad=beta,
                 detector_pixel_count=rows * columns,
                 cancel_requested=cancel_requested,
+                position_projection=self._position_projection,
             )
 
         if self._execution_worker_count == 1:
@@ -2984,6 +3059,11 @@ class CompiledMonteCarloDetectorSampler:
             detector_visible_m0_q_gap_Ainv=(self._detector.detector_visible_m0_q_gap_Ainv),
             execution_backend=self._execution_backend,
             execution_device=self._execution_device,
+            position_integration_model_id=(
+                "sampled_position.v1"
+                if self._beam_position is None
+                else "conditional_gaussian_pixel_integral.v1"
+            ),
             execution_worker_count=self._execution_worker_count,
             _array_ownership_token=_ARRAY_OWNERSHIP_TOKEN,
         )
@@ -3020,6 +3100,11 @@ class CompiledMonteCarloDetectorSampler:
             rod_count=len(self._detector.rods),
             execution_backend=self._execution_backend,
             execution_device=self._execution_device,
+            position_integration_model_id=(
+                "sampled_position.v1"
+                if self._beam_position is None
+                else "conditional_gaussian_pixel_integral.v1"
+            ),
         )
 
 
