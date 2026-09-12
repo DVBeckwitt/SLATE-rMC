@@ -147,3 +147,8 @@ tasks:
     branch: codex/full-native-refinement
     status: IMPLEMENTED_NATIVE_WORKFLOW_MEASURED_NUMERICS_UNQUALIFIED
     depends_on: [T29]
+  - id: T32
+    file: tasks/32_native_projection_coalescing.md
+    branch: codex/native-projection-coalescing
+    status: IMPLEMENTED_NATIVE_PARITY_FITTING_CONTINUES
+    depends_on: [T30]

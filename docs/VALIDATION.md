@@ -2325,3 +2325,10 @@ contrast RMS `2.44181813e-7`, and objective-contrast error `6.67758286e-6`. The 
 occupancy gradients differ by `1.70462552e-7` relative and preserve improvement direction.
 This isolates m0 angular error at one optimizer stencil; other families, axes, source and
 parameter directions remain unqualified. T31 records exact artifacts, work counts and cost.
+
+T32 coalesces equal-weight adjacent native rectangles. Existing independent Gaussian
+probability tests cover weighted gaps/overlaps and near-singular oblique beams. Complete
+Se predictions at the baseline and actual occupancy stencil agree with the prerequisite
+to 1.02e-14 whitened RMS; the objective contrast is unchanged. The external 4096-kernel
+alternating benchmark measures 1.3355 times faster projection with maximum probability
+disagreement 4.44e-16. Neither check qualifies source integration or physical fitting.

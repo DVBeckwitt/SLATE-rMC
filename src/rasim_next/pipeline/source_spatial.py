@@ -215,6 +215,9 @@ def _project_gaussian_regions(
     low,
     high,
     prefix,
+    rectangle_index,
+    column_low,
+    column_high,
     membership_ptr,
     owner,
     run_weight,
@@ -232,6 +235,7 @@ def _project_gaussian_regions(
     out_weight.pop()
     sums = np.zeros(nobs)
     seen = np.zeros(nobs, np.int64)
+    seen_rectangle = np.zeros(len(column_low), np.int64)
     for i in range(len(mean)):
         stamp = i + 1
         touched = [np.int64(0)]
@@ -255,14 +259,17 @@ def _project_gaussian_regions(
             for j in range(start, stop):
                 if high[j] < ym - yr:
                     continue
+                rectangle = rectangle_index[j]
+                if seen_rectangle[rectangle] == stamp:
+                    continue
                 value = _correlated_rectangle_probability(
                     mx,
                     my,
                     sx,
                     beta,
                     conditional_y,
-                    c - 0.5,
-                    c + 0.5,
+                    column_low[rectangle],
+                    column_high[rectangle],
                     low[j],
                     high[j],
                     nodes,
@@ -270,8 +277,10 @@ def _project_gaussian_regions(
                     radius,
                     angle_coefficients,
                 )
+                # A later column can intersect a rectangle rejected above.
+                seen_rectangle[rectangle] = stamp
                 if value > 0:
-                    for member in range(membership_ptr[j], membership_ptr[j + 1]):
+                    for member in range(membership_ptr[rectangle], membership_ptr[rectangle + 1]):
                         o = owner[member]
                         if seen[o] != stamp:
                             seen[o] = stamp
@@ -290,7 +299,7 @@ class NativeSpatialRegionProjection:
     """Gaussian box probabilities over frozen native region weights, without a raster.
 
     The native projector supplies each region's piecewise constant pixel weights.
-    Contiguous equal-weight row runs share one rectangle integral. Identical
+    Adjacent equal-weight pixel runs share one rectangle integral. Identical
     rectangles are integrated once and distributed to their observations with
     the original weights; no surviving-mass normalization occurs.
     """
@@ -304,6 +313,9 @@ class NativeSpatialRegionProjection:
             runs = (
                 np.zeros(p.detector_shape_rc[1] + 1, dtype=np.int64),
                 np.empty(0),
+                np.empty(0),
+                np.empty(0),
+                np.empty(0, dtype=np.int64),
                 np.empty(0),
                 np.empty(0),
                 np.zeros(1, dtype=np.int64),
@@ -331,18 +343,58 @@ class NativeSpatialRegionProjection:
         ends = np.r_[starts[1:] - 1, len(rows) - 1]
         low, high = rows[starts] - 0.5, rows[ends] + 0.5
         columns, owner, weight = columns[starts], owner[starts], weight[starts]
+        order = np.lexsort((columns, weight, high, low, owner))
+        columns, low, high, owner, weight = (a[order] for a in (columns, low, high, owner, weight))
+        starts = np.r_[
+            0,
+            1
+            + np.flatnonzero(
+                (np.diff(owner) != 0)
+                | (np.diff(columns) != 1)
+                | (low[1:] != low[:-1])
+                | (high[1:] != high[:-1])
+                | (weight[1:] != weight[:-1])
+            ),
+        ]
+        ends = np.r_[starts[1:] - 1, len(columns) - 1]
         rectangles, membership = np.unique(
-            np.column_stack((columns, low, high)), axis=0, return_inverse=True
+            np.column_stack(
+                (columns[starts] - 0.5, columns[ends] + 0.5, low[starts], high[starts])
+            ),
+            axis=0,
+            return_inverse=True,
         )
         order = np.argsort(membership, kind="stable")
-        owner, weight = owner[order], weight[order]
+        owner, weight = owner[starts][order], weight[starts][order]
         membership_ptr = np.searchsorted(membership[order], np.arange(len(rectangles) + 1))
-        columns, low, high = rectangles.T
+        column_low, column_high, low, high = rectangles.T
+        # Index each spanned column; projection integrates each rectangle once.
+        widths = (column_high - column_low).astype(np.int64)
+        rectangle_index = np.repeat(np.arange(len(rectangles)), widths)
+        columns = (
+            np.repeat((column_low + 0.5).astype(np.int64), widths)
+            + np.arange(len(rectangle_index))
+            - np.repeat(np.cumsum(widths) - widths, widths)
+        )
+        order = np.lexsort((high[rectangle_index], low[rectangle_index], columns))
+        rectangle_index, columns = rectangle_index[order], columns[order]
+        low, high = low[rectangle_index], high[rectangle_index]
         ptr = np.searchsorted(columns, np.arange(p.detector_shape_rc[1] + 1))
         prefix = high.copy()
         for c in range(p.detector_shape_rc[1]):
             prefix[ptr[c] : ptr[c + 1]] = np.maximum.accumulate(high[ptr[c] : ptr[c + 1]])
-        runs = (ptr, low, high, prefix, membership_ptr, owner, weight)
+        runs = (
+            ptr,
+            low,
+            high,
+            prefix,
+            rectangle_index,
+            column_low,
+            column_high,
+            membership_ptr,
+            owner,
+            weight,
+        )
         for a in runs:
             a.setflags(write=False)
         object.__setattr__(self, "_runs", runs)

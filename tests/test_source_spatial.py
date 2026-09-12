@@ -1110,7 +1110,7 @@ def test_unsupported_probability_measures_fail_explicitly():
 
 def test_oblique_narrow_beams_preserve_native_pixel_mass():
     """Near-singular projected beams retain their finite rectangle probabilities."""
-    shape = (3, 4)
+    shape = (4, 4)
     mean = np.array([1.12, 1.6])
     sigma = np.array([0.8, 1.2])
     for rho in (-1 + 1e-12, -0.99, -0.4, 0.4, 0.99, 1 - 1e-12):
@@ -1146,6 +1146,25 @@ def test_oblique_narrow_beams_preserve_native_pixel_mass():
                 epsrel=1e-12,
             )[0]
         np.testing.assert_allclose(actual, expected, rtol=2e-11, atol=5e-13)
+        # A negatively correlated beam reaches the narrow row only after its
+        # first column. The overlapping whole panel must not suppress that hit.
+        flat = np.arange(np.prod(shape))
+        middle_row = flat[flat // shape[1] == 1]
+        projection = NativePixelRegionProjection(
+            shape,
+            flat,
+            np.r_[np.zeros(len(flat), dtype=int), np.ones(len(middle_row), dtype=int)],
+            np.r_[flat, middle_row],
+            np.ones(len(flat) + len(middle_row)),
+            2,
+            "oblique-panel-and-row.v1",
+        )
+        regions = NativeSpatialRegionProjection(projection).probabilities(
+            kernels, quadrature_order=16, gaussian_tail_radius=8.0
+        )
+        np.testing.assert_allclose(
+            regions.toarray()[0], [expected.sum(), expected[1].sum()], rtol=2e-11, atol=5e-13
+        )
 
 
 def test_pixel_roi_and_monte_carlo_share_integrated_gaussian_mass():
@@ -1176,6 +1195,8 @@ def test_pixel_roi_and_monte_carlo_share_integrated_gaussian_mass():
     pixel_column = np.tile(flat, 3)
     alternating_weight = np.where(y.ravel() % 2 == 0, 1.0, 0.3)
     region_weight = np.r_[alternating_weight, np.ones(len(flat)), 0.7 * alternating_weight]
+    keep = (owner == 2) | (x.ravel()[pixel_column] != 2)
+    owner, pixel_column, region_weight = (a[keep] for a in (owner, pixel_column, region_weight))
     p = NativePixelRegionProjection(
         shape, flat, owner, pixel_column, region_weight, 4, "overlapping-native-regions.v1"
     )

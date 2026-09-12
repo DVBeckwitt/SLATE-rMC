@@ -1,5 +1,5 @@
 {
-  "file_count": 378,
+  "file_count": 379,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -118,8 +118,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "ec596062f4b649b74d674026808f06e70df572597c9cbcd1ea00742944e4aba5",
-      "size_bytes": 96510
+      "sha256": "c98d12fb5cd97c4504f62bb14b42fb7c7faf6e0629b4058340061070e8c57c2c",
+      "size_bytes": 96933
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -193,8 +193,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "5ec178d3e63e14155d5b3c557bbf7e40e80d9add5ca7ecec30054e56ebec0167",
-      "size_bytes": 165691
+      "sha256": "7b46b9218ecdccfa165e16d083f875f32d8c17e3afa20b02fc437a904169d14a",
+      "size_bytes": 166216
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -1288,8 +1288,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_spatial.py",
-      "sha256": "e3996d068daf72ff627f3ae5f8643f6d73ee1f1acf5b53d8ab22b8ffa20363ca",
-      "size_bytes": 29737
+      "sha256": "2105e31c5a6520a6d6988202c89d9aa5f09193ee016dee6d8b6d7f453a6f1b15",
+      "size_bytes": 31735
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1582,6 +1582,11 @@
       "size_bytes": 19066
     },
     {
+      "path": "tasks/32_native_projection_coalescing.md",
+      "sha256": "c2ecdca535d89b74f89642460859a0de35878aaade5da0d2f1546e0e4f17e0ba",
+      "size_bytes": 5021
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1623,8 +1628,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "67876cb6cdaaeaea1252c168026ce923a0aab787cb3a58a40f5f1cc85f51a6f5",
-      "size_bytes": 4860
+      "sha256": "e4fff0b679ad76054032d72594ba93160c23fe62089a00060584ef3886df2e58",
+      "size_bytes": 5048
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1848,8 +1853,8 @@
     },
     {
       "path": "tests/test_source_spatial.py",
-      "sha256": "7acd1977a07e943e0b51743b5ff6d28b22fedb41bd4c70ddf5459f11e1d07042",
-      "size_bytes": 53303
+      "sha256": "a67378cfc7e89e46314956d353f9129e074b6a279b55dd0ae57249b38597aa74",
+      "size_bytes": 54323
     },
     {
       "path": "tests/test_stacking_transition.py",

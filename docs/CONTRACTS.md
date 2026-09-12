@@ -1265,3 +1265,9 @@ validation compares refined predictions with scales fitted on training alone. An
 alternative or better admissible profile point blocks selection pending joint refitting of
 that N. Numerical agreement remains empirical at declared probes; it is not a certified
 error bound or an identified physical estimate.
+
+The native spatial projector may combine adjacent pixel columns into a wider rectangle
+only when observation owner, exact weight and vertical bounds agree. Rectangle geometry
+can be shared between observations, but each original membership weight applies once.
+The same continuous Gaussian rectangle integral supplies the probability. This is an
+internal partition change with no new result measure, raster or public API.
