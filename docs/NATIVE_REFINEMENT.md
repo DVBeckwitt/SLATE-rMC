@@ -146,6 +146,12 @@ blocks declare numerical checks/probes/tolerances, calibration, prospective
 training indices/groups, sensitivity, profiles, and real-forward synthetic data.
 An empty stage list executes baseline/numerical diagnostics only.
 
+`require_initial_qualification` defaults to true. When fitting or profiles are requested,
+a failed initial numerical screen writes an incomplete checkpoint and exits with status 2
+before optimization. Explicit false permits a bounded execution exercise; it does not
+qualify the resulting predictions. Result schema `rasim-native-refinement-result-v2`
+retains an `optimizer_candidate` separately from `selected`.
+
 Each validation group is `{"name": "branch:m3_plus", "indices": [2, 7, 9]}`
 with the actual frozen row indices. Groups must partition all valid rows outside
 training, without overlap. The result retains the joint conditional score plus
@@ -167,11 +173,42 @@ overall numerical status cannot inherit a passing initial status when fitted or
 discrete-ranking checks fail. A source refinement must change effective sampled
 rays, masses or conditional position, rather than only a provenance label.
 
+`qualify_profile_candidates` defaults to true. Every nuisance-refitted profile center
+and N receives numerical checks, including the objective offsets across the complete
+profile curve. Conditional validation also checks numerical predictions with each scale
+fitted on training alone. A better admissible profile point for any N invalidates that
+N's resolved minimum and requires an all-active joint refit. Failed numerical checks or
+unresolved alternatives leave `selected` null, even if an optimizer reports convergence.
+
+Optional `regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` freeze conservative proposal
+domains in `integration_override`. They must enclose actual source-region bounds for every
+candidate and refinement; insufficient coverage raises. This stabilizes axial nodes across
+source sample counts without dropping support. `quadrature_kind` defaults to `sobol`;
+`composite_gauss` uses axial CDF panels and separately integrates reachable angular arcs.
+The latter requires seed zero and independent order refinements. Neither rule is qualified
+merely by being deterministic or by passing its analytic quadrature invariant.
+For composite quadrature, `maximum_axial_panel_width_Ainv` caps the physical width of
+inverse-CDF panels through recursive bisection. Refine the cap independently of the
+angular order. This prevents large physical gaps between concentrated proposal peaks;
+it does not replace the observable accuracy gate.
+
+Use `angular_support="fixed_union"` to keep the conservative angular domain independent
+of individual observation Q boundaries. The default `"q_conditioned_union"` preserves
+compatibility. Fixed support removes a demonstrated remeshing discontinuity, but its
+angular resolution must still be independently qualified. Observation grouping was an
+unsuccessful numerical prototype and is not a supported control.
+
 `stitch_grid_size` refines the empirical Bi handoff calculation. Baseline, numerical
 probes, reported fits, local-sensitivity probes and profile candidates record the
 actual surface/wavelength interval selection, overlap scale and zero-strength
 normalization. Pb's non-reflectivity model returns no handoff records. A switch in
 the empirical handoff remains a potential source of nonsmooth parameter response.
+
+`stitch_overlap_measure="continuous_q_median"` opts into a uniform-Q overlap median,
+using separately interpolated Parratt numerator and internal-phase denominator on the
+complete `[5Qc,10Qc]` interval. This named extension avoids counting grid points as the
+measure. The default `sampled_log_median` preserves manuscript compatibility. The first
+divergence is overlap normalization; automatic/fallback blend-window selection is unchanged.
 
 The explicit response cache retains at most two geometry responses and 64 small
 prediction vectors. Source, material, reciprocal basis or rigid instrument
@@ -203,3 +240,32 @@ diffuse intensity of those effects. Select an extension only after resolving
 numerical residuals and establishing its operator, measure, calibration evidence
 and independent proof. No generic extra blur or background term is added merely
 to reduce the objective.
+
+## Qualification of optimizer decisions
+
+A numerical pass at a large parameter perturbation does not establish finite-difference
+gradient accuracy. SLSQP uses normalized search coordinates `(value-lower)/(upper-lower)`
+and the declared absolute `finite_difference_step`. At `eps=1e-4`, its physical step is
+normally `1e-4*(upper-lower)`, reversed near the upper bound. Sensitivity uses its own
+`sensitivity_scale` and relative step; those are different diagnostic stencils.
+
+Use one existing diagnostic plan per center and integer N: retain the full parameter
+roster and frozen training split, set `starts=[center]`, `repeat_choices=[N]`,
+`stages=[]`, `profiles=[]`, `sensitivity=false` and `controls=false`. Supply the center
+followed by the actual one-sided optimizer stencil points in `qualification_candidates`.
+Omit `qualification_scale` so the runner profiles a reference training scale and reuses it.
+Preserve independently justified numerical refinements and the existing acceptance gates.
+Use actual recorded evaluation vectors when replaying an existing optimizer decision.
+
+For each numerical rule, subtract the center's profiled objective from each stencil
+objective and divide by the valid training count times the signed normalized step.
+Report gradient differences and sign changes separately. Se's 884 training rows and
+`eps=1e-4` mean an objective-contrast error of `0.5` still permits a normalized gradient
+error of `5.656`; the existing inference gate alone is not a gradient criterion. Rebuild
+stencils at every audited center because a translated/clipped probe need not match SLSQP's
+bound-aware step. Sensitivity singular values likewise require their own refinement check.
+
+Unqualified initialization remains diagnostic-only. Independent refinements must preserve
+the proposed improvement direction and meet a predeclared relative decision-error budget.
+It cannot produce selected estimates, profiles or identification claims. Restart the
+normal qualified workflow from any retained warm start; never relax final inference gates.

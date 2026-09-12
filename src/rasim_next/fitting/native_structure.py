@@ -50,6 +50,7 @@ def native_stitch_records(physics, arguments, stack):
                     zero_strength_A2=state.zero_strength_A2,
                     qc_Ainv=state.qc_Ainv,
                     grid_size=physics.integration_rule.stitch_grid_size,
+                    overlap_measure=state.overlap_measure,
                 )
             )
     return records

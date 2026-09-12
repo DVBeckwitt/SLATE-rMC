@@ -95,7 +95,9 @@ def _compile_source_parratt_stitch(
     )
 
 
-def _retained_source_parratt_stitch(state: object) -> CompiledParrattStitch | None:
+def _retained_source_parratt_stitch(
+    state: object, overlap_measure: str
+) -> CompiledParrattStitch | None:
     """Keep the source-wavelength overlap normalization frozen during structure fitting."""
 
     if int(state.specular_stitch_code) == 0:
@@ -122,6 +124,7 @@ def _retained_source_parratt_stitch(state: object) -> CompiledParrattStitch | No
             else "automatic"
         ),
         interface_assumption=parratt_stitch_interface_assumption(int(state.specular_stitch_code)),
+        overlap_measure=overlap_measure,
     )
 
 
@@ -1580,7 +1583,12 @@ class SourceAveragedDetectorEwaldMeasure:
                     intensity_envelope_u_radial_A2=rebound_envelope.u_radial_A2,
                     intensity_envelope_u_normal_A2=rebound_envelope.u_normal_A2,
                     shared_disorder_epsilon=rebound_strength.shared_disorder_epsilon,
-                    specular_stitch=_retained_source_parratt_stitch(indexed.evaluator.state),
+                    specular_stitch=_retained_source_parratt_stitch(
+                        indexed.evaluator.state,
+                        "sampled_log_median"
+                        if self.specular_stitch_stack is None
+                        else self.specular_stitch_stack.overlap_measure,
+                    ),
                 )
                 rebound_block.append(
                     indexed.with_evaluator(

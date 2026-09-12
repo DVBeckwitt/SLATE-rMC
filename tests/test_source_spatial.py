@@ -422,6 +422,51 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
     reference = {(batch.source_state_index, batch.radial_Ainv): batch for batch in full}
     assert len(reference) == len(full) > 0
 
+    refined_source = sample_conditional_gaussian_source(
+        mean_origin_lab_m=[0, 0, 0.05],
+        mean_direction_lab=[0, 0, -1],
+        transverse_axes_lab=np.eye(3)[:2],
+        spatial_sigma_m=[0.001, 0.002],
+        divergence_sigma_rad=[0.002, 0.003],
+        position_divergence_correlation=[-0.3, 0.4],
+        line_wavelength_A=[1.54, 1.544],
+        line_probability=[0.66, 0.34],
+        common_wavelength_sigma_A=0,
+        sample_count=8,
+        seed=723,
+        polarization_state_id="UNITY_APPROXIMATION",
+    )
+    fixed_rule = replace(small_rule, regular_q_bounds_Ainv=(0.0, 9.0))
+    axial_grids = []
+    for source_rule in (source, refined_source):
+        stream = tuple(
+            iter_conditional_fiber_transfers(
+                **(
+                    arguments
+                    | dict(
+                        source=source_rule,
+                        incident=build_incident_states(source_rule.mean_rays, material, instrument),
+                    )
+                ),
+                rule=fixed_rule,
+            )
+        )
+        axial_grids.append({b.radial_Ainv: b.positive_axial_Ainv for b in stream})
+        for batch in stream:
+            np.testing.assert_array_equal(
+                batch.positive_axial_Ainv, axial_grids[-1][batch.radial_Ainv]
+            )
+    assert axial_grids[0].keys() == axial_grids[1].keys()
+    for radius in axial_grids[0]:
+        np.testing.assert_array_equal(axial_grids[0][radius], axial_grids[1][radius])
+    with pytest.raises(ValueError, match="does not enclose"):
+        tuple(
+            iter_conditional_fiber_transfers(
+                **arguments,
+                rule=replace(small_rule, regular_q_bounds_Ainv=(0.0, 0.01)),
+            )
+        )
+
     def assert_same_stream(actual):
         actual = tuple(actual)
         assert len(actual) == len(reference)

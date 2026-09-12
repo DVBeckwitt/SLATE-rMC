@@ -9494,7 +9494,8 @@ def test_interactive_goniometer_axis_deltas_rebuild_the_pivoted_commanded_motion
         )
 
 
-def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field() -> None:
+@pytest.mark.parametrize("quadrature_kind", ("sobol", "composite_gauss"))
+def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrature_kind) -> None:
     from scipy.integrate import quad
 
     from painted_ewald import MosaicParameters
@@ -9509,10 +9510,11 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field() -> No
         normal_sample=[0, 0, 1],
         source_region_bounds=[[0, 4, 0, 2 * np.pi]],
         reference_mosaic=MosaicParameters(0.4, 0.7, 0.3),
-        axial_power=12,
-        angular_power=5,
+        axial_power=12 if quadrature_kind == "sobol" else 8,
+        angular_power=5 if quadrature_kind == "sobol" else 7,
         axial_seed=66546,
         angular_shift_seed=1104,
+        quadrature_kind=quadrature_kind,
     )
     nodes = sample_conditional_fiber_coordinates(**arguments)
     axial = nodes.positive_axial_Ainv[nodes.axial_index]
@@ -9528,3 +9530,83 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field() -> No
     )
     assert not len(empty.weight_Ainv_rad)
     np.testing.assert_array_equal(empty.positive_axial_Ainv, nodes.positive_axial_Ainv)
+    if quadrature_kind == "composite_gauss":
+        # A narrow native-support feature lies between coarse proposal peaks.
+        # Physical panel refinement must recover its integral without a new PDF.
+        refined = sample_conditional_fiber_coordinates(
+            **(arguments | {"axial_power": 3, "maximum_axial_panel_width_Ainv": 0.02})
+        )
+        t = refined.positive_axial_Ainv[refined.axial_index]
+        narrow = np.exp(-0.5 * ((t - 0.55) / 0.008) ** 2)
+        assert refined.weight_Ainv_rad @ narrow == pytest.approx(
+            2 * np.pi * np.sqrt(2 * np.pi) * 0.008, rel=1e-7
+        )
+        assert np.max(np.diff(refined.positive_axial_Ainv)) < 0.02
+        split = sample_conditional_fiber_coordinates(
+            **(
+                arguments
+                | {
+                    "source_region_bounds": [[0, 4, 0, 0.4], [0, 4, 5, 0.2], [0, 4, 6.1, 0.3]],
+                }
+            )
+        )
+        arcs = [(0, 0.4), (5, 5.2), (6.1, 2 * np.pi)]
+        expected = sum(
+            quad(
+                lambda t, left=left, right=right: (
+                    2
+                    * np.pi
+                    / t
+                    * (np.exp(t * right / (2 * np.pi)) - np.exp(t * left / (2 * np.pi)))
+                ),
+                0.2,
+                1.0,
+                epsabs=1e-13,
+            )[0]
+            for left, right in arcs
+        )
+        axial = split.positive_axial_Ainv[split.axial_index]
+        actual = split.weight_Ainv_rad @ np.exp(axial * split.ewald_azimuth_rad / (2 * np.pi))
+        assert actual == pytest.approx(expected, rel=1e-10)
+        assert split.weight_Ainv_rad.sum() == pytest.approx(
+            0.8 * sum(b - a for a, b in arcs), rel=1e-10
+        )
+        changed_shift = sample_conditional_fiber_coordinates(
+            **(arguments | {"angular_shift_seed": 90210})
+        )
+        np.testing.assert_array_equal(changed_shift.ewald_azimuth_rad, nodes.ewald_azimuth_rad)
+
+
+def test_fixed_angular_support_preserves_continuity_across_observation_q_bounds() -> None:
+    from painted_ewald import MosaicParameters
+    from rasim_next.pipeline.fiber_detector import sample_conditional_fiber_coordinates
+
+    center = np.sqrt(0.6**2 - 0.3**2)
+    arguments = dict(
+        axial_bounds_Ainv=(center - 1e-9, center + 1e-9),
+        axial_peak_centers_Ainv=[center],
+        axial_peak_half_width_Ainv=0.02,
+        radial_Ainv=0.3,
+        ki_sample_Ainv=[0, 0, -2],
+        normal_sample=[0, 0, 1],
+        source_region_bounds=[[0, 2, 0, 1.3], [0.6, 2, 0.9, 1.4]],
+        reference_mosaic=MosaicParameters(0.4, 0.7, 0.3),
+        axial_power=3,
+        angular_power=4,
+        axial_seed=0,
+        angular_shift_seed=0,
+        quadrature_kind="composite_gauss",
+        angular_support="fixed_union",
+    )
+    nodes = sample_conditional_fiber_coordinates(**arguments)
+    acceptance = np.exp(-0.5 * ((nodes.ewald_azimuth_rad - 0.6) / 0.03) ** 2)
+    mass = np.bincount(nodes.axial_index, weights=nodes.weight_Ainv_rad)
+    moment = np.bincount(nodes.axial_index, weights=nodes.weight_Ainv_rad * acceptance) / mass
+    assert np.ptp(moment) < 1e-8
+    # Continuity alone does not certify accuracy; refine against an analytic integral.
+    refined = sample_conditional_fiber_coordinates(**(arguments | {"angular_power": 8}))
+    lower, upper = arguments["axial_bounds_Ainv"]
+    assert refined.weight_Ainv_rad.sum() == pytest.approx(2.3 * (upper - lower), rel=1e-8)
+    acceptance = np.exp(-0.5 * ((refined.ewald_azimuth_rad - 0.6) / 0.03) ** 2)
+    average = (refined.weight_Ainv_rad @ acceptance) / refined.weight_Ainv_rad.sum()
+    assert average == pytest.approx(np.sqrt(2 * np.pi) * 0.03 / 2.3, rel=1e-8)

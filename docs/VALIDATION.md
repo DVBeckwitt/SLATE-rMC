@@ -2233,3 +2233,95 @@ spectra/finer grids or imply a whole-fit speedup. Spatial-projector reuse is bit
 identical; phase/zero handoff strengths are carried through typed results without
 reevaluation. The Bi 513->1025 handoff-grid comparisons also fail objective-contrast
 qualification (661.25 Te, -4615.36 Se), despite smaller prediction differences.
+
+## Explicit numerical measures and qualification gates (contract v17)
+
+T31 preserves the sampled overlap prescription as `MATCH`. Its explicitly named
+continuous-Q extension is `NO_ORACLE` against legacy; the first divergence is overlap
+normalization after identical pure Parratt and structure strengths. Constant, nonuniform
+affine and finite-fringe median identities give independent measure authority. The
+compiled detector uses the same scale and preserves its low/high branches. At the actual
+Bi baseline and occupancy probes, 32769 to 65537 overlap nodes pass the declared gates:
+maximum prediction RMS is `3.54625e-5` Se and `5.34377e-7` Te; Se's objective-contrast
+error is `-0.0851168`, below the absolute `0.5` limit. This qualifies only that handoff
+calculation on fixed other rules.
+
+Frozen conservative Q domains preserve source-count-independent axial grids and reject
+insufficient coverage. Composite quadrature preserves a nonseparable continuous integral,
+disjoint/wrapped-arc mass and empty-support behavior. Physical panel bisection also
+integrates a narrow Gaussian between proposal peaks against its analytic integral.
+The previous Sobol coordinates and weights are bitwise identical over 65536 equivalent
+nodes. Its narrow sampler benchmark is 0.174539 versus 0.200680 seconds, with a 258654208-byte
+peak working set; this is an overhead measurement, not a whole-fit speedup.
+The initial composite Se/B4 outgoing integration screens still fail. Physical axial-panel
+refinement from `.02` to `.01` inverse angstroms subsequently gives prediction RMS
+`0.0348232` Se and `0.0281227` B4 on a fixed two-line first-order source. Parameter-contrast
+RMS is `0.00134907` and `0.000420759`; both prediction gates pass. Objective-contrast
+errors `2.39526` and `-0.715523` still exceed `0.5`. These controlled trials do not
+qualify source or angular integration. Full physical estimates remain unaccepted.
+
+The subsequent `.01` to `.005` axial comparison gives maximum prediction RMS `0.0193593`
+Se and `0.0141682` B4. B4's objective contrast `0.412069` passes; Se's `-3.91267` fails.
+Independent angular refinement from 16 to 32 nodes at cap `.01` gives prediction RMS
+`8.75063` Se and `11.1784` B4, with objective contrasts `-174.400` and `-1630.60`.
+Angular integration is therefore the larger measured disagreement in these fixed-source
+trials. They took 657.052/1196.462 seconds for axial and 644.851/1040.562 seconds for
+angular, with peak working sets up to 2,081,529,856 bytes. Observation grouping was subsequently tested and removed. Its local speedups did not
+resolve combined integration error. The uncapped Se axial comparison even reverses the
+occupancy objective contrast (`+2435.014` versus `-1741.035`), so it cannot support reliable
+initialization. Retired external studies are provenance, not runnable supported plans.
+
+An isolated actual Se case identifies a numerical discontinuity: at
+`Q=2.0614578928089955` inverse angstroms, changing Q by only `2e-9` changes the coarse
+computed angular acceptance from `1.29277e-6` to `0.01869534`. An observation bound activates
+and remeshes the complete conditional angular union. The optional fixed union removes
+this jump. Its public permanent regression also agrees with an analytic narrow Gaussian.
+An independent physical-angle oracle at the actual geometry agrees between 32769 and
+65537 uniform points to `2.83e-15` relative. Fixed-union g12 agrees to `7.76e-14` there;
+g10 still differs by `1.44e-4`. Including actual mosaic, source, geometry, polarization and
+envelope with unit strength preserves this finding. This is an isolated angular-slice
+proof, not qualification of the complete detector prediction or source integration.
+
+Five additional angular slices cover Se low/high Q, B4 m0, a nonzero B4 rod and a mosaic-width
+stress case. Independent uniform-angle oracles converge within `1e-9` relative. A generic
+physical-panel extension is not retained: the narrow B4 case favors existing g10 (`8.59e-9`
+relative error, 2048 nodes) over physical GL8 (`1.17e-6`) or local-CDF GL8 (`4.29e-4`), both
+3888 nodes. These are independent integration comparisons of a shared physical integrand,
+not an independent validation of all scattering physics. The external angular-slice
+reassessment artifact retains exact values, source/input hashes and limitations.
+
+Next qualification targets angular resolution, followed by parameter differences at the
+actual optimizer stencils. The existing occupancy probe of `0.01` does not establish
+accuracy of the SLSQP step of `2e-5`, sensitivity step of `1e-6`, or other parameter directions.
+Final prediction, contrast and objective tolerances remain unchanged.
+
+Numerical acceptance regressions inject a profile-center bias and a held-out-only error:
+a passing initial/training comparison cannot qualify either changed result. Actual CLI
+execution confirms failed initial qualification exits 2. An explicit execution-only
+override completes 184 all-active/profile evaluations with `selected=null`. A separate
+coarse profile-center wiring exercise evaluates every profile center, records the numerical
+curve offsets, and leaves unresolved profile points unaccepted. No synthetic all-parameter
+recovery is claimed by these execution exercises.
+
+The final current-source compact suite passes 510 tests in 861.32 seconds, with 14 expected
+CUDA underutilization warnings. Formatting/linting cover `src`, `tests` and `scripts`;
+immutable legacy evidence is excluded. The fixed-support public test protects both continuity
+and absolute domain mass; explicit Python mutation probes detect restored remeshing and
+doubled weights. The normal JIT regression passes in the complete suite. All eight subsystem
+scientific proofs pass; the two wrappers additionally require a clean committed worktree. The
+378-file/12-reference-case inventory passes. No type checker is configured. T31 records
+external artifacts, timings, limitations and retained-test rationale.
+
+The current default Sobol sampler remains bitwise identical to the previous own committed
+implementation over 65536 nodes. A new five-repetition alternating-order benchmark gives
+median 0.134746 versus 0.135670 seconds and peak working set 256319488 bytes, with the compact
+suite concurrent. This verifies negligible measured sampler overhead on that case; it is
+not a full-fit timing or a bound for high angular orders.
+
+A bounded complete-vector Se attribution check now refines only m0 from g8 to g10 at
+baseline and the actual `-2e-5` occupancy step. Other rods remain in the complete prediction.
+On uncapped p7 and the fixed two-line source, maximum prediction RMS is `0.00821780135`,
+contrast RMS `2.44181813e-7`, and objective-contrast error `6.67758286e-6`. The normalized
+occupancy gradients differ by `1.70462552e-7` relative and preserve improvement direction.
+This isolates m0 angular error at one optimizer stencil; other families, axes, source and
+parameter directions remain unqualified. T31 records exact artifacts, work counts and cost.

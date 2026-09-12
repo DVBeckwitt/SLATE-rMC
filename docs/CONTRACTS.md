@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **16**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **17**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -1214,3 +1214,54 @@ The interface and measurement limitations are in `NATIVE_REFINEMENT.md`.
 `scripts/refine_native.py` binds numeric plans to raw-acquisition, source-code and observation
 hashes and writes one external NPZ with embedded manifest. It never promotes a candidate
 automatically or turns an optimizer success, bound or raw profile into physical certainty.
+
+## Explicit numerical measures and acceptance gates (v17)
+
+`ParrattStitchStack.overlap_measure` and `CompiledParrattStitch.overlap_measure` default
+to `sampled_log_median`, preserving the manuscript's sampled empirical prescription.
+The opt-in `continuous_q_median` is a named extension, not a legacy match. Its scale is
+the uniform-Q median of `A/B` on the complete interval `[5Qc,10Qc]`, where
+`A=R_Parratt*zero_strength*Q^2` and `B=internal_phase_strength`. The public pure
+`continuous_overlap_scale` interpolates A and B separately linearly and solves for the
+level whose sublevel set occupies half the interval. Exact endpoints are included;
+isolated zeros are permitted, but zero numerator/denominator segments are rejected.
+The first divergence from compatibility is overlap normalization, after identical
+Parratt and structure strengths. Automatic/fallback blend selection remains empirical
+and potentially nonsmooth. Identity includes the overlap measure in addition to model ID.
+Both public result types, `SpecularResult` and `KinematicScaleSpecularResult`, retain
+the overlap measure independently of their originating stack or caller.
+
+`FiberIntegrationRule.regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` optionally
+freeze conservative Q proposal domains. Each must enclose the actual pooled source-region
+bounds; an insufficient interval raises rather than truncating support. Axial grids then
+remain shared when source row counts change. `quadrature_kind="sobol"` retains the default
+paired net. `composite_gauss` uses eight-point Gauss-Legendre axial CDF panels (or the
+requested lower order) and separate quadrature on each merged reachable angular arc.
+Arc masses and proposal densities enter the weights explicitly. Its seed must be zero;
+order refinement supplies comparison evidence. All fields participate in numerical identity.
+For composite quadrature, optional `maximum_axial_panel_width_Ainv` bisects CDF panels
+until their inverse-CDF physical widths satisfy the declared positive scalar cap. It
+adds nodes where proposal stretching leaves wide physical gaps, retaining the same
+normalized PDF, panel masses and immutable shared axial grid. This geometric resolution
+control supplies no error certificate; observed predictions still require convergence checks.
+
+`FiberIntegrationRule.angular_support` defaults to `"q_conditioned_union"` for
+compatibility. `"fixed_union"` uses the union of every source-region angular interval
+throughout that source's complete Q interval. Individual observation Q boundaries no
+longer change the angular quadrature topology. The actual native Gaussian projection
+still owns observation contributions. Native observation memberships, physical factors
+and the integration measure remain unchanged; quadrature nodes, proposal densities and
+quadrature weights can change.
+This prevents artificial axial jumps caused by angular remeshing. It does not establish
+angular resolution, and geometry changes can still change the conservative union.
+
+Native result schema v2 separates `optimizer_candidate` from `selected`. By default,
+`require_initial_qualification=True` stops requested fitting/profiling after a failed
+initial screen, checkpoints `selected=None`, and exits with status 2. An explicit false
+value permits execution after initial failure; that failure still prevents selection.
+Every fitted N,
+profile center and cross-N objective contrast requires its own numerical checks. Conditional
+validation compares refined predictions with scales fitted on training alone. Any unresolved
+alternative or better admissible profile point blocks selection pending joint refitting of
+that N. Numerical agreement remains empirical at declared probes; it is not a certified
+error bound or an identified physical estimate.

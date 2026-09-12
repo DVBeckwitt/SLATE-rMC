@@ -3,6 +3,43 @@
 import numpy as np
 
 
+def compare_conditional_predictions(
+    observations,
+    reference_count,
+    refined_count,
+    training_mask,
+    validation_mask,
+    *,
+    maximum_whitened_rms,
+    maximum_objective_error,
+):
+    """Qualify held-out predictions in the existing conditional noise measure.
+
+    Count predictions must use scales fitted on training data only. The Schur
+    complement and conditional means have one authority in conditional_validation.
+    This checks numerical agreement, never predictive adequacy or parameter error.
+    """
+    from rasim_next.fitting.native_search import conditional_validation
+
+    if not all(np.isfinite(v) and v > 0 for v in (maximum_whitened_rms, maximum_objective_error)):
+        raise ValueError("conditional numerical tolerances must be positive and finite")
+    low, high = (
+        conditional_validation(observations, v, training_mask, validation_mask)
+        for v in (reference_count, refined_count)
+    )
+    difference = high["whitened_residual"] - low["whitened_residual"]
+    rms = float(np.sqrt(np.mean(difference**2)))
+    objective_error = high["chi_square"] - low["chi_square"]
+    return dict(
+        whitened_difference=difference,
+        whitened_rms=rms,
+        objective_error=objective_error,
+        empirical_agreement=bool(
+            rms <= maximum_whitened_rms and abs(objective_error) <= maximum_objective_error
+        ),
+    )
+
+
 def compare_native_predictions(
     observations,
     reference,

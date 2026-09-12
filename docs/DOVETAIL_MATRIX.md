@@ -101,3 +101,6 @@ consumers rather than reasons to create per-material Python runners.
 | frozen counts/background covariance | GLS and historical diagnostics | common search and profiles | no row reassignment, exact scale, distinct measurement/assumption terms |
 | fitted centers at every integer N | numerical prediction and objective contrasts | discrete comparison | actual training objective and guard policy; empirical qualification only |
 | training fit and full cross-covariance | conditional held-out and group scores | predictive assessment | explicit group partition; no validation-informed fitting or scale |
+| declared overlap measure and conservative Q domains | immutable numerical identity | native response and handoff | sampled compatibility remains default; insufficient domains raise |
+| fitted/profile centers and refined training scales | numerical qualification at every candidate | selected-candidate reporting | unresolved N, improved profile minima, or failed conditional checks block selection |
+| declared angular-support policy | conservative Q-independent angular union | joint rod/Ewald integration | individual observation Q boundaries preserve angular topology; native projection retains contribution ownership |

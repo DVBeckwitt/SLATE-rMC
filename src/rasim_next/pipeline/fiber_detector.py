@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from scipy.special import roots_legendre
 from scipy.stats import qmc
 
 from painted_ewald import MosaicParameters, Rod
@@ -571,14 +572,19 @@ def _angular_cdf_density(value, centers, widths, offsets, uniform_mass):
 
 
 @numba.njit(nogil=True)
-def _bounded_angular_quantiles(quantiles, q, bounds, centers, widths, uniform_mass=0.2):
+def _bounded_angular_quantiles(
+    quantiles, q, bounds, centers, widths, split_arcs=False, uniform_mass=0.2
+):
     """Condition the complete proposal on the conservative reachable arc union.
 
     Empty-support axial rows retain their attempted quadrature count with zero
     contribution. The returned PDF includes the union probability normalization.
     """
-    x = np.zeros(quantiles.shape)
-    pdf = np.zeros(quantiles.shape)
+    axial_indices = []
+    angular_indices = []
+    angles = []
+    densities = []
+    fractions = []
     lower = np.empty(2 * len(bounds))
     upper = np.empty(2 * len(bounds))
     for i in range(len(q)):
@@ -630,28 +636,48 @@ def _bounded_angular_quantiles(quantiles, q, bounds, centers, widths, uniform_ma
         if total <= 0:
             raise ArithmeticError("Nonpositive reachable angular proposal mass")
         for j in range(quantiles.shape[1]):
-            target = quantiles[i, j] * total
-            interval = 0
-            while interval < merged - 1 and target > mass[interval]:
-                target -= mass[interval]
-                interval += 1
-            target += base[interval]
-            left, right = lo[interval], hi[interval]
-            v = left + (right - left) * quantiles[i, j]
-            for _iteration in range(70):
-                cdf, density = _angular_cdf_density(v, centers[i], widths[i], offsets, uniform_mass)
-                error = cdf - target
-                if abs(error) < 2e-15 or right - left < 2e-14:
-                    break
-                if error > 0:
-                    right = v
+            for arc in range(merged if split_arcs else 1):
+                if split_arcs:
+                    interval = arc
+                    target = quantiles[i, j] * mass[interval]
+                    fraction = mass[interval] / total
                 else:
-                    left = v
-                proposed = v - error / density
-                v = proposed if left < proposed < right else 0.5 * (left + right)
-            x[i, j] = v
-            pdf[i, j] = density / total
-    return x, pdf
+                    target = quantiles[i, j] * total
+                    interval = 0
+                    while interval < merged - 1 and target > mass[interval]:
+                        target -= mass[interval]
+                        interval += 1
+                    fraction = 1.0
+                if mass[interval] <= 0:
+                    continue
+                target += base[interval]
+                left, right = lo[interval], hi[interval]
+                v = left + (right - left) * quantiles[i, j]
+                for _iteration in range(70):
+                    cdf, density = _angular_cdf_density(
+                        v, centers[i], widths[i], offsets, uniform_mass
+                    )
+                    error = cdf - target
+                    if abs(error) < 2e-15 or right - left < 2e-14:
+                        break
+                    if error > 0:
+                        right = v
+                    else:
+                        left = v
+                    proposed = v - error / density
+                    v = proposed if left < proposed < right else 0.5 * (left + right)
+                axial_indices.append(i)
+                angular_indices.append(j)
+                angles.append(v)
+                densities.append(density / total)
+                fractions.append(fraction)
+    return (
+        np.array(axial_indices),
+        np.array(angular_indices),
+        np.array(angles),
+        np.array(densities),
+        np.array(fractions),
+    )
 
 
 def _angular_proposal_parameters(t, radius, ki, normal, sigma, gamma):
@@ -734,6 +760,9 @@ def sample_conditional_fiber_coordinates(
     angular_power: int,
     axial_seed: int,
     angular_shift_seed: int,
+    quadrature_kind: str = "sobol",
+    maximum_axial_panel_width_Ainv: float | None = None,
+    angular_support: str = "q_conditioned_union",
 ) -> FiberQuadratureNodes:
     """Integrate a joint continuous rod/Ewald function with a proper 2-D net.
 
@@ -746,6 +775,8 @@ def sample_conditional_fiber_coordinates(
     """
     if not isinstance(reference_mosaic, MosaicParameters):
         raise TypeError("reference_mosaic must be MosaicParameters")
+    if angular_support not in {"q_conditioned_union", "fixed_union"}:
+        raise ValueError("angular support must be q_conditioned_union or fixed_union")
     lower, upper = map(float, axial_bounds_Ainv)
     centers = np.asarray(axial_peak_centers_Ainv, dtype=np.float64)
     width, radius = float(axial_peak_half_width_Ainv), float(radial_Ainv)
@@ -782,9 +813,53 @@ def sample_conditional_fiber_coordinates(
     for value in (axial_power, angular_power, axial_seed, angular_shift_seed):
         if type(value) is not int or value < 0:
             raise ValueError("quadrature powers and seeds must be nonnegative integers")
-    unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
+    if maximum_axial_panel_width_Ainv is not None and (
+        quadrature_kind != "composite_gauss"
+        or np.ndim(maximum_axial_panel_width_Ainv) != 0
+        or np.iscomplexobj(maximum_axial_panel_width_Ainv)
+        or not np.isfinite(maximum_axial_panel_width_Ainv)
+        or maximum_axial_panel_width_Ainv <= 0
+    ):
+        raise ValueError("a finite positive axial panel width requires composite_gauss")
+    if quadrature_kind == "sobol":
+        unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
+        axial_quantiles = unit[:, 0]
+        shift = unit[:, 1] + np.random.default_rng(angular_shift_seed).random()
+        angular_count = 2**angular_power
+        angular_quantiles = (shift[:, None] + (np.arange(angular_count) + 0.5) / angular_count) % 1
+        probability_weights = np.full(angular_quantiles.shape, 1 / (len(unit) * angular_count))
+    elif quadrature_kind == "composite_gauss":
+        order = 2 ** min(axial_power, 3)
+        panels = 2**axial_power // order
+        axial_nodes, axial_weights = roots_legendre(order)
+        angular_nodes, angular_weights = roots_legendre(2**angular_power)
+        edges = np.linspace(0.0, 1.0, panels + 1)
+        if maximum_axial_panel_width_Ainv is not None:
+            while True:
+                physical_edges, _ = _axial_mixture_quantiles(
+                    edges, lower, upper, centers, width, np.ones(len(centers))
+                )
+                split = np.diff(physical_edges) > maximum_axial_panel_width_Ainv
+                if not np.any(split):
+                    break
+                middle = (edges[:-1][split] + edges[1:][split]) / 2
+                if np.any((middle <= edges[:-1][split]) | (middle >= edges[1:][split])):
+                    raise ValueError(
+                        "requested axial panel width is below floating-point resolution"
+                    )
+                edges = np.sort(np.concatenate((edges, middle)))
+        panel_mass = np.diff(edges)
+        axial_quantiles = (edges[:-1, None] + panel_mass[:, None] * (axial_nodes + 1) / 2).ravel()
+        axial_weights = (panel_mass[:, None] * axial_weights).ravel()
+        angular_count = len(angular_nodes)
+        angular_quantiles = np.broadcast_to(
+            (angular_nodes + 1) / 2, (len(axial_quantiles), angular_count)
+        ).copy()
+        probability_weights = axial_weights[:, None] * angular_weights[None, :] / 4
+    else:
+        raise ValueError("quadrature kind must be sobol or composite_gauss")
     axial, axial_pdf = _axial_mixture_quantiles(
-        unit[:, 0], lower, upper, centers, width, np.ones(len(centers))
+        axial_quantiles, lower, upper, centers, width, np.ones(len(centers))
     )
     angular_centers, angular_widths = _angular_proposal_parameters(
         axial,
@@ -794,19 +869,26 @@ def sample_conditional_fiber_coordinates(
         reference_mosaic.gaussian_sigma_rad,
         reference_mosaic.lorentzian_half_width_rad,
     )
-    angular_count = 2**angular_power
-    shift = unit[:, 1] + np.random.default_rng(angular_shift_seed).random()
-    angular_quantiles = (shift[:, None] + (np.arange(angular_count) + 0.5) / angular_count) % 1
-    azimuth, angular_pdf = _bounded_angular_quantiles(
-        angular_quantiles, np.hypot(radius, axial), bounds, angular_centers, angular_widths
+    if angular_support == "fixed_union" and len(bounds):
+        # Preserve one conservative angular union throughout the source's Q range.
+        # Activating an observation must not remesh another observation's integral.
+        bounds = bounds.copy()
+        bounds[:, 0] = np.min(bounds[:, 0])
+        bounds[:, 1] = np.max(bounds[:, 1])
+    axial_index, angular_index, azimuth, angular_pdf, fractions = _bounded_angular_quantiles(
+        angular_quantiles,
+        np.hypot(radius, axial),
+        bounds,
+        angular_centers,
+        angular_widths,
+        quadrature_kind == "composite_gauss",
     )
-    axial_index = np.repeat(np.arange(len(axial)), angular_count)
-    supported = angular_pdf.ravel() > 0
-    axial_index = axial_index[supported]
-    weights = 1 / (
-        len(axial) * angular_count * axial_pdf[axial_index] * angular_pdf.ravel()[supported]
+    weights = (
+        probability_weights[axial_index, angular_index]
+        * fractions
+        / (axial_pdf[axial_index] * angular_pdf)
     )
-    return FiberQuadratureNodes(axial, axial_index, azimuth.ravel()[supported], weights)
+    return FiberQuadratureNodes(axial, axial_index, azimuth, weights)
 
 
 @dataclass(frozen=True, slots=True)
@@ -829,8 +911,42 @@ class FiberIntegrationRule:
     batch_size: int = 16384
     cone_quadrature_order: int = 16
     stitch_grid_size: int = 513
+    regular_q_bounds_Ainv: tuple[float, float] | None = None
+    local_m0_q_bounds_Ainv: tuple[float, float] | None = None
+    quadrature_kind: str = "sobol"
+    maximum_axial_panel_width_Ainv: float | None = None
+    angular_support: str = "q_conditioned_union"
 
     def __post_init__(self) -> None:
+        if self.angular_support not in {"q_conditioned_union", "fixed_union"}:
+            raise ValueError("angular support must be q_conditioned_union or fixed_union")
+        if self.quadrature_kind not in {"sobol", "composite_gauss"}:
+            raise ValueError("quadrature kind must be sobol or composite_gauss")
+        if self.quadrature_kind == "composite_gauss" and self.seed != 0:
+            raise ValueError("Gauss-Legendre has no random seed; use order refinement")
+        if self.maximum_axial_panel_width_Ainv is not None and (
+            self.quadrature_kind != "composite_gauss"
+            or np.ndim(self.maximum_axial_panel_width_Ainv) != 0
+            or np.iscomplexobj(self.maximum_axial_panel_width_Ainv)
+            or not np.isfinite(self.maximum_axial_panel_width_Ainv)
+            or self.maximum_axial_panel_width_Ainv <= 0
+        ):
+            raise ValueError("a finite positive axial panel width requires composite_gauss")
+        if self.maximum_axial_panel_width_Ainv is not None:
+            object.__setattr__(
+                self, "maximum_axial_panel_width_Ainv", float(self.maximum_axial_panel_width_Ainv)
+            )
+        for name in ("regular_q_bounds_Ainv", "local_m0_q_bounds_Ainv"):
+            value = getattr(self, name)
+            if value is not None:
+                bounds = tuple(float(v) for v in value)
+                if (
+                    len(bounds) != 2
+                    or not np.all(np.isfinite(bounds))
+                    or not 0 <= bounds[0] < bounds[1]
+                ):
+                    raise ValueError("frozen Q bounds must be a finite increasing nonnegative pair")
+                object.__setattr__(self, name, bounds)
         if type(self.stitch_grid_size) is not int or self.stitch_grid_size < 257:
             raise ValueError("stitch grid size must be an integer of at least 257")
         if type(self.cone_quadrature_order) is not int or self.cone_quadrature_order < 4:
@@ -989,8 +1105,16 @@ def iter_conditional_fiber_transfers(
         all_bounds = np.concatenate(tuple(bounds.values()))
         if not len(all_bounds) or all_bounds[:, 1].max() <= radius:
             continue
-        lower = np.sqrt(max(0.0, all_bounds[:, 0].min() ** 2 - radius**2))
-        upper = np.sqrt(max(0.0, all_bounds[:, 1].max() ** 2 - radius**2))
+        q_lower, q_upper = float(all_bounds[:, 0].min()), float(all_bounds[:, 1].max())
+        frozen = rule.local_m0_q_bounds_Ainv if local else rule.regular_q_bounds_Ainv
+        if frozen is not None:
+            if frozen[0] > q_lower or frozen[1] < q_upper:
+                raise ValueError(
+                    "frozen Q support does not enclose the actual source-region bounds"
+                )
+            q_lower, q_upper = frozen
+        lower = np.sqrt(max(0.0, q_lower**2 - radius**2))
+        upper = np.sqrt(max(0.0, q_upper**2 - radius**2))
         spacing = b3 * rule.axial_peak_spacing_L
         centers = np.arange(np.floor(lower / spacing), np.ceil(upper / spacing) + 1) * spacing
         centers = centers[(centers >= lower) & (centers <= upper)]
@@ -1019,6 +1143,9 @@ def iter_conditional_fiber_transfers(
                 angular_power=rule.angular_power,
                 axial_seed=7919 * rule.seed + 65537 * gi + 1009,
                 angular_shift_seed=8191 * si + 7919 * rule.seed + 131 * gi + 973,
+                quadrature_kind=rule.quadrature_kind,
+                maximum_axial_panel_width_Ainv=rule.maximum_axial_panel_width_Ainv,
+                angular_support=rule.angular_support,
             )
             for first in range(0, len(nodes.axial_index), rule.batch_size):
                 if cancel_requested is not None and cancel_requested():

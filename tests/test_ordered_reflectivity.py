@@ -1516,12 +1516,14 @@ def test_corrected_specular_keeps_named_outputs_separate() -> None:
     assert result.raw_kinematic_normalization == "raw finite-stack electron2"
     assert result.parratt_normalization == "dimensionless pure Parratt reflectivity"
     assert result.composite_normalization == "dimensionless manuscript specular composite"
+    assert result.overlap_measure == "sampled_log_median"
     assert not result.composite_reflectivity.flags.writeable
 
 
-def test_kinematic_scale_stitch_recovers_the_high_branch_exactly() -> None:
+@pytest.mark.parametrize("overlap_measure", ("sampled_log_median", "continuous_q_median"))
+def test_kinematic_scale_stitch_recovers_the_high_branch_exactly(overlap_measure) -> None:
     qc_Ainv = 0.0528619975
-    qz_Ainv = np.linspace(0.5, 12.0, 257) * qc_Ainv
+    qz_Ainv = np.unique(np.r_[np.linspace(0.5, 12.0, 257), 5.0, 10.0]) * qc_Ainv
     pure = parratt_reflectivity(
         qz_Ainv,
         WAVELENGTH_A,
@@ -1539,7 +1541,9 @@ def test_kinematic_scale_stitch_recovers_the_high_branch_exactly() -> None:
         c_A=28.636,
         qc_Ainv=qc_Ainv,
         film_layer_index=1,
+        overlap_measure=overlap_measure,
     )
+    assert result.overlap_measure == overlap_measure
     lower, upper = result.blend_bounds_q_over_qc
     below = qz_Ainv / qc_Ainv <= lower
     above = qz_Ainv / qc_Ainv >= upper
@@ -1643,9 +1647,32 @@ def test_compiled_finite_stack_preserves_coherent_null_and_neighbors(backend: st
     assert np.all(np.abs(values - direct) <= limits)
 
 
+def test_continuous_overlap_median_measure_and_finite_stack_zeros() -> None:
+    from rasim_next.reflectivity.specular import continuous_overlap_scale
+
+    # Nonuniform node counts must not change the uniform-Q measure.
+    x = np.array([5.0, 5.1, 5.2, 5.3, 9.9, 10.0])
+    assert continuous_overlap_scale(x, 3 + 2 * x, np.ones_like(x)) == pytest.approx(18.0)
+    assert continuous_overlap_scale(x, np.full_like(x, 7), np.full_like(x, 2)) == pytest.approx(3.5)
+    tiny = continuous_overlap_scale([5, 7.5, 9.999, 10], [1e-100, 1e-100, 1e-100, 1], [1, 1, 1, 1])
+    assert tiny / 1e-100 == pytest.approx(1.0)
+    # An integer number of fringes has median sin^2=1/2, even with exact zeros.
+    x = np.linspace(5, 10, 8193)
+    denominator = np.sin(6 * np.pi * (x - 5) / 5) ** 2
+    median = continuous_overlap_scale(x, np.ones_like(x), denominator)
+    assert median == pytest.approx(2.0, abs=2e-6)
+    assert continuous_overlap_scale(x, np.full_like(x, 21), 7 * denominator) == pytest.approx(
+        3 * median
+    )
+    with pytest.raises(ValueError, match="positive segment"):
+        continuous_overlap_scale([5, 6, 10], [1, 1, 1], [0, 0, 1])
+
+
+@pytest.mark.parametrize("overlap_measure", ("sampled_log_median", "continuous_q_median"))
 @pytest.mark.parametrize("film_index", (0.999979 + 3.2e-7j, 0.999979 + 0.0j))
 def test_compiled_parratt_strength_matches_the_continuous_proof_path(
     film_index: complex,
+    overlap_measure: str,
 ) -> None:
     from rasim_next.pipeline._continuous_detector_kernel import (
         _empirical_parratt_strength_A2,
@@ -1657,13 +1684,15 @@ def test_compiled_parratt_strength_matches_the_continuous_proof_path(
         return 7.0 + 0.3 * layer**2
 
     compiled = compile_parratt_stitch(
-        ParrattStitchStack(substrate_index),
+        ParrattStitchStack(substrate_index, overlap_measure=overlap_measure),
         kinematic,
         wavelength_A=WAVELENGTH_A,
         film_refractive_index=film_index,
         film_thickness_A=500.0,
         c_A=28.636,
+        grid_size=409 if overlap_measure == "continuous_q_median" else 513,
     )
+    assert compiled.overlap_measure == overlap_measure
     qz = np.asarray((0.02, 0.08, 0.20, 0.40), dtype=np.float64)
     pure = parratt_reflectivity(
         qz,

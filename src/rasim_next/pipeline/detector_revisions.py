@@ -157,6 +157,7 @@ def _incidence_angle_static_physics_revision(
                 ("specular_top_roughness_A", specular_stitch_stack.top_roughness_A),
                 ("specular_bottom_roughness_A", specular_stitch_stack.bottom_roughness_A),
                 ("specular_model_id", specular_stitch_stack.model_id),
+                ("specular_overlap_measure", specular_stitch_stack.overlap_measure),
                 (
                     "specular_interface_assumption",
                     specular_stitch_stack.interface_assumption,

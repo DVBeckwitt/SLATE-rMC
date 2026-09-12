@@ -54,6 +54,7 @@ class SpecularResult:
     raw_kinematic_normalization: str = "raw finite-stack electron2"
     parratt_normalization: str = "dimensionless pure Parratt reflectivity"
     composite_normalization: str = "dimensionless manuscript specular composite"
+    overlap_measure: str = "sampled_log_median"
 
     def __post_init__(self) -> None:
         arrays = tuple(
@@ -82,6 +83,7 @@ class SpecularResult:
             or not np.isfinite(self.zero_kinematic_strength)
             or self.zero_kinematic_strength <= 0.0
             or self.blend_selection not in {"automatic", "fallback"}
+            or self.overlap_measure not in {"sampled_log_median", "continuous_q_median"}
             or not all(
                 (
                     self.raw_kinematic_normalization,
@@ -130,6 +132,7 @@ class KinematicScaleSpecularResult:
     zero_strength_A2: float
     parratt_normalization: str = "dimensionless pure Parratt reflectivity"
     composite_normalization: str = "kinematic finite-stack strength A2"
+    overlap_measure: str = "sampled_log_median"
 
     def __post_init__(self) -> None:
         arrays = tuple(
@@ -157,6 +160,7 @@ class KinematicScaleSpecularResult:
             or len(bounds) != 2
             or not 0.0 <= bounds[0] < bounds[1]
             or self.blend_selection not in {"automatic", "fallback"}
+            or self.overlap_measure not in {"sampled_log_median", "continuous_q_median"}
             or not self.parratt_normalization
             or not self.composite_normalization
         ):
@@ -191,6 +195,7 @@ class ParrattStitchStack:
     bottom_roughness_A: float = 0.0
     model_id: str = "empirical_parratt_kinematic_strength.v1"
     interface_assumption: str = LOCAL_LAMELLA_INTERFACE
+    overlap_measure: str = "sampled_log_median"
 
     def __post_init__(self) -> None:
         index_value = complex(self.substrate_refractive_index)
@@ -206,6 +211,8 @@ class ParrattStitchStack:
             raise ValueError("interface roughnesses must be finite and nonnegative")
         if self.model_id != "empirical_parratt_kinematic_strength.v1":
             raise ValueError("unsupported Parratt stitch model_id")
+        if self.overlap_measure not in {"sampled_log_median", "continuous_q_median"}:
+            raise ValueError("unsupported overlap measure")
         parratt_stitch_interface_code(self.interface_assumption)
         object.__setattr__(self, "substrate_refractive_index", index_value)
         object.__setattr__(self, "top_roughness_A", roughness[0])
@@ -228,6 +235,7 @@ class CompiledParrattStitch:
     blend_selection: str
     model_id: str = "empirical_parratt_kinematic_strength.v1"
     interface_assumption: str = LOCAL_LAMELLA_INTERFACE
+    overlap_measure: str = "sampled_log_median"
 
     def __post_init__(self) -> None:
         film = complex(self.film_refractive_index)
@@ -263,6 +271,7 @@ class CompiledParrattStitch:
             or not 0.0 <= bounds[0] < bounds[1]
             or self.blend_selection not in {"automatic", "fallback"}
             or self.model_id != "empirical_parratt_kinematic_strength.v1"
+            or self.overlap_measure not in {"sampled_log_median", "continuous_q_median"}
         ):
             raise ValueError("compiled Parratt stitch state is invalid")
         parratt_stitch_interface_code(self.interface_assumption)
@@ -328,6 +337,68 @@ def _blend_bounds(
     return (3.0, 6.0), "fallback"
 
 
+def continuous_overlap_scale(q_over_qc, parratt_numerator, phase_strength) -> float:
+    """Median of A/B in uniform Q measure on [5 Qc, 10 Qc].
+
+    A is Parratt reflectivity times zero-phase strength times Q squared; B is
+    internal-phase strength. Both are interpolated linearly, never their singular
+    ratio. The exact below-level length on each segment defines the median.
+    This is a named continuous-measure extension of the sampled manuscript rule.
+    Grid refinement must resolve fringes and every relevant level crossing.
+    """
+    x, a, b = (np.asarray(v, dtype=float) for v in (q_over_qc, parratt_numerator, phase_strength))
+    if (
+        x.ndim != 1
+        or len(x) < 2
+        or a.shape != x.shape
+        or b.shape != x.shape
+        or any(np.any(~np.isfinite(v)) for v in (x, a, b))
+        or np.any(np.diff(x) <= 0)
+        or x[0] != 5.0
+        or x[-1] != 10.0
+        or np.any(a < 0)
+        or np.any(b < 0)
+        or np.any((a[:-1] == 0) & (a[1:] == 0))
+        or np.any((b[:-1] == 0) & (b[1:] == 0))
+    ):
+        raise ValueError("overlap requires increasing [5,10] support and positive segment measures")
+    a_scale, b_scale = float(a.max()), float(b.max())
+    a, b = a / a_scale, b / b_scale
+    widths = np.diff(x)
+
+    def below_length(scale):
+        difference = a - scale * b
+        left, right = difference[:-1], difference[1:]
+        fraction = ((left <= 0) & (right <= 0)).astype(float)
+        crossing = (left < 0) != (right < 0)
+        crossing &= left != right
+        fraction[crossing] = np.where(
+            left[crossing] < 0, -left[crossing], -right[crossing]
+        ) / np.abs(right[crossing] - left[crossing])
+        return float(widths @ fraction)
+
+    lower, upper = 0.0, 1.0
+    while below_length(upper) < 2.5:
+        upper *= 2.0
+        if not np.isfinite(upper):
+            raise FloatingPointError("overlap median has no finite scale")
+    lower = upper / 2
+    while lower > 0 and below_length(lower) >= 2.5:
+        upper, lower = lower, lower / 2
+    for _ in range(64):
+        middle = (lower + upper) / 2
+        if below_length(middle) < 2.5:
+            lower = middle
+        else:
+            upper = middle
+        if upper - lower <= 8 * np.finfo(float).eps * upper:
+            break
+    result = upper * (a_scale / b_scale)
+    if not np.isfinite(result) or result <= 0:
+        raise FloatingPointError("overlap median must be finite and positive")
+    return float(result)
+
+
 def manuscript_specular_composite(
     parratt: ParrattResult,
     kinematic_at_l: KinematicEvaluator,
@@ -336,6 +407,7 @@ def manuscript_specular_composite(
     qc_Ainv: float,
     film_layer_index: int,
     fit_mask: ArrayLike | None = None,
+    overlap_measure: str = "sampled_log_median",
 ) -> SpecularResult:
     """Build the named dimensionless handoff without changing either pure input."""
 
@@ -369,6 +441,9 @@ def manuscript_specular_composite(
         raise ValueError("zero-phase kinematic intensity must be positive")
 
     q_over_qc = qz / qc_value
+    if overlap_measure == "continuous_q_median":
+        for endpoint in (5.0, 10.0):
+            q_over_qc[np.isclose(q_over_qc, endpoint, rtol=0, atol=8e-15)] = endpoint
     shape_term = (phase_kinematic / zero) / qz**2
     pure_parratt = np.asarray(parratt.reflectivity)
     scale_points = (
@@ -376,8 +451,20 @@ def manuscript_specular_composite(
     )
     if not np.any(scale_points):
         raise ValueError("no positive finite points exist in the declared 5<Qz/Qc<10 fit mask")
-    log_scale = np.median(np.log(pure_parratt[scale_points]) - np.log(shape_term[scale_points]))
-    scale_factor = float(np.exp(log_scale))
+    if overlap_measure == "sampled_log_median":
+        log_scale = np.median(np.log(pure_parratt[scale_points]) - np.log(shape_term[scale_points]))
+        scale_factor = float(np.exp(log_scale))
+    elif overlap_measure == "continuous_q_median":
+        overlap = (q_over_qc >= 5.0) & (q_over_qc <= 10.0)
+        if not np.all(fit[overlap]):
+            raise ValueError("continuous overlap requires the complete [5,10] interval")
+        scale_factor = continuous_overlap_scale(
+            q_over_qc[overlap],
+            (pure_parratt * zero * qz**2)[overlap],
+            phase_kinematic[overlap],
+        )
+    else:
+        raise ValueError("unsupported overlap measure")
     high_branch = scale_factor * shape_term
     positive = (pure_parratt > 0.0) & (high_branch > 0.0)
     mismatch = np.full(qz.shape, np.inf, dtype=np.float64)
@@ -409,6 +496,7 @@ def manuscript_specular_composite(
         blend_selection=selection,
         phase_kinematic_strength=phase_kinematic,
         zero_kinematic_strength=float(zero),
+        overlap_measure=overlap_measure,
     )
 
 
@@ -420,6 +508,7 @@ def kinematic_scale_specular_stitch(
     qc_Ainv: float,
     film_layer_index: int,
     fit_mask: ArrayLike | None = None,
+    overlap_measure: str = "sampled_log_median",
 ) -> KinematicScaleSpecularResult:
     """Convert the named dimensionless handoff back to finite-stack strength units.
 
@@ -436,6 +525,7 @@ def kinematic_scale_specular_stitch(
         qc_Ainv=qc_Ainv,
         film_layer_index=film_layer_index,
         fit_mask=fit_mask,
+        overlap_measure=overlap_measure,
     )
     qz = np.asarray(dimensionless.qz_Ainv)
     phase_strength = dimensionless.phase_kinematic_strength
@@ -463,6 +553,7 @@ def kinematic_scale_specular_stitch(
         blend_bounds_q_over_qc=dimensionless.blend_bounds_q_over_qc,
         blend_selection=dimensionless.blend_selection,
         zero_strength_A2=zero_strength,
+        overlap_measure=dimensionless.overlap_measure,
     )
 
 
@@ -504,7 +595,12 @@ def compile_parratt_stitch(
     qc = 2.0 * k0 * np.sqrt(critical_radicand)
     if qc <= 0.0:
         raise ValueError("film index does not define a positive external critical wavevector")
-    qz = np.linspace(0.05, 10.25, int(grid_size), dtype=np.float64) * qc
+    q_grid = np.linspace(0.05, 10.25, int(grid_size), dtype=np.float64)
+    if stack.overlap_measure == "continuous_q_median":
+        for endpoint in (5.0, 10.0):
+            q_grid[np.isclose(q_grid, endpoint, rtol=0, atol=8e-15)] = endpoint
+        q_grid = np.unique(np.r_[q_grid, 5.0, 10.0])
+    qz = q_grid * qc
     pure = parratt_reflectivity(
         qz,
         wavelength,
@@ -518,6 +614,7 @@ def compile_parratt_stitch(
         c_A=c_value,
         qc_Ainv=qc,
         film_layer_index=1,
+        overlap_measure=stack.overlap_measure,
     )
     return CompiledParrattStitch(
         film_refractive_index=film_index,
@@ -531,4 +628,5 @@ def compile_parratt_stitch(
         blend_bounds_q_over_qc=stitched.blend_bounds_q_over_qc,
         blend_selection=stitched.blend_selection,
         interface_assumption=stack.interface_assumption,
+        overlap_measure=stitched.overlap_measure,
     )

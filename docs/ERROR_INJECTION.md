@@ -447,3 +447,21 @@ interval changes. Measured guard failure is retained as rejection evidence, neve
 Runner numerical records additionally bind the actual target revision and guard policy,
 compare fitted center offsets across N, and reject effective no-op refinements. A failing
 screen never qualifies a physical fit or automatically enables a new physical term.
+
+## Numerical measures and acceptance (v17)
+
+- Replace the uniform-Q median by a grid-point median: the nonuniform affine-measure
+  oracle fails. Omit endpoint handling or zero-segment rejection: compiled endpoint and
+  finite-stack-zero regressions detect the error.
+- Drop an angular arc's probability fraction: disjoint/wrapped-arc mass and nonseparable
+  integral oracles fail. Reuse insufficient frozen Q support: the enclosing-domain check
+  raises. Source-count changes must preserve shared axial nodes under a valid frozen domain.
+- Restore Q-conditioned arc activation under the fixed-union policy: the public
+  observation-boundary continuity regression fails. Incorrect angular measure or weights
+  also fail its independently known narrow-Gaussian integral.
+- Give a profile center a numerical bias while keeping the initial center exact: its
+  objective-contrast gate fails. Perturb only held-out predictions: the training screen
+  can pass, but the conditional-validation numerical gate fails.
+- Accept a failed initial screen, unresolved N, or an admissible profile minimum below
+  the same N's joint fit: runner acceptance must remain null. An execution-only override
+  cannot grant numerical agreement or physical identification.

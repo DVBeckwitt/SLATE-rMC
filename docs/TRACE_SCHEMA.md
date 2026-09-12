@@ -2,7 +2,7 @@
 
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
-API v14 does not renumber historical evidence.
+API v17 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
@@ -277,3 +277,14 @@ thickness-bound instrument revisions, raw-acquisition and observation hashes, co
 hashes, numerical prediction/contrast arrays, optimizer/guard statuses, profile
 policy and conditional-validation groups. These remain external numeric NPZ records
 with one embedded manifest; they add no trace stage or trace-version increment.
+
+Contract-v17 native result schema `rasim-native-refinement-result-v2` additionally
+retains the stitch overlap measure, frozen Q domains, quadrature kind, physical panel cap
+and angular-support policy through the
+effective plan and dependency identities. `optimizer_candidate` is separate from
+`selected`. Initial, fitted, discrete-ranking, profile and conditional-validation
+numerical statuses accompany the actual candidate arrays and target revisions.
+Profile records map numerical candidates to sorted grid indices and preserve better
+admissible points requiring a joint refit. Failed initial qualification checkpoints
+`workflow_complete=false`; execution-only results cannot inherit scientific qualification.
+Source hashes attest the startup filesystem snapshot, not loaded bytecode.

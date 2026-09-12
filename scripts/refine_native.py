@@ -16,7 +16,11 @@ import numpy as np
 
 from painted_ewald import MosaicParameters
 from rasim_next.fitting.bi_native import BiNativeStructureModel
-from rasim_next.fitting.native_accuracy import compare_native_predictions, native_sensitivity
+from rasim_next.fitting.native_accuracy import (
+    compare_conditional_predictions,
+    compare_native_predictions,
+    native_sensitivity,
+)
 from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_instrument import NativeInstrumentModel
 from rasim_next.fitting.native_joint import NativeJointEvaluator
@@ -68,6 +72,9 @@ def main():
     plan = json.loads(plan_bytes)
     if plan["schema"] != "rasim-native-refinement-plan-v1":
         raise ValueError("unsupported native refinement plan schema")
+    require_qualification = plan.get("require_initial_qualification", True)
+    if type(require_qualification) is not bool:
+        raise ValueError("require_initial_qualification must be boolean")
     original = load_native_fit_physics(args.physics)
     observations = load_native_fit_observations(args.observations)
     observation_record = json.loads(args.observations.read_bytes())
@@ -143,6 +150,11 @@ def main():
             "axial_peak_spacing_L",
             "axial_peak_half_width_L",
             "source_latent_radius",
+            "regular_q_bounds_Ainv",
+            "local_m0_q_bounds_Ainv",
+            "quadrature_kind",
+            "maximum_axial_panel_width_Ainv",
+            "angular_support",
         }:
             raise ValueError(
                 "numerical checks must change quadrature, not batching or rejection guards"
@@ -166,6 +178,15 @@ def main():
             ),
         )
         source_override = {**plan.get("source_override", {}), **overrides.get("source", {})}
+        if "stitch_overlap_measure" in plan:
+            if result.specular_stitch_stack is None:
+                raise ValueError("a stitch overlap measure requires the declared Bi composite")
+            result = replace(
+                result,
+                specular_stitch_stack=replace(
+                    result.specular_stitch_stack, overlap_measure=plan["stitch_overlap_measure"]
+                ),
+            )
         if source_override:
             definition = replace(result.source_definition, **source_override)
             source = definition.sample()
@@ -241,7 +262,7 @@ def main():
     start_time = perf_counter()
     arrays, history = {}, []
     manifest = dict(
-        schema="rasim-native-refinement-result-v1",
+        schema="rasim-native-refinement-result-v2",
         plan=plan,
         plan_sha256=hashlib.sha256(plan_bytes).hexdigest(),
         physics_input_revision=original.input_revision,
@@ -490,6 +511,24 @@ def main():
             guarded,
         )
     manifest["initial_numerical_status"] = manifest["numerical_status"]
+    if (
+        require_qualification
+        and (stages or plan.get("profiles"))
+        and manifest["initial_numerical_status"] == "not_qualified"
+    ):
+        manifest.update(
+            selected=None,
+            workflow_complete=False,
+            execution_status="initial_numerical_qualification_failed",
+        )
+        save()
+        print(
+            json.dumps(
+                dict(output=str(args.output), execution_status=manifest["execution_status"])
+            ),
+            flush=True,
+        )
+        raise SystemExit(2)
     options = dict(
         calibration=calibration,
         finite_difference_step=plan["finite_difference_step"],
@@ -602,9 +641,10 @@ def main():
     eligible = [(n, r.best_converged) for n, r in fitted if r.best_converged is not None]
     if eligible:
         selected_n, selected = min(eligible, key=lambda item: item[1].objective)
-        manifest["selected"] = dict(N=selected_n, **_point_record(selected))
+        manifest["optimizer_candidate"] = dict(N=selected_n, **_point_record(selected))
+        manifest["selected"] = None
         manifest["all_choices_resolved"] = all(r.minimum_resolved for _, r in fitted)
-        arrays["selected_prediction_count"] = selected.prediction_count
+        arrays["optimizer_candidate_prediction_count"] = selected.prediction_count
         if training is not None:
             validation = conditional_validation(
                 complete_target,
@@ -619,6 +659,36 @@ def main():
             manifest["validation"] = {
                 k: v for k, v in validation.items() if not isinstance(v, np.ndarray)
             }
+            validation_checks = []
+            for i, check in enumerate(checks):
+                key = f"fit_N{selected_n}_numerical_{i}_raw"
+                if key not in arrays:
+                    continue
+                refined_raw = arrays[key][0]
+                refined_scale, _ = target_observations.profile_scale(refined_raw)
+                comparison = compare_conditional_predictions(
+                    complete_target,
+                    selected.prediction_count,
+                    refined_scale * refined_raw,
+                    mask,
+                    observations.valid & ~mask,
+                    maximum_whitened_rms=plan["numerical_tolerances"]["maximum_whitened_rms"],
+                    maximum_objective_error=plan["numerical_tolerances"][
+                        "maximum_objective_contrast_error"
+                    ],
+                )
+                arrays[f"validation_numerical_{i}_whitened_difference"] = comparison.pop(
+                    "whitened_difference"
+                )
+                validation_checks.append(dict(name=check["name"], **comparison))
+            manifest["validation"]["numerical_checks"] = validation_checks
+            manifest["validation"]["numerical_status"] = (
+                "empirical_agreement_at_candidate"
+                if checks
+                and len(validation_checks) == len(checks)
+                and all(c["empirical_agreement"] for c in validation_checks)
+                else "not_qualified"
+            )
     else:
         selected_n, selected = repeats[0], None
         manifest["selected"] = None
@@ -643,7 +713,7 @@ def main():
         controls = load_native_background_controls(args.observations)
         cases = [("baseline", starts[0], repeats[0], baseline_scale)]
         if selected is not None:
-            cases.append(("selected", reference_values, selected_n, selected.scale))
+            cases.append(("candidate", reference_values, selected_n, selected.scale))
         budget = plan.get("maximum_control_signal_measurement_sigma")
         if budget is not None and (not np.isfinite(budget) or budget <= 0):
             raise ValueError("control contamination budget must be declared positive and finite")
@@ -710,6 +780,7 @@ def main():
         manifest["sensitivity_stitches"] = [
             evaluator.stitch_state(v, selected_n) for v in sensitivity["probe_values"]
         ]
+    manifest["profile_improved_candidates"] = []
     for specification in plan.get("profiles", []):
         predictors = {n: (lambda v, n=n: evaluator.predict(v, n)) for n in repeats}
         profile = profile_native_parameter(
@@ -723,14 +794,94 @@ def main():
             enforce_historical_guards=False,
             **options,
         )
+        if fitted:
+            fitted_by_choice = dict(fitted)
+            for n, fits in profile["fits"].items():
+                fitted_minimum = fitted_by_choice[n].best_converged
+                if fitted_minimum is None:
+                    continue
+                for i, fit in fits.items():
+                    point = (
+                        fit.best_feasible
+                        if stages[-1]["enforce_historical_guards"]
+                        else fit.best_evaluated
+                    )
+                    if (
+                        point is not None
+                        and point.objective
+                        < fitted_minimum.objective - 1e-7 * max(1.0, abs(fitted_minimum.objective))
+                    ):
+                        manifest["all_choices_resolved"] = False
+                        manifest["profile_improved_candidates"].append(
+                            dict(
+                                parameter=specification["name"],
+                                N=n,
+                                grid_index=i,
+                                **_point_record(point),
+                            )
+                        )
         for name in ("grid", "objective", "resolved", "envelope_objective", "envelope_resolved"):
             arrays[f"profile_{specification['name']}_{name}"] = profile[name]
+        profile_labels = []
+        point_status = {}
+        for n, fits in profile["fits"].items():
+            label = f"profile_{specification['name']}_N{n}"
+            profile_labels.append(label)
+            points = [
+                reference_values,
+                *[
+                    (
+                        f.best_converged if f.best_converged is not None else f.best_evaluated
+                    ).parameter_values
+                    for f in (fits[i] for i in sorted(fits))
+                ],
+            ]
+            point_status[str(n)] = (
+                run_checks(
+                    label,
+                    points,
+                    n,
+                    target_observations.profile_scale(evaluator.predict(reference_values, n))[0],
+                    target_observations,
+                    False,
+                )
+                if checks and plan.get("qualify_profile_candidates", True)
+                else "not_qualified"
+            )
+        profile_agreement = bool(checks) and all(
+            v != "not_qualified" for v in point_status.values()
+        )
+        curve_errors = []
+        for i, check in enumerate(checks):
+            keys = [f"{label}_numerical_{i}_" for label in profile_labels]
+            if any(key + "refined_objective" not in arrays for key in keys):
+                profile_agreement = False
+                continue
+            offsets = np.concatenate(
+                [
+                    arrays[key + "refined_objective"] - arrays[key + "reference_objective"]
+                    for key in keys
+                ]
+            )
+            arrays[f"profile_{specification['name']}_numerical_{i}_objective_offsets"] = offsets
+            error = float(np.ptp(offsets))
+            curve_errors.append(dict(name=check["name"], maximum_objective_contrast_error=error))
+            profile_agreement &= (
+                error <= plan["numerical_tolerances"]["maximum_objective_contrast_error"]
+            )
         manifest["profiles"].append(
             dict(
                 parameter=specification["name"],
                 choices=profile["choices"],
                 interval_status=profile["interval_status"],
-                numerical_status="not_qualified",
+                numerical_status="empirical_agreement_at_profile_candidates"
+                if profile_agreement
+                else "not_qualified",
+                numerical_status_by_choice=point_status,
+                numerical_grid_indices={
+                    str(n): sorted(fits) for n, fits in profile["fits"].items()
+                },
+                numerical_curve_checks=curve_errors,
                 guard_conditioned=profile["guard_conditioned"],
                 observation_revision=target_observations.input_revision,
                 fits=[
@@ -767,6 +918,26 @@ def main():
         )
     if manifest["profiles"]:
         manifest["identification_status"] = "raw_profiles_available_without_confidence_intervals"
+        if any(p["numerical_status"] == "not_qualified" for p in manifest["profiles"]):
+            manifest["numerical_status"] = "not_qualified"
+    if manifest.get("validation", {}).get("numerical_status") == "not_qualified":
+        manifest["numerical_status"] = "not_qualified"
+    if (
+        selected is not None
+        and manifest.get("all_choices_resolved", False)
+        and manifest["numerical_status"] != "not_qualified"
+        and all(p["all_points_resolved"] for p in manifest["profiles"])
+        and not manifest["profile_improved_candidates"]
+    ):
+        manifest["selected"] = manifest["optimizer_candidate"]
+        arrays["selected_prediction_count"] = selected.prediction_count
+    manifest["selection_status"] = (
+        "numerically_qualified_candidate"
+        if manifest["selected"] is not None
+        else "profile_improvement_requires_joint_refit"
+        if manifest["profile_improved_candidates"]
+        else "no_resolved_numerically_qualified_selection"
+    )
     manifest["workflow_complete"] = True
     save()
     print(

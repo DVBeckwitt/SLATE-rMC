@@ -37,6 +37,45 @@ def observations(counts, covariance=None):
     )
 
 
+def test_numerical_gates_detect_profile_offsets_and_held_out_only_error():
+    from rasim_next.fitting.native_accuracy import (
+        compare_conditional_predictions,
+        compare_native_predictions,
+    )
+
+    obs = observations([2, 3, 5, 7], np.eye(4) + np.full((4, 4), 0.2))
+    train = np.array([True, True, False, False])
+    target = training_observations(obs, train)
+    low = np.array([[1, 2, 3, 4], [1, 2.1, 3, 4]], dtype=float)
+    high = low.copy()
+    high[:, 2:] += 1
+    limits = dict(
+        fixed_scale=1.0,
+        maximum_whitened_rms=0.1,
+        maximum_contrast_rms=0.05,
+        maximum_objective_contrast_error=0.5,
+    )
+    assert compare_native_predictions(target, low, high, **limits)["empirical_agreement"]
+    scale = target.profile_scale(low[0])[0]
+    validation = compare_conditional_predictions(
+        obs,
+        scale * low[0],
+        scale * high[0],
+        train,
+        ~train,
+        maximum_whitened_rms=0.1,
+        maximum_objective_error=0.5,
+    )
+    assert not validation["empirical_agreement"]
+    assert validation["whitened_rms"] > 0.1
+    # A bias at only one refitted profile center cannot inherit a baseline pass.
+    high = low.copy()
+    high[1, 0] += 4
+    profile = compare_native_predictions(target, low, high, **limits)
+    assert not profile["empirical_agreement"]
+    assert abs(profile["objective_contrast_error"][0]) > 0.5
+
+
 def test_profile_refits_scale_and_every_nuisance_to_analytic_optimum():
     obs = observations([1, 3, 1])
     parameters = (

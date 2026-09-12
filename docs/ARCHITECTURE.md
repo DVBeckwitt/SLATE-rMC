@@ -342,3 +342,12 @@ prediction callables and immutable observations. They contain no scattering equa
 `scripts/refine_native.py` orchestrates numerical checks, all-active fits, discrete choices,
 profiles, controls and conditional validation. The Bi-specific v15 API remains supported.
 No additional dependency or parallel physical implementation is introduced.
+
+Contract v17 keeps that ownership. `fiber_detector` owns the explicit numerical proposal
+domains and composite axial/angular quadrature; `reflectivity.specular` owns the named overlap
+measure. Native response identity includes both declarations. The runner separates optimizer
+candidates from numerically checked selections and checks profile/conditional predictions
+through `native_accuracy`, reusing the existing covariance and validation equations.
+`fiber_detector` also owns the declared angular-support policy. Its optional fixed union
+prevents individual observation Q boundaries from remeshing angular integration. Native
+projection retains the same observation memberships, covariance and physical factors.
