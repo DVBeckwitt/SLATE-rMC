@@ -37,6 +37,10 @@ def _wrapped_gaussian_density(angle_rad: FloatArray, sigma_rad: float) -> FloatA
         raise RuntimeError("wrapped Gaussian Fourier sum did not converge")
 
     scaled_density = np.exp(-0.5 * (angle_rad / sigma_rad) ** 2)
+    # Every noncentral image is below exp(-800), which is exactly zero in
+    # float64. This is an underflow identity, not a truncated angular tail.
+    if np.max(np.abs(angle_rad), initial=0.0) + 40.0 * sigma_rad < 2.0 * np.pi:
+        return scaled_density / (np.sqrt(2.0 * np.pi) * sigma_rad)
     for image in range(1, _DENSITY_MAX_TERMS + 1):
         offset = 2.0 * np.pi * image
         scaled_density += np.exp(-0.5 * ((angle_rad + offset) / sigma_rad) ** 2)

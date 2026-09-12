@@ -1,0 +1,786 @@
+"""Run a declared Bi/Pb native refinement experiment and retain one external diagnostic."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.metadata
+import json
+import platform
+import subprocess
+from dataclasses import replace
+from pathlib import Path
+from time import perf_counter
+
+import numpy as np
+
+from painted_ewald import MosaicParameters
+from rasim_next.fitting.bi_native import BiNativeStructureModel
+from rasim_next.fitting.native_accuracy import compare_native_predictions, native_sensitivity
+from rasim_next.fitting.native_input import load_native_fit_physics
+from rasim_next.fitting.native_instrument import NativeInstrumentModel
+from rasim_next.fitting.native_joint import NativeJointEvaluator
+from rasim_next.fitting.native_observations import (
+    load_native_background_controls,
+    load_native_fit_observations,
+)
+from rasim_next.fitting.native_search import (
+    FitParameter,
+    GaussianCalibration,
+    conditional_validation,
+    fit_native_parameters,
+    profile_native_parameter,
+    training_observations,
+)
+from rasim_next.fitting.native_structure import validate_native_rod_coverage
+from rasim_next.fitting.pb_native import PbJointModel, PbNativeStructureModel
+from rasim_next.materials.optics import material_optics
+from rasim_next.pipeline.detector_revisions import _instrument_revision
+from rasim_next.proof.diagnostics import write_diagnostic
+
+
+def _point_record(point):
+    if point is None:
+        return None
+    return dict(
+        parameters=point.parameter_values.tolist(),
+        scale=point.scale,
+        data_chi_square=point.data_chi_square,
+        calibration_chi_square=point.calibration_chi_square,
+        assumption_chi_square=point.assumption_chi_square,
+        objective=point.objective,
+        guards_pass=point.scores["guards_pass"],
+        optimizer_converged=point.optimizer_converged,
+        optimizer_message=point.get("optimizer_message"),
+        physical_boundaries=point.get("physical_boundary_parameters"),
+        search_limits=point.get("search_bound_parameters"),
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--physics", type=Path, required=True)
+    parser.add_argument("--observations", type=Path, required=True)
+    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    plan_bytes = args.plan.read_bytes()
+    plan = json.loads(plan_bytes)
+    if plan["schema"] != "rasim-native-refinement-plan-v1":
+        raise ValueError("unsupported native refinement plan schema")
+    original = load_native_fit_physics(args.physics)
+    observations = load_native_fit_observations(args.observations)
+    observation_record = json.loads(args.observations.read_bytes())
+    if observation_record["physical_input"]["sha256"] != original.input_revision:
+        raise ValueError("observations and physical input are not bound together")
+    if plan["acquisition_id"] != observation_record["raw_acquisition"]["sha256"]:
+        raise ValueError("acquisition ownership must equal the frozen raw acquisition SHA256")
+    parameters = tuple(FitParameter(**p) for p in plan["parameters"])
+    calibration = tuple(GaussianCalibration(**b) for b in plan.get("calibration", ()))
+    names = tuple(p.name for p in parameters)
+    for block in calibration:
+        if block.acquisition_id != plan["acquisition_id"]:
+            raise ValueError("calibration must explicitly bind this target acquisition")
+    training = plan.get("training_indices")
+    validation_masks = {}
+    if training is not None:
+        indices = np.asarray(training)
+        if (
+            indices.ndim != 1
+            or indices.dtype.kind not in "iu"
+            or len(indices) == 0
+            or len(np.unique(indices)) != len(indices)
+            or np.any(indices < 0)
+            or np.any(indices >= len(observations.valid))
+        ):
+            raise ValueError("training indices must be distinct in-range nonnegative integers")
+        mask = np.zeros_like(observations.valid)
+        mask[indices] = True
+        training_observations(observations, mask)
+        if not np.any(observations.valid & ~mask) or not plan.get("validation_groups"):
+            raise ValueError(
+                "prospective validation requires nonempty held-out rows and declared groups"
+            )
+        coverage = np.zeros_like(mask, dtype=int)
+        for group in plan["validation_groups"]:
+            indices = np.asarray(group["indices"])
+            if (
+                not isinstance(group["name"], str)
+                or not group["name"]
+                or group["name"] in validation_masks
+                or indices.ndim != 1
+                or indices.dtype.kind not in "iu"
+                or not len(indices)
+                or len(np.unique(indices)) != len(indices)
+                or np.any(indices < 0)
+                or np.any(indices >= len(mask))
+            ):
+                raise ValueError("validation groups require unique names and explicit row indices")
+            group_mask = np.zeros_like(mask)
+            group_mask[indices] = True
+            validation_masks[group["name"]] = group_mask
+            coverage += group_mask
+        if not np.array_equal(coverage, (observations.valid & ~mask).astype(int)):
+            raise ValueError("validation groups must partition the declared held-out valid rows")
+    starts = np.asarray(plan["starts"], dtype=float)
+    repeats = tuple(plan["repeat_choices"])
+    if (
+        not repeats
+        or any(type(n) is not int or n < 1 for n in repeats)
+        or len(set(repeats)) != len(repeats)
+    ):
+        raise ValueError("repeat choices must be distinct positive integers")
+
+    def physics_with(overrides):
+        if set(overrides) - {"name", "integration", "spatial_quadrature_order", "source"}:
+            raise ValueError("unknown numerical refinement fields")
+        if set(overrides.get("integration", {})) - {
+            "axial_power",
+            "angular_power",
+            "seed",
+            "cone_quadrature_order",
+            "stitch_grid_size",
+            "axial_peak_spacing_L",
+            "axial_peak_half_width_L",
+            "source_latent_radius",
+        }:
+            raise ValueError(
+                "numerical checks must change quadrature, not batching or rejection guards"
+            )
+        if set(overrides.get("source", {})) - {
+            "kind",
+            "sample_count",
+            "seed",
+            "divergence_order",
+            "wavelength_order",
+        }:
+            raise ValueError("numerical source checks cannot change physical source parameters")
+        result = replace(
+            original,
+            integration_rule=replace(
+                original.integration_rule,
+                **{**plan.get("integration_override", {}), **overrides.get("integration", {})},
+            ),
+            spatial_quadrature_order=overrides.get(
+                "spatial_quadrature_order", original.spatial_quadrature_order
+            ),
+        )
+        source_override = {**plan.get("source_override", {}), **overrides.get("source", {})}
+        if source_override:
+            definition = replace(result.source_definition, **source_override)
+            source = definition.sample()
+            result = replace(
+                result,
+                source_definition=definition,
+                source=source,
+                material=material_optics(
+                    result.structure.crystals[0], source.mean_rays.wavelength_A
+                ),
+            )
+        return result
+
+    def evaluator_for(physics):
+        model = (
+            PbJointModel(PbNativeStructureModel(physics))
+            if physics.structure.stacking_phases
+            else BiNativeStructureModel(physics)
+        )
+        instrument = (
+            NativeInstrumentModel(physics, plan["acquisition_id"])
+            if plan["fit_instrument"]
+            else None
+        )
+        evaluator = NativeJointEvaluator(
+            model,
+            observations,
+            MosaicParameters(*plan["proposal_mosaic"]),
+            instrument,
+            plan["workers"],
+        )
+        if evaluator.parameter_names != names:
+            raise ValueError("plan must declare every physical parameter in the evaluator's order")
+        if tuple(p.unit for p in parameters) != evaluator.parameter_units:
+            raise ValueError("plan units differ from the physical coordinate contract")
+        specimen_count = len(names) - (18 if instrument is not None else 0)
+        expected_owners = ("specimen:" + original.sample_id,) * specimen_count + (
+            plan["acquisition_id"],
+        ) * (len(names) - specimen_count)
+        if tuple(p.owner for p in parameters) != expected_owners:
+            raise ValueError("parameter ownership differs from specimen/acquisition declarations")
+        return evaluator
+
+    physics = physics_with({})
+    evaluator = evaluator_for(physics)
+    stages = plan.get("stages", [])
+    if stages and tuple(stages[-1]["active_parameters"]) != names:
+        raise ValueError("the final fit stage must release every admitted continuous coordinate")
+    for stage in stages:
+        if (training is not None or "synthetic" in plan) and stage["enforce_historical_guards"]:
+            raise ValueError(
+                "historical guards cannot constrain synthetic or prospective training fits"
+            )
+    # Validate every supplied start and the complete physical candidate roster.
+    for start in starts:
+        for n in repeats:
+            evaluator.bind(start, n)
+    coverage = validate_native_rod_coverage(
+        physics,
+        a_bounds_A=(parameters[0].lower, parameters[0].upper),
+        c_bounds_A=(parameters[1].lower, parameters[1].upper),
+    )
+    if plan["fit_instrument"]:
+        spectral = starts[0].copy()
+        spectral[-3] = parameters[-3].upper
+        spectral[-2:] = [p.lower for p in parameters[-2:]]
+        broadest, _, _, _ = evaluator.bind(spectral, repeats[0])
+        coverage = validate_native_rod_coverage(
+            broadest,
+            a_bounds_A=(parameters[0].lower, parameters[0].upper),
+            c_bounds_A=(parameters[1].lower, parameters[1].upper),
+        )
+    start_time = perf_counter()
+    arrays, history = {}, []
+    manifest = dict(
+        schema="rasim-native-refinement-result-v1",
+        plan=plan,
+        plan_sha256=hashlib.sha256(plan_bytes).hexdigest(),
+        physics_input_revision=original.input_revision,
+        observation_input_revision=observations.input_revision,
+        projection_revision=observations.projection.projection_revision,
+        rod_coverage=coverage,
+        numerical_status="not_qualified",
+        identification_status="not_profiled",
+        acceptance="candidate_only",
+        implementation=dict(
+            source_hash_scope="startup filesystem snapshot; not loaded-bytecode attestation",
+            git_commit=subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(__file__).resolve().parents[1],
+                text=True,
+            ).strip(),
+            git_worktree_status=subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                cwd=Path(__file__).resolve().parents[1],
+                text=True,
+            ),
+            source_sha256={
+                str(p.relative_to(Path(__file__).resolve().parents[1])): hashlib.sha256(
+                    p.read_bytes()
+                ).hexdigest()
+                for p in sorted((Path(__file__).resolve().parents[1] / "src").rglob("*.py"))
+            },
+            runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            python=platform.python_version(),
+            dependencies={
+                name: importlib.metadata.version(name)
+                for name in ("numpy", "scipy", "numba", "gemmi", "xraydb")
+            },
+        ),
+        model="finite detector-native Bi/Pb with composition-derived optics",
+        numerical_checks=[],
+        fits=[],
+        profiles=[],
+        limitations=[
+            "Each acquisition has its own scale and source/instrument ownership.",
+            "Historical guards are compatibility checks, not independent measurements.",
+            "Prospective splits reuse an explored acquisition; they are not untouched experiments.",
+            "No calibrated detector PSF, strain ensemble or finite footprint is inferred by this model.",
+        ],
+    )
+
+    def save():
+        manifest.update(
+            elapsed_seconds=perf_counter() - start_time,
+            compile_count=evaluator.compile_count,
+            compile_seconds=evaluator.compile_seconds,
+        )
+        arrays["evaluation_history"] = np.asarray(history)
+        write_diagnostic(
+            args.output,
+            arrays=arrays,
+            manifest=manifest,
+            repository_root=Path(__file__).resolve().parents[1],
+        )
+
+    def checkpoint(point):
+        history.append(np.r_[point.parameter_values, point.scale, point.objective])
+        arrays["latest_prediction_count"] = point.prediction_count
+        save()
+        print(
+            json.dumps(
+                dict(
+                    evaluation=len(history),
+                    objective=point.objective,
+                    guards_pass=point.scores["guards_pass"],
+                    elapsed_seconds=round(perf_counter() - start_time, 2),
+                )
+            ),
+            flush=True,
+        )
+
+    baseline = evaluator.predict(starts[0], repeats[0])
+    bound, baseline_arguments, _, _ = evaluator.bind(starts[0], repeats[0])
+    manifest["baseline_physics"] = dict(
+        input_revision=bound.input_revision,
+        source_revision=bound.source.revision,
+        material_revision=bound.material.material_revision,
+        material_provenance=bound.material.provenance,
+        instrument_revision=_instrument_revision(
+            replace(bound.instrument, film_thickness_A=baseline_arguments["film_thickness_A"])
+        ),
+    )
+    baseline_scale, _ = observations.profile_scale(baseline)
+    arrays["baseline_raw"] = baseline
+    arrays["baseline_prediction_count"] = baseline_scale * baseline
+    manifest["baseline_scale"] = baseline_scale
+    manifest["baseline_inactive_parameters"] = evaluator.inactive_parameters(starts[0], repeats[0])
+    manifest["baseline_stitch"] = evaluator.stitch_state(starts[0], repeats[0])
+    save()
+    checks = plan.get("numerical_checks", [])
+
+    center_errors = {}
+
+    def run_checks(label, candidates, n, fixed_scale, objective_observations, guarded=False):
+        candidates = np.asarray(candidates, dtype=float)
+        agreement = True
+        arrays[f"{label}_qualification_candidates"] = candidates
+        reference = np.array([evaluator.predict(v, n) for v in candidates])
+        arrays[f"{label}_qualification_reference"] = reference
+        reference_stitches = [evaluator.stitch_state(v, n) for v in candidates]
+        for i, specification in enumerate(checks):
+            print(
+                json.dumps(dict(numerical_check=specification["name"], state="running")), flush=True
+            )
+            refined_physics = physics_with(specification)
+            if (
+                refined_physics.integration_rule == physics.integration_rule
+                and refined_physics.spatial_quadrature_order == physics.spatial_quadrature_order
+                and refined_physics.source.revision == physics.source.revision
+            ):
+                raise ValueError("a numerical check must change an effective integration rule")
+            refined_evaluator = evaluator_for(refined_physics)
+            effective_rule = refined_physics.integration_rule
+            if physics.specular_stitch_stack is None:
+                effective_rule = replace(
+                    effective_rule, stitch_grid_size=physics.integration_rule.stitch_grid_size
+                )
+            effective_change = (
+                effective_rule != physics.integration_rule
+                or refined_physics.spatial_quadrature_order != physics.spatial_quadrature_order
+            )
+            for candidate in candidates:
+                trial_physics, _, _, _ = refined_evaluator.bind(candidate, n)
+                low_physics, _, _, _ = evaluator.bind(candidate, n)
+                high_source, low_source = trial_physics.source, low_physics.source
+                effective_change = (
+                    effective_change
+                    or any(
+                        not np.array_equal(
+                            getattr(high_source.mean_rays, field),
+                            getattr(low_source.mean_rays, field),
+                        )
+                        for field in (
+                            "origin_lab_m",
+                            "direction_lab",
+                            "wavelength_A",
+                            "source_weight",
+                        )
+                    )
+                    or not np.array_equal(
+                        high_source.conditional_origin_factor_lab_m,
+                        low_source.conditional_origin_factor_lab_m,
+                    )
+                )
+                validate_native_rod_coverage(
+                    trial_physics,
+                    a_bounds_A=(parameters[0].lower, parameters[0].upper),
+                    c_bounds_A=(parameters[1].lower, parameters[1].upper),
+                )
+            if not effective_change:
+                raise ValueError("numerical check leaves all effective probe quadratures unchanged")
+            refined = np.array([refined_evaluator.predict(v, n) for v in candidates])
+            refined_stitches = [refined_evaluator.stitch_state(v, n) for v in candidates]
+            tolerances = dict(plan["numerical_tolerances"])
+            tolerances["require_constrained_objective_agreement"] = guarded
+            comparison = compare_native_predictions(
+                objective_observations,
+                reference,
+                refined,
+                fixed_scale=fixed_scale,
+                **tolerances,
+            )
+            prefix = "constrained_" if guarded else ""
+            center_errors.setdefault(label, []).append(
+                float(
+                    comparison[f"refined_{prefix}objective"][0]
+                    - comparison[f"reference_{prefix}objective"][0]
+                )
+            )
+            for name, value in comparison.items():
+                if isinstance(value, np.ndarray):
+                    arrays[f"{label}_numerical_{i}_{name}"] = value
+            arrays[f"{label}_numerical_{i}_raw"] = refined
+            manifest["numerical_checks"].append(
+                dict(
+                    name=specification["name"],
+                    scope=label,
+                    N=n,
+                    objective_observation_revision=objective_observations.input_revision,
+                    guard_diagnostics_included=comparison["guard_diagnostics_included"],
+                    reference_stitches=reference_stitches,
+                    refined_stitches=refined_stitches,
+                    empirical_agreement=comparison["empirical_agreement"],
+                    compile_count=refined_evaluator.compile_count,
+                    compile_seconds=refined_evaluator.compile_seconds,
+                )
+            )
+            agreement = agreement and comparison["empirical_agreement"]
+            refined_evaluator.clear_responses()
+            save()
+            print(
+                json.dumps(
+                    dict(
+                        numerical_check=specification["name"],
+                        empirical_agreement=comparison["empirical_agreement"],
+                        maximum_whitened_rms=float(np.max(comparison["whitened_rms"])),
+                    )
+                ),
+                flush=True,
+            )
+        return "empirical_agreement_at_declared_probes" if agreement else "not_qualified"
+
+    target_observations = observations
+    if "synthetic" in plan:
+        specification = plan["synthetic"]
+        truth = np.asarray(specification["truth"], dtype=float)
+        raw = evaluator.predict(truth, specification["coherent_repeats"])
+        count = specification["scale"] * raw
+        if specification["add_noise"]:
+            supported = observations.valid
+            count[supported] += np.linalg.cholesky(
+                observations.covariance_count2[np.ix_(supported, supported)]
+            ) @ np.random.default_rng(specification["seed"]).standard_normal(int(supported.sum()))
+        target_observations = replace(
+            observations,
+            net_count=count,
+            fit_target=observations.fit_operator @ count,
+            allow_guard_constraints=False,
+            input_revision=hashlib.sha256(count.tobytes()).hexdigest(),
+        )
+        arrays["synthetic_target"] = count
+        manifest["synthetic"] = specification
+    complete_target = target_observations
+    if training is not None:
+        target_observations = training_observations(target_observations, mask)
+        arrays["training_mask"] = mask
+        arrays["validation_mask"] = observations.valid & ~mask
+    if checks:
+        guarded = bool(stages and stages[-1]["enforce_historical_guards"])
+        qualification_scale = plan.get("qualification_scale")
+        if qualification_scale is None:
+            qualification_scale, _ = target_observations.profile_scale(
+                baseline, enforce_guards=guarded
+            )
+        manifest["numerical_status"] = run_checks(
+            "initial",
+            plan["qualification_candidates"],
+            repeats[0],
+            qualification_scale,
+            target_observations,
+            guarded,
+        )
+    manifest["initial_numerical_status"] = manifest["numerical_status"]
+    options = dict(
+        calibration=calibration,
+        finite_difference_step=plan["finite_difference_step"],
+        callback=checkpoint,
+    )
+    if plan.get("sensitivity"):
+        sensitivity = native_sensitivity(
+            lambda v: evaluator.predict(v, repeats[0]),
+            target_observations,
+            parameters,
+            starts[0],
+            relative_step=plan["finite_difference_step"],
+        )
+        for name, value in sensitivity.items():
+            if isinstance(value, np.ndarray):
+                arrays[f"initial_sensitivity_{name}"] = value
+        save()
+    fitted = []
+    for n in repeats:
+        warm_starts = starts
+        for stage in stages:
+            active = tuple(stage["active_parameters"])
+            if set(active) - set(names):
+                raise ValueError("stage names an undeclared parameter")
+            fixed = {
+                name: float(warm_starts[0, i]) for i, name in enumerate(names) if name not in active
+            }
+            result = fit_native_parameters(
+                lambda v, n=n: evaluator.predict(v, n),
+                target_observations,
+                parameters,
+                warm_starts,
+                fixed_values=fixed,
+                maximum_iterations=stage["maximum_iterations"],
+                enforce_historical_guards=stage["enforce_historical_guards"],
+                **options,
+            )
+            manifest["fits"].append(
+                dict(
+                    N=n,
+                    stage=stage["name"],
+                    best_evaluated=_point_record(result.best_evaluated),
+                    best_feasible=_point_record(result.best_feasible),
+                    best_converged=_point_record(result.best_converged),
+                    minimum_resolved=result.minimum_resolved,
+                    runs=[_point_record(p) for p in result.runs],
+                )
+            )
+            chosen = (
+                result.best_converged
+                if result.best_converged is not None
+                else result.best_evaluated
+            )
+            warm_starts = np.vstack([chosen.parameter_values, starts])
+            arrays[f"fit_N{n}_{stage['name']}"] = chosen.prediction_count
+            save()
+        if stages:
+            fitted.append((n, result))
+    manifest["fitted_numerical_status"] = {}
+    for n, result in fitted:
+        label = f"fit_N{n}"
+        manifest["fitted_numerical_status"][label] = "not_qualified"
+        if checks and plan.get("qualify_fitted_candidates", True):
+            point = (
+                result.best_converged
+                if result.best_converged is not None
+                else result.best_evaluated
+            )
+            center = point.parameter_values
+            directions = (
+                np.asarray(plan["qualification_candidates"])[1:]
+                - np.asarray(plan["qualification_candidates"])[0]
+            )
+            lower = np.array([p.lower for p in parameters])
+            upper = np.array([p.upper for p in parameters])
+            probes = [center]
+            for direction in directions:
+                trial = np.clip(center + direction, lower, upper)
+                if np.linalg.norm(trial - center) < np.linalg.norm(direction) / 2:
+                    trial = np.clip(center - direction, lower, upper)
+                probes.append(trial)
+            manifest["fitted_numerical_status"][label] = run_checks(
+                label,
+                probes,
+                n,
+                point.scale,
+                target_observations,
+                stages[-1]["enforce_historical_guards"],
+            )
+    manifest["discrete_ranking_numerical_status"] = "not_qualified"
+    if fitted and all(f"fit_N{n}" in center_errors for n, _ in fitted):
+        offsets = np.array([center_errors[f"fit_N{n}"] for n, _ in fitted])
+        arrays["discrete_objective_numerical_offsets"] = offsets
+        arrays["discrete_objective_numerical_contrast_errors"] = offsets - offsets[0]
+        if (
+            np.max(np.ptp(offsets, axis=0))
+            <= plan["numerical_tolerances"]["maximum_objective_contrast_error"]
+        ):
+            manifest["discrete_ranking_numerical_status"] = (
+                "empirical_agreement_at_fitted_candidates"
+            )
+    if fitted:
+        manifest["numerical_status"] = (
+            "empirical_agreement_at_declared_probes"
+            if manifest["initial_numerical_status"] != "not_qualified"
+            and all(v != "not_qualified" for v in manifest["fitted_numerical_status"].values())
+            and manifest["discrete_ranking_numerical_status"] != "not_qualified"
+            else "not_qualified"
+        )
+    eligible = [(n, r.best_converged) for n, r in fitted if r.best_converged is not None]
+    if eligible:
+        selected_n, selected = min(eligible, key=lambda item: item[1].objective)
+        manifest["selected"] = dict(N=selected_n, **_point_record(selected))
+        manifest["all_choices_resolved"] = all(r.minimum_resolved for _, r in fitted)
+        arrays["selected_prediction_count"] = selected.prediction_count
+        if training is not None:
+            validation = conditional_validation(
+                complete_target,
+                selected.prediction_count,
+                mask,
+                observations.valid & ~mask,
+                groups=validation_masks,
+            )
+            for name, value in validation.items():
+                if isinstance(value, np.ndarray):
+                    arrays[f"validation_{name}"] = value
+            manifest["validation"] = {
+                k: v for k, v in validation.items() if not isinstance(v, np.ndarray)
+            }
+    else:
+        selected_n, selected = repeats[0], None
+        manifest["selected"] = None
+    reference_values = starts[0] if selected is None else selected.parameter_values
+    manifest["reported_candidate_inactive_parameters"] = evaluator.inactive_parameters(
+        reference_values, selected_n
+    )
+    manifest["reported_candidate_stitch"] = evaluator.stitch_state(reference_values, selected_n)
+    bound, reported_arguments, _, _ = evaluator.bind(reference_values, selected_n)
+    manifest["reported_candidate_physics"] = dict(
+        input_revision=bound.input_revision,
+        source_revision=bound.source.revision,
+        material_revision=bound.material.material_revision,
+        instrument_revision=_instrument_revision(
+            replace(bound.instrument, film_thickness_A=reported_arguments["film_thickness_A"])
+        ),
+        source_rule=bound.source_definition.kind,
+        source_row_count=len(bound.source.mean_rays.wavelength_A),
+    )
+    if plan.get("controls"):
+        manifest["background_controls"] = []
+        controls = load_native_background_controls(args.observations)
+        cases = [("baseline", starts[0], repeats[0], baseline_scale)]
+        if selected is not None:
+            cases.append(("selected", reference_values, selected_n, selected.scale))
+        budget = plan.get("maximum_control_signal_measurement_sigma")
+        if budget is not None and (not np.isfinite(budget) or budget <= 0):
+            raise ValueError("control contamination budget must be declared positive and finite")
+        for label, values, n, scale in cases:
+            bound, arguments, mosaic, stack = evaluator.bind(values, n)
+            detector = bound.detector(mosaic=evaluator.proposal_mosaic, **arguments)
+            for i, control in enumerate(controls):
+                response = detector.compile_native_response(
+                    control.projection, worker_count=plan["workers"]
+                )
+                signal = scale * response.evaluate(
+                    mosaic=mosaic,
+                    thickness_A=arguments["film_thickness_A"],
+                    specular_stitch_stack=stack,
+                )
+                diagnostic = control.signal_diagnostic(signal)
+                arrays[f"control_{label}_{i}_signal_count"] = signal
+                arrays[f"control_{label}_{i}_split"] = control.split
+                for name, value in diagnostic.items():
+                    if isinstance(value, np.ndarray):
+                        arrays[f"control_{label}_{i}_{name}"] = value
+                manifest["background_controls"].append(
+                    dict(
+                        scope=label,
+                        layout=i,
+                        projection_revision=control.projection.projection_revision,
+                        control_revision=control.revision,
+                        split_summary=diagnostic["split_summary"],
+                        status=(
+                            "diagnostic_only"
+                            if budget is None
+                            else "within_declared_budget"
+                            if np.max(diagnostic["signal_measurement_sigma"]) <= budget
+                            else "fixed_background_validity_unresolved"
+                        ),
+                        numerical_status="not_qualified",
+                    )
+                )
+                del response
+                save()
+                print(
+                    json.dumps(
+                        dict(
+                            control_scope=label,
+                            layout=i,
+                            maximum_signal_measurement_sigma=float(
+                                np.max(diagnostic["signal_measurement_sigma"])
+                            ),
+                        )
+                    ),
+                    flush=True,
+                )
+    if plan.get("sensitivity"):
+        sensitivity = native_sensitivity(
+            lambda v: evaluator.predict(v, selected_n),
+            target_observations,
+            parameters,
+            reference_values,
+            relative_step=plan["finite_difference_step"],
+        )
+        for name, value in sensitivity.items():
+            if isinstance(value, np.ndarray):
+                arrays[f"sensitivity_{name}"] = value
+        manifest["sensitivity_stitches"] = [
+            evaluator.stitch_state(v, selected_n) for v in sensitivity["probe_values"]
+        ]
+    for specification in plan.get("profiles", []):
+        predictors = {n: (lambda v, n=n: evaluator.predict(v, n)) for n in repeats}
+        profile = profile_native_parameter(
+            predictors,
+            target_observations,
+            parameters,
+            np.vstack([reference_values, starts]),
+            name=specification["name"],
+            grid=specification["grid"],
+            maximum_iterations=specification["maximum_iterations"],
+            enforce_historical_guards=False,
+            **options,
+        )
+        for name in ("grid", "objective", "resolved", "envelope_objective", "envelope_resolved"):
+            arrays[f"profile_{specification['name']}_{name}"] = profile[name]
+        manifest["profiles"].append(
+            dict(
+                parameter=specification["name"],
+                choices=profile["choices"],
+                interval_status=profile["interval_status"],
+                numerical_status="not_qualified",
+                guard_conditioned=profile["guard_conditioned"],
+                observation_revision=target_observations.input_revision,
+                fits=[
+                    dict(
+                        N=n,
+                        grid_index=i,
+                        best_evaluated=_point_record(fit.best_evaluated),
+                        best_feasible=_point_record(fit.best_feasible),
+                        best_converged=_point_record(fit.best_converged),
+                        minimum_resolved=fit.minimum_resolved,
+                        runs=[_point_record(point) for point in fit.runs],
+                    )
+                    for n, fits in profile["fits"].items()
+                    for i, fit in fits.items()
+                ],
+                candidate_stitches=[
+                    dict(
+                        N=n,
+                        grid_index=i,
+                        state=evaluator.stitch_state(
+                            (
+                                fit.best_converged
+                                if fit.best_converged is not None
+                                else fit.best_evaluated
+                            ).parameter_values,
+                            n,
+                        ),
+                    )
+                    for n, fits in profile["fits"].items()
+                    for i, fit in fits.items()
+                ],
+                all_points_resolved=bool(profile["resolved"].all()),
+            )
+        )
+    if manifest["profiles"]:
+        manifest["identification_status"] = "raw_profiles_available_without_confidence_intervals"
+    manifest["workflow_complete"] = True
+    save()
+    print(
+        json.dumps(
+            dict(
+                output=str(args.output),
+                numerical_status=manifest["numerical_status"],
+                selected=manifest["selected"],
+                elapsed_seconds=manifest["elapsed_seconds"],
+            )
+        ),
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

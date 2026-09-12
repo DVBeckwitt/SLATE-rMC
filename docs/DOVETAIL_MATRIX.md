@@ -91,3 +91,13 @@ detector intensity or pixel integration.
 Generic programmatic sparse fitting is active. Automatic raw-image region discovery/recipe
 generation, generic full-image rendering, and arbitrary stacking-law construction remain deferred
 consumers rather than reasons to create per-material Python runners.
+
+## Contract-v16 native refinement
+
+| Producer | Output | Consumer | Binding |
+|---|---|---|---|
+| native Bi/Pb candidate | cell, sites, phase roster and occupied-cell optics | conditional detector | signed rods, finite windows, units and normalization preserved |
+| acquisition candidate | source samples and rigid poses | native response compiler | fixed source plane, raw-acquisition ownership, complete dependency revision |
+| frozen counts/background covariance | GLS and historical diagnostics | common search and profiles | no row reassignment, exact scale, distinct measurement/assumption terms |
+| fitted centers at every integer N | numerical prediction and objective contrasts | discrete comparison | actual training objective and guard policy; empirical qualification only |
+| training fit and full cross-covariance | conditional held-out and group scores | predictive assessment | explicit group partition; no validation-informed fitting or scale |

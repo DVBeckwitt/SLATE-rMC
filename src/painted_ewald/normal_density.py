@@ -118,6 +118,15 @@ class SphericalMosaicDensity:
             raise ValueError("quadrature_order must be an integer of at least four")
         shape = polar.shape
         polar, cone = polar.ravel(), cone.ravel()
+        result = np.empty(polar.size)
+        degenerate = (polar == 0) | (polar == np.pi) | (cone == 0) | (cone == np.pi)
+        if np.any(degenerate):
+            result[degenerate] = self.directed_density_sr_inv(
+                abs(polar[degenerate] - cone[degenerate])
+            )
+        if np.all(degenerate):
+            return result.reshape(shape)
+        polar, cone = polar[~degenerate], cone[~degenerate]
         delta = abs(polar - cone)
         b = np.sin(polar) * np.sin(cone)
         out = np.zeros(polar.size)
@@ -158,7 +167,8 @@ class SphericalMosaicDensity:
                     lower = upper
                     upper = np.minimum(np.pi, 2 * upper)
                 out[start:stop] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
-        return out.reshape(shape)
+        result[~degenerate] = out
+        return result.reshape(shape)
 
     def plane_density_sr_inv(self, alpha_rad: ArrayLike) -> NDArray[np.float64]:
         """Antipodal sum per spherical area on the unoriented-normal hemisphere."""

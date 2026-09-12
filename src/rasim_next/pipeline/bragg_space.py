@@ -182,7 +182,9 @@ class Pbi2FiniteSurfaceStrength:
     surface_fractions: tuple[float, float, float]
     normalization: EventIntensityNormalization
     unknown_u_iso_A2: float | None = None
+    site_displacement_profile: SiteDisplacementProfile | None = None
     _motifs: tuple[tuple[CrystalStructure, ...], ...] = field(init=False, repr=False)
+    _motif_tensors: tuple = field(init=False, repr=False)
     _lattice: ReciprocalLattice = field(init=False, repr=False)
     structure_model_revision: str = field(init=False)
 
@@ -209,6 +211,24 @@ class Pbi2FiniteSurfaceStrength:
         object.__setattr__(self, "normalization", normalization)
         object.__setattr__(self, "repeats", index(self.repeats))
         object.__setattr__(self, "_motifs", pbi2_surface_motif_crystals(self.crystal))
+        profile = self.site_displacement_profile
+        if profile is not None and (
+            not isinstance(profile, SiteDisplacementProfile) or self.unknown_u_iso_A2 is not None
+        ):
+            raise ValueError(
+                "Pb site profile must be explicit and exclusive with unknown-U filling"
+            )
+        normal = np.cross(self.crystal.direct_basis_A[:, 0], self.crystal.direct_basis_A[:, 1])
+        tensors = tuple(
+            tuple(
+                None
+                if profile is None
+                else profile.tensors_A2(tuple(site.source_label for site in motif.sites), normal)
+                for motif in orientation
+            )
+            for orientation in self._motifs
+        )
+        object.__setattr__(self, "_motif_tensors", tensors)
         object.__setattr__(self, "_lattice", ReciprocalLattice.from_crystal(self.crystal))
         object.__setattr__(
             self,
@@ -223,6 +243,7 @@ class Pbi2FiniteSurfaceStrength:
                 ("initial", np.array([[p.initial.plus, p.initial.minus] for p in populations])),
                 ("population_fractions", np.array(self.population_fractions)),
                 ("surface_fractions", np.array(self.surface_fractions)),
+                ("site_tensors_A2", np.array([]) if profile is None else tensors[0][0]),
                 (
                     "unknown_u_iso_A2",
                     "from_crystal" if self.unknown_u_iso_A2 is None else self.unknown_u_iso_A2,
@@ -262,11 +283,15 @@ class Pbi2FiniteSurfaceStrength:
             [
                 [
                     unit_cell_amplitude(
-                        m, hkl, 2 * np.pi / knorm, unknown_u_iso_A2=self.unknown_u_iso_A2
+                        m,
+                        hkl,
+                        2 * np.pi / knorm,
+                        unknown_u_iso_A2=self.unknown_u_iso_A2,
+                        site_displacement_tensors_A2=tensor,
                     ).amplitude_e
-                    for m in orientation
+                    for m, tensor in zip(orientation, tensors, strict=True)
                 ]
-                for orientation in self._motifs
+                for orientation, tensors in zip(self._motifs, self._motif_tensors, strict=True)
             ]
         )
         full, lower, upper = (amplitudes[:, i] for i in range(3))

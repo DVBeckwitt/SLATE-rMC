@@ -271,3 +271,9 @@ quadrature, scan, and component revisions. Adaptive records carry source/evaluat
 covariance, convergence gate, and refinement tree; staged scores carry immutable SHA-256 comparison
 revisions and block shapes. These are typed records or external proof artifacts, not new trace
 stages, so trace-v4 numbering remains unchanged.
+
+Native-refinement v16 diagnostics retain candidate values/N, actual source/material/
+thickness-bound instrument revisions, raw-acquisition and observation hashes, code
+hashes, numerical prediction/contrast arrays, optimizer/guard statuses, profile
+policy and conditional-validation groups. These remain external numeric NPZ records
+with one embedded manifest; they add no trace stage or trace-version increment.

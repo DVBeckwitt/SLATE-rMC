@@ -270,6 +270,47 @@ def test_native_bi_reuse_invalidates_changed_density_and_cell():
         np.array([10.0]),
         "Bi-reuse",
     )
+    from rasim_next.pipeline.conditional_detector import NativeMosaicCache
+    from rasim_next.pipeline.source_spatial import NativeSpatialRegionProjection
+
+    detector = physics.detector(
+        mosaic=MosaicParameters(0.5, 0.6, 0.4),
+        coherent_repeats=3,
+        film_thickness_A=200.0,
+        surface_fractions=(0.2, 0.3, 0.5),
+        phase_fractions=(1.0,),
+        fault_parameters={},
+    )
+    response = detector.compile_native_response(projection)
+    projector = NativeSpatialRegionProjection(projection)
+    projected = detector.compile_native_response(projection, spatial_projection=projector)
+    np.testing.assert_array_equal(projected.evaluate(), response.evaluate())
+    with pytest.raises(ValueError, match="another native observation"):
+        detector.compile_native_response(
+            replace(projection, quadrature_revision="other"), spatial_projection=projector
+        )
+    cache = NativeMosaicCache(response)
+    for sigma, gamma, eta, thickness, order in (
+        (0.5, 0.6, 0.4, 200.0, 16),
+        (0.55, 0.6, 0.4, 200.0, 16),
+        (0.55, 0.7, 0.4, 200.0, 16),
+        (0.55, 0.7, 0.0, 210.0, 16),
+        (0.55, 0.7, 1.0, 210.0, 16),
+        (0.55, 0.7, 0.4, 210.0, 24),
+    ):
+        options = dict(
+            mosaic=MosaicParameters(sigma, gamma, eta),
+            thickness_A=thickness,
+            cone_quadrature_order=order,
+        )
+        np.testing.assert_allclose(
+            response.evaluate(mosaic_cache=cache, **options),
+            response.evaluate(**options),
+            rtol=3e-13,
+            atol=0,
+        )
+    with pytest.raises(ValueError, match="another native response"):
+        replace(response, projection_revision="other").evaluate(mosaic_cache=cache)
     values = np.r_[model.reference_parameters.as_array(), 0.5, 0.6, 0.4, 0.2, 0.6, 100, 2, 4]
     evaluator = BiNativeFitEvaluator(model, observations, MosaicParameters(0.5, 0.6, 0.4), 2)
     initial = evaluator.predict(BiJointCandidate(values, 3))
@@ -362,3 +403,123 @@ def test_generic_finite_site_tensors_match_direct_signed_atom_and_repeat_sum():
     )
     with pytest.raises(ValueError, match="positive semidefinite"):
         replace(model, site_displacement_tensors_A2=-tensors)
+
+
+def test_pb_site_displacements_and_finite_windows_match_explicit_atomic_paths():
+    from itertools import pairwise, product
+
+    from rasim_next.core.contracts import EventIntensityNormalization
+    from rasim_next.ordered.motifs import (
+        SiteDisplacementProfile,
+        TransverseIsotropicSiteDisplacement,
+    )
+    from rasim_next.pipeline.bragg_space import Pbi2FiniteSurfaceStrength
+    from rasim_next.stacking import (
+        InitialPopulation,
+        StackingPopulation,
+        TransitionLaw,
+        full_transition_matrix,
+    )
+
+    crystal = read_crystal(
+        Path(__file__).resolve().parents[1] / "examples/pbi2/structures/PbI2_2H.cif", phase_id="Pb"
+    )
+    crystal = replace(
+        crystal,
+        sites=tuple(
+            replace(
+                s,
+                fractional=(*np.round(np.array(s.fractional[:2]) * 3) / 3, s.fractional[2]),
+                u_iso_A2=0.0,
+            )
+            for s in crystal.sites
+        ),
+    )
+    profile = SiteDisplacementProfile(
+        (
+            TransverseIsotropicSiteDisplacement("Pb1", 0.008, 0.024),
+            TransverseIsotropicSiteDisplacement("I1", 0.017, 0.039),
+        )
+    )
+    initial = InitialPopulation(0.65, 0.35)
+    law = TransitionLaw(0.17, 0.23, 0.11, 0.31, 0.18)
+    model = Pbi2FiniteSurfaceStrength(
+        crystal,
+        2,
+        (StackingPopulation("mixture", law, initial),),
+        (1.0,),
+        (0.2, 0.3, 0.5),
+        EventIntensityNormalization.FINITE_TOTAL,
+        site_displacement_profile=profile,
+    )
+    hkl = np.array([[0, 0, 0.37], [1, 0, 1.27], [-1, 1, -2.38]])
+    waves = np.array([1.54, 1.544, 1.54])
+    q = hkl @ model.reciprocal_basis_Ainv.T
+    z = min(s.fractional[2] for s in crystal.sites if s.element == "I")
+    # Explicit manuscript plus orientation, independent of motif extraction.
+    xyz = np.array([[0.0, 0.0, 0.0], [1 / 3, 2 / 3, -z], [2 / 3, 1 / 3, z]])
+    atomic = []
+    for element, label in (("Pb", "Pb1"), ("I", "I1"), ("I", "I1")):
+        factor, _ = atomic_scattering_factor_e(
+            species=element,
+            element=element,
+            charge=0,
+            q_magnitude_Ainv=np.linalg.norm(q, axis=1),
+            wavelength_A=waves,
+        )
+        radial, normal = profile.components_A2(label)
+        atomic.append(
+            factor * np.exp(-0.5 * (radial * (q[:, 0] ** 2 + q[:, 1] ** 2) + normal * q[:, 2] ** 2))
+        )
+    atomic = np.array(atomic).T
+    transition = full_transition_matrix(law)
+    expected = np.zeros((3, 3))
+    for first, tail in product((0, 3), product(range(6), repeat=2)):
+        path = (first, *tail)
+        probability = (initial.plus, initial.minus)[first // 3] * np.prod(
+            [transition[a, b] for a, b in pairwise(path)]
+        )
+        for window in range(3):
+            amplitude = np.zeros(3, dtype=complex)
+            for layer, state in enumerate(path):
+                positions = xyz.copy()
+                positions[:, 2] *= 1 if state < 3 else -1
+                if layer == 0:
+                    keep = (
+                        np.ones(3, dtype=bool)
+                        if window == 0
+                        else positions[:, 2] >= 0
+                        if window == 1
+                        else positions[:, 2] > 0
+                    )
+                elif layer == 2:
+                    keep = (
+                        np.zeros(3, dtype=bool)
+                        if window == 0
+                        else positions[:, 2] < 0
+                        if window == 1
+                        else positions[:, 2] <= 0
+                    )
+                else:
+                    keep = np.ones(3, dtype=bool)
+                positions += np.array([state % 3 / 3, 2 * (state % 3) / 3, layer])
+                amplitude += np.sum(
+                    atomic[:, keep] * np.exp(2j * np.pi * hkl @ positions[keep].T), axis=1
+                )
+            expected[window] += probability * abs(amplitude) ** 2 * CLASSICAL_ELECTRON_RADIUS_A**2
+    args = dict(h=hkl[:, 0], k=hkl[:, 1], L=hkl[:, 2], k_norm_Ainv=2 * np.pi / waves)
+    np.testing.assert_allclose(
+        model.evaluate_components_hkl(**args)[:, 0], expected, rtol=3e-13, atol=1e-18
+    )
+    per_layer = replace(model, normalization=EventIntensityNormalization.FINITE_PER_LAYER)
+    np.testing.assert_allclose(
+        per_layer.evaluate_components_hkl(**args)[:, 0], expected / 2, rtol=3e-13
+    )
+    changed = replace(
+        profile, sites=tuple(replace(s, u_radial_A2=s.u_radial_A2 + 0.1) for s in profile.sites)
+    )
+    np.testing.assert_allclose(
+        replace(model, site_displacement_profile=changed).evaluate_hkl(**args)[0],
+        model.evaluate_hkl(**args)[0],
+        rtol=3e-13,
+    )

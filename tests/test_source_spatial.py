@@ -191,6 +191,156 @@ def test_native_physics_input_preserves_expanded_sites_and_stacking_averages(tmp
     np.testing.assert_array_equal(detector.material.n_complex, [0.99994 + 1e-6j, 0.99993 + 2e-6j])
     assert detector.phase_population_weight == 0.4 and detector.polarization_weight == 0.5
     assert tuple(r.population for r in detector.rods) == (0.7, 0.9)
+    # The complete Pb candidate and acquisition adapter reuse these exact input
+    # owners; this also checks that source definitions survive numeric loading.
+    from test_native_search import observations as make_observations
+
+    from rasim_next.fitting.native_instrument import NativeInstrumentModel
+    from rasim_next.fitting.native_joint import NativeJointEvaluator
+    from rasim_next.fitting.pb_native import (
+        PbCellSiteParameters,
+        PbJointModel,
+        PbNativeStructureModel,
+    )
+    from rasim_next.materials.optics import material_optics
+    from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
+
+    physics = replace(
+        physics, material=material_optics(crystal, physics.source.mean_rays.wavelength_A)
+    )
+    atomic = PbNativeStructureModel(physics)
+    model = PbJointModel(atomic)
+    seed = dict(
+        coherent_repeats=8,
+        film_thickness_nm=50.0,
+        gaussian_sigma_deg=6.0,
+        lorentzian_hwhm_deg=12.0,
+        eta=0.3,
+        surface_fractions=(0.2, 0.3, 0.5),
+        phase_fractions=(0.6, 0.4),
+        fault_parameters=dict(ordered=0.08, mixed=0.16),
+    )
+    initial = model.initial_values(seed)
+    bound, arguments = model.bind(initial, 8)
+    np.testing.assert_allclose(
+        bound.structure.strength(
+            **{k: v for k, v in arguments.items() if k != "film_thickness_A"}
+        ).evaluate_hkl(h=[0, 1, -1], k=[0, 0, 1], L=[0.37, 1.27, -2.38], k_norm_Ainv=4.08),
+        strength.evaluate_hkl(h=[0, 1, -1], k=[0, 0, 1], L=[0.37, 1.27, -2.38], k_norm_Ainv=4.08),
+        rtol=3e-13,
+    )
+    for i, delta in enumerate((0.001, 0.002, 0.0001, -0.01, -0.01, 0.003, 0.003, 0.003, 0.003)):
+        trial = atomic.reference_parameters.as_array()
+        trial[i] += delta
+        rebound = atomic.bind(PbCellSiteParameters.from_array(trial))
+        assert (not np.array_equal(rebound.material.n_complex, bound.material.n_complex)) == (
+            i in (0, 1, 3, 4)
+        )
+        for site, base in zip(rebound.structure.crystals[0].sites, crystal.sites, strict=True):
+            if i != 2:
+                assert site.fractional == base.fractional
+            elif base.element == "I":
+                assert site.fractional[2] - base.fractional[2] == pytest.approx(
+                    delta if base.fractional[2] < 0.5 else -delta, abs=1e-15
+                )
+    with pytest.raises(ValueError, match="smaller"):
+        model.initial_values(dict(seed, film_thickness_nm=1.0))
+    shape = physics.instrument.detector_shape_rc
+    flat = np.arange(np.prod(shape))
+    projection = NativePixelRegionProjection(
+        shape,
+        flat,
+        (((flat % shape[1] - 44) ** 2 + (flat // shape[1] - 39) ** 2) >= 20**2).astype(int),
+        flat,
+        np.ones(len(flat)),
+        2,
+        "joint-pb-proof",
+    )
+    obs = replace(make_observations([1, 1]), projection=projection)
+    instrument_model = NativeInstrumentModel(physics, "test-acquisition")
+    evaluator = NativeJointEvaluator(
+        model, obs, MosaicParameters(0.1, 0.2, 0.3), instrument_model, 2
+    )
+    coordinates = np.r_[initial, instrument_model.initial_values]
+    predicted = evaluator.predict(coordinates, 8)
+    assert np.any(predicted > 0)
+    inactive_probe = coordinates.copy()
+    inactive_probe[11], inactive_probe[12], inactive_probe[16] = 0, 1, 1
+    inactive = evaluator.inactive_parameters(inactive_probe, 8)
+    assert set(inactive) == {
+        "lorentzian_half_width_rad",
+        "surface_1_share_of_remainder",
+        "phase_1_epsilon",
+        "phase_1_parent_0_share_of_remainder",
+        "phase_1_parent_1_share_of_remainder",
+    }
+    with pytest.raises(ValueError, match="aligned"):
+        evaluator.predict(coordinates.reshape(1, -1), 8)
+    with pytest.raises(ValueError, match="aligned"):
+        evaluator.predict(coordinates.astype(complex) + 1j, 8)
+    coordinates[14] += 10
+    thickness = evaluator.predict(coordinates, 8)
+    assert evaluator.compile_count == 1
+    fresh = NativeJointEvaluator(model, obs, evaluator.proposal_mosaic, instrument_model, 2)
+    np.testing.assert_allclose(thickness, fresh.predict(coordinates, 8), rtol=3e-13)
+    # Representative changes for each distinct geometry/source dependency.
+    for i, delta in (
+        (0, 0.2),
+        (2, 0.0001),
+        (5, 0.0002),
+        (7, 0.000005),
+        (8, 0.00003),
+        (10, 0.0001),
+        (12, 0.03),
+        (14, 0.01),
+        (15, 0.00002),
+        (16, 0.00001),
+    ):
+        coordinates[len(initial) + i] += delta
+        actual = evaluator.predict(coordinates, 8)
+        independent = NativeJointEvaluator(
+            model, obs, evaluator.proposal_mosaic, instrument_model, 2
+        )
+        np.testing.assert_allclose(
+            actual, independent.predict(coordinates, 8), rtol=3e-13, atol=1e-18
+        )
+    assert evaluator.compile_count == 11
+    from rasim_next.fitting.native_search import FitParameter, fit_native_parameters
+
+    # Real-forward recovery with all other coordinates fixed distinguishes this
+    # integration proof from the independent analytic optimizer tests.
+    truth = np.r_[initial, instrument_model.initial_values]
+    raw = evaluator.predict(truth, 8)
+    scale = 500 / np.max(raw)
+    target = scale * raw
+    synthetic = replace(obs, net_count=target, fit_target=target, allow_guard_constraints=False)
+    specification = tuple(
+        FitParameter(
+            name,
+            unit,
+            "synthetic",
+            float(value - abs(value) * 0.1 - 0.005),
+            float(value + abs(value) * 0.1 + 0.005),
+            0.001,
+        )
+        for name, unit, value in zip(
+            evaluator.parameter_names, evaluator.parameter_units, truth, strict=True
+        )
+    )
+    perturbed = truth.copy()
+    perturbed[9] += 0.005
+    recovery = fit_native_parameters(
+        lambda v: evaluator.predict(v, 8),
+        synthetic,
+        specification,
+        [perturbed],
+        fixed_values={p.name: float(truth[i]) for i, p in enumerate(specification) if i != 9},
+        maximum_iterations=60,
+        finite_difference_step=1e-6,
+    )
+    assert recovery.best_converged is not None
+    assert recovery.best_converged.data_chi_square < 1e-6
+    assert recovery.best_converged.parameter_values[9] == pytest.approx(truth[9], abs=2e-5)
     record["material"]["n_imag"] = [1e-6]
     write()
     with pytest.raises(ValueError, match="refractive indices"):

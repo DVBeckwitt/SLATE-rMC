@@ -426,3 +426,24 @@ Expected first detection: signed direct-amplitude/isotropic/termination proof, c
 dependency and native reuse tests, roster bound validation, immutable candidate/observation
 validation, correlated GLS/scale oracle, planted all-coordinate recovery, or recorded sensitivity
 interval changes. Measured guard failure is retained as rejection evidence, never waived.
+
+## Joint native refinement controls (v16)
+
+- Exchange Pb radial/normal ADPs, wrap iodine lifts, or replace amplitude damping by
+  an intensity envelope: the independent finite atomic-path oracle diverges.
+- Reuse a response after a source/rigid-pose change, bypass candidate shape/complex
+  validation on a cache hit, or retain a cone component after its width/order changes:
+  the dependency and fresh-response parity checks fail.
+- Count calibration twice or change its coordinate metadata; constrain training with
+  full-data historical guards; ignore cross-covariance or duplicate validation groups:
+  ownership/leakage/partition checks and the analytic Schur-complement oracle fail.
+- Report an inferior converged start as resolved despite a lower unfinished admissible
+  point, or let an infeasible low-prior point invalidate a converged guarded solution:
+  separate constrained/unconstrained counterexamples detect both errors.
+- Hide changed guard feasibility behind unchanged individual free-scale decisions,
+  divide control signal by robust-fit weights, or take a zero finite-difference step
+  at a narrow search boundary: numerical/control/sensitivity regressions detect these.
+
+Runner numerical records additionally bind the actual target revision and guard policy,
+compare fitted center offsets across N, and reject effective no-op refinements. A failing
+screen never qualifies a physical fit or automatically enables a new physical term.

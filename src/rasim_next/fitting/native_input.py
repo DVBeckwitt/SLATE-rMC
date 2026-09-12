@@ -16,6 +16,7 @@ from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import build_incident_states
 from rasim_next.materials.crystal import CrystalSite, CrystalStructure
 from rasim_next.ordered.amplitudes import _validated_site_displacement_tensors
+from rasim_next.ordered.motifs import SiteDisplacementProfile, TransverseIsotropicSiteDisplacement
 from rasim_next.pipeline.bragg_space import (
     CifFiniteStackStrength,
     IncoherentStructureMixture,
@@ -75,6 +76,7 @@ class FiniteStructureRecipe:
     stacking_phases: tuple[StackingPhaseRecipe, ...] = ()
     initial_population: InitialPopulation | None = None
     site_displacement_tensors_A2: tuple[np.ndarray, ...] | None = None
+    site_displacement_profile: SiteDisplacementProfile | None = None
 
     def __post_init__(self) -> None:
         crystals, phases = tuple(self.crystals), tuple(self.stacking_phases)
@@ -93,6 +95,15 @@ class FiniteStructureRecipe:
         object.__setattr__(self, "crystals", crystals)
         object.__setattr__(self, "stacking_phases", phases)
         object.__setattr__(self, "normalization", EventIntensityNormalization(self.normalization))
+        if self.site_displacement_profile is not None and (
+            not phases
+            or not isinstance(self.site_displacement_profile, SiteDisplacementProfile)
+            or self.site_displacement_tensors_A2 is not None
+            or self.unknown_u_iso_A2 is not None
+        ):
+            raise ValueError(
+                "the Pb site profile requires stacking and exclusive displacement state"
+            )
         if self.site_displacement_tensors_A2 is not None:
             if phases or len(self.site_displacement_tensors_A2) != len(crystals):
                 raise ValueError("site tensors require one tensor array per ordered CIF motif")
@@ -169,6 +180,72 @@ class FiniteStructureRecipe:
             surface_fractions,
             self.normalization,
             self.unknown_u_iso_A2,
+            self.site_displacement_profile,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeSourceDefinition:
+    """Physical source inputs and an explicit integration rule retained at I/O."""
+
+    mean_origin_lab_m: np.ndarray
+    mean_direction_lab: np.ndarray
+    transverse_axes_lab: np.ndarray
+    spatial_sigma_m: np.ndarray
+    divergence_sigma_rad: np.ndarray
+    line_wavelength_A: np.ndarray
+    line_probability: np.ndarray
+    common_wavelength_sigma_A: float
+    polarization_state_id: str
+    kind: str
+    position_divergence_correlation: tuple[float, float] = (0.0, 0.0)
+    sample_count: int = 32
+    seed: int = 0
+    divergence_order: int = 6
+    wavelength_order: int = 6
+
+    def __post_init__(self):
+        for name in (
+            "mean_origin_lab_m",
+            "mean_direction_lab",
+            "transverse_axes_lab",
+            "spatial_sigma_m",
+            "divergence_sigma_rad",
+            "line_wavelength_A",
+            "line_probability",
+            "position_divergence_correlation",
+        ):
+            raw = np.asarray(getattr(self, name))
+            if np.iscomplexobj(raw) or np.any(~np.isfinite(raw)):
+                raise ValueError("source parameters must be finite real arrays")
+            value = np.array(raw, dtype=float, copy=True)
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+        if self.kind not in ("gauss_hermite", "latin_hypercube"):
+            raise ValueError("unrecognized conditional source integration rule")
+
+    def sample(self):
+        """Rebuild common-latent rows through the authoritative source sampler."""
+        parameters = dict(
+            mean_origin_lab_m=self.mean_origin_lab_m,
+            mean_direction_lab=self.mean_direction_lab,
+            transverse_axes_lab=self.transverse_axes_lab,
+            spatial_sigma_m=self.spatial_sigma_m,
+            divergence_sigma_rad=self.divergence_sigma_rad,
+            line_wavelength_A=self.line_wavelength_A,
+            line_probability=self.line_probability,
+            common_wavelength_sigma_A=self.common_wavelength_sigma_A,
+            polarization_state_id=self.polarization_state_id,
+            position_divergence_correlation=self.position_divergence_correlation,
+        )
+        if self.kind == "latin_hypercube":
+            return sample_conditional_gaussian_source(
+                **parameters, sample_count=self.sample_count, seed=self.seed
+            )
+        return quadrature_conditional_gaussian_source(
+            **parameters,
+            divergence_order=self.divergence_order,
+            wavelength_order=self.wavelength_order,
         )
 
 
@@ -191,6 +268,7 @@ class NativeFitPhysics:
     polarization_weight: float
     specular_stitch_stack: ParrattStitchStack | None
     input_revision: str
+    source_definition: NativeSourceDefinition | None = None
 
     def __post_init__(self) -> None:
         for name in ("reciprocal_basis_Ainv", "crystal_to_sample"):
@@ -291,6 +369,12 @@ def load_native_fit_physics(path: Path) -> NativeFitPhysics:
         crystals.append(CrystalStructure(**crystal))
     phases = tuple(StackingPhaseRecipe(**p) for p in structure.pop("stacking_phases"))
     initial = structure.pop("initial_population")
+    if structure.get("site_displacement_profile") is not None:
+        profile = dict(structure["site_displacement_profile"])
+        profile["sites"] = tuple(
+            TransverseIsotropicSiteDisplacement(**site) for site in profile["sites"]
+        )
+        structure["site_displacement_profile"] = SiteDisplacementProfile(**profile)
     recipe = FiniteStructureRecipe(
         crystals=tuple(crystals),
         stacking_phases=phases,
@@ -302,14 +386,8 @@ def load_native_fit_physics(path: Path) -> NativeFitPhysics:
         stack = dict(stack)
         stack["substrate_refractive_index"] = complex(*stack["substrate_refractive_index"])
         stack = ParrattStitchStack(**stack)
-    rule = dict(record["source_rule"])
-    kind = rule.pop("kind")
-    if kind == "gauss_hermite":
-        source = quadrature_conditional_gaussian_source(**record["source"], **rule)
-    elif kind == "latin_hypercube":
-        source = sample_conditional_gaussian_source(**record["source"], **rule)
-    else:
-        raise ValueError("unrecognized conditional source integration rule")
+    definition = NativeSourceDefinition(**record["source"], **record["source_rule"])
+    source = definition.sample()
     return NativeFitPhysics(
         sample_id=record["sample_id"],
         instrument=CompiledInstrument(**instrument),
@@ -326,4 +404,5 @@ def load_native_fit_physics(path: Path) -> NativeFitPhysics:
         polarization_weight=record["polarization_weight"],
         specular_stitch_stack=stack,
         input_revision=hashlib.sha256(payload).hexdigest(),
+        source_definition=definition,
     )

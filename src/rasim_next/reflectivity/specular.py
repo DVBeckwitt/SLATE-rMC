@@ -49,6 +49,8 @@ class SpecularResult:
     scale_factor: float
     blend_bounds_q_over_qc: tuple[float, float]
     blend_selection: str
+    phase_kinematic_strength: NDArray[np.float64]
+    zero_kinematic_strength: float
     raw_kinematic_normalization: str = "raw finite-stack electron2"
     parratt_normalization: str = "dimensionless pure Parratt reflectivity"
     composite_normalization: str = "dimensionless manuscript specular composite"
@@ -63,6 +65,7 @@ class SpecularResult:
                 self.parratt_reflectivity,
                 self.scaled_high_branch,
                 self.composite_reflectivity,
+                self.phase_kinematic_strength,
             )
         )
         if arrays[0].ndim != 1 or any(array.shape != arrays[0].shape for array in arrays[1:]):
@@ -76,6 +79,8 @@ class SpecularResult:
             or not 0.0 <= bounds[0] < bounds[1]
             or not np.isfinite(self.scale_factor)
             or self.scale_factor <= 0.0
+            or not np.isfinite(self.zero_kinematic_strength)
+            or self.zero_kinematic_strength <= 0.0
             or self.blend_selection not in {"automatic", "fallback"}
             or not all(
                 (
@@ -95,6 +100,7 @@ class SpecularResult:
             parratt,
             high,
             composite,
+            phase_strength,
         ) = arrays
         object.__setattr__(self, "qz_Ainv", qz)
         object.__setattr__(self, "phase_l_coordinate", phase_l)
@@ -102,6 +108,8 @@ class SpecularResult:
         object.__setattr__(self, "parratt_reflectivity", parratt)
         object.__setattr__(self, "scaled_high_branch", high)
         object.__setattr__(self, "composite_reflectivity", composite)
+        object.__setattr__(self, "phase_kinematic_strength", phase_strength)
+        object.__setattr__(self, "zero_kinematic_strength", float(self.zero_kinematic_strength))
         object.__setattr__(self, "scale_factor", float(self.scale_factor))
         object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
 
@@ -119,6 +127,7 @@ class KinematicScaleSpecularResult:
     dimensionless_scale_factor: float
     blend_bounds_q_over_qc: tuple[float, float]
     blend_selection: str
+    zero_strength_A2: float
     parratt_normalization: str = "dimensionless pure Parratt reflectivity"
     composite_normalization: str = "kinematic finite-stack strength A2"
 
@@ -143,6 +152,8 @@ class KinematicScaleSpecularResult:
         if (
             not np.isfinite(scale)
             or scale <= 0.0
+            or not np.isfinite(self.zero_strength_A2)
+            or self.zero_strength_A2 <= 0.0
             or len(bounds) != 2
             or not 0.0 <= bounds[0] < bounds[1]
             or self.blend_selection not in {"automatic", "fallback"}
@@ -167,6 +178,7 @@ class KinematicScaleSpecularResult:
         object.__setattr__(self, "composite_strength_A2", composite)
         object.__setattr__(self, "strength_ratio", ratio)
         object.__setattr__(self, "dimensionless_scale_factor", scale)
+        object.__setattr__(self, "zero_strength_A2", float(self.zero_strength_A2))
         object.__setattr__(self, "blend_bounds_q_over_qc", bounds)
 
 
@@ -395,6 +407,8 @@ def manuscript_specular_composite(
         scale_factor=scale_factor,
         blend_bounds_q_over_qc=bounds,
         blend_selection=selection,
+        phase_kinematic_strength=phase_kinematic,
+        zero_kinematic_strength=float(zero),
     )
 
 
@@ -424,20 +438,8 @@ def kinematic_scale_specular_stitch(
         fit_mask=fit_mask,
     )
     qz = np.asarray(dimensionless.qz_Ainv)
-    phase_strength = _evaluate_kinematic(
-        kinematic_at_l,
-        np.asarray(dimensionless.phase_l_coordinate),
-        "internal-phase",
-    )
-    zero_strength = float(
-        _evaluate_kinematic(
-            kinematic_at_l,
-            np.zeros(1, dtype=np.float64),
-            "zero-phase",
-        )[0]
-    )
-    if zero_strength <= 0.0:
-        raise ValueError("zero-phase kinematic intensity must be positive")
+    phase_strength = dimensionless.phase_kinematic_strength
+    zero_strength = dimensionless.zero_kinematic_strength
     conversion = qz**2 * zero_strength / dimensionless.scale_factor
     scaled_parratt = conversion * dimensionless.parratt_reflectivity
     composite = conversion * dimensionless.composite_reflectivity
@@ -460,6 +462,7 @@ def kinematic_scale_specular_stitch(
         dimensionless_scale_factor=dimensionless.scale_factor,
         blend_bounds_q_over_qc=dimensionless.blend_bounds_q_over_qc,
         blend_selection=dimensionless.blend_selection,
+        zero_strength_A2=zero_strength,
     )
 
 
@@ -523,13 +526,7 @@ def compile_parratt_stitch(
         top_roughness_A=stack.top_roughness_A,
         bottom_roughness_A=stack.bottom_roughness_A,
         qc_Ainv=qc,
-        zero_strength_A2=float(
-            _evaluate_kinematic(
-                kinematic_at_l,
-                np.zeros(1, dtype=np.float64),
-                "zero-phase",
-            )[0]
-        ),
+        zero_strength_A2=stitched.zero_strength_A2,
         dimensionless_scale_factor=stitched.dimensionless_scale_factor,
         blend_bounds_q_over_qc=stitched.blend_bounds_q_over_qc,
         blend_selection=stitched.blend_selection,

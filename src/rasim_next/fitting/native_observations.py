@@ -27,6 +27,7 @@ class NativeFitObservations:
     guard_pointer: np.ndarray
     guard_limit: np.ndarray
     input_revision: str
+    allow_guard_constraints: bool = True
     _cholesky: np.ndarray = field(init=False, repr=False)
     _whitened_net: np.ndarray = field(init=False, repr=False)
 
@@ -93,6 +94,8 @@ class NativeFitObservations:
         self, raw_prediction: np.ndarray, *, enforce_guards: bool = False
     ) -> tuple[float, np.ndarray]:
         """Exact nonnegative GLS scale, including correlated observation errors."""
+        if enforce_guards and not self.allow_guard_constraints:
+            raise ValueError("historical guards may only be diagnostic on a training split")
         shape = self.whiten(raw_prediction)
         denominator = float(shape @ shape)
         if denominator == 0:
@@ -187,3 +190,96 @@ def load_native_fit_observations(path: Path) -> NativeFitObservations:
             arrays["frozen_guard_limit"],
             hashlib.sha256(payload).hexdigest(),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeBackgroundControl:
+    """Frozen control support; measurement noise is distinct from calibration weighting."""
+
+    projection: NativePixelRegionProjection
+    measurement_variance_count2: np.ndarray
+    split: np.ndarray
+    revision: str
+
+    def __post_init__(self):
+        n = self.projection.observation_count
+        for name in ("measurement_variance_count2", "split"):
+            value = np.array(getattr(self, name), copy=True)
+            if value.shape != (n,) or np.iscomplexobj(value) or np.any(~np.isfinite(value)):
+                raise ValueError("control arrays must be aligned finite real vectors")
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+        if (
+            np.any(self.measurement_variance_count2 <= 0)
+            or self.split.dtype.kind not in "iu"
+            or not np.all(np.isin(self.split, (0, 1, 2)))
+            or not self.revision
+        ):
+            raise ValueError(
+                "controls require positive measurement variance and declared split labels"
+            )
+
+    def signal_diagnostic(self, predicted_signal_count):
+        """Predicted diffraction contamination, without fitting a scale or changing background."""
+        signal = np.asarray(predicted_signal_count)
+        if (
+            signal.shape != self.split.shape
+            or np.iscomplexobj(signal)
+            or np.any(~np.isfinite(signal))
+            or np.any(signal < 0)
+        ):
+            raise ValueError("control signal must be a finite nonnegative count vector")
+        sigma = signal / np.sqrt(self.measurement_variance_count2)
+        density = signal / self.projection.observation_measure_px2
+        return dict(
+            signal_measurement_sigma=sigma,
+            signal_density_count_per_px2=density,
+            split_summary=[
+                dict(
+                    split=i,
+                    row_count=int(np.sum(self.split == i)),
+                    predicted_signal_count=float(signal[self.split == i].sum()),
+                    maximum_signal_measurement_sigma=float(
+                        np.max(sigma[self.split == i], initial=0)
+                    ),
+                    squared_signal_norm=float(np.sum(sigma[self.split == i] ** 2)),
+                )
+                for i in (0, 1, 2)
+            ],
+            interpretation="predicted signal norm, not a goodness-of-fit chi-square",
+        )
+
+
+def load_native_background_controls(path: Path) -> tuple[NativeBackgroundControl, ...]:
+    """Load independent control layouts; do not combine their overlapping cells as evidence."""
+    path = Path(path)
+    record = json.loads(path.read_bytes())
+    arrays_path = path.parent / record["arrays"]["path"]
+    with arrays_path.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != record["arrays"]["sha256"]:
+            raise ValueError("native observation array SHA256 mismatch")
+    controls = (record["background"]["controls"], *record["background"]["guard_controls"])
+    result = []
+    with np.load(arrays_path, allow_pickle=False) as arrays:
+        signal_pixels = arrays[record["signal_projection"]["arrays"]["flat_pixel_index"]]
+        for control in controls:
+            data = control["projection"]
+            projection = NativePixelRegionProjection(
+                detector_shape_rc=tuple(data["detector_shape_rc"]),
+                observation_count=data["observation_count"],
+                quadrature_revision=data["quadrature_revision"],
+                **{key: arrays[value] for key, value in data["arrays"].items()},
+            )
+            if projection.projection_revision != data["projection_revision"] or len(
+                np.intersect1d(signal_pixels, projection.flat_pixel_index)
+            ):
+                raise ValueError("control projection is changed or overlaps frozen signal pixels")
+            result.append(
+                NativeBackgroundControl(
+                    projection,
+                    arrays[control["arrays"]["measurement_variance_count2"]],
+                    arrays[control["arrays"]["split"]],
+                    control["revision"],
+                )
+            )
+    return tuple(result)

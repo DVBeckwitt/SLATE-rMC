@@ -2185,3 +2185,51 @@ angular and seeded finer checks changed predictions by 7.87--15.75 covariance-wh
 units per supported row. **No new measured fit or parameter uncertainty is accepted.**
 The numerical core exposes the requested degrees of freedom; adequate integration and
 identifiability remain acceptance requirements before replacing the nominal fit.
+
+## Complete native refinement workflow (contract v16)
+
+T30 extends the native path to the full declared Bi/Pb specimen roster and eighteen
+source/instrument coordinates. PHY-ORD-019 is checked against explicit signed atomic
+enumeration of every two-layer path for three terminations, both normalizations and
+independent Pb/I radial/normal ADPs. The four Pb nominal reductions agree to 1.1e-14
+relative strength or better. They are `MATCH`; newly varied states have `NO_ORACLE`
+for experimental parameter truth and are checked against independent equations.
+
+PHY-FIT-023/024/025 retain a compact proof set: complete source/pose rebuilding versus
+fresh responses, exact cone-cache parity, a real native forward mosaic/scale recovery,
+analytic all-nuisance profiles, separate feasible/converged minima, calibration ownership,
+training-guard leakage rejection, conditional covariance and validation partition checks,
+and numerical-guard/control-noise counterexamples. Synthetic native recovery is deliberately
+limited to an identifiable mosaic/scale problem; it is not recovery of all 39--45 parameters
+from the six measured datasets. Local derivatives and raw profiles do not establish that.
+
+All-six numerical screens use original 32-row conditional sources and p7/g2 quadrature.
+Inner cone 16->32 and spatial 16->48 changes are at float64 roundoff. Axial, outgoing
+angular and source checks fail the declared 0.1 fixed-scale whitened-RMS budget:
+
+| Acquisition | Axial p8 | Angular g3 | Source 64 | Independent seed |
+|---|---:|---:|---:|---:|
+| Bi2Te3 | 12.759 | 4.945 | 3.357 | 14.008 |
+| Bi2Se3 | 26.467 | 8.282 | 6.386 | 26.190 |
+| GD1 | 23.851 | 26.333 | 13.953 | 48.335 |
+| SiD1 | 28.948 | 8.946 | 6.696 | 40.205 |
+| Clean1 | 18.764 | 12.906 | 7.013 | 22.032 |
+| B4 | 18.723 | 9.233 | 5.956 | 29.755 |
+
+These are disagreements, not rigorous error bounds. Original valid/excluded rows,
+native support, net counts, covariance and historical guards remain fixed. Numerical
+failure prevents interpreting residuals as evidence for PSF, microstrain, footprint
+or extra off-specular channels. No new physical parameter estimate is accepted.
+
+Runtime, memory, all-six workflow exercise and proof-command evidence are recorded
+in T30. Diagnostics remain external NPZ files with embedded manifests; no generated
+reference images, temporary scripts or measured snapshot tests enter the repository.
+
+The final suite passes 503 tests in 475.38 s with 14 expected GPU-underutilization
+warnings. The equivalent-work p8/g3 benchmark preserves the earlier prediction to
+4.38e-16 relative, with warm direct/cache medians 1.86547/0.26988 s and a 607.45 MB
+peak working set while two responses are retained. This does not qualify larger
+spectra/finer grids or imply a whole-fit speedup. Spatial-projector reuse is bitwise
+identical; phase/zero handoff strengths are carried through typed results without
+reevaluation. The Bi 513->1025 handoff-grid comparisons also fail objective-contrast
+qualification (661.25 Te, -4615.36 Se), despite smaller prediction differences.

@@ -142,3 +142,8 @@ tasks:
     branch: codex/bi13-native-joint
     status: READY_NUMERICAL_CORE_MEASURED_EXPLORATION_NOT_ACCEPTED
     depends_on: [T21, T26, T27]
+  - id: T30
+    file: tasks/30_full_native_refinement.md
+    branch: codex/full-native-refinement
+    status: IMPLEMENTED_NATIVE_WORKFLOW_MEASURED_NUMERICS_UNQUALIFIED
+    depends_on: [T29]

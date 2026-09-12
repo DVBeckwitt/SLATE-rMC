@@ -224,14 +224,21 @@ def _event_mass(
     thickness_A: float,
     envelope: SampleQIntensityEnvelope,
     weight: float,
+    cone_quadrature_order: int = 16,
+    cone_density: FloatArray | None = None,
 ) -> FloatArray:
     """Shared exact SF/cone contraction, before native-region or pixel deposition."""
     index = nodes.axial_index
-    mass = strength[0, index] * density.cone_average_sr_inv(
-        nodes.polar_angle_rad, nodes.cone_angle_rad
-    ) + strength[1, index] * density.cone_average_sr_inv(
-        nodes.polar_angle_rad, np.pi - nodes.cone_angle_rad
-    )
+    if cone_density is None:
+        cone_density = np.array(
+            [
+                density.cone_average_sr_inv(
+                    nodes.polar_angle_rad, opening, quadrature_order=cone_quadrature_order
+                )
+                for opening in (nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)
+            ]
+        )
+    mass = strength[0, index] * cone_density[0] + strength[1, index] * cone_density[1]
     coefficient = (
         nodes.integrated_coefficient
         * weight
@@ -246,6 +253,59 @@ def _event_mass(
             decay, 0.0, thickness_A
         ) / uniform_depth_attenuation(decay, 0.0, nodes.reference_thickness_A)
     return mass * coefficient
+
+
+@dataclass(frozen=True, slots=True)
+class NativeMosaicCache:
+    """Explicit bounded execution state for one immutable response's cone averages.
+
+    Retain one width/order entry per normalized component. Eta mixes the two
+    probability laws; thickness, structure and attenuation do not alter them.
+    """
+
+    response: NativeFiberResponse
+    _gaussian: tuple | None = field(default=None, init=False, repr=False)
+    _lorentzian: tuple | None = field(default=None, init=False, repr=False)
+
+    def components(self, density: SphericalMosaicDensity, order: int) -> tuple:
+        parameters = density.parameters
+        components = []
+        for name, width, active, pure in (
+            (
+                "_gaussian",
+                parameters.gaussian_sigma_rad,
+                parameters.lorentzian_probability < 1,
+                MosaicParameters(parameters.gaussian_sigma_rad, 0.0, 0.0),
+            ),
+            (
+                "_lorentzian",
+                parameters.lorentzian_half_width_rad,
+                parameters.lorentzian_probability > 0,
+                MosaicParameters(0.0, parameters.lorentzian_half_width_rad, 1.0),
+            ),
+        ):
+            if not active:
+                components.append(None)
+                continue
+            saved = getattr(self, name)
+            if saved is None or saved[:2] != (width, order):
+                law = SphericalMosaicDensity(pure)
+                values = []
+                for node in self.response.nodes:
+                    value = np.array(
+                        [
+                            law.cone_average_sr_inv(
+                                node.polar_angle_rad, opening, quadrature_order=order
+                            )
+                            for opening in (node.cone_angle_rad, np.pi - node.cone_angle_rad)
+                        ]
+                    )
+                    value.setflags(write=False)
+                    values.append(value)
+                saved = (width, order, tuple(values))
+                object.__setattr__(self, name, saved)
+            components.append(saved[2])
+        return tuple(components)
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +369,8 @@ class NativeFiberResponse:
         thickness_A: float | None = None,
         intensity_envelope: SampleQIntensityEnvelope | None = None,
         specular_stitch_stack: ParrattStitchStack | None = None,
+        mosaic_cache: NativeMosaicCache | None = None,
+        cone_quadrature_order: int | None = None,
     ) -> FloatArray:
         """Return raw integrated A² per native observation, with one shared scale owner."""
         detector = self.detector
@@ -324,10 +386,33 @@ class NativeFiberResponse:
         if not np.isfinite(thickness) or thickness < 0:
             raise ValueError("thickness must be finite and nonnegative")
         density = SphericalMosaicDensity(detector.mosaic if mosaic is None else mosaic)
+        order = (
+            detector.integration_rule.cone_quadrature_order
+            if cone_quadrature_order is None
+            else cone_quadrature_order
+        )
+        if type(order) is not int or order < 4:
+            raise ValueError("cone quadrature order must be an integer of at least four")
+        components = None
+        if mosaic_cache is not None:
+            if mosaic_cache.response is not self:
+                raise ValueError("mosaic cache belongs to another native response")
+            components = mosaic_cache.components(density, order)
         envelope = detector.intensity_envelope if intensity_envelope is None else intensity_envelope
         tables = [detector._strength_table(grid, model, thickness) for grid in self.grids]
         result = np.zeros(len(self.observation_measure_px2))
-        for node, probability in zip(self.nodes, self.region_probability, strict=True):
+        for i, (node, probability) in enumerate(
+            zip(self.nodes, self.region_probability, strict=True)
+        ):
+            cone_density = None
+            if components is not None:
+                gaussian, lorentzian = components
+                eta = density.parameters.lorentzian_probability
+                cone_density = np.zeros((2, len(node.axial_index)))
+                if gaussian is not None:
+                    cone_density += (1 - eta) * gaussian[i]
+                if lorentzian is not None:
+                    cone_density += eta * lorentzian[i]
             mass = _event_mass(
                 node,
                 tables[node.grid_index],
@@ -335,6 +420,8 @@ class NativeFiberResponse:
                 thickness,
                 envelope,
                 detector.phase_population_weight * detector.polarization_weight,
+                order,
+                cone_density,
             )
             result += mass @ probability
         return result
@@ -453,6 +540,8 @@ class ConditionalStructureDetector:
                             rule.axial_peak_half_width_L,
                             rule.source_latent_radius,
                             rule.maximum_backward_probability,
+                            rule.cone_quadrature_order,
+                            rule.stitch_grid_size,
                         ]
                     ),
                 ),
@@ -619,6 +708,7 @@ class ConditionalStructureDetector:
                     film_refractive_index=film,
                     film_thickness_A=thickness,
                     c_A=2 * np.pi / b3,
+                    grid_size=self.integration_rule.stitch_grid_size,
                 )
                 value = _stitch_grid(
                     value[0],
@@ -640,7 +730,11 @@ class ConditionalStructureDetector:
         return result
 
     def compile_native_response(
-        self, projection: NativePixelRegionProjection, *, worker_count: int = 1
+        self,
+        projection: NativePixelRegionProjection,
+        *,
+        worker_count: int = 1,
+        spatial_projection: NativeSpatialRegionProjection | None = None,
     ) -> NativeFiberResponse:
         """Compile probabilities with bounded parallel work and fixed reduction order."""
         if type(worker_count) is not int or worker_count < 1:
@@ -657,7 +751,16 @@ class ConditionalStructureDetector:
         np.maximum.at(high, owner, np.column_stack((column, row)) + 0.5)
         bounds = np.column_stack((low[:, 0], high[:, 0], low[:, 1], high[:, 1]))
         bounds = bounds[np.all(np.isfinite(bounds), axis=1)]
-        projector = NativeSpatialRegionProjection(projection)
+        if spatial_projection is not None and (
+            not isinstance(spatial_projection, NativeSpatialRegionProjection)
+            or spatial_projection.projection is not projection
+        ):
+            raise ValueError("spatial projection belongs to another native observation operator")
+        projector = (
+            spatial_projection
+            if spatial_projection is not None
+            else NativeSpatialRegionProjection(projection)
+        )
         grids, nodes, probabilities, indices = [], [], [], {}
         if len(bounds):
             for batch, probability in _project_batches(
@@ -705,6 +808,7 @@ class ConditionalStructureDetector:
                 self.instrument.film_thickness_A,
                 self.intensity_envelope,
                 self.phase_population_weight * self.polarization_weight,
+                self.integration_rule.cone_quadrature_order,
             )
             yield batch.transfer.spatial, mass
 

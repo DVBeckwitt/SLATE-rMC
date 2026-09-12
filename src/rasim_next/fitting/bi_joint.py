@@ -16,8 +16,9 @@ from rasim_next.fitting.bi_native import (
     BiNativeStructureModel,
 )
 from rasim_next.fitting.native_observations import NativeFitObservations
-from rasim_next.pipeline.conditional_detector import NativeFiberResponse
-from rasim_next.reflectivity.specular import compile_parratt_stitch
+from rasim_next.fitting.native_structure import native_stitch_records
+from rasim_next.pipeline.conditional_detector import NativeMosaicCache
+from rasim_next.pipeline.source_spatial import NativeSpatialRegionProjection
 
 BI_JOINT_PARAMETER_NAMES = (
     *BI_CELL_SITE_PARAMETER_NAMES,
@@ -87,11 +88,14 @@ class BiNativeFitEvaluator:
     compile_count: int = field(default=0, init=False)
     evaluation_count: int = field(default=0, init=False)
     compile_seconds: float = field(default=0.0, init=False)
-    _responses: OrderedDict[tuple[str, bytes], NativeFiberResponse] = field(
+    _responses: OrderedDict[tuple[str, bytes], NativeMosaicCache] = field(
         default_factory=OrderedDict, init=False, repr=False
     )
     _predictions: OrderedDict[tuple[int, bytes], np.ndarray] = field(
         default_factory=OrderedDict, init=False, repr=False
+    )
+    _spatial_projection: NativeSpatialRegionProjection | None = field(
+        default=None, init=False, repr=False
     )
 
     def predict(self, candidate: BiJointCandidate) -> np.ndarray:
@@ -122,25 +126,35 @@ class BiNativeFitEvaluator:
         )
         key = (physics.material.material_revision, physics.reciprocal_basis_Ainv.tobytes())
         if key in self._responses:
-            response = self._responses.pop(key)
+            mosaic_cache = self._responses.pop(key)
         else:
             start = perf_counter()
+            if self._spatial_projection is None:
+                object.__setattr__(
+                    self,
+                    "_spatial_projection",
+                    NativeSpatialRegionProjection(self.observations.projection),
+                )
             response = detector.compile_native_response(
-                self.observations.projection, worker_count=self.worker_count
+                self.observations.projection,
+                worker_count=self.worker_count,
+                spatial_projection=self._spatial_projection,
             )
+            mosaic_cache = NativeMosaicCache(response)
             object.__setattr__(
                 self, "compile_seconds", self.compile_seconds + perf_counter() - start
             )
             object.__setattr__(self, "compile_count", self.compile_count + 1)
-        self._responses[key] = response
+        self._responses[key] = mosaic_cache
         while len(self._responses) > 2:
             self._responses.popitem(last=False)
         object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
-        prediction = response.evaluate(
+        prediction = mosaic_cache.response.evaluate(
             detector.strength_model,
             mosaic=MosaicParameters(*candidate.values[13:16]),
             thickness_A=candidate.film_thickness_A,
             specular_stitch_stack=stack,
+            mosaic_cache=mosaic_cache,
         )
         prediction.setflags(write=False)
         self._predictions[candidate_key] = prediction
@@ -152,6 +166,7 @@ class BiNativeFitEvaluator:
         """Release the explicitly retained native integration resources."""
         self._responses.clear()
         self._predictions.clear()
+        object.__setattr__(self, "_spatial_projection", None)
 
     def stitch_state(self, candidate: BiJointCandidate) -> list[dict]:
         """Record the empirical normalization and selected interval for every surface/line."""
@@ -161,39 +176,14 @@ class BiNativeFitEvaluator:
             top_roughness_A=float(candidate.values[19]),
             bottom_roughness_A=float(candidate.values[20]),
         )
-        strength = physics.structure.strength(
+        arguments = dict(
             coherent_repeats=candidate.coherent_repeats,
+            film_thickness_A=candidate.film_thickness_A,
             surface_fractions=candidate.surface_fractions,
             phase_fractions=(1.0,),
             fault_parameters={},
         )
-        result = []
-        for surface, component in enumerate(strength.components):
-            for wave, index in zip(
-                physics.material.wavelength_A, physics.material.n_complex, strict=True
-            ):
-                state = compile_parratt_stitch(
-                    stack,
-                    lambda ell, component=component, wave=wave: component.evaluate_hkl(
-                        h=0, k=0, L=ell, k_norm_Ainv=2 * np.pi / wave
-                    ),
-                    wavelength_A=wave,
-                    film_refractive_index=index,
-                    film_thickness_A=candidate.film_thickness_A,
-                    c_A=candidate.values[1],
-                )
-                result.append(
-                    dict(
-                        surface=surface,
-                        wavelength_A=float(wave),
-                        selection=state.blend_selection,
-                        bounds_q_over_qc=state.blend_bounds_q_over_qc,
-                        scale=state.dimensionless_scale_factor,
-                        zero_strength_A2=state.zero_strength_A2,
-                        qc_Ainv=state.qc_Ainv,
-                    )
-                )
-        return result
+        return native_stitch_records(physics, arguments, stack)
 
 
 def fit_bi_joint(

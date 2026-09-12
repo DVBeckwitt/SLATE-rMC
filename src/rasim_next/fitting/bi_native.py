@@ -10,16 +10,17 @@ from numpy.typing import ArrayLike, NDArray
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.fitting.fixed_lattice import hexagonal_direct_basis
 from rasim_next.fitting.native_input import NativeFitPhysics
+from rasim_next.fitting.native_structure import (
+    rebind_native_structure,
+    validate_native_rod_coverage,
+)
 from rasim_next.materials.crystal import crystal_with_direct_basis
-from rasim_next.materials.optics import atomic_scattering_factor_e, material_optics
 from rasim_next.ordered.motifs import (
     Bi2X3QuintupleLayerParameters,
     SiteDisplacementProfile,
     TransverseIsotropicSiteDisplacement,
     quintuple_layer_site_labels,
 )
-from rasim_next.reciprocal.lattice import ReciprocalLattice
-from rasim_next.reciprocal.rods import build_rod_catalog
 
 BI_CELL_SITE_PARAMETER_NAMES = (
     "a_A",
@@ -227,95 +228,15 @@ class BiNativeStructureModel:
             unknown_u_iso_A2=None,
             site_displacement_tensors_A2=tuple(tensors for _ in crystals),
         )
-        reciprocal = ReciprocalLattice.from_crystal(crystals[0]).basis_Ainv
-        material = material_optics(crystals[0], reference.source.mean_rays.wavelength_A)
         revision = canonical_revision_sha256(
             ("definition_id", "bi_native_cell_site_candidate.v1"),
             ("reference_input", reference.input_revision),
             ("parameters", parameters.as_array()),
         )
-        rod_revision = reference.rod_catalog_revision
-        if not np.array_equal(reciprocal, reference.reciprocal_basis_Ainv):
-            rod_revision = canonical_revision_sha256(
-                ("definition_id", "fixed_physical_rod_roster_rebound_basis.v1"),
-                ("reference_catalog", rod_revision),
-                ("reciprocal_basis_Ainv", reciprocal),
-            )
-        return replace(
-            reference,
-            structure=recipe,
-            material=material,
-            reciprocal_basis_Ainv=reciprocal,
-            rod_catalog_revision=rod_revision,
-            input_revision=revision,
-        )
+        return rebind_native_structure(reference, recipe, revision)
 
     def validate_rod_coverage(self, *, a_bounds_A, c_bounds_A) -> dict[str, float | int]:
-        """Prove fixed-roster coverage over a cell box and every occupancy in [0,1].
-
-        Positive forward factors and the smallest volume bound beta. For
-        0<Re(n)<=1, the refracted phase sphere satisfies
-        Kphase² <= k0²(1+beta_max), including complex normal-wavevector effects.
-        Every potentially elastic rod must therefore have Qr <= 2*Kphase_max.
-        A reciprocal-metric eigenvalue bounds the exhaustive integer search.
-        """
-        bounds = np.asarray([a_bounds_A, c_bounds_A], dtype=float)
-        if (
-            bounds.shape != (2, 2)
-            or np.any(~np.isfinite(bounds))
-            or np.any(bounds <= 0)
-            or np.any(bounds[:, 1] < bounds[:, 0])
-        ):
-            raise ValueError("cell coverage requires ordered positive a/c ranges")
-        waves = np.unique(self.reference.source.mean_rays.wavelength_A)
-        cell = self.reference.structure.crystals[0]
-        for species, element, charge in {(s.species, s.element, s.charge) for s in cell.sites}:
-            factor, _ = atomic_scattering_factor_e(
-                species=species,
-                element=element,
-                charge=charge,
-                q_magnitude_Ainv=np.zeros(len(waves)),
-                wavelength_A=waves,
-            )
-            if np.any(factor.real <= 0) or np.any(factor.imag < 0):
-                raise ValueError("rod coverage optical bound requires positive forward factors")
-        parameters = replace(
-            self.reference_parameters,
-            a_A=bounds[0, 0],
-            c_A=bounds[1, 0],
-            bi_occupancy=1.0,
-            central_x_occupancy=1.0,
-            outer_x_occupancy=1.0,
-        )
-        dense = self.bind(parameters)
-        if np.any(dense.material.n_complex.real <= 0):
-            raise ValueError("cell box exceeds the passive phase-sphere coverage bound")
-        beta = float(np.max(dense.material.n_complex.imag))
-        maximum_q = float(4 * np.pi / np.min(waves) * np.sqrt(1 + beta))
-        wide = self.bind(replace(parameters, a_A=bounds[0, 1], c_A=bounds[1, 1]))
-        crystal = wide.structure.crystals[0]
-        lattice = ReciprocalLattice.from_crystal(crystal)
-        minimum_eigenvalue = float(np.linalg.eigvalsh(lattice.inplane_metric_Ainv2)[0])
-        limit = int(np.ceil(maximum_q / np.sqrt(minimum_eigenvalue)))
-        catalog = build_rod_catalog(crystal, h_bounds=(-limit, limit), k_bounds=(-limit, limit))
-        configured = {(rod.h, rod.k) for rod in self.reference.rods}
-        required = {
-            (int(h), int(k))
-            for h, k, q in zip(catalog.h, catalog.k, catalog.qr_Ainv, strict=True)
-            if q <= maximum_q * (1 + 1e-12)
-        }
-        if missing := required - configured:
-            raise ValueError(f"fixed rod roster misses potentially elastic rods: {sorted(missing)}")
-        absent_q = [
-            float(q)
-            for h, k, q in zip(catalog.h, catalog.k, catalog.qr_Ainv, strict=True)
-            if (int(h), int(k)) not in configured
-        ]
-        first_excluded = min([np.sqrt(minimum_eigenvalue) * (limit + 1), *absent_q])
-        return dict(
-            maximum_elastic_q_Ainv=maximum_q,
-            first_excluded_radial_Ainv=first_excluded,
-            exclusion_margin_Ainv=first_excluded - maximum_q,
-            required_rod_count=len(required),
-            enumerated_index_limit=limit,
+        """Prove fixed-roster coverage over the complete declared cell box."""
+        return validate_native_rod_coverage(
+            self.reference, a_bounds_A=a_bounds_A, c_bounds_A=c_bounds_A
         )

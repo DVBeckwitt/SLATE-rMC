@@ -1,6 +1,6 @@
 # Contracts
 
-Contract API version: **15**. Trace schema version: **4**. Reference pack version: **1**.
+Contract API version: **16**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
@@ -1167,3 +1167,50 @@ diagnostics, not posterior uncertainties or numerical qualification. Bounds do n
 identification. Full occupancy scale remains active through density-derived optics, and may
 still be weakly constrained. Source/mounting calibration, PSF, strain distributions, additional
 off-specular channels and stacking disorder are outside this first ordered Bi milestone.
+
+## Joint native Bi/Pb and acquisition refinement (v16)
+
+`PbNativeStructureModel` preserves signed iodine integer lifts while varying a,c,z,
+both occupancies and independent radial/normal Pb/I ADPs. `PbJointModel` adds all
+declared phase/parent simplex coordinates, per-phase epsilon, initial orientation,
+mosaic and finite terminations. `Pbi2FiniteSurfaceStrength.site_displacement_profile`
+uses the existing unit-cell tensor amplitude for every finite whole/lower/upper motif
+and both orientations. N retains its declared single-layer Pb or conventional-cell Bi unit.
+`native_structure.rebind_native_structure` owns common cell/material/rod rebinding.
+
+`NativeSourceDefinition` retains the explicit source input at the loader boundary.
+`NativeInstrumentModel` binds eighteen acquisition coordinates with fixed frames and units,
+resamples the conditional source and recomputes candidate optics at actual wavelengths.
+`NativeJointEvaluator` owns bounded explicit response and prediction caches for either
+specimen model. Its geometry key includes source, material, basis and rigid poses;
+film thickness remains an intensity dependency. `NativeMosaicCache` reuses only unchanged
+Gaussian/Lorentzian widths and cone order within one response. `FiberIntegrationRule`
+declares the inner cone order separately from axial and outgoing-angle integration.
+The same rule declares `stitch_grid_size` (default 513, minimum 257); the fitting
+trace uses that exact grid. `SpecularResult` retains immutable internal-phase and
+zero-phase strengths in the input evaluator's units, and `KinematicScaleSpecularResult`
+retains `zero_strength_A2`. Downstream handoff calculations consume those existing
+values instead of invoking the same structure evaluator repeatedly. Other declared
+observables and handoff-selection equations are unchanged.
+An optional `NativeSpatialRegionProjection` can be reused by the response compiler
+only with its identical frozen observation-projection owner.
+
+`native_search` profiles a nonnegative scale in the full supported covariance, accepts
+independently owned Gaussian calibration blocks, separates assumptions, refits every
+continuous nuisance at each discrete N and sweeps each profile in both directions.
+Best evaluated, feasible and converged points are distinct. An unfinished lower admissible
+point prevents a resolved-minimum claim. Training/synthetic observations prohibit historical
+guard constraints. Conditional validation uses the original cross-covariance and verifies
+declared disjoint groups; marginal group scores are correlated and cannot be summed.
+
+`native_accuracy` compares fixed-scale predictions, parameter contrasts and profiled
+objective contrasts against the actual objective observations. Guarded-objective checks
+are required for guarded fits. The runner checks fitted centers for every N and compares
+their numerical score offsets before reporting discrete-ranking agreement. All such
+agreement is empirical at the declared probes, not a certified error bound. Exact mixture
+boundary inactivity is reported without freezing coordinates or claiming identification.
+
+The interface and measurement limitations are in `NATIVE_REFINEMENT.md`.
+`scripts/refine_native.py` binds numeric plans to raw-acquisition, source-code and observation
+hashes and writes one external NPZ with embedded manifest. It never promotes a candidate
+automatically or turns an optimizer success, bound or raw profile into physical certainty.

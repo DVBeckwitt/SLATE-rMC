@@ -1105,3 +1105,20 @@ forbidden by the CLI because those coordinates form the known Rigaku translation
 Jacobian still provides the general rank authority. Without either fit flag, no calibration pack is
 serialized and the legacy numerical/result-revision path is exact. These options polish an existing
 calibration and do not turn diffraction peaks into an absolute detector-calibration oracle.
+
+## Complete native Bi/Pb refinement
+
+With `src` on `PYTHONPATH`, run:
+
+```powershell
+python scripts/refine_native.py --physics C:\external\sample_physics.json `
+  --observations C:\external\sample_observations.json `
+  --plan C:\external\sample_plan.json --output C:\external\sample_fit.ra_diag.npz
+```
+
+The parameter/plan contract is in `NATIVE_REFINEMENT.md`; T30 records the actual
+six-acquisition inputs, plans, numerical screens and workflow evidence. The same
+runner supports both Bi and all four declared Pb recipes. Explicit calibration
+blocks require real covariance and acquisition ownership. Empty stages run only
+baseline/numerical checks; final fitting stages release the full coordinate roster.
+Output remains a candidate with independent numerical and identification status.

@@ -334,3 +334,11 @@ arithmetic remain shared with their existing owners. Current main's beam-positio
 configured sampled-source routes are preserved. The explicit Bi execution resource may reuse
 unchanged material/basis responses; cell and occupancy candidates rebuild transport. There is
 no plugin backend, hidden global cache, new dependency or imported legacy runtime.
+
+Contract v16 extends this path to the complete declared Pb phase roster and explicit
+source/instrument candidates. `native_structure` is the common lattice/optics rebinder;
+`native_joint` is the response owner; `native_search` and `native_accuracy` consume ordinary
+prediction callables and immutable observations. They contain no scattering equations.
+`scripts/refine_native.py` orchestrates numerical checks, all-active fits, discrete choices,
+profiles, controls and conditional validation. The Bi-specific v15 API remains supported.
+No additional dependency or parallel physical implementation is introduced.

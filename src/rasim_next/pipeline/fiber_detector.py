@@ -827,8 +827,14 @@ class FiberIntegrationRule:
     source_latent_radius: float = 8.0
     maximum_backward_probability: float = 1e-12
     batch_size: int = 16384
+    cone_quadrature_order: int = 16
+    stitch_grid_size: int = 513
 
     def __post_init__(self) -> None:
+        if type(self.stitch_grid_size) is not int or self.stitch_grid_size < 257:
+            raise ValueError("stitch grid size must be an integer of at least 257")
+        if type(self.cone_quadrature_order) is not int or self.cone_quadrature_order < 4:
+            raise ValueError("cone quadrature order must be an integer of at least four")
         for name in ("axial_power", "angular_power", "seed", "batch_size"):
             value = getattr(self, name)
             if type(value) is not int or value < (1 if name == "batch_size" else 0):
