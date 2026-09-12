@@ -152,3 +152,8 @@ tasks:
     branch: codex/native-projection-coalescing
     status: IMPLEMENTED_NATIVE_PARITY_FITTING_CONTINUES
     depends_on: [T30]
+  - id: T33
+    file: tasks/33_native_batched_fit.md
+    branch: codex/native-batched-fit
+    status: READY_OPTIONAL_BATCHED_SEARCH_PHYSICAL_FITTING_CONTINUES
+    depends_on: [T32]

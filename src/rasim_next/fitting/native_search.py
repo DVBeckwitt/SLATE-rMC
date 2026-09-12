@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+from packaging.version import Version
+from scipy import __version__ as scipy_version
 from scipy.linalg import cho_solve, cholesky, solve_triangular
 from scipy.optimize import OptimizeResult, minimize
 
@@ -103,6 +105,7 @@ def fit_native_parameters(
     parameters: tuple[FitParameter, ...],
     starts,
     *,
+    predict_many: Callable[[np.ndarray], np.ndarray] | None = None,
     fixed_values: dict[str, float] | None = None,
     calibration: tuple[GaussianCalibration, ...] = (),
     maximum_iterations: int = 50,
@@ -115,7 +118,17 @@ def fit_native_parameters(
     Best evaluated, feasible and converged points remain separate. Optimization
     success cannot qualify quadrature, establish identification or promote a fit.
     Data-derived historical guards are optional promotion constraints, not priors.
+    Optional predict_many receives (candidate, parameter) physical coordinates and
+    returns (candidate, observation) raw predictions in the same order. Only these
+    predictions may run concurrently; objective history and callbacks remain serial.
+    The caller owns worker isolation. This optional path requires SciPy >= 1.16.
+    Callbacks must not change the predictor state within a precomputed batch.
     """
+    if predict_many is not None:
+        if not callable(predict_many):
+            raise TypeError("predict_many must be callable")
+        if Version(scipy_version) < Version("1.16"):
+            raise RuntimeError("predict_many requires SciPy >= 1.16")
     names = tuple(p.name for p in parameters)
     if not names:
         raise ValueError("at least one declared parameter is required")
@@ -173,14 +186,38 @@ def fit_native_parameters(
     for start_index in sorted(distinct.tolist()):
         base = effective_starts[start_index].copy()
         last_x, last_point = None, None
+        prediction_buffer = {}
 
-        def evaluate(x, base=base, start_index=start_index):
+        def physical_values(x, base=base):
+            values = base.copy()
+            values[active] = lower[active] + width[active] * x
+            return values
+
+        def prediction_map(function, points, prediction_buffer=prediction_buffer):
+            points = list(points)
+            if not points:
+                return []
+            raw = np.asarray(predict_many(np.array([physical_values(x) for x in points])))
+            if (
+                raw.shape != (len(points), len(observations.net_count))
+                or np.iscomplexobj(raw)
+                or np.any(~np.isfinite(raw))
+            ):
+                raise ValueError("predict_many must return aligned finite real predictions")
+            prediction_buffer.update((x.tobytes(), row) for x, row in zip(points, raw, strict=True))
+            try:
+                return [function(x) for x in points]
+            finally:
+                prediction_buffer.clear()
+
+        def evaluate(x, prediction_buffer=prediction_buffer, start_index=start_index):
             nonlocal last_x, last_point, best, feasible, evaluation_count
             if last_x is not None and np.array_equal(x, last_x):
                 return last_point
-            values = base.copy()
-            values[active] = lower[active] + width[active] * x
-            raw = predict(values)
+            values = physical_values(x)
+            raw = prediction_buffer.get(x.tobytes())
+            if raw is None:
+                raw = predict(values)
             scale, residual = observations.profile_scale(
                 raw, enforce_guards=enforce_historical_guards
             )
@@ -246,13 +283,16 @@ def fit_native_parameters(
                 },
             )
         if len(active):
+            options = dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9)
+            if predict_many is not None:
+                options["workers"] = prediction_map
             result = minimize(
                 lambda x: evaluate(x).objective / int(observations.valid.sum()),
                 (base[active] - lower[active]) / width[active],
                 method="SLSQP",
                 bounds=[(0.0, 1.0)] * len(active),
                 constraints=constraints,
-                options=dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9),
+                options=options,
             )
         else:
             result = OptimizeResult(
@@ -293,6 +333,8 @@ def refit_native_choices(predictors, observations, parameters, starts, **search_
     """Refit all continuous nuisance coordinates for every explicit discrete model/N."""
     if not predictors:
         raise ValueError("at least one explicit discrete choice is required")
+    if len(predictors) > 1 and search_options.get("predict_many") is not None:
+        raise ValueError("bind predict_many separately for each discrete choice")
     results = {
         choice: fit_native_parameters(predict, observations, parameters, starts, **search_options)
         for choice, predict in predictors.items()
@@ -321,6 +363,8 @@ def profile_native_parameter(
     chi-square threshold or confidence-interval interpretation, especially at
     mixture boundaries or when conditioned on historical guards.
     """
+    if len(predictors) > 1 and options.get("predict_many") is not None:
+        raise ValueError("bind predict_many separately for each discrete choice")
     names = tuple(p.name for p in parameters)
     if name not in names or "fixed_values" in options:
         raise ValueError("profile one declared coordinate without additional hidden fixed values")

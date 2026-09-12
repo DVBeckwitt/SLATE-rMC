@@ -269,3 +269,26 @@ Unqualified initialization remains diagnostic-only. Independent refinements must
 the proposed improvement direction and meet a predeclared relative decision-error budget.
 It cannot produce selected estimates, profiles or identification claims. Restart the
 normal qualified workflow from any retained warm start; never relax final inference gates.
+
+## Batched finite-difference predictions
+
+`fit_native_parameters(..., predict_many=callable)` optionally batches SciPy's bounded
+finite-difference predictions. The callable receives a two-dimensional array of complete
+physical parameter vectors, including fixed coordinates, and returns finite real raw
+predictions with shape `(candidate_count, observation_count)` in the same order. SciPy
+1.16 or newer is required for this option; ordinary serial fitting retains the existing
+dependency range. The optimizer, finite-difference steps and statistical objective are
+unchanged.
+
+Only prediction calculation may be concurrent. Scale profiling, calibration, guards,
+best-point updates and callbacks execute serially in the original candidate order.
+Callbacks must not alter predictor state within a batch. The caller owns worker isolation:
+native response caches and XrayDB sessions must not be shared between concurrent workers.
+Process workers should receive explicit model state and return prediction arrays; the
+parent owns diagnostic writes. Reuse an existing response for inexpensive coordinates
+before distributing geometry-changing predictions. Historical-guard constraint derivatives
+remain serial in SciPy. Batching changes execution cost, not numerical qualification.
+The multi-choice refit/profile wrappers reject a shared batch callable when more than
+one discrete choice is supplied. Bind scalar and batched predictions to the same N and
+call the single-choice search separately; a callable bound to one N cannot supply the
+finite differences of another.

@@ -12,6 +12,7 @@ from rasim_next.fitting.native_search import (
     conditional_validation,
     fit_native_parameters,
     profile_native_parameter,
+    refit_native_choices,
     training_observations,
 )
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
@@ -35,6 +36,113 @@ def observations(counts, covariance=None):
         np.array([1e6]),
         "known-observations",
     )
+
+
+def test_batched_predictions_preserve_bounded_calibrated_search_and_serial_history(monkeypatch):
+    import threading
+
+    import scipy
+    from packaging.version import Version
+
+    from rasim_next.fitting import native_search
+
+    if Version(scipy.__version__) < Version("1.16"):
+        pytest.skip("batched finite differences require SciPy >= 1.16")
+    target = observations([1, 2.4, 1.2, 1.1], np.eye(4) + 0.1)
+    parameters = tuple(FitParameter(name, "1", "sample", 0, 2, 0.1) for name in ("x", "y", "z"))
+    calibration = GaussianCalibration(
+        (0,),
+        np.array([0.3]),
+        np.array([[0.04]]),
+        "b" * 64,
+        "sample",
+        "independent_measurement",
+        ("x",),
+        ("1",),
+        ("sample",),
+    )
+    starts = [[0, 2, 0.9], [0.8, 0.9, 0.1]]
+    options = dict(
+        fixed_values={"z": 0.4},
+        calibration=(calibration,),
+        maximum_iterations=30,
+        finite_difference_step=1e-6,
+    )
+
+    def model(values):
+        x, y, z = values
+        return np.array([1, 2 + x, 1 + y**2, x + y + z])
+
+    histories, results, scalar_calls = [], [], []
+    batches = []
+    parent_thread = threading.get_ident()
+    for batched in (False, True):
+        history, calls = [], []
+
+        def predict(values, calls=calls):
+            calls.append(values.copy())
+            return model(values)
+
+        def predict_many(values):
+            batches.append(values.copy())
+            assert np.all((values >= 0) & (values <= 2))
+            np.testing.assert_array_equal(values[:, 2], 0.4)
+            return np.array([model(row) for row in values])
+
+        def callback(point, history=history):
+            assert threading.get_ident() == parent_thread
+            history.append(np.r_[point.parameter_values, point.objective, point.scale])
+
+        results.append(
+            fit_native_parameters(
+                predict,
+                target,
+                parameters,
+                starts,
+                predict_many=predict_many if batched else None,
+                callback=callback,
+                **options,
+            )
+        )
+        histories.append(history)
+        scalar_calls.append(len(calls))
+    assert batches and scalar_calls[1] < scalar_calls[0]
+    np.testing.assert_array_equal(histories[0], histories[1])
+    assert results[0].evaluation_count == results[1].evaluation_count
+    assert results[0].minimum_resolved == results[1].minimum_resolved
+    for serial, batched in zip(results[0].runs, results[1].runs, strict=True):
+        np.testing.assert_array_equal(serial.parameter_values, batched.parameter_values)
+        assert serial.calibration_chi_square == batched.calibration_chi_square
+        assert serial.optimizer_converged == batched.optimizer_converged
+    for bad_batch in (np.ones((2, 3)), np.full((2, 4), np.nan), np.ones((2, 4), complex)):
+        with pytest.raises(ValueError, match="aligned finite real"):
+            fit_native_parameters(
+                model,
+                target,
+                parameters,
+                starts[:1],
+                predict_many=lambda values, bad_batch=bad_batch: bad_batch,
+                **options,
+            )
+    with pytest.raises(ValueError, match="separately for each discrete choice"):
+        refit_native_choices(
+            {12: model, 13: model}, target, parameters, starts, predict_many=predict_many
+        )
+    with pytest.raises(ValueError, match="separately for each discrete choice"):
+        profile_native_parameter(
+            {12: model, 13: model},
+            target,
+            parameters,
+            starts,
+            name="x",
+            grid=[0.3],
+            predict_many=predict_many,
+        )
+    monkeypatch.setattr(native_search, "scipy_version", "1.15.3")
+    with pytest.raises(RuntimeError, match=r"SciPy >= 1\.16"):
+        fit_native_parameters(
+            model, target, parameters, starts, predict_many=predict_many, **options
+        )
 
 
 def test_numerical_gates_detect_profile_offsets_and_held_out_only_error():
