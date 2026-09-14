@@ -43,6 +43,26 @@ class NativeInstrumentModel:
 
     reference: NativeFitPhysics
     acquisition_id: str
+    parameter_units = (
+        "pixel",
+        "pixel",
+        "metre",
+        "radian",
+        "radian",
+        "radian",
+        "radian",
+        "metre",
+        "metre",
+        "metre",
+        "radian",
+        "radian",
+        "1",
+        "1",
+        "1",
+        "angstrom",
+        "angstrom",
+        "angstrom",
+    )
 
     def __post_init__(self):
         definition = self.reference.source_definition

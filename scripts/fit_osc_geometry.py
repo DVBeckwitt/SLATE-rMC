@@ -15,13 +15,13 @@ from time import perf_counter
 
 import numpy as np
 
-from rasim_next.fitting import (
+from rasim_next.fitting.fixed_experiment import FixedPositionState
+from rasim_next.fitting.indexed_series import (
     DETECTOR_CALIBRATION_PARAMETER_NAMES,
     INCIDENCE_ANGLE_DELTA_PARAMETER_NAME,
     SHARED_GEOMETRY_PARAMETER_NAMES,
     DetectorCalibrationCorrectionBounds,
     DetectorCalibrationCorrections,
-    FixedPositionState,
     IncidenceAngleDeltaBounds,
     IndexedGeometryImage,
     SharedGeometryCorrectionBounds,

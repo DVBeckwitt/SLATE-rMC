@@ -127,6 +127,11 @@ def _correlation_angle_coefficients(slope, conditional_y, nodes, weights):
     return coefficients
 
 
+@numba.njit(nogil=True, inline="always")
+def _correlation_corner(a, sine, x, y):
+    return math.exp(-a * (x - sine * y) ** 2 - 0.5 * y * y)
+
+
 @numba.njit(nogil=True)
 def _correlated_rectangle_probability(
     mx,
@@ -142,6 +147,8 @@ def _correlated_rectangle_probability(
     weights,
     radius,
     angle_coefficients,
+    corner_xy,
+    corner_exp,
 ):
     """Plackett angle integral, with conditional-CDF quadrature near degeneracy.
 
@@ -178,16 +185,42 @@ def _correlated_rectangle_probability(
     sy = math.hypot(slope, conditional_y)
     yl, yh = (ylow - my) / sy, (yhigh - my) / sy
     base = _normal_interval_probability(lo, hi) * _normal_interval_probability(yl, yh)
-    correction = 0.0
-    for i in range(angle_coefficients.shape[1]):
-        a, sine, w = angle_coefficients[:, i]
-        # Completing the square avoids cancellation near unit correlation.
-        correction += w * (
-            math.exp(-a * (hi - sine * yh) ** 2 - 0.5 * yh * yh)
-            - math.exp(-a * (lo - sine * yh) ** 2 - 0.5 * yh * yh)
-            - math.exp(-a * (hi - sine * yl) ** 2 - 0.5 * yl * yl)
-            + math.exp(-a * (lo - sine * yl) ** 2 - 0.5 * yl * yl)
-        )
+    if corner_exp.shape[0] == 0:
+        correction = 0.0
+        for i in range(angle_coefficients.shape[1]):
+            a, sine, w = angle_coefficients[:, i]
+            correction += w * (
+                _correlation_corner(a, sine, hi, yh)
+                - _correlation_corner(a, sine, lo, yh)
+                - _correlation_corner(a, sine, hi, yl)
+                + _correlation_corner(a, sine, lo, yl)
+            )
+    else:
+        x = (hi, lo, hi, lo)
+        y = (yh, yh, yl, yl)
+        reuse = np.full(4, -1, dtype=np.int64)
+        for j in range(4):
+            for k in range(4):
+                if x[j] == corner_xy[k, 0] and y[j] == corner_xy[k, 1]:
+                    reuse[j] = k
+                    break
+        values = np.empty(4)
+        correction = 0.0
+        for i in range(angle_coefficients.shape[1]):
+            a, sine, w = angle_coefficients[:, i]
+            # Completing the square avoids cancellation near unit correlation.
+            # Read every reused corner before replacing the previous rectangle.
+            for j in range(4):
+                values[j] = (
+                    corner_exp[i, reuse[j]]
+                    if reuse[j] >= 0
+                    else _correlation_corner(a, sine, x[j], y[j])
+                )
+            correction += w * (values[0] - values[1] - values[2] + values[3])
+            for j in range(4):
+                corner_exp[i, j] = values[j]
+        for j in range(4):
+            corner_xy[j, 0], corner_xy[j, 1] = x[j], y[j]
     value = base + correction
     if value < 0.0 or value < 1e-12 * (base + abs(correction)):
         return _rectangle_probability(
@@ -236,6 +269,8 @@ def _project_gaussian_regions(
     sums = np.zeros(nobs)
     seen = np.zeros(nobs, np.int64)
     seen_rectangle = np.zeros(len(column_low), np.int64)
+    corner_xy = np.empty((0, 2))
+    corner_exp = np.empty((0, 4))
     for i in range(len(mean)):
         stamp = i + 1
         touched = [np.int64(0)]
@@ -276,6 +311,8 @@ def _project_gaussian_regions(
                     weights,
                     radius,
                     angle_coefficients,
+                    corner_xy,
+                    corner_exp,
                 )
                 # A later column can intersect a rectangle rejected above.
                 seen_rectangle[rectangle] = stamp
@@ -434,7 +471,7 @@ class NativeSpatialRegionProjection:
 
 @numba.njit(nogil=True)
 def _deposit_gaussian_pixels(
-    mean, factor, mass, shape, nodes, weights, angle_nodes, angle_weights, radius
+    mean, factor, mass, shape, nodes, weights, angle_nodes, angle_weights, radius, row_offset
 ):
     image = np.zeros(shape)
     for i in range(len(mean)):
@@ -448,6 +485,8 @@ def _deposit_gaussian_pixels(
         angle_coefficients = _correlation_angle_coefficients(
             beta * sx, conditional_y, angle_nodes, angle_weights
         )
+        corner_xy = np.full((4, 2), np.nan)
+        corner_exp = np.empty((angle_coefficients.shape[1], 4))
         for c in range(
             max(0, math.ceil(mx - radius * sx - 0.5)),
             min(shape[1] - 1, math.floor(mx + radius * sx + 0.5)) + 1,
@@ -455,10 +494,10 @@ def _deposit_gaussian_pixels(
             ym = my + beta * (c - mx)
             yr = 0.5 * abs(beta) + radius * conditional_y
             for r in range(
-                max(0, math.ceil(ym - yr - 0.5)),
-                min(shape[0] - 1, math.floor(ym + yr + 0.5)) + 1,
+                max(row_offset, math.ceil(ym - yr - 0.5)),
+                min(row_offset + shape[0] - 1, math.floor(ym + yr + 0.5)) + 1,
             ):
-                image[r, c] += mass[i] * _correlated_rectangle_probability(
+                image[r - row_offset, c] += mass[i] * _correlated_rectangle_probability(
                     mx,
                     my,
                     sx,
@@ -472,6 +511,8 @@ def _deposit_gaussian_pixels(
                     weights,
                     radius,
                     angle_coefficients,
+                    corner_xy,
+                    corner_exp,
                 )
     return image
 
@@ -595,6 +636,7 @@ class DetectorSpatialKernels:
         integrated_mass: ArrayLike,
         quadrature_order: int,
         gaussian_tail_radius: float,
+        row_offset: int = 0,
     ) -> NDArray[np.float64]:
         """Integrate the same continuous kernels into [row,column] pixel masses.
 
@@ -605,6 +647,8 @@ class DetectorSpatialKernels:
         evaluation, pixel-center approximation or survivor renormalization occurs.
         """
         shape = tuple(detector_shape_rc)
+        if type(row_offset) is not int or row_offset < 0:
+            raise ValueError("row_offset must be a nonnegative native row index")
         if len(shape) != 2 or any(type(n) is not int or n <= 0 for n in shape):
             raise ValueError("detector_shape_rc requires two positive integers")
         mass = np.asarray(integrated_mass, dtype=np.float64)
@@ -624,6 +668,7 @@ class DetectorSpatialKernels:
             angle_nodes,
             angle_weights,
             float(gaussian_tail_radius),
+            row_offset,
         )
         if np.any(~np.isfinite(result)):
             raise FloatingPointError("integrated spatial mass is nonfinite")

@@ -37,6 +37,7 @@ from rasim_next.pipeline.detector_revisions import (
 from rasim_next.pipeline.fiber_detector import (
     ConditionalFiberBatch,
     FiberIntegrationRule,
+    FiberScatteringCache,
     iter_conditional_fiber_transfers,
 )
 from rasim_next.pipeline.source_spatial import (
@@ -126,7 +127,7 @@ class FiberStrengthGrid:
 
 @dataclass(frozen=True, slots=True)
 class FiberResponseNodes:
-    """Physical quadrature factors after the spatial kernels have been reduced."""
+    """Physical quadrature factors after spatial reduction, excluding source mass."""
 
     grid_index: int
     source_state_index: int
@@ -354,7 +355,7 @@ class NativeFiberResponse:
             self,
             "response_revision",
             canonical_revision_sha256(
-                ("definition_id", "continuous_conditional_native_response.v1"),
+                ("definition_id", "continuous_conditional_native_response.v2"),
                 ("detector", self.detector.fixed_physics_revision),
                 ("reference_structure", self.detector.strength_model.structure_model_revision),
                 ("projection", self.projection_revision),
@@ -371,9 +372,25 @@ class NativeFiberResponse:
         specular_stitch_stack: ParrattStitchStack | None = None,
         mosaic_cache: NativeMosaicCache | None = None,
         cone_quadrature_order: int | None = None,
+        source_weights: FloatArray | None = None,
     ) -> FloatArray:
         """Return raw integrated A² per native observation, with one shared scale owner."""
         detector = self.detector
+        weights = (
+            detector.source.mean_rays.source_weight
+            if source_weights is None
+            else np.asarray(source_weights)
+        )
+        if (
+            weights.shape != detector.source.mean_rays.source_weight.shape
+            or np.iscomplexobj(weights)
+            or np.any(~np.isfinite(weights))
+            or np.any(weights < 0)
+            or not np.isclose(weights.sum(), 1.0, rtol=0, atol=2e-15)
+        ):
+            raise ValueError(
+                "source_weights must retain source-row order and normalized nonnegative masses"
+            )
         if specular_stitch_stack is not None:
             if detector.specular_stitch_stack is None:
                 raise ValueError("response reuse cannot add a local specular channel")
@@ -419,7 +436,9 @@ class NativeFiberResponse:
                 density,
                 thickness,
                 envelope,
-                detector.phase_population_weight * detector.polarization_weight,
+                detector.phase_population_weight
+                * detector.polarization_weight
+                * weights[node.source_state_index],
                 order,
                 cone_density,
             )
@@ -450,6 +469,7 @@ class ConditionalStructureDetector:
     gaussian_tail_radius: float = 8.0
     incidence_axis_angle_rad: float | None = None
     scan_calibration_binding_revision: str | None = None
+    proposal_mosaic: MosaicParameters | None = None
     fixed_physics_revision: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -458,6 +478,10 @@ class ConditionalStructureDetector:
             proper_rotation(self.crystal_to_sample),
         )
         rods = tuple(self.rods)
+        if self.proposal_mosaic is not None and not isinstance(
+            self.proposal_mosaic, MosaicParameters
+        ):
+            raise TypeError("proposal_mosaic must be an explicit MosaicParameters value")
         if (
             not rods
             or any(not isinstance(r, Rod) for r in rods)
@@ -548,6 +572,7 @@ class ConditionalStructureDetector:
                 ("proposal_seed", rule.seed),
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
+                ("frozen_ewald_bounds_Ainv_rad", np.array(rule.frozen_ewald_bounds_Ainv_rad or ())),
                 (
                     "maximum_axial_panel_width_Ainv",
                     np.array(())
@@ -561,9 +586,9 @@ class ConditionalStructureDetector:
                     "reference_mosaic",
                     np.array(
                         [
-                            self.mosaic.gaussian_sigma_rad,
-                            self.mosaic.lorentzian_half_width_rad,
-                            self.mosaic.lorentzian_probability,
+                            (self.proposal_mosaic or self.mosaic).gaussian_sigma_rad,
+                            (self.proposal_mosaic or self.mosaic).lorentzian_half_width_rad,
+                            (self.proposal_mosaic or self.mosaic).lorentzian_probability,
                         ]
                     ),
                 ),
@@ -651,7 +676,12 @@ class ConditionalStructureDetector:
         return replace(self, rods=requested)
 
     def _batches(
-        self, bounds: FloatArray, cancel_requested: Callable[[], bool] | None = None
+        self,
+        bounds: FloatArray,
+        cancel_requested: Callable[[], bool] | None = None,
+        *,
+        scattering_cache: FiberScatteringCache | None = None,
+        include_source_mass: bool = True,
     ) -> Iterator[ConditionalFiberBatch]:
         return iter_conditional_fiber_transfers(
             rods=self.rods,
@@ -662,10 +692,12 @@ class ConditionalStructureDetector:
             material=self.material,
             instrument=self.instrument,
             native_bounds_px=bounds,
-            reference_mosaic=self.mosaic,
+            reference_mosaic=self.proposal_mosaic or self.mosaic,
             rule=self.integration_rule,
             local_stitched_m0=self.specular_stitch_stack is not None,
             cancel_requested=cancel_requested,
+            scattering_cache=scattering_cache,
+            include_source_mass=include_source_mass,
         )
 
     def _grid(self, batch: ConditionalFiberBatch) -> FiberStrengthGrid:
@@ -746,6 +778,7 @@ class ConditionalStructureDetector:
         *,
         worker_count: int = 1,
         spatial_projection: NativeSpatialRegionProjection | None = None,
+        scattering_cache: FiberScatteringCache | None = None,
     ) -> NativeFiberResponse:
         """Compile probabilities with bounded parallel work and fixed reduction order."""
         if type(worker_count) is not int or worker_count < 1:
@@ -775,7 +808,7 @@ class ConditionalStructureDetector:
         grids, nodes, probabilities, indices = [], [], [], {}
         if len(bounds):
             for batch, probability in _project_batches(
-                self._batches(bounds),
+                self._batches(bounds, scattering_cache=scattering_cache, include_source_mass=False),
                 projector,
                 self.spatial_quadrature_order,
                 self.gaussian_tail_radius,
@@ -801,11 +834,19 @@ class ConditionalStructureDetector:
         )
 
     def _intensity_batches(
-        self, bounds: FloatArray, cancel_requested: Callable[[], bool] | None = None
+        self,
+        bounds: FloatArray,
+        cancel_requested: Callable[[], bool] | None = None,
+        *,
+        batch_offset: int = 0,
     ):
         tables = {}
         density = SphericalMosaicDensity(self.mosaic)
-        for batch in self._batches(bounds, cancel_requested):
+        count = 0
+        for index, batch in enumerate(self._batches(bounds, cancel_requested)):
+            count = index + 1
+            if index < batch_offset:
+                continue
             wavelength = float(self.source.mean_rays.wavelength_A[batch.source_state_index])
             key = (batch.radial_Ainv, wavelength)
             if key not in tables:
@@ -822,6 +863,8 @@ class ConditionalStructureDetector:
                 self.integration_rule.cone_quadrature_order,
             )
             yield batch.transfer.spatial, mass
+        if batch_offset > count:
+            raise ValueError("batch_offset exceeds the declared detector event stream")
 
     def density_at(self, column_px: ArrayLike, row_px: ArrayLike) -> FloatArray:
         column, row = np.broadcast_arrays(
@@ -839,19 +882,38 @@ class ConditionalStructureDetector:
             result += kernels.density_at(column, row, integrated_mass=mass)
         return result
 
-    def integrate_native_pixels(self) -> FloatArray:
-        """Integrate the continuous detector function over every native pixel."""
+    def integrate_native_pixels(self, *, row_bounds: tuple[int, int] | None = None) -> FloatArray:
+        """Sum the whole-panel event stream, optionally depositing only declared rows."""
+        shape = (
+            self.detector_shape_rc
+            if row_bounds is None
+            else (row_bounds[1] - row_bounds[0], self.detector_shape_rc[1])
+        )
+        image = np.zeros(shape)
+        for contribution in self.iter_native_pixel_batches(row_bounds=row_bounds):
+            image += contribution
+        return image
+
+    def iter_native_pixel_batches(
+        self, *, row_bounds: tuple[int, int] | None = None, batch_offset: int = 0
+    ):
+        """One whole-panel proposal; checkpoint completed additive native image batches."""
         rows, columns = self.detector_shape_rc
-        image = np.zeros((rows, columns))
+        if type(batch_offset) is not int or batch_offset < 0:
+            raise ValueError("batch_offset must be a nonnegative integer")
+        first, stop = (0, rows) if row_bounds is None else row_bounds
+        if type(first) is not int or type(stop) is not int or not 0 <= first < stop <= rows:
+            raise ValueError("row_bounds must identify ordered native detector rows")
+        shape = stop - first, columns
         bounds = np.array([[-0.5, columns - 0.5, -0.5, rows - 0.5]])
-        for kernels, mass in self._intensity_batches(bounds):
-            image += kernels.integrate_native_pixels(
-                self.detector_shape_rc,
+        for kernels, mass in self._intensity_batches(bounds, batch_offset=batch_offset):
+            yield kernels.integrate_native_pixels(
+                shape,
                 integrated_mass=mass,
                 quadrature_order=self.spatial_quadrature_order,
                 gaussian_tail_radius=self.gaussian_tail_radius,
+                row_offset=first,
             )
-        return image
 
     def sample_native_pixel_mass(
         self,

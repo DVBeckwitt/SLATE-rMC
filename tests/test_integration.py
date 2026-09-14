@@ -19,18 +19,22 @@ from rasim_next.core.contracts import (
 )
 from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.fitting import (
+from rasim_next.fitting.geometry import (
     ContinuousDetectorGeometryModel,
     ExactTagGeometryModel,
-    FixedMatchedRegionBackground,
     GeometryCorrections,
+)
+from rasim_next.fitting.matched_regions import (
+    FixedMatchedRegionBackground,
     MatchedRegionObservations,
     ParameterizedStructureRegionModel,
-    Pbi2ParentLogRatioParameterization,
-    Pbi2ParentMixtureStrength,
     StructureRegionIdentifiabilityError,
     StructureRegionResponseBlock,
     fit_parameterized_matched_regions,
+)
+from rasim_next.fitting.stacking_intensity import (
+    Pbi2ParentLogRatioParameterization,
+    Pbi2ParentMixtureStrength,
 )
 from rasim_next.geometry import (
     AngleFrame,
@@ -748,12 +752,12 @@ def test_incidence_angle_averaged_detector_equals_explicit_weighted_sum() -> Non
 
 
 def test_incidence_angle_average_wraps_real_shared_source_engines() -> None:
-    from rasim_next.fitting import (
-        FixedLatticeState,
+    from rasim_next.fitting.fixed_experiment import (
         FixedPositionState,
-        SharedGeometryCorrections,
         build_fixed_incidence_scan_series,
     )
+    from rasim_next.fitting.fixed_lattice import FixedLatticeState
+    from rasim_next.fitting.indexed_series import SharedGeometryCorrections
     from rasim_next.materials import read_crystal
     from rasim_next.pipeline.incidence_acquisition import IncidenceAngleQuadrature
     from rasim_next.pipeline.incidence_angle_average import IncidenceAngleAveragedDetector
@@ -3077,7 +3081,7 @@ def test_pbi2_parent_mixture_uses_shared_sparse_detector_including_regular_00l()
 
 
 def test_generic_pbi2_detector_uses_unchanged_mosaic_fitter() -> None:
-    from rasim_next.fitting import (
+    from rasim_next.fitting.mosaic import (
         MosaicProfileDefinition,
         MosaicProfileIdentity,
         MosaicReflectionGroupKey,
@@ -8210,7 +8214,7 @@ def test_ordered_recovery_requires_mosaic_or_explicit_synthetic_proof(tmp_path: 
 
 def test_mosaic_runner_profile_is_weighted_source_state_sum_not_nominal_only() -> None:
     from rasim_next.core.contracts import IncidentSampleBatch
-    from rasim_next.fitting import (
+    from rasim_next.fitting.mosaic import (
         MosaicProfileDefinition,
         MosaicProfileIdentity,
         MosaicReflectionGroupKey,

@@ -5,6 +5,67 @@ optical transport, spherical mosaic and native-pixel integration used by the
 renderer. A fit predicts the frozen native observations; moving geometry or a
 lattice never moves measured pixels into another fitting region.
 
+## Shared material boundary
+
+`NativeRefinementModel` supplies ordered parameter names/units, `bind(values, N)`
+and exact mixture-boundary inactivity. Binding returns the typed physical inputs,
+finite-structure arguments, physical mosaic and optional specular stack. Built-in
+`BiJointModel` and `PbJointModel` own their symmetry and population rules.
+`make_native_evaluator(..., model=...)` and `native_prediction_group(..., model=...)`
+accept another explicit model; the command-line JSON assembly currently covers
+the built-in Bi/Pb recipes. A new material still needs a valid scientific binding
+and numerical qualification. It does not need another optimizer or detector kernel.
+
+## Portable inputs and saved images
+
+`configs/native_experiments.json` lists the six frozen acquisition descriptors
+and physical-input hashes relative to the declared external input root.
+Adopt an existing calibrated experiment with:
+
+```powershell
+uv run --frozen python scripts/prepare_native.py `
+  --observations C:\external\original\sample_observations.json `
+  --output-directory C:\external\prepared
+```
+
+Optional `--raw` and `--dark` resolve relocated files; their original SHA256 must
+match. OSC conversion happens once at the existing I/O boundary. Decoded NPZ inputs
+already contain detector-native counts. Preparation verifies frozen raw projection,
+count/dark covariance, net/background arrays and control support, then copies
+unchanged payloads and publishes the descriptor last. The descriptor references
+hash-prefixed local filenames. This is frozen-calibration adoption, not a new
+background estimator or a substitute for validating a new acquisition's calibration.
+
+Render a saved fit with the same physical and observation inputs:
+
+```powershell
+uv run --frozen python scripts/render_native.py `
+  --physics C:\external\prepared\PHYSICS.json `
+  --observations C:\external\prepared\sample_observations.json `
+  --result C:\external\fit.ra_diag.npz --output C:\external\image.ra_diag.npz `
+  --full-image
+```
+
+Use the actual physics filename referenced by the prepared descriptor. Add
+`--candidate` only to render the separately recorded optimizer candidate. The
+renderer reproduces its saved region prediction before carrying its fit status.
+Physical mosaic, roughness, scale and numerical proposal remain distinct. Full
+images integrate the continuous distribution over each native pixel using one
+whole-panel proposal and additive batches. `--resume` restarts from the last
+consistent atomic checkpoint; `--checkpoint-seconds` defaults to 60. Source files,
+dependencies, inputs and candidate identity must match. The image is explicitly
+unqualified until its own observable convergence is established. Synthetic results
+retain their saved synthetic target and target-kind label.
+
+Historical orchestration was retired at T34. Recover archived source without
+executing it using `scripts/restore_native_archive.py --bundle ALL_REFS.bundle
+--manifest SATELLITE_MANIFEST.json --worktree OLD_NAME --destination NEW_DIRECTORY`.
+The resolver verifies archived bytes, restores the recorded Git tree and dirty
+overlay, and records the old-to-new source-root mapping in `RECOVERY.json`.
+Original virtual-environment bytes remain archived; recreate environments from
+the restored dependency metadata because launchers contain absolute paths.
+Immutable examples and scientific result artifacts are not rewritten.
+
 ## Admitted parameters
 
 | Model | Continuous specimen coordinates | With acquisition coordinates |
@@ -66,6 +127,14 @@ profiles one nonnegative intensity scale exactly. It accepts multiple starts,
 explicitly fixed initialization coordinates and separately declared calibration
 blocks. `refit_native_choices` refits every continuous coordinate for each N or
 other explicit discrete choice. It never rounds a continuous N.
+
+The common runner defaults to public SciPy `least_squares(method="trf")` for
+unguarded stages and SLSQP for explicit historical inequalities. `method` may be
+declared per stage/profile; TRF rejects historical inequality constraints. Its
+`maximum_function_evaluations` bounds public solver evaluations; finite-difference
+probes are additional forward work and are counted separately by the raw ledger.
+TRF uses physical sensitivity scales, linear residual loss and bound-aware signed
+or shortened differences. It never fixes a weak coordinate merely to obtain rank.
 
 Bounds are declared search ranges, not confidence intervals. Each bound endpoint
 has its own `physical` or `search` classification. `sensitivity_scale` is a
@@ -137,6 +206,22 @@ Run `scripts/refine_native.py --physics PHYSICS.json --observations OBSERVATIONS
 The plan schema is `rasim-native-refinement-plan-v1`. The external diagnostic
 contains numeric arrays and one embedded JSON manifest, atomically checkpointed.
 Task 30 records the six concrete acquisition-bound plan and result locations.
+
+`prediction_workers` defaults to 1. Larger values use one persistent isolated
+process pool for the run; `prediction_group_size` defaults to 16. Each group owns
+an evaluator and reuses exact dependent state across its candidates. Processes
+persist, while evaluator caches are bounded to the group. Numerical projection
+`workers` is a separate setting; avoid nested oversubscription. Only the parent
+profiles scale, computes objectives, records status and writes checkpoints.
+Compilation/cache counters in the runner are explicitly parent-only and cannot
+be interpreted as total worker cost.
+
+`--resume` restores exact completed raw vectors indexed by full float64 parameter
+bytes and integer N. Forward identity includes plan, input hashes, source files,
+runner and numerical dependencies. Pending work is regenerated by the public
+optimizer. Raw predictions are rescored with the current stage objective and
+fixed-coordinate scope; residuals, Jacobians and private optimizer state are not
+restored. Lower unfinished candidates remain evidence against a resolved minimum.
 
 Required plan fields are `parameters` (serialized `FitParameter` records),
 `starts`, `repeat_choices`, `proposal_mosaic`, `acquisition_id`, `fit_instrument`,
@@ -211,12 +296,28 @@ measure. The default `sampled_log_median` preserves manuscript compatibility. Th
 divergence is overlap normalization; automatic/fallback blend-window selection is unchanged.
 
 The explicit response cache retains at most two geometry responses and 64 small
-prediction vectors. Source, material, reciprocal basis or rigid instrument
-changes invalidate geometry reuse. Atomic z/ADPs, stacking, population weights,
-thickness and roughness still recompute their physical intensity. Gaussian and
-Lorentzian cone components reuse only their own unchanged width/order within one
-response owner. Exact pole identities and float64-underflow shortcuts preserve
-the unoptimized mosaic equation.
+prediction vectors. Response v2 excludes source masses: line probability updates
+reuse per-line geometry and multiply current aligned normalized weights exactly
+once, including zero-probability endpoints. Atomic z/ADPs, stacking, mosaic,
+population weights, thickness and roughness recompute their physical intensity.
+
+`FiberScatteringCache` separately retains pre-projection scattering, bounded by
+256 MiB and 4096 entries. Detector corrections, sample normal translation and
+spatial beam moments can reuse this state when their actual quadrature nodes and
+upstream optical inputs match. New origins, Gaussian kernels, visibility and
+region probabilities are still computed. Cell, occupancy, sample tilt, divergence
+and wavelength update their dependent scattering/optics. No stale surviving-event
+mask is reused. Cache owners are explicit; there is no hidden global cache.
+
+For stationary proposals across transport perturbations, declare
+`frozen_ewald_bounds_Ainv_rad=[Q_low,Q_high,arc_start,arc_width]` in the integration
+rule. It must enclose each candidate's conservative source/region support; otherwise
+evaluation raises. Default adaptive proposals remain available but may miss this
+cache when geometry changes. Domain coverage does not establish quadrature accuracy.
+There is no permanent finite response valid for arbitrary materials or parameters.
+Gaussian corner reuse is restricted to adjacent native pixels; fitting rectangles
+retain the direct probability loop. Stable cancellation handling and independent
+conditional-CDF fallback remain shared.
 
 ## Unresolved physical freedoms
 

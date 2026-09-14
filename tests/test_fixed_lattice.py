@@ -5,7 +5,7 @@ import copy
 import numpy as np
 import pytest
 
-from rasim_next.fitting import FixedLatticeState, fixed_lattice_from_fit_record
+from rasim_next.fitting.fixed_lattice import FixedLatticeState, fixed_lattice_from_fit_record
 
 REFERENCE_BASIS_A = np.asarray(((4.0, -2.0, 0.0), (0.0, 3.4641016151377544, 0.0), (0.0, 0.0, 28.0)))
 

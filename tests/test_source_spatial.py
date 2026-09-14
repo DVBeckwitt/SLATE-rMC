@@ -221,7 +221,7 @@ def test_native_physics_input_preserves_expanded_sites_and_stacking_averages(tmp
         fault_parameters=dict(ordered=0.08, mixed=0.16),
     )
     initial = model.initial_values(seed)
-    bound, arguments = model.bind(initial, 8)
+    bound, arguments, _, _ = model.bind(initial, 8)
     np.testing.assert_allclose(
         bound.structure.strength(
             **{k: v for k, v in arguments.items() if k != "film_thickness_A"}
@@ -304,7 +304,7 @@ def test_native_physics_input_preserves_expanded_sites_and_stacking_averages(tmp
         np.testing.assert_allclose(
             actual, independent.predict(coordinates, 8), rtol=3e-13, atol=1e-18
         )
-    assert evaluator.compile_count == 11
+    assert evaluator.compile_count == 10  # Spectral population reuses its exact response.
     from rasim_next.fitting.native_search import FitParameter, fit_native_parameters
 
     # Real-forward recovery with all other coordinates fixed distinguishes this
@@ -912,7 +912,12 @@ def test_local_native_mixture_stitches_components_and_preserves_signed_sf():
         table = tables[node.grid_index][:, node.axial_index]
         plus = law.cone_average_sr_inv(node.polar_angle_rad, node.cone_angle_rad)
         minus = law.cone_average_sr_inv(node.polar_angle_rad, np.pi - node.cone_angle_rad)
-        coefficient = node.integrated_coefficient * 0.8 * 0.9
+        coefficient = (
+            node.integrated_coefficient
+            * 0.8
+            * 0.9
+            * detector.source.mean_rays.source_weight[node.source_state_index]
+        )
         manual += (coefficient * (table[0] * plus + table[1] * minus)) @ probability
         absolute_l_wrong += (coefficient * table[0] * (plus + minus)) @ probability
     np.testing.assert_allclose(signed_actual, manual, rtol=5e-12, atol=0.0)

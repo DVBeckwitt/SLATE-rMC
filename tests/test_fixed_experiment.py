@@ -9,15 +9,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rasim_next.fitting import (
-    SHARED_GEOMETRY_PARAMETER_NAMES,
-    FixedLatticeState,
+from rasim_next.fitting.fixed_experiment import (
     FixedMosaicState,
     FixedPositionState,
-    SharedGeometryCorrections,
     build_fixed_experiment_series,
     build_fixed_incidence_scan_series,
     fixed_position_from_fit_record,
+)
+from rasim_next.fitting.fixed_lattice import FixedLatticeState
+from rasim_next.fitting.indexed_series import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
+    SharedGeometryCorrections,
     zero_sum_helmert_basis,
 )
 from rasim_next.materials import read_crystal

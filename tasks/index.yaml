@@ -157,3 +157,8 @@ tasks:
     branch: codex/native-batched-fit
     status: READY_OPTIONAL_BATCHED_SEARCH_PHYSICAL_FITTING_CONTINUES
     depends_on: [T32]
+  - id: T34
+    file: tasks/34_native_response_reuse.md
+    branch: codex/native-response-reuse
+    status: READY_REUSABLE_NATIVE_WORKFLOW_FITS_UNQUALIFIED
+    depends_on: [T33]

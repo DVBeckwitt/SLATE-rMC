@@ -11,7 +11,7 @@ import numpy as np
 
 from rasim_next.core.contracts import RodQueryBatch
 from rasim_next.core.scattering import electron_squared_to_scattering_strength_A2
-from rasim_next.fitting import (
+from rasim_next.fitting.stacking_intensity import (
     STACKING_COMPONENT_IDS,
     StackingPopulationIdentifiabilityError,
     compile_pbi2_stacking_profile_response,

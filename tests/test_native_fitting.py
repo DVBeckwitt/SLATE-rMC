@@ -78,6 +78,113 @@ def bi_physics():
     )
 
 
+def test_fixed_proposal_reuses_scattering_and_separates_spectral_mass_from_pixels():
+    from painted_ewald import MosaicParameters
+    from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
+    from rasim_next.pipeline.fiber_detector import FiberScatteringCache
+
+    physics = bi_physics()
+    physics = replace(
+        physics,
+        integration_rule=replace(
+            physics.integration_rule,
+            axial_power=5,
+            angular_power=2,
+            frozen_ewald_bounds_Ainv_rad=(0.0, 9.0, 0.0, 2 * np.pi),
+        ),
+    )
+    proposal = MosaicParameters(0.5, 0.6, 0.4)
+    physical = MosaicParameters(0.7, 0.9, 0.3)
+    arguments = dict(
+        coherent_repeats=3,
+        film_thickness_A=200.0,
+        surface_fractions=(0.2, 0.3, 0.5),
+        phase_fractions=(1.0,),
+        fault_parameters={},
+    )
+    detector = physics.detector(mosaic=physical, **arguments)
+    detector = replace(
+        detector,
+        proposal_mosaic=proposal,
+        specular_stitch_stack=replace(
+            detector.specular_stitch_stack, top_roughness_A=2.0, bottom_roughness_A=3.0
+        ),
+    )
+    rows, columns = detector.detector_shape_rc
+    flat = np.arange(rows * columns)
+    projection = NativePixelRegionProjection(
+        (rows, columns),
+        flat,
+        (flat // columns >= rows // 2).astype(int),
+        flat,
+        np.ones(len(flat)),
+        2,
+        "reuse-and-native-render-proof",
+    )
+    cache = FiberScatteringCache()
+    response = detector.compile_native_response(projection, scattering_cache=cache)
+    expected = response.evaluate()
+    assert np.any(expected > 0)
+    image = detector.integrate_native_pixels()
+    np.testing.assert_allclose(
+        projection.integrate_field(image, np.ones_like(image))[0], expected, rtol=2e-10, atol=1e-18
+    )
+    parts = [
+        detector.integrate_native_pixels(row_bounds=(0, rows // 2)),
+        detector.integrate_native_pixels(row_bounds=(rows // 2, rows)),
+    ]
+    np.testing.assert_array_equal(np.vstack(parts), image)
+    contributions = list(detector.iter_native_pixel_batches())
+    np.testing.assert_array_equal(sum(contributions), image)
+    np.testing.assert_array_equal(
+        sum(detector.iter_native_pixel_batches(batch_offset=1), contributions[0].copy()), image
+    )
+    built = cache.build_count
+    moved = replace(
+        detector,
+        instrument=replace(detector.instrument, detector_reference_coordinate_px=(48.0, 42.0)),
+    )
+    reused = moved.compile_native_response(projection, scattering_cache=cache).evaluate()
+    np.testing.assert_array_equal(reused, moved.compile_native_response(projection).evaluate())
+    assert cache.build_count == built and cache.reuse_count > 0
+    assert not np.array_equal(reused, expected)
+    weights = detector.source.mean_rays.source_weight
+    first_line = detector.source.mean_rays.wavelength_A == detector.source.mean_rays.wavelength_A[0]
+    line0 = np.where(first_line, weights / weights[first_line].sum(), 0.0)
+    line1 = np.where(~first_line, weights / weights[~first_line].sum(), 0.0)
+    endpoints = [response.evaluate(source_weights=w) for w in (line0, line1)]
+    np.testing.assert_allclose(
+        response.evaluate(source_weights=0.2 * line0 + 0.8 * line1),
+        0.2 * endpoints[0] + 0.8 * endpoints[1],
+        rtol=3e-14,
+        atol=0,
+    )
+    new_source = replace(
+        detector.source, mean_rays=replace(detector.source.mean_rays, source_weight=line0)
+    )
+    rebound = replace(physics, source=new_source).detector(mosaic=physical, **arguments)
+    rebound = replace(
+        rebound, proposal_mosaic=proposal, specular_stitch_stack=detector.specular_stitch_stack
+    )
+    np.testing.assert_allclose(
+        rebound.compile_native_response(projection).evaluate(), endpoints[0], rtol=3e-13, atol=0
+    )
+    changed = replace(
+        detector,
+        integration_rule=replace(
+            detector.integration_rule, frozen_ewald_bounds_Ainv_rad=(0, 10, 0, 2 * np.pi)
+        ),
+    )
+    assert changed.fixed_physics_revision != detector.fixed_physics_revision
+    with pytest.raises(ValueError, match="does not enclose"):
+        replace(
+            detector,
+            integration_rule=replace(
+                detector.integration_rule, frozen_ewald_bounds_Ainv_rad=(0, 0.01, 0, 2 * np.pi)
+            ),
+        ).compile_native_response(projection)
+
+
 def test_bi_thirteen_coordinates_bind_optics_lattice_orbits_and_surface_windows():
     from painted_ewald import MosaicParameters
     from rasim_next.fitting.bi_native import BiCellSiteParameters, BiNativeStructureModel
@@ -140,9 +247,10 @@ def test_bi_thirteen_coordinates_bind_optics_lattice_orbits_and_surface_windows(
 
 
 def test_native_gls_scale_and_all_parameter_optimizer_recover_known_counts():
-    from rasim_next.fitting.bi_joint import BiJointCandidate, fit_bi_joint
+    from rasim_next.fitting.bi_joint import BI_JOINT_PARAMETER_NAMES
     from rasim_next.fitting.bi_native import BiNativeStructureModel
     from rasim_next.fitting.native_observations import NativeFitObservations
+    from rasim_next.fitting.native_search import FitParameter, fit_native_parameters
     from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 
     values = np.r_[
@@ -222,32 +330,36 @@ def test_native_gls_scale_and_all_parameter_optimizer_recover_known_counts():
             self.seen = []
 
         def predict(self, candidate):
-            self.seen.append(candidate.values)
-            return np.r_[1, 2 + (candidate.values - lower) / (upper - lower)]
+            self.seen.append(candidate)
+            return np.r_[1, 2 + (candidate - lower) / (upper - lower)]
 
     evaluator = KnownNativeObservable()
-    result = fit_bi_joint(
-        evaluator,
-        BiJointCandidate(values, 3),
-        lower=lower,
-        upper=upper,
-        maximum_iterations=100,
+    result = fit_native_parameters(
+        evaluator.predict,
+        observations,
+        tuple(
+            FitParameter(name, "1", "specimen", lo, hi, (hi - lo) / 10)
+            for name, lo, hi in zip(BI_JOINT_PARAMETER_NAMES, lower, upper, strict=True)
+        ),
+        [values],
+        method="trf",
+        maximum_function_evaluations=100,
         finite_difference_step=1e-5,
     )
-    assert result.success
-    assert len(result.active_parameters) == 21
+    assert result.best_converged is not None
     assert np.all(np.ptp(np.array(evaluator.seen), axis=0) > 0)
     np.testing.assert_allclose(
-        (result.candidate.values - lower) / (upper - lower), truth, atol=2e-3
+        (result.best_converged.parameter_values - lower) / (upper - lower), truth, atol=2e-3
     )
-    assert result.scores["guards_pass"]
+    assert result.best_converged.scores["guards_pass"]
     assert result.numerical_status == "not_qualified"
 
 
 def test_native_bi_reuse_invalidates_changed_density_and_cell():
     from painted_ewald import MosaicParameters
-    from rasim_next.fitting.bi_joint import BiJointCandidate, BiNativeFitEvaluator
+    from rasim_next.fitting.bi_joint import BiJointModel
     from rasim_next.fitting.bi_native import BiNativeStructureModel
+    from rasim_next.fitting.native_joint import NativeJointEvaluator
     from rasim_next.fitting.native_observations import NativeFitObservations
     from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 
@@ -312,28 +424,26 @@ def test_native_bi_reuse_invalidates_changed_density_and_cell():
     with pytest.raises(ValueError, match="another native response"):
         replace(response, projection_revision="other").evaluate(mosaic_cache=cache)
     values = np.r_[model.reference_parameters.as_array(), 0.5, 0.6, 0.4, 0.2, 0.6, 100, 2, 4]
-    evaluator = BiNativeFitEvaluator(model, observations, MosaicParameters(0.5, 0.6, 0.4), 2)
-    initial = evaluator.predict(BiJointCandidate(values, 3))
+    evaluator = NativeJointEvaluator(
+        BiJointModel(model), observations, MosaicParameters(0.5, 0.6, 0.4), worker_count=2
+    )
+    initial = evaluator.predict(values, 3)
     assert np.any(initial > 0)
     assert not initial.flags.writeable
-    np.testing.assert_array_equal(evaluator.predict(BiJointCandidate(values, 3)), initial)
+    np.testing.assert_array_equal(evaluator.predict(values, 3), initial)
     assert evaluator.evaluation_count == 1
     values[2] += 0.001
     values[18:] += 1
-    reused = evaluator.predict(BiJointCandidate(values, 3))
+    reused = evaluator.predict(values, 3)
     assert evaluator.compile_count == 1
-    independent = BiNativeFitEvaluator(model, observations, evaluator.proposal_mosaic)
-    np.testing.assert_allclose(
-        reused, independent.predict(BiJointCandidate(values, 3)), rtol=3e-13, atol=0
-    )
+    independent = NativeJointEvaluator(BiJointModel(model), observations, evaluator.proposal_mosaic)
+    np.testing.assert_allclose(reused, independent.predict(values, 3), rtol=3e-13, atol=0)
     values[4] -= 0.03
-    density = evaluator.predict(BiJointCandidate(values, 3))
+    density = evaluator.predict(values, 3)
     assert evaluator.compile_count == 2
-    np.testing.assert_allclose(
-        density, independent.predict(BiJointCandidate(values, 3)), rtol=3e-13, atol=0
-    )
+    np.testing.assert_allclose(density, independent.predict(values, 3), rtol=3e-13, atol=0)
     values[0] += 0.01
-    evaluator.predict(BiJointCandidate(values, 3))
+    evaluator.predict(values, 3)
     assert evaluator.compile_count == 3
     with pytest.raises(ValueError, match="misses potentially elastic rods"):
         model.validate_rod_coverage(a_bounds_A=(4.3, 4.5), c_bounds_A=(30.0, 31.0))

@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from rasim_next.fitting import (
+from rasim_next.fitting.fixed_experiment import fixed_position_from_fit_record
+from rasim_next.fitting.fixed_lattice import (
     LATTICE_FIT_SCHEMA_VERSION,
     LATTICE_MAXIMUM_ABSOLUTE_LOG_STRAIN,
     LATTICE_MAXIMUM_ABSOLUTE_PRIOR_PULL,
@@ -28,14 +29,15 @@ from rasim_next.fitting import (
     LATTICE_PARAMETER_NAMES,
     LATTICE_REQUIRED_DATA_PRACTICAL_RANK,
     LATTICE_SENSITIVITY_RELATIVE_TOLERANCE,
+    hexagonal_direct_basis,
+)
+from rasim_next.fitting.geometry import ExactTagGeometryModel
+from rasim_next.fitting.indexed_series import (
     IndexedGeometryImage,
     audit_indexed_geometry_series_roots,
     evaluate_indexed_geometry_series_metrics,
     evaluate_indexed_geometry_series_residual,
-    fixed_position_from_fit_record,
-    hexagonal_direct_basis,
 )
-from rasim_next.fitting.geometry import ExactTagGeometryModel
 from rasim_next.pipeline.configured_simulation import (
     rebind_configured_geometry_direct_basis,
     rebind_configured_geometry_instrument,

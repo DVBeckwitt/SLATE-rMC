@@ -13,12 +13,14 @@ import rasim_next.selection.osc_series as osc_series_module
 from rasim_next.core.frames import FrameId
 from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.fitting import (
-    PBI2_IDEAL_PARENTS,
+from rasim_next.fitting.geometry import (
     ExactTagGeometryModel,
-    IndexedGeometryImage,
     IntegerLMarkerKey,
     IntegerLMarkerPrediction,
+)
+from rasim_next.fitting.indexed_series import IndexedGeometryImage
+from rasim_next.fitting.pbi2_geometry import (
+    PBI2_IDEAL_PARENTS,
     Pbi2PolytypeLandmarkCatalogue,
     build_ideal_pbi2_polytype_landmark_catalogue,
 )

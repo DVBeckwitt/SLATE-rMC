@@ -1,5 +1,15 @@
 # Dovetail matrix
 
+T34 adds the following shared boundaries:
+
+| Producer | Output | Consumer | Boundary rule |
+|---|---|---|---|
+| material refinement model | physical candidate, units and inactivity | native evaluator | symmetry-specific logic remains in specimen model |
+| scattering compiler | pre-projection optical events | conditional transport | actual node/optical keys; no old detector-survivor reuse |
+| native response v2 | source-mass-free coefficients | current candidate contraction | aligned line/source probabilities multiply exactly once |
+| public TRF batch | full physical vectors and N | parent prediction store | exact raw replay; no private optimizer state |
+| native pixel batch stream | additive whole-panel image contribution | renderer | one proposal, atomic complete-batch checkpoints |
+
 This matrix records the live production boundaries. Historical task documents describe earlier
 phases but do not override these owners.
 

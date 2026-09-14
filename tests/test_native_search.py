@@ -38,6 +38,78 @@ def observations(counts, covariance=None):
     )
 
 
+def test_public_trf_batches_respect_bounds_and_recover_scoped_lower_evidence():
+    target = observations([1, 1.4, 1.2, 1.6], np.eye(4) + 0.1)
+    parameters = (
+        FitParameter("wavelength_A", "angstrom", "beam", 1.54, 1.54001, 1e-6),
+        FitParameter("mix", "1", "sample", 0, 1, 0.1),
+    )
+
+    def model(v):
+        x = (v[0] - 1.54) / 1e-5
+        return np.array([1, 1 + x, 1 + v[1], 1 + x + v[1]])
+
+    batches = []
+
+    def many(rows):
+        assert np.all((rows[:, 0] >= 1.54) & (rows[:, 0] <= 1.54001))
+        assert np.all((rows[:, 1] >= 0) & (rows[:, 1] <= 1))
+        batches.append(rows.copy())
+        return np.array([model(v) for v in rows])
+
+    calibration = GaussianCalibration(
+        (1,),
+        np.array([0.2]),
+        np.array([[0.03]]),
+        "c" * 64,
+        "sample",
+        "independent_measurement",
+        ("mix",),
+        ("1",),
+        ("sample",),
+    )
+    options = dict(method="trf", finite_difference_step=1e-4, calibration=(calibration,))
+    serial = fit_native_parameters(model, target, parameters, [[1.54, 1]], **options)
+    batched = fit_native_parameters(
+        model, target, parameters, [[1.54, 1]], predict_many=many, **options
+    )
+    assert batches
+    np.testing.assert_array_equal(
+        serial.best_converged.parameter_values, batched.best_converged.parameter_values
+    )
+    assert batched.best_converged.objective < 1e-8
+    assert batched.best_converged.jacobian_evaluations > 0
+    # Large requested steps still produce admissible shortened/signed stencils.
+    fit_native_parameters(
+        model,
+        target,
+        parameters,
+        [[1.540004, 0.6]],
+        method="trf",
+        predict_many=many,
+        finite_difference_step=0.9,
+        maximum_function_evaluations=1,
+    )
+    previous = np.array([[1.540003, 0.2], [1.540004, 0.8]])
+    recovered = fit_native_parameters(
+        model,
+        target,
+        parameters,
+        [[1.54, 0.2]],
+        method="trf",
+        fixed_values={"mix": 0.2},
+        maximum_function_evaluations=1,
+        previous_predictions=(previous, many(previous)),
+    )
+    assert recovered.best_evaluated.objective < 0.1
+    assert recovered.best_evaluated.parameter_values[1] == 0.2
+    assert not recovered.minimum_resolved
+    with pytest.raises(ValueError, match="inequalities"):
+        fit_native_parameters(
+            model, target, parameters, [[1.54, 0.2]], method="trf", enforce_historical_guards=True
+        )
+
+
 def test_batched_predictions_preserve_bounded_calibrated_search_and_serial_history(monkeypatch):
     import threading
 

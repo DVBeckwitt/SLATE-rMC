@@ -1,5 +1,11 @@
 # Scope and phases
 
+T34 consolidates native preparation, fitting, rendering and recoverable execution for all
+six declared acquisitions. All admitted coordinates remain free in the final joint stage.
+This delivers reusable infrastructure; it does not qualify the existing provisional fits
+or establish their parameter uncertainties. Additional materials supply a scientifically
+defined specimen binding, not changes to the shared detector or optimizer.
+
 ## Current objective
 
 Maintain the smallest scientifically explicit core that produces detector-native X-ray scattering

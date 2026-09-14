@@ -13,12 +13,14 @@ import numpy as np
 import pytest
 import yaml
 
-from rasim_next.fitting import (
+from rasim_next.fitting.fixed_experiment import (
     FIXED_EXPERIMENT_STATE_SCHEMA_VERSION,
     POSITION_FIT_RESULT_SCHEMA_VERSION,
-    SHARED_GEOMETRY_PARAMETER_NAMES,
     FixedMosaicState,
     FixedPositionState,
+)
+from rasim_next.fitting.indexed_series import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
     SharedGeometryCorrections,
     zero_sum_helmert_basis,
 )

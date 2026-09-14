@@ -21,10 +21,14 @@ from scipy.ndimage import map_coordinates
 from painted_ewald import MosaicParameters, Rod, wrapped_mosaic_line_density_rad_inv
 from rasim_next.core.contracts import MaterialOptics
 from rasim_next.core.staged_fit import verify_staged_fit_stage_artifact
-from rasim_next.fitting import (
+from rasim_next.fitting.geometry import ExactTagGeometryModel
+from rasim_next.fitting.indexed_series import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
+    SharedGeometryCorrections,
+    apply_shared_geometry_corrections,
+)
+from rasim_next.fitting.mosaic import (
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
-    ExactTagGeometryModel,
     MosaicIdentifiabilityError,
     MosaicProfileDefinition,
     MosaicProfileFitResult,
@@ -33,8 +37,6 @@ from rasim_next.fitting import (
     MosaicProfileSearchResult,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
-    SharedGeometryCorrections,
-    apply_shared_geometry_corrections,
     evaluate_continuous_mosaic_profiles,
     fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,

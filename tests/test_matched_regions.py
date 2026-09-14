@@ -5,16 +5,18 @@ import math
 import numpy as np
 import pytest
 
-from rasim_next.fitting import (
+from rasim_next.fitting.matched_regions import (
     FixedMatchedRegionBackground,
     IntegratedPeakAreaProjection,
     MatchedRegionObservations,
-    RadialBackgroundProfiles,
-    RadialBackgroundState,
     condition_matched_region_background_from_anchors,
     fit_matched_regions,
-    fit_shared_radial_background,
     profile_matched_region_nuisance,
+)
+from rasim_next.fitting.radial_background import (
+    RadialBackgroundProfiles,
+    RadialBackgroundState,
+    fit_shared_radial_background,
 )
 
 

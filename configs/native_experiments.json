@@ -1,0 +1,72 @@
+{
+  "schema": "rasim-native-experiment-catalog-v1",
+  "description": "Frozen native experiments; resolve paths relative to an explicitly supplied external input root. Use prepare_native.py for hash-verified relocation.",
+  "experiments": [
+    {
+      "sample_id": "b4",
+      "observations": {
+        "path": "native_fit_inputs_20260911/b4_observations.json",
+        "sha256": "f3e8ad8cc50380f2eabc9cb4d4657efdf3f164ce918f6d8ac494c7f9cc1140f6"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/b4_physics.json",
+        "sha256": "5493fa321aedd7f107e7827bc796204b12f98d4802b68c32312710d2fa8098fa"
+      }
+    },
+    {
+      "sample_id": "bi2se3",
+      "observations": {
+        "path": "native_fit_inputs_20260911/bi2se3_observations.json",
+        "sha256": "e7869e085a97a146590e58cb2be80b5fa81febf78f329617f6e3504af0067d40"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/bi2se3_physics.json",
+        "sha256": "a6d954c66cf1788b11fa77021587c4707e323ef44f37d758c8fc0a447ec76d2b"
+      }
+    },
+    {
+      "sample_id": "bi2te3",
+      "observations": {
+        "path": "native_fit_inputs_20260911/bi2te3_observations.json",
+        "sha256": "b5b0fce10577992ca159a6eaa7a2f8c9a91523a5772b65c442e15d09e97d5477"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/bi2te3_physics.json",
+        "sha256": "bf26d8b59ecaa28ba443654b7ce8ce66374ed207fa4f3b6f5eb5371b613408e3"
+      }
+    },
+    {
+      "sample_id": "clean1",
+      "observations": {
+        "path": "native_fit_inputs_20260911/clean1_observations.json",
+        "sha256": "502e98b7a78b559f7bc67d403433e2aab1f8a6cb97cf874f7ce3553bc267fff5"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/clean1_physics.json",
+        "sha256": "94827b0fe0133410a944f82301ab6ebfae262c6ac0da3ca1c426d1b7d9f8bbec"
+      }
+    },
+    {
+      "sample_id": "gd1",
+      "observations": {
+        "path": "native_fit_inputs_20260911/gd1_observations.json",
+        "sha256": "25804e03fb18f4c91d3c62ec660f577e52af06f063f08c5c7426f97d45e29a06"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/gd1_physics.json",
+        "sha256": "99aa4311e6a22f2dc6794057c23d13d89d4beb6bc902d18e1d4c0133d87a6c82"
+      }
+    },
+    {
+      "sample_id": "sid1",
+      "observations": {
+        "path": "native_fit_inputs_20260911/sid1_observations.json",
+        "sha256": "8120354e936e05e1064367f2c1db689c355663fdd95ca4347eab807220a41de4"
+      },
+      "physics": {
+        "path": "native_fit_inputs_20260911/sid1_physics.json",
+        "sha256": "c267282753064a0d0eab4d26eda352d6f412a2d2f8657bf41e8a4711ef64dd20"
+      }
+    }
+  ]
+}

@@ -1,5 +1,14 @@
 # Stage-trace schema
 
+Native refinement result v2 additionally records `prediction_store`, completed raw
+vectors/N/predictions, pending work, public optimizer termination metadata and execution
+status. Revision identity binds plan, inputs, source files, runner and numerical dependency
+versions. Parent compilation metrics explicitly exclude isolated worker-group builds.
+Native render v1 records the candidate/target kind, implementation identity, whole-panel
+batch count, completion and separate fit/image numerical status. Only consistent batch
+boundaries are atomically published; interruption retains the last published checkpoint.
+These are execution manifests, not new physical trace stages.
+
 Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
 API v17 does not renumber historical evidence.

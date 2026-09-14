@@ -10,7 +10,8 @@ from time import perf_counter
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from rasim_next.fitting import ExactTagGeometryModel, IndexedGeometryImage
+from rasim_next.fitting.geometry import ExactTagGeometryModel
+from rasim_next.fitting.indexed_series import IndexedGeometryImage
 from rasim_next.geometry import AngleFrame
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.io.osc import read_osc

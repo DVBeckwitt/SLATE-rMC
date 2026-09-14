@@ -1,5 +1,22 @@
 # Contracts
 
+## Native response reuse and execution (T34)
+
+The current execution extension is documented in [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
+`FiberScatteringTransfer` retains physical event state before detector/source-mass pruning;
+`FiberScatteringCache` is a bounded explicit owner keyed by actual quadrature and optical state.
+Projection applies current origins, detector visibility and footprint exactly once.
+`NativeFiberResponse` v2 excludes source mass and contracts current aligned normalized weights.
+No cached survivor mask may determine a new detector candidate's support. A frozen Ewald
+envelope must pass candidate-specific Q and angular coverage checks. Default adaptive rules
+remain available; no response is valid for arbitrary parameter changes.
+
+`NativeRefinementModel` supplies names, units, a physical binding and exact inactivity rules.
+Built-in Bi/Pb symmetry rules live in those models. Search, observations, instrument binding,
+transport, probability integration and execution checkpoints are shared. Raw prediction
+recovery is keyed by full float64 candidate, integer N and declared forward identity;
+optimizer state, residuals and Jacobians are not replayed.
+
 Contract API version: **17**. Trace schema version: **4**. Reference pack version: **1**.
 
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
@@ -1149,16 +1166,11 @@ observations. No executable checkpoint is admitted.
 Lorentzian width/mass, two bounded surface-mixture coordinates, extra film thickness and two
 interface roughnesses. Surface fractions are `(s0,(1-s0)s1,(1-s0)(1-s1))`; physical film
 thickness is `N*c + extra`, so a coherent stack cannot exceed the film. N is an integer
-conventional-cell repeat count, never a rounded continuous parameter. `BiNativeFitEvaluator`
-is an explicit execution resource retaining at most two immutable responses with material/basis
-keys and 64 small immutable prediction vectors keyed by the complete candidate. The latter
-avoids duplicate objective/constraint finite differences; its scientific inputs are frozen.
-`fit_bi_joint` requires physical bounds, exposes the
-active coordinates and returns optimizer status, predictions and separate guards. The CLI
-`scripts/fit_bi_native.py` accepts a numeric plan, optional initialization blocks, all-active
-joint stages and independent continuous refits at selected integer N values. Conditional
-repeat checks are labeled separately. All output is one external diagnostic NPZ per run with
-an embedded manifest, never an automatic replacement of an accepted fit.
+conventional-cell repeat count, never a rounded continuous parameter. `BiJointModel` now
+binds this candidate through the common `NativeRefinementModel` contract. The duplicate
+Bi evaluator/search/CLI has retired. `NativeJointEvaluator`, `fit_native_parameters` and
+`scripts/refine_native.py` own execution for all built-in specimen models. Output remains
+one external diagnostic with separate candidate, convergence and numerical-selection states.
 
 Local sensitivity uses range-scaled, covariance-whitened prediction derivatives with profiled
 scale. The CLI records SVD directions and each perturbation's empirical stitch selection,

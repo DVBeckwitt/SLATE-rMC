@@ -21,15 +21,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from rasim_next.fitting import (
+from rasim_next.fitting.fixed_experiment import (
     FIXED_EXPERIMENT_STATE_SCHEMA_VERSION,
-    FixedLatticeState,
     FixedMosaicState,
     FixedPositionState,
     build_fixed_experiment_series,
-    fixed_lattice_from_fit_record,
     fixed_position_from_fit_record,
 )
+from rasim_next.fitting.fixed_lattice import FixedLatticeState, fixed_lattice_from_fit_record
 from rasim_next.io.osc import read_osc
 from rasim_next.materials import read_crystal
 from rasim_next.pipeline.configured_simulation import (

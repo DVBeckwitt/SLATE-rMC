@@ -19,33 +19,43 @@ from painted_ewald.rotations import mosaic_axes
 from rasim_next.core.frames import FrameId
 from rasim_next.core.layer_order import CommensurateLayerOrder
 from rasim_next.core.transforms import RigidTransform
-from rasim_next.fitting import (
-    PBI2_IDEAL_PARENTS,
-    SHARED_GEOMETRY_PARAMETER_NAMES,
-    STACKING_COMPONENT_IDS,
-    STACKING_PHASE_IDS,
-    CompiledLayerLStackingResponse,
-    CompiledStackingResponse,
+from rasim_next.fitting.geometry import (
     ContinuousDetectorFunction,
     ContinuousDetectorGeometryModel,
-    DetectorCalibrationCorrectionBounds,
-    DetectorCalibrationCorrections,
     ExactTagGeometryModel,
     GeometryCorrectionBounds,
     GeometryCorrections,
     GeometryPredictionError,
     GeometryRankError,
-    IncidenceAngleDeltaBounds,
-    IndexedGeometryImage,
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,
     LayerLMarkerDefinition,
     LayerLMarkerKey,
     LayerLMarkerObservations,
-    LayerLStackingObservations,
     M0IntegerLObservations,
     M0IntegerLPrediction,
+    audit_integer_l_marker_selection,
+    evaluate_layer_l_geometry_objective_residual,
+    evaluate_tagged_geometry_objective_residual,
+    fit_tagged_detector_function_geometry,
+    merge_layer_l_marker_observations,
+)
+from rasim_next.fitting.indexed_series import (
+    SHARED_GEOMETRY_PARAMETER_NAMES,
+    DetectorCalibrationCorrectionBounds,
+    DetectorCalibrationCorrections,
+    IncidenceAngleDeltaBounds,
+    IndexedGeometryImage,
+    SharedGeometryCorrectionBounds,
+    SharedGeometryCorrections,
+    apply_detector_calibration_corrections,
+    apply_shared_geometry_corrections,
+    audit_indexed_geometry_series_roots,
+    evaluate_indexed_geometry_series_residual,
+    fit_indexed_geometry_series,
+)
+from rasim_next.fitting.mosaic import (
     MosaicComponentProfile,
     MosaicComponentProfileBank,
     MosaicIdentifiabilityError,
@@ -54,33 +64,31 @@ from rasim_next.fitting import (
     MosaicProfileNuisanceBasis,
     MosaicProfileSet,
     MosaicReflectionGroupKey,
-    Pbi2ParentLogRatioParameterization,
-    Pbi2ParentMixtureStrength,
-    Pbi2PolytypeLandmarkCatalogue,
-    SharedGeometryCorrectionBounds,
-    SharedGeometryCorrections,
-    StackingPopulationIdentifiabilityError,
-    apply_detector_calibration_corrections,
-    apply_shared_geometry_corrections,
-    audit_indexed_geometry_series_roots,
-    audit_integer_l_marker_selection,
-    build_ideal_pbi2_polytype_landmark_catalogue,
     build_layer_l_mosaic_profile_definitions,
-    compile_pbi2_layer_l_stacking_response,
-    compile_pbi2_stacking_profile_response,
     evaluate_continuous_mosaic_profiles,
-    evaluate_indexed_geometry_series_residual,
-    evaluate_layer_l_geometry_objective_residual,
-    evaluate_tagged_geometry_objective_residual,
-    fit_indexed_geometry_series,
-    fit_layer_l_stacking_phase_totals,
     fit_mosaic_component_profiles,
     fit_refined_mosaic_component_profiles,
-    fit_stacking_phase_totals,
-    fit_tagged_detector_function_geometry,
-    merge_layer_l_marker_observations,
-    ordered_intensity_profile_catalog_revision,
+)
+from rasim_next.fitting.ordered_intensity import ordered_intensity_profile_catalog_revision
+from rasim_next.fitting.pbi2_geometry import (
+    PBI2_IDEAL_PARENTS,
+    Pbi2PolytypeLandmarkCatalogue,
+    build_ideal_pbi2_polytype_landmark_catalogue,
     pbi2_ideal_parent_landmark_contributions,
+)
+from rasim_next.fitting.stacking_intensity import (
+    STACKING_COMPONENT_IDS,
+    STACKING_PHASE_IDS,
+    CompiledLayerLStackingResponse,
+    CompiledStackingResponse,
+    LayerLStackingObservations,
+    Pbi2ParentLogRatioParameterization,
+    Pbi2ParentMixtureStrength,
+    StackingPopulationIdentifiabilityError,
+    compile_pbi2_layer_l_stacking_response,
+    compile_pbi2_stacking_profile_response,
+    fit_layer_l_stacking_phase_totals,
+    fit_stacking_phase_totals,
 )
 from rasim_next.geometry import (
     AngleFrame,
@@ -3681,7 +3689,7 @@ def test_continuous_mosaic_profiles_integrate_signal_and_normalization_before_di
 
 
 def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profiles() -> None:
-    from rasim_next.fitting import (
+    from rasim_next.fitting.ordered_intensity import (
         ORDERED_INTENSITY_TOPOLOGY_PROBE_REVISION,
         OrderedIntensityObservations,
         OrderedIntensityPeakCenterObservations,
@@ -4008,7 +4016,7 @@ def test_sparse_ordered_intensity_response_matches_direct_m0_and_nonzero_profile
 
 
 def test_ordered_intensity_fit_enforces_freeze_gauge_revision_and_rank_contracts() -> None:
-    from rasim_next.fitting import (
+    from rasim_next.fitting.ordered_intensity import (
         OrderedIntensityDatasetResponse,
         OrderedIntensityIdentifiabilityError,
         OrderedIntensityObservations,

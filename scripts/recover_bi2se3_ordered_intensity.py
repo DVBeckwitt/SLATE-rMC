@@ -18,25 +18,29 @@ from typing import Any
 import numpy as np
 
 from painted_ewald import MosaicBraggSpace
-from rasim_next.fitting import (
+from rasim_next.fitting.indexed_series import (
     SHARED_GEOMETRY_PARAMETER_NAMES,
-    SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
-    SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
+    SharedGeometryCorrections,
+    apply_shared_geometry_corrections,
+)
+from rasim_next.fitting.mosaic import (
     SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION,
     MosaicProfileDefinition,
     MosaicProfileIdentity,
     MosaicReflectionGroupKey,
+    source_averaged_profile_has_support,
+)
+from rasim_next.fitting.ordered_intensity import (
+    SOURCE_AVERAGED_ORDERED_INTENSITY_RESPONSE_CONTRACT_REVISION,
+    SOURCE_AVERAGED_ORDERED_INTENSITY_SIGNAL_CERTIFICATE_RELATIVE_FLOOR,
     OrderedIntensityIdentifiabilityError,
     OrderedIntensityPeakCenterObservations,
-    SharedGeometryCorrections,
-    apply_shared_geometry_corrections,
     compile_source_averaged_ordered_intensity_response,
     evaluate_source_averaged_ordered_intensity_point_signal,
     fit_ordered_intensity_series,
     ordered_intensity_profile_catalog_revision,
     ordered_intensity_structure_model_revision,
     source_averaged_detector_instrument_revision,
-    source_averaged_profile_has_support,
 )
 from rasim_next.geometry import build_incident_states, detector_coordinates_to_angles
 from rasim_next.io.osc import read_osc

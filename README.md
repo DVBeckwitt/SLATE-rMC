@@ -55,32 +55,30 @@ For a one-incident-state, native-pixel convergence diagnostic, use
 `scripts/generate_bi2se3_continuous_detector.py`. Its omitted physical options inherit the same YAML
 fixture, so there is only one default authority.
 
-The current real-OSC workflow is modular and resumable. It fits positions first, optionally tests a
-tightly bounded lattice change, combines that result with an explicitly provided mosaic state, and
-then calibrates background and runs the joint structure fit. The same adapter and state
-contracts serve the tracked Bi2Se3 and Bi2Te3 layered-quintuple recipes. Model evaluation stays
-continuous; only measured OSC data and detector displays are pixel arrays. The measured pixels are
-a piecewise-constant count field projected over the same continuous mixed-chart rectangles as the
-model, with fractional-pixel covariance retained.
+The current fitting workflow uses frozen detector-native observations and one shared
+material-independent search, response and rendering path. Built-in specimen bindings cover
+Bi2Se3, Bi2Te3 and the four declared PbI2 acquisitions. New materials supply an explicit
+`NativeRefinementModel`; their symmetry and parameter rules do not enter the detector core.
 
 ```powershell
-uv run --frozen python scripts/compose_fixed_experiment.py `
-  --position C:\external\fit\position.json `
-  --geometry-manifest configs/bi2se3_osc_geometry_fit_model_limited.yaml `
-  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
-  --mosaic-state examples/bi2se3/experiment/fixed_mosaic.json `
-  --destination C:\external\fit\fixed_experiment.json
+uv run --frozen python scripts/prepare_native.py `
+  --observations C:\external\original\sample_observations.json `
+  --output-directory C:\external\prepared
 
-uv run --frozen python scripts/fit_layered_quintuple_regions.py prepare `
-  --fixed-state C:\external\fit\fixed_experiment.json `
-  --recipe examples/bi2se3/experiment/figure7_matched_regions.toml `
-  --destination C:\external\fit\matched_regions.ra_diag.npz
+uv run --frozen python scripts/refine_native.py `
+  --physics C:\external\prepared\PHYSICS.json `
+  --observations C:\external\prepared\sample_observations.json `
+  --plan C:\external\fit_plan.json --output C:\external\fit.ra_diag.npz
 ```
 
-The tracked material-specific mosaic file uses `rasim-fixed-mosaic-state-v1` and is hash-bound into
-the checkpoint; its values are never duplicated on the command line. See `docs/EXAMPLES.md` for the complete
-position-to-figure sequence, stage dependencies, and result qualifications. Historical replay
-examples remain available for reference but are not the current fitting path.
+Preparation verifies and relocates an existing calibrated experiment; it preserves measured
+support, background and covariance. Use the hash-prefixed physics filename referenced by the
+prepared descriptor. `--resume` reuses exact completed predictions and restarts the public
+optimizer. `scripts/render_native.py` renders a saved selection; unqualified candidates require
+`--candidate`. Add `--full-image` for continuous integration over every native pixel.
+See [native refinement](docs/NATIVE_REFINEMENT.md) for complete commands, parameter ownership,
+reuse validity, recovery and scientific qualifications. Historical orchestration is archived
+at Git revision `349524d24f960198d75df8def104adbca204944a`.
 
 ## Interactive tools
 

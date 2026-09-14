@@ -1,5 +1,16 @@
 # Architecture
 
+## Current native fitting ownership
+
+Material bindings implement `NativeRefinementModel`; `native_workflow` assembles them with
+the shared instrument/observation owners. `native_search` owns public bounded TRF and guarded
+SLSQP, exact scale profiling and nuisance refits. `native_execution` owns raw recovery.
+`fiber_detector` separates retained scattering from detector transport; `conditional_detector`
+contracts current SF, mosaic and source masses. Gaussian probabilities have one shared
+arithmetic owner in `source_spatial`. See [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
+Historical layered-stage orchestration and eager fitting-package reexports have retired;
+geometry, scan and Monte Carlo paths retain their distinct live contracts.
+
 ## Design rule
 
 The repository has one production path from a configured incident beam to a detector-native

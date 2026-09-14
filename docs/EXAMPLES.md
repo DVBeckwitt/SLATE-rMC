@@ -1,5 +1,15 @@
 # Examples
 
+## Current native fitting commands
+
+Use the preparation/refinement/render commands in [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).
+The six input declarations are in `configs/native_experiments.json`; external data remain
+hash-bound. Earlier recipes below invoking `fit_layered_quintuple_regions.py`,
+`replay_staged_fit.py`, `staged_fit_ordered_intensity.py`, `run_layered_fit.py` or
+`fit_bi_native.py` are historical evidence, available at revision
+`349524d24f960198d75df8def104adbca204944a`. Those orchestration files are no longer live.
+Their numerical invariants remain with the current core owners and compact tests.
+
 ## Canonical Bi2Se3 simulation
 
 [`configs/bi2se3_simulation.yaml`](../configs/bi2se3_simulation.yaml) is the sole default authority.

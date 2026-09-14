@@ -1,5 +1,16 @@
 # Validation and proof
 
+## T34 reuse and workflow proof
+
+The retained boundaries are native source-mass separation, direct/reused response parity,
+proposal coverage rejection, current detector visibility, exact native batch sums,
+public bounded TRF and scoped interrupted-prediction replay, calibrated raw-input adoption,
+and render interruption/resume. `test_native_workflow_cli.py` covers actual serialized
+physics/observation/render boundaries. Existing atom, transition, covariance, optics and
+reference invariants remain authoritative. Equivalent coarse Bi/Pb workload comparisons
+measure implementation work only; they do not qualify fitted physical values. T34's task
+handoff records exact commands, measurements and limitations.
+
 Tolerance selection and required negative controls are authoritative in [ERROR_INJECTION.md](ERROR_INJECTION.md).
 
 ## Proof hierarchy

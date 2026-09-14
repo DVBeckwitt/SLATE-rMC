@@ -12,10 +12,6 @@ The compact suite is organized by scientific boundary:
 - `test_stacking_transition.py`: finite stacking correlations, parent limits, and normalization.
 - `test_fitting.py`: exact tagged-site geometry, detector-function objectives, rank checks, and
   blind bounded recovery, including independently switchable coordinates and named ordered bounds.
-- `test_staged_fit_replay_cli.py`: strict portable Bi2Se3/Bi2Te3 cases, exact input identities,
-  complete locked numerical runtime closure, pre-execution backend/dependency rejection, stage
-  order/revision chaining, nested-path/loaded-case immutability, pre-persistence tolerance checks,
-  and runtime-aware artifact-complete resume.
 - `test_integration.py`: continuous detector inverse mapping, caustics, native-pixel integration,
   source averaging, YAML construction, compiled kernels, CUDA parity, and end-to-end factor
   ownership.
@@ -28,11 +24,16 @@ The compact suite is organized by scientific boundary:
 - `test_fixed_experiment.py` and `test_compose_fixed_experiment_cli.py`: strict modular position,
   lattice, and provided-mosaic composition, exact image/angle binding, and immutable physics reuse
   across incidence views.
-- `test_layered_quintuple_regions_cli.py`: exact A/B/C/joint lineage, implementation/cache identity,
-  parameter-scaled identifiability, fit-conditioned policy, checkpoint integrity, and render
-  publication contracts for the material adapter.
 - `test_osc_lattice_cli.py` and `test_fixed_lattice.py`: data-only lattice promotion gates and the
   immutable retained/accepted full-basis handoff into mosaic and structure construction.
+
+- `test_native_execution.py`: exact completed raw recovery after a partial out-of-order batch.
+- `test_native_search.py`: scaled bounded TRF, calibrated multistarts, exact nuisance-scale
+  profiling, discrete/profile ownership and lower unfinished evidence.
+- `test_native_fitting.py`: Bi/Pb site/mixture bindings, response dependency reuse, exact
+  line masses, frozen proposal validity and continuous native pixel/batch equivalence.
+- `test_native_workflow_cli.py`: hash-verified portable frozen-input adoption and complete
+  image checkpoint/resume with explicit unqualified-candidate status.
 
 Retain a test only when it protects a distinct scientific invariant, public contract, accepted
 reference comparison, or integration boundary. Broad parameter sweeps, image snapshots, benchmarks,

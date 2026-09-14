@@ -1,5 +1,12 @@
 # Error-injection and tolerance policy
 
+T34 rejection controls cover an insufficient frozen Q/angular envelope, changed spectral
+weights including zero-line endpoints, changed detector geometry, changed raw acquisition
+hashes, malformed or duplicate worker rows, wrong-N/forward-identity replay, and interrupted
+native rendering. Required behavior is direct parity or explicit rejection, never stale
+reuse, changed net counts, lost completed predictions or double-counted image batches.
+The physical fitting thresholds in PHY-FIT-025 remain unchanged.
+
 A plausible image is not proof. Every scientific proof must detect bounded mistakes at the first
 affected stage while the unmodified calculation passes.
 

@@ -14,7 +14,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.ndimage import gaussian_filter, map_coordinates, maximum_filter
 from scipy.optimize import linear_sum_assignment
 
-from rasim_next.fitting import (
+from rasim_next.fitting.geometry import (
     IntegerLMarkerKey,
     IntegerLMarkerObservations,
     IntegerLMarkerPrediction,

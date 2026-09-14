@@ -7,7 +7,7 @@ import numpy as np
 from packaging.version import Version
 from scipy import __version__ as scipy_version
 from scipy.linalg import cho_solve, cholesky, solve_triangular
-from scipy.optimize import OptimizeResult, minimize
+from scipy.optimize import OptimizeResult, least_squares, minimize
 
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.fitting.native_observations import NativeFitObservations
@@ -99,6 +99,58 @@ class GaussianCalibration:
         return solve_triangular(self._factor, values[list(self.indices)] - self.mean, lower=True)
 
 
+def score_native_prediction(
+    observations, parameters, values, raw, calibration=(), *, guarded=False
+):
+    """Score one exact physical vector, including profiled scale and calibration once."""
+    values, raw = np.asarray(values, dtype=float), np.asarray(raw)
+    names = tuple(p.name for p in parameters)
+    lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
+    width = upper - lower
+    root_count = np.sqrt(int(observations.valid.sum()))
+    scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
+    prediction = scale * raw
+    scores = observations.scores(prediction)
+    calibration_chi_square = assumption_chi_square = 0.0
+    residual_blocks = [residual]
+    for block in calibration:
+        r = block.residual(values)
+        residual_blocks.append(r)
+        if block.evidence_kind == "independent_measurement":
+            calibration_chi_square += float(r @ r)
+        else:
+            assumption_chi_square += float(r @ r)
+    point = OptimizeResult(
+        parameter_values=values,
+        raw_prediction=np.array(raw, dtype=float, copy=True),
+        optimization_residual=np.concatenate(residual_blocks) / root_count,
+        scale=scale,
+        prediction_count=prediction,
+        data_chi_square=float(residual @ residual),
+        calibration_chi_square=calibration_chi_square,
+        assumption_chi_square=assumption_chi_square,
+        objective=float(residual @ residual) + calibration_chi_square + assumption_chi_square,
+        scores=scores,
+        start_index=-1,
+        optimizer_converged=False,
+    )
+    for kind, attribute in (
+        ("search", "search_bound_parameters"),
+        ("physical", "physical_boundary_parameters"),
+    ):
+        point[attribute] = tuple(
+            name
+            for i, name in enumerate(names)
+            if (
+                (abs(values[i] - lower[i]) < 1e-6 * width[i] and parameters[i].lower_kind == kind)
+                or (
+                    abs(values[i] - upper[i]) < 1e-6 * width[i] and parameters[i].upper_kind == kind
+                )
+            )
+        )
+    return point
+
+
 def fit_native_parameters(
     predict: Callable[[np.ndarray], np.ndarray],
     observations: NativeFitObservations,
@@ -108,7 +160,10 @@ def fit_native_parameters(
     predict_many: Callable[[np.ndarray], np.ndarray] | None = None,
     fixed_values: dict[str, float] | None = None,
     calibration: tuple[GaussianCalibration, ...] = (),
+    method: str = "slsqp",
+    previous_predictions: tuple[np.ndarray, np.ndarray] | None = None,
     maximum_iterations: int = 50,
+    maximum_function_evaluations: int = 80,
     finite_difference_step: float = 1e-4,
     enforce_historical_guards: bool = False,
     callback=None,
@@ -121,13 +176,21 @@ def fit_native_parameters(
     Optional predict_many receives (candidate, parameter) physical coordinates and
     returns (candidate, observation) raw predictions in the same order. Only these
     predictions may run concurrently; objective history and callbacks remain serial.
-    The caller owns worker isolation. This optional path requires SciPy >= 1.16.
+    The caller owns worker isolation. Batched SLSQP requires SciPy >= 1.16.
+    TRF uses the public least-squares API and a shared bounded difference batch.
+    Its function budget excludes derivative probes, which evaluation_count includes.
     Callbacks must not change the predictor state within a precomputed batch.
     """
+    if method not in ("slsqp", "trf"):
+        raise ValueError("method must be slsqp or trf")
+    if type(maximum_function_evaluations) is not int or maximum_function_evaluations < 1:
+        raise ValueError("maximum_function_evaluations must be a positive integer")
+    if method == "trf" and enforce_historical_guards:
+        raise ValueError("TRF cannot enforce historical inequalities; use SLSQP")
     if predict_many is not None:
         if not callable(predict_many):
             raise TypeError("predict_many must be callable")
-        if Version(scipy_version) < Version("1.16"):
+        if method == "slsqp" and Version(scipy_version) < Version("1.16"):
             raise RuntimeError("predict_many requires SciPy >= 1.16")
     names = tuple(p.name for p in parameters)
     if not names:
@@ -182,6 +245,44 @@ def fit_native_parameters(
     effective_starts = np.array(starts, dtype=float, copy=True)
     for name, value in fixed_values.items():
         effective_starts[:, names.index(name)] = value
+    if previous_predictions is not None:
+        previous_values, previous_raw = map(np.asarray, previous_predictions)
+        if (
+            previous_values.ndim != 2
+            or previous_values.shape[1] != len(names)
+            or previous_raw.shape != (len(previous_values), len(observations.net_count))
+            or any(
+                np.iscomplexobj(a) or np.any(~np.isfinite(a))
+                for a in (previous_values, previous_raw)
+            )
+        ):
+            raise ValueError(
+                "previous predictions must be aligned finite full vectors and raw rows"
+            )
+        for values, raw in zip(previous_values, previous_raw, strict=True):
+            if (
+                np.any(values < lower)
+                or np.any(values > upper)
+                or any(values[names.index(name)] != fixed for name, fixed in fixed_values.items())
+            ):
+                continue
+            point = score_native_prediction(
+                observations,
+                parameters,
+                values,
+                raw,
+                calibration,
+                guarded=enforce_historical_guards,
+            )
+            if best is None or point.objective < best.objective:
+                best = point
+            if point.scores["guards_pass"] and (
+                feasible is None or point.objective < feasible.objective
+            ):
+                feasible = point
+        incumbent = feasible if enforce_historical_guards else best
+        if incumbent is not None:
+            effective_starts = np.vstack([incumbent.parameter_values, effective_starts])
     _, distinct = np.unique(effective_starts, axis=0, return_index=True)
     for start_index in sorted(distinct.tolist()):
         base = effective_starts[start_index].copy()
@@ -218,59 +319,53 @@ def fit_native_parameters(
             raw = prediction_buffer.get(x.tobytes())
             if raw is None:
                 raw = predict(values)
-            scale, residual = observations.profile_scale(
-                raw, enforce_guards=enforce_historical_guards
+            point = score_native_prediction(
+                observations,
+                parameters,
+                values,
+                raw,
+                calibration,
+                guarded=enforce_historical_guards,
             )
-            prediction = scale * raw
-            scores = observations.scores(prediction)
-            calibration_chi_square = assumption_chi_square = 0.0
-            for block in calibration:
-                r = block.residual(values)
-                if block.evidence_kind == "independent_measurement":
-                    calibration_chi_square += float(r @ r)
-                else:
-                    assumption_chi_square += float(r @ r)
-            point = OptimizeResult(
-                parameter_values=values,
-                scale=scale,
-                prediction_count=prediction,
-                data_chi_square=float(residual @ residual),
-                calibration_chi_square=calibration_chi_square,
-                assumption_chi_square=assumption_chi_square,
-                objective=float(residual @ residual)
-                + calibration_chi_square
-                + assumption_chi_square,
-                scores=scores,
-                start_index=start_index,
-                optimizer_converged=False,
-            )
-            for kind, attribute in (
-                ("search", "search_bound_parameters"),
-                ("physical", "physical_boundary_parameters"),
-            ):
-                point[attribute] = tuple(
-                    name
-                    for i, name in enumerate(names)
-                    if (
-                        (
-                            abs(values[i] - lower[i]) < 1e-6 * width[i]
-                            and parameters[i].lower_kind == kind
-                        )
-                        or (
-                            abs(values[i] - upper[i]) < 1e-6 * width[i]
-                            and parameters[i].upper_kind == kind
-                        )
-                    )
-                )
+            point.start_index = start_index
             if best is None or point.objective < best.objective:
                 best = point
-            if scores["guards_pass"] and (feasible is None or point.objective < feasible.objective):
+            if point.scores["guards_pass"] and (
+                feasible is None or point.objective < feasible.objective
+            ):
                 feasible = point
             evaluation_count += 1
             last_x, last_point = x.copy(), point
             if callback is not None:
                 callback(point)
             return point
+
+        def residual_jacobian(x):
+            center = evaluate(x)
+            forward, backward = 1.0 - x, x
+            step = finite_difference_step
+            delta = np.where(
+                forward >= np.minimum(step, backward),
+                np.minimum(step, forward),
+                -np.minimum(step, backward),
+            )
+            trials = np.broadcast_to(x, (len(active), len(active))).copy()
+            trials[np.arange(len(active)), np.arange(len(active))] += delta
+            physical = np.array([physical_values(t) for t in trials])
+            actual_steps = (
+                physical[np.arange(len(active)), active] - center.parameter_values[active]
+            ) / width[active]
+            if np.any(~np.isfinite(actual_steps)) or np.any(actual_steps == 0):
+                raise ValueError("finite-difference step is not representable")
+            if np.any(physical < lower) or np.any(physical > upper):
+                raise ValueError("finite-difference stencil exceeds physical bounds")
+            points = (
+                prediction_map(evaluate, trials)
+                if predict_many is not None
+                else [evaluate(t) for t in trials]
+            )
+            residuals = np.array([p.optimization_residual for p in points])
+            return ((residuals - center.optimization_residual) / actual_steps[:, None]).T
 
         constraints = ()
         if enforce_historical_guards:
@@ -282,13 +377,42 @@ def fit_native_parameters(
                     ),
                 },
             )
-        if len(active):
+        initial = (base[active] - lower[active]) / width[active]
+        if len(active) and method == "trf":
+            literal = score_native_prediction(
+                observations, parameters, base, predict(base), calibration, guarded=False
+            )
+            literal.start_index = start_index
+            if best is None or literal.objective < best.objective:
+                best = literal
+            if literal.scores["guards_pass"] and (
+                feasible is None or literal.objective < feasible.objective
+            ):
+                feasible = literal
+            evaluation_count += 1
+            if callback is not None:
+                callback(literal)
+            result = least_squares(
+                lambda x: evaluate(x).optimization_residual,
+                initial,
+                jac=residual_jacobian,
+                bounds=(0.0, 1.0),
+                method="trf",
+                loss="linear",
+                tr_solver="exact",
+                x_scale=np.array([parameters[i].sensitivity_scale for i in active]) / width[active],
+                max_nfev=maximum_function_evaluations,
+                ftol=1e-6,
+                xtol=1e-6,
+                gtol=1e-6,
+            )
+        elif len(active):
             options = dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9)
             if predict_many is not None:
                 options["workers"] = prediction_map
             result = minimize(
                 lambda x: evaluate(x).objective / int(observations.valid.sum()),
-                (base[active] - lower[active]) / width[active],
+                initial,
                 method="SLSQP",
                 bounds=[(0.0, 1.0)] * len(active),
                 constraints=constraints,
@@ -300,7 +424,12 @@ def fit_native_parameters(
             )
         point = OptimizeResult(evaluate(result.x))
         point.optimizer_converged = bool(result.success)
-        point.optimizer_message, point.iterations = str(result.message), int(result.nit)
+        point.optimizer_message = str(result.message)
+        point.iterations = result.get("nit")
+        point.function_evaluations = result.get("nfev")
+        point.jacobian_evaluations = result.get("njev")
+        point.optimality = result.get("optimality")
+        point.method = method
         runs.append(point)
         if (
             point.optimizer_converged
@@ -314,6 +443,9 @@ def fit_native_parameters(
         best_feasible=feasible,
         best_converged=converged,
         evaluation_count=evaluation_count,
+        requested_starts=np.array(starts, dtype=float, copy=True),
+        effective_starts=effective_starts,
+        method=method,
         numerical_status="not_qualified",
         identification_status="not_profiled",
         guard_conditioned=enforce_historical_guards,
@@ -354,7 +486,16 @@ def refit_native_choices(predictors, observations, parameters, starts, **search_
 
 
 def profile_native_parameter(
-    predictors, observations, parameters, starts, *, name, grid, **options
+    predictors,
+    observations,
+    parameters,
+    starts,
+    *,
+    name,
+    grid,
+    predict_many_by_choice=None,
+    previous_predictions_by_choice=None,
+    **options,
 ):
     """Hold one coordinate and refit every nuisance, scale and discrete choice.
 
@@ -365,6 +506,11 @@ def profile_native_parameter(
     """
     if len(predictors) > 1 and options.get("predict_many") is not None:
         raise ValueError("bind predict_many separately for each discrete choice")
+    for mapping in (predict_many_by_choice, previous_predictions_by_choice):
+        if mapping is not None and set(mapping) != set(predictors):
+            raise ValueError("per-choice execution must bind every predictor key exactly")
+    if predict_many_by_choice is not None and options.get("predict_many") is not None:
+        raise ValueError("supply one batch binding per choice")
     names = tuple(p.name for p in parameters)
     if name not in names or "fixed_values" in options:
         raise ValueError("profile one declared coordinate without additional hidden fixed values")
@@ -379,6 +525,11 @@ def profile_native_parameter(
     curves = {key: {} for key in predictors}
     orders = (np.argsort(grid), np.argsort(grid)[::-1]) if len(grid) > 1 else (np.array([0]),)
     for choice, predict in predictors.items():
+        choice_options = dict(options)
+        if predict_many_by_choice is not None:
+            choice_options["predict_many"] = predict_many_by_choice[choice]
+        if previous_predictions_by_choice is not None:
+            choice_options["previous_predictions"] = previous_predictions_by_choice[choice]
         for order in orders:
             warm = np.empty((0, len(parameters)))
             for i in order:
@@ -388,7 +539,7 @@ def profile_native_parameter(
                     parameters,
                     np.vstack([starts, warm]),
                     fixed_values={name: float(grid[i])},
-                    **options,
+                    **choice_options,
                 )
                 previous = curves[choice].get(int(i))
                 point = result.best_converged

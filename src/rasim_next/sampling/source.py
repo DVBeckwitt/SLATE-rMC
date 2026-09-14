@@ -137,8 +137,8 @@ def _conditional_parameters(
     width = float(_finite_real(common_wavelength_sigma_A, (), "common_wavelength_sigma_A"))
     if np.any(lines <= 0) or np.unique(lines).size != lines.size or width < 0:
         raise ValueError("distinct positive wavelengths and nonnegative line width are required")
-    if np.any(probability <= 0) or not np.isclose(probability.sum(), 1.0, rtol=0, atol=2e-15):
-        raise ValueError("line probabilities must be positive and sum to one")
+    if np.any(probability < 0) or not np.isclose(probability.sum(), 1.0, rtol=0, atol=2e-15):
+        raise ValueError("line probabilities must be nonnegative and sum to one")
     arrays = (origin, direction, axes, spatial_sigma, divergence_sigma, rho, lines, probability)
     for array in arrays:
         array.setflags(write=False)
@@ -246,7 +246,7 @@ def sample_conditional_gaussian_source(
         latents.append(gaussian[:, :2])
         wavelengths.append(line + width * gaussian[:, 2])
         row_mass = float(mass) / int(count)
-        if row_mass <= 0 or not math.isclose(
+        if (mass > 0 and row_mass <= 0) or not math.isclose(
             math.fsum([row_mass] * int(count)), float(mass), rel_tol=8 * np.finfo(float).eps
         ):
             raise ValueError("line probability is too small for the allocated source rows")

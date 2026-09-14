@@ -212,6 +212,18 @@ class PbJointModel:
     atomic: PbNativeStructureModel
 
     @property
+    def parameter_units(self):
+        return (
+            ("angstrom",) * 2
+            + ("1",) * 3
+            + ("angstrom^2",) * 4
+            + ("radian",) * 2
+            + ("1",) * 3
+            + ("angstrom",)
+            + ("1",) * (len(self.parameter_names) - 15)
+        )
+
+    @property
     def parameter_names(self):
         phases = self.atomic.reference.structure.stacking_phases
         return (
@@ -299,10 +311,37 @@ class PbJointModel:
                 ("coherent_repeats", coherent_repeats),
             ),
         )
-        return physics, dict(
-            coherent_repeats=coherent_repeats,
-            film_thickness_A=coherent_repeats * values[1] + values[14],
-            surface_fractions=simplex_fractions(values[12:14]),
-            phase_fractions=fractions,
-            fault_parameters={f"phase_{i}": float(e) for i, e in enumerate(epsilon)},
+        return (
+            physics,
+            dict(
+                coherent_repeats=coherent_repeats,
+                film_thickness_A=coherent_repeats * values[1] + values[14],
+                surface_fractions=simplex_fractions(values[12:14]),
+                phase_fractions=fractions,
+                fault_parameters={f"phase_{i}": float(e) for i, e in enumerate(epsilon)},
+            ),
+            MosaicParameters(*values[9:12]),
+            None,
         )
+
+    def inactive_parameters(self, values):
+        parameters = dict(zip(self.parameter_names, values, strict=True))
+        inactive = {}
+        phases = self.atomic.reference.structure.stacking_phases
+        share_names = [f"phase_{i}_share_of_remainder" for i in range(len(phases) - 1)]
+        fractions = simplex_fractions([parameters[name] for name in share_names])
+        exhausted = False
+        for name in share_names:
+            if exhausted:
+                inactive[name] = "zero phase remainder"
+            exhausted = exhausted or parameters[name] == 1
+        for i, (phase, fraction) in enumerate(zip(phases, fractions, strict=True)):
+            if fraction == 0:
+                inactive[f"phase_{i}_epsilon"] = "zero phase population"
+            exhausted = False
+            for j in range(len(phase.parents) - 1):
+                name = f"phase_{i}_parent_{j}_share_of_remainder"
+                if fraction == 0 or exhausted:
+                    inactive[name] = "zero phase population or parent remainder"
+                exhausted = exhausted or parameters[name] == 1
+        return inactive

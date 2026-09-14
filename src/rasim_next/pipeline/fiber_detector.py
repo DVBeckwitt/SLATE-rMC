@@ -5,9 +5,11 @@ The resulting conditional position kernels are shared by fitting and rendering.
 All arrays returned here are one quadrature batch, not a retained event raster.
 """
 
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from concurrent.futures import CancelledError
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from time import perf_counter
 
 import numba
 import numpy as np
@@ -17,7 +19,7 @@ from scipy.stats import qmc
 
 from painted_ewald import MosaicParameters, Rod
 from painted_ewald.validation import proper_rotation, reciprocal_basis
-from rasim_next.core.contracts import MaterialOptics
+from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
 from rasim_next.core.scattering import polarization_model_code, scattering_polarization_weight
 from rasim_next.core.validity import ValidityCode
 from rasim_next.geometry.detector import (
@@ -255,7 +257,216 @@ class FiberDetectorTransfer:
         )
 
 
-def compile_conditional_fiber_transfer(
+@dataclass(frozen=True, slots=True)
+class FiberScatteringTransfer:
+    """Immutable optical events before detector rejection or spectral mass."""
+
+    quadrature_index: NDArray[np.int64]
+    polar_angle_rad: NDArray[np.float64]
+    cone_angle_rad: NDArray[np.float64]
+    coefficient_per_L_rad: NDArray[np.float64]
+    outgoing_direction_lab: NDArray[np.float64]
+    phase_q_radial_squared_Ainv2: NDArray[np.float64]
+    phase_q_normal_squared_Ainv2: NDArray[np.float64]
+    attenuation_decay_sum_Ainv: NDArray[np.float64] | None = None
+    reference_thickness_A: float = 0.0
+    local_phase_q_Ainv: NDArray[np.float64] | None = None
+    local_external_q_Ainv: NDArray[np.float64] | None = None
+
+    def __post_init__(self):
+        size = len(self.quadrature_index)
+        if np.asarray(self.quadrature_index).dtype.kind not in "iu":
+            raise TypeError("quadrature indices must be integers")
+        for name in (
+            "quadrature_index",
+            "polar_angle_rad",
+            "cone_angle_rad",
+            "coefficient_per_L_rad",
+            "outgoing_direction_lab",
+            "phase_q_radial_squared_Ainv2",
+            "phase_q_normal_squared_Ainv2",
+            "attenuation_decay_sum_Ainv",
+            "local_phase_q_Ainv",
+            "local_external_q_Ainv",
+        ):
+            supplied = getattr(self, name)
+            if supplied is None:
+                continue
+            if np.iscomplexobj(supplied):
+                raise ValueError("scattering arrays must be real")
+            value = np.array(
+                supplied, dtype=np.int64 if name == "quadrature_index" else float, copy=True
+            )
+            shape = (size, 3) if name == "outgoing_direction_lab" else (size,)
+            if (
+                value.shape != shape
+                or np.any(~np.isfinite(value))
+                or (name != "outgoing_direction_lab" and np.any(value < 0))
+            ):
+                raise ValueError("scattering arrays must be finite and aligned")
+            if name.endswith("angle_rad") and np.any(value > np.pi):
+                raise ValueError("scattering normal angles must lie in [0, pi]")
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+        if not np.allclose(
+            np.linalg.norm(self.outgoing_direction_lab, axis=1), 1.0, rtol=0, atol=1e-12
+        ):
+            raise ValueError("outgoing scattering directions must be unit vectors")
+        if not np.isfinite(self.reference_thickness_A) or self.reference_thickness_A < 0:
+            raise ValueError("reference thickness must be finite and nonnegative")
+        if (self.local_phase_q_Ainv is None) != (self.local_external_q_Ainv is None):
+            raise ValueError("local scattering requires both phase and external Q")
+
+    @property
+    def retained_bytes(self):
+        return sum(
+            value.nbytes
+            for value in (
+                self.quadrature_index,
+                self.polar_angle_rad,
+                self.cone_angle_rad,
+                self.coefficient_per_L_rad,
+                self.outgoing_direction_lab,
+                self.phase_q_radial_squared_Ainv2,
+                self.phase_q_normal_squared_Ainv2,
+                self.attenuation_decay_sum_Ainv,
+                self.local_phase_q_Ainv,
+                self.local_external_q_Ainv,
+            )
+            if value is not None
+        )
+
+
+@dataclass
+class FiberScatteringCache:
+    """Explicit byte-bounded execution owner; no detector-pruned events retained."""
+
+    maximum_bytes: int = 256 * 1024**2
+    build_count: int = field(default=0, init=False)
+    reuse_count: int = field(default=0, init=False)
+    build_seconds: float = field(default=0.0, init=False)
+    retained_bytes: int = field(default=0, init=False)
+    peak_retained_bytes: int = field(default=0, init=False)
+    entries: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
+
+    def __post_init__(self):
+        if type(self.maximum_bytes) is not int or self.maximum_bytes < 0:
+            raise ValueError("maximum_bytes must be a nonnegative integer")
+
+    def compile(self, *, local, coordinates, context):
+        si = context["source_state_index"]
+        states = context["incident"].states
+        instrument = context["instrument"]
+        if type(si) is not int or not 0 <= si < len(states.valid) or not states.valid[si]:
+            raise ValueError("source_state_index must identify a valid incident state")
+        if (
+            states.source_revision != context["source"].mean_rays.source_revision
+            or states.material_revision != context["material"].material_revision
+            or states.sample_geometry_revision != instrument.sample_geometry_revision
+        ):
+            raise ValueError("source, material and geometry must match incident states")
+        key = canonical_revision_sha256(
+            ("local", local),
+            *(
+                (name, (value.h, value.k, value.population) if isinstance(value, Rod) else value)
+                for name, value in coordinates.items()
+            ),
+            ("material", context["material"].material_revision),
+            ("wavelength", states.wavelength_A[si]),
+            ("direction", states.direction_sample[si]),
+            ("phase_wavevector", states.k_film_phase_sample_Ainv[si]),
+            ("normal_wavevector", states.kz_film_Ainv[si]),
+            ("entrance", states.entrance_amplitude[si]),
+            ("polarization", states.polarization_state_id[si]),
+            ("sample_rotation", instrument.lab_from_sample.rotation),
+            ("crystal_rotation", instrument.sample_from_crystal.rotation),
+            ("thickness_A", instrument.film_thickness_A),
+        )
+        if key in self.entries:
+            self.reuse_count += 1
+            self.entries.move_to_end(key)
+            return self.entries[key]
+        start = perf_counter()
+        result = (_compile_local_scattering if local else _compile_fiber_scattering)(
+            **coordinates, **context
+        )
+        self.build_seconds += perf_counter() - start
+        self.build_count += 1
+        size = 0 if result is None else result.retained_bytes
+        if size <= self.maximum_bytes:
+            while self.entries and (
+                self.retained_bytes + size > self.maximum_bytes or len(self.entries) >= 4096
+            ):
+                _, removed = self.entries.popitem(last=False)
+                self.retained_bytes -= 0 if removed is None else removed.retained_bytes
+            self.entries[key] = result
+            self.retained_bytes += size
+            self.peak_retained_bytes = max(self.peak_retained_bytes, self.retained_bytes)
+        return result
+
+
+def project_conditional_fiber_transfer(
+    scattering,
+    *,
+    source,
+    incident,
+    source_state_index,
+    instrument,
+    maximum_backward_probability,
+    include_source_mass=True,
+):
+    """Recompute current spatial transport, preserving newly visible events."""
+    if scattering is None:
+        return None, None
+    si = source_state_index
+    states = incident.states
+    if (
+        states.source_revision != source.mean_rays.source_revision
+        or states.sample_geometry_revision != instrument.sample_geometry_revision
+    ):
+        raise ValueError("source and sample geometry must match current incident states")
+    outgoing = scattering.outgoing_direction_lab
+    plane = _intersect_detector_plane(
+        np.broadcast_to(states.sample_intersection_lab_m[si], outgoing.shape), outgoing, instrument
+    )
+    selected = np.flatnonzero(plane.status == ValidityCode.VALID)
+    if not len(selected):
+        return None, None
+    spatial = compile_conditional_spatial_kernels(
+        instrument=instrument,
+        source=source,
+        source_state_index=si,
+        outgoing_direction_lab=outgoing[selected],
+        maximum_backward_probability=maximum_backward_probability,
+    )
+    coefficient = scattering.coefficient_per_L_rad[selected] * states.footprint_acceptance[si]
+    if include_source_mass:
+        coefficient *= states.source_weight[si]
+    decay = scattering.attenuation_decay_sum_Ainv
+    transfer = FiberDetectorTransfer(
+        scattering.quadrature_index[selected],
+        scattering.polar_angle_rad[selected],
+        scattering.cone_angle_rad[selected],
+        coefficient,
+        spatial,
+        scattering.phase_q_radial_squared_Ainv2[selected],
+        scattering.phase_q_normal_squared_Ainv2[selected],
+        None if decay is None else decay[selected],
+        scattering.reference_thickness_A,
+    )
+    local = (
+        None
+        if scattering.local_phase_q_Ainv is None
+        else LocalM0DetectorTransfer(
+            transfer,
+            scattering.local_phase_q_Ainv[selected],
+            scattering.local_external_q_Ainv[selected],
+        )
+    )
+    return transfer, local
+
+
+def _compile_fiber_scattering(
     *,
     rod: Rod,
     reciprocal_basis_Ainv: ArrayLike,
@@ -267,15 +478,8 @@ def compile_conditional_fiber_transfer(
     source_state_index: int,
     material: MaterialOptics,
     instrument: CompiledInstrument,
-    maximum_backward_probability: float,
-) -> FiberDetectorTransfer | None:
-    """Transport one rod batch through shared optics and conditional positions.
-
-    None means no supported forward detector-plane ray. This is the macroscopic
-    planar-interface channel; the local-lamella m0 stitch keeps its own chart.
-    Neither detector-panel cropping nor structure-strength pruning occurs here.
-    Rod population, source mass, illuminated path and optical factors enter once.
-    """
+) -> FiberScatteringTransfer | None:
+    """Physical scattering before source mass, footprint and detector transport."""
     if not isinstance(rod, Rod):
         raise TypeError("fiber transfer requires a physical Rod")
     states, si = incident.states, source_state_index
@@ -323,16 +527,6 @@ def compile_conditional_fiber_transfer(
         return None
     outgoing_sample = modes.k_air_phase_sample_Ainv[indices] / air_k
     outgoing_lab = instrument.lab_from_sample.apply_vector(outgoing_sample)
-    plane = _intersect_detector_plane(
-        np.broadcast_to(states.sample_intersection_lab_m[si], outgoing_lab.shape),
-        outgoing_lab,
-        instrument,
-    )
-    forward = plane.status == ValidityCode.VALID
-    indices, selected = indices[forward], selected[forward]
-    if not len(selected):
-        return None
-    outgoing_sample, outgoing_lab = outgoing_sample[forward], outgoing_lab[forward]
     incident_sign = -1 if states.direction_sample[si, 2] < 0 else 1
     decay = mode_decay_constant(states.kz_film_Ainv[si], incident_sign) + mode_decay_constant(
         modes.kz_film_Ainv[indices], modes.propagation_direction[indices]
@@ -341,30 +535,18 @@ def compile_conditional_fiber_transfer(
     coefficient = measure[selected] * scalar_optical_weight(
         states.entrance_amplitude[si], modes.exit_amplitude[indices], attenuation
     )
-    coefficient *= (
-        rod.population
-        * states.source_weight[si]
-        * states.footprint_acceptance[si]
-        * incident_illuminated_path_weight(states.direction_sample[si])
-    )
+    coefficient *= rod.population * incident_illuminated_path_weight(states.direction_sample[si])
     coefficient *= scattering_polarization_weight(
         states.direction_sample[si], outgoing_sample, model_id=states.polarization_state_id[si]
     )
     q_norm = np.linalg.norm(q[selected], axis=1)
     polar = np.arccos(np.clip(q[selected] @ (rotation @ normal) / q_norm, -1.0, 1.0))
-    spatial = compile_conditional_spatial_kernels(
-        instrument=instrument,
-        source=source,
-        source_state_index=si,
-        outgoing_direction_lab=outgoing_lab,
-        maximum_backward_probability=maximum_backward_probability,
-    )
-    return FiberDetectorTransfer(
+    return FiberScatteringTransfer(
         selected,
         polar,
         cone[selected],
         coefficient,
-        spatial,
+        outgoing_lab,
         np.sum(q[selected, :2] ** 2, axis=1),
         q[selected, 2] ** 2,
         decay,
@@ -420,7 +602,7 @@ class LocalM0DetectorTransfer:
             object.__setattr__(self, name, value)
 
 
-def compile_conditional_local_m0_transfer(
+def _compile_local_scattering(
     *,
     external_q_Ainv: ArrayLike,
     ewald_azimuth_rad: ArrayLike,
@@ -429,8 +611,7 @@ def compile_conditional_local_m0_transfer(
     source_state_index: int,
     material: MaterialOptics,
     instrument: CompiledInstrument,
-    maximum_backward_probability: float,
-) -> LocalM0DetectorTransfer | None:
+) -> FiberScatteringTransfer | None:
     """Integrate local planes on the air Ewald sphere per dQexternal dzeta.
 
     A single positive external-Q coordinate represents each scattering ray;
@@ -461,13 +642,6 @@ def compile_conditional_local_m0_transfer(
     )
     outgoing = outgoing.reshape(-1, 3) / k0
     indices = np.flatnonzero(measure.ravel() > 0)
-    outgoing_lab = instrument.lab_from_sample.apply_vector(outgoing[indices])
-    plane = _intersect_detector_plane(
-        np.broadcast_to(states.sample_intersection_lab_m[si], outgoing_lab.shape),
-        outgoing_lab,
-        instrument,
-    )
-    indices = indices[plane.status == ValidityCode.VALID]
     if not len(indices):
         return None
     refraction_index = np.flatnonzero(material.wavelength_A == states.wavelength_A[si])
@@ -486,23 +660,86 @@ def compile_conditional_local_m0_transfer(
     indices, g = indices[valid], g[valid]
     if not len(indices):
         return None
-    spatial = compile_conditional_spatial_kernels(
-        instrument=instrument,
+    coefficient = g[:, 4] * incident_illuminated_path_weight(states.direction_sample[si])
+    return FiberScatteringTransfer(
+        indices,
+        g[:, 1],
+        np.zeros(len(indices)),
+        coefficient,
+        instrument.lab_from_sample.apply_vector(outgoing[indices]),
+        g[:, 5],
+        g[:, 6],
+        local_phase_q_Ainv=g[:, 2],
+        local_external_q_Ainv=g[:, 3],
+    )
+
+
+def compile_conditional_fiber_transfer(
+    *,
+    rod,
+    reciprocal_basis_Ainv,
+    crystal_to_sample,
+    L,
+    ewald_azimuth_rad,
+    source,
+    incident,
+    source_state_index,
+    material,
+    instrument,
+    maximum_backward_probability,
+):
+    """Compile direct source-weighted scattering and current detector transport."""
+    scattering = _compile_fiber_scattering(
+        rod=rod,
+        reciprocal_basis_Ainv=reciprocal_basis_Ainv,
+        crystal_to_sample=crystal_to_sample,
+        L=L,
+        ewald_azimuth_rad=ewald_azimuth_rad,
         source=source,
-        source_state_index=si,
-        outgoing_direction_lab=instrument.lab_from_sample.apply_vector(outgoing[indices]),
+        incident=incident,
+        source_state_index=source_state_index,
+        material=material,
+        instrument=instrument,
+    )
+    return project_conditional_fiber_transfer(
+        scattering,
+        source=source,
+        incident=incident,
+        source_state_index=source_state_index,
+        instrument=instrument,
         maximum_backward_probability=maximum_backward_probability,
+    )[0]
+
+
+def compile_conditional_local_m0_transfer(
+    *,
+    external_q_Ainv,
+    ewald_azimuth_rad,
+    source,
+    incident,
+    source_state_index,
+    material,
+    instrument,
+    maximum_backward_probability,
+):
+    """Compile direct local-lamella scattering and current detector transport."""
+    scattering = _compile_local_scattering(
+        external_q_Ainv=external_q_Ainv,
+        ewald_azimuth_rad=ewald_azimuth_rad,
+        source=source,
+        incident=incident,
+        source_state_index=source_state_index,
+        material=material,
+        instrument=instrument,
     )
-    coefficient = (
-        g[:, 4]
-        * states.source_weight[si]
-        * states.footprint_acceptance[si]
-        * incident_illuminated_path_weight(states.direction_sample[si])
-    )
-    transfer = FiberDetectorTransfer(
-        indices, g[:, 1], np.zeros(len(indices)), coefficient, spatial, g[:, 5], g[:, 6]
-    )
-    return LocalM0DetectorTransfer(transfer, g[:, 2], g[:, 3])
+    return project_conditional_fiber_transfer(
+        scattering,
+        source=source,
+        incident=incident,
+        source_state_index=source_state_index,
+        instrument=instrument,
+        maximum_backward_probability=maximum_backward_probability,
+    )[1]
 
 
 @numba.njit(nogil=True)
@@ -916,8 +1153,21 @@ class FiberIntegrationRule:
     quadrature_kind: str = "sobol"
     maximum_axial_panel_width_Ainv: float | None = None
     angular_support: str = "q_conditioned_union"
+    frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
 
     def __post_init__(self) -> None:
+        if self.frozen_ewald_bounds_Ainv_rad is not None:
+            bounds = tuple(float(v) for v in self.frozen_ewald_bounds_Ainv_rad)
+            if (
+                len(bounds) != 4
+                or not np.all(np.isfinite(bounds))
+                or not 0 <= bounds[0] < bounds[1]
+                or not 0 < bounds[3] <= 2 * np.pi
+            ):
+                raise ValueError(
+                    "frozen Ewald envelope requires ordered Q and a positive angular arc"
+                )
+            object.__setattr__(self, "frozen_ewald_bounds_Ainv_rad", bounds)
         if self.angular_support not in {"q_conditioned_union", "fixed_union"}:
             raise ValueError("angular support must be q_conditioned_union or fixed_union")
         if self.quadrature_kind not in {"sobol", "composite_gauss"}:
@@ -1031,6 +1281,8 @@ def iter_conditional_fiber_transfers(
     local_stitched_m0: bool,
     cancel_requested: Callable[[], bool] | None = None,
     source_state_indices: tuple[int, ...] | None = None,
+    scattering_cache: FiberScatteringCache | None = None,
+    include_source_mass: bool = True,
 ) -> Iterator[ConditionalFiberBatch]:
     """Stream the same continuous transfers for native fits and full-panel images.
 
@@ -1096,7 +1348,24 @@ def iter_conditional_fiber_transfers(
             )
             # Intersected Cartesian and elastic-shell intervals may be empty.
             # Such rectangles have no event in this channel; never reverse bounds.
-            channel_bounds[local][si] = source_bounds[source_bounds[:, 1] >= source_bounds[:, 0]]
+            source_bounds = source_bounds[source_bounds[:, 1] >= source_bounds[:, 0]]
+            frozen = rule.frozen_ewald_bounds_Ainv_rad
+            if frozen is not None:
+                low_q, high_q, start_angle, arc_width = frozen
+                relative_start = np.mod(source_bounds[:, 2] - start_angle, 2 * np.pi)
+                if (
+                    np.any(source_bounds[:, 0] < low_q)
+                    or np.any(source_bounds[:, 1] > high_q)
+                    or (
+                        arc_width < 2 * np.pi
+                        and np.any(relative_start + source_bounds[:, 3] > arc_width)
+                    )
+                ):
+                    raise ValueError(
+                        "frozen Ewald envelope does not enclose current source-region bounds"
+                    )
+                source_bounds = np.asarray([frozen])
+            channel_bounds[local][si] = source_bounds
     for gi, (radius, group) in enumerate(groups):
         if cancel_requested is not None and cancel_requested():
             raise CancelledError
@@ -1154,30 +1423,36 @@ def iter_conditional_fiber_transfers(
                 axial_index = nodes.axial_index[first:stop]
                 axial = nodes.positive_axial_Ainv[axial_index]
                 azimuth = nodes.ewald_azimuth_rad[first:stop]
-                args = dict(
-                    source_state_index=si,
-                    maximum_backward_probability=rule.maximum_backward_probability,
-                    **context,
-                )
-                local_transfer = None
+                args = dict(source_state_index=si, **context)
                 if local:
-                    local_transfer = compile_conditional_local_m0_transfer(
-                        external_q_Ainv=axial,
-                        ewald_azimuth_rad=azimuth,
-                        **args,
-                    )
-                    transfer = None if local_transfer is None else local_transfer.transfer
+                    coordinates = dict(external_q_Ainv=axial, ewald_azimuth_rad=azimuth)
                 else:
                     rod = replace(group[0], population=1.0)
                     offset = (rod.h * basis[:, 0] + rod.k * basis[:, 1]) @ crystal_normal
-                    transfer = compile_conditional_fiber_transfer(
+                    coordinates = dict(
                         rod=rod,
                         reciprocal_basis_Ainv=basis,
                         crystal_to_sample=rotation,
                         L=(axial - offset) / b3,
                         ewald_azimuth_rad=azimuth,
-                        **args,
                     )
+                if scattering_cache is None:
+                    scattering = (
+                        _compile_local_scattering if local else _compile_fiber_scattering
+                    )(**coordinates, **args)
+                else:
+                    scattering = scattering_cache.compile(
+                        local=local, coordinates=coordinates, context=args
+                    )
+                transfer, local_transfer = project_conditional_fiber_transfer(
+                    scattering,
+                    source=source,
+                    incident=incident,
+                    source_state_index=si,
+                    instrument=instrument,
+                    maximum_backward_probability=rule.maximum_backward_probability,
+                    include_source_mass=include_source_mass,
+                )
                 if transfer is None:
                     continue
                 selected = transfer.quadrature_index

@@ -10,7 +10,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.ndimage import gaussian_filter, map_coordinates, maximum_filter, minimum_filter
 
 from painted_ewald import Rod
-from rasim_next.fitting import IntegerLMarkerKey, IntegerLMarkerObservations
+from rasim_next.fitting.geometry import IntegerLMarkerKey, IntegerLMarkerObservations
 from rasim_next.geometry import (
     AngleFrame,
     CompiledInstrument,
