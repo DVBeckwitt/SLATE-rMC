@@ -1,5 +1,5 @@
 {
-  "file_count": 376,
+  "file_count": 377,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -103,8 +103,8 @@
     },
     {
       "path": "docs/CONTRACTS.md",
-      "sha256": "786a8785d1717b63fa2caa745bb7a02d09edbbb466cb0a720f2c43c26ced61ec",
-      "size_bytes": 97704
+      "sha256": "db845d4e4fa898d045bb5bd0d992d8621c986d63791425a4a5dedca8948e1a0b",
+      "size_bytes": 98116
     },
     {
       "path": "docs/CONVENTIONS.md",
@@ -143,8 +143,8 @@
     },
     {
       "path": "docs/NATIVE_REFINEMENT.md",
-      "sha256": "8b9a4384b823b5c83d4fc42744dde92b5d988968536850300931c7ecc8508edc",
-      "size_bytes": 24669
+      "sha256": "5ae94f64cf5e7d51825e4c83c4feae0046fcf40a41a88d70daa2f821c30ab3c8",
+      "size_bytes": 25800
     },
     {
       "path": "docs/OSC_COORDINATES.md",
@@ -758,8 +758,8 @@
     },
     {
       "path": "scripts/refine_native.py",
-      "sha256": "a592d766002860bfef12a070bdb9e0cac99ddec5a2d04c84c820a55563cd52c3",
-      "size_bytes": 48215
+      "sha256": "d16a5a077dd4d23c5e2d2d9d88eb601193a70d17ed26821b094a2bbf22378ce2",
+      "size_bytes": 49801
     },
     {
       "path": "scripts/render_native.py",
@@ -998,8 +998,8 @@
     },
     {
       "path": "src/rasim_next/fitting/native_workflow.py",
-      "sha256": "1dbb6c3e704455d0efb111c3c05fa51c8962d4e72e387293fb6d53d53ec7228f",
-      "size_bytes": 4646
+      "sha256": "f14b45e7543d5d6f8405f51f548cb6e2d86fac681d410f2a3c101fe520926a79",
+      "size_bytes": 4697
     },
     {
       "path": "src/rasim_next/fitting/ordered_intensity.py",
@@ -1213,8 +1213,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/conditional_detector.py",
-      "sha256": "444f7b4663084859b64fa762631c63caaa84275ed0c34c6133daa32a67d46e06",
-      "size_bytes": 41986
+      "sha256": "0764bb91cbe5079fe5b4a5e67f28954ef5210e7f23b6b856322351c538537e4d",
+      "size_bytes": 42278
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
@@ -1238,8 +1238,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/fiber_detector.py",
-      "sha256": "e4cdf9829d734e62286077286c1662607fd817b1daae76cf686c36e9bb7b322a",
-      "size_bytes": 65103
+      "sha256": "52fe7ad33c198c42789a999005865997c05ab226c289014316fb5ddcd10f4694",
+      "size_bytes": 65481
     },
     {
       "path": "src/rasim_next/pipeline/incidence_acquisition.py",
@@ -1577,6 +1577,11 @@
       "size_bytes": 11353
     },
     {
+      "path": "tasks/35_qualified_bi_fit.md",
+      "sha256": "47d7e3dd7858a8115939fae1309a1cc8b55aaf5cf71c1c62dee96d8ff9e13977",
+      "size_bytes": 6275
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1618,8 +1623,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "b24c2976f18bca2708cab4f385622d046cdbee2bb5d06b88b809c7e7869c6312",
-      "size_bytes": 5407
+      "sha256": "41d7aba61231b417816f1e7b30e9f2e11928fb60039e89bea9bf972c10bde381",
+      "size_bytes": 5593
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1798,8 +1803,8 @@
     },
     {
       "path": "tests/test_native_fitting.py",
-      "sha256": "b1248359487b6785af6eb5f50b3d51791415712d1d54368ddbff31f8e9980233",
-      "size_bytes": 25090
+      "sha256": "f4b8ca1eefc2548767cd18cc5d7c1768a7ce4058cfa2340804afbd2d35548938",
+      "size_bytes": 26545
     },
     {
       "path": "tests/test_native_search.py",
@@ -1808,8 +1813,8 @@
     },
     {
       "path": "tests/test_native_workflow_cli.py",
-      "sha256": "bb35d313d8bf3ec604abea43698c330386b9e60468cfccc617940f5aba968378",
-      "size_bytes": 10608
+      "sha256": "8834f8bbbd5b3145fd5636af3cee1c05a20d56ed8201c5cea1b6af43e336977a",
+      "size_bytes": 14453
     },
     {
       "path": "tests/test_ordered_reflectivity.py",

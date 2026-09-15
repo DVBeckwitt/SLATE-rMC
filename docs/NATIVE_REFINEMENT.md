@@ -342,6 +342,23 @@ numerical residuals and establishing its operator, measure, calibration evidence
 and independent proof. No generic extra blur or background term is added merely
 to reduce the objective.
 
+## Matched fixed-parameter controls
+
+An optional plan `fixed_parameters` object maps explicit parameter names to fixed
+physical values. Every start must contain those exact values, within declared bounds.
+No stage may release them; the final stage must release every remaining coordinate
+in the declared order. Omitting this object preserves the full-release requirement.
+Results label these experiments `fixed_parameter_control` and retain the values.
+Numerical qualification, scale profiling, N refits and conditional validation retain
+their ordinary gates. Sensitivity and identification profiles belong to the separately
+released full model; fixed controls reject those options rather than silently freeing SF.
+
+`local_m0_maximum_axial_panel_width_Ainv` optionally overrides the global axial panel
+cap for the local-lamella m0 channel. `null` inherits the global cap. For example,
+global `null` plus local `0.02` reproduces the prior explicit m0/nonzero partition
+using one shared evaluator. Both caps require composite Gauss quadrature. Each
+channel retains its full support and contributes raw mass before one fitted scale.
+
 ## Qualification of optimizer decisions
 
 A numerical pass at a large parameter perturbation does not establish finite-difference

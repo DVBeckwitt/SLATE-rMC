@@ -152,9 +152,31 @@ def main():
     physics = native_physics_with(original, plan, {})
     evaluator = make_native_evaluator(physics, observations, plan)
     stages = plan.get("stages", [])
-    if stages and tuple(stages[-1]["active_parameters"]) != names:
+    fixed_parameters = plan.get("fixed_parameters", {})
+    if not isinstance(fixed_parameters, dict) or set(fixed_parameters) - set(names):
+        raise ValueError("fixed parameters must explicitly name declared coordinates")
+    for name, value in fixed_parameters.items():
+        index = names.index(name)
+        parameter = parameters[index]
+        if (
+            type(value) not in (int, float)
+            or not np.isfinite(value)
+            or not parameter.lower <= value <= parameter.upper
+            or np.any(starts[:, index] != value)
+        ):
+            raise ValueError(
+                "fixed values must be finite, within bounds and identical in all starts"
+            )
+    if fixed_parameters and (plan.get("sensitivity") or plan.get("profiles")):
+        raise ValueError(
+            "fixed-parameter controls require identification in the released full model"
+        )
+    free_names = tuple(name for name in names if name not in fixed_parameters)
+    if stages and (not free_names or tuple(stages[-1]["active_parameters"]) != free_names):
         raise ValueError("the final fit stage must release every admitted continuous coordinate")
     for stage in stages:
+        if set(stage["active_parameters"]) & set(fixed_parameters):
+            raise ValueError("a fit stage cannot release a declared fixed control parameter")
         if (training is not None or "synthetic" in plan) and stage["enforce_historical_guards"]:
             raise ValueError(
                 "historical guards cannot constrain synthetic or prospective training fits"
@@ -191,6 +213,8 @@ def main():
         numerical_status="not_qualified",
         identification_status="not_profiled",
         acceptance="candidate_only",
+        fit_scope="fixed_parameter_control" if fixed_parameters else "all_admitted_coordinates",
+        fixed_parameters=fixed_parameters,
         implementation=dict(
             source_hash_scope="startup filesystem snapshot; not loaded-bytecode attestation",
             git_commit=subprocess.check_output(
@@ -393,6 +417,11 @@ def main():
 
         def run_checks(label, candidates, n, fixed_scale, objective_observations, guarded=False):
             candidates = np.asarray(candidates, dtype=float)
+            for name, value in fixed_parameters.items():
+                if np.any(candidates[:, names.index(name)] != value):
+                    raise ValueError(
+                        "qualification cannot change a declared fixed control parameter"
+                    )
             agreement = True
             arrays[f"{label}_qualification_candidates"] = candidates
             reference = np.array([predict(v, n) for v in candidates])

@@ -174,6 +174,103 @@ def test_preparation_preserves_shared_pixel_covariance_and_rejects_changed_raw(t
     assert not (tmp_path / "rejected").exists()
 
 
+def test_fixed_sf_control_keeps_declared_values_and_full_release_remains_required(
+    tmp_path, monkeypatch
+):
+    physics_path, observation_path = experiment(tmp_path / "inputs")
+    physics = load_native_fit_physics(physics_path)
+    observations = load_native_fit_observations(observation_path)
+    atomic = BiNativeStructureModel(physics)
+    values = np.r_[atomic.reference_parameters.as_array(), 0.1, 0.2, 0.3, 0.2, 0.6, 50, 2, 4]
+    evaluator = NativeJointEvaluator(
+        BiJointModel(atomic), observations, MosaicParameters(0.15, 0.25, 0.4)
+    )
+    names = evaluator.parameter_names
+    acquisition = json.loads(observation_path.read_bytes())["raw_acquisition"]["sha256"]
+    plan = dict(
+        schema="rasim-native-refinement-plan-v1",
+        fit_instrument=False,
+        workers=1,
+        acquisition_id=acquisition,
+        proposal_mosaic=[0.15, 0.25, 0.4],
+        parameters=[
+            dict(
+                name=name,
+                unit=unit,
+                owner="specimen:" + physics.sample_id,
+                lower=float(value - 0.01),
+                upper=float(value + 0.01),
+                sensitivity_scale=0.001,
+            )
+            for name, unit, value in zip(names, evaluator.parameter_units, values, strict=True)
+        ],
+        starts=[values.tolist()],
+        repeat_choices=[2],
+        finite_difference_step=1e-4,
+        fixed_parameters=dict(zip(names[:13], values[:13], strict=True)),
+        stages=[
+            dict(
+                name="control",
+                active_parameters=list(names[13:]),
+                maximum_iterations=1,
+                maximum_function_evaluations=1,
+                enforce_historical_guards=False,
+            )
+        ],
+        numerical_checks=[],
+        require_initial_qualification=False,
+        profiles=[],
+        sensitivity=False,
+        controls=False,
+        synthetic=dict(truth=values.tolist(), coherent_repeats=2, scale=7, add_noise=False),
+    )
+    plan_path = tmp_path / "plan.json"
+    output = tmp_path / "control.ra_diag.npz"
+    runner = script("refine_native")
+    # This compact fixture owns two rods; full catalogue coverage has its own proof.
+    monkeypatch.setattr(runner, "validate_native_rod_coverage", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "refine_native",
+            "--physics",
+            str(physics_path),
+            "--observations",
+            str(observation_path),
+            "--plan",
+            str(plan_path),
+            "--output",
+            str(output),
+        ],
+    )
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    runner.main()
+    with np.load(output, allow_pickle=False) as saved:
+        manifest = json.loads(saved["manifest_json"].tobytes())
+        assert manifest["fit_scope"] == "fixed_parameter_control"
+        assert manifest["fixed_parameters"] == plan["fixed_parameters"]
+        assert manifest["selected"] is None
+        candidates = saved["prediction_values"]
+        assert len(candidates) > 1
+        np.testing.assert_array_equal(
+            candidates[:, :13], np.tile(values[:13], (len(candidates), 1))
+        )
+    fixed = plan.pop("fixed_parameters")
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(ValueError, match="final fit stage must release every"):
+        runner.main()
+    plan["fixed_parameters"] = fixed
+    changed = values.copy()
+    changed[0] += 0.001
+    plan["qualification_candidates"] = [values.tolist(), changed.tolist()]
+    plan["numerical_checks"] = [dict(name="angular", integration=dict(angular_power=2))]
+    plan["qualification_scale"] = 7
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    output.unlink()
+    with pytest.raises(ValueError, match="qualification cannot change"):
+        runner.main()
+
+
 def test_render_recovery_preserves_proposal_roughness_scale_and_candidate_status(
     tmp_path, monkeypatch
 ):

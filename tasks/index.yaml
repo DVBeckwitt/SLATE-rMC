@@ -162,3 +162,8 @@ tasks:
     branch: codex/native-response-reuse
     status: READY_REUSABLE_NATIVE_WORKFLOW_FITS_UNQUALIFIED
     depends_on: [T33]
+  - id: T35
+    file: tasks/35_qualified_bi_fit.md
+    branch: codex/qualified-bi-fit
+    status: IMPLEMENTED_MATCHED_RUNNER_BOUNDARY_MEASURED_NUMERICS_UNQUALIFIED
+    depends_on: [T34]

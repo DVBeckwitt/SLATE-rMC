@@ -19,6 +19,12 @@ optimizer state, residuals and Jacobians are not replayed.
 
 Contract API version: **17**. Trace schema version: **4**. Reference pack version: **1**.
 
+T35 adds explicit fixed-parameter control declarations and an optional local-m0
+axial panel cap. Controls retain the complete physical vector and fixed-value
+provenance; ordinary fits still release every admitted coordinate. The local cap
+inherits the global cap when absent and otherwise overrides only local-m0 quadrature.
+Neither changes physics, result measure, observations, or numerical acceptance gates.
+
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
 and ordering are validated eagerly.

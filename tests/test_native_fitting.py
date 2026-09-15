@@ -394,6 +394,37 @@ def test_native_bi_reuse_invalidates_changed_density_and_cell():
         fault_parameters={},
     )
     response = detector.compile_native_response(projection)
+    # One full-rod evaluation preserves the explicitly split local-m0 rule.
+    split_rule = replace(
+        detector.integration_rule,
+        quadrature_kind="composite_gauss",
+        maximum_axial_panel_width_Ainv=None,
+        local_m0_maximum_axial_panel_width_Ainv=0.2,
+    )
+    split_detector = replace(detector, integration_rule=split_rule)
+    uncapped = replace(
+        split_detector,
+        integration_rule=replace(split_rule, local_m0_maximum_axial_panel_width_Ainv=None),
+    )
+    assert split_detector.fixed_physics_revision != uncapped.fixed_physics_revision
+    joint = split_detector.compile_native_response(projection)
+    pieces = []
+    for local, cap in ((True, 0.2), (False, None)):
+        part = replace(
+            detector,
+            rods=tuple(r for r in detector.rods if (r.h == r.k == 0) == local),
+            integration_rule=replace(
+                split_rule,
+                maximum_axial_panel_width_Ainv=cap,
+                local_m0_maximum_axial_panel_width_Ainv=None,
+            ),
+        )
+        pieces.append(part.compile_native_response(projection).evaluate())
+    assert all(np.any(piece > 0) for piece in pieces)
+    np.testing.assert_allclose(joint.evaluate(), sum(pieces), rtol=3e-13, atol=0)
+    assert joint.response_revision != response.response_revision
+    with pytest.raises(ValueError, match="axial panel width"):
+        replace(split_rule, local_m0_maximum_axial_panel_width_Ainv=-1)
     projector = NativeSpatialRegionProjection(projection)
     projected = detector.compile_native_response(projection, spatial_projection=projector)
     np.testing.assert_array_equal(projected.evaluate(), response.evaluate())

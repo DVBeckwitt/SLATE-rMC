@@ -28,6 +28,7 @@ def native_physics_with(original, plan, overrides):
         "local_m0_q_bounds_Ainv",
         "quadrature_kind",
         "maximum_axial_panel_width_Ainv",
+        "local_m0_maximum_axial_panel_width_Ainv",
         "angular_support",
         "frozen_ewald_bounds_Ainv_rad",
     }:

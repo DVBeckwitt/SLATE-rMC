@@ -580,6 +580,12 @@ class ConditionalStructureDetector:
                     else np.array([rule.maximum_axial_panel_width_Ainv]),
                 ),
                 ("regular_q_bounds_Ainv", np.array(rule.regular_q_bounds_Ainv or ())),
+                (
+                    "local_m0_maximum_axial_panel_width_Ainv",
+                    np.array(())
+                    if rule.local_m0_maximum_axial_panel_width_Ainv is None
+                    else np.array([rule.local_m0_maximum_axial_panel_width_Ainv]),
+                ),
                 ("local_m0_q_bounds_Ainv", np.array(rule.local_m0_q_bounds_Ainv or ())),
                 ("overlap_measure", "none" if stack is None else stack.overlap_measure),
                 (

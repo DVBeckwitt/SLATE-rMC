@@ -1136,6 +1136,8 @@ class FiberIntegrationRule:
     The uniform component retains the complete geometrically bounded domain.
     A local m0 domain reaching Q=0 requires an integrable structure/optical model,
     such as the named Parratt composite; the coordinate rule cannot supply one.
+    A local-m0 panel cap overrides the global cap only in that channel; None
+    inherits the global cap. The same physical integration measure is retained.
     """
 
     axial_power: int = 12
@@ -1152,6 +1154,7 @@ class FiberIntegrationRule:
     local_m0_q_bounds_Ainv: tuple[float, float] | None = None
     quadrature_kind: str = "sobol"
     maximum_axial_panel_width_Ainv: float | None = None
+    local_m0_maximum_axial_panel_width_Ainv: float | None = None
     angular_support: str = "q_conditioned_union"
     frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
 
@@ -1174,18 +1177,21 @@ class FiberIntegrationRule:
             raise ValueError("quadrature kind must be sobol or composite_gauss")
         if self.quadrature_kind == "composite_gauss" and self.seed != 0:
             raise ValueError("Gauss-Legendre has no random seed; use order refinement")
-        if self.maximum_axial_panel_width_Ainv is not None and (
-            self.quadrature_kind != "composite_gauss"
-            or np.ndim(self.maximum_axial_panel_width_Ainv) != 0
-            or np.iscomplexobj(self.maximum_axial_panel_width_Ainv)
-            or not np.isfinite(self.maximum_axial_panel_width_Ainv)
-            or self.maximum_axial_panel_width_Ainv <= 0
+        for name in (
+            "maximum_axial_panel_width_Ainv",
+            "local_m0_maximum_axial_panel_width_Ainv",
         ):
-            raise ValueError("a finite positive axial panel width requires composite_gauss")
-        if self.maximum_axial_panel_width_Ainv is not None:
-            object.__setattr__(
-                self, "maximum_axial_panel_width_Ainv", float(self.maximum_axial_panel_width_Ainv)
-            )
+            value = getattr(self, name)
+            if value is not None:
+                if (
+                    self.quadrature_kind != "composite_gauss"
+                    or np.ndim(value) != 0
+                    or np.iscomplexobj(value)
+                    or not np.isfinite(value)
+                    or value <= 0
+                ):
+                    raise ValueError("a finite positive axial panel width requires composite_gauss")
+                object.__setattr__(self, name, float(value))
         for name in ("regular_q_bounds_Ainv", "local_m0_q_bounds_Ainv"):
             value = getattr(self, name)
             if value is not None:
@@ -1413,7 +1419,11 @@ def iter_conditional_fiber_transfers(
                 axial_seed=7919 * rule.seed + 65537 * gi + 1009,
                 angular_shift_seed=8191 * si + 7919 * rule.seed + 131 * gi + 973,
                 quadrature_kind=rule.quadrature_kind,
-                maximum_axial_panel_width_Ainv=rule.maximum_axial_panel_width_Ainv,
+                maximum_axial_panel_width_Ainv=(
+                    rule.local_m0_maximum_axial_panel_width_Ainv
+                    if local and rule.local_m0_maximum_axial_panel_width_Ainv is not None
+                    else rule.maximum_axial_panel_width_Ainv
+                ),
                 angular_support=rule.angular_support,
             )
             for first in range(0, len(nodes.axial_index), rule.batch_size):
