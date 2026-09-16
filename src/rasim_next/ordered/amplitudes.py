@@ -124,9 +124,37 @@ def unit_cell_amplitude(
         raise ValueError("unknown isotropic displacement requires an explicit calculation value")
 
     lattice = ReciprocalLattice.from_crystal(crystal)
-    q_vectors = lattice.q_cartesian_Ainv(indices).reshape(-1, 3)
-    q_magnitude = np.linalg.norm(q_vectors, axis=1)
+    flat_indices = indices.reshape(-1, 3)
     wavelength_flat = wavelength.reshape(-1)
+    inverse = None
+    if indices.ndim >= 3 and indices.shape[-2] >= 32:
+        # Native tables carry whole axial rows. Match opposite rows in linear
+        # work; sorting every query or looping over short rows costs more than
+        # the saved atomic sums. The long-row threshold brackets measured work.
+        width = indices.shape[-2]
+        rows = indices.reshape(-1, width, 3)
+        waves = wavelength.reshape(-1, width)
+        selected, lookup, inverted, row_by_key = [], [], [], {}
+        for i, (row, wave) in enumerate(zip(rows, waves, strict=True)):
+            partner = row_by_key.get((*(-row[0]), wave[0]))
+            reuse = (
+                partner is not None
+                and np.array_equal(row, -rows[selected[partner]])
+                and np.array_equal(wave, waves[selected[partner]])
+            )
+            if reuse:
+                lookup.append(partner)
+            else:
+                row_by_key[(*row[0], wave[0])] = len(selected)
+                lookup.append(len(selected))
+                selected.append(i)
+            inverted.append(reuse)
+        if len(selected) < len(rows):
+            flat_indices = rows[selected].reshape(-1, 3)
+            wavelength_flat = waves[selected].reshape(-1)
+            inverse = np.asarray(lookup)
+    q_vectors = lattice.q_cartesian_Ainv(flat_indices).reshape(-1, 3)
+    q_magnitude = np.linalg.norm(q_vectors, axis=1)
     fractional = np.asarray([site.fractional for site in crystal.sites], dtype=np.float64)
     positions_A = fractional @ crystal.direct_basis_A.T
     phase = np.exp(1.0j * (q_vectors @ positions_A.T))
@@ -165,6 +193,7 @@ def unit_cell_amplitude(
     site_sum = phase * damping * occupancy[None, :]
 
     amplitude = np.zeros(q_vectors.shape[0], dtype=np.complex128)
+    inverted_amplitude = np.zeros_like(amplitude) if inverse is not None else None
     mappings: list[str] = []
     factor_groups = sorted({(site.species, site.element, site.charge) for site in crystal.sites})
     for species, element, charge in factor_groups:
@@ -183,9 +212,21 @@ def unit_cell_amplitude(
             q_magnitude_Ainv=q_magnitude,
             wavelength_A=wavelength_flat,
         )
-        amplitude += factor * np.sum(site_sum[:, mask], axis=1)
+        geometric_sum = np.sum(site_sum[:, mask], axis=1)
+        amplitude += factor * geometric_sum
+        if inverted_amplitude is not None:
+            # G_species(-Q) = conj(G_species(Q)); anomalous f is NOT conjugated.
+            # The same identity holds for arbitrary real anisotropic site tensors
+            # and retained integer surface lifts, without centrosymmetry.
+            inverted_amplitude += factor * geometric_sum.conj()
         mappings.append(mapping)
 
+    if inverse is not None:
+        amplitude = np.where(
+            np.asarray(inverted)[:, None],
+            inverted_amplitude.reshape(-1, width)[inverse],
+            amplitude.reshape(-1, width)[inverse],
+        )
     return StructureAmplitudeResult(
         amplitude_e=amplitude.reshape(leading_shape),
         provenance=(

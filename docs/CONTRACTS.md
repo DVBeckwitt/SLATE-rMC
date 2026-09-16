@@ -25,6 +25,12 @@ provenance; ordinary fits still release every admitted coordinate. The local cap
 inherits the global cap when absent and otherwise overrides only local-m0 quadrature.
 Neither changes physics, result measure, observations, or numerical acceptance gates.
 
+An optional Gauss-Hermite `NativeSourceDefinition.local_m0_divergence_order` uses
+a separate normalized numerical source rule for stitched `(0,0)`. Bind physical
+source parameters first, then resolve disjoint `NativeFitPhysics.integration_parts()`.
+Regular and local intensities sum before one scale; each partition retains its own
+source/response identity and cache. Equal orders preserve the unsplit path.
+
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
 and ordering are validated eagerly.
@@ -1272,6 +1278,10 @@ and the integration measure remain unchanged; quadrature nodes, proposal densiti
 quadrature weights can change.
 This prevents artificial axial jumps caused by angular remeshing. It does not establish
 angular resolution, and geometry changes can still change the conservative union.
+`FiberIntegrationRule.local_m0_angular_power` optionally overrides the global
+angular order for the local-lamella m0 channel. `None` inherits `angular_power`;
+explicit values are nonnegative integers and participate in numerical identity.
+The same continuous domain and integration measure apply to both channels.
 
 Native result schema v2 separates `optimizer_candidate` from `selected`. By default,
 `require_initial_qualification=True` stops requested fitting/profiling after a failed
@@ -1289,3 +1299,11 @@ only when observation owner, exact weight and vertical bounds agree. Rectangle g
 can be shared between observations, but each original membership weight applies once.
 The same continuous Gaussian rectangle integral supplies the probability. This is an
 internal partition change with no new result measure, raster or public API.
+
+The optional numerical acceleration boundary is specified in
+`NATIVE_REFINEMENT.md`: immutable rod-keyed `AxialPanelMesh` physical GL8 panels,
+raw panel-resolved native predictions, explicit one-N stencil preparation, and
+exact-checked reference-correction warm starts. Meshes participate in detector
+revision and response-cache identity. Preparation and approximate proposals cannot
+select fits or supply exact recovery rows. Independent source/angular/axial checks
+remain mandatory. No physical measure, symmetry assumption or dependency changes.

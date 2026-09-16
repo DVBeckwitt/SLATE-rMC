@@ -445,12 +445,10 @@ class NativeSpatialRegionProjection:
         Multiply that bound by the maximum summed region weight for overlapping
         or weighted regions. It excludes reference-node quadrature error and the
         separately reported backward-flight bound. Increase quadrature order to
-        check the conditional-CDF integral independently of tail truncation.
+        check both rectangle-integral forms independently of tail truncation.
         """
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
-        angle_nodes, angle_weights = _integration_rule(
-            max(16, quadrature_order), gaussian_tail_radius
-        )
+        angle_nodes, angle_weights = nodes, weights
         ptr, owner, mass = _project_gaussian_regions(
             kernels.mean_px,
             kernels.factor_px,
@@ -642,7 +640,7 @@ class DetectorSpatialKernels:
 
         Off-panel centers contribute through their tails. Omitted Gaussian mass
         and interior-CDF approximation error is at most sum(mass)*6*Phi(-gaussian_tail_radius), in addition to source
-        backward-flight, outgoing-quadrature and conditional-CDF quadrature errors.
+        backward-flight, outgoing-quadrature and rectangle-quadrature errors.
         Increase quadrature_order to check the last error separately. No image blur, new SF
         evaluation, pixel-center approximation or survivor renormalization occurs.
         """
@@ -655,9 +653,7 @@ class DetectorSpatialKernels:
         if mass.shape != (len(self.mean_px),) or np.any(~np.isfinite(mass)) or np.any(mass < 0):
             raise ValueError("integrated_mass must be a finite nonnegative value per kernel")
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
-        angle_nodes, angle_weights = _integration_rule(
-            max(16, quadrature_order), gaussian_tail_radius
-        )
+        angle_nodes, angle_weights = nodes, weights
         result = _deposit_gaussian_pixels(
             self.mean_px,
             self.factor_px,

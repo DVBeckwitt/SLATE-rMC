@@ -1151,6 +1151,10 @@ def test_oblique_narrow_beams_preserve_native_pixel_mass():
                 epsrel=1e-12,
             )[0]
         np.testing.assert_allclose(actual, expected, rtol=2e-11, atol=5e-13)
+        coarse = kernels.integrate_native_pixels(
+            shape, integrated_mass=np.ones(1), quadrature_order=8, gaussian_tail_radius=8.0
+        )
+        np.testing.assert_allclose(coarse, expected, rtol=0, atol=1e-8)
         # A negatively correlated beam reaches the narrow row only after its
         # first column. The overlapping whole panel must not suppress that hit.
         flat = np.arange(np.prod(shape))

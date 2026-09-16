@@ -146,17 +146,25 @@ class SphericalMosaicDensity:
         if eta < 1:
             sigma = self.parameters.gaussian_sigma_rad
             node, weight = np.polynomial.legendre.leggauss(quadrature_order)
+            # The minimum cone tilt is delta. Beyond 40 sigma, every wrapped
+            # Gaussian image underflows (exp(-800)); there is no Gaussian work.
+            # Preserve the original angle arithmetic for subnormal squared widths.
+            gaussian_indices = (
+                np.arange(polar.size)
+                if sigma < np.sqrt(np.finfo(float).tiny)
+                else np.flatnonzero(delta < 40 * sigma)
+            )
             # Bounded batches keep the angle workspace independent of image size.
-            for start in range(0, polar.size, 2048):
-                stop = min(start + 2048, polar.size)
-                bb, dd = b[start:stop], delta[start:stop]
+            for start in range(0, len(gaussian_indices), 2048):
+                selected = gaussian_indices[start : start + 2048]
+                bb, dd = b[selected], delta[selected]
                 curvature = bb / np.sinc(dd / np.pi)
                 scale = np.minimum(
                     np.pi, sigma / np.sqrt(np.maximum(curvature, np.finfo(float).tiny))
                 )
-                lower = np.zeros(stop - start)
+                lower = np.zeros(len(selected))
                 upper = scale.copy()
-                total = np.zeros(stop - start)
+                total = np.zeros(len(selected))
                 while np.any(lower < np.pi):
                     half = (upper - lower) / 2
                     psi = (upper + lower)[:, None] / 2 + half[:, None] * node
@@ -166,7 +174,7 @@ class SphericalMosaicDensity:
                     total += half * (_wrapped_gaussian_density(angle, sigma) @ weight)
                     lower = upper
                     upper = np.minimum(np.pi, 2 * upper)
-                out[start:stop] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
+                out[selected] += (1 - eta) * total / (np.pi**2 * self.gaussian_normalization)
         result[~degenerate] = out
         return result.reshape(shape)
 

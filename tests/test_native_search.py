@@ -38,6 +38,148 @@ def observations(counts, covariance=None):
     )
 
 
+def test_axial_adaptation_targets_local_detector_error_and_keeps_stencil_mesh():
+    from scipy.special import ndtr, roots_legendre
+
+    from rasim_next.fitting.native_acceleration import refine_axial_meshes
+    from rasim_next.pipeline.fiber_detector import AxialPanelMesh
+
+    target = observations([2, 1, 1], np.eye(3) + 0.1)
+    node, weight = roots_legendre(8)
+
+    def evaluate(meshes):
+        edges = np.asarray(meshes[0].edges_Ainv)
+        half = np.diff(edges) / 2
+        x = edges[:-1, None] + half[:, None] * (1 + node)
+        return np.array(
+            [
+                np.column_stack(
+                    (
+                        half * (np.exp(-0.5 * ((x - center) / 0.025) ** 2) @ weight),
+                        2 * half,
+                        half * (x @ weight),
+                    )
+                )
+                for center in (0.53, 0.54, 0.525)
+            ]
+        )
+
+    mesh = AxialPanelMesh(((1, 0),), "positive_phase_axial", (0.0, 0.3, 0.7, 1.0))
+    accepted, report = refine_axial_meshes(
+        evaluate,
+        target,
+        (mesh,),
+        fixed_scale=1000,
+        maximum_whitened_rms=0.01,
+        maximum_contrast_rms=0.005,
+        maximum_objective_contrast_error=0.5,
+        maximum_panels=128,
+    )
+    assert len(accepted[0].edges_Ainv) > len(mesh.edges_Ainv)
+    assert report["comparison"]["empirical_agreement"]
+    assert accepted[0].edges_Ainv[0] == 0 and accepted[0].edges_Ainv[-1] == 1
+    expected = np.array(
+        [
+            [np.sqrt(2 * np.pi) * 0.025 * (ndtr((1 - c) / 0.025) - ndtr(-c / 0.025)), 1, 0.5]
+            for c in (0.53, 0.54, 0.525)
+        ]
+    )
+    errors = np.array(
+        [target.whiten(1000 * row) for row in evaluate(accepted).sum(axis=1) - expected]
+    )
+    assert np.sqrt(np.mean(errors**2, axis=1)).max() < 0.01
+    with pytest.raises(ValueError, match="budget"):
+        refine_axial_meshes(
+            evaluate,
+            target,
+            (mesh,),
+            fixed_scale=1000,
+            maximum_whitened_rms=0.01,
+            maximum_contrast_rms=0.005,
+            maximum_objective_contrast_error=0.5,
+            maximum_panels=5,
+        )
+
+
+def test_reference_correction_preserves_zeros_and_rejects_invalid_reuse():
+    from rasim_next.fitting.native_acceleration import NativeReferenceCorrection
+
+    high, low = np.array([0, 4, 1.0]), np.array([0, 3, 1.0])
+    reference = NativeReferenceCorrection(np.array([0.5]), np.array([0]), np.array([1]), high, low)
+    np.testing.assert_array_equal(reference.predict([0.5], low), high)
+    np.testing.assert_allclose(reference.predict([0.6], [0.1, 3.3, 1.1]), [0.1, 4.3, 1.1])
+    high[1] = 99
+    assert reference.high_reference[1] == 4
+    with pytest.raises(ValueError, match="trust box"):
+        reference.predict([1.1], low)
+    with pytest.raises(ValueError, match="negative"):
+        NativeReferenceCorrection(
+            np.array([0.5]), np.array([0]), np.array([1]), [0, 0, 0], low
+        ).predict([0.6], [0, 2, 1])
+
+    from rasim_next.fitting.native_acceleration import reference_corrected_start
+
+    parameter = (FitParameter("shape", "1", "sample", 0, 1, 1),)
+    exact_calls = []
+
+    def exact(v):
+        exact_calls.append(float(v[0]))
+        return np.array([1, 1 + v[0], 2 - v[0]])
+
+    target = observations([1, 1.7, 1.3], 0.001 * np.eye(3))
+    tolerances = dict(
+        maximum_whitened_rms=0.1, maximum_contrast_rms=0.05, maximum_objective_contrast_error=0.5
+    )
+    start, records = reference_corrected_start(
+        exact,
+        lambda v: np.array([1, 1.2 + v[0], 2.3 - v[0]]),
+        target,
+        parameter,
+        [0.2],
+        trust_radii=[0.7],
+        numerical_tolerances=tolerances,
+        maximum_updates=1,
+    )
+    assert start[0] == pytest.approx(0.7, abs=1e-5)
+    assert records[0]["accepted"]
+    assert len(exact_calls) == 2  # One high anchor and one exact acceptance check.
+    with pytest.raises(ValueError, match="admissible start"):
+        reference_corrected_start(
+            exact,
+            exact,
+            target,
+            parameter,
+            [0.2 + 1j],
+            trust_radii=[0.7],
+            numerical_tolerances=tolerances,
+        )
+    # A changing coarse bias can produce an attractive surrogate minimum. The
+    # exact prediction/contrast gate must reject it rather than promote it.
+    rejected, records = reference_corrected_start(
+        exact,
+        lambda v: np.array([1, 1 + 3 * v[0], 2 - v[0]]),
+        target,
+        parameter,
+        [0.2],
+        trust_radii=[0.7],
+        numerical_tolerances=tolerances,
+        maximum_updates=1,
+    )
+    np.testing.assert_array_equal(rejected, [0.2])
+    assert not records[0]["accepted"]
+    with pytest.raises(ValueError, match="preserve every declared fixed"):
+        reference_corrected_start(
+            exact,
+            exact,
+            target,
+            parameter,
+            [0.2],
+            trust_radii=[0.7],
+            numerical_tolerances=tolerances,
+            fixed_values={"shape": 0.7},
+        )
+
+
 def test_public_trf_batches_respect_bounds_and_recover_scoped_lower_evidence():
     target = observations([1, 1.4, 1.2, 1.6], np.eye(4) + 0.1)
     parameters = (

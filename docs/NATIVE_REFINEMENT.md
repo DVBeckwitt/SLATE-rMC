@@ -295,8 +295,8 @@ complete `[5Qc,10Qc]` interval. This named extension avoids counting grid points
 measure. The default `sampled_log_median` preserves manuscript compatibility. The first
 divergence is overlap normalization; automatic/fallback blend-window selection is unchanged.
 
-The explicit response cache retains at most two geometry responses and 64 small
-prediction vectors. Response v2 excludes source masses: line probability updates
+The explicit response cache retains at most two geometry responses per rod partition
+and 64 small prediction vectors. Response v2 excludes source masses: line probability updates
 reuse per-line geometry and multiply current aligned normalized weights exactly
 once, including zero-probability endpoints. Atomic z/ADPs, stacking, mosaic,
 population weights, thickness and roughness recompute their physical intensity.
@@ -308,6 +308,17 @@ upstream optical inputs match. New origins, Gaussian kernels, visibility and
 region probabilities are still computed. Cell, occupancy, sample tilt, divergence
 and wavelength update their dependent scattering/optics. No stale surviving-event
 mask is reused. Cache owners are explicit; there is no hidden global cache.
+
+`source_override.local_m0_divergence_order` optionally sets a positive Gauss-Hermite
+divergence order for stitched `(0,0)` alone. The regular rods keep `divergence_order`.
+`None`, equal orders, or an absent stitched rod use the ordinary unsplit path.
+`NativeFitPhysics.integration_parts()` applies the distinct rules after binding the
+physical candidate; each partition samples the same physical source distribution
+with normalized weights. Predictions sum raw partition intensities before one scale.
+Fitting, numerical checks, controls and rendering consume those same partitions.
+Numerical-check `source_partitions_candidate_index` identifies the recorded probe
+in its scope's `qualification_candidates` array. Rendering checkpoints retain each
+partition's revision, completed batch count and completion flag.
 
 For stationary proposals across transport perturbations, declare
 `frozen_ewald_bounds_Ainv_rad=[Q_low,Q_high,arc_start,arc_width]` in the integration
@@ -358,6 +369,11 @@ cap for the local-lamella m0 channel. `null` inherits the global cap. For exampl
 global `null` plus local `0.02` reproduces the prior explicit m0/nonzero partition
 using one shared evaluator. Both caps require composite Gauss quadrature. Each
 channel retains its full support and contributes raw mass before one fitted scale.
+
+`local_m0_angular_power` similarly overrides `angular_power` only for the declared
+local-lamella m0 channel; `null` inherits the global order. This lets the same
+evaluator retain an adequate m0 rule while refining nonzero rods. The numerical
+revision includes the override; neither domain nor physical weighting changes.
 
 ## Qualification of optimizer decisions
 
@@ -410,3 +426,78 @@ The multi-choice refit/profile wrappers reject a shared batch callable when more
 one discrete choice is supplied. Bind scalar and batched predictions to the same N and
 call the single-choice search separately; a callable bound to one N cannot supply the
 finite differences of another.
+
+## Opt-in axial preparation and reference proposals
+
+The declared spatial quadrature order controls both Plackett-angle and
+conditional-CDF rectangle integration, identically for native regions and pixels.
+Order 16 is unchanged. Lower orders no longer inherit a hidden angle-order floor;
+previous lower-order qualifications must therefore be repeated. Spatial-order
+checks remain independent of source, angular and axial refinement, and the
+Gaussian tail bound does not include rectangle-quadrature error.
+
+`AxialPanelMesh` declares a complete radial rod group, a physical coordinate and
+strictly increasing edges in inverse angstroms. Use `positive_phase_axial` for
+regular rods or `external_local_m0_q` for local m0. Every signed rod remains present.
+Edges must enclose source/detector support throughout the intended neighborhood;
+insufficient meshes raise rather than crop the model.
+
+`FiberIntegrationRule.axial_meshes` selects physical GL8 panels. It requires
+`quadrature_kind="composite_gauss"`, `axial_power=3`, zero seed and no width caps.
+Refine edges, not the now-inactive axial importance-proposal metadata. Angular,
+source and cone integration remain independently controlled. The public
+`NativeJointEvaluator.predict_axial_panels(values, N)` returns nonnegative raw
+`(panel, observation)` contributions through the ordinary response and factors.
+Their sum recovers `predict`; source partitions retain global panel ordering.
+
+For preparation, use a measured-data plan with one `repeat_choices` entry,
+center-first `qualification_candidates` containing the actual optimizer stencil,
+existing `numerical_tolerances`, and an `axial_adaptation` object containing:
+
+- `initial_meshes`: complete rod groups, each with `rods_hk`, `coordinate` and
+  `edges_Ainv`; seed known narrow peaks, optical transitions and support boundaries.
+- `fixed_scale`: the positive reference scale in the objective's count units.
+- `maximum_panels` (default 2048) and `maximum_passes` (default 12): explicit work limits.
+
+Run `scripts/refine_native.py` with the usual inputs/output and `--prepare-axial-mesh`.
+Preparation applies the input rule's global/local-m0 physical panel-width limits
+to every initial gap before adaptation, retaining all supplied and elastic-cutoff
+edges. The local limit overrides the global limit only for local m0. Excessive
+seed size fails before evaluating predictions; the work budget includes children.
+The returned explicit mesh has no separate width cap because its edges carry it.
+Each GL8 panel is compared with two GL8 children. Covariance-whitened prediction and
+stencil-contrast errors prioritize refinement; the whole-vector objective gate also
+must pass. Training splits use training rows only. Each N is prepared separately so
+its own center defines contrasts. Work-budget exhaustion raises explicitly.
+
+The external `rasim-native-axial-mesh-v1` diagnostic retains plan/input/source hashes,
+stencil vectors, parent/child evidence, costs and the prepared `integration_override`.
+Copy that override into the normal fit/render plan and freeze it during nearby steps.
+Qualify independently: **both parent and child rules can miss a narrow peak.**
+Preparation is neither a certified bound nor fit selection. Cross-N ranking,
+source/angular refinement and held-out validation keep their ordinary gates.
+
+An optional stage `reference_correction` object contains `numerical_override`
+(the cheaper source/integration rule), positive `trust_radii` in physical parameter
+units and full parameter order, optional `maximum_updates` (default 2) and
+`maximum_function_evaluations` (default 30). `reference_corrected_start` freezes
+`high(reference) + low(candidate) - low(reference)` inside each bounded optimizer
+call. This additive correction handles zeros without dividing by intensity.
+Out-of-box/negative corrections use an explicitly recorded high-rule fallback.
+Only an improving high-rule objective passing prediction/contrast gates moves the
+reference; rejected moves shrink the trust box.
+
+Here “exact” means the declared high numerical rule, not the continuous integral.
+Corrected vectors never enter exact recovery, normal fit history or qualification.
+The helper produces only a warm start; the ordinary all-active high-rule stage
+follows. Fixed controls, calibration ownership and guards remain unchanged.
+Resume restores exact rows and restarts proposal work. Include setup, cheap calls,
+rejections and final exact fitting in benchmarks: short/cheap fits can be slower.
+Both accelerators are opt-in, never enabled automatically by a preparation pass.
+
+Long inversion-paired axial rows share atomic geometric sums automatically:
+per-species `G(-Q)=conj(G(Q))`, but anomalous `f` stays unchanged. Generally
+`F(-Q) != conj(F(Q))`. This covers mirrored in-plane rods and 00±L without assuming
+centrosymmetry, mirroring detector pixels or merging signed intensities. Finite
+stacking already uses its authoritative closed-form repeat factor; no duplicate
+stacking implementation or intensity-equality assumption is introduced.

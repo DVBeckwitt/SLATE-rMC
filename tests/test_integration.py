@@ -9535,6 +9535,30 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrat
     assert not len(empty.weight_Ainv_rad)
     np.testing.assert_array_equal(empty.positive_axial_Ainv, nodes.positive_axial_Ainv)
     if quadrature_kind == "composite_gauss":
+        # Explicit physical panels preserve the continuous measure and stay fixed
+        # when the numerical importance proposal changes.
+        physical = sample_conditional_fiber_coordinates(
+            **(arguments | {"axial_panel_edges_Ainv": [0.2, 0.35, 0.7, 1.0]})
+        )
+        t = physical.positive_axial_Ainv[physical.axial_index]
+        assert physical.weight_Ainv_rad.sum() == pytest.approx(0.8 * 2 * np.pi, rel=1e-10)
+        assert physical.weight_Ainv_rad @ np.exp(
+            t * physical.ewald_azimuth_rad / (2 * np.pi)
+        ) == pytest.approx(expected, rel=1e-10)
+        moved = sample_conditional_fiber_coordinates(
+            **(
+                arguments
+                | {
+                    "axial_panel_edges_Ainv": [0.2, 0.35, 0.7, 1.0],
+                    "axial_peak_half_width_Ainv": 0.03,
+                }
+            )
+        )
+        np.testing.assert_array_equal(moved.positive_axial_Ainv, physical.positive_axial_Ainv)
+        with pytest.raises(ValueError, match="enclose"):
+            sample_conditional_fiber_coordinates(
+                **(arguments | {"axial_panel_edges_Ainv": [0.3, 1.0]})
+            )
         # A narrow native-support feature lies between coarse proposal peaks.
         # Physical panel refinement must recover its integral without a new PDF.
         refined = sample_conditional_fiber_coordinates(

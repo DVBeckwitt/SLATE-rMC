@@ -272,3 +272,9 @@ Every current-phase `MATCH`, `CORRECTED`, or `NEW` row must be named by at least
 | PHY-FIT-023 | all admitted Bi/Pb specimen and acquisition coordinates through one native response | fixed-source native recipes | all-six typed bundles, Pb isotropic reduction, source/pose dependency and fresh-response parity | fitting | NEW v16 implementation; 39/39/39/39/45/43 continuous coordinates plus discrete N; measured numerical acceptance unresolved |
 | PHY-FIT-024 | multistart, full nuisance/discrete profiles, calibration ownership and conditional validation | ad hoc fit workflows | analytic nuisance/scale optimum, correlated Schur-complement oracle, leakage and unresolved-minimum counterexamples | fitting | NEW v16, strengthened v17: every profile/N and conditional validation needs numerical qualification; better admissible profile minima block resolved selection; calibration covariance absent from current six acquisitions |
 | PHY-FIT-025 | observable numerical contrasts, control contamination and explicit cone reuse | repeated response evaluation | identical-rule parity, guard-feasibility counterexample, nonseparable/arc-mass quadrature invariant, frozen-support source comparison and all-six convergence screens | fitting/integration | NEW v16/v17 diagnostics; failed initial qualification stops fitting by default; current detector integration remains unqualified; no unsupported extra blur admitted |
+
+T35 adds numerical implementations under PHY-FIT-025: one-N error-driven physical
+axial panels and frozen-reference proposal correction with exact high-rule acceptance.
+Independent qualification still owns fit selection. PHY-ORD-018 additionally reuses
+inversion-related per-species geometric sums without equating anomalous signed
+intensities. No new physical model or legacy classification is implied.

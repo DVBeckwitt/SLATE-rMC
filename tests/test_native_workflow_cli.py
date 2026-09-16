@@ -3,7 +3,8 @@
 import hashlib
 import importlib.util
 import json
-from dataclasses import fields
+import sys
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ from rasim_next.fitting.bi_native import BiNativeStructureModel
 from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_joint import NativeJointEvaluator
 from rasim_next.fitting.native_observations import load_native_fit_observations
-from rasim_next.fitting.native_workflow import make_native_evaluator
+from rasim_next.fitting.native_workflow import make_native_evaluator, native_physics_with
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 from rasim_next.pipeline.conditional_detector import ConditionalStructureDetector
 from rasim_next.proof.diagnostics import write_diagnostic
@@ -223,6 +224,17 @@ def test_fixed_sf_control_keeps_declared_values_and_full_release_remains_require
         sensitivity=False,
         controls=False,
         synthetic=dict(truth=values.tolist(), coherent_repeats=2, scale=7, add_noise=False),
+        numerical_tolerances=dict(
+            maximum_whitened_rms=0.1,
+            maximum_contrast_rms=0.05,
+            maximum_objective_contrast_error=0.5,
+        ),
+    )
+    plan["stages"][0]["reference_correction"] = dict(
+        numerical_override={},
+        trust_radii=[0.005] * len(values),
+        maximum_updates=1,
+        maximum_function_evaluations=1,
     )
     plan_path = tmp_path / "plan.json"
     output = tmp_path / "control.ra_diag.npz"
@@ -250,6 +262,9 @@ def test_fixed_sf_control_keeps_declared_values_and_full_release_remains_require
         assert manifest["fit_scope"] == "fixed_parameter_control"
         assert manifest["fixed_parameters"] == plan["fixed_parameters"]
         assert manifest["selected"] is None
+        acceleration = manifest["reference_acceleration"][0]
+        assert acceleration["acceptance"] == "exact_checked_warm_start_only"
+        assert acceleration["records"][0]["comparison"]["empirical_agreement"]
         candidates = saved["prediction_values"]
         assert len(candidates) > 1
         np.testing.assert_array_equal(
@@ -270,18 +285,182 @@ def test_fixed_sf_control_keeps_declared_values_and_full_release_remains_require
     with pytest.raises(ValueError, match="qualification cannot change"):
         runner.main()
 
+    changed = values.copy()
+    changed[14] += 0.001
+    plan.update(
+        stages=[],
+        source_override=dict(kind="gauss_hermite", divergence_order=2, wavelength_order=1),
+        qualification_candidates=[values.tolist(), changed.tolist()],
+        numerical_checks=[dict(name="local_source", source=dict(local_m0_divergence_order=3))],
+        numerical_tolerances=dict(
+            maximum_whitened_rms=0.1,
+            maximum_contrast_rms=0.05,
+            maximum_objective_contrast_error=0.5,
+        ),
+    )
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    output.unlink(missing_ok=True)
+    runner.main()
+    with np.load(output, allow_pickle=False) as saved:
+        manifest = json.loads(saved["manifest_json"].tobytes())
+        check = manifest["numerical_checks"][0]
+        assert check["name"] == "local_source"
+        assert check["source_partitions_candidate_index"] == 1
+        assert [p["divergence_order"] for p in check["source_partitions"]] == [2, 3]
+        assert [p["row_count"] for p in check["source_partitions"]] == [8, 18]
+
+    from rasim_next.pipeline.fiber_detector import AxialPanelMesh
+
+    meshes = [
+        dict(rods_hk=[[0, 0]], coordinate="external_local_m0_q", edges_Ainv=[0, 7.5, 8, 8.5, 9]),
+        dict(rods_hk=[[1, 0]], coordinate="positive_phase_axial", edges_Ainv=[0, 7.5, 8, 8.5, 9]),
+    ]
+    plan.update(
+        source_override=dict(kind="gauss_hermite", divergence_order=1, wavelength_order=1),
+        integration_override=dict(
+            angular_power=0,
+            quadrature_kind="composite_gauss",
+            maximum_axial_panel_width_Ainv=1.0,
+            local_m0_maximum_axial_panel_width_Ainv=0.5,
+        ),
+        axial_adaptation=dict(initial_meshes=meshes, fixed_scale=1),
+        numerical_tolerances=dict(
+            maximum_whitened_rms=1e6,
+            maximum_contrast_rms=1e6,
+            maximum_objective_contrast_error=1e6,
+        ),
+    )
+    # CLI preparation owns finite evidence/provenance, not fit qualification.
+    plan.pop("synthetic")
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    output.unlink()
+    monkeypatch.setattr("sys.argv", [*sys.argv, "--prepare-axial-mesh"])
+    runner.main()
+    with np.load(output, allow_pickle=False) as saved:
+        manifest = json.loads(saved["manifest_json"].tobytes())
+        assert manifest["acceptance"] == "empirical_mesh_agreement_only"
+        assert manifest["report"]["comparison"]["empirical_agreement"]
+        assert manifest["implementation"]["source_sha256"]
+        mesh_plan = dict(integration_override=manifest["integration_override"])
+        bound = native_physics_with(physics, mesh_plan, {})
+        assert all(isinstance(m, AxialPanelMesh) for m in bound.integration_rule.axial_meshes)
+        for mesh, original in zip(bound.integration_rule.axial_meshes, meshes, strict=True):
+            cap = 0.5 if mesh.coordinate == "external_local_m0_q" else 1.0
+            assert np.max(np.diff(mesh.edges_Ainv)) <= cap * (1 + 1e-12)
+            assert set(original["edges_Ainv"]).issubset(mesh.edges_Ainv)
+        with pytest.raises(ValueError, match="ignored by the frozen mesh"):
+            native_physics_with(physics, mesh_plan, dict(integration=dict(axial_peak_spacing_L=2)))
+        with pytest.raises(ValueError, match="refine mesh edges"):
+            native_physics_with(physics, mesh_plan, dict(integration=dict(axial_power=4)))
+    plan["axial_adaptation"]["maximum_panels"] = 4
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    output.unlink()
+    with pytest.raises(ValueError, match="seed panel widths exceed"):
+        runner.main()
+    plan["axial_adaptation"].pop("maximum_panels")
+    plan["repeat_choices"] = [2, 3]
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    output.unlink(missing_ok=True)
+    with pytest.raises(ValueError, match="prepare each N separately"):
+        runner.main()
+
+
+def test_local_source_rule_preserves_raw_partition_sum_and_physical_source_rebinding(tmp_path):
+    from rasim_next.fitting.native_instrument import NativeInstrumentModel
+
+    physics_path, observation_path = experiment(tmp_path / "source-parts")
+    original = load_native_fit_physics(physics_path)
+    observations = load_native_fit_observations(observation_path)
+    physics = native_physics_with(
+        original,
+        {},
+        {
+            "source": {
+                "kind": "gauss_hermite",
+                "divergence_order": 2,
+                "wavelength_order": 1,
+                "local_m0_divergence_order": 3,
+            }
+        },
+    )
+    atomic = BiNativeStructureModel(physics)
+    instrument = NativeInstrumentModel(physics, "raw")
+    values = np.r_[
+        atomic.reference_parameters.as_array(),
+        0.1,
+        0.2,
+        0.3,
+        0.2,
+        0.6,
+        50,
+        2,
+        4,
+        instrument.initial_values,
+    ]
+    proposal = MosaicParameters(0.15, 0.25, 0.4)
+    evaluator = NativeJointEvaluator(BiJointModel(atomic), observations, proposal, instrument)
+    for source_change in (False, True):
+        if source_change:
+            values[31] *= 1.1
+            values[33] += 0.05
+        bound, arguments, mosaic, stack = evaluator.bind(values, 2)
+        expected = np.zeros(len(observations.net_count))
+        for local, order in ((False, 2), (True, 3)):
+            part = native_physics_with(
+                bound,
+                {},
+                {"source": {"local_m0_divergence_order": None, "divergence_order": order}},
+            )
+            part = replace(part, rods=tuple(r for r in part.rods if (r.h == r.k == 0) == local))
+            response = part.detector(mosaic=proposal, **arguments).compile_native_response(
+                observations.projection
+            )
+            expected += response.evaluate(mosaic=mosaic, specular_stitch_stack=stack)
+        np.testing.assert_allclose(evaluator.predict(values, 2), expected, rtol=3e-13, atol=0)
+        assert evaluator.compile_count == (4 if source_change else 2)
+        with pytest.raises(ValueError, match="integration_parts"):
+            bound.detector(mosaic=proposal, **arguments)
+    values[35] -= 0.03
+    evaluator.predict(values, 2)
+    assert evaluator.compile_count == 4
+    same = replace(physics.source_definition, local_m0_divergence_order=2)
+    equal = replace(physics, source_definition=same)
+    assert equal.integration_parts()[0] is equal
+    default = replace(equal, source_definition=replace(same, local_m0_divergence_order=None))
+    for candidate in (equal, default):
+        ev = NativeJointEvaluator(
+            BiJointModel(BiNativeStructureModel(candidate)),
+            observations,
+            proposal,
+            NativeInstrumentModel(candidate, "raw"),
+        )
+        raw = ev.predict(values, 2)
+        if candidate is equal:
+            equal_raw = raw
+        else:
+            np.testing.assert_array_equal(raw, equal_raw)
+    with pytest.raises(ValueError, match="local_m0_divergence_order"):
+        replace(same, local_m0_divergence_order=True)
+    with pytest.raises(ValueError, match="Gauss-Hermite"):
+        replace(same, kind="latin_hypercube")
+
 
 def test_render_recovery_preserves_proposal_roughness_scale_and_candidate_status(
     tmp_path, monkeypatch
 ):
     physics_path, observation_path = experiment(tmp_path / "inputs")
     physics = load_native_fit_physics(physics_path)
+    source_override = dict(
+        kind="gauss_hermite", divergence_order=2, wavelength_order=1, local_m0_divergence_order=3
+    )
+    physics = native_physics_with(physics, {"source_override": source_override}, {})
     observations = load_native_fit_observations(observation_path)
     atomic = BiNativeStructureModel(physics)
     values = np.r_[atomic.reference_parameters.as_array(), 0.1, 0.2, 0.3, 0.2, 0.6, 50, 2, 4]
     proposal = MosaicParameters(0.15, 0.25, 0.4)
     evaluator = NativeJointEvaluator(BiJointModel(atomic), observations, proposal)
     plan = dict(
+        source_override=source_override,
         fit_instrument=False,
         workers=1,
         acquisition_id="raw",
@@ -325,7 +504,7 @@ def test_render_recovery_preserves_proposal_roughness_scale_and_candidate_status
 
     def interrupted(self, **kwargs):
         for index, pixels in enumerate(original(self, **kwargs)):
-            if index == 1:
+            if index == 1 and all(r.h == r.k == 0 for r in self.rods):
                 raise RuntimeError("simulated interrupted render")
             yield pixels
 
@@ -335,7 +514,9 @@ def test_render_recovery_preserves_proposal_roughness_scale_and_candidate_status
             render(physics_path, observation_path, result, output, **options)
     with np.load(output, allow_pickle=False) as data:
         saved = json.loads(data["manifest_json"].tobytes())
-        assert saved["completed_batches"] == 1 and not saved["complete"]
+        assert saved["partition_finished"] == [True, False] and not saved["complete"]
+        assert saved["partition_completed_batches"][1] == 1
+        assert saved["completed_batches"] == sum(saved["partition_completed_batches"])
     render(physics_path, observation_path, result, output, resume=True, **options)
     direct = tmp_path / "direct.ra_diag.npz"
     render(physics_path, observation_path, result, direct, **options)

@@ -63,9 +63,13 @@ def render(
     evaluator = make_native_evaluator(physics, observations, plan)
     values, n, scale = np.asarray(point["parameters"]), point["N"], point["scale"]
     bound, arguments, mosaic, stack = evaluator.bind(values, n)
-    detector = bound.detector(mosaic=mosaic, **arguments)
-    detector = replace(
-        detector, specular_stitch_stack=stack, proposal_mosaic=evaluator.proposal_mosaic
+    detectors = tuple(
+        replace(
+            part.detector(mosaic=mosaic, **arguments),
+            specular_stitch_stack=stack,
+            proposal_mosaic=evaluator.proposal_mosaic,
+        )
+        for part in bound.integration_parts()
     )
     if not np.isfinite(checkpoint_seconds) or checkpoint_seconds <= 0:
         raise ValueError("render checkpoint interval must be positive")
@@ -88,10 +92,13 @@ def render(
         observation_input_revision=observations.input_revision,
         status="unqualified_optimizer_candidate" if candidate else "selected_fit",
         candidate=point,
-        detector_revision=detector.fixed_physics_revision,
+        detector_revision=detectors[0].fixed_physics_revision,
+        detector_partition_revisions=[d.fixed_physics_revision for d in detectors],
         full_image=full_image,
         implementation=implementation,
         completed_batches=0,
+        partition_completed_batches=[0] * len(detectors),
+        partition_finished=[False] * len(detectors),
         fit_numerical_status=result["numerical_status"],
         image_numerical_status="not_qualified",
         target_kind="synthetic" if "synthetic" in plan else "measured",
@@ -108,7 +115,7 @@ def render(
         raise ValueError(
             "current renderer does not reproduce the saved candidate region prediction"
         )
-    rows, columns = detector.detector_shape_rc
+    rows, columns = detectors[0].detector_shape_rc
     if full_image:
         arrays.update(simulated_detector_native_count=np.zeros((rows, columns)))
     if resume:
@@ -123,6 +130,7 @@ def render(
             for name in (
                 "result_sha256",
                 "detector_revision",
+                "detector_partition_revisions",
                 "status",
                 "full_image",
                 "implementation",
@@ -145,6 +153,22 @@ def render(
                             "render checkpoint pixels must be finite nonnegative counts"
                         )
                 manifest["completed_batches"] = old["completed_batches"]
+                counts, finished = (
+                    old.get("partition_completed_batches"),
+                    old.get("partition_finished"),
+                )
+                if (
+                    not isinstance(counts, list)
+                    or not isinstance(finished, list)
+                    or len(counts) != len(detectors)
+                    or len(finished) != len(detectors)
+                    or any(type(c) is not int or c < 0 for c in counts)
+                    or any(type(done) is not bool for done in finished)
+                    or sum(counts) != old["completed_batches"]
+                ):
+                    raise ValueError("invalid native render partition checkpoint")
+                manifest["partition_completed_batches"] = counts
+                manifest["partition_finished"] = finished
     elif output.exists():
         raise ValueError("render output exists; use resume or another path")
     root = Path(__file__).resolve().parents[1]
@@ -156,16 +180,25 @@ def render(
 
     save()
     if full_image:
-        first = manifest["completed_batches"]
-        for i, contribution in enumerate(
-            detector.iter_native_pixel_batches(batch_offset=first), start=first
-        ):
-            arrays["simulated_detector_native_count"] += scale * contribution
-            manifest["completed_batches"] = i + 1
-            if perf_counter() - last_checkpoint >= checkpoint_seconds:
-                save()
-                print(json.dumps(dict(completed_batches=i + 1)), flush=True)
-                last_checkpoint = perf_counter()
+        for part, detector in enumerate(detectors):
+            if manifest["partition_finished"][part]:
+                continue
+            first = manifest["partition_completed_batches"][part]
+            for i, contribution in enumerate(
+                detector.iter_native_pixel_batches(batch_offset=first), start=first
+            ):
+                arrays["simulated_detector_native_count"] += scale * contribution
+                manifest["completed_batches"] += 1
+                manifest["partition_completed_batches"][part] = i + 1
+                if perf_counter() - last_checkpoint >= checkpoint_seconds:
+                    save()
+                    print(
+                        json.dumps(dict(completed_batches=manifest["completed_batches"])),
+                        flush=True,
+                    )
+                    last_checkpoint = perf_counter()
+            manifest["partition_finished"][part] = True
+            save()
     # An interruption between array accumulation and its counter must never
     # publish partial state. Recovery uses the last consistent atomic checkpoint.
     manifest["complete"] = True

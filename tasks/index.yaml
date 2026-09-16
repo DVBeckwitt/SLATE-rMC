@@ -164,6 +164,6 @@ tasks:
     depends_on: [T33]
   - id: T35
     file: tasks/35_qualified_bi_fit.md
-    branch: codex/qualified-bi-fit
-    status: IMPLEMENTED_MATCHED_RUNNER_BOUNDARY_MEASURED_NUMERICS_UNQUALIFIED
+    branch: codex/simulator-freeze-20260916
+    status: FROZEN_SOFTWARE_BASELINE_MATCH_FITS_UNQUALIFIED_DEFERRED
     depends_on: [T34]

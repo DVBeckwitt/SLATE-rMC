@@ -10,12 +10,13 @@ import json
 import platform
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from time import perf_counter
 
 import numpy as np
 
+from rasim_next.fitting.native_acceleration import reference_corrected_start
 from rasim_next.fitting.native_accuracy import (
     compare_conditional_predictions,
     compare_native_predictions,
@@ -40,6 +41,7 @@ from rasim_next.fitting.native_workflow import (
     make_native_evaluator,
     native_physics_with,
     native_prediction_group,
+    prepare_native_axial_meshes,
 )
 from rasim_next.pipeline.detector_revisions import _instrument_revision
 from rasim_next.proof.diagnostics import write_diagnostic
@@ -67,12 +69,40 @@ def _point_record(point):
     )
 
 
+def _implementation_record():
+    root = Path(__file__).resolve().parents[1]
+    return dict(
+        source_hash_scope="startup filesystem snapshot; not loaded-bytecode attestation",
+        git_commit=subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip(),
+        git_worktree_status=subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=root, text=True
+        ),
+        source_sha256={
+            str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted((root / "src").rglob("*.py"))
+        },
+        runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        python=platform.python_version(),
+        dependencies={
+            name: importlib.metadata.version(name)
+            for name in ("numpy", "scipy", "numba", "gemmi", "xraydb")
+        },
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--physics", type=Path, required=True)
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--prepare-axial-mesh",
+        action="store_true",
+        help="Prepare an error-adapted frozen mesh; do not run a fit",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -201,6 +231,55 @@ def main():
             c_bounds_A=(parameters[1].lower, parameters[1].upper),
         )
     start_time = perf_counter()
+    if args.prepare_axial_mesh:
+        if args.resume or args.output.exists():
+            raise ValueError("mesh preparation requires a new diagnostic output")
+        if "synthetic" in plan:
+            raise ValueError(
+                "mesh preparation requires measured observations, not a synthetic fit plan"
+            )
+        specification = plan["axial_adaptation"]
+        target = training_observations(observations, mask) if training is not None else observations
+        rule, report = prepare_native_axial_meshes(
+            physics,
+            target,
+            plan,
+            specification["initial_meshes"],
+            fixed_scale=specification["fixed_scale"],
+            maximum_panels=specification.get("maximum_panels", 2048),
+            maximum_passes=specification.get("maximum_passes", 12),
+        )
+        reference, refined = report.pop("reference"), report.pop("refined")
+        report["comparison"] = {
+            name: value.tolist() if isinstance(value, np.ndarray) else value
+            for name, value in report["comparison"].items()
+        }
+        write_diagnostic(
+            args.output,
+            arrays=dict(
+                reference=reference,
+                refined=refined,
+                qualification_candidates=np.asarray(plan["qualification_candidates"]),
+            ),
+            manifest=dict(
+                schema="rasim-native-axial-mesh-v1",
+                implementation=_implementation_record(),
+                plan=plan,
+                physics_input_revision=original.input_revision,
+                observation_input_revision=observations.input_revision,
+                plan_sha256=hashlib.sha256(plan_bytes).hexdigest(),
+                integration_override=asdict(rule),
+                report=report,
+                elapsed_seconds=perf_counter() - start_time,
+                acceptance="empirical_mesh_agreement_only",
+            ),
+            repository_root=Path(__file__).resolve().parents[1],
+        )
+        print(
+            json.dumps(dict(output=str(args.output), execution_status="axial_mesh_prepared")),
+            flush=True,
+        )
+        return
     arrays, history = {}, []
     manifest = dict(
         schema="rasim-native-refinement-result-v2",
@@ -215,31 +294,7 @@ def main():
         acceptance="candidate_only",
         fit_scope="fixed_parameter_control" if fixed_parameters else "all_admitted_coordinates",
         fixed_parameters=fixed_parameters,
-        implementation=dict(
-            source_hash_scope="startup filesystem snapshot; not loaded-bytecode attestation",
-            git_commit=subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=Path(__file__).resolve().parents[1],
-                text=True,
-            ).strip(),
-            git_worktree_status=subprocess.check_output(
-                ["git", "status", "--porcelain"],
-                cwd=Path(__file__).resolve().parents[1],
-                text=True,
-            ),
-            source_sha256={
-                str(p.relative_to(Path(__file__).resolve().parents[1])): hashlib.sha256(
-                    p.read_bytes()
-                ).hexdigest()
-                for p in sorted((Path(__file__).resolve().parents[1] / "src").rglob("*.py"))
-            },
-            runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            python=platform.python_version(),
-            dependencies={
-                name: importlib.metadata.version(name)
-                for name in ("numpy", "scipy", "numba", "gemmi", "xraydb")
-            },
-        ),
+        implementation=_implementation_record(),
         model="finite detector-native Bi/Pb with composition-derived optics",
         numerical_checks=[],
         fits=[],
@@ -437,6 +492,8 @@ def main():
                     refined_physics.integration_rule == physics.integration_rule
                     and refined_physics.spatial_quadrature_order == physics.spatial_quadrature_order
                     and refined_physics.source.revision == physics.source.revision
+                    and refined_physics.source_definition.local_m0_divergence_order
+                    == physics.source_definition.local_m0_divergence_order
                 ):
                     raise ValueError("a numerical check must change an effective integration rule")
                 refined_evaluator = make_native_evaluator(refined_physics, observations, plan)
@@ -452,24 +509,31 @@ def main():
                 for candidate in candidates:
                     trial_physics, _, _, _ = refined_evaluator.bind(candidate, n)
                     low_physics, _, _, _ = evaluator.bind(candidate, n)
-                    high_source, low_source = trial_physics.source, low_physics.source
+                    high_parts, low_parts = (
+                        trial_physics.integration_parts(),
+                        low_physics.integration_parts(),
+                    )
                     effective_change = (
                         effective_change
+                        or len(high_parts) != len(low_parts)
                         or any(
-                            not np.array_equal(
-                                getattr(high_source.mean_rays, field),
-                                getattr(low_source.mean_rays, field),
+                            any(
+                                not np.array_equal(
+                                    getattr(high.source.mean_rays, field),
+                                    getattr(low.source.mean_rays, field),
+                                )
+                                for field in (
+                                    "origin_lab_m",
+                                    "direction_lab",
+                                    "wavelength_A",
+                                    "source_weight",
+                                )
                             )
-                            for field in (
-                                "origin_lab_m",
-                                "direction_lab",
-                                "wavelength_A",
-                                "source_weight",
+                            or not np.array_equal(
+                                high.source.conditional_origin_factor_lab_m,
+                                low.source.conditional_origin_factor_lab_m,
                             )
-                        )
-                        or not np.array_equal(
-                            high_source.conditional_origin_factor_lab_m,
-                            low_source.conditional_origin_factor_lab_m,
+                            for high, low in zip(high_parts, low_parts, strict=False)
                         )
                     )
                     validate_native_rod_coverage(
@@ -515,6 +579,16 @@ def main():
                         empirical_agreement=comparison["empirical_agreement"],
                         compile_count=refined_evaluator.compile_count,
                         compile_seconds=refined_evaluator.compile_seconds,
+                        source_partitions_candidate_index=len(candidates) - 1,
+                        source_partitions=[
+                            dict(
+                                rods=[(r.h, r.k, r.population) for r in p.rods],
+                                divergence_order=p.source_definition.divergence_order,
+                                row_count=len(p.source.mean_rays.wavelength_A),
+                                source_revision=p.source.revision,
+                            )
+                            for p in trial_physics.integration_parts()
+                        ],
                     )
                 )
                 agreement = agreement and comparison["empirical_agreement"]
@@ -622,6 +696,57 @@ def main():
                     for i, name in enumerate(names)
                     if name not in active
                 }
+                correction = stage.get("reference_correction")
+                if correction is not None:
+                    low_physics = native_physics_with(
+                        original, plan, correction["numerical_override"]
+                    )
+                    low_evaluator = make_native_evaluator(low_physics, observations, plan)
+                    warm, evidence = reference_corrected_start(
+                        lambda v, n=n: predict(v, n),
+                        lambda v, n=n, low=low_evaluator: low.predict(v, n),
+                        target_observations,
+                        parameters,
+                        warm_starts[0],
+                        trust_radii=correction["trust_radii"],
+                        numerical_tolerances=plan["numerical_tolerances"],
+                        maximum_updates=correction.get("maximum_updates", 2),
+                        fixed_values=fixed,
+                        calibration=calibration,
+                        method=stage.get(
+                            "method",
+                            plan.get(
+                                "method", "slsqp" if stage["enforce_historical_guards"] else "trf"
+                            ),
+                        ),
+                        maximum_iterations=stage["maximum_iterations"],
+                        maximum_function_evaluations=correction.get(
+                            "maximum_function_evaluations", 30
+                        ),
+                        finite_difference_step=plan["finite_difference_step"],
+                        enforce_historical_guards=stage["enforce_historical_guards"],
+                    )
+                    for record in evidence:
+                        if "comparison" in record:
+                            record["comparison"] = {
+                                name: value.tolist() if isinstance(value, np.ndarray) else value
+                                for name, value in record["comparison"].items()
+                            }
+                    manifest.setdefault("reference_acceleration", []).append(
+                        dict(
+                            N=n,
+                            stage=stage["name"],
+                            numerical_override=correction["numerical_override"],
+                            records=evidence,
+                            low_compile_count=low_evaluator.compile_count,
+                            low_compile_seconds=low_evaluator.compile_seconds,
+                            low_evaluation_count=low_evaluator.evaluation_count,
+                            acceptance="exact_checked_warm_start_only",
+                        )
+                    )
+                    low_evaluator.clear_responses()
+                    warm_starts = np.vstack([warm, warm_starts])
+                    save()
                 result = fit_native_parameters(
                     lambda v, n=n: predict(v, n),
                     target_observations,
@@ -784,6 +909,16 @@ def main():
             ),
             source_rule=bound.source_definition.kind,
             source_row_count=len(bound.source.mean_rays.wavelength_A),
+            integration_parts=[
+                dict(
+                    rods=[(r.h, r.k, r.population) for r in p.rods],
+                    source_revision=p.source.revision,
+                    material_revision=p.material.material_revision,
+                    divergence_order=p.source_definition.divergence_order,
+                    source_row_count=len(p.source.mean_rays.wavelength_A),
+                )
+                for p in bound.integration_parts()
+            ],
         )
         if plan.get("controls"):
             manifest["background_controls"] = []
@@ -798,16 +933,18 @@ def main():
                 )
             for label, values, n, scale in cases:
                 bound, arguments, mosaic, stack = evaluator.bind(values, n)
-                detector = bound.detector(mosaic=evaluator.proposal_mosaic, **arguments)
                 for i, control in enumerate(controls):
-                    response = detector.compile_native_response(
-                        control.projection, worker_count=plan["workers"]
-                    )
-                    signal = scale * response.evaluate(
-                        mosaic=mosaic,
-                        thickness_A=arguments["film_thickness_A"],
-                        specular_stitch_stack=stack,
-                    )
+                    signal = np.zeros(control.projection.observation_count)
+                    for part in bound.integration_parts():
+                        detector = part.detector(mosaic=evaluator.proposal_mosaic, **arguments)
+                        response = detector.compile_native_response(
+                            control.projection, worker_count=plan["workers"]
+                        )
+                        signal += scale * response.evaluate(
+                            mosaic=mosaic,
+                            thickness_A=arguments["film_thickness_A"],
+                            specular_stitch_stack=stack,
+                        )
                     diagnostic = control.signal_diagnostic(signal)
                     arrays[f"control_{label}_{i}_signal_count"] = signal
                     arrays[f"control_{label}_{i}_split"] = control.split

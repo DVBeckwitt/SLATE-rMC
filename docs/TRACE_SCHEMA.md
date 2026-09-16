@@ -297,3 +297,13 @@ Profile records map numerical candidates to sorted grid indices and preserve bet
 admissible points requiring a joint refit. Failed initial qualification checkpoints
 `workflow_complete=false`; execution-only results cannot inherit scientific qualification.
 Source hashes attest the startup filesystem snapshot, not loaded bytecode.
+
+Optional `rasim-native-axial-mesh-v1` preparation diagnostics retain the complete
+plan, acquisition/physics/observation/source identities, fixed scale, one-N stencil,
+prepared physical meshes, parent/refined predictions, comparison results and build
+costs. Acceptance is only `empirical_mesh_agreement_only`. Normal native result v2
+may retain `reference_acceleration` records: fixed high/low rules, reference/candidate
+vectors, exact objective checks, rejection/fallback evidence and low-rule work counts.
+These are proposal records (`exact_checked_warm_start_only`), never exact prediction
+cache entries or selected estimates. Numeric comparison vectors may appear as JSON
+lists in these compact manifests. No new physical trace stage/version is introduced.
