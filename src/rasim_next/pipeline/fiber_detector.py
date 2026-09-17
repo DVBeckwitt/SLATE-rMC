@@ -772,7 +772,9 @@ def _axial_mixture_quantiles(quantiles, lower, upper, centers, width, weights, u
     for i in range(len(quantiles)):
         lo, hi = lower, upper
         v = lo + (hi - lo) * quantiles[i]
-        for _iteration in range(70):
+        # Newton can stagnate near opposite bracket edges in a narrow mixture.
+        # Keep its fast path, then guarantee contraction with bounded bisection.
+        for _iteration in range(150):
             cdf = uniform_mass * (v - lower) / (upper - lower)
             density = uniform_mass / (upper - lower)
             for j in range(len(centers)):
@@ -785,14 +787,18 @@ def _axial_mixture_quantiles(quantiles, lower, upper, centers, width, weights, u
                     (1 - uniform_mass) * weights[j] * width / (delta * delta + width * width) / z[j]
                 )
             error = cdf - quantiles[i]
+            if not np.isfinite(error) or not np.isfinite(density) or density <= 0:
+                raise ValueError("axial inverse CDF requires a finite positive density")
             if abs(error) < 2e-15 or hi - lo < 2e-14 * max(1.0, upper - lower):
                 break
             if error > 0:
                 hi = v
             else:
                 lo = v
-            proposed = v - error / density
+            proposed = v - error / density if _iteration < 70 else 0.5 * (lo + hi)
             v = proposed if lo < proposed < hi else 0.5 * (lo + hi)
+        else:
+            raise ValueError("axial inverse CDF did not converge within its iteration budget")
         x[i] = v
         pdf[i] = density
     return x, pdf

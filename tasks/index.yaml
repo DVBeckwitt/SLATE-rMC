@@ -172,3 +172,8 @@ tasks:
     branch: codex/b4-projection-20260916
     status: READY_PROJECTION_MATCH_FULL_FITS_UNQUALIFIED
     depends_on: [T35]
+  - id: T37
+    file: tasks/37_axial_cdf_repair.md
+    branch: codex/axial-cdf-repair-20260917
+    status: READY_AXIAL_CDF_REPAIR_FULL_FITS_UNQUALIFIED
+    depends_on: [T36]

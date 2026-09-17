@@ -9570,6 +9570,31 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrat
             2 * np.pi * np.sqrt(2 * np.pi) * 0.008, rel=1e-7
         )
         assert np.max(np.diff(refined.positive_axial_Ainv)) < 0.02
+        # A multimodal proposal can stall Newton inversion between narrow peaks.
+        # Public coordinates and weights must still integrate the physical measure.
+        upper = 4.5671527086186625
+        multimodal = sample_conditional_fiber_coordinates(
+            **(
+                arguments
+                | {
+                    "axial_bounds_Ainv": (0.0, upper),
+                    "axial_peak_centers_Ainv": np.arange(31) * 0.14984081974178634,
+                    "axial_peak_half_width_Ainv": 0.009772227374464327,
+                    "ki_sample_Ainv": [0, 0, -3],
+                    "source_region_bounds": [[0, 6, 0, 2 * np.pi]],
+                    "axial_power": 3,
+                    "angular_power": 4,
+                    "maximum_axial_panel_width_Ainv": 0.02,
+                    "angular_support": "fixed_union",
+                }
+            )
+        )
+        spacing = np.diff(multimodal.positive_axial_Ainv)
+        assert np.all(spacing > 0)
+        assert np.max(spacing) < 0.02
+        t = multimodal.positive_axial_Ainv[multimodal.axial_index]
+        assert multimodal.weight_Ainv_rad.sum() == pytest.approx(2 * np.pi * upper, rel=1e-7)
+        assert multimodal.weight_Ainv_rad @ t == pytest.approx(np.pi * upper**2, rel=1e-7)
         split = sample_conditional_fiber_coordinates(
             **(
                 arguments
