@@ -1,5 +1,5 @@
 {
-  "file_count": 378,
+  "file_count": 379,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -1273,8 +1273,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_spatial.py",
-      "sha256": "b17c77a08d4bff871e7b80c56ea85c176d2ad3ae0647428c2740d725a7c0b7d7",
-      "size_bytes": 33312
+      "sha256": "0b7c4906778168d971e14009ca0b11edc46bb509d6a6d300070c30e69f53292d",
+      "size_bytes": 36141
     },
     {
       "path": "src/rasim_next/proof/__init__.py",
@@ -1587,6 +1587,11 @@
       "size_bytes": 24219
     },
     {
+      "path": "tasks/36_b4_projection.md",
+      "sha256": "d91468a37fcb1bd84e4a745bd4ca2cbb98190003c6f08dfe23e05733e9f3542c",
+      "size_bytes": 9611
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1628,8 +1633,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "ffe17d322ab2c1788209899c80ba3b051b930becfafa5da99738e0fd72ea2690",
-      "size_bytes": 5593
+      "sha256": "88b163bbe3d05aea2453589345286bb40fe8111ba17a0112b409eae599443131",
+      "size_bytes": 5761
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1853,8 +1858,8 @@
     },
     {
       "path": "tests/test_source_spatial.py",
-      "sha256": "f37be309086308c3f5a76acb1f36443436fa17ea3c2bb84c2c4308949344b0ce",
-      "size_bytes": 54730
+      "sha256": "89db022cfb2414508cdde33eaf71a5172cf71ac77cfd12a89e38cec406609f1d",
+      "size_bytes": 54885
     },
     {
       "path": "tests/test_stacking_transition.py",

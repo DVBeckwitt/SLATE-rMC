@@ -167,3 +167,8 @@ tasks:
     branch: codex/simulator-freeze-20260916
     status: FROZEN_SOFTWARE_BASELINE_MATCH_FITS_UNQUALIFIED_DEFERRED
     depends_on: [T34]
+  - id: T36
+    file: tasks/36_b4_projection.md
+    branch: codex/b4-projection-20260916
+    status: READY_PROJECTION_MATCH_FULL_FITS_UNQUALIFIED
+    depends_on: [T35]
