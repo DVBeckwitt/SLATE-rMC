@@ -2,6 +2,10 @@
 
 The compact suite is organized by scientific boundary:
 
+- `test_dream_rsi.py`: development-workflow isolation, immutable history, prefix-only
+  replay, bounded policy execution/repair, policy selection, and global installation.
+  This exercises no numerical physics and makes no model-service calls.
+
 - `test_core_coordinates.py`: units, frames, immutable source/incident contracts, transforms, and
   external diagnostics.
 - `test_geometry_optics.py`: canonical geometry, detector rays/tilts, refraction, attenuation, and

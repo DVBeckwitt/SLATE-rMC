@@ -1,5 +1,5 @@
 {
-  "file_count": 377,
+  "file_count": 389,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -23,8 +23,8 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "7e6775dfd02daae23291811a636a41a279c32a196a58e538606d16e58a97bd72",
-      "size_bytes": 12334
+      "sha256": "4579360bd7670804927d05a2aee8f6ec15cb383dd05d5e8203b58aef3a7fca57",
+      "size_bytes": 13057
     },
     {
       "path": "PLANS.md",
@@ -82,6 +82,11 @@
       "size_bytes": 2742
     },
     {
+      "path": "configs/dream_rsi.json",
+      "sha256": "000a1df4445d507144d0dcf64eb7e0e2df59e7a830e410932e8f0fea8151ba76",
+      "size_bytes": 2183
+    },
+    {
       "path": "configs/native_experiments.json",
       "sha256": "8010c8ed82ed2d1f6af01086b834b442b557b2f07d963f4109fdbd042f72c4ce",
       "size_bytes": 2672
@@ -120,6 +125,11 @@
       "path": "docs/DOVETAIL_MATRIX.md",
       "sha256": "8adf18135f541b9a64637d8d5c7d9ae442868fe709284dbb11ab0a073a41a74e",
       "size_bytes": 17341
+    },
+    {
+      "path": "docs/DREAM_RSI.md",
+      "sha256": "212fa13ef7f24ff3c89255f673bc85e31b0a37563c598ce8542a224ffc904e86",
+      "size_bytes": 6529
     },
     {
       "path": "docs/ERROR_INJECTION.md",
@@ -1607,6 +1617,11 @@
       "size_bytes": 26592
     },
     {
+      "path": "tasks/dream_rsi_workflow.md",
+      "sha256": "2ea0da9c81c1887c5b3d244bcc02dd15146a3eca20bff32ceebc68408a7cb0fb",
+      "size_bytes": 2964
+    },
+    {
       "path": "tasks/hbn_ring_fitter_plan.md",
       "sha256": "9f353b8909168c09006c0d48f0efa871af8633e61c36d7fe9873701c2fb5a79d",
       "size_bytes": 24189
@@ -1728,8 +1743,8 @@
     },
     {
       "path": "tests/README.md",
-      "sha256": "f0a7b5c2d0500e6bf6c2a176ce14af285972fe79870e1980988b5dc39388ae73",
-      "size_bytes": 2888
+      "sha256": "585e3ec293c682db158318cca2e7f0c846588173a13e257c37d21823e9c6e5b9",
+      "size_bytes": 3133
     },
     {
       "path": "tests/test_beam_position.py",
@@ -1750,6 +1765,11 @@
       "path": "tests/test_detector_horizon_acceptance.py",
       "sha256": "1040c7e1a5876193ea09381de789431193db1d270e16112b4d97a8588a1cf64b",
       "size_bytes": 634
+    },
+    {
+      "path": "tests/test_dream_rsi.py",
+      "sha256": "697dd8a1ac6808a9efa9ac1d15e5de44b434213d158872c5823b94de9e844c2c",
+      "size_bytes": 11902
     },
     {
       "path": "tests/test_ewald_sphere_viewer.py",
@@ -1865,6 +1885,46 @@
       "path": "tools/check_docs.py",
       "sha256": "6dae4a8e609521b8722369e7c099b20cf7148865cbf5597783962886718ba40b",
       "size_bytes": 3685
+    },
+    {
+      "path": "tools/dream-rsi/SKILL.md",
+      "sha256": "57b41e4c6578bf73f83cabfab1a2c1516ef113f78ec34bbe2d0135413c0336c7",
+      "size_bytes": 8021
+    },
+    {
+      "path": "tools/dream-rsi/scripts/dream_rsi.py",
+      "sha256": "5d4d8e3f57612edbe4f4077ede85ac5834f22d72c2c70307dc94559f691b3beb",
+      "size_bytes": 9088
+    },
+    {
+      "path": "tools/dream-rsi/scripts/install.py",
+      "sha256": "eb57c1045322530a2c814ac1b30e0898e107309371739022b79361f3d189cc6e",
+      "size_bytes": 3957
+    },
+    {
+      "path": "tools/dream-rsi/scripts/policy.py",
+      "sha256": "f67c904a9f25ded6ca81c229383d8acd7050cdddccc15464db8da76d7cf6035c",
+      "size_bytes": 2246
+    },
+    {
+      "path": "tools/dream-rsi/scripts/rsi_improve.py",
+      "sha256": "6077916db315c72d3494860251935f418135abe81f9868707dd08b57b934cbb5",
+      "size_bytes": 9140
+    },
+    {
+      "path": "tools/dream-rsi/scripts/rsi_policy.py",
+      "sha256": "b78ec1066e227349e2505c7e3064e794879b6694e656b1fcb84f01d9aea68433",
+      "size_bytes": 7034
+    },
+    {
+      "path": "tools/dream-rsi/scripts/rsi_run.py",
+      "sha256": "031360a15b51f4ddd37ae26cc811884edefeda3ab681db75a9ec6a4fb7fd15ea",
+      "size_bytes": 23044
+    },
+    {
+      "path": "tools/dream-rsi/scripts/rsi_state.py",
+      "sha256": "895bb8fda5deb53312b01ef523d0bce5b5d214c1d1bd725eda627fdd43b1ee98",
+      "size_bytes": 9109
     },
     {
       "path": "tools/video_ai/Install_Video_AI.bat",

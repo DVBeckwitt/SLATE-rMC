@@ -142,6 +142,17 @@ sufficient proof.
   Detector solid angle is excluded from the raw image and applies only in an explicitly requested
   later analysis correction.
 
+## Automatic discovery workflow
+
+Use the personal `dream-rsi` skill automatically for substantial iterative work:
+consult relevant recorded attempts, retain measured failures and successes, and run
+bounded discovery/replay/policy improvement when a repeatable evaluator and competing
+approaches justify search. The user does not need to request this workflow separately.
+Follow [docs/DREAM_RSI.md](docs/DREAM_RSI.md) and narrow the project adapter to the task.
+Keep one coding writer, protected scientific evidence and tolerances, and all generated
+history outside the repository. Ordinary direct edits need no search episode. Prompts
+marked `DREAM_RSI_WORKER` perform only their assigned attempt without nested searches.
+
 ## Worktree isolation
 
 T02--T05 were created from one clean `PROOF_BASE_SHA`, reviewed, merged into `main` at
