@@ -472,3 +472,12 @@ screen never qualifies a physical fit or automatically enables a new physical te
 - Accept a failed initial screen, unresolved N, or an admissible profile minimum below
   the same N's joint fit: runner acceptance must remain null. An execution-only override
   cannot grant numerical agreement or physical identification.
+
+T35 numerical-acceleration regressions additionally reject truncated/overlapping
+physical meshes, metadata-only mesh refinement, multi-N preparation without separate
+centers, and fixed-control drift. Omitting physical panel widths fails the independent
+nonseparable integral; assigning local-m0 phase Q instead of external Q to panels
+fails raw panel/native-vector conservation. A changing coarse-model bias must fail
+exact proposal acceptance; zeros cannot be repaired by clipping or ratio division.
+Conjugating anomalous species factors or equating opposite intensities fails direct
+signed atom/repeat enumeration with anisotropic cross terms and lifted surface sites.

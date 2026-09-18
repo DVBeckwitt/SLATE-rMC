@@ -54,6 +54,24 @@ from rasim_next.sampling.source import ConditionalSourceSamples
 FloatArray = NDArray[np.float64]
 
 
+def native_projection_bounds_px(
+    projection: NativePixelRegionProjection, detector_shape_rc: tuple[int, int]
+) -> FloatArray:
+    """Return finite native rectangle bounds owned by an observation projection."""
+    if projection.detector_shape_rc != detector_shape_rc:
+        raise ValueError("native projection uses a different detector")
+    owner = projection.observation_row
+    row, column = np.divmod(
+        projection.flat_pixel_index[projection.pixel_column_index], detector_shape_rc[1]
+    )
+    low = np.full((projection.observation_count, 2), np.inf)
+    high = -low.copy()
+    np.minimum.at(low, owner, np.column_stack((column, row)) - 0.5)
+    np.maximum.at(high, owner, np.column_stack((column, row)) + 0.5)
+    bounds = np.column_stack((low[:, 0], high[:, 0], low[:, 1], high[:, 1]))
+    return bounds[np.all(np.isfinite(bounds), axis=1)]
+
+
 def _frozen(value: ArrayLike, *, integer: bool = False) -> np.ndarray:
     reject_complex(value, "fiber response array")
     supplied = np.asarray(value)
@@ -373,6 +391,7 @@ class NativeFiberResponse:
         mosaic_cache: NativeMosaicCache | None = None,
         cone_quadrature_order: int | None = None,
         source_weights: FloatArray | None = None,
+        resolve_axial_panels: bool = False,
     ) -> FloatArray:
         """Return raw integrated A² per native observation, with one shared scale owner."""
         detector = self.detector
@@ -417,7 +436,15 @@ class NativeFiberResponse:
             components = mosaic_cache.components(density, order)
         envelope = detector.intensity_envelope if intensity_envelope is None else intensity_envelope
         tables = [detector._strength_table(grid, model, thickness) for grid in self.grids]
-        result = np.zeros(len(self.observation_measure_px2))
+        meshes = detector.integration_rule.axial_meshes
+        panel_offsets = np.cumsum([0, *(len(m.edges_Ainv) - 1 for m in meshes)])
+        if resolve_axial_panels and not meshes:
+            raise ValueError("panel contributions require explicit axial meshes")
+        result = np.zeros(
+            (int(panel_offsets[-1]), len(self.observation_measure_px2))
+            if resolve_axial_panels
+            else len(self.observation_measure_px2)
+        )
         for i, (node, probability) in enumerate(
             zip(self.nodes, self.region_probability, strict=True)
         ):
@@ -442,7 +469,33 @@ class NativeFiberResponse:
                 order,
                 cone_density,
             )
-            result += mass @ probability
+            if resolve_axial_panels:
+                grid = self.grids[node.grid_index]
+                key = tuple(sorted((r.h, r.k) for r in grid.rods))
+                matches = [j for j, mesh in enumerate(meshes) if mesh.rods_hk == key]
+                if len(matches) != 1:
+                    raise ValueError("every strength grid requires one explicit axial mesh")
+                j = matches[0]
+                coordinate = (
+                    grid.positive_axial_Ainv
+                    if grid.external_q_Ainv is None
+                    else grid.external_q_Ainv
+                )
+                panel = (
+                    np.searchsorted(
+                        meshes[j].edges_Ainv, coordinate[node.axial_index], side="right"
+                    )
+                    - 1
+                )
+                if np.any(panel < 0) or np.any(panel >= len(meshes[j].edges_Ainv) - 1):
+                    raise ValueError("axial mesh does not enclose retained response nodes")
+                reduction = csr_matrix(
+                    (mass, (panel + panel_offsets[j], np.arange(len(mass)))),
+                    shape=(int(panel_offsets[-1]), len(mass)),
+                )
+                result += (reduction @ probability).toarray()
+            else:
+                result += mass @ probability
         return result
 
 
@@ -572,6 +625,24 @@ class ConditionalStructureDetector:
                 ("proposal_seed", rule.seed),
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
+                *(
+                    (f"axial_mesh_{i}_rods", np.asarray(mesh.rods_hk, dtype=np.int64))
+                    for i, mesh in enumerate(rule.axial_meshes)
+                ),
+                *(
+                    (f"axial_mesh_{i}_coordinate", mesh.coordinate)
+                    for i, mesh in enumerate(rule.axial_meshes)
+                ),
+                *(
+                    (f"axial_mesh_{i}_edges_Ainv", np.asarray(mesh.edges_Ainv))
+                    for i, mesh in enumerate(rule.axial_meshes)
+                ),
+                (
+                    "local_m0_angular_power",
+                    np.array(())
+                    if rule.local_m0_angular_power is None
+                    else np.array([rule.local_m0_angular_power]),
+                ),
                 ("frozen_ewald_bounds_Ainv_rad", np.array(rule.frozen_ewald_bounds_Ainv_rad or ())),
                 (
                     "maximum_axial_panel_width_Ainv",
@@ -789,18 +860,7 @@ class ConditionalStructureDetector:
         """Compile probabilities with bounded parallel work and fixed reduction order."""
         if type(worker_count) is not int or worker_count < 1:
             raise ValueError("worker_count must be a positive integer")
-        if projection.detector_shape_rc != self.detector_shape_rc:
-            raise ValueError("native projection uses a different detector")
-        owner = projection.observation_row
-        row, column = np.divmod(
-            projection.flat_pixel_index[projection.pixel_column_index], self.detector_shape_rc[1]
-        )
-        low = np.full((projection.observation_count, 2), np.inf)
-        high = -low.copy()
-        np.minimum.at(low, owner, np.column_stack((column, row)) - 0.5)
-        np.maximum.at(high, owner, np.column_stack((column, row)) + 0.5)
-        bounds = np.column_stack((low[:, 0], high[:, 0], low[:, 1], high[:, 1]))
-        bounds = bounds[np.all(np.isfinite(bounds), axis=1)]
+        bounds = native_projection_bounds_px(projection, self.detector_shape_rc)
         if spatial_projection is not None and (
             not isinstance(spatial_projection, NativeSpatialRegionProjection)
             or spatial_projection.projection is not projection

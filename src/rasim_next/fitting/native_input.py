@@ -203,6 +203,7 @@ class NativeSourceDefinition:
     seed: int = 0
     divergence_order: int = 6
     wavelength_order: int = 6
+    local_m0_divergence_order: int | None = None
 
     def __post_init__(self):
         for name in (
@@ -223,6 +224,14 @@ class NativeSourceDefinition:
             object.__setattr__(self, name, value)
         if self.kind not in ("gauss_hermite", "latin_hypercube"):
             raise ValueError("unrecognized conditional source integration rule")
+        if self.local_m0_divergence_order is not None and (
+            self.kind != "gauss_hermite"
+            or type(self.local_m0_divergence_order) is not int
+            or self.local_m0_divergence_order < 1
+        ):
+            raise ValueError(
+                "local_m0_divergence_order requires a positive integer and Gauss-Hermite"
+            )
 
     def sample(self):
         """Rebuild common-latent rows through the authoritative source sampler."""
@@ -279,6 +288,50 @@ class NativeFitPhysics:
         if self.structure.stacking_phases and self.specular_stitch_stack is not None:
             raise ValueError("this Pb finite-surface recipe has no reflectivity channel")
 
+    def integration_parts(self) -> tuple[NativeFitPhysics, ...]:
+        """Partition independent rods only when stitched m0 needs a different source rule.
+
+        Every part retains the same physical source distribution and uses its own
+        normalized numerical samples. Sum raw predictions before fitting a scale.
+        """
+        definition = self.source_definition
+        if (
+            definition is None
+            or definition.local_m0_divergence_order in (None, definition.divergence_order)
+            or self.specular_stitch_stack is None
+            or not any(r.h == r.k == 0 for r in self.rods)
+        ):
+            return (self,)
+        from rasim_next.materials.optics import material_optics
+
+        parts = []
+        for local in (False, True):
+            rods = tuple(r for r in self.rods if (r.h == r.k == 0) == local)
+            if not rods:
+                continue
+            rule = replace(
+                definition,
+                divergence_order=(
+                    definition.local_m0_divergence_order if local else definition.divergence_order
+                ),
+                local_m0_divergence_order=None,
+            )
+            source = rule.sample() if local else self.source
+            parts.append(
+                replace(
+                    self,
+                    rods=rods,
+                    source_definition=rule,
+                    source=source,
+                    material=(
+                        material_optics(self.structure.crystals[0], source.mean_rays.wavelength_A)
+                        if local
+                        else self.material
+                    ),
+                )
+            )
+        return tuple(parts)
+
     def detector(
         self,
         *,
@@ -289,6 +342,14 @@ class NativeFitPhysics:
         phase_fractions: tuple[float, ...],
         fault_parameters: dict[str, float],
     ) -> ConditionalStructureDetector:
+        definition = self.source_definition
+        if (
+            definition is not None
+            and definition.local_m0_divergence_order not in (None, definition.divergence_order)
+            and self.specular_stitch_stack is not None
+            and any(r.h == r.k == 0 for r in self.rods)
+        ):
+            raise ValueError("resolve integration_parts before constructing a detector")
         strength = self.structure.strength(
             coherent_repeats=coherent_repeats,
             surface_fractions=surface_fractions,

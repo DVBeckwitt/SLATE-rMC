@@ -836,8 +836,8 @@ def test_uniform_crystal_azimuth_cone_average_and_convergence() -> None:
 
     # Includes a cone touching the narrow normal peak, an offset cone, both
     # directed poles, and the broad-component isotropic limit.
-    polar = np.array([0.0, 0.6, 0.61, 1.3, np.pi / 2, np.pi])
-    cone = np.array([0.0, 0.6, 0.6, 0.2, np.pi / 2, 0.0])
+    polar = np.array([0.0, 0.6, 0.61, 1.3, np.pi / 2, np.pi - 0.01, np.pi])
+    cone = np.array([0.0, 0.6, 0.6, 0.2, np.pi / 2, 0.01, 0.0])
     for sigma, gamma in ((np.deg2rad(0.03), np.deg2rad(0.03)), (0.3, 0.6), (4.0, 4.0)):
         for eta in (0.0, 1.0, 0.37):
             law = SphericalMosaicDensity(MosaicParameters(sigma, gamma, eta))
@@ -865,6 +865,14 @@ def test_uniform_crystal_azimuth_cone_average_and_convergence() -> None:
                 for lo, hi in ((0.0, min(scale, np.pi)), (min(scale, np.pi), np.pi))
             )
             assert actual[1] == pytest.approx(oracle, rel=2e-11)
+
+    gaussian = SphericalMosaicDensity(MosaicParameters(0.01, 0.02, 0.0))
+    lorentzian = SphericalMosaicDensity(MosaicParameters(0.01, 0.02, 1.0))
+    mixture = SphericalMosaicDensity(MosaicParameters(0.01, 0.02, 0.37))
+    assert gaussian.cone_average_sr_inv(polar[-2], cone[-2]) == 0
+    assert mixture.cone_average_sr_inv(polar[-2], cone[-2]) == pytest.approx(
+        0.37 * lorentzian.cone_average_sr_inv(polar[-2], cone[-2]), rel=2e-12
+    )
 
     # A complete cone remains a unit-mass spherical distribution, including
     # the negative axial sheet. This is independent of the pointwise circle rule.

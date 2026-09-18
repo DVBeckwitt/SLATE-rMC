@@ -164,6 +164,21 @@ tasks:
     depends_on: [T33]
   - id: T35
     file: tasks/35_qualified_bi_fit.md
-    branch: codex/qualified-bi-fit
-    status: IMPLEMENTED_MATCHED_RUNNER_BOUNDARY_MEASURED_NUMERICS_UNQUALIFIED
+    branch: codex/simulator-freeze-20260916
+    status: FROZEN_SOFTWARE_BASELINE_MATCH_FITS_UNQUALIFIED_DEFERRED
     depends_on: [T34]
+  - id: T36
+    file: tasks/36_b4_projection.md
+    branch: codex/b4-projection-20260916
+    status: READY_PROJECTION_MATCH_FULL_FITS_UNQUALIFIED
+    depends_on: [T35]
+  - id: T37
+    file: tasks/37_axial_cdf_repair.md
+    branch: codex/axial-cdf-repair-20260917
+    status: READY_AXIAL_CDF_REPAIR_FULL_FITS_UNQUALIFIED
+    depends_on: [T36]
+  - id: T38
+    file: tasks/38_angular_cdf_repair.md
+    branch: codex/angular-cdf-repair-20260918
+    status: READY_ANGULAR_CDF_REPAIR_FULL_FITS_UNQUALIFIED_STOPPED
+    depends_on: [T37]

@@ -112,10 +112,48 @@ class NativeJointEvaluator:
             self._predictions.move_to_end(candidate_key)
             return self._predictions[candidate_key]
         physics, arguments, mosaic, stack = self.bind(values, coherent_repeats)
+        prediction = sum(
+            (
+                self._predict_part(part, arguments, mosaic, stack)
+                for part in physics.integration_parts()
+            ),
+            np.zeros(len(self.observations.net_count)),
+        )
+        prediction.setflags(write=False)
+        self._predictions[candidate_key] = prediction
+        while len(self._predictions) > 64:
+            self._predictions.popitem(last=False)
+        object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
+        return prediction
+
+    def predict_axial_panels(self, values, coherent_repeats):
+        """Return raw (panel, observation) contributions in declared mesh order.
+
+        This decomposition uses the ordinary response and physical contraction;
+        it is not an alternative detector model or a normalized partial signal.
+        """
+        physics, arguments, mosaic, stack = self.bind(values, coherent_repeats)
+        meshes = physics.integration_rule.axial_meshes
+        if not meshes:
+            raise ValueError("panel predictions require explicit axial meshes")
+        return sum(
+            (
+                self._predict_part(part, arguments, mosaic, stack, resolve_axial_panels=True)
+                for part in physics.integration_parts()
+            ),
+            np.zeros(
+                (sum(len(m.edges_Ainv) - 1 for m in meshes), len(self.observations.net_count))
+            ),
+        )
+
+    def _predict_part(self, physics, arguments, mosaic, stack, *, resolve_axial_panels=False):
+        """Evaluate one disjoint rod partition with its normalized source rule."""
         detector = physics.detector(mosaic=self.proposal_mosaic, **arguments)
         # Thickness changes attenuation weights, never the accepted spatial ray map.
         # This backend rejects finite footprint/external absorption at construction.
         key = (
+            physics.rods,
+            physics.integration_rule,
             physics.material.material_revision,
             physics.reciprocal_basis_Ainv.tobytes(),
             physics.source.mean_rays.origin_lab_m.tobytes(),
@@ -148,22 +186,18 @@ class NativeJointEvaluator:
             )
             object.__setattr__(self, "compile_count", self.compile_count + 1)
         self._responses[key] = cache
-        while len(self._responses) > 2:
-            self._responses.popitem(last=False)
-        prediction = cache.response.evaluate(
+        matching = [k for k in self._responses if k[0] == physics.rods]
+        for old_key in matching[:-2]:
+            del self._responses[old_key]
+        return cache.response.evaluate(
             detector.strength_model,
             mosaic=mosaic,
             thickness_A=arguments["film_thickness_A"],
             specular_stitch_stack=stack,
             mosaic_cache=cache,
             source_weights=physics.source.mean_rays.source_weight,
+            resolve_axial_panels=resolve_axial_panels,
         )
-        prediction.setflags(write=False)
-        self._predictions[candidate_key] = prediction
-        while len(self._predictions) > 64:
-            self._predictions.popitem(last=False)
-        object.__setattr__(self, "evaluation_count", self.evaluation_count + 1)
-        return prediction
 
     def clear_responses(self):
         self._responses.clear()
@@ -201,4 +235,9 @@ class NativeJointEvaluator:
     def stitch_state(self, values, coherent_repeats):
         """Surface/wavelength handoff selections and normalization at this candidate."""
         physics, arguments, _, stack = self.bind(values, coherent_repeats)
-        return native_stitch_records(physics, arguments, stack)
+        return [
+            record
+            for part in physics.integration_parts()
+            if any(r.h == r.k == 0 for r in part.rods)
+            for record in native_stitch_records(part, arguments, stack)
+        ]

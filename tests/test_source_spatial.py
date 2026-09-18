@@ -1151,6 +1151,10 @@ def test_oblique_narrow_beams_preserve_native_pixel_mass():
                 epsrel=1e-12,
             )[0]
         np.testing.assert_allclose(actual, expected, rtol=2e-11, atol=5e-13)
+        coarse = kernels.integrate_native_pixels(
+            shape, integrated_mass=np.ones(1), quadrature_order=8, gaussian_tail_radius=8.0
+        )
+        np.testing.assert_allclose(coarse, expected, rtol=0, atol=1e-8)
         # A negatively correlated beam reaches the narrow row only after its
         # first column. The overlapping whole panel must not suppress that hit.
         flat = np.arange(np.prod(shape))
@@ -1158,17 +1162,24 @@ def test_oblique_narrow_beams_preserve_native_pixel_mass():
         projection = NativePixelRegionProjection(
             shape,
             flat,
-            np.r_[np.zeros(len(flat), dtype=int), np.ones(len(middle_row), dtype=int)],
-            np.r_[flat, middle_row],
-            np.ones(len(flat) + len(middle_row)),
-            2,
+            np.r_[
+                np.zeros(len(flat), dtype=int),
+                np.ones(len(middle_row), dtype=int),
+                2 + flat,
+            ],
+            np.r_[flat, middle_row, flat],
+            np.ones(2 * len(flat) + len(middle_row)),
+            2 + len(flat),
             "oblique-panel-and-row.v1",
         )
         regions = NativeSpatialRegionProjection(projection).probabilities(
             kernels, quadrature_order=16, gaussian_tail_radius=8.0
         )
         np.testing.assert_allclose(
-            regions.toarray()[0], [expected.sum(), expected[1].sum()], rtol=2e-11, atol=5e-13
+            regions.toarray()[0],
+            np.r_[expected.sum(), expected[1].sum(), expected.ravel()],
+            rtol=2e-11,
+            atol=5e-13,
         )
 
 

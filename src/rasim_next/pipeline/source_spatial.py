@@ -25,14 +25,21 @@ from rasim_next.measurement.continuous_regions import NativePixelRegionProjectio
 from rasim_next.sampling.source import ConditionalSourceSamples
 
 
+@numba.njit(nogil=True, inline="always")
+def _normal_interval_from_tails(low, high, low_tail, high_tail):
+    if low >= 0:
+        return low_tail - high_tail
+    if high <= 0:
+        return high_tail - low_tail
+    return 1.0 - (high_tail + low_tail)
+
+
 @numba.njit(nogil=True)
 def _normal_interval_probability(low: float, high: float) -> float:
     root2 = math.sqrt(2.0)
-    if low >= 0:
-        return 0.5 * (math.erfc(low / root2) - math.erfc(high / root2))
-    if high <= 0:
-        return 0.5 * (math.erfc(-high / root2) - math.erfc(-low / root2))
-    return 1.0 - 0.5 * (math.erfc(high / root2) + math.erfc(-low / root2))
+    return _normal_interval_from_tails(
+        low, high, 0.5 * math.erfc(abs(low) / root2), 0.5 * math.erfc(abs(high) / root2)
+    )
 
 
 @numba.njit(nogil=True)
@@ -149,6 +156,10 @@ def _correlated_rectangle_probability(
     angle_coefficients,
     corner_xy,
     corner_exp,
+    corner_index=None,
+    corner_integral=None,
+    corner_stamp=None,
+    stamp=0,
 ):
     """Plackett angle integral, with conditional-CDF quadrature near degeneracy.
 
@@ -184,8 +195,38 @@ def _correlated_rectangle_probability(
         return _normal_interval_probability(lo, hi)
     sy = math.hypot(slope, conditional_y)
     yl, yh = (ylow - my) / sy, (yhigh - my) / sy
-    base = _normal_interval_probability(lo, hi) * _normal_interval_probability(yl, yh)
-    if corner_exp.shape[0] == 0:
+    if corner_index is None:
+        base = _normal_interval_probability(lo, hi) * _normal_interval_probability(yl, yh)
+    else:
+        endpoints = (lo, hi, yl, yh)
+        tails = np.empty(4)
+        for j in range(4):
+            index = corner_index[4 + j]
+            if corner_stamp[index] != stamp:
+                corner_integral[index] = 0.5 * math.erfc(abs(endpoints[j]) / math.sqrt(2.0))
+                corner_stamp[index] = stamp
+            tails[j] = corner_integral[index]
+        base = _normal_interval_from_tails(lo, hi, tails[0], tails[1]) * (
+            _normal_interval_from_tails(yl, yh, tails[2], tails[3])
+        )
+    cancellation_scale = base
+    if corner_index is not None:
+        x = (hi, lo, hi, lo)
+        y = (yh, yh, yl, yl)
+        values = np.empty(4)
+        for j in range(4):
+            corner = corner_index[j]
+            if corner_stamp[corner] != stamp:
+                value = 0.0
+                for i in range(angle_coefficients.shape[1]):
+                    a, sine, w = angle_coefficients[:, i]
+                    value += w * _correlation_corner(a, sine, x[j], y[j])
+                corner_integral[corner] = value
+                corner_stamp[corner] = stamp
+            values[j] = corner_integral[corner]
+            cancellation_scale += abs(values[j])
+        correction = values[0] - values[1] - values[2] + values[3]
+    elif corner_exp.shape[0] == 0:
         correction = 0.0
         for i in range(angle_coefficients.shape[1]):
             a, sine, w = angle_coefficients[:, i]
@@ -222,7 +263,7 @@ def _correlated_rectangle_probability(
         for j in range(4):
             corner_xy[j, 0], corner_xy[j, 1] = x[j], y[j]
     value = base + correction
-    if value < 0.0 or value < 1e-12 * (base + abs(correction)):
+    if value < 0.0 or value < 1e-12 * max(cancellation_scale, base + abs(correction)):
         return _rectangle_probability(
             mx,
             my,
@@ -254,6 +295,7 @@ def _project_gaussian_regions(
     membership_ptr,
     owner,
     run_weight,
+    corner_index,
     nobs,
     nodes,
     weights,
@@ -269,6 +311,9 @@ def _project_gaussian_regions(
     sums = np.zeros(nobs)
     seen = np.zeros(nobs, np.int64)
     seen_rectangle = np.zeros(len(column_low), np.int64)
+    corner_count = int(corner_index.max()) + 1 if corner_index.size else 0
+    corner_integral = np.empty(corner_count)
+    corner_stamp = np.zeros(corner_count, np.int64)
     corner_xy = np.empty((0, 2))
     corner_exp = np.empty((0, 4))
     for i in range(len(mean)):
@@ -313,6 +358,10 @@ def _project_gaussian_regions(
                     angle_coefficients,
                     corner_xy,
                     corner_exp,
+                    corner_index[rectangle],
+                    corner_integral,
+                    corner_stamp,
+                    stamp,
                 )
                 # A later column can intersect a rectangle rejected above.
                 seen_rectangle[rectangle] = stamp
@@ -358,6 +407,7 @@ class NativeSpatialRegionProjection:
                 np.zeros(1, dtype=np.int64),
                 np.empty(0, dtype=np.int64),
                 np.empty(0),
+                np.empty((0, 8), dtype=np.int64),
             )
             for a in runs:
                 a.setflags(write=False)
@@ -405,6 +455,22 @@ class NativeSpatialRegionProjection:
         owner, weight = owner[starts][order], weight[starts][order]
         membership_ptr = np.searchsorted(membership[order], np.arange(len(rectangles) + 1))
         column_low, column_high, low, high = rectangles.T
+        # Physical corner identities are shared by every rectangle, independent
+        # of observation weights. Values are cached only within one Gaussian.
+        corners = rectangles[:, np.array([[1, 3], [0, 3], [1, 2], [0, 2]])]
+        _, corner_index = np.unique(corners.reshape(-1, 2), axis=0, return_inverse=True)
+        corner_index = corner_index.reshape(-1, 4)
+        # Separate ID ranges cache marginal tails at repeated X/Y boundaries.
+        next_index = int(corner_index.max()) + 1
+        _, x_index = np.unique(rectangles[:, :2], return_inverse=True)
+        _, y_index = np.unique(rectangles[:, 2:], return_inverse=True)
+        corner_index = np.column_stack(
+            (
+                corner_index,
+                x_index.reshape(-1, 2) + next_index,
+                y_index.reshape(-1, 2) + next_index + int(x_index.max()) + 1,
+            )
+        )
         # Index each spanned column; projection integrates each rectangle once.
         widths = (column_high - column_low).astype(np.int64)
         rectangle_index = np.repeat(np.arange(len(rectangles)), widths)
@@ -431,6 +497,7 @@ class NativeSpatialRegionProjection:
             membership_ptr,
             owner,
             weight,
+            corner_index,
         )
         for a in runs:
             a.setflags(write=False)
@@ -445,12 +512,10 @@ class NativeSpatialRegionProjection:
         Multiply that bound by the maximum summed region weight for overlapping
         or weighted regions. It excludes reference-node quadrature error and the
         separately reported backward-flight bound. Increase quadrature order to
-        check the conditional-CDF integral independently of tail truncation.
+        check both rectangle-integral forms independently of tail truncation.
         """
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
-        angle_nodes, angle_weights = _integration_rule(
-            max(16, quadrature_order), gaussian_tail_radius
-        )
+        angle_nodes, angle_weights = nodes, weights
         ptr, owner, mass = _project_gaussian_regions(
             kernels.mean_px,
             kernels.factor_px,
@@ -642,7 +707,7 @@ class DetectorSpatialKernels:
 
         Off-panel centers contribute through their tails. Omitted Gaussian mass
         and interior-CDF approximation error is at most sum(mass)*6*Phi(-gaussian_tail_radius), in addition to source
-        backward-flight, outgoing-quadrature and conditional-CDF quadrature errors.
+        backward-flight, outgoing-quadrature and rectangle-quadrature errors.
         Increase quadrature_order to check the last error separately. No image blur, new SF
         evaluation, pixel-center approximation or survivor renormalization occurs.
         """
@@ -655,9 +720,7 @@ class DetectorSpatialKernels:
         if mass.shape != (len(self.mean_px),) or np.any(~np.isfinite(mass)) or np.any(mass < 0):
             raise ValueError("integrated_mass must be a finite nonnegative value per kernel")
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
-        angle_nodes, angle_weights = _integration_rule(
-            max(16, quadrature_order), gaussian_tail_radius
-        )
+        angle_nodes, angle_weights = nodes, weights
         result = _deposit_gaussian_pixels(
             self.mean_px,
             self.factor_px,

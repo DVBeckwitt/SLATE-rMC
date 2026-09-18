@@ -56,6 +56,25 @@ def _ewald_frame(ki: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return axis, first, np.cross(axis, first)
 
 
+def elastic_axial_cutoff_Ainv(*, ki_sample_Ainv: ArrayLike, radial_Ainv: float) -> float | None:
+    """Return positive axial Ewald endpoint, or None when radius is unreachable."""
+    ki = np.asarray(ki_sample_Ainv, dtype=np.float64)
+    radial = float(radial_Ainv)
+    if (
+        ki.shape != (3,)
+        or np.any(~np.isfinite(ki))
+        or not np.isfinite(radial)
+        or radial < 0
+        or np.linalg.norm(ki) == 0
+    ):
+        raise ValueError("elastic cutoff requires a finite nonzero ki and nonnegative radius")
+    diameter_squared = 4 * float(ki @ ki)
+    remainder = diameter_squared - radial**2
+    if remainder < 0:
+        return None
+    return float(np.sqrt(remainder))
+
+
 def conditional_ewald_region_bounds(
     *,
     native_bounds_px: ArrayLike,
@@ -193,10 +212,11 @@ def fiber_ewald_coordinates(
     if not np.all(np.isfinite(ell)) or not np.all(np.isfinite(azimuth)):
         raise ValueError("rod and Ewald azimuth coordinates must be finite")
     k = np.linalg.norm(ki)
+    cutoff = elastic_axial_cutoff_Ainv(ki_sample_Ainv=ki, radial_Ainv=r)
     axis, first, second = _ewald_frame(ki)
     w = offset + b3 * ell
     q = np.hypot(r, w)
-    supported = (q > 0) & (q <= 2 * k)
+    supported = (q > 0) & (False if cutoff is None else (np.abs(w) <= cutoff))
     along = -q * q / (2 * k)
     transverse = q * np.sqrt(np.maximum(0.0, 1.0 - (q / (2 * k)) ** 2))
     direction = np.cos(azimuth)[..., None] * first + np.sin(azimuth)[..., None] * second
@@ -752,7 +772,9 @@ def _axial_mixture_quantiles(quantiles, lower, upper, centers, width, weights, u
     for i in range(len(quantiles)):
         lo, hi = lower, upper
         v = lo + (hi - lo) * quantiles[i]
-        for _iteration in range(70):
+        # Newton can stagnate near opposite bracket edges in a narrow mixture.
+        # Keep its fast path, then guarantee contraction with bounded bisection.
+        for _iteration in range(150):
             cdf = uniform_mass * (v - lower) / (upper - lower)
             density = uniform_mass / (upper - lower)
             for j in range(len(centers)):
@@ -765,14 +787,18 @@ def _axial_mixture_quantiles(quantiles, lower, upper, centers, width, weights, u
                     (1 - uniform_mass) * weights[j] * width / (delta * delta + width * width) / z[j]
                 )
             error = cdf - quantiles[i]
+            if not np.isfinite(error) or not np.isfinite(density) or density <= 0:
+                raise ValueError("axial inverse CDF requires a finite positive density")
             if abs(error) < 2e-15 or hi - lo < 2e-14 * max(1.0, upper - lower):
                 break
             if error > 0:
                 hi = v
             else:
                 lo = v
-            proposed = v - error / density
+            proposed = v - error / density if _iteration < 70 else 0.5 * (lo + hi)
             v = proposed if lo < proposed < hi else 0.5 * (lo + hi)
+        else:
+            raise ValueError("axial inverse CDF did not converge within its iteration budget")
         x[i] = v
         pdf[i] = density
     return x, pdf
@@ -890,19 +916,27 @@ def _bounded_angular_quantiles(
                 target += base[interval]
                 left, right = lo[interval], hi[interval]
                 v = left + (right - left) * quantiles[i, j]
-                for _iteration in range(70):
+                # Keep the Newton fast path, then guarantee bracket contraction.
+                # Return only a tested coordinate and the density evaluated there.
+                for _iteration in range(150):
                     cdf, density = _angular_cdf_density(
                         v, centers[i], widths[i], offsets, uniform_mass
                     )
                     error = cdf - target
+                    if not np.isfinite(error) or not np.isfinite(density) or density <= 0:
+                        raise ValueError("angular inverse CDF requires a finite positive density")
                     if abs(error) < 2e-15 or right - left < 2e-14:
                         break
                     if error > 0:
                         right = v
                     else:
                         left = v
-                    proposed = v - error / density
+                    proposed = v - error / density if _iteration < 70 else 0.5 * (left + right)
                     v = proposed if left < proposed < right else 0.5 * (left + right)
+                else:
+                    raise ValueError(
+                        "angular inverse CDF did not converge within its iteration budget"
+                    )
                 axial_indices.append(i)
                 angular_indices.append(j)
                 angles.append(v)
@@ -1000,6 +1034,7 @@ def sample_conditional_fiber_coordinates(
     quadrature_kind: str = "sobol",
     maximum_axial_panel_width_Ainv: float | None = None,
     angular_support: str = "q_conditioned_union",
+    axial_panel_edges_Ainv: ArrayLike | None = None,
 ) -> FiberQuadratureNodes:
     """Integrate a joint continuous rod/Ewald function with a proper 2-D net.
 
@@ -1058,7 +1093,35 @@ def sample_conditional_fiber_coordinates(
         or maximum_axial_panel_width_Ainv <= 0
     ):
         raise ValueError("a finite positive axial panel width requires composite_gauss")
-    if quadrature_kind == "sobol":
+    if axial_panel_edges_Ainv is not None:
+        supplied = np.asarray(axial_panel_edges_Ainv)
+        if (
+            quadrature_kind != "composite_gauss"
+            or np.iscomplexobj(supplied)
+            or supplied.ndim != 1
+            or len(supplied) < 2
+            or np.any(~np.isfinite(supplied))
+            or np.any(np.diff(supplied) <= 0)
+            or supplied[0] < 0
+            or supplied[0] != lower
+            or supplied[-1] != upper
+        ):
+            raise ValueError(
+                "physical axial panels must enclose exactly the domain and require composite_gauss"
+            )
+        if maximum_axial_panel_width_Ainv is not None:
+            raise ValueError("explicit axial panels cannot also request a panel-width cap")
+        edges = np.asarray(supplied, dtype=float)
+        axial_nodes, axial_weights = roots_legendre(2 ** min(axial_power, 3))
+        angular_nodes, angular_weights = roots_legendre(2**angular_power)
+        half = np.diff(edges) / 2
+        axial = (edges[:-1, None] + half[:, None] * (axial_nodes + 1)).ravel()
+        axial_pdf = np.ones(len(axial))
+        angular_quantiles = np.broadcast_to(
+            (angular_nodes + 1) / 2, (len(axial), len(angular_nodes))
+        ).copy()
+        probability_weights = (half[:, None] * axial_weights).ravel()[:, None] * angular_weights / 2
+    elif quadrature_kind == "sobol":
         unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
         axial_quantiles = unit[:, 0]
         shift = unit[:, 1] + np.random.default_rng(angular_shift_seed).random()
@@ -1095,9 +1158,10 @@ def sample_conditional_fiber_coordinates(
         probability_weights = axial_weights[:, None] * angular_weights[None, :] / 4
     else:
         raise ValueError("quadrature kind must be sobol or composite_gauss")
-    axial, axial_pdf = _axial_mixture_quantiles(
-        axial_quantiles, lower, upper, centers, width, np.ones(len(centers))
-    )
+    if axial_panel_edges_Ainv is None:
+        axial, axial_pdf = _axial_mixture_quantiles(
+            axial_quantiles, lower, upper, centers, width, np.ones(len(centers))
+        )
     angular_centers, angular_widths = _angular_proposal_parameters(
         axial,
         radius,
@@ -1129,6 +1193,44 @@ def sample_conditional_fiber_coordinates(
 
 
 @dataclass(frozen=True, slots=True)
+class AxialPanelMesh:
+    """Fixed physical panels for an explicit complete radial rod group.
+
+    Local-lamella m0 uses external |Q|; regular rods use positive internal
+    axial momentum. The mesh never declares intensity or detector symmetry.
+    """
+
+    rods_hk: tuple[tuple[int, int], ...]
+    coordinate: str
+    edges_Ainv: tuple[float, ...]
+
+    def __post_init__(self):
+        rods = tuple(sorted(tuple(row) for row in self.rods_hk))
+        if (
+            not rods
+            or len(set(rods)) != len(rods)
+            or any(len(row) != 2 or any(type(v) is not int for v in row) for row in rods)
+        ):
+            raise ValueError("axial mesh requires unique integer (h,k) rods")
+        if self.coordinate not in {"positive_phase_axial", "external_local_m0_q"}:
+            raise ValueError("axial mesh coordinate must name its physical measure")
+        if self.coordinate == "external_local_m0_q" and rods != ((0, 0),):
+            raise ValueError("external local-m0 mesh requires only the zero rod")
+        supplied = np.asarray(self.edges_Ainv)
+        if (
+            np.iscomplexobj(supplied)
+            or supplied.ndim != 1
+            or len(supplied) < 2
+            or np.any(~np.isfinite(supplied))
+            or supplied[0] < 0
+            or np.any(np.diff(supplied) <= 0)
+        ):
+            raise ValueError("axial mesh edges must be finite, nonnegative and strictly increasing")
+        object.__setattr__(self, "rods_hk", rods)
+        object.__setattr__(self, "edges_Ainv", tuple(float(v) for v in supplied))
+
+
+@dataclass(frozen=True, slots=True)
 class FiberIntegrationRule:
     """Numerical proposal and integration controls, never physical peak cutoffs.
 
@@ -1136,8 +1238,8 @@ class FiberIntegrationRule:
     The uniform component retains the complete geometrically bounded domain.
     A local m0 domain reaching Q=0 requires an integrable structure/optical model,
     such as the named Parratt composite; the coordinate rule cannot supply one.
-    A local-m0 panel cap overrides the global cap only in that channel; None
-    inherits the global cap. The same physical integration measure is retained.
+    Local-m0 angular order and panel cap override their global values only in
+    that channel; None inherits them. The physical integration measure is retained.
     """
 
     axial_power: int = 12
@@ -1155,10 +1257,32 @@ class FiberIntegrationRule:
     quadrature_kind: str = "sobol"
     maximum_axial_panel_width_Ainv: float | None = None
     local_m0_maximum_axial_panel_width_Ainv: float | None = None
+    local_m0_angular_power: int | None = None
     angular_support: str = "q_conditioned_union"
     frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
+    axial_meshes: tuple[AxialPanelMesh, ...] = ()
 
     def __post_init__(self) -> None:
+        meshes = tuple(AxialPanelMesh(**m) if isinstance(m, dict) else m for m in self.axial_meshes)
+        if any(not isinstance(m, AxialPanelMesh) for m in meshes):
+            raise TypeError("axial_meshes must contain declared AxialPanelMesh values")
+        if meshes and (self.quadrature_kind != "composite_gauss" or self.axial_power != 3):
+            raise ValueError(
+                "frozen axial meshes require composite_gauss and axial_power=3; refine mesh edges instead"
+            )
+        if meshes and (
+            self.maximum_axial_panel_width_Ainv is not None
+            or self.local_m0_maximum_axial_panel_width_Ainv is not None
+        ):
+            raise ValueError("explicit axial meshes cannot also request panel-width caps")
+        rods = [hk for mesh in meshes for hk in mesh.rods_hk]
+        if len(set(rods)) != len(rods):
+            raise ValueError("axial meshes must have disjoint rod groups")
+        object.__setattr__(self, "axial_meshes", meshes)
+        if self.local_m0_angular_power is not None and (
+            type(self.local_m0_angular_power) is not int or self.local_m0_angular_power < 0
+        ):
+            raise ValueError("local_m0_angular_power must be a nonnegative integer or None")
         if self.frozen_ewald_bounds_Ainv_rad is not None:
             bounds = tuple(float(v) for v in self.frozen_ewald_bounds_Ainv_rad)
             if (
@@ -1328,6 +1452,23 @@ def iter_conditional_fiber_transfers(
                 break
         else:
             groups.append((radius, [rod]))
+    if rule.axial_meshes:
+        for radius, group in groups:
+            group_key = tuple(sorted((r.h, r.k) for r in group))
+            coordinate = (
+                "external_local_m0_q"
+                if radius == 0 and local_stitched_m0
+                else "positive_phase_axial"
+            )
+            matches = [
+                m
+                for m in rule.axial_meshes
+                if m.rods_hk == group_key and m.coordinate == coordinate
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    "axial meshes must cover every complete current rod group and coordinate"
+                )
     states = incident.states
     valid_sources = [int(index) for index in np.flatnonzero(states.valid)]
     requested = valid_sources if source_state_indices is None else list(source_state_indices)
@@ -1395,6 +1536,19 @@ def iter_conditional_fiber_transfers(
         centers = centers[(centers >= lower) & (centers <= upper)]
         if not len(centers):
             centers = np.array([(lower + upper) / 2])
+        group_key = tuple(sorted((r.h, r.k) for r in group))
+        meshes = [m for m in rule.axial_meshes if any(hk in group_key for hk in m.rods_hk)]
+        mesh = meshes[0] if meshes else None
+        if mesh is not None and (
+            len(meshes) != 1
+            or mesh.rods_hk != group_key
+            or mesh.coordinate != ("external_local_m0_q" if local else "positive_phase_axial")
+        ):
+            raise ValueError("axial mesh must match the complete rod group and coordinate")
+        if mesh is not None:
+            if mesh.edges_Ainv[0] > lower or mesh.edges_Ainv[-1] < upper:
+                raise ValueError("frozen axial mesh does not enclose current source-region support")
+            lower, upper = mesh.edges_Ainv[0], mesh.edges_Ainv[-1]
         for si in active_sources:
             if cancel_requested is not None and cancel_requested():
                 raise CancelledError
@@ -1415,7 +1569,11 @@ def iter_conditional_fiber_transfers(
                 source_region_bounds=bounds[si],
                 reference_mosaic=reference_mosaic,
                 axial_power=rule.axial_power,
-                angular_power=rule.angular_power,
+                angular_power=(
+                    rule.local_m0_angular_power
+                    if local and rule.local_m0_angular_power is not None
+                    else rule.angular_power
+                ),
                 axial_seed=7919 * rule.seed + 65537 * gi + 1009,
                 angular_shift_seed=8191 * si + 7919 * rule.seed + 131 * gi + 973,
                 quadrature_kind=rule.quadrature_kind,
@@ -1425,6 +1583,7 @@ def iter_conditional_fiber_transfers(
                     else rule.maximum_axial_panel_width_Ainv
                 ),
                 angular_support=rule.angular_support,
+                axial_panel_edges_Ainv=None if mesh is None else mesh.edges_Ainv,
             )
             for first in range(0, len(nodes.axial_index), rule.batch_size):
                 if cancel_requested is not None and cancel_requested():
