@@ -283,6 +283,37 @@ compatibility. Fixed support removes a demonstrated remeshing discontinuity, but
 angular resolution must still be independently qualified. Observation grouping was an
 unsuccessful numerical prototype and is not a supported control.
 
+`angular_panel_edges_rad` optionally supplies an immutable increasing physical-angle
+partition from exactly `0` to `2*pi`, requiring `composite_gauss`. The sampler merges
+the original support first, then intersects each arc with the partition. Each panel
+uses `2**angular_power` physical Gauss nodes (use power 3 for GL8), or the declared
+local-m0 power where applicable. Weights are `dphi` times the original axial measure;
+the angular proposal CDF/PDF is bypassed, not multiplied in again. No supported arc,
+signed rod, source mass, observation or physical factor is removed. Omitting edges
+preserves the old proposal rule. Refine panel widths and per-panel order explicitly.
+
+`seed_angular_panel_edges(bounds, maximum_panel_width_rad=..., maximum_panels=...)`
+constructs candidate edges from complete native source/region bounds, retaining
+internal boundaries even where support intervals overlap. Supply all required
+observation/source/probe bounds, not only a selected parent or training rows. It caps
+physical widths inside their angular union and retains the outside gaps as panels.
+This is geometry seeding, not a kernel-adaptive selector or accuracy certificate.
+The supplied width must pass full-observable numerical checks; a fine angular rule
+does not qualify axial/source/cone integration. No universal width is prescribed.
+
+The rule's `maximum_angular_panel_nodes` defaults to 4194304 per source/rod-group
+sampler call and rejects excessive explicit-panel work before allocating angular
+output arrays. It is a work guard, not a numerical-refinement override. The seeder
+also fails when its declared panel budget is exceeded; neither uses a coarse fallback.
+Edges are included in native revisions, cache keys and serialized rules. For geometry
+or source probes, fixed edges alone do not freeze changing support: prepare a common
+enclosing `frozen_ewald_bounds_Ainv_rad` and common axial rule as well. Reuse one mesh
+across the planned candidates, and independently qualify its observable contrasts.
+The bound applies to the entire sampler call, not each axial row. A fine mesh over
+a large axial domain may exceed it; the demonstrated one-row cost is not a bound
+for a full family. Do not silently raise the budget or relabel such a rejection
+as numerical convergence.
+
 `stitch_grid_size` refines the empirical Bi handoff calculation. Baseline, numerical
 probes, reported fits, local-sensitivity probes and profile candidates record the
 actual surface/wavelength interval selection, overlap scale and zero-strength

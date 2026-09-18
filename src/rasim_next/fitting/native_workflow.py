@@ -21,6 +21,7 @@ def native_physics_with(original, plan, overrides):
     if set(overrides.get("integration", {})) - {
         "axial_power",
         "angular_power",
+        "angular_panel_edges_rad",
         "local_m0_angular_power",
         "seed",
         "cone_quadrature_order",

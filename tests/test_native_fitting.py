@@ -95,6 +95,8 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
             quadrature_kind="composite_gauss",
             axial_meshes=meshes,
             angular_support="fixed_union",
+            angular_power=3,
+            angular_panel_edges_rad=(0.0, np.pi / 2, np.pi, 2 * np.pi),
         ),
     )
     detector = physics.detector(
@@ -105,6 +107,25 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
         phase_fractions=(1.0,),
         fault_parameters={},
     )
+    changed = replace(
+        detector,
+        integration_rule=replace(
+            detector.integration_rule, angular_panel_edges_rad=(0.0, np.pi / 3, np.pi, 2 * np.pi)
+        ),
+    )
+    assert changed.fixed_physics_revision != detector.fixed_physics_revision
+    from rasim_next.fitting.native_workflow import native_physics_with
+
+    roundtrip = native_physics_with(
+        physics,
+        {},
+        {
+            "integration": {
+                "angular_panel_edges_rad": list(detector.integration_rule.angular_panel_edges_rad)
+            }
+        },
+    )
+    assert roundtrip.integration_rule == physics.integration_rule
     rows, columns = detector.detector_shape_rc
     flat = np.arange(rows * columns)
     projection = NativePixelRegionProjection(

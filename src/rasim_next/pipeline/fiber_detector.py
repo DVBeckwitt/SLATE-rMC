@@ -835,6 +835,160 @@ def _angular_cdf_density(value, centers, widths, offsets, uniform_mass):
 
 
 @numba.njit(nogil=True)
+def _angular_intervals(q, bounds):
+    lower = np.empty(2 * len(bounds))
+    upper = np.empty(2 * len(bounds))
+    count = 0
+    for row in bounds:
+        if q < row[0] or q > row[1] or row[3] == 0:
+            continue
+        start = row[2] % (2 * np.pi)
+        width = row[3]
+        if width >= 2 * np.pi:
+            return np.array([0.0]), np.array([2 * np.pi])
+        stop = start + width
+        lower[count], upper[count] = start, min(stop, 2 * np.pi)
+        count += 1
+        if stop > 2 * np.pi:
+            lower[count], upper[count] = 0.0, stop - 2 * np.pi
+            count += 1
+    if count == 0:
+        return lower[:0], upper[:0]
+    order = np.argsort(lower[:count])
+    lo, hi = lower[:count][order], upper[:count][order]
+    merged = 1
+    for j in range(1, count):
+        if lo[j] <= hi[merged - 1]:
+            hi[merged - 1] = max(hi[merged - 1], hi[j])
+        else:
+            lo[merged], hi[merged] = lo[j], hi[j]
+            merged += 1
+    return lo[:merged], hi[:merged]
+
+
+def seed_angular_panel_edges(
+    source_region_bounds: ArrayLike, *, maximum_panel_width_rad: float, maximum_panels: int
+) -> tuple[float, ...]:
+    """Seed a fixed physical-angle partition from complete native geometry bounds.
+
+    Supply the union of bounds over every required observation/source/probe.
+    All geometry endpoints remain knots, including boundaries inside overlapping
+    support arcs. Gaps outside those arcs remain panels, not omitted support.
+    The width cap is an explicit accuracy control, not a convergence certificate.
+    """
+    bounds = np.asarray(source_region_bounds)
+    width = maximum_panel_width_rad
+    if (
+        bounds.ndim != 2
+        or bounds.shape[1] != 4
+        or np.iscomplexobj(bounds)
+        or np.any(~np.isfinite(bounds))
+        or np.any(bounds[:, 0] < 0)
+        or np.any(bounds[:, 3] < 0)
+        or np.any(bounds[:, 3] > 2 * np.pi)
+        or np.ndim(width) != 0
+        or np.iscomplexobj(width)
+        or not np.isfinite(width)
+        or width <= 0
+        or type(maximum_panels) is not int
+        or maximum_panels < 1
+    ):
+        raise ValueError(
+            "angular seeding requires finite geometry, positive width and panel budget"
+        )
+    bounds = bounds[(bounds[:, 1] >= bounds[:, 0]) & (bounds[:, 3] > 0)].astype(float)
+    bounds[:, :2] = [0.0, 1.0]
+    start = bounds[:, 2] % (2 * np.pi)
+    stop = start + bounds[:, 3]
+    cuts = np.unique(
+        np.r_[
+            0.0, 2 * np.pi, start, np.minimum(stop, 2 * np.pi), stop[stop > 2 * np.pi] - 2 * np.pi
+        ]
+    )
+    lo, hi = _angular_intervals(0.0, bounds)
+    lengths = np.diff(cuts)
+    midpoint = cuts[:-1] + lengths / 2
+    inside = np.zeros(len(midpoint), dtype=bool)
+    for left, right in zip(lo, hi, strict=True):
+        inside |= (midpoint >= left) & (midpoint <= right)
+    counts = np.maximum(1.0, np.where(inside, np.ceil(lengths / width), 1.0))
+    if np.sum(counts) > maximum_panels:
+        raise ValueError("angular panel budget exceeded; no mesh or accuracy fallback returned")
+    edges = np.r_[
+        np.concatenate(
+            [
+                np.linspace(left, right, int(count) + 1)[:-1]
+                for left, right, count in zip(cuts[:-1], cuts[1:], counts, strict=True)
+            ]
+        ),
+        2 * np.pi,
+    ]
+    if np.any(np.diff(edges) <= 0):
+        raise ValueError("requested angular panel width is below floating-point resolution")
+    return tuple(edges)
+
+
+def _validated_angular_edges(edges, quadrature_kind):
+    if edges is None:
+        return None
+    value = np.asarray(edges)
+    if (
+        quadrature_kind != "composite_gauss"
+        or np.iscomplexobj(value)
+        or value.ndim != 1
+        or len(value) < 2
+        or np.any(~np.isfinite(value))
+        or value[0] != 0
+        or value[-1] != 2 * np.pi
+        or np.any(np.diff(value) <= 0)
+    ):
+        raise ValueError(
+            "angular panels require increasing finite [0,2*pi] edges and composite_gauss"
+        )
+    return np.asarray(value, dtype=float)
+
+
+@numba.njit(nogil=True)
+def _angular_panel_node_count(q, bounds, edges, order, maximum_nodes):
+    count = 0
+    for coordinate in q:
+        lo, hi = _angular_intervals(coordinate, bounds)
+        for j in range(len(lo)):
+            left, right = lo[j], hi[j]
+            count += (
+                np.searchsorted(edges, right, side="left")
+                - np.searchsorted(edges, left, side="right")
+                + 1
+            ) * order
+            if count > maximum_nodes:
+                raise ValueError("angular panel node budget exceeded before allocation")
+    return count
+
+
+@numba.njit(nogil=True)
+def _physical_angular_panels(q, bounds, edges, nodes, weights, count):
+    axial_index = np.empty(count, dtype=np.int64)
+    phi, mass = np.empty(count), np.empty(count)
+    count = 0
+    for i, coordinate in enumerate(q):
+        lo, hi = _angular_intervals(coordinate, bounds)
+        for arc in range(len(lo)):
+            left, right = lo[arc], hi[arc]
+            first = np.searchsorted(edges, left, side="right")
+            stop = np.searchsorted(edges, right, side="left")
+            for j in range(first, stop + 1):
+                end = right if j == stop else edges[j]
+                half = (end - left) / 2
+                for k in range(len(nodes)):
+                    axial_index[count] = i
+                    phi[count] = left + half * (nodes[k] + 1)
+                    mass[count] = half * weights[k]
+                    count += 1
+                left = end
+    return axial_index, phi, mass
+
+
+@numba.njit(nogil=True)
 def _bounded_angular_quantiles(
     quantiles, q, bounds, centers, widths, split_arcs=False, uniform_mass=0.2
 ):
@@ -848,41 +1002,11 @@ def _bounded_angular_quantiles(
     angles = []
     densities = []
     fractions = []
-    lower = np.empty(2 * len(bounds))
-    upper = np.empty(2 * len(bounds))
     for i in range(len(q)):
-        count = 0
-        for row in bounds:
-            if q[i] < row[0] or q[i] > row[1] or row[3] == 0:
-                continue
-            start = row[2] % (2 * np.pi)
-            width = row[3]
-            if width >= 2 * np.pi:
-                lower[0] = 0.0
-                upper[0] = 2 * np.pi
-                count = 1
-                break
-            stop = start + width
-            lower[count] = start
-            upper[count] = min(stop, 2 * np.pi)
-            count += 1
-            if stop > 2 * np.pi:
-                lower[count] = 0.0
-                upper[count] = stop - 2 * np.pi
-                count += 1
-        if count == 0:
+        lo, hi = _angular_intervals(q[i], bounds)
+        merged = len(lo)
+        if merged == 0:
             continue
-        order = np.argsort(lower[:count])
-        lo = lower[:count][order]
-        hi = upper[:count][order]
-        merged = 1
-        for j in range(1, count):
-            if lo[j] <= hi[merged - 1]:
-                hi[merged - 1] = max(hi[merged - 1], hi[j])
-            else:
-                lo[merged] = lo[j]
-                hi[merged] = hi[j]
-                merged += 1
         offsets = np.empty(centers.shape[1])
         for j in range(len(offsets)):
             offsets[j] = _wrapped_cauchy_cdf(-centers[i, j], widths[i, j])
@@ -1035,6 +1159,8 @@ def sample_conditional_fiber_coordinates(
     maximum_axial_panel_width_Ainv: float | None = None,
     angular_support: str = "q_conditioned_union",
     axial_panel_edges_Ainv: ArrayLike | None = None,
+    angular_panel_edges_rad: ArrayLike | None = None,
+    maximum_angular_panel_nodes: int = 4194304,
 ) -> FiberQuadratureNodes:
     """Integrate a joint continuous rod/Ewald function with a proper 2-D net.
 
@@ -1049,6 +1175,9 @@ def sample_conditional_fiber_coordinates(
         raise TypeError("reference_mosaic must be MosaicParameters")
     if angular_support not in {"q_conditioned_union", "fixed_union"}:
         raise ValueError("angular support must be q_conditioned_union or fixed_union")
+    angular_edges = _validated_angular_edges(angular_panel_edges_rad, quadrature_kind)
+    if type(maximum_angular_panel_nodes) is not int or maximum_angular_panel_nodes < 1:
+        raise ValueError("angular panel node budget must be a positive integer")
     lower, upper = map(float, axial_bounds_Ainv)
     centers = np.asarray(axial_peak_centers_Ainv, dtype=np.float64)
     width, radius = float(axial_peak_half_width_Ainv), float(radial_Ainv)
@@ -1085,6 +1214,8 @@ def sample_conditional_fiber_coordinates(
     for value in (axial_power, angular_power, axial_seed, angular_shift_seed):
         if type(value) is not int or value < 0:
             raise ValueError("quadrature powers and seeds must be nonnegative integers")
+    if angular_edges is not None and 2**angular_power > maximum_angular_panel_nodes:
+        raise ValueError("angular panel node budget exceeded by per-panel order")
     if maximum_axial_panel_width_Ainv is not None and (
         quadrature_kind != "composite_gauss"
         or np.ndim(maximum_axial_panel_width_Ainv) != 0
@@ -1113,14 +1244,19 @@ def sample_conditional_fiber_coordinates(
             raise ValueError("explicit axial panels cannot also request a panel-width cap")
         edges = np.asarray(supplied, dtype=float)
         axial_nodes, axial_weights = roots_legendre(2 ** min(axial_power, 3))
-        angular_nodes, angular_weights = roots_legendre(2**angular_power)
         half = np.diff(edges) / 2
         axial = (edges[:-1, None] + half[:, None] * (axial_nodes + 1)).ravel()
         axial_pdf = np.ones(len(axial))
-        angular_quantiles = np.broadcast_to(
-            (angular_nodes + 1) / 2, (len(axial), len(angular_nodes))
-        ).copy()
-        probability_weights = (half[:, None] * axial_weights).ravel()[:, None] * angular_weights / 2
+        if angular_edges is not None:
+            axial_mass = (half[:, None] * axial_weights).ravel()
+        else:
+            angular_nodes, angular_weights = roots_legendre(2**angular_power)
+            angular_quantiles = np.broadcast_to(
+                (angular_nodes + 1) / 2, (len(axial), len(angular_nodes))
+            ).copy()
+            probability_weights = (
+                (half[:, None] * axial_weights).ravel()[:, None] * angular_weights / 2
+            )
     elif quadrature_kind == "sobol":
         unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
         axial_quantiles = unit[:, 0]
@@ -1132,7 +1268,6 @@ def sample_conditional_fiber_coordinates(
         order = 2 ** min(axial_power, 3)
         panels = 2**axial_power // order
         axial_nodes, axial_weights = roots_legendre(order)
-        angular_nodes, angular_weights = roots_legendre(2**angular_power)
         edges = np.linspace(0.0, 1.0, panels + 1)
         if maximum_axial_panel_width_Ainv is not None:
             while True:
@@ -1151,17 +1286,47 @@ def sample_conditional_fiber_coordinates(
         panel_mass = np.diff(edges)
         axial_quantiles = (edges[:-1, None] + panel_mass[:, None] * (axial_nodes + 1) / 2).ravel()
         axial_weights = (panel_mass[:, None] * axial_weights).ravel()
-        angular_count = len(angular_nodes)
-        angular_quantiles = np.broadcast_to(
-            (angular_nodes + 1) / 2, (len(axial_quantiles), angular_count)
-        ).copy()
-        probability_weights = axial_weights[:, None] * angular_weights[None, :] / 4
+        if angular_edges is not None:
+            axial_mass = axial_weights / 2
+        else:
+            angular_nodes, angular_weights = roots_legendre(2**angular_power)
+            angular_count = len(angular_nodes)
+            angular_quantiles = np.broadcast_to(
+                (angular_nodes + 1) / 2, (len(axial_quantiles), angular_count)
+            ).copy()
+            probability_weights = axial_weights[:, None] * angular_weights[None, :] / 4
     else:
         raise ValueError("quadrature kind must be sobol or composite_gauss")
     if axial_panel_edges_Ainv is None:
         axial, axial_pdf = _axial_mixture_quantiles(
             axial_quantiles, lower, upper, centers, width, np.ones(len(centers))
         )
+    if angular_support == "fixed_union" and len(bounds):
+        # Preserve one conservative angular union throughout the source's Q range.
+        # Activating an observation must not remesh another observation's integral.
+        bounds = bounds.copy()
+        bounds[:, 0] = np.min(bounds[:, 0])
+        bounds[:, 1] = np.max(bounds[:, 1])
+    if angular_edges is not None:
+        q = np.hypot(radius, axial)
+        count = _angular_panel_node_count(
+            q, bounds, angular_edges, 2**angular_power, maximum_angular_panel_nodes
+        )
+        if count == 0:
+            return FiberQuadratureNodes(
+                axial, np.empty(0, dtype=np.int64), np.empty(0), np.empty(0)
+            )
+        angular_nodes, angular_weights = roots_legendre(2**angular_power)
+        index, phi, angular_mass = _physical_angular_panels(
+            q,
+            bounds,
+            angular_edges,
+            angular_nodes,
+            angular_weights,
+            count,
+        )
+        axial_mass = axial_mass / axial_pdf
+        return FiberQuadratureNodes(axial, index, phi, axial_mass[index] * angular_mass)
     angular_centers, angular_widths = _angular_proposal_parameters(
         axial,
         radius,
@@ -1170,12 +1335,6 @@ def sample_conditional_fiber_coordinates(
         reference_mosaic.gaussian_sigma_rad,
         reference_mosaic.lorentzian_half_width_rad,
     )
-    if angular_support == "fixed_union" and len(bounds):
-        # Preserve one conservative angular union throughout the source's Q range.
-        # Activating an observation must not remesh another observation's integral.
-        bounds = bounds.copy()
-        bounds[:, 0] = np.min(bounds[:, 0])
-        bounds[:, 1] = np.max(bounds[:, 1])
     axial_index, angular_index, azimuth, angular_pdf, fractions = _bounded_angular_quantiles(
         angular_quantiles,
         np.hypot(radius, axial),
@@ -1261,8 +1420,18 @@ class FiberIntegrationRule:
     angular_support: str = "q_conditioned_union"
     frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
     axial_meshes: tuple[AxialPanelMesh, ...] = ()
+    angular_panel_edges_rad: tuple[float, ...] | None = None
+    maximum_angular_panel_nodes: int = 4194304
 
     def __post_init__(self) -> None:
+        angular_edges = _validated_angular_edges(self.angular_panel_edges_rad, self.quadrature_kind)
+        if angular_edges is not None:
+            object.__setattr__(self, "angular_panel_edges_rad", tuple(angular_edges))
+        if (
+            type(self.maximum_angular_panel_nodes) is not int
+            or self.maximum_angular_panel_nodes < 1
+        ):
+            raise ValueError("angular panel node budget must be a positive integer")
         meshes = tuple(AxialPanelMesh(**m) if isinstance(m, dict) else m for m in self.axial_meshes)
         if any(not isinstance(m, AxialPanelMesh) for m in meshes):
             raise TypeError("axial_meshes must contain declared AxialPanelMesh values")
@@ -1584,6 +1753,8 @@ def iter_conditional_fiber_transfers(
                 ),
                 angular_support=rule.angular_support,
                 axial_panel_edges_Ainv=None if mesh is None else mesh.edges_Ainv,
+                angular_panel_edges_rad=rule.angular_panel_edges_rad,
+                maximum_angular_panel_nodes=rule.maximum_angular_panel_nodes,
             )
             for first in range(0, len(nodes.axial_index), rule.batch_size):
                 if cancel_requested is not None and cancel_requested():

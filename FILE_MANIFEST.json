@@ -1,5 +1,5 @@
 {
-  "file_count": 393,
+  "file_count": 394,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -153,8 +153,8 @@
     },
     {
       "path": "docs/NATIVE_REFINEMENT.md",
-      "sha256": "5dce46817066d57fbf61448fb47bb6e85c13c776542ebc1f30d061bf4f42fd5f",
-      "size_bytes": 32006
+      "sha256": "64bf4d5f32f5826c08d41f45d5b6eb61e8b804cfe4f2933890d700095481b4cf",
+      "size_bytes": 34289
     },
     {
       "path": "docs/OSC_COORDINATES.md",
@@ -1013,8 +1013,8 @@
     },
     {
       "path": "src/rasim_next/fitting/native_workflow.py",
-      "sha256": "93e2b9fd2128e0a113d40d3ae801b1991f72956a65435cf4d054d59960f722b9",
-      "size_bytes": 14771
+      "sha256": "59aeb16828c866cf42fb168cb8736999cb25a7547445749a888f65af5f4c83d6",
+      "size_bytes": 14806
     },
     {
       "path": "src/rasim_next/fitting/ordered_intensity.py",
@@ -1228,8 +1228,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/conditional_detector.py",
-      "sha256": "bd4eb887718eab7ab66931223e3b0ac0c990a9d2329432a1e038dcc69ddd1967",
-      "size_bytes": 45017
+      "sha256": "0c1ff4617c94833fdde8b2121dbeaf50ddf1f2c6d31e4305e33ed08eb66bebe6",
+      "size_bytes": 45317
     },
     {
       "path": "src/rasim_next/pipeline/configured_simulation.py",
@@ -1253,8 +1253,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/fiber_detector.py",
-      "sha256": "ed37956d0ff8983661ad78bf0737e059e2ca495a97c35ab82455d0f0b73b6f80",
-      "size_bytes": 73423
+      "sha256": "71038d6bf57ba57da45c57a7fd17111e306f8a6f420d4be79b164a09da7645af",
+      "size_bytes": 80313
     },
     {
       "path": "src/rasim_next/pipeline/incidence_acquisition.py",
@@ -1612,6 +1612,11 @@
       "size_bytes": 6718
     },
     {
+      "path": "tasks/39_native_angular_panels.md",
+      "sha256": "6ea6237e70127e95a1d0c727ee3c539850a5d509c0667e7edb5669572f215e5d",
+      "size_bytes": 8265
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1658,8 +1663,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "fed9536d043ede5f7881c705d4d7121552b1911babc06e892074978fa1d79929",
-      "size_bytes": 6123
+      "sha256": "c54f8a21ae4efd108e1182804f159478c9451badb56b433de1b2e386e826740b",
+      "size_bytes": 6312
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1823,8 +1828,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "d4ea05323be57644abcbb977029d89773c020232f99e6ae081aab80a163646a5",
-      "size_bytes": 379182
+      "sha256": "459629521f01ca09e66ddc04821fb3efb28fe85cdf4bbd6e15eb3d08f02eb4e3",
+      "size_bytes": 384228
     },
     {
       "path": "tests/test_matched_regions.py",
@@ -1843,8 +1848,8 @@
     },
     {
       "path": "tests/test_native_fitting.py",
-      "sha256": "95683fc49a0266635f72271d0d9844d5acf777f9cfa4a481cd78fa6fdd8b4882",
-      "size_bytes": 37808
+      "sha256": "87c62d3d7bb74f5d27d2f534ead66ad7f5aba6bdd93fd1d4cbc41253544c60c2",
+      "size_bytes": 38549
     },
     {
       "path": "tests/test_native_search.py",

@@ -9535,6 +9535,17 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrat
     assert not len(empty.weight_Ainv_rad)
     np.testing.assert_array_equal(empty.positive_axial_Ainv, nodes.positive_axial_Ainv)
     if quadrature_kind == "composite_gauss":
+        angular_panels = sample_conditional_fiber_coordinates(
+            **(
+                arguments
+                | {"angular_power": 3, "angular_panel_edges_rad": [0, 1.0, 4.0, 2 * np.pi]}
+            )
+        )
+        t = angular_panels.positive_axial_Ainv[angular_panels.axial_index]
+        assert angular_panels.weight_Ainv_rad.sum() == pytest.approx(0.8 * 2 * np.pi, rel=1e-10)
+        assert angular_panels.weight_Ainv_rad @ np.exp(
+            t * angular_panels.ewald_azimuth_rad / (2 * np.pi)
+        ) == pytest.approx(expected, rel=1e-10)
         # Explicit physical panels preserve the continuous measure and stay fixed
         # when the numerical importance proposal changes.
         physical = sample_conditional_fiber_coordinates(
@@ -9628,6 +9639,109 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrat
             **(arguments | {"angular_shift_seed": 90210})
         )
         np.testing.assert_array_equal(changed_shift.ewald_azimuth_rad, nodes.ewald_azimuth_rad)
+
+
+def test_native_angular_panels_resolve_adjacent_bin_mass() -> None:
+    from scipy.special import ndtr
+
+    from painted_ewald import MosaicParameters
+    from rasim_next.pipeline.fiber_detector import (
+        FiberIntegrationRule,
+        sample_conditional_fiber_coordinates,
+        seed_angular_panel_edges,
+    )
+
+    axial = 0.8979108197741483
+    axial_edges = [axial - 0.001, axial + 0.001]
+    arcs = [(0.0, 1.4959182683734986), (4.789373891459921, 2 * np.pi)]
+    arguments = dict(
+        axial_bounds_Ainv=axial_edges,
+        axial_peak_centers_Ainv=[axial],
+        axial_peak_half_width_Ainv=0.01,
+        radial_Ainv=1.587533442412548,
+        ki_sample_Ainv=[-0.0005850815951370112, 4.06296583629823, -0.3561943954988449],
+        normal_sample=[0, 0, 1],
+        # A wrapped interval and an overlapping interval must not duplicate mass.
+        source_region_bounds=[
+            [0, 5, arcs[1][0], 2 * np.pi - arcs[1][0] + 0.5],
+            [0, 5, 0.4, arcs[0][1] - 0.4],
+        ],
+        reference_mosaic=MosaicParameters(0.048106916673827695, 1.9857142825423217, 0),
+        axial_power=0,
+        angular_power=7,
+        axial_seed=0,
+        angular_shift_seed=0,
+        quadrature_kind="composite_gauss",
+        angular_support="fixed_union",
+        axial_panel_edges_Ainv=axial_edges,
+    )
+    bins, sigma = np.array([0.990, 0.999, 1.008]), 0.0007
+
+    def bin_mass(nodes):
+        cdf = ndtr((nodes.ewald_azimuth_rad[:, None] - bins) / sigma)
+        return nodes.weight_Ainv_rad @ (cdf[:, :-1] - cdf[:, 1:])
+
+    def primitive(x):
+        z = (x - bins) / sigma
+        normal_integral = z * ndtr(z) + np.exp(-z * z / 2) / np.sqrt(2 * np.pi)
+        return sigma * (normal_integral[:-1] - normal_integral[1:])
+
+    expected = (axial_edges[1] - axial_edges[0]) * sum(
+        primitive(hi) - primitive(lo) for lo, hi in arcs
+    )
+    edges = seed_angular_panel_edges(
+        [[0, 5, 0.97, 0.06]], maximum_panel_width_rad=0.001, maximum_panels=100
+    )
+    supplied = arguments | {"angular_power": 3, "angular_panel_edges_rad": edges}
+    nodes = sample_conditional_fiber_coordinates(**supplied)
+    np.testing.assert_allclose(bin_mass(nodes), expected, rtol=1e-9, atol=1e-15)
+    width = axial_edges[1] - axial_edges[0]
+    assert nodes.weight_Ainv_rad.sum() == pytest.approx(
+        width * sum(hi - lo for lo, hi in arcs), rel=1e-13
+    )
+    assert nodes.weight_Ainv_rad @ np.sin(nodes.ewald_azimuth_rad) == pytest.approx(
+        width * sum(np.cos(lo) - np.cos(hi) for lo, hi in arcs), abs=1e-14
+    )
+    changed = sample_conditional_fiber_coordinates(
+        **(
+            supplied
+            | {"reference_mosaic": MosaicParameters(0.3, 0.7, 0.4), "angular_shift_seed": 98}
+        )
+    )
+    np.testing.assert_array_equal(changed.ewald_azimuth_rad, nodes.ewald_azimuth_rad)
+    np.testing.assert_array_equal(changed.weight_Ainv_rad, nodes.weight_Ainv_rad)
+    rule = FiberIntegrationRule(
+        quadrature_kind="composite_gauss", angular_panel_edges_rad=list(edges)
+    )
+    assert rule.angular_panel_edges_rad == edges
+    assert hash(rule)
+    for invalid in ([0.1, 2 * np.pi], [0, 1, 1, 2 * np.pi], [0, np.nan, 2 * np.pi]):
+        with pytest.raises(ValueError, match="angular panels"):
+            sample_conditional_fiber_coordinates(
+                **(supplied | {"angular_panel_edges_rad": invalid})
+            )
+    with pytest.raises(ValueError, match="angular panels"):
+        FiberIntegrationRule(angular_panel_edges_rad=edges)
+    with pytest.raises(ValueError, match="node budget"):
+        sample_conditional_fiber_coordinates(**(supplied | {"maximum_angular_panel_nodes": 10}))
+    with pytest.raises(ValueError, match="panel budget"):
+        seed_angular_panel_edges(
+            [[0, 5, 0.97, 0.06]], maximum_panel_width_rad=0.001, maximum_panels=10
+        )
+    with pytest.raises(ValueError, match="angular seeding"):
+        seed_angular_panel_edges(
+            np.array([[0, 5, 1 + 0.1j, 0.1]]), maximum_panel_width_rad=0.01, maximum_panels=100
+        )
+    seeded = np.array(
+        seed_angular_panel_edges(
+            [[0, 5, 6.0, 0.5], [0, 5, 0.1, 0.3]], maximum_panel_width_rad=0.02, maximum_panels=100
+        )
+    )
+    assert {0.0, 2 * np.pi, 6.0, 6.5 - 2 * np.pi, 0.1, 0.4}.issubset(seeded)
+    mids = (seeded[:-1] + seeded[1:]) / 2
+    inside = (mids < 0.4) | (mids > 6.0)
+    assert np.max(np.diff(seeded)[inside]) <= 0.02 * (1 + 1e-12)
+    assert np.max(np.diff(seeded)[~inside]) > 5
 
 
 def test_multimodal_angular_quadrature_preserves_arc_measure() -> None:

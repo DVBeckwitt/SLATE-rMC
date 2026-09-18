@@ -626,6 +626,12 @@ class ConditionalStructureDetector:
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
                 *(
+                    ("angular_panel_edges_rad", np.asarray(rule.angular_panel_edges_rad)),
+                    ("maximum_angular_panel_nodes", rule.maximum_angular_panel_nodes),
+                )
+                if rule.angular_panel_edges_rad is not None
+                else (),
+                *(
                     (f"axial_mesh_{i}_rods", np.asarray(mesh.rods_hk, dtype=np.int64))
                     for i, mesh in enumerate(rule.axial_meshes)
                 ),

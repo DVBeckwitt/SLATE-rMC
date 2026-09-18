@@ -182,3 +182,8 @@ tasks:
     branch: codex/angular-cdf-repair-20260918
     status: READY_ANGULAR_CDF_REPAIR_FULL_FITS_UNQUALIFIED_STOPPED
     depends_on: [T37]
+  - id: T39
+    file: tasks/39_native_angular_panels.md
+    branch: codex/angular-panels-20260918
+    status: READY_LOCAL_ANGULAR_REPAIR_FULL_FITS_UNQUALIFIED_STOPPED
+    depends_on: [T38]
