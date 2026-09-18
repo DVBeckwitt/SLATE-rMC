@@ -283,6 +283,39 @@ compatibility. Fixed support removes a demonstrated remeshing discontinuity, but
 angular resolution must still be independently qualified. Observation grouping was an
 unsuccessful numerical prototype and is not a supported control.
 
+Native fitting and rendering now automatically resolve the angular proposal against
+their complete requested detector support. Geometry-only tiles (at most 64 pixels
+per side, at most 65536 tiles per source/channel) provide corner/center rates of
+Gaussian-kernel and pixel motion. Each tile's physical-angle width applies only
+inside its original conservative Q/angular envelope. These envelopes refine the
+mesh; they do not prune the integration union or omit observations. Whole-panel
+rendering uses the same selector with its own complete panel support.
+Witness rates are normalized by their physical Ewald-circle radius, then scaled
+to each axial node's radius. This avoids applying the motion of a large circle to
+a nearly collapsed endpoint circle. At zero radius only the geometry cap is
+removed; angular measure and proposal panels remain. Tiles without propagating
+witnesses add no geometry cap and still retain their original proposal support.
+An entirely degenerate set of propagating witnesses fails explicitly. These
+sampled seeds do not replace observable convergence checks.
+
+`angular_resolution_fraction` defaults to 0.5 and controls panel width relative to
+the local spatial response scale; halve it for independent angular refinement.
+The ordinary angular rule uses GL8 in each proposal-CDF panel, with inverse-density
+weights restoring physical `dphi`. `angular_power` supplies
+`2**max(0, angular_power-3)` initial panels per arc. Powers below 3 therefore share
+the same initial angular rule. The existing Sobol axial grid is retained when
+`quadrature_kind="sobol"`; its angular integration is now deterministic conditional
+quadrature. Low-level coordinate calls without resolution inputs retain the paired
+proposal as a reference API, not as native production routing.
+Numerical-check overrides that change power within that ineffective range are
+rejected. A frozen support envelope alone does not freeze the adaptive panels
+when detector or source geometry changes; qualify the actual parameter contrasts.
+
+Corner/center rates are resolution seeds, not a supremum or numerical certificate.
+Refine and qualify the actual observable and parameter contrasts. Fit support is
+not full-image evidence, and image qualification remains separate. No universal
+image tolerance follows from the local angular regression.
+
 `angular_panel_edges_rad` optionally supplies an immutable increasing physical-angle
 partition from exactly `0` to `2*pi`, requiring `composite_gauss`. The sampler merges
 the original support first, then intersects each arc with the partition. Each panel
@@ -290,7 +323,8 @@ uses `2**angular_power` physical Gauss nodes (use power 3 for GL8), or the decla
 local-m0 power where applicable. Weights are `dphi` times the original axial measure;
 the angular proposal CDF/PDF is bypassed, not multiplied in again. No supported arc,
 signed rod, source mass, observation or physical factor is removed. Omitting edges
-preserves the old proposal rule. Refine panel widths and per-panel order explicitly.
+uses automatic native resolution. Explicit edges override that selector for
+reproducibility; refine their panel widths and per-panel order explicitly.
 
 `seed_angular_panel_edges(bounds, maximum_panel_width_rad=..., maximum_panels=...)`
 constructs candidate edges from complete native source/region bounds, retaining
@@ -302,8 +336,8 @@ The supplied width must pass full-observable numerical checks; a fine angular ru
 does not qualify axial/source/cone integration. No universal width is prescribed.
 
 The rule's `maximum_angular_panel_nodes` defaults to 4194304 per source/rod-group
-sampler call and rejects excessive explicit-panel work before allocating angular
-output arrays. It is a work guard, not a numerical-refinement override. The seeder
+sampler call and rejects excessive automatic or explicit-panel work before yielding
+any coordinates. It is a work guard, not a numerical-refinement override. The seeder
 also fails when its declared panel budget is exceeded; neither uses a coarse fallback.
 Edges are included in native revisions, cache keys and serialized rules. For geometry
 or source probes, fixed edges alone do not freeze changing support: prepare a common
@@ -313,6 +347,15 @@ The bound applies to the entire sampler call, not each axial row. A fine mesh ov
 a large axial domain may exceed it; the demonstrated one-row cost is not a bound
 for a full family. Do not silently raise the budget or relabel such a rejection
 as numerical convergence.
+
+Coordinates and transfers stream in batches, including splits within an axial row
+or panel. Every batch retains the complete axial grid and global axial indices,
+so cached structure factors cannot alias a slice-local grid. Automatic preparation
+still stores five arrays per accepted panel (40 bytes per panel, plus construction
+storage); retained sparse responses have a separate memory cost. Batch size only
+bounds temporary joint-coordinate/transfer arrays. Numerical algorithm v2 and the
+resolution fraction are bound to native identities and serialized rules, preventing
+reuse of a pre-migration response or checkpoint.
 
 `stitch_grid_size` refines the empirical Bi handoff calculation. Baseline, numerical
 probes, reported fits, local-sensitivity probes and profile candidates record the

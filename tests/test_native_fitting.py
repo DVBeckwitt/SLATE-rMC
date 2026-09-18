@@ -84,6 +84,15 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
     from rasim_next.pipeline.fiber_detector import AxialPanelMesh
 
     physics = bi_physics()
+    from rasim_next.fitting.native_workflow import native_physics_with
+
+    for name in ("angular_power", "local_m0_angular_power"):
+        with pytest.raises(ValueError, match="ignored by the effective mesh"):
+            native_physics_with(physics, {}, {"integration": {name: 2}})
+    refined = native_physics_with(
+        physics, {}, {"integration": {"angular_resolution_fraction": 0.25}}
+    )
+    assert refined.integration_rule.angular_resolution_fraction == 0.25
     meshes = (
         AxialPanelMesh(((0, 0),), "external_local_m0_q", (0.0, 7.5, 7.8, 8.0, 8.2, 9.0)),
         AxialPanelMesh(((1, 0),), "positive_phase_axial", (0.0, 7.5, 7.8, 8.0, 8.2, 9.0)),
@@ -114,8 +123,6 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
         ),
     )
     assert changed.fixed_physics_revision != detector.fixed_physics_revision
-    from rasim_next.fitting.native_workflow import native_physics_with
-
     roundtrip = native_physics_with(
         physics,
         {},
@@ -144,7 +151,7 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
     np.testing.assert_allclose(panels.sum(axis=0), response.evaluate(), rtol=2e-13)
 
 
-def test_fixed_proposal_reuses_scattering_and_separates_spectral_mass_from_pixels():
+def test_adaptive_proposal_reuses_scattering_and_separates_spectral_mass_from_pixels():
     from painted_ewald import MosaicParameters
     from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
     from rasim_next.pipeline.fiber_detector import FiberScatteringCache
@@ -212,6 +219,13 @@ def test_fixed_proposal_reuses_scattering_and_separates_spectral_mass_from_pixel
     )
     reused = moved.compile_native_response(projection, scattering_cache=cache).evaluate()
     np.testing.assert_array_equal(reused, moved.compile_native_response(projection).evaluate())
+    # Frozen support does not freeze geometry-dependent angular resolution.
+    # Changed nodes must rebuild; the same moved geometry must then reuse them.
+    assert cache.build_count > built
+    built = cache.build_count
+    np.testing.assert_array_equal(
+        moved.compile_native_response(projection, scattering_cache=cache).evaluate(), reused
+    )
     assert cache.build_count == built and cache.reuse_count > 0
     assert not np.array_equal(reused, expected)
     weights = detector.source.mean_rays.source_weight
@@ -872,6 +886,10 @@ def test_axial_preparation_seeds_stencil_elastic_cutoffs_before_adaptation():
             axial_meshes=seeds,
             quadrature_kind="composite_gauss",
             angular_support="fixed_union",
+            # Isolate axial endpoint preparation with one fixed angular rule.
+            # Automatic angular accuracy has its own independent bin/reference proof.
+            angular_power=3,
+            angular_panel_edges_rad=(0.0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi),
         ),
     )
 

@@ -1258,8 +1258,12 @@ the overlap measure independently of their originating stack or caller.
 `FiberIntegrationRule.regular_q_bounds_Ainv` and `local_m0_q_bounds_Ainv` optionally
 freeze conservative Q proposal domains. Each must enclose the actual pooled source-region
 bounds; an insufficient interval raises rather than truncating support. Axial grids then
-remain shared when source row counts change. `quadrature_kind="sobol"` retains the default
-paired net. `composite_gauss` uses eight-point Gauss-Legendre axial CDF panels (or the
+remain shared when source row counts change. Low-level coordinate calls without angular
+resolution inputs retain the paired Sobol reference net. Native fit/render calls retain
+its axial grid and automatically resolve conditional GL8 angular panels using their
+complete detector support, as specified in [Native refinement](NATIVE_REFINEMENT.md).
+This numerical routing update preserves the physical measure and qualification gates.
+`composite_gauss` uses eight-point Gauss-Legendre axial CDF panels (or the
 requested lower order) and separate quadrature on each merged reachable angular arc.
 Arc masses and proposal densities enter the weights explicitly. Its seed must be zero;
 order refinement supplies comparison evidence. All fields participate in numerical identity.

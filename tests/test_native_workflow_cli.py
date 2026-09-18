@@ -348,7 +348,7 @@ def test_fixed_sf_control_keeps_declared_values_and_full_release_remains_require
             cap = 0.5 if mesh.coordinate == "external_local_m0_q" else 1.0
             assert np.max(np.diff(mesh.edges_Ainv)) <= cap * (1 + 1e-12)
             assert set(original["edges_Ainv"]).issubset(mesh.edges_Ainv)
-        with pytest.raises(ValueError, match="ignored by the frozen mesh"):
+        with pytest.raises(ValueError, match="ignored by the effective mesh"):
             native_physics_with(physics, mesh_plan, dict(integration=dict(axial_peak_spacing_L=2)))
         with pytest.raises(ValueError, match="refine mesh edges"):
             native_physics_with(physics, mesh_plan, dict(integration=dict(axial_power=4)))

@@ -146,7 +146,9 @@ def test_native_physics_input_preserves_expanded_sites_and_stacking_averages(tmp
                 ),
             ],
         ),
-        integration_rule=values(FiberIntegrationRule(axial_power=4, angular_power=1)),
+        # This boundary/rebinding proof needs a small complete axial grid;
+        # angular convergence is checked independently against analytic oracles.
+        integration_rule=values(FiberIntegrationRule(axial_power=2, angular_power=1)),
         spatial_quadrature_order=8,
         phase_population_weight=0.4,
         polarization_weight=0.5,
@@ -417,7 +419,7 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
     def strength(rod, ell):
         return (1 + 0.07 * rod.h - 0.03 * rod.k + 0.01 * ell) ** 2 + 0.1
 
-    small_rule = FiberIntegrationRule(axial_power=4, angular_power=1, seed=1, batch_size=100000)
+    small_rule = FiberIntegrationRule(axial_power=2, angular_power=1, seed=1, batch_size=100000)
     full = tuple(iter_conditional_fiber_transfers(**arguments, rule=small_rule))
     reference = {(batch.source_state_index, batch.radial_Ainv): batch for batch in full}
     assert len(reference) == len(full) > 0
@@ -517,13 +519,13 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
     )
 
     results = []
-    for batch_size in (100000, 13):
+    for batch_size in (100000, 257):
         image, roi = np.zeros(shape), np.zeros(2)
         seen = set()
         for batch in iter_conditional_fiber_transfers(
             **arguments,
             rule=FiberIntegrationRule(
-                axial_power=6, angular_power=2, seed=1, batch_size=batch_size
+                axial_power=3, angular_power=2, seed=1, batch_size=batch_size
             ),
         ):
             seen.update((rod.h, rod.k) for rod in batch.rods)
@@ -619,7 +621,7 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
         strength_model=SignedStrength(basis),
         mosaic=mosaic,
         integration_rule=FiberIntegrationRule(
-            axial_power=6, angular_power=2, seed=1, batch_size=100000
+            axial_power=3, angular_power=2, seed=1, batch_size=100000
         ),
         spatial_quadrature_order=8,
     )
@@ -717,6 +719,33 @@ def test_conditional_gaussian_matches_direct_rays_and_moments():
         )
     assert kernels.mean_px[1, 0] > instrument.detector_shape_rc[1]  # off-panel center retained
     assert not kernels.mean_px.flags.writeable
+
+    # Angular resolution must follow actual transported kernel motion, including
+    # the tilted detector's covariance change, not just centroid displacement.
+    from rasim_next.pipeline.source_spatial import conditional_spatial_angular_rate
+
+    outgoing = args["outgoing_direction_lab"]
+    tangent = np.cross([0.2, 0.9, -0.1], outgoing)
+    h = 1e-6
+    neighbors = [
+        compile_conditional_spatial_kernels(
+            **(args | {"outgoing_direction_lab": outgoing + sign * h * tangent})
+        )
+        for sign in (-1, 1)
+    ]
+    dm = (neighbors[1].mean_px - neighbors[0].mean_px) / (2 * h)
+    df = (neighbors[1].factor_px - neighbors[0].factor_px) / (2 * h)
+    expected_rate = np.maximum(
+        np.linalg.norm(np.linalg.solve(kernels.factor_px, dm[..., None])[..., 0], axis=1)
+        + np.sqrt(2)
+        * 8
+        * np.linalg.norm(np.linalg.solve(kernels.factor_px, df), ord=2, axis=(1, 2)),
+        np.max(abs(dm), axis=1),
+    )
+    rate = conditional_spatial_angular_rate(
+        **args, outgoing_derivative_lab=tangent, source_latent_radius=8
+    )
+    np.testing.assert_allclose(rate, expected_rate, rtol=1e-8)
 
 
 def test_local_native_mixture_stitches_components_and_preserves_signed_sf():

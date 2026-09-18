@@ -599,7 +599,7 @@ class ConditionalStructureDetector:
             self,
             "fixed_physics_revision",
             canonical_revision_sha256(
-                ("definition_id", "independent_azimuth_conditional_detector.v1"),
+                ("definition_id", "independent_azimuth_conditional_detector.v2"),
                 ("source", self.source.revision),
                 ("incident_model", self.incident.states.incident_model_id),
                 ("material", self.material.material_revision),
@@ -625,10 +625,9 @@ class ConditionalStructureDetector:
                 ("proposal_seed", rule.seed),
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
-                *(
-                    ("angular_panel_edges_rad", np.asarray(rule.angular_panel_edges_rad)),
-                    ("maximum_angular_panel_nodes", rule.maximum_angular_panel_nodes),
-                )
+                ("angular_resolution_fraction", rule.angular_resolution_fraction),
+                ("maximum_angular_panel_nodes", rule.maximum_angular_panel_nodes),
+                *(("angular_panel_edges_rad", np.asarray(rule.angular_panel_edges_rad)),)
                 if rule.angular_panel_edges_rad is not None
                 else (),
                 *(

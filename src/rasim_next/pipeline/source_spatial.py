@@ -790,6 +790,33 @@ def validate_conditional_spatial_support(
         raise ValueError("singular source position requires a lower-dimensional measure")
 
 
+def _conditional_source_footprint(source, source_state_index, instrument):
+    source_mean = source.mean_rays.origin_lab_m[source_state_index]
+    direction = source.mean_rays.direction_lab[source_state_index]
+    source_factor = source.conditional_origin_factor_lab_m
+    sample = _intersect_sample_rays(
+        source_mean[None, :],
+        direction[None, :],
+        lab_from_sample=instrument.lab_from_sample,
+        sample_from_lab=instrument.sample_from_lab,
+        sample_support_model_id=instrument.sample_support_model_id,
+        sample_width_m=instrument.sample_width_m,
+        sample_length_m=instrument.sample_length_m,
+    )
+    if sample.status[0] != ValidityCode.VALID:
+        raise ValueError(f"invalid mean incident ray: {sample.status[0]}")
+    sample_normal = instrument.lab_from_sample.rotation[:, 2]
+    distance_factor = -(sample_normal @ source_factor) / (sample_normal @ direction)
+    footprint_factor = source_factor + direction[:, None] * distance_factor
+    incoming_sigma = np.linalg.norm(distance_factor)
+    incoming_loss = (
+        max(float(ndtr(-sample.ray_distance_m[0] / incoming_sigma)), np.finfo(float).tiny)
+        if incoming_sigma > 0.0
+        else 0.0
+    )
+    return sample.point_lab_m, footprint_factor, incoming_loss
+
+
 def compile_conditional_spatial_kernels(
     *,
     instrument: CompiledInstrument,
@@ -817,31 +844,11 @@ def compile_conditional_spatial_kernels(
         source.mean_rays.wavelength_A
     ):
         raise ValueError("source_state_index must identify one conditional source row")
-    source_mean = source.mean_rays.origin_lab_m[source_state_index]
-    direction = source.mean_rays.direction_lab[source_state_index]
-    source_factor = source.conditional_origin_factor_lab_m
-    sample = _intersect_sample_rays(
-        source_mean[None, :],
-        direction[None, :],
-        lab_from_sample=instrument.lab_from_sample,
-        sample_from_lab=instrument.sample_from_lab,
-        sample_support_model_id=instrument.sample_support_model_id,
-        sample_width_m=instrument.sample_width_m,
-        sample_length_m=instrument.sample_length_m,
-    )
-    if sample.status[0] != ValidityCode.VALID:
-        raise ValueError(f"invalid mean incident ray: {sample.status[0]}")
-    sample_normal = instrument.lab_from_sample.rotation[:, 2]
-    distance_factor = -(sample_normal @ source_factor) / (sample_normal @ direction)
-    footprint_factor = source_factor + direction[:, None] * distance_factor
-    incoming_sigma = np.linalg.norm(distance_factor)
-    incoming_loss = (
-        max(float(ndtr(-sample.ray_distance_m[0] / incoming_sigma)), np.finfo(float).tiny)
-        if incoming_sigma > 0.0
-        else 0.0
+    sample_point, footprint_factor, incoming_loss = _conditional_source_footprint(
+        source, source_state_index, instrument
     )
     outgoing = finite_vectors3(outgoing_direction_lab, "outgoing_direction_lab")
-    origins = np.broadcast_to(sample.point_lab_m, outgoing.shape)
+    origins = np.broadcast_to(sample_point, outgoing.shape)
     intersections = _intersect_detector_plane(origins, outgoing, instrument)
     if np.any(intersections.status != ValidityCode.VALID):
         raise ValueError("every mean outgoing ray must meet the forward detector plane")
@@ -872,3 +879,54 @@ def compile_conditional_spatial_kernels(
         factor,
         loss,
     )
+
+
+def conditional_spatial_angular_rate(
+    *,
+    instrument: CompiledInstrument,
+    source: ConditionalSourceSamples,
+    source_state_index: int,
+    outgoing_direction_lab: ArrayLike,
+    outgoing_derivative_lab: ArrayLike,
+    maximum_backward_probability: float,
+    source_latent_radius: float,
+) -> NDArray[np.float64]:
+    """Local kernel/pixel motion per radian; a resolution seed, not an error bound."""
+    kernels = compile_conditional_spatial_kernels(
+        instrument=instrument,
+        source=source,
+        source_state_index=source_state_index,
+        outgoing_direction_lab=outgoing_direction_lab,
+        maximum_backward_probability=maximum_backward_probability,
+    )
+    derivative = finite_vectors3(outgoing_derivative_lab, "outgoing_derivative_lab")
+    outgoing = np.asarray(outgoing_direction_lab)
+    if (
+        derivative.shape != outgoing.shape
+        or not np.isfinite(source_latent_radius)
+        or source_latent_radius <= 0
+    ):
+        raise ValueError("angular derivatives must align and source radius must be positive")
+    point, footprint, _ = _conditional_source_footprint(source, source_state_index, instrument)
+    rotation = instrument.lab_from_detector.rotation.T
+    direction, tangent = outgoing @ rotation.T, derivative @ rotation.T
+    projected_tangent = (
+        tangent[:, :2] - direction[:, :2] * (tangent[:, 2] / direction[:, 2])[:, None]
+    )
+    ratio_derivative = projected_tangent / direction[:, 2, None]
+    distance = ((instrument.lab_from_detector.translation_m - point[0]) @ rotation.T)[2]
+    pitch = np.array([instrument.detector_column_pitch_m, instrument.detector_row_pitch_m])
+    mean_derivative = distance * ratio_derivative / pitch
+    factor_derivative = (
+        -ratio_derivative[:, :, None] * (rotation @ footprint)[2] / pitch[None, :, None]
+    )
+    latent_mean = np.linalg.solve(kernels.factor_px, mean_derivative[:, :, None])[:, :, 0]
+    latent_factor = np.linalg.solve(kernels.factor_px, factor_derivative)
+    rate = np.maximum(
+        np.linalg.norm(latent_mean, axis=1)
+        + np.sqrt(2) * source_latent_radius * np.linalg.norm(latent_factor, ord=2, axis=(1, 2)),
+        np.max(abs(mean_derivative), axis=1),
+    )
+    if np.any(~np.isfinite(rate)):
+        raise ValueError("grazing angular transport has unresolved spatial resolution")
+    return rate

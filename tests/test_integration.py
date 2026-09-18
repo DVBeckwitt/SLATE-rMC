@@ -9647,6 +9647,7 @@ def test_native_angular_panels_resolve_adjacent_bin_mass() -> None:
     from painted_ewald import MosaicParameters
     from rasim_next.pipeline.fiber_detector import (
         FiberIntegrationRule,
+        iter_conditional_fiber_coordinates,
         sample_conditional_fiber_coordinates,
         seed_angular_panel_edges,
     )
@@ -9695,6 +9696,43 @@ def test_native_angular_panels_resolve_adjacent_bin_mass() -> None:
     supplied = arguments | {"angular_power": 3, "angular_panel_edges_rad": edges}
     nodes = sample_conditional_fiber_coordinates(**supplied)
     np.testing.assert_allclose(bin_mass(nodes), expected, rtol=1e-9, atol=1e-15)
+    resolved = sample_conditional_fiber_coordinates(
+        **(arguments | {"maximum_angular_panel_width_rad": sigma / 2})
+    )
+    np.testing.assert_allclose(bin_mass(resolved), expected, rtol=1e-9, atol=1e-15)
+    localized = arguments | {
+        "angular_resolution_regions": [
+            [0, 5, 0.97, 0.06, sigma / 2],
+            # An unreachable rectangle must not dictate the whole angular mesh.
+            [3, 5, 0, 2 * np.pi, 1e-12],
+        ],
+        "maximum_angular_panel_nodes": 10000,
+    }
+    automatic = sample_conditional_fiber_coordinates(**localized)
+    np.testing.assert_allclose(bin_mass(automatic), expected, rtol=1e-9, atol=1e-15)
+    unrefined = bin_mass(sample_conditional_fiber_coordinates(**arguments))
+    assert np.max(abs(unrefined - expected)) > 1e-3 * np.max(expected)
+    automatic_blocks = list(iter_conditional_fiber_coordinates(**localized, batch_size=17))
+    assert all(len(block.axial_index) <= 17 for block in automatic_blocks)
+    for name in ("axial_index", "ewald_azimuth_rad", "weight_Ainv_rad"):
+        np.testing.assert_array_equal(
+            np.concatenate([getattr(block, name) for block in automatic_blocks]),
+            getattr(automatic, name),
+        )
+    with pytest.raises(ValueError, match="node budget"):
+        next(
+            iter_conditional_fiber_coordinates(
+                **(localized | {"maximum_angular_panel_nodes": 10}), batch_size=3
+            )
+        )
+    blocks = list(iter_conditional_fiber_coordinates(**supplied, batch_size=17))
+    assert all(len(block.axial_index) <= 17 for block in blocks)
+    for block in blocks:
+        np.testing.assert_array_equal(block.positive_axial_Ainv, nodes.positive_axial_Ainv)
+    for name in ("axial_index", "ewald_azimuth_rad", "weight_Ainv_rad"):
+        np.testing.assert_array_equal(
+            np.concatenate([getattr(block, name) for block in blocks]), getattr(nodes, name)
+        )
     width = axial_edges[1] - axial_edges[0]
     assert nodes.weight_Ainv_rad.sum() == pytest.approx(
         width * sum(hi - lo for lo, hi in arcs), rel=1e-13
@@ -9724,6 +9762,14 @@ def test_native_angular_panels_resolve_adjacent_bin_mass() -> None:
         FiberIntegrationRule(angular_panel_edges_rad=edges)
     with pytest.raises(ValueError, match="node budget"):
         sample_conditional_fiber_coordinates(**(supplied | {"maximum_angular_panel_nodes": 10}))
+    with pytest.raises(ValueError, match="node budget"):
+        next(
+            iter_conditional_fiber_coordinates(
+                **(supplied | {"maximum_angular_panel_nodes": 10}), batch_size=3
+            )
+        )
+    with pytest.raises(ValueError, match="batch_size"):
+        next(iter_conditional_fiber_coordinates(**supplied, batch_size=0))
     with pytest.raises(ValueError, match="panel budget"):
         seed_angular_panel_edges(
             [[0, 5, 0.97, 0.06]], maximum_panel_width_rad=0.001, maximum_panels=10

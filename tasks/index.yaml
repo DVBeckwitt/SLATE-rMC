@@ -187,3 +187,8 @@ tasks:
     branch: codex/angular-panels-20260918
     status: READY_LOCAL_ANGULAR_REPAIR_FULL_FITS_UNQUALIFIED_STOPPED
     depends_on: [T38]
+  - id: T40
+    file: tasks/40_automatic_native_angular.md
+    branch: codex/automatic-angular-20260918
+    status: READY_AUTOMATIC_ANGULAR_MIGRATION_LOCAL_ORACLES_PASS_FULL_FITS_UNQUALIFIED
+    depends_on: [T39]

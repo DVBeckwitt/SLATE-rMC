@@ -22,6 +22,7 @@ def native_physics_with(original, plan, overrides):
         "axial_power",
         "angular_power",
         "angular_panel_edges_rad",
+        "angular_resolution_fraction",
         "local_m0_angular_power",
         "seed",
         "cone_quadrature_order",
@@ -72,8 +73,19 @@ def native_physics_with(original, plan, overrides):
         )
     if result.integration_rule.frozen_ewald_bounds_Ainv_rad is not None:
         ignored.add("angular_support")
+    if result.integration_rule.angular_panel_edges_rad is not None:
+        ignored.add("angular_resolution_fraction")
+    else:
+        base_rule = replace(original.integration_rule, **plan.get("integration_override", {}))
+        if base_rule.angular_panel_edges_rad is None:
+            for name in ("angular_power", "local_m0_angular_power"):
+                before, after = getattr(base_rule, name), getattr(result.integration_rule, name)
+                before = base_rule.angular_power if before is None else before
+                after = result.integration_rule.angular_power if after is None else after
+                if before != after and max(3, before) == max(3, after):
+                    ignored.add(name)
     if ignored & set(overrides.get("integration", {})):
-        raise ValueError("numerical overrides cannot refine controls ignored by the frozen mesh")
+        raise ValueError("numerical overrides cannot refine controls ignored by the effective mesh")
     source_override = {**plan.get("source_override", {}), **overrides.get("source", {})}
     if "stitch_overlap_measure" in plan:
         if result.specular_stitch_stack is None:
