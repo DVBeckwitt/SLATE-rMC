@@ -177,3 +177,8 @@ tasks:
     branch: codex/axial-cdf-repair-20260917
     status: READY_AXIAL_CDF_REPAIR_FULL_FITS_UNQUALIFIED
     depends_on: [T36]
+  - id: T38
+    file: tasks/38_angular_cdf_repair.md
+    branch: codex/angular-cdf-repair-20260918
+    status: READY_ANGULAR_CDF_REPAIR_FULL_FITS_UNQUALIFIED_STOPPED
+    depends_on: [T37]

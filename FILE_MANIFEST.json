@@ -1,5 +1,5 @@
 {
-  "file_count": 380,
+  "file_count": 381,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -1243,8 +1243,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/fiber_detector.py",
-      "sha256": "d38fc5bb8d183b84797fd4565074122187c9b00a26a9324a39afa8e2b0313966",
-      "size_bytes": 72850
+      "sha256": "ed37956d0ff8983661ad78bf0737e059e2ca495a97c35ab82455d0f0b73b6f80",
+      "size_bytes": 73423
     },
     {
       "path": "src/rasim_next/pipeline/incidence_acquisition.py",
@@ -1597,6 +1597,11 @@
       "size_bytes": 6536
     },
     {
+      "path": "tasks/38_angular_cdf_repair.md",
+      "sha256": "22df7558623d829480c2a121a783088f92f6afe01f6e765611b927b496a78989",
+      "size_bytes": 6718
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1638,8 +1643,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "8f59ec06b7aac924a21cdd5a787f744b0f54995efeb7929c02acdc443c974b07",
-      "size_bytes": 5935
+      "sha256": "fed9536d043ede5f7881c705d4d7121552b1911babc06e892074978fa1d79929",
+      "size_bytes": 6123
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1798,8 +1803,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "54d493758fbf75d0b99a420920b066e6f1b9bee4b3081f4594755c3272350c97",
-      "size_bytes": 377585
+      "sha256": "d4ea05323be57644abcbb977029d89773c020232f99e6ae081aab80a163646a5",
+      "size_bytes": 379182
     },
     {
       "path": "tests/test_matched_regions.py",

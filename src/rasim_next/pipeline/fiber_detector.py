@@ -916,19 +916,27 @@ def _bounded_angular_quantiles(
                 target += base[interval]
                 left, right = lo[interval], hi[interval]
                 v = left + (right - left) * quantiles[i, j]
-                for _iteration in range(70):
+                # Keep the Newton fast path, then guarantee bracket contraction.
+                # Return only a tested coordinate and the density evaluated there.
+                for _iteration in range(150):
                     cdf, density = _angular_cdf_density(
                         v, centers[i], widths[i], offsets, uniform_mass
                     )
                     error = cdf - target
+                    if not np.isfinite(error) or not np.isfinite(density) or density <= 0:
+                        raise ValueError("angular inverse CDF requires a finite positive density")
                     if abs(error) < 2e-15 or right - left < 2e-14:
                         break
                     if error > 0:
                         right = v
                     else:
                         left = v
-                    proposed = v - error / density
+                    proposed = v - error / density if _iteration < 70 else 0.5 * (left + right)
                     v = proposed if left < proposed < right else 0.5 * (left + right)
+                else:
+                    raise ValueError(
+                        "angular inverse CDF did not converge within its iteration budget"
+                    )
                 axial_indices.append(i)
                 angular_indices.append(j)
                 angles.append(v)

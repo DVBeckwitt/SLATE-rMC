@@ -9630,6 +9630,41 @@ def test_joint_fiber_quadrature_integrates_nonseparable_continuous_field(quadrat
         np.testing.assert_array_equal(changed_shift.ewald_azimuth_rad, nodes.ewald_azimuth_rad)
 
 
+def test_multimodal_angular_quadrature_preserves_arc_measure() -> None:
+    from painted_ewald import MosaicParameters
+    from rasim_next.pipeline.fiber_detector import sample_conditional_fiber_coordinates
+
+    # A native GD1 proposal stalls Newton between narrow angular modes. One
+    # physical axial midpoint isolates its angular coordinate/density pairing.
+    axial = 3.1781816914396286
+    edges = [axial - 0.001, axial + 0.001]
+    arcs = [(0.0, 1.4959182683734986), (4.789373891459921, 2 * np.pi)]
+    nodes = sample_conditional_fiber_coordinates(
+        axial_bounds_Ainv=edges,
+        axial_peak_centers_Ainv=[axial],
+        axial_peak_half_width_Ainv=0.01,
+        radial_Ainv=1.587533442412548,
+        ki_sample_Ainv=[-0.0005850815951370112, 4.06296583629823, -0.3561943954988449],
+        normal_sample=[0, 0, 1],
+        source_region_bounds=[[0, 5, lo, hi - lo] for lo, hi in arcs],
+        reference_mosaic=MosaicParameters(0.048106916673827695, 1.9857142825423217, 0),
+        axial_power=0,
+        angular_power=7,
+        axial_seed=0,
+        angular_shift_seed=0,
+        quadrature_kind="composite_gauss",
+        angular_support="fixed_union",
+        axial_panel_edges_Ainv=edges,
+    )
+    length = edges[1] - edges[0]
+    mass = length * sum(hi - lo for lo, hi in arcs)
+    sine_moment = length * sum(np.cos(lo) - np.cos(hi) for lo, hi in arcs)
+    assert nodes.weight_Ainv_rad.sum() == pytest.approx(mass, rel=1e-10, abs=1e-14)
+    assert nodes.weight_Ainv_rad @ np.sin(nodes.ewald_azimuth_rad) == pytest.approx(
+        sine_moment, rel=1e-10, abs=1e-14
+    )
+
+
 def test_fixed_angular_support_preserves_continuity_across_observation_q_bounds() -> None:
     from painted_ewald import MosaicParameters
     from rasim_next.pipeline.fiber_detector import sample_conditional_fiber_coordinates
