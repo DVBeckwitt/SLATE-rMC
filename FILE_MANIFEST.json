@@ -1,5 +1,5 @@
 {
-  "file_count": 395,
+  "file_count": 401,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -87,6 +87,11 @@
       "size_bytes": 2183
     },
     {
+      "path": "configs/joint_hbn_bi_geometry_fit.yaml",
+      "sha256": "62104ceb72b56e2e6295f9265020d58163ab16c1f944fe01c57cd0bb1ce577a0",
+      "size_bytes": 400
+    },
+    {
       "path": "configs/native_experiments.json",
       "sha256": "8010c8ed82ed2d1f6af01086b834b442b557b2f07d963f4109fdbd042f72c4ce",
       "size_bytes": 2672
@@ -138,8 +143,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "df99764c746262a694d6382aef3d734bf5497bfce621865a0720acce14ff31ce",
-      "size_bytes": 65660
+      "sha256": "e4997152f9d60dffd371d6ce0e66bbc73e77611f319933c39bd20a33ce4cd828",
+      "size_bytes": 66762
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -727,6 +732,11 @@
       "size_bytes": 48956
     },
     {
+      "path": "scripts/fit_joint_hbn_bi_geometry.py",
+      "sha256": "321ee855babadd50e30451597cff6e14e47556b5ae13ebb8aa427930b212cf11",
+      "size_bytes": 12474
+    },
+    {
       "path": "scripts/fit_osc_geometry.py",
       "sha256": "a5a5e68b0c757df565f346da6286c3acf1a24edd86df95ea2a4ebd7d17d51cd1",
       "size_bytes": 55949
@@ -952,9 +962,19 @@
       "size_bytes": 125845
     },
     {
+      "path": "src/rasim_next/fitting/hbn.py",
+      "sha256": "8f084f88a775806fdea3934e8c5e1fc8c906446097f078372da37dc9dc3a6b16",
+      "size_bytes": 20405
+    },
+    {
       "path": "src/rasim_next/fitting/indexed_series.py",
       "sha256": "df78f5ed30e0736024fa0d638734dd7c45dbe3b4227f7dda910ea7126b1954de",
       "size_bytes": 68321
+    },
+    {
+      "path": "src/rasim_next/fitting/joint_geometry.py",
+      "sha256": "8652f8c8559aeb55d23d96bc46ef9756ff671fc97c3a9c8448dfee2f7979354b",
+      "size_bytes": 26648
     },
     {
       "path": "src/rasim_next/fitting/matched_regions.py",
@@ -1622,6 +1642,11 @@
       "size_bytes": 9908
     },
     {
+      "path": "tasks/41_joint_hbn_bi_geometry.md",
+      "sha256": "8f5e51069ffe9c2bd2c102a6920c524e5591cdfd12272f590307c07888a2a7ab",
+      "size_bytes": 4950
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1668,8 +1693,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "0edfcc3956a4d6a35400ad5a8d05940efbaf4fd0c1002463885377b607c24b0a",
-      "size_bytes": 6525
+      "sha256": "828479905e4ac3eafe927b80d6dc778d0578e0e8d6f6dd36ac7fb9af0824dcd2",
+      "size_bytes": 6700
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1830,6 +1855,11 @@
       "path": "tests/test_geometry_optics.py",
       "sha256": "5b325a6be5efc39b4ea40a38c0971df686b30d1b0d7e94c92437f8459a14770f",
       "size_bytes": 56778
+    },
+    {
+      "path": "tests/test_hbn_calibration.py",
+      "sha256": "f813c99ca0cb560121d667414dbcc74b11c594ab8de37634c7febe757c16523e",
+      "size_bytes": 2124
     },
     {
       "path": "tests/test_integration.py",

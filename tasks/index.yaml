@@ -192,3 +192,8 @@ tasks:
     branch: codex/automatic-angular-20260918
     status: READY_AUTOMATIC_ANGULAR_MIGRATION_LOCAL_ORACLES_PASS_FULL_FITS_UNQUALIFIED
     depends_on: [T39]
+  - id: T41
+    file: tasks/41_joint_hbn_bi_geometry.md
+    branch: codex/joint-hbn-bi-geometry
+    status: BLOCKED_GONIOMETER_PIVOT_UNIDENTIFIABLE
+    depends_on: [T18, T40]

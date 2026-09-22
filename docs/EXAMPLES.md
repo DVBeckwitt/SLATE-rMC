@@ -530,6 +530,27 @@ applying or claiming the frozen Bi2Se3 thresholds. Counts or reflection names ne
 the full selection revision because moved same-key detector lobes are scientifically distinct.
 The primary fit always uses every frozen key; `--heldout-integer-l` requests a separate training
 refit and held-out prediction report without changing that primary data set.
+
+## Automatic hBN plus cross-material geometry audit
+
+Trace all five declared hBN powder rings without clicks, use hBN only for detector center and the
+two intrinsic detector tilts, and fit those coordinates jointly with every indexed Bi2Se3 and
+Bi2Te3 incidence image:
+
+```powershell
+python scripts/fit_joint_hbn_bi_geometry.py `
+  configs/joint_hbn_bi_geometry_fit.yaml `
+  --destination C:\path\outside\the\repository\joint-geometry.json `
+  --json
+```
+
+The configured detector translation, pitch, shape, roll, and native orientation remain fixed.  A
+private hBN calibrant distance supplies ring scale but is never exported as shared detector
+distance.  The JSON separates static declarations, session-global fitted coordinates, specimen-
+local coordinates, and the private nuisance value.  It also reports the full scaled-Jacobian rank,
+condition, weakest direction, active bounds, covariance standard errors, automatic ring coverage,
+and per-image detector-pixel errors.  The command exits with status 2 when the observable fit
+converges but any declared parameter fails confidence qualification.
 Every geometry coordinate is active by default. Repeat `--freeze-parameter NAME` to hold any
 coordinate at its configured base value; at least one shared coordinate or the common delta must
 remain active. `--fit-incidence-angle-delta` activates one scalar added to every commanded angle;
