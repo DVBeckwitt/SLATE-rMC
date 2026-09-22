@@ -121,6 +121,26 @@ size_bytes = 350
 sha256 = "7bb068222994599d3768c91b898dcf862e6302d5824436e790356678799f4373"
 
 [[file]]
+path = "examples/pbi2/osc/Y1_5d_5m.osc.gz"
+size_bytes = 3916723
+sha256 = "61bc5c958301fcd6b6413ce7775fe64b5b872b7366f37130c8efaf9946b9de43"
+
+[[file]]
+path = "examples/pbi2/osc/Y1_10d_10m.osc.gz"
+size_bytes = 4550585
+sha256 = "5458fb70901b2101214cc97d35370e40975ee116209951bb47ec74252eec84bf"
+
+[[file]]
+path = "examples/pbi2/osc/Y2_5d_10m.osc.gz"
+size_bytes = 4874192
+sha256 = "edc2603994bcf6c06126dbe659f77adedf2e739f10e5e2c39afca4a6c9a2f9a0"
+
+[[file]]
+path = "examples/pbi2/osc/Y2_10d_10m.osc.gz"
+size_bytes = 4896213
+sha256 = "8c6e11bb89c93ac50437ee43def9e7f4537b0234ef9ada1af82e12b6ef4fe1ea"
+
+[[file]]
 path = "examples/pbi2/structures/PbI2_2H.cif"
 size_bytes = 1272
 sha256 = "7cf2a5e1957ea63d277c704cff390724175f96e6d26f982287490eedc24afbf9"

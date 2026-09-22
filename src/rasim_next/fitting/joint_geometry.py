@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -14,6 +15,7 @@ from rasim_next.core.frames import FrameId
 from rasim_next.core.transforms import RigidTransform
 from rasim_next.fitting.geometry import (
     ExactTagGeometryModel,
+    GeometryPredictionError,
     IntegerLMarkerObservations,
     evaluate_layer_l_geometry_objective_residual,
     evaluate_tagged_geometry_objective_residual,
@@ -36,7 +38,7 @@ from rasim_next.pipeline.configured_simulation import (
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
-MaterialId = Literal["bi2se3", "bi2te3"]
+SpecimenId = Literal["bi2se3", "bi2te3", "pbi2_y1", "pbi2_y2"]
 
 JOINT_GEOMETRY_PARAMETER_NAMES = (
     "detector_column_tilt_rad",
@@ -53,12 +55,18 @@ JOINT_GEOMETRY_PARAMETER_NAMES = (
     "bi2te3_sample_x_tilt_rad",
     "bi2te3_sample_y_tilt_rad",
     "bi2te3_zs_m",
+    "pbi2_y1_sample_x_tilt_rad",
+    "pbi2_y1_sample_y_tilt_rad",
+    "pbi2_y1_zs_m",
+    "pbi2_y2_sample_x_tilt_rad",
+    "pbi2_y2_sample_y_tilt_rad",
+    "pbi2_y2_zs_m",
     "hbn_calibrant_distance_m",
 )
 
 GLOBAL_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[:9]
-LOCAL_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[9:14]
-NUISANCE_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[14:]
+LOCAL_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[9:20]
+NUISANCE_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[20:]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +85,12 @@ class JointGeometryState:
     bi2te3_sample_x_tilt_rad: float
     bi2te3_sample_y_tilt_rad: float
     bi2te3_zs_m: float
+    pbi2_y1_sample_x_tilt_rad: float
+    pbi2_y1_sample_y_tilt_rad: float
+    pbi2_y1_zs_m: float
+    pbi2_y2_sample_x_tilt_rad: float
+    pbi2_y2_sample_y_tilt_rad: float
+    pbi2_y2_zs_m: float
     hbn_calibrant_distance_m: float
 
     def __post_init__(self) -> None:
@@ -89,9 +103,7 @@ class JointGeometryState:
     @classmethod
     def from_array(cls, values: ArrayLike) -> JointGeometryState:
         array = np.asarray(values, dtype=np.float64)
-        if array.shape != (len(JOINT_GEOMETRY_PARAMETER_NAMES),) or not np.all(
-            np.isfinite(array)
-        ):
+        if array.shape != (len(JOINT_GEOMETRY_PARAMETER_NAMES),) or not np.all(np.isfinite(array)):
             raise ValueError("joint geometry state has the wrong shape or nonfinite values")
         return cls(*(float(value) for value in array))
 
@@ -104,6 +116,12 @@ class JointGeometryState:
             calibration.detector_row_tilt_rad,
             calibration.beam_center_column_px,
             calibration.beam_center_row_px,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -161,6 +179,12 @@ class JointGeometryBounds:
             -angle,
             -angle,
             -5.0e-4,
+            -angle,
+            -angle,
+            -5.0e-4,
+            -angle,
+            -angle,
+            -5.0e-4,
             0.04,
         )
         upper = JointGeometryState(
@@ -173,6 +197,12 @@ class JointGeometryBounds:
             1.0e-3,
             1.0e-3,
             incidence,
+            angle,
+            5.0e-4,
+            angle,
+            angle,
+            5.0e-4,
+            angle,
             angle,
             5.0e-4,
             angle,
@@ -191,7 +221,7 @@ class JointGeometryBounds:
 
 @dataclass(frozen=True, slots=True)
 class JointGeometryImageMetric:
-    material_id: MaterialId
+    specimen_id: SpecimenId
     image_id: str
     site_count: int
     site_rms_px: float
@@ -214,8 +244,8 @@ class JointGeometryFitResult:
     hbn_residual_rms_px: float
     hbn_residual_max_px: float
     per_image: tuple[JointGeometryImageMetric, ...]
-    pooled_bi_site_rms_px: float
-    pooled_bi_site_max_px: float
+    pooled_crystalline_site_rms_px: float
+    pooled_crystalline_site_max_px: float
     model_evaluation_count: int
     optimizer_function_evaluation_count: int
     beam_origin_lab_m: FloatArray
@@ -286,7 +316,7 @@ def _axis_and_pivot(
 
 
 def _absolute_instrument_and_model(
-    material_id: MaterialId,
+    specimen_id: SpecimenId,
     image: IndexedGeometryImage,
     state: JointGeometryState,
     *,
@@ -302,8 +332,7 @@ def _absolute_instrument_and_model(
                 replace(
                     configured_axis,
                     angle_deg=(
-                        configured_axis.angle_deg
-                        + math.degrees(state.incidence_angle_delta_rad)
+                        configured_axis.angle_deg + math.degrees(state.incidence_angle_delta_rad)
                     ),
                 ),
             ),
@@ -328,13 +357,14 @@ def _absolute_instrument_and_model(
     reference_column, reference_row = instrument.detector_reference_coordinate_px
     detector_offset_m = np.asarray(
         (
-            (state.beam_center_column_px - reference_column)
-            * instrument.detector_column_pitch_m,
+            (state.beam_center_column_px - reference_column) * instrument.detector_column_pitch_m,
             (state.beam_center_row_px - reference_row) * instrument.detector_row_pitch_m,
             0.0,
         )
     )
-    beam_hit_lab_m = instrument.lab_from_detector.translation_m + detector_rotation @ detector_offset_m
+    beam_hit_lab_m = (
+        instrument.lab_from_detector.translation_m + detector_rotation @ detector_offset_m
+    )
     direction = np.asarray(shifted_config.source.mean_direction_lab, dtype=np.float64)
     direction /= np.linalg.norm(direction)
     nominal_origin = np.asarray(shifted_config.source.mean_origin_lab_m, dtype=np.float64)
@@ -346,14 +376,24 @@ def _absolute_instrument_and_model(
         config=shifted_config,
         samples=sample_configured_nominal_geometry_source(source),
     )
-    if material_id == "bi2se3":
+    if specimen_id == "bi2se3":
         sample_x_tilt = 0.0
         sample_y_tilt = state.bi2se3_sample_y_tilt_rad
         z_s_m = state.bi2se3_zs_m
-    else:
+    elif specimen_id == "bi2te3":
         sample_x_tilt = state.bi2te3_sample_x_tilt_rad
         sample_y_tilt = state.bi2te3_sample_y_tilt_rad
         z_s_m = state.bi2te3_zs_m
+    elif specimen_id == "pbi2_y1":
+        sample_x_tilt = state.pbi2_y1_sample_x_tilt_rad
+        sample_y_tilt = state.pbi2_y1_sample_y_tilt_rad
+        z_s_m = state.pbi2_y1_zs_m
+    elif specimen_id == "pbi2_y2":
+        sample_x_tilt = state.pbi2_y2_sample_x_tilt_rad
+        sample_y_tilt = state.pbi2_y2_sample_y_tilt_rad
+        z_s_m = state.pbi2_y2_zs_m
+    else:
+        raise ValueError(f"unknown specimen_id {specimen_id!r}")
     corrections = SharedGeometryCorrections(
         detector_column_tilt_rad=0.0,
         detector_row_tilt_rad=0.0,
@@ -374,14 +414,14 @@ def _absolute_instrument_and_model(
 
 
 def _predict_image(
-    material_id: MaterialId,
+    specimen_id: SpecimenId,
     image: IndexedGeometryImage,
     state: JointGeometryState,
     *,
     base_detector_rotation: FloatArray,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     model, instrument, beam_origin = _absolute_instrument_and_model(
-        material_id,
+        specimen_id,
         image,
         state,
         base_detector_rotation=base_detector_rotation,
@@ -405,14 +445,18 @@ def evaluate_joint_geometry_residual(
     hbn_observations: HbnRingObservations,
     bi2se3_images: tuple[IndexedGeometryImage, ...],
     bi2te3_images: tuple[IndexedGeometryImage, ...],
+    pbi2_y1_images: tuple[IndexedGeometryImage, ...],
+    pbi2_y2_images: tuple[IndexedGeometryImage, ...],
     base_detector_rotation: ArrayLike,
 ) -> FloatArray:
-    """Evaluate hBN and both fixed indexed material series in one residual vector."""
+    """Evaluate hBN and all four fixed indexed specimen series in one residual vector."""
 
     if not isinstance(state, JointGeometryState):
         raise TypeError("state must be JointGeometryState")
     rotation = np.asarray(base_detector_rotation, dtype=np.float64)
-    images = tuple(bi2se3_images) + tuple(bi2te3_images)
+    images = (
+        tuple(bi2se3_images) + tuple(bi2te3_images) + tuple(pbi2_y1_images) + tuple(pbi2_y2_images)
+    )
     if not images:
         raise ValueError("joint geometry fit requires indexed material images")
     reference = images[0].model.instrument
@@ -435,14 +479,16 @@ def evaluate_joint_geometry_residual(
             detector_row_pitch_m=reference.detector_row_pitch_m,
         )
     ]
-    for material_id, material_images in (
+    for specimen_id, specimen_images in (
         ("bi2se3", tuple(bi2se3_images)),
         ("bi2te3", tuple(bi2te3_images)),
+        ("pbi2_y1", tuple(pbi2_y1_images)),
+        ("pbi2_y2", tuple(pbi2_y2_images)),
     ):
-        for image in material_images:
+        for image in specimen_images:
             blocks.append(
                 _predict_image(
-                    material_id,
+                    specimen_id,
                     image,
                     state,
                     base_detector_rotation=rotation,
@@ -464,20 +510,33 @@ def _finite_jacobian(
     jacobian = np.empty((baseline.size, values.size), dtype=np.float64)
     for index, requested_step in enumerate(steps):
         step = min(float(requested_step), 0.2 * float(upper[index] - lower[index]))
-        forward = values.copy()
-        backward = values.copy()
-        if values[index] - step >= lower[index] and values[index] + step <= upper[index]:
-            forward[index] += step
-            backward[index] -= step
-            jacobian[:, index] = (
-                np.asarray(function(forward)) - np.asarray(function(backward))  # type: ignore[operator]
-            ) / (2.0 * step)
-        elif values[index] + step <= upper[index]:
-            forward[index] += step
-            jacobian[:, index] = (np.asarray(function(forward)) - baseline) / step  # type: ignore[operator]
+        for _ in range(12):
+            forward_value = None
+            backward_value = None
+            if values[index] + step <= upper[index]:
+                forward = values.copy()
+                forward[index] += step
+                with suppress(GeometryPredictionError):
+                    forward_value = np.asarray(function(forward))  # type: ignore[operator]
+            if values[index] - step >= lower[index]:
+                backward = values.copy()
+                backward[index] -= step
+                with suppress(GeometryPredictionError):
+                    backward_value = np.asarray(function(backward))  # type: ignore[operator]
+            if forward_value is not None and backward_value is not None:
+                jacobian[:, index] = (forward_value - backward_value) / (2.0 * step)
+                break
+            if forward_value is not None:
+                jacobian[:, index] = (forward_value - baseline) / step
+                break
+            if backward_value is not None:
+                jacobian[:, index] = (baseline - backward_value) / step
+                break
+            step *= 0.5
         else:
-            backward[index] -= step
-            jacobian[:, index] = (baseline - np.asarray(function(backward))) / step  # type: ignore[operator]
+            raise GeometryPredictionError(
+                f"no topology-preserving finite-difference step for parameter {index}"
+            )
     return jacobian
 
 
@@ -487,6 +546,8 @@ def fit_joint_geometry(
     hbn_calibration: HbnDetectorCalibration,
     bi2se3_images: tuple[IndexedGeometryImage, ...],
     bi2te3_images: tuple[IndexedGeometryImage, ...],
+    pbi2_y1_images: tuple[IndexedGeometryImage, ...],
+    pbi2_y2_images: tuple[IndexedGeometryImage, ...],
     base_detector_rotation: ArrayLike,
     bounds: JointGeometryBounds | None = None,
 ) -> JointGeometryFitResult:
@@ -499,8 +560,10 @@ def fit_joint_geometry(
         raise TypeError("hBN observations and calibration have invalid types")
     se3 = tuple(bi2se3_images)
     te3 = tuple(bi2te3_images)
-    if not se3 or not te3:
-        raise ValueError("both Bi2Se3 and Bi2Te3 image series are required")
+    y1 = tuple(pbi2_y1_images)
+    y2 = tuple(pbi2_y2_images)
+    if not se3 or not te3 or not y1 or not y2:
+        raise ValueError("Bi2Se3, Bi2Te3, PbI2 Y1, and PbI2 Y2 image series are required")
     rotation = np.asarray(base_detector_rotation, dtype=np.float64)
     initial = JointGeometryState.from_hbn(hbn_calibration)
     active_bounds = JointGeometryBounds.around_hbn(hbn_calibration) if bounds is None else bounds
@@ -519,6 +582,12 @@ def fit_joint_geometry(
             3.0e-4,
             3.0e-4,
             math.radians(0.1),
+            0.01,
+            1.0e-4,
+            0.01,
+            0.01,
+            1.0e-4,
+            0.01,
             0.01,
             1.0e-4,
             0.01,
@@ -544,11 +613,26 @@ def fit_joint_geometry(
             1.0e-5,
             1.0e-6,
             1.0e-5,
+            1.0e-5,
+            1.0e-6,
+            1.0e-5,
+            1.0e-5,
+            1.0e-6,
+            1.0e-5,
         )
     )
-    evaluation_count = 0
+    evaluation_count = 1
+    residual_size = evaluate_joint_geometry_residual(
+        initial,
+        hbn_observations=hbn_observations,
+        bi2se3_images=se3,
+        bi2te3_images=te3,
+        pbi2_y1_images=y1,
+        pbi2_y2_images=y2,
+        base_detector_rotation=rotation,
+    ).size
 
-    def residual_array(values: FloatArray) -> FloatArray:
+    def raw_residual_array(values: FloatArray) -> FloatArray:
         nonlocal evaluation_count
         evaluation_count += 1
         return np.array(
@@ -557,13 +641,21 @@ def fit_joint_geometry(
                 hbn_observations=hbn_observations,
                 bi2se3_images=se3,
                 bi2te3_images=te3,
+                pbi2_y1_images=y1,
+                pbi2_y2_images=y2,
                 base_detector_rotation=rotation,
             ),
             copy=True,
         )
 
+    def optimizer_residual_array(values: FloatArray) -> FloatArray:
+        try:
+            return raw_residual_array(values)
+        except GeometryPredictionError:
+            return np.full(residual_size, 1.0e6, dtype=np.float64)
+
     optimized = least_squares(
-        residual_array,
+        optimizer_residual_array,
         initial_values,
         bounds=(lower, upper),
         method="trf",
@@ -577,9 +669,9 @@ def fit_joint_geometry(
         max_nfev=250,
     )
     state = JointGeometryState.from_array(optimized.x)
-    raw_residual = residual_array(optimized.x)
+    raw_residual = raw_residual_array(optimized.x)
     jacobian = _finite_jacobian(
-        residual_array,
+        raw_residual_array,
         np.asarray(optimized.x, dtype=np.float64),
         lower,
         upper,
@@ -599,14 +691,14 @@ def fit_joint_geometry(
         dtype=np.bool_,
     )
     degrees_of_freedom = max(raw_residual.size - optimized.x.size, 1)
-    covariance = np.linalg.pinv(jacobian.T @ jacobian) * float(raw_residual @ raw_residual) / (
-        degrees_of_freedom
+    covariance = (
+        np.linalg.pinv(jacobian.T @ jacobian)
+        * float(raw_residual @ raw_residual)
+        / (degrees_of_freedom)
     )
     standard_error = np.sqrt(np.maximum(np.diag(covariance), 0.0))
     parameter_confident = np.asarray(
-        (~on_bounds)
-        & np.isfinite(standard_error)
-        & (standard_error < 0.5 * half_span),
+        (~on_bounds) & np.isfinite(standard_error) & (standard_error < 0.5 * half_span),
         dtype=np.bool_,
     )
 
@@ -629,10 +721,15 @@ def fit_joint_geometry(
     per_image = []
     all_site_errors = []
     beam_origin = None
-    for material_id, images in (("bi2se3", se3), ("bi2te3", te3)):
+    for specimen_id, images in (
+        ("bi2se3", se3),
+        ("bi2te3", te3),
+        ("pbi2_y1", y1),
+        ("pbi2_y2", y2),
+    ):
         for image in images:
             _, site_error, image_beam_origin = _predict_image(
-                material_id,
+                specimen_id,
                 image,
                 state,
                 base_detector_rotation=rotation,
@@ -641,7 +738,7 @@ def fit_joint_geometry(
             all_site_errors.append(magnitude)
             per_image.append(
                 JointGeometryImageMetric(
-                    material_id=material_id,
+                    specimen_id=specimen_id,
                     image_id=image.image_id,
                     site_count=magnitude.size,
                     site_rms_px=float(np.sqrt(np.mean(magnitude**2))),
@@ -716,8 +813,8 @@ def fit_joint_geometry(
         hbn_residual_rms_px=float(np.sqrt(np.mean(hbn_residual**2))),
         hbn_residual_max_px=float(np.max(np.abs(hbn_residual))),
         per_image=tuple(per_image),
-        pooled_bi_site_rms_px=float(np.sqrt(np.mean(pooled**2))),
-        pooled_bi_site_max_px=float(np.max(pooled)),
+        pooled_crystalline_site_rms_px=float(np.sqrt(np.mean(pooled**2))),
+        pooled_crystalline_site_max_px=float(np.max(pooled)),
         model_evaluation_count=evaluation_count,
         optimizer_function_evaluation_count=int(optimized.nfev),
         beam_origin_lab_m=beam_origin,

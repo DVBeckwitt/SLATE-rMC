@@ -2343,3 +2343,13 @@ Se predictions at the baseline and actual occupancy stencil agree with the prere
 to 1.02e-14 whitened RMS; the objective contrast is unchanged. The external 4096-kernel
 alternating benchmark measures 1.3355 times faster projection with maximum probability
 disagreement 4.44e-16. Neither check qualifies source integration or physical fitting.
+
+T42 extends the automatic hBN/Bi geometry fit with PbI2 Y1 and Y2 while preserving one shared
+global geometry. Blind 2H indexing retains only exact keys reproduced at both 5 and 10 degrees
+with coherent detector motion; this admits two `m=1`, `L=1` roots per image and rejects the
+motion-incoherent `m=3` candidate plus all singletons. The resulting hBN RMS is 0.825105 px and
+the pooled 69-site crystalline RMS is 1.218949 px (maximum 6.303034 px). The 21-column scaled
+Jacobian is full-rank with condition 11517.94. The complete decomposition remains unqualified:
+the global pivot-pitch offset reaches +1.0 mm, dominates the weakest direction at 0.98294, and
+leaves derived `zB=-1.030854 +/- 3.154354 mm`. The observable fit is accepted as measured
+evidence; the mechanical pivot and `zB` estimates are not.

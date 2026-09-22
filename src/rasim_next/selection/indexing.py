@@ -490,6 +490,86 @@ class MeasuredIndexingResult:
             reference_wavelength_A=image.reference_wavelength_A,
         )
 
+    def replicated_key_observations_for(
+        self,
+        image_id: str,
+        *,
+        minimum_distinct_incidence_images: int = 2,
+    ) -> IntegerLMarkerObservations:
+        """Return sparse exact keys independently recovered at distinct incidences.
+
+        This is the conservative geometry-only handoff for series whose crystalline
+        pattern contains too few distinct-L sites to establish a full ordered branch
+        track.  It leaves :meth:`observations_for` and its stronger branch-track gate
+        unchanged.  A key is retained only when blind indexing assigned that same
+        full crystallographic key confidently at the requested number of distinct
+        commanded incidence angles.
+        """
+
+        if (
+            isinstance(minimum_distinct_incidence_images, bool)
+            or not isinstance(minimum_distinct_incidence_images, int)
+            or minimum_distinct_incidence_images < 2
+        ):
+            raise ValueError("minimum_distinct_incidence_images must be at least 2")
+        try:
+            image = next(item for item in self.image_results if item.image_id == image_id)
+        except StopIteration as error:
+            raise KeyError(f"unknown image_id {image_id!r}") from error
+        evidence_by_key: dict[
+            IntegerLMarkerKey,
+            list[tuple[MeasuredImageIndexingResult, MarkerIndexingDecision]],
+        ] = {}
+        for candidate_image in self.image_results:
+            for decision in candidate_image.marker_decisions:
+                if decision.status == MarkerIndexingStatus.VISIBLE_CONFIDENT:
+                    evidence_by_key.setdefault(decision.key, []).append((candidate_image, decision))
+        replicated = set()
+        for key, evidence in evidence_by_key.items():
+            incidences = {item[0].incidence_angle_rad for item in evidence}
+            detector_hashes = {item[0].detector_data_hash for item in evidence}
+            context_hashes = {item[0].context_hash for item in evidence}
+            if (
+                len(incidences) < minimum_distinct_incidence_images
+                or len(detector_hashes) < minimum_distinct_incidence_images
+                or len(context_hashes) < minimum_distinct_incidence_images
+            ):
+                continue
+            offsets = np.asarray(
+                tuple(
+                    (
+                        decision.observed_column_px - decision.predicted_column_px,
+                        decision.observed_row_px - decision.predicted_row_px,
+                    )
+                    for _, decision in evidence
+                ),
+                dtype=np.float64,
+            )
+            centered = offsets - np.mean(offsets, axis=0)
+            motion_rms_px = float(np.sqrt(np.mean(np.sum(centered**2, axis=1))))
+            if motion_rms_px <= self.policy.maximum_track_rms_px:
+                replicated.add(key)
+        decisions = tuple(
+            item
+            for item in image.marker_decisions
+            if item.status == MarkerIndexingStatus.VISIBLE_CONFIDENT and item.key in replicated
+        )
+        if not decisions:
+            raise ValueError(
+                f"image {image_id!r} has no exact key with coherent distinct-incidence replication"
+            )
+        coordinates = np.asarray(
+            tuple((item.observed_column_px, item.observed_row_px) for item in decisions),
+            dtype=np.float64,
+        )
+        covariance = np.asarray(tuple(item.covariance_px2 for item in decisions), dtype=np.float64)
+        return IntegerLMarkerObservations(
+            keys=tuple(item.key for item in decisions),
+            coordinates_px=coordinates,
+            covariance_px2=covariance,
+            reference_wavelength_A=image.reference_wavelength_A,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class FrozenMarkerVisibilityImageAudit:

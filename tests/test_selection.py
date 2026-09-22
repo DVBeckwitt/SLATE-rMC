@@ -285,6 +285,50 @@ def test_overlapping_replication_chains_retain_all_qualified_images_and_sites() 
     assert {key.integer_L for key in manifest.observations_for("C").keys} == {6, 8}
 
 
+def test_sparse_exact_keys_can_be_admitted_only_after_distinct_incidence_replication() -> None:
+    first = _synthetic_image_result(
+        "A", 5.0, (1,), geometry_offset_px=0.0, detector_hash_digit="1", context_hash_digit="a"
+    )
+    second = _synthetic_image_result(
+        "B",
+        10.0,
+        (1, 2),
+        geometry_offset_px=1.0,
+        detector_hash_digit="2",
+        context_hash_digit="b",
+    )
+    manifest = select_confident_branch_tracks((first, second), policy=_policy())
+
+    with pytest.raises(ValueError, match="no accepted visible"):
+        manifest.observations_for("A")
+
+    first_observations = manifest.replicated_key_observations_for("A")
+    second_observations = manifest.replicated_key_observations_for("B")
+    assert first_observations.keys == (_key(1, 1, -1),)
+    assert second_observations.keys == (_key(1, 1, -1),)
+
+    repeated_angle = select_confident_branch_tracks(
+        (first, replace(second, incidence_angle_rad=first.incidence_angle_rad)),
+        policy=_policy(),
+    )
+    with pytest.raises(ValueError, match="distinct-incidence"):
+        repeated_angle.replicated_key_observations_for("A")
+
+    incoherent_second = replace(
+        second,
+        marker_decisions=(
+            replace(
+                second.marker_decisions[0],
+                observed_row_px=second.marker_decisions[0].observed_row_px + 40.0,
+            ),
+            *second.marker_decisions[1:],
+        ),
+    )
+    incoherent = select_confident_branch_tracks((first, incoherent_second), policy=_policy())
+    with pytest.raises(ValueError, match="coherent distinct-incidence"):
+        incoherent.replicated_key_observations_for("A")
+
+
 def test_frozen_visibility_audit_ignores_new_candidate_track_censoring() -> None:
     original_results = tuple(
         _synthetic_image_result(

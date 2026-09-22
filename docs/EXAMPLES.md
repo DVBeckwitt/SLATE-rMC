@@ -534,12 +534,12 @@ refit and held-out prediction report without changing that primary data set.
 ## Automatic hBN plus cross-material geometry audit
 
 Trace all five declared hBN powder rings without clicks, use hBN only for detector center and the
-two intrinsic detector tilts, and fit those coordinates jointly with every indexed Bi2Se3 and
-Bi2Te3 incidence image:
+two intrinsic detector tilts, and fit those coordinates jointly with every indexed Bi2Se3,
+Bi2Te3, PbI2 Y1, and PbI2 Y2 incidence image:
 
 ```powershell
-python scripts/fit_joint_hbn_bi_geometry.py `
-  configs/joint_hbn_bi_geometry_fit.yaml `
+python scripts/fit_joint_hbn_crystal_geometry.py `
+  configs/joint_hbn_crystal_geometry_fit.yaml `
   --destination C:\path\outside\the\repository\joint-geometry.json `
   --json
 ```
@@ -550,7 +550,11 @@ distance.  The JSON separates static declarations, session-global fitted coordin
 local coordinates, and the private nuisance value.  It also reports the full scaled-Jacobian rank,
 condition, weakest direction, active bounds, covariance standard errors, automatic ring coverage,
 and per-image detector-pixel errors.  The command exits with status 2 when the observable fit
-converges but any declared parameter fails confidence qualification.
+converges but any declared parameter fails confidence qualification. PbI2 indexing is limited to
+the declared 2H structure. Because each PbI2 image has only one confidently indexed L per branch,
+the sparse handoff retains a key only when blind indexing independently recovers the identical key
+at both distinct commanded incidences and its incidence-dependent detector motion agrees within
+8 px RMS. Singleton and motion-incoherent peaks are excluded before fitting.
 Every geometry coordinate is active by default. Repeat `--freeze-parameter NAME` to hold any
 coordinate at its configured base value; at least one shared coordinate or the common delta must
 remain active. `--fit-incidence-angle-delta` activates one scalar added to every commanded angle;

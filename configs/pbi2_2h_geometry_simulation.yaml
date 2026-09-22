@@ -1,0 +1,117 @@
+schema_version: rasim-simulation-v2
+
+material:
+  cif_path: ../examples/pbi2/structures/PbI2_2H.cif
+  phase_id: pbi2
+
+source:
+  mean_origin_lab_m: [0.0, -0.020, 0.0]
+  mean_direction_lab: [0.0, 1.0, 0.0]
+  transverse_axes_lab:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  spatial_sigma_m: [1.4312946262159279e-4, 1.2325011424826383e-4]
+  divergence_sigma_rad: [9.852413728253700e-4, 7.612068911119583e-4]
+  position_divergence_correlation: [-0.1477984535, 0.3873100736]
+  wavelength_model_id: discrete_gaussian_lines.v1
+  mean_wavelength_A: 1.5419012588932806
+  wavelength_sigma_A: 0.0
+  line_wavelength_A: [1.540592925, 1.544427]
+  line_probability: [0.6587615283267457, 0.3412384716732543]
+  common_line_sigma_A: 0.0
+  sample_count: 1000
+  seed: 1729
+  polarization_state_id: THOMSON_UNPOLARIZED_UNANALYSED
+
+instrument:
+  axis_rotations:
+    - axis_lab: [1.0, 0.0, 0.0]
+      angle_deg: 5.0
+      pivot_lab_m: [0.0, 0.0, 0.0]
+  lab_from_goniometer_zero:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  goniometer_from_sample:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  sample_from_crystal:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
+    translation_m: [0.0, 0.0, 0.0]
+  lab_from_detector:
+    rotation:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0]
+      - [0.0, -1.0, 0.0]
+    translation_m: [0.0, 0.075, 0.0]
+  detector_tilt:
+    about_column_axis_deg: 0.0
+    about_row_axis_deg: 0.0
+  detector_shape_rc: [3000, 3000]
+  detector_row_pitch_m: 0.0001
+  detector_column_pitch_m: 0.0001
+  detector_reference_coordinate_px: [1453.12, 1596.422]
+  sample_support_model_id: unbounded_plane.v1
+  sample_width_m: null
+  sample_length_m: null
+  film_thickness_A: 500.0
+  detector_path_medium_id: vacuum_or_helium_unity.v1
+  detector_path_linear_attenuation_m_inv: 0.0
+
+mosaic:
+  gaussian_sigma_deg: 1.0
+  lorentzian_hwhm_deg: 0.0
+  lorentzian_probability: 0.0
+  alpha_panel_count: 8
+  alpha_gauss_order: 12
+  azimuth_count: 32
+  azimuth_phase_deg: 21.25673419935354
+
+structure_factor:
+  model_id: cif_conventional_cell_finite_repeat.v1
+  repeats: 52
+  normalization: FINITE_TOTAL
+  unknown_u_iso_A2: 0.0
+
+bragg:
+  selection_model: all_elastic_reachable.v1
+  rod_population: 1.0
+  include_detector_visible_m0: true
+  root_policy: all_retained_roots.v1
+
+weights:
+  phase_population: 1.0
+  polarization: 1.0
+
+numerics:
+  worker_count: 32
+  detector_execution_backend: cpu
+  detector_macrobin_size_px: 60
+  detector_gauss_order: 2
+  reciprocal_alpha_count: 3
+  reciprocal_beta_count: 12
+  reciprocal_u_count: 48
+  reciprocal_alpha_max_deg: 5.0
+  ewald_alpha_count: 16
+  ewald_beta_count: 72
+  ewald_alpha_max_deg: 5.0
+
+outputs:
+  output_directory: ~/.rasim-next/configured-output
+  reciprocal_space:
+    enabled: true
+    filename: reciprocal-space.png
+  ewald_surface:
+    enabled: true
+    filename: ewald-surface.png
+  detector:
+    enabled: true
+    filename: detector.png

@@ -197,3 +197,8 @@ tasks:
     branch: codex/joint-hbn-bi-geometry
     status: BLOCKED_GONIOMETER_PIVOT_UNIDENTIFIABLE
     depends_on: [T18, T40]
+  - id: T42
+    file: tasks/42_joint_hbn_bi_pbi2_geometry.md
+    branch: codex/joint-hbn-bi-pbi2-geometry
+    status: BLOCKED_GONIOMETER_PIVOT_UNIDENTIFIABLE
+    depends_on: [T41]

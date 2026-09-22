@@ -1,0 +1,10 @@
+schema_version: rasim-osc-geometry-fit-v1
+simulation_config: pbi2_2h_geometry_simulation.yaml
+incidence_axis_index: 0
+images:
+  - image_id: PbI2_Y2_5d_10m
+    osc_path: ../examples/pbi2/osc/Y2_5d_10m.osc.gz
+    axis_rotation_angles_deg: [5.0]
+  - image_id: PbI2_Y2_10d_10m
+    osc_path: ../examples/pbi2/osc/Y2_10d_10m.osc.gz
+    axis_rotation_angles_deg: [10.0]

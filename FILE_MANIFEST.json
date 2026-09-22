@@ -1,5 +1,5 @@
 {
-  "file_count": 401,
+  "file_count": 410,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -87,14 +87,29 @@
       "size_bytes": 2183
     },
     {
-      "path": "configs/joint_hbn_bi_geometry_fit.yaml",
-      "sha256": "62104ceb72b56e2e6295f9265020d58163ab16c1f944fe01c57cd0bb1ce577a0",
-      "size_bytes": 400
+      "path": "configs/joint_hbn_crystal_geometry_fit.yaml",
+      "sha256": "e9072961046c7b81ab89611aa117cf37441915626cf327781c72b31e0bb67c57",
+      "size_bytes": 513
     },
     {
       "path": "configs/native_experiments.json",
       "sha256": "8010c8ed82ed2d1f6af01086b834b442b557b2f07d963f4109fdbd042f72c4ce",
       "size_bytes": 2672
+    },
+    {
+      "path": "configs/pbi2_2h_geometry_simulation.yaml",
+      "sha256": "5ee6e0402617cbcfe0e00abfcc37a510a585b1a77d4ebe09dd50d5b576fcc4f7",
+      "size_bytes": 3067
+    },
+    {
+      "path": "configs/pbi2_y1_osc_geometry_fit.yaml",
+      "sha256": "f4fdb363ab46d4b9864e93ad9da0073e21aa2fba4829289297d0204fe1f50ad3",
+      "size_bytes": 361
+    },
+    {
+      "path": "configs/pbi2_y2_osc_geometry_fit.yaml",
+      "sha256": "7537958d892027950bca94e2b98224166c9d869ade2cc223cda0dd38a29bfe47",
+      "size_bytes": 363
     },
     {
       "path": "docs/ARCHITECTURE.md",
@@ -143,8 +158,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "e4997152f9d60dffd371d6ce0e66bbc73e77611f319933c39bd20a33ce4cd828",
-      "size_bytes": 66762
+      "sha256": "1a078ecf17d824f056a6749a5a73f73f6e1df351c5fe04229e8d90854c5aae57",
+      "size_bytes": 67189
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -193,8 +208,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "5e50203623a2917ea91a26260a745d3a88606d5c445b004d99e12f804452ce53",
-      "size_bytes": 166930
+      "sha256": "6b3f19d37727d7d22e12dddfed9383302c74bb0f17e92dda1611dd19e8b031ba",
+      "size_bytes": 167741
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -208,8 +223,8 @@
     },
     {
       "path": "examples/MANIFEST.toml",
-      "sha256": "54771e305f487b23d96e9cdebf50626a87971611c91b3c35424d50cffc2f0778",
-      "size_bytes": 7212
+      "sha256": "fba9d09d1563f869481aab6a6983f73031d77ca1d4122e2eecf1227431657f12",
+      "size_bytes": 7817
     },
     {
       "path": "examples/README.md",
@@ -440,6 +455,26 @@
       "path": "examples/pbi2/experiment/stacking_truth.toml",
       "sha256": "3198cfacaba81eece48ed5b049f17fc5deab03e4dbb7204d4f2c6c4846bfefc8",
       "size_bytes": 509
+    },
+    {
+      "path": "examples/pbi2/osc/Y1_10d_10m.osc.gz",
+      "sha256": "5458fb70901b2101214cc97d35370e40975ee116209951bb47ec74252eec84bf",
+      "size_bytes": 4550585
+    },
+    {
+      "path": "examples/pbi2/osc/Y1_5d_5m.osc.gz",
+      "sha256": "61bc5c958301fcd6b6413ce7775fe64b5b872b7366f37130c8efaf9946b9de43",
+      "size_bytes": 3916723
+    },
+    {
+      "path": "examples/pbi2/osc/Y2_10d_10m.osc.gz",
+      "sha256": "8c6e11bb89c93ac50437ee43def9e7f4537b0234ef9ada1af82e12b6ef4fe1ea",
+      "size_bytes": 4896213
+    },
+    {
+      "path": "examples/pbi2/osc/Y2_5d_10m.osc.gz",
+      "sha256": "edc2603994bcf6c06126dbe659f77adedf2e739f10e5e2c39afca4a6c9a2f9a0",
+      "size_bytes": 4874192
     },
     {
       "path": "examples/pbi2/structures/PbI2_2H.cif",
@@ -732,9 +767,9 @@
       "size_bytes": 48956
     },
     {
-      "path": "scripts/fit_joint_hbn_bi_geometry.py",
-      "sha256": "321ee855babadd50e30451597cff6e14e47556b5ae13ebb8aa427930b212cf11",
-      "size_bytes": 12474
+      "path": "scripts/fit_joint_hbn_crystal_geometry.py",
+      "sha256": "ca81abb09f39115485dbb6589603067f0a344149a43db6d12c3b41682ec391ae",
+      "size_bytes": 16646
     },
     {
       "path": "scripts/fit_osc_geometry.py",
@@ -973,8 +1008,8 @@
     },
     {
       "path": "src/rasim_next/fitting/joint_geometry.py",
-      "sha256": "8652f8c8559aeb55d23d96bc46ef9756ff671fc97c3a9c8448dfee2f7979354b",
-      "size_bytes": 26648
+      "sha256": "89447856d8c341645febfcba1b5d13a7afbd149c4e3a21aaaec778da35196bac",
+      "size_bytes": 29815
     },
     {
       "path": "src/rasim_next/fitting/matched_regions.py",
@@ -1403,8 +1438,8 @@
     },
     {
       "path": "src/rasim_next/selection/indexing.py",
-      "sha256": "d4ccfc63ae77b3a629b15f6368b0ba52ad56cfd8af43684034babeeb2f3ad286",
-      "size_bytes": 71400
+      "sha256": "139e5a29d95e77ba627673008155a276a48b8d36c9bd368182adc5ebf5434a90",
+      "size_bytes": 75179
     },
     {
       "path": "src/rasim_next/selection/osc_series.py",
@@ -1647,6 +1682,11 @@
       "size_bytes": 4950
     },
     {
+      "path": "tasks/42_joint_hbn_bi_pbi2_geometry.md",
+      "sha256": "b4aada35f1027142e7bbc076625b4d0e0517f833476ddd34bb8a8ee16099cec7",
+      "size_bytes": 2793
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1693,8 +1733,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "828479905e4ac3eafe927b80d6dc778d0578e0e8d6f6dd36ac7fb9af0824dcd2",
-      "size_bytes": 6700
+      "sha256": "26c0b711bb9ea07ac5ad0ad4c7ce40a04275737c00e4a813b2aafa848da6b731",
+      "size_bytes": 6880
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1867,6 +1907,11 @@
       "size_bytes": 386548
     },
     {
+      "path": "tests/test_joint_geometry.py",
+      "sha256": "9227c6db8a117a6026bd3b61fe8747620d9641a3754b1dc182e5447b8857b57d",
+      "size_bytes": 1481
+    },
+    {
       "path": "tests/test_matched_regions.py",
       "sha256": "f84326a1a3316309ff1a0c89467265c61899f07713de108f559407a0de8f8b16",
       "size_bytes": 24166
@@ -1923,8 +1968,8 @@
     },
     {
       "path": "tests/test_selection.py",
-      "sha256": "c6f3afa9ae25ddc3488fbfa2b97a888194aa7dcfc469115a3d1a1695df2881a3",
-      "size_bytes": 61867
+      "sha256": "3f067d0b20b1ccb2469ae3f67e053fcbcbe98128060c83a65717cc72c6545d3a",
+      "size_bytes": 63544
     },
     {
       "path": "tests/test_source_spatial.py",
