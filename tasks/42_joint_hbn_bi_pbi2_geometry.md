@@ -1,8 +1,9 @@
 # T42: joint hBN, BiX, and 2H-PbI2 geometry
 
-Status: BLOCKED_GONIOMETER_PIVOT_UNIDENTIFIABLE
+Status: PASS_REDUCED_REFERENCE_GEOMETRY
 Branch: `codex/joint-hbn-bi-pbi2-geometry`
 Base: `9cbc1be8d4194148f64d17ca13e3f982a567314b`
+Decision: [D043](../docs/DECISIONS.md#d043-joint-geometry-fixes-the-unsupported-pitch-gauge-before-intensity-fitting)
 
 ## Goal
 
@@ -29,14 +30,28 @@ The observable fit passes. hBN is 0.8251 px RMS. Per-image crystalline RMS range
 px for Bi2Se3, 0.604-0.860 px for Bi2Te3, 1.143-1.596 px for Y1, and 0.318-0.395 px for Y2.
 The pooled crystalline RMS is 1.2189 px and the maximum site error is 6.3030 px.
 
-The complete decomposition remains unqualified. The data Jacobian is full-rank at 21/21 with
-scaled condition 11517.9, but the global pivot-pitch offset reaches the +1.0 mm bound. The weakest
-scaled direction has 0.9829 loading on that coordinate. Derived `zB` is -1.0309 +/- 3.1544 mm.
-Adding the two-angle PbI2 data therefore verifies that the 2H peaks can participate in the common
-fit and improves observable coverage, but it does not supply the missing pivot lever arm.
+The unrestricted 21-coordinate decomposition remains unqualified. Its global pivot-pitch offset
+reaches the +1.0 mm bound and dominates the weakest scaled direction at 0.9829. A measured profile
+from -3 to +3 mm changes the pooled detector RMS only from 1.301 to 1.210 px, while fixing pivot
+pitch alone transfers the weak direction to goniometer-axis pitch with 0.9828 loading. These two
+pitch-direction mechanical coordinates therefore describe an unsupported gauge for this dataset.
 
-Measured artifact:
-`C:\Users\Kenpo\.codex\visualizations\2026\09\18\01a0b67f-592e-76b3-b9b4-5d6d86215329\joint_hbn_bi_pbi2_geometry\joint_geometry_report_final_v2.json`
+The accepted reduced parameterization fixes goniometer-axis pitch and pivot pitch displacement to
+their nominal references and fits the remaining 19 coordinates. It is full-rank at 19/19, has
+scaled condition 978.86, has no active fitted bounds or uncertain fitted parameters, and passes the
+unchanged detector residual gates. hBN is 0.8251 px RMS; pooled crystalline RMS is 1.2314 px and the
+maximum site error is 6.3043 px. The change from the unrestricted fit is 0.0124 px pooled RMS.
+
+This qualifies detector-predictive geometry over the observed angle range. The fixed mechanical
+references are declared rather than reported as measurements. Conditional `zB=-0.03091 +/-
+0.01807 mm` is the fitted beam line relative to the nominal pivot plane; the physical beam offset
+from the unknown true rotation center remains unqualified.
+
+Measured artifacts:
+
+- unrestricted fit: `C:\Users\Kenpo\.codex\visualizations\2026\09\18\01a0b67f-592e-76b3-b9b4-5d6d86215329\joint_hbn_bi_pbi2_geometry\joint_geometry_report_final_v2.json`
+- fixed-coordinate profile: `C:\Users\Kenpo\.codex\visualizations\2026\09\18\01a0b67f-592e-76b3-b9b4-5d6d86215329\joint_hbn_bi_pbi2_geometry\joint_geometry_pivot_profile.json`
+- accepted reduced fit: `C:\Users\Kenpo\.codex\visualizations\2026\09\18\01a0b67f-592e-76b3-b9b4-5d6d86215329\joint_hbn_bi_pbi2_geometry\joint_geometry_report_reduced_v3_final.json`
 
 ## Verification
 
@@ -48,6 +63,6 @@ python scripts/verify_seed.py
 git diff --check
 ```
 
-The next qualifying measurement must add independent mechanical pivot information or a wider
-incidence range that materially changes the pivot lever arm. More samples at only 5 and 10 degrees
-with free local `zS` coordinates will not resolve the measured weak direction.
+An independent mechanical pivot datum or wider incidence range is still required before assigning
+physical meaning to the two fixed pitch references or to physical `zB`. More samples at only 5 and
+10 degrees with free local `zS` coordinates will not resolve that mechanical decomposition.

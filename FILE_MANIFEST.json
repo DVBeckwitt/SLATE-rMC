@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/DECISIONS.md",
-      "sha256": "898d7a5e4364add03c3ec9404b169386d30e627540c5b0bc00cd41ed4a48dfc7",
-      "size_bytes": 23270
+      "sha256": "16389213304b1e51ae133f48ada713a762ead9db207389e53b9167c7f5f485b2",
+      "size_bytes": 25134
     },
     {
       "path": "docs/DOVETAIL_MATRIX.md",
@@ -208,8 +208,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "6b3f19d37727d7d22e12dddfed9383302c74bb0f17e92dda1611dd19e8b031ba",
-      "size_bytes": 167741
+      "sha256": "1b2801fd77bbee18cb3095b71292a6cc9ccac53c8d7b43c93725d5bfcadf79ff",
+      "size_bytes": 168687
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -768,8 +768,8 @@
     },
     {
       "path": "scripts/fit_joint_hbn_crystal_geometry.py",
-      "sha256": "ca81abb09f39115485dbb6589603067f0a344149a43db6d12c3b41682ec391ae",
-      "size_bytes": 16646
+      "sha256": "9325735248fc5976d9c922ba698ff96652f7d798dee32bfe99df1ec67cb7feff",
+      "size_bytes": 17551
     },
     {
       "path": "scripts/fit_osc_geometry.py",
@@ -1008,8 +1008,8 @@
     },
     {
       "path": "src/rasim_next/fitting/joint_geometry.py",
-      "sha256": "89447856d8c341645febfcba1b5d13a7afbd149c4e3a21aaaec778da35196bac",
-      "size_bytes": 29815
+      "sha256": "be6359ab82c67eb0d23e7e417abce6cd7296a392673845068891a9c5edabe2e7",
+      "size_bytes": 32927
     },
     {
       "path": "src/rasim_next/fitting/matched_regions.py",
@@ -1683,8 +1683,8 @@
     },
     {
       "path": "tasks/42_joint_hbn_bi_pbi2_geometry.md",
-      "sha256": "b4aada35f1027142e7bbc076625b4d0e0517f833476ddd34bb8a8ee16099cec7",
-      "size_bytes": 2793
+      "sha256": "e392226e07236bb452de3c26ce0f60bedfe568fc1cac396c46e01ff7f08b311a",
+      "size_bytes": 4146
     },
     {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
@@ -1908,8 +1908,8 @@
     },
     {
       "path": "tests/test_joint_geometry.py",
-      "sha256": "9227c6db8a117a6026bd3b61fe8747620d9641a3754b1dc182e5447b8857b57d",
-      "size_bytes": 1481
+      "sha256": "b65e293b51083369e0d043b980d3f110870f597ea21d792f300f276ff65450c4",
+      "size_bytes": 1951
     },
     {
       "path": "tests/test_matched_regions.py",

@@ -364,3 +364,27 @@ Delayed acceptance evaluates the fixed datasets before any exact scan candidate 
 explicit work/gate policy. No material-specific scan runner, representative-pose substitution,
 angle Monte Carlo, hidden detector-region compiler, or unbounded scan loop belongs in the reusable
 core.
+
+## D043: Joint geometry fixes the unsupported pitch gauge before intensity fitting
+
+The hBN, Bi2Se3, Bi2Te3, PbI2 Y1, and PbI2 Y2 images do not independently identify goniometer-axis
+pitch and the pitch-direction displacement of the goniometer pivot. In the unrestricted fit,
+pivot pitch dominates the weakest scaled Jacobian direction and reaches its bound. Fixing it merely
+transfers that direction to axis pitch. The accepted detector-predictive parameterization therefore
+fixes both coordinates to their nominal zero references and fits the remaining 19 coordinates.
+This is a gauge choice: neither fixed coordinate is a measurement or a confidence-qualified
+mechanical result. No combined physical parameter replaces them.
+
+Detector projection at the measured angles uses this complete reduced state. Sample-local tilts
+and `zS`, global yaw coordinates, incidence zero, beam center, and detector tilts remain fitted.
+Conditional `zB` is the beam line relative to the nominal pivot plane; it is not the physical beam
+offset from an independently known rotation center. Reports must label the two pitch coordinates as
+fixed references with no standard error and must keep physical `zB` unqualified.
+
+This decision qualifies peak positions and reciprocal-space-to-detector mapping. Before a final
+all-structure-factor simulated image or fit is called qualified, the complete optics and intensity
+prediction must be compared across data-equivalent points from the measured pitch-gauge profile.
+If refraction, attenuation, mosaic response, predicted intensities, or fitted conclusions change
+beyond their existing gates, that variation is a retained geometry systematic and cannot be hidden
+by structure-factor parameters. The reduced reference state may still produce images, but those
+intensity results remain model-limited until this propagation check passes.

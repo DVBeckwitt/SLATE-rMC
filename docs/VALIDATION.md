@@ -2353,3 +2353,14 @@ Jacobian is full-rank with condition 11517.94. The complete decomposition remain
 the global pivot-pitch offset reaches +1.0 mm, dominates the weakest direction at 0.98294, and
 leaves derived `zB=-1.030854 +/- 3.154354 mm`. The observable fit is accepted as measured
 evidence; the mechanical pivot and `zB` estimates are not.
+
+The follow-up fixed-coordinate profile establishes that the failed direction is an unsupported
+mechanical gauge for these data. Across fixed pivot-pitch references from -3 to +3 mm, refitting all
+other coordinates changes pooled crystalline RMS only from 1.3013 to 1.2101 px. Fixing pivot pitch
+alone moves the weakest scaled direction to goniometer-axis pitch with 0.9828 loading. The accepted
+reduced model therefore fixes both pitch-direction mechanical coordinates to their nominal
+references and refits the remaining 19 coordinates. It passes at rank 19/19, scaled condition
+978.86, hBN RMS 0.82510 px, pooled crystalline RMS 1.23138 px, and maximum site error 6.30431 px,
+with no fitted bounds or uncertain fitted parameters. This qualifies detector-predictive geometry
+over the measured angles. Conditional `zB=-0.03091 +/- 0.01807 mm` is relative to the fixed nominal
+pivot plane; the physical rotation-center offset remains unmeasured.

@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 
 from rasim_next.fitting.joint_geometry import (
+    DEFAULT_FITTED_PARAMETER_NAMES,
+    DEFAULT_FIXED_REFERENCE_PARAMETERS,
     GLOBAL_PARAMETER_NAMES,
     JOINT_GEOMETRY_PARAMETER_NAMES,
     LOCAL_PARAMETER_NAMES,
@@ -39,6 +41,19 @@ def test_joint_geometry_parameter_partition_includes_two_independent_pbi2_specim
     assert NUISANCE_PARAMETER_NAMES == ("hbn_calibrant_distance_m",)
     assert len(JOINT_GEOMETRY_PARAMETER_NAMES) == 21
     assert len(set(JOINT_GEOMETRY_PARAMETER_NAMES)) == 21
+
+    assert DEFAULT_FIXED_REFERENCE_PARAMETERS == (
+        ("goniometer_axis_pitch_rad", 0.0),
+        ("goniometer_pivot_pitch_offset_m", 0.0),
+    )
+    assert (
+        tuple(
+            name
+            for name in JOINT_GEOMETRY_PARAMETER_NAMES
+            if name not in {item[0] for item in DEFAULT_FIXED_REFERENCE_PARAMETERS}
+        )
+        == DEFAULT_FITTED_PARAMETER_NAMES
+    )
 
     values = np.arange(len(JOINT_GEOMETRY_PARAMETER_NAMES), dtype=np.float64)
     state = JointGeometryState.from_array(values)

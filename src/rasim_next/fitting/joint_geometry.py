@@ -68,6 +68,15 @@ GLOBAL_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[:9]
 LOCAL_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[9:20]
 NUISANCE_PARAMETER_NAMES = JOINT_GEOMETRY_PARAMETER_NAMES[20:]
 
+DEFAULT_FIXED_REFERENCE_PARAMETERS = (
+    ("goniometer_axis_pitch_rad", 0.0),
+    ("goniometer_pivot_pitch_offset_m", 0.0),
+)
+_DEFAULT_FIXED_PARAMETER_NAMES = frozenset(name for name, _ in DEFAULT_FIXED_REFERENCE_PARAMETERS)
+DEFAULT_FITTED_PARAMETER_NAMES = tuple(
+    name for name in JOINT_GEOMETRY_PARAMETER_NAMES if name not in _DEFAULT_FIXED_PARAMETER_NAMES
+)
+
 
 @dataclass(frozen=True, slots=True)
 class JointGeometryState:
@@ -253,6 +262,8 @@ class JointGeometryFitResult:
     corrected_goniometer_pivot_lab_m: FloatArray
     z_b_m: float
     z_b_standard_error_m: float
+    fitted_parameter_names: tuple[str, ...]
+    fixed_reference_parameters: tuple[tuple[str, float], ...]
 
     def __post_init__(self) -> None:
         count = len(JOINT_GEOMETRY_PARAMETER_NAMES)
@@ -264,10 +275,14 @@ class JointGeometryFitResult:
         origin = np.asarray(self.beam_origin_lab_m, dtype=np.float64)
         axis = np.asarray(self.corrected_goniometer_axis_lab, dtype=np.float64)
         pivot = np.asarray(self.corrected_goniometer_pivot_lab_m, dtype=np.float64)
+        fixed_names = tuple(name for name, _ in self.fixed_reference_parameters)
+        expected_fitted_names = tuple(
+            name for name in JOINT_GEOMETRY_PARAMETER_NAMES if name not in set(fixed_names)
+        )
         if (
             standard_error.shape != (count,)
             or confident.shape != (count,)
-            or singular.shape != (count,)
+            or singular.shape != (len(self.fitted_parameter_names),)
             or weakest.shape != (count,)
             or active.shape != (count,)
             or origin.shape != (3,)
@@ -275,6 +290,12 @@ class JointGeometryFitResult:
             or pivot.shape != (3,)
         ):
             raise ValueError("joint geometry result arrays have invalid shapes")
+        if fixed_names != tuple(
+            name for name in JOINT_GEOMETRY_PARAMETER_NAMES if name in fixed_names
+        ):
+            raise ValueError("fixed reference parameters must use canonical parameter order")
+        if self.fitted_parameter_names != expected_fitted_names:
+            raise ValueError("fitted parameters must be the canonical fixed-reference complement")
         for value in (standard_error, confident, singular, weakest, active, origin, axis, pivot):
             value.setflags(write=False)
         object.__setattr__(self, "standard_error", standard_error)
@@ -551,7 +572,7 @@ def fit_joint_geometry(
     base_detector_rotation: ArrayLike,
     bounds: JointGeometryBounds | None = None,
 ) -> JointGeometryFitResult:
-    """Fit the declared shared and sample-local geometry with fail-closed confidence gates."""
+    """Fit the identifiable geometry after fixing the declared mechanical references."""
 
     if not isinstance(hbn_observations, HbnRingObservations) or not isinstance(
         hbn_calibration,
@@ -569,7 +590,18 @@ def fit_joint_geometry(
     active_bounds = JointGeometryBounds.around_hbn(hbn_calibration) if bounds is None else bounds
     lower = active_bounds.lower.as_array()
     upper = active_bounds.upper.as_array()
-    initial_values = initial.as_array()
+    initial_values = np.array(initial.as_array(), copy=True)
+    fixed_reference = dict(DEFAULT_FIXED_REFERENCE_PARAMETERS)
+    for name, value in fixed_reference.items():
+        initial_values[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)] = value
+    fitted_indices = np.asarray(
+        [
+            index
+            for index, name in enumerate(JOINT_GEOMETRY_PARAMETER_NAMES)
+            if name not in fixed_reference
+        ],
+        dtype=np.int64,
+    )
     half_span = active_bounds.half_span
     scale = np.asarray(
         (
@@ -621,9 +653,15 @@ def fit_joint_geometry(
             1.0e-5,
         )
     )
+
+    def expand_fitted_values(fitted_values: FloatArray) -> FloatArray:
+        values = initial_values.copy()
+        values[fitted_indices] = fitted_values
+        return values
+
     evaluation_count = 1
     residual_size = evaluate_joint_geometry_residual(
-        initial,
+        JointGeometryState.from_array(initial_values),
         hbn_observations=hbn_observations,
         bi2se3_images=se3,
         bi2te3_images=te3,
@@ -632,12 +670,12 @@ def fit_joint_geometry(
         base_detector_rotation=rotation,
     ).size
 
-    def raw_residual_array(values: FloatArray) -> FloatArray:
+    def raw_residual_array(fitted_values: FloatArray) -> FloatArray:
         nonlocal evaluation_count
         evaluation_count += 1
         return np.array(
             evaluate_joint_geometry_residual(
-                JointGeometryState.from_array(values),
+                JointGeometryState.from_array(expand_fitted_values(fitted_values)),
                 hbn_observations=hbn_observations,
                 bi2se3_images=se3,
                 bi2te3_images=te3,
@@ -648,19 +686,19 @@ def fit_joint_geometry(
             copy=True,
         )
 
-    def optimizer_residual_array(values: FloatArray) -> FloatArray:
+    def optimizer_residual_array(fitted_values: FloatArray) -> FloatArray:
         try:
-            return raw_residual_array(values)
+            return raw_residual_array(fitted_values)
         except GeometryPredictionError:
             return np.full(residual_size, 1.0e6, dtype=np.float64)
 
     optimized = least_squares(
         optimizer_residual_array,
-        initial_values,
-        bounds=(lower, upper),
+        initial_values[fitted_indices],
+        bounds=(lower[fitted_indices], upper[fitted_indices]),
         method="trf",
         jac="2-point",
-        x_scale=scale,
+        x_scale=scale[fitted_indices],
         loss="soft_l1",
         f_scale=2.0,
         ftol=1.0e-11,
@@ -668,39 +706,51 @@ def fit_joint_geometry(
         gtol=1.0e-11,
         max_nfev=250,
     )
-    state = JointGeometryState.from_array(optimized.x)
+    optimized_values = expand_fitted_values(np.asarray(optimized.x, dtype=np.float64))
+    state = JointGeometryState.from_array(optimized_values)
     raw_residual = raw_residual_array(optimized.x)
     jacobian = _finite_jacobian(
         raw_residual_array,
         np.asarray(optimized.x, dtype=np.float64),
-        lower,
-        upper,
-        steps,
+        lower[fitted_indices],
+        upper[fitted_indices],
+        steps[fitted_indices],
     )
-    scaled_jacobian = jacobian * half_span[None, :]
+    scaled_jacobian = jacobian * half_span[fitted_indices][None, :]
     _, singular, right = np.linalg.svd(scaled_jacobian, full_matrices=False)
     tolerance = singular[0] * max(scaled_jacobian.shape) * np.finfo(np.float64).eps
     rank = int(np.count_nonzero(singular > tolerance))
     condition = float(singular[0] / singular[-1]) if singular[-1] > 0.0 else math.inf
-    weakest = np.asarray(right[-1], dtype=np.float64)
-    if weakest[int(np.argmax(np.abs(weakest)))] < 0.0:
-        weakest = -weakest
-    bound_tolerance = 1.0e-6 * half_span
-    on_bounds = np.asarray(
-        (optimized.x - lower <= bound_tolerance) | (upper - optimized.x <= bound_tolerance),
+    fitted_weakest = np.asarray(right[-1], dtype=np.float64)
+    if fitted_weakest[int(np.argmax(np.abs(fitted_weakest)))] < 0.0:
+        fitted_weakest = -fitted_weakest
+    weakest = np.zeros(len(JOINT_GEOMETRY_PARAMETER_NAMES), dtype=np.float64)
+    weakest[fitted_indices] = fitted_weakest
+    bound_tolerance = 1.0e-6 * half_span[fitted_indices]
+    fitted_on_bounds = np.asarray(
+        (optimized.x - lower[fitted_indices] <= bound_tolerance)
+        | (upper[fitted_indices] - optimized.x <= bound_tolerance),
         dtype=np.bool_,
     )
-    degrees_of_freedom = max(raw_residual.size - optimized.x.size, 1)
+    on_bounds = np.zeros(len(JOINT_GEOMETRY_PARAMETER_NAMES), dtype=np.bool_)
+    on_bounds[fitted_indices] = fitted_on_bounds
+    degrees_of_freedom = max(raw_residual.size - fitted_indices.size, 1)
     covariance = (
         np.linalg.pinv(jacobian.T @ jacobian)
         * float(raw_residual @ raw_residual)
         / (degrees_of_freedom)
     )
-    standard_error = np.sqrt(np.maximum(np.diag(covariance), 0.0))
-    parameter_confident = np.asarray(
-        (~on_bounds) & np.isfinite(standard_error) & (standard_error < 0.5 * half_span),
+    fitted_standard_error = np.sqrt(np.maximum(np.diag(covariance), 0.0))
+    standard_error = np.full(len(JOINT_GEOMETRY_PARAMETER_NAMES), np.nan, dtype=np.float64)
+    standard_error[fitted_indices] = fitted_standard_error
+    fitted_confident = np.asarray(
+        (~fitted_on_bounds)
+        & np.isfinite(fitted_standard_error)
+        & (fitted_standard_error < 0.5 * half_span[fitted_indices]),
         dtype=np.bool_,
     )
+    parameter_confident = np.zeros(len(JOINT_GEOMETRY_PARAMETER_NAMES), dtype=np.bool_)
+    parameter_confident[fitted_indices] = fitted_confident
 
     hbn_residual = evaluate_hbn_residual_px(
         np.asarray(
@@ -754,8 +804,8 @@ def fit_joint_geometry(
     closest_beam_point = beam_origin + direction * float((pivot - beam_origin) @ direction)
     z_b_m = float(closest_beam_point[2] - pivot[2])
 
-    def derived_z_b(values: FloatArray) -> float:
-        candidate = JointGeometryState.from_array(values)
+    def derived_z_b(fitted_values: FloatArray) -> float:
+        candidate = JointGeometryState.from_array(expand_fitted_values(fitted_values))
         _, _, candidate_origin = _absolute_instrument_and_model(
             "bi2se3",
             se3[0],
@@ -768,20 +818,27 @@ def fit_joint_geometry(
         )
         return float(candidate_beam_point[2] - candidate_pivot[2])
 
-    z_b_gradient = np.zeros(len(JOINT_GEOMETRY_PARAMETER_NAMES), dtype=np.float64)
-    for index, step in enumerate(steps):
+    z_b_gradient = np.zeros(fitted_indices.size, dtype=np.float64)
+    for fitted_index, (parameter_index, step) in enumerate(
+        zip(fitted_indices, steps[fitted_indices], strict=True)
+    ):
         forward = np.asarray(optimized.x, dtype=np.float64).copy()
         backward = forward.copy()
-        if optimized.x[index] - step >= lower[index] and optimized.x[index] + step <= upper[index]:
-            forward[index] += step
-            backward[index] -= step
-            z_b_gradient[index] = (derived_z_b(forward) - derived_z_b(backward)) / (2.0 * step)
-        elif optimized.x[index] + step <= upper[index]:
-            forward[index] += step
-            z_b_gradient[index] = (derived_z_b(forward) - z_b_m) / step
+        if (
+            optimized.x[fitted_index] - step >= lower[parameter_index]
+            and optimized.x[fitted_index] + step <= upper[parameter_index]
+        ):
+            forward[fitted_index] += step
+            backward[fitted_index] -= step
+            z_b_gradient[fitted_index] = (derived_z_b(forward) - derived_z_b(backward)) / (
+                2.0 * step
+            )
+        elif optimized.x[fitted_index] + step <= upper[parameter_index]:
+            forward[fitted_index] += step
+            z_b_gradient[fitted_index] = (derived_z_b(forward) - z_b_m) / step
         else:
-            backward[index] -= step
-            z_b_gradient[index] = (z_b_m - derived_z_b(backward)) / step
+            backward[fitted_index] -= step
+            z_b_gradient[fitted_index] = (z_b_m - derived_z_b(backward)) / step
     z_b_variance = float(z_b_gradient @ covariance @ z_b_gradient)
     z_b_standard_error_m = math.sqrt(max(z_b_variance, 0.0))
     metrics_qualified = bool(
@@ -792,10 +849,10 @@ def fit_joint_geometry(
     )
     confidence = bool(
         optimized.success
-        and rank == len(JOINT_GEOMETRY_PARAMETER_NAMES)
+        and rank == fitted_indices.size
         and condition <= 1.0e8
         and not np.any(on_bounds)
-        and np.all(parameter_confident)
+        and np.all(fitted_confident)
         and metrics_qualified
     )
     return JointGeometryFitResult(
@@ -822,4 +879,6 @@ def fit_joint_geometry(
         corrected_goniometer_pivot_lab_m=pivot,
         z_b_m=z_b_m,
         z_b_standard_error_m=z_b_standard_error_m,
+        fitted_parameter_names=DEFAULT_FITTED_PARAMETER_NAMES,
+        fixed_reference_parameters=DEFAULT_FIXED_REFERENCE_PARAMETERS,
     )

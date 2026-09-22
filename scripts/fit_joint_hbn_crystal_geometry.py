@@ -80,19 +80,27 @@ def _write_external_json(destination: Path, payload: dict[str, object]) -> Path:
 
 def _parameter_payload(result: object, names: tuple[str, ...]) -> dict[str, object]:
     state = result.state
-    return {
-        name: {
-            "value": float(getattr(state, name)),
-            "standard_error": float(
-                result.standard_error[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)]
-            ),
-            "confidence_qualified": bool(
-                result.parameter_confident[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)]
-            ),
-            "active_bound": bool(result.active_bounds[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)]),
-        }
-        for name in names
-    }
+    fixed = dict(result.fixed_reference_parameters)
+    payload = {}
+    for name in names:
+        index = JOINT_GEOMETRY_PARAMETER_NAMES.index(name)
+        if name in fixed:
+            payload[name] = {
+                "value": float(getattr(state, name)),
+                "standard_error": None,
+                "confidence_qualified": None,
+                "active_bound": False,
+                "role": "fixed_reference",
+            }
+        else:
+            payload[name] = {
+                "value": float(getattr(state, name)),
+                "standard_error": float(result.standard_error[index]),
+                "confidence_qualified": bool(result.parameter_confident[index]),
+                "active_bound": bool(result.active_bounds[index]),
+                "role": "fitted",
+            }
+    return payload
 
 
 def _replicated_sparse_images(
@@ -243,13 +251,12 @@ def run(manifest_path: Path) -> dict[str, object]:
         "value": result.z_b_m,
         "standard_error": result.z_b_standard_error_m,
         "confidence_qualified": result.confidence_qualified,
-        "active_bound": bool(
-            result.active_bounds[
-                JOINT_GEOMETRY_PARAMETER_NAMES.index("goniometer_pivot_pitch_offset_m")
-            ]
-        ),
-        "derived_from": "fitted beam line minus corrected goniometer pivot along lab z",
+        "active_bound": False,
+        "role": "derived_conditional_on_fixed_reference",
+        "derived_from": "fitted beam line minus nominal-reference goniometer pivot along lab z",
+        "mechanical_interpretation_qualified": False,
     }
+    fitted_names = set(result.fitted_parameter_names)
     active_bound_names = tuple(
         name
         for name, active in zip(
@@ -257,7 +264,7 @@ def run(manifest_path: Path) -> dict[str, object]:
             result.active_bounds,
             strict=True,
         )
-        if active
+        if active and name in fitted_names
     )
     unconfident_names = tuple(
         name
@@ -266,14 +273,14 @@ def run(manifest_path: Path) -> dict[str, object]:
             result.parameter_confident,
             strict=True,
         )
-        if not confident
+        if not confident and name in fitted_names
     )
     qualification_failures = []
     if not result.success:
         qualification_failures.append("optimizer did not converge")
-    if result.jacobian_rank != len(JOINT_GEOMETRY_PARAMETER_NAMES):
+    if result.jacobian_rank != len(result.fitted_parameter_names):
         qualification_failures.append(
-            f"Jacobian rank {result.jacobian_rank}/{len(JOINT_GEOMETRY_PARAMETER_NAMES)}"
+            f"Jacobian rank {result.jacobian_rank}/{len(result.fitted_parameter_names)}"
         )
     if result.scaled_jacobian_condition > 1.0e8:
         qualification_failures.append(
@@ -292,7 +299,7 @@ def run(manifest_path: Path) -> dict[str, object]:
     ):
         qualification_failures.append("crystalline detector residual gate failed")
     payload = {
-        "schema_version": "rasim-joint-hbn-crystal-geometry-fit-result-v2",
+        "schema_version": "rasim-joint-hbn-crystal-geometry-fit-result-v3",
         "success": result.success,
         "confidence_qualified": result.confidence_qualified,
         "message": result.message,
@@ -312,7 +319,16 @@ def run(manifest_path: Path) -> dict[str, object]:
                 "sample pose",
                 "z_s",
             ),
-            "gauge": "Bi2Se3 sample-x tilt fixed; common incidence-angle delta fitted",
+            "gauge": (
+                "Bi2Se3 sample-x tilt, goniometer-axis pitch, and pivot pitch displacement "
+                "fixed to nominal references; common incidence-angle delta fitted"
+            ),
+            "fixed_reference_parameters": dict(result.fixed_reference_parameters),
+            "fitted_parameter_names": result.fitted_parameter_names,
+            "qualification_scope": (
+                "detector-predictive geometry over the observed angle range; fixed mechanical "
+                "references and physical zB are not independently measured"
+            ),
             "pbi2_admission": (
                 "same exact 2H integer-L key recovered blindly at both distinct incidences, "
                 "with observed incidence motion coherent to 8 px RMS; at least two retained "
@@ -343,7 +359,7 @@ def run(manifest_path: Path) -> dict[str, object]:
         },
         "identifiability": {
             "jacobian_rank": result.jacobian_rank,
-            "parameter_count": len(JOINT_GEOMETRY_PARAMETER_NAMES),
+            "parameter_count": len(result.fitted_parameter_names),
             "scaled_jacobian_condition": result.scaled_jacobian_condition,
             "scaled_jacobian_singular_values": (result.scaled_jacobian_singular_values.tolist()),
             "weakest_direction": {
