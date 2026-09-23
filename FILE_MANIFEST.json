@@ -1,5 +1,5 @@
 {
-  "file_count": 410,
+  "file_count": 415,
   "files": [
     {
       "path": ".codex/setup.sh",
@@ -138,8 +138,8 @@
     },
     {
       "path": "docs/DECISIONS.md",
-      "sha256": "16389213304b1e51ae133f48ada713a762ead9db207389e53b9167c7f5f485b2",
-      "size_bytes": 25134
+      "sha256": "c200ff5971a5c95391339d13eabc319f90fc6506f0596c469fdb2ace65c757e2",
+      "size_bytes": 25849
     },
     {
       "path": "docs/DOVETAIL_MATRIX.md",
@@ -158,8 +158,8 @@
     },
     {
       "path": "docs/EXAMPLES.md",
-      "sha256": "1a078ecf17d824f056a6749a5a73f73f6e1df351c5fe04229e8d90854c5aae57",
-      "size_bytes": 67189
+      "sha256": "d1badd40c79756c93c58415e7886063e5544814d395b58fb663e2ab3e3ccd324",
+      "size_bytes": 68666
     },
     {
       "path": "docs/FITTING_ROADMAP.md",
@@ -208,8 +208,8 @@
     },
     {
       "path": "docs/VALIDATION.md",
-      "sha256": "1b2801fd77bbee18cb3095b71292a6cc9ccac53c8d7b43c93725d5bfcadf79ff",
-      "size_bytes": 168687
+      "sha256": "91f127faac54ebf73a361cdc9c474b732d3f0117da6a1b543ba57d6ae57ca67d",
+      "size_bytes": 170676
     },
     {
       "path": "docs/WORKBRANCH_ARCHIVE_2026-07-16.md",
@@ -827,6 +827,16 @@
       "size_bytes": 10139
     },
     {
+      "path": "scripts/replay_bi2te3_mosaic_response.py",
+      "sha256": "a8049af6ce65aeff07949c8e2c2c83393b0f0926da219fdcd67b621d975cea77",
+      "size_bytes": 8417
+    },
+    {
+      "path": "scripts/replay_joint_geometry_handoff.py",
+      "sha256": "17dc59af0ffa6c17d3263ad4833bb2807a0ade22830a36d386677cbe0fcd8716",
+      "size_bytes": 9460
+    },
+    {
       "path": "scripts/restore_native_archive.py",
       "sha256": "537d3afcbb8eb80386858e727f7513ead8e6ff8df79cdf69302902eb149b50fc",
       "size_bytes": 4202
@@ -1008,8 +1018,13 @@
     },
     {
       "path": "src/rasim_next/fitting/joint_geometry.py",
-      "sha256": "be6359ab82c67eb0d23e7e417abce6cd7296a392673845068891a9c5edabe2e7",
-      "size_bytes": 32927
+      "sha256": "89eea8328a65cc9f1e3ec1f0ad11083f6fd9d930739844c3977c80b27193159e",
+      "size_bytes": 33743
+    },
+    {
+      "path": "src/rasim_next/fitting/joint_geometry_handoff.py",
+      "sha256": "c5c86fd1a7c17e13121edee456e25a467aad10977135b777696771ac3aef8c00",
+      "size_bytes": 22189
     },
     {
       "path": "src/rasim_next/fitting/matched_regions.py",
@@ -1687,6 +1702,11 @@
       "size_bytes": 4146
     },
     {
+      "path": "tasks/43_bi2te3_mosaic_handoff.md",
+      "sha256": "52bae6d42d9b26bf05700d20d95d09ddd77704e83ba5d00931359d1dc9619102",
+      "size_bytes": 4056
+    },
+    {
       "path": "tasks/OVERNIGHT_RUNBOOK.md",
       "sha256": "a6c1c282eceb9678dc9f6b3154bb8a73b8f5edf18c87e57067372b11d4e9f0c6",
       "size_bytes": 697
@@ -1733,8 +1753,8 @@
     },
     {
       "path": "tasks/index.yaml",
-      "sha256": "26c0b711bb9ea07ac5ad0ad4c7ce40a04275737c00e4a813b2aafa848da6b731",
-      "size_bytes": 6880
+      "sha256": "fa7cbe6c894585f5b94078d3899412c2f1685fa955ac93200ee8421c3cdeaa54",
+      "size_bytes": 7075
     },
     {
       "path": "tasks/mosaic_distribution_fitting_plan.md",
@@ -1910,6 +1930,11 @@
       "path": "tests/test_joint_geometry.py",
       "sha256": "b65e293b51083369e0d043b980d3f110870f597ea21d792f300f276ff65450c4",
       "size_bytes": 1951
+    },
+    {
+      "path": "tests/test_joint_geometry_handoff.py",
+      "sha256": "10bd58fdea5416ee7f69a9a443ff50cdabc29b86d03fa9efcef711464cab0f33",
+      "size_bytes": 10503
     },
     {
       "path": "tests/test_matched_regions.py",

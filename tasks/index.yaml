@@ -200,5 +200,10 @@ tasks:
   - id: T42
     file: tasks/42_joint_hbn_bi_pbi2_geometry.md
     branch: codex/joint-hbn-bi-pbi2-geometry
-    status: BLOCKED_GONIOMETER_PIVOT_UNIDENTIFIABLE
+    status: PASS_REDUCED_REFERENCE_GEOMETRY
     depends_on: [T41]
+  - id: T43
+    file: tasks/43_bi2te3_mosaic_handoff.md
+    branch: codex/bi2te3-mosaic-handoff-repair
+    status: GEOMETRY_VALIDATED_NUMERICAL_BOUNDARY_MEASURED_MOSAIC_UNQUALIFIED
+    depends_on: [T42]

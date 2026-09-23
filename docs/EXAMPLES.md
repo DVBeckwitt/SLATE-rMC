@@ -1157,3 +1157,32 @@ runner supports both Bi and all four declared Pb recipes. Explicit calibration
 blocks require real covariance and acquisition ownership. Empty stages run only
 baseline/numerical checks; final fitting stages release the full coordinate roster.
 Output remains a candidate with independent numerical and identification status.
+
+## Replay the Bi2Te3 joint-geometry handoff
+
+```powershell
+python scripts/replay_joint_geometry_handoff.py `
+  C:\external\joint_geometry_report_reduced_v3_final.json `
+  configs/bi2se3_simulation.yaml configs/bi2te3_osc_geometry_fit.yaml `
+  C:\external\bi2te3_joint_handoff.json
+```
+
+The command indexes the three OSC images, saves a hash-bound checkpoint outside the repository,
+reloads its detector and source configuration, and compares all retained site predictions with the
+joint fitter. The checkpoint supplies `config` and `position` through
+`load_joint_geometry_handoff` for `build_fixed_experiment_series`. Its mosaic parameters remain
+unqualified.
+
+For a bounded corrected-response replay of one accepted 10-degree `m=1,L=10` root side, run the
+following with `--source-count 250` and again with `500`. Repeat with `--root-sign 1`, and set
+`--component lorentzian --width-deg 0.35` or `0.585` for the narrow-component screen:
+
+```powershell
+python scripts/replay_bi2te3_mosaic_response.py C:\external\bi2te3_joint_handoff.json `
+  --source-count 250 --component gaussian --width-deg 0.909 --root-sign -1
+```
+
+The response runner loads the checkpoint's rebased source and fixed position together, builds the
+fixed series, and evaluates the physical-rod detector response at the tracked 41-bin profile
+layout. It reports the profile, validity, wall time and whole-process peak working set. It is a
+numerical convergence probe, not a fitted or accepted mosaic state.

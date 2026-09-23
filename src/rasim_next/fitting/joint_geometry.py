@@ -32,6 +32,7 @@ from rasim_next.fitting.indexed_series import (
 )
 from rasim_next.geometry.instrument import CompiledInstrument, compose_intrinsic_xy_rotation
 from rasim_next.pipeline.configured_simulation import (
+    SimulationConfiguration,
     rebind_configured_geometry_instrument,
     sample_configured_nominal_geometry_source,
 )
@@ -336,6 +337,57 @@ def _axis_and_pivot(
     return axis, pivot
 
 
+def specimen_local_geometry(
+    specimen_id: SpecimenId, state: JointGeometryState
+) -> tuple[float, float, float]:
+    """Return sample-x tilt, sample-y tilt, and local plane offset."""
+
+    if specimen_id == "bi2se3":
+        return 0.0, state.bi2se3_sample_y_tilt_rad, state.bi2se3_zs_m
+    if specimen_id == "bi2te3":
+        return state.bi2te3_sample_x_tilt_rad, state.bi2te3_sample_y_tilt_rad, state.bi2te3_zs_m
+    if specimen_id == "pbi2_y1":
+        return state.pbi2_y1_sample_x_tilt_rad, state.pbi2_y1_sample_y_tilt_rad, state.pbi2_y1_zs_m
+    if specimen_id == "pbi2_y2":
+        return state.pbi2_y2_sample_x_tilt_rad, state.pbi2_y2_sample_y_tilt_rad, state.pbi2_y2_zs_m
+    raise ValueError(f"unknown specimen_id {specimen_id!r}")
+
+
+def joint_beam_origin_lab_m(
+    state: JointGeometryState,
+    detector_base: SimulationConfiguration,
+    base_detector_rotation: FloatArray | None = None,
+) -> FloatArray:
+    """Project the fitted detector beam center onto the declared source line."""
+
+    base_instrument = detector_base.instrument
+    detector_rotation = compose_intrinsic_xy_rotation(
+        (
+            base_instrument.lab_from_detector.rotation
+            if base_detector_rotation is None
+            else base_detector_rotation
+        ),
+        state.detector_column_tilt_rad,
+        state.detector_row_tilt_rad,
+    )
+    reference_column, reference_row = base_instrument.detector_reference_coordinate_px
+    detector_offset_m = np.asarray(
+        (
+            (state.beam_center_column_px - reference_column)
+            * base_instrument.detector_column_pitch_m,
+            (state.beam_center_row_px - reference_row) * base_instrument.detector_row_pitch_m,
+            0.0,
+        )
+    )
+    beam_hit_lab_m = (
+        base_instrument.lab_from_detector.translation_m + detector_rotation @ detector_offset_m
+    )
+    direction = np.asarray(detector_base.source.mean_direction_lab, dtype=np.float64)
+    direction /= np.linalg.norm(direction)
+    nominal_origin = np.asarray(detector_base.source.mean_origin_lab_m, dtype=np.float64)
+    return beam_hit_lab_m - direction * float((beam_hit_lab_m - nominal_origin) @ direction)
+
+
 def _absolute_instrument_and_model(
     specimen_id: SpecimenId,
     image: IndexedGeometryImage,
@@ -375,21 +427,7 @@ def _absolute_instrument_and_model(
             FrameId.LAB,
         ),
     )
-    reference_column, reference_row = instrument.detector_reference_coordinate_px
-    detector_offset_m = np.asarray(
-        (
-            (state.beam_center_column_px - reference_column) * instrument.detector_column_pitch_m,
-            (state.beam_center_row_px - reference_row) * instrument.detector_row_pitch_m,
-            0.0,
-        )
-    )
-    beam_hit_lab_m = (
-        instrument.lab_from_detector.translation_m + detector_rotation @ detector_offset_m
-    )
-    direction = np.asarray(shifted_config.source.mean_direction_lab, dtype=np.float64)
-    direction /= np.linalg.norm(direction)
-    nominal_origin = np.asarray(shifted_config.source.mean_origin_lab_m, dtype=np.float64)
-    beam_origin = beam_hit_lab_m - direction * float((beam_hit_lab_m - nominal_origin) @ direction)
+    beam_origin = joint_beam_origin_lab_m(state, shifted_config, base_detector_rotation)
     source = replace(shifted_config.source, mean_origin_lab_m=tuple(float(v) for v in beam_origin))
     shifted_config = replace(shifted_config, source=source)
     inputs = replace(
@@ -397,24 +435,7 @@ def _absolute_instrument_and_model(
         config=shifted_config,
         samples=sample_configured_nominal_geometry_source(source),
     )
-    if specimen_id == "bi2se3":
-        sample_x_tilt = 0.0
-        sample_y_tilt = state.bi2se3_sample_y_tilt_rad
-        z_s_m = state.bi2se3_zs_m
-    elif specimen_id == "bi2te3":
-        sample_x_tilt = state.bi2te3_sample_x_tilt_rad
-        sample_y_tilt = state.bi2te3_sample_y_tilt_rad
-        z_s_m = state.bi2te3_zs_m
-    elif specimen_id == "pbi2_y1":
-        sample_x_tilt = state.pbi2_y1_sample_x_tilt_rad
-        sample_y_tilt = state.pbi2_y1_sample_y_tilt_rad
-        z_s_m = state.pbi2_y1_zs_m
-    elif specimen_id == "pbi2_y2":
-        sample_x_tilt = state.pbi2_y2_sample_x_tilt_rad
-        sample_y_tilt = state.pbi2_y2_sample_y_tilt_rad
-        z_s_m = state.pbi2_y2_zs_m
-    else:
-        raise ValueError(f"unknown specimen_id {specimen_id!r}")
+    sample_x_tilt, sample_y_tilt, z_s_m = specimen_local_geometry(specimen_id, state)
     corrections = SharedGeometryCorrections(
         detector_column_tilt_rad=0.0,
         detector_row_tilt_rad=0.0,

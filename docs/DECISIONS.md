@@ -388,3 +388,13 @@ If refraction, attenuation, mosaic response, predicted intensities, or fitted co
 beyond their existing gates, that variation is a retained geometry systematic and cannot be hidden
 by structure-factor parameters. The reduced reference state may still produce images, but those
 intensity results remain model-limited until this propagation check passes.
+
+## D044: Bi2Te3 mosaic input uses the qualified joint detector base
+
+The joint fit's detector tilts are absolute relative to its zero-tilt detector base. A downstream
+Bi2Te3 model must replace only the legacy detector rotation with that base before applying the
+fitted tilts once. The fitted beam center is encoded as a derived source origin while the detector
+reference stays at its configured coordinate. Applying either correction again changes the
+detector prediction and is invalid. The handoff is bound to the joint report and source OSC inputs.
+It qualifies detector geometry only; a mosaic parameter remains unqualified until the corrected
+response passes source convergence, family and background checks.

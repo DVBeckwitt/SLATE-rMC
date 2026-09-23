@@ -2364,3 +2364,26 @@ references and refits the remaining 19 coordinates. It passes at rank 19/19, sca
 with no fitted bounds or uncertain fitted parameters. This qualifies detector-predictive geometry
 over the measured angles. Conditional `zB=-0.03091 +/- 0.01807 mm` is relative to the fixed nominal
 pivot plane; the physical rotation-center offset remains unmeasured.
+
+T43 repairs the Bi2Te3 joint-geometry handoff. The original experimental mosaic adapter first
+diverged at detector rotation (a 0.420451-degree relative error, about 5.50 px) and then at the
+detector reference (an additional 0.484-px shift). The hash-bound, reloaded handoff now reconstructs
+the source and detector from the reduced joint report and the declared zero-tilt base. The real OSC
+replay matches all 35 joint-fit Bi2Te3 detector predictions exactly: RMS/max residuals are
+0.630007/1.230024 px at 5 degrees, 0.893597/2.190828 px at 10 degrees, and
+0.849124/1.954111 px at 15 degrees. A compact permanent test rejects second tilt/reference
+applications, a wrong rebuilt beam origin, and altered report bytes. This is a `CORRECTED` geometry
+case, not a qualified physical mosaic. The corrected 64-state seven-profile mixture reaches its
+Lorentzian lower bound. The bounded downstream response pilot uses the same handoff config and
+position, the tracked 41-bin layout, six physical rods, and both sides of the 10-degree
+`m=1,L=10` profile. Its frozen gate is raw and amplitude-profiled 250-to-500-source relative L2
+at most 0.02, all 41 bins valid, under 30 minutes aggregate, and peak whole-process RSS under
+1 GB. Gaussian sigma 0.909 degree gives raw/scale-profiled discrepancies 0.01345/0.01211 on the
+negative root and 0.00762/0.00755 on the positive root. Lorentzian HWHM 0.585 degree gives
+0.01802/0.01654 and 0.01061/0.01048. The narrower HWHM 0.35 degree fails on the negative root
+at 0.02624/0.02411 (positive root 0.01606/0.01577). All tested bins remain valid. The direct
+profile response took 97.673 seconds of aggregate numerical evaluation and peaked at 319,602,688
+bytes of whole-process RSS. The historic prebuilt support/layout attempt reached
+about 9.3 GB before evaluating widths. The pilot establishes a numerical boundary, not a shared
+physical fit. Full corrected family/background checks and pitch-gauge propagation remain open;
+no fixed mosaic is updated.
