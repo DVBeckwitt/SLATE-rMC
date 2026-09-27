@@ -602,20 +602,10 @@ replace fitted observations.
 
 ## Historical Bi2Se3 shape-only recovery
 
-The standalone `recover_bi2se3_mosaic.py` workflow is archived at revision
-`4a2c2940a7de7f05004b77b173dc22a76a879b9f`. Its library owner remains
-`rasim_next.fitting.mosaic`: Gaussian/Lorentzian profile responses, independent
-nonnegative amplitude per complete profile, optional declared background, and
-identifiability checks. These shape-only equations remain live; their former tests are archived in Git.
-
-The retired runner's synthetic case generation, old stage-artifact schemas, model-based
-profile eligibility and point-sampled display images are historical evidence. They do not
-define the current native count workflow. Current prepared observations keep their frozen
-memberships; a nominal geometry ray cannot exclude intensity supported by other source states.
-
-Use [native refinement](NATIVE_REFINEMENT.md) for shared-scale native count fitting.
-That objective includes cross-reflection intensity information and is **not equivalent** to
-shape-only profile fitting. Neither result alone identifies a unique physical mosaic law.
+The runner is archived at `4a2c2940a7de7f05004b77b173dc22a76a879b9f`; its component-bank
+and shape-only fitting library is archived at `1f65a09`. `fitting.mosaic` retains
+frozen profile definitions and continuous evaluation. Current fitting uses
+[the native workflow](STAGED_FITTING.md).
 
 ## Historical: transferred-amplitude Bi2Se3 relative structure fit
 
@@ -853,17 +843,9 @@ second scale, horizontal shift, detector raster for the model, smoothing, or syn
 
 ## Historical fixed-position Bi2Se3 structure recovery
 
-The standalone `recover_bi2se3_ordered_intensity.py` workflow is archived at revision
-`4a2c2940a7de7f05004b77b173dc22a76a879b9f`. Its distinct mathematical implementation
-remains in `rasim_next.fitting.ordered_intensity`. Its former synthetic proof and
-tests are archived at Git revision `358362e`.
-
-This synthetic proof uses selected-group point densities in A^2/rad^2, an exact occupancy
-quadratic and a checked 13-node normal-displacement response. Its relative mode profiles
-one scale per incidence. It is not a fit of unseparated measured native counts, and its
-old display-only point-sampled detector images are not pixel-integrated predictions.
-Use [native refinement](NATIVE_REFINEMENT.md) for the latter observable; retain the
-declared conditional inference contract when using the library API.
+Both the runner and conditional selected-center fitting library are retired.
+Their objectives are not equivalent to native-count inference. Historical source
+is recoverable at `1f65a09`; use [the staged guide](STAGED_FITTING.md) for current fits.
 
 ## Optional PbI2 rational landmarks
 

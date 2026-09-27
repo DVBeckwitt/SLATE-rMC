@@ -21,8 +21,8 @@ is a different comparison, even if its figure looks better.
 | Stage | Authoritative production owners | Scope and limit |
 | --- | --- | --- |
 | Geometry | `fitting/joint_geometry.py`, `hbn.py`, `joint_geometry_handoff.py`, shared `geometry` transforms | D043 reduced reference gauge with shared hBN/crystal calibration; D044 applies the accepted source/detector state once. Predictive geometry is qualified; the fixed mechanical pitch references are not measured parameters. |
-| Mosaic | `painted_ewald/normal_density.py`, `fitting/native_search.py` | Directed spherical Gaussian/Lorentzian density with independent uniform spin through full-family native observations. `fitting/mosaic.py` retains the distinct conditional shape-only objective; its per-profile amplitudes cannot establish cross-reflection SF agreement. |
-| Ordered SF | `ordered/amplitudes.py`, `ordered/finite_stack.py`, explicit Bi/Pb or generic CIF bindings | One complex atomic-amplitude equation and coherent finite structure. Geometry and source remain bound; occupancies, site ADPs and empirical sample-Q envelopes have distinct meanings. `fitting/ordered_intensity.py` retains its exact conditional response contraction and conditional inference contract. |
+| Mosaic | `painted_ewald/normal_density.py`, `fitting/native_search.py` | Directed spherical Gaussian/Lorentzian density with independent uniform spin through full-family native observations. `fitting/mosaic.py` retains continuous profile evaluation only. |
+| Ordered SF | `ordered/amplitudes.py`, `ordered/finite_stack.py`, explicit Bi/Pb or generic CIF bindings | One complex atomic-amplitude equation and coherent finite structure. Geometry and source remain bound; occupancies, site ADPs and empirical sample-Q envelopes have distinct meanings. The alternate selected-center optimizer is retired. |
 | SF with disorder | `stacking/transition.py`, `stacking/finite_intensity.py`, `stacking/parent_models.py` | One finite-stack transition recurrence whose prior enumeration and ordered-limit evidence is archived in Git. Independent parents mix as intensities. Synthetic fixed-parent recovery does not qualify measured disorder estimates. |
 | Transport and fitting | `pipeline/fiber_detector.py`, `conditional_detector.py`, `source_spatial.py`; `fitting/native_observations.py`, `native_workflow.py`, `native_search.py`, `native_execution.py` | One conditional transport/spatial-probability path, frozen native memberships, declared covariance and shared-scale fit. Numerical routing is explicit; no extra detector engine or hidden physical fallback. |
 
@@ -40,8 +40,8 @@ was not the modern full-covariance GLS objective. It was nominal, not numericall
 later two-profile spline experiment changed those inputs and assumptions, improved central signed
 profiles and left large radial excess. It is archived research, not the default replacement.
 
-The two historical Bi2Se3 recovery CLIs are retired; their distinct fitting mathematics and
-scientific contracts remain. Bespoke point-source/full-field adapters, spline banks and
+The two historical Bi2Se3 recovery CLIs and alternate fitters are retired; their
+evidence remains archived. Bespoke point-source/full-field adapters, spline banks and
 failed performance experiments remain external evidence. Do not import their orchestration into
 production. The current `prepare_native`, `refine_native` and `render_native` commands own the
 native-count workflow; see [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md) for explicit nominal
@@ -144,23 +144,10 @@ contributing rod/orientation branches on the active detector panel.
   and optional zero-sum image trims represented by Helmert contrasts. Any identifiable subset may
   be active while the complement remains exactly fixed; the common delta and overlapping sample-x
   gauge cannot be active together.
-- `fitting/mosaic.py`: immutable finite-bin profile identities and response banks, exact
-  per-profile nuisance-amplitude projection, deterministic width refinement, centered-logit eta
-  search, and local/global identifiability diagnostics. Its continuous-profile entry point is a
-  fitting-boundary adapter over the canonical measurement transform, not another angle mapping.
-- `fitting/stacking_intensity.py`: direct signed-rod PbI2 finite-parent strengths, exact-rational
-  reflection-group aggregation, keyed intrinsic-strength observations, and deterministic
-  constrained nonnegative population fitting. The rational adapter collapses detector-root sides,
-  retains their canonical definitions as provenance, and sums unique rods, but is not a
-  detector/source/optics response.
-- `fitting/ordered_intensity.py`: fixed detector/mosaic sparse ROI-mass responses plus certified
-  source-averaged selected-center responses, fixed-position Bi2Se3 occupancy quadratics,
-  directional `Qr/Qz` damping, analytic image-scale projection, and structural rank/correlation
-  diagnostics. The source-averaged path sums every incident state into one detector function per
-  incidence before comparison and certifies its `Uz` interpolation against full-detector probes.
-  Dataset-ID-bound observations carry distinct mass/density measures, while numerical-response,
-  structure, mosaic, source, instrument, backend, and rod-catalog revisions preserve provenance.
-  The full strength model is retained as a proof oracle, not called by optimizer iterations.
+- `fitting/mosaic.py`: frozen angular-profile identities and continuous finite-bin evaluation
+  through the canonical measurement transform.
+- `fitting/stacking_intensity.py`: fixed-parent PbI2 strength and log-ratio parameters,
+  using the shared finite-stack physics.
 - `measurement`: downstream detector-derived observables, including the continuous normalized
   `(phi, 2theta)` coordinate pullback, per-rod all-root angular signal, the full finite-pixel angle
   projector, and an exact cropped physical-pixel projector for fully panel-contained measured
@@ -196,16 +183,8 @@ contributing rod/orientation branches on the active detector panel.
    exit-refraction, and detector geometry for each landmark trial.
 8. `ContinuousNormalizedAngleFunction` reparameterizes one bound detector field with an explicit
    coordinate Jacobian and separate `S/N` measures; it does not rasterize or alter detector physics.
-9. The mosaic-profile adapter evaluates only frozen angular quadrature nodes, integrates `S` and
-   `N` before division, and caches exact component responses by width. CUDA performs the expensive
-   detector evaluations; the small deterministic profile search remains on the CPU. The measured
-   path projects only cropped raw-OSC pixels into the identical local-bin layout with exact polygon
-   overlap. A frozen sideband gate removes whole weak profiles, and explicit policy identities
-   remove whole secondary-lobe profiles before the one joint fit; neither operation masks bins by
-   their central-profile intensity. Explicit nonzero profiles use the frozen OSC indexing
-   selection, while branchless `00L` profiles require raw-significant observed support and a
-   representable fixed-model landmark. Geometry-audited inverse-support boundary bins may be frozen
-   out identically from every simulated component.
+9. Frozen mosaic-profile evaluation integrates signal S and detector-area normalization N
+   separately. Measurement projectors retain the corresponding native-pixel boundary.
 10. Measured selection discovers peaks without predicted coordinates, refines them on the native
    detector, infers discrete reciprocal identities, and freezes replicated branch tracks before
    fitting consumes them.
@@ -228,10 +207,8 @@ contributing rod/orientation branches on the active detector panel.
     including six `m=0`; a measured-mosaic handoff instead propagates its exact fit-eligible
     identity set. That evidence concerned synthetic selected-component recovery, not unresolved raw-OSC
     intensity recovery.
-14. The synthetic PbI2 rational-landmark SF boundary collapses detector-root duplicates to one
-    intrinsic structural query, sums every unique signed rod once, and fits one fixed-parent amount
-    vector and scale per specimen. Exact parent overlaps stay inside one response row. Detector
-    transport and arbitrary transition-law refinement remain downstream work.
+14. Fixed-parent PbI2 strengths remain available through `Pbi2ParentMixtureStrength`;
+    detector-native fitting uses the shared native workflow.
 15. Native-center rendering samples the final combined detector density once per native pixel. It
     is display-only `A^2/px^2`, not pixel-integrated mass, OSC counts, or a count-calibrated fit.
 16. The interactive Monte Carlo viewer owns one latest-only scheduler and one long-lived render
@@ -267,11 +244,8 @@ module-global or import-time side effects.
   exit-refraction and detector geometry.
 - A measured selection manifest is invalidated by any image, mask, detector/cake calibration,
   reciprocal context, or policy hash change. A fitter never silently relabels a frozen manifest.
-- A mosaic response bank is invalidated by any profile layout, angle frame, source, backend/device,
-  material/rod catalogue, or fixed geometry revision change. Mosaic width and mixture changes reuse
-  the frozen upstream geometry but require their exact component response.
-- A measured mosaic observation is additionally invalidated by any OSC bytes, detector-valid mask,
-  exact local projector, measured-selection policy, or nuisance-basis profile revision change.
+- Simulated profiles bind layout, angle frame, source, backend, rods and geometry.
+  Measured profiles additionally bind observation bytes and the projection revision.
 - A source-averaged selected-center response is invalidated by source count/revision, selected-center
   layout, rods, mosaic or structure physics, instrument, backend, or device. Geometry tag/marker
   construction independently rebuilds exactly one ideal source-center, zero-divergence,

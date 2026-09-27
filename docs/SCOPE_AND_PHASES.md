@@ -133,7 +133,7 @@ observable, and any sphere mesh or raster is only a display sample of that funct
 - One sparse source-averaged detector transfer shared by generic CIF, specialized Bi2X3, and fixed
   five-parent PbI2 strengths at selected continuous coordinates.
 - Declarative affine expanded-CIF fractional-coordinate, occupancy, and isotropic-`U` bases, plus
-  gauge-free PbI2 parent log ratios, through one rank-gated matched-region fitter.
+  gauge-free PbI2 parent log ratios, through the shared rank-gated native search.
 - Optional native detector reference-center and panel-normal distance calibration with explicit
   fixed-position provenance and an exact inactive legacy path.
 - Reciprocal-metric integer-L rod shells for nonhexagonal layered cells; `family_m` remains

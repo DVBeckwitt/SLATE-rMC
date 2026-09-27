@@ -73,9 +73,9 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 | `OscGeometrySeriesConfiguration` / `OscGeometryIndexingRun` | selection | strict IDs/paths/commanded angles plus one provenance-bound frozen selection and retained fit-ready models |
 | `CommensurateLayerOrder` / `LayerLMarkerDefinition` / `LayerLMarkerObservations` | geometry/fitting | exact reduced layer coordinate; rod-free physical marker identity plus explicit signed-rod provenance; one frozen coordinate/covariance row per physical detector locus |
 | `Pbi2PolytypeLandmarkCatalogue` | fitting | ideal-parent 2H/4H/6H support in one declared single-trilayer PbI2 metric, exact overlap deduplication, signed-rod/parent provenance, source-CIF and full geometry-context revisions; no intensity or measured-centroid claim |
-| `CompiledLayerLStackingResponse` / `LayerLStackingObservations` / `StackingPopulationFitResult` | fitting | canonical exact-rational reflection-group identities, unique signed-rod summed intrinsic parent responses, keyed specimen strengths/variances, allowed-component provenance, and constrained population/phase diagnostics |
+| `Pbi2ParentMixtureStrength` / `Pbi2ParentLogRatioParameterization` | structure binding | fixed near-parent fractions, signed rods, finite-layer normalization and provider revision |
 | `IndexedGeometryImage` / `IndexedGeometryFitResult` | fitting | one frozen integer- or rational-layer image block and one selected subset of the shared geometry pack, optionally augmented by one common incidence-angle delta and zero-sum Helmert trims, with commanded/trim/effective-angle provenance, fixed-coordinate provenance, per-image metrics, and combined rank diagnostics |
-| `MosaicProfileDefinition` / `MosaicProfileSet` / `MosaicComponentProfileBank` / `MosaicProfileFitResult` | measurement/fitting boundary | frozen integer- or exact-rational reflection identity; finite-bin `S`, `N`, validity and angle layout; exact pure-component responses; fitted mosaic parameters, nuisance scales, and identifiability evidence |
+| `MosaicProfileDefinition` / `MosaicProfileSet` | measurement boundary | frozen reflection identity, finite-bin S, N, validity, angle layout and source/observation provenance |
 | `LayeredReciprocalFrame` / `ReciprocalProfileRegion` | measurement | one explicit reciprocal basis, active sample-from-crystal rotation, declared axial basis vector, radial band, axial bin edges, detector-side interval, and sidebands; no material-specific family equation or detector raster |
 | `ReciprocalProfileMembership` / `BinnedSampleIntegral` | measurement | immutable sample-to-bin identities and separately accumulated signal/measure vectors; division occurs only after finite-bin integration |
 
@@ -262,7 +262,7 @@ caustic flags, and pointwise validity. It applies no detector solid-angle accept
 The exact pole and every invalid/off-panel direction have `S=N=I=0`. Finite bins are a separate
 consumer and must integrate `S` and `N` before division.
 
-### Finite-bin mosaic-profile fitting
+### Finite-bin mosaic-profile evaluation
 
 `evaluate_continuous_mosaic_profiles(...)` is the narrow fitting-boundary adapter over the
 canonical all-root angle pullback. For every frozen profile bin it integrates angular signal `S`
@@ -275,7 +275,7 @@ that peak amplitudes are known or shared. `EXPLICIT_NONZERO` profiles retain eac
 branch with independent analytic-branch and root-side identities. `COLLAPSED_00L` has
 `branch_id=None` and `analytic_branch_id=0`, because the regular `m=0` inverse preimages are summed
 by one all-root profile. Profile, angle-frame, physical source, backend/device, rod, layout, and
-any predeclared bin exclusions are immutable and must agree throughout a component bank.
+any predeclared bin exclusions are immutable and must agree throughout a profile evaluation.
 `MosaicProfileSet.source_revision` is the detector result's actual source realization revision; a
 profile-layout hash cannot substitute for it.
 
@@ -300,178 +300,15 @@ contract all enter the immutable cache key. This projector pixelizes only the al
 observation; simulated component responses remain continuous angular integrals.
 
 Measured profile sets carry an `observation_revision` instead of a physical `source_revision`.
-An optional `MosaicProfileNuisanceBasis` is bound to the exact profile revision as well as the
-identities and valid-bin mask. Its coefficients are unconstrained signed detrending terms, not a
-claim of a nonnegative physical background. A component response with numerically absent
-nuisance-projected energy is treated as zero; on a mixture face where a profile then has no model
-energy, its fitted scale is exactly zero and it contributes its full normalized observed residual.
-A width pair with one zero-energy component and one nonzero component in the same profile is
-rejected because its apparent boundary optimum can be an unattained limit with divergent scale.
+`MosaicProfileDefinition.excluded_phi_bin_indices` records frozen numerical-support
+exclusions. Exclusions are provenance-bound and cannot depend on measured intensity.
+The nuisance projection, component bank and shape-only search are retired.
 
-For every individual `(dataset, reflection, analytic branch, root side)` profile, the fitter
-analytically profiles an independent nonnegative amplitude and minimizes relative squared shape
-error. Absolute peak heights, structure-factor amplitudes, and cross-peak intensity ratios therefore
-cannot determine the mosaic distribution; every admitted weak or strong profile has equal
-profile-level leverage. Relative intensity across bins within one profile remains essential mosaic
-information. Gaussian sigma and Lorentzian HWHM are selected from exact component responses; eta
-is searched on both exact faces and a scale-centered logit coordinate. Repeated width pairs are
-cached during deterministic refinement. A fit fails with a typed identifiability error when the
-nuisance-projected local sensitivity is deficient or when the finite global audit finds distinct
-tied solutions. The 8,193-point stationary audit is deterministic numerical evidence, not a formal
-theorem excluding arbitrarily narrower sub-grid aliases.
+### Retired fixed-position ordered-intensity fitting
 
-For rational PbI2 landmarks this scale projection permits fixed parent-population constants,
-including summed strength at exact overlaps, to set profile amplitudes without entering the mosaic
-objective. It does not remove binwise structure-factor, finite-stack, disorder, source, optics, or
-detector variation. Those responses must be frozen in a complete component bank or separately
-proved shape-invariant before measured rational profiles are admitted. Exact pure-parent support is
-landmark provenance, not an intensity mask; finite stacks or disorder can leak intensity into a
-nominally absent site.
-
-Data-quality screening, when requested, occurs before fitting and removes an entire profile under
-a frozen, provenance-bound policy. It may use selection-only sidebands to classify weak profiles
-and explicit full-profile identities to classify known secondary lobes. It may not trim selected
-phi bins according to measured intensity. Once admitted, every profile has the same profile-level
-leverage regardless of absolute intensity.
-
-A branchless measured `m=0` profile additionally requires positive finite signal from the complete
-source-averaged simulated profile. This support check precedes weak/secondary screening and is
-recorded in the selection audit; a nominal one-state landmark alone is not intensity evidence.
-
-`MosaicProfileDefinition.excluded_phi_bin_indices` is a frozen, provenance-bound numerical-support
-mask, never an intensity threshold. The Bi2Se3 proof excludes 43 independently audited inverse-
-support boundary bins from both truth and every component response, while retaining every one of
-the 32 profiles and at least 38 bins per profile. A general topology-split cubature that retains
-those boundary bins is not yet implemented.
-
-### Fixed-position ordered-intensity fitting
-
-`compile_ordered_intensity_response(...)` freezes detector geometry, source, optics, mosaic,
-physical rods, finite angular ROIs, and the atomic coordinates. Each regular inverse root retains
-its observation index, physical rod, exact `L`, root sign, fixed mass coefficient, and crystal-frame
-`Qr^2/Qz^2`. It also compiles the six coefficients of the homogeneous occupancy quadratic for the
-three unique Bi2Se3 source sites. No detector raster, pixel deposition, detector reprojection, or
-full structure-factor calculation occurs in an optimizer iteration.
-
-For the finite-ROI response, each profile is the integrated contribution of the rods named by that frozen
-reflection group. It is therefore a selected-group component mass, not the unseparated total counts
-inside the same raw detector ROI. A real-image consumer must provide a provenance-bound component
-extraction/deblending step or prove that omitted rods and background are below its declared error
-budget. The current synthetic Bi2Se3 proof uses exact selected-component observations; it does not
-claim raw-OSC intensity recovery.
-
-For fixed Bi and Se2 Wyckoff coordinates, every term is evaluated as
-
-```text
-S = [oBi^2, oSe1^2, oSe2^2, oBi*oSe1, oBi*oSe2, oSe1*oSe2] dot C
-I = fixed_mass * S * exp[-Ur*Qr^2 - Uz*Qz^2]
-```
-
-The coefficient compiler retains the configured finite-stack normalization and stacking-disorder
-law. `predict_mass_direct_A2(...)` evaluates the authoritative CIF-derived quintuple-layer
-amplitude and configured finite-stack model on the same frozen roots and exists as the independent
-acceleration oracle; fitting uses
-`predict_mass_A2(...)` only. Within every admitted reflection group, weak and baseline-extinct roots
-are retained. The nominal integer-L marker catalog admits sites from geometry and detector topology
-only; its aligned strength arrays are diagnostics that may be exactly zero. A zero-occupancy control
-must therefore produce the same profile identities as the CIF baseline even though every diagnostic
-strength vanishes. The tracked proof also freezes the expected per-incidence group counts.
-
-`fit_ordered_intensity_series(...)` accepts an explicit active-name tuple and freezes its exact
-complement. This first phase permits only the three occupancies and `Ur/Uz`; attempting to activate
-either Wyckoff coordinate fails explicitly. Absolute-calibrated data may fit all three occupancies.
-With one analytic scale per image, their common multiplier is an exact gauge, so one occupancy must
-be fixed as a positive ratio reference and only occupancy ratios may be interpreted. Ratio
-coordinates are nonnegative and may exceed one. The returned layered-quintuple parameter object is merely the
-admissible representative obtained by dividing all ratios by their maximum; frozen occupancy names
-refer to the optimizer's ratio coordinates, not to the representative's numeric fields. Mixed
-nonzero-`m` radial families are required to distinguish `Ur` from a common intensity scale. Within
-one call, every admitted `m=0` and nonzero observation must use the same declared kinematic measure:
-either finite-ROI mass or source-averaged selected-center angular signal density. Parratt, composite
-specular, and mixed-measure observations are rejected.
-
-Every response carries a derived digest of its immutable roots, coefficients, `Qr/Qz`, detector
-weights, wavelength, profile identities, and source/material/geometry revisions. Its structure and
-physical mosaic compatibility revisions are checked across the simultaneous series. Observations
-are immutable dataset-ID-bound records with exactly one declared measure. ROI-mass observable
-revisions hash profile identities, angle-frame layout, finite ROI boundaries, bin count, and frozen
-topology exclusions but intentionally exclude quadrature order. Thus a refined truth/data evaluation
-and a cheaper converged prediction may share one declared observable while retaining different
-numerical response digests. Selected-center records instead hash their frozen center/group layout.
-Tuple position is never an authority. Profile
-rod-catalog revisions must equal the detector's
-configured catalog before response compilation. Different wavelength-specific response digests and
-reach-limited rod catalogs are allowed when the shared structure and mosaic remain compatible.
-The reported rank, condition, and correlation matrix are local inverse-sensitivity diagnostics,
-not statistical covariance or uncertainty: this phase declares no noise model. One bound-contact
-flag is reported for every active coordinate and accepted deterministic recoveries require all of
-them to be false.
-
-`probe_ordered_intensity_inverse_boundary_bins(...)` applies a fixed 17-by-17 geometry probe to
-every phi bin. The one-state path and the source-averaged structure path retain physical
-source-state, rod, root-sign, validity, and caustic identity while freezing a conservative
-exclusion mask before quadrature. Structure strength and observed intensity do not decide the
-mask. This finite probe is not a general topology certificate; each new material/ROI set still
-requires an independent response-order convergence check.
-
-`compile_source_averaged_ordered_intensity_response(...)` is the distributed-source companion for
-the synthetic fixed-position proof. For each incidence it evaluates one detector function
-
-```text
-D_a(c,r) = sum_s w_s D_a,s(c,r)
-```
-
-before selecting rods, applying a dataset scale, or constructing any residual. It exposes frozen
-selected-center angular signal density in `A^2/rad^2`, not finite-ROI mass. The response therefore
-uses `OrderedIntensityPeakCenterObservations` and measure ID
-`selected_group_angular_signal_density_A2_per_rad2.v1`; ROI-mass observations cannot be mixed into
-the same fit. Nonzero centers are frozen nominal integer-L markers, whereas admitted `m=0` centers
-are frozen observed coordinates, so the common term is selected center rather than nominal peak.
-
-At 13 canonical Chebyshev-Lobatto `Uz` nodes, six occupancy probes are evaluated through the full
-source-averaged, all-root detector. Their homogeneous occupancy quadratic is exact. `Qr^2` is exact
-and constant within each accepted symmetry group; the noncommuting source/root variation in `Qz`
-is retained by the full detector evaluations before interpolation. Every compiled response must
-pass 12 interlaced full-detector validation nodes at maximum occupancy-contracted signal error
-`2e-3` or fail. At each profile and validation node the exact and interpolated homogeneous
-occupancy quadratics are converted to symmetric three-site matrices `Q` and `Qhat`. A profile-local
-generalized-eigenvalue bound covers every real occupancy direction `o` (and therefore every allowed
-nonnegative direction): `|o.T@(Qhat-Q)@o| <= rho*(o.T@Q@o + 1e-12*S_p*||o||^2)`, where `S_p` is
-the largest direct spectral norm across that profile's validation nodes. No scale is pooled across
-profiles; the additive term explicitly governs exactly extinct or numerically rank-deficient modes.
-The response compiler contract revision is
-`source-averaged-selected-center-occ-quadratic-chebyshev-qz-spectral.v2`. Recovery schema v4 stores
-that revision and the `1e-12` floor, and rendering rejects an older or missing contract before any
-detector evaluation.
-Its digest binds the source count/revision, instrument, material, mosaic, rods, selected centers,
-all-root policy, interpolation certificate, backend, and device. A joint caller may require an
-exact source count and realization; the tracked proof requires the same 250-state realization for
-all three views. This is an accelerator for synthetic selected-component recovery, not a raw-OSC
-intensity extractor.
-
-The unfiltered synthetic mode retains every weak or baseline-extinct nonzero geometry anchor and
-all six admitted branchless `m=0` anchors. When a measured-mosaic handoff is supplied, its exact
-fit-eligible identity set is authoritative, so its weak/secondary-lobe exclusions propagate into
-the synthetic selected-center structure-factor recovery. There is no per-source scale or residual:
-selected-group rod restriction is linear, and all retained source/root contributions are summed
-before the one dataset-scale projection and joint three-incidence residual.
-
-The measured-mosaic handoff uses schema `rasim-bi2se3-real-mosaic-fit-v3` and support-gate revision
-`positive-combined-detector-m0-profile-signal.v2`. Every candidate selection record carries its
-combined-source modeled signal and Boolean support decision. Ordered-intensity consumers reject
-the earlier schema or a missing/mismatched gate revision. They also reconstruct the support
-decision from an integral `family_m` and a finite, nonnegative signal, rejecting inconsistent
-records instead of trusting serialized Boolean state. The v2 gate includes raw-significant
-nominally unsupported `m=0` observations as provisional candidates, and consumers require every
-fit-eligible identity and dataset to be present in the compiled response. Schema v3 additionally
-binds the upstream position-artifact revision, the nine shared correction values, one common
-incidence-angle delta, and the commanded/effective angle vectors. Ordered-intensity schema v4
-rebuilds and records that exact position state; it never falls back to case-file geometry.
-
-Before compiling an admitted `m=0` anchor, the tracked runner evaluates its baseline structure
-through the complete source-averaged selected-group detector and requires positive finite modeled
-support. Raw significance remains the upstream observation gate; this forward check prevents a
-nominal one-state landmark alone from establishing intensity support.
+Selected-component point-density/ROI-mass fitting APIs are archived at `1f65a09`.
+Their conditional objective is distinct from native-count fitting. Use the shared
+native refinement workflow for current inference.
 
 ### Configured simulation
 
@@ -678,44 +515,12 @@ common-layer transition model. Broad, asymmetric, or population-dependent blends
 stacking-aware intensity fit. The common-incidence-delta/sample-normal-x gauge is unchanged by the
 additional landmarks.
 
-### Exact rational-layer intrinsic SF population fitting
+### Fixed-parent PbI2 strength
 
-`compile_pbi2_layer_l_stacking_response(...)` consumes an all-five-parent
-`Pbi2PolytypeLandmarkCatalogue` and an already admitted subset of
-`LayerLMarkerObservations`. It verifies every marker definition against the catalogue, then
-collapses analytic detector root sides to one canonical `MosaicReflectionGroupKey` carrying
-`(m, reduced L, reciprocal-basis revision)` and the complete signed-rod membership. Canonical
-source marker definitions remain response provenance only. Missing optional
-markers produce no structural row.
-
-For each structural row the compiler evaluates every unique contributing signed rod through the
-authoritative five-parent finite-stack response and sums the resulting intensities. It neither
-averages rods nor iterates parent-support records as multiplicity. All five component columns are
-evaluated at every admitted site: pure-parent support is a selection provenance and never masks
-finite-stack or nonzero-disorder leakage. The declared measure is
-`pointwise-intrinsic-summed-signed-rods-layer-L-strength-A2.v1`; detector roots, source, optics,
-mosaic, polarization, detector Jacobians, and finite detector bins are absent.
-
-`LayerLStackingObservations` binds one specimen's intrinsic strengths and positive variances to
-the exact reflection groups and response sampling revision. `fit_layer_l_stacking_phase_totals`
-joins by branch-independent group identity and complete signed-rod membership rather than tuple
-position. One
-nonnegative amount vector and its sum as one global specimen scale tie every row. Parent overlaps
-remain columns in the same row, so the prediction is `R @ amount`; they never create duplicate
-residuals.
-
-`allowed_component_ids` is an explicit canonical-order prior. The accepted specimen rosters are
-2H only, 2H plus both 6H hands, or all five components. Excluded components have exactly zero
-amount and excluded phase-profile bounds are `[0,0]`; the sole allowed 2H phase has bounds `[1,1]`.
-The required aggregate phase-contrast rank is the number of allowed phases minus one. Handed
-domains may alias while their aggregate phase total remains identifiable; their reported domain
-fractions are then one NNLS representative.
-
-This boundary fits populations of fixed responses with `epsilon=0.001`, plus-only initialization,
-declared layer count, one 2H-derived motif, corrected registry convention, and finite-per-layer
-normalization. It is not arbitrary transition-law refinement and is not a detector-native or
-measured PbI2 fit. Separately calibrated specimens require separately compiled responses and
-scales.
+`Pbi2ParentMixtureStrength` and `Pbi2ParentLogRatioParameterization` retain five fixed
+near-parent templates, explicit fractions, signed rods and shared finite-layer response.
+The intrinsic-landmark population compiler/fitter is retired. This provider does not
+infer an arbitrary transition law.
 
 ### Indexed multi-OSC geometry series
 
