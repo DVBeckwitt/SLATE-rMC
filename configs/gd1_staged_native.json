@@ -1,0 +1,375 @@
+{
+  "schema": "rasim-native-refinement-plan-v1",
+  "recipe_id": "gd1-ordered-to-disorder-native.v1",
+  "experiment_binding": {
+    "physics_sha256": "99aa4311e6a22f2dc6794057c23d13d89d4beb6bc902d18e1d4c0133d87a6c82",
+    "observation_sha256": "25804e03fb18f4c91d3c62ec660f577e52af06f063f08c5c7426f97d45e29a06"
+  },
+  "acquisition_id": "97e36137f19ee613bcad64b35358afb0bddf0781700f08c02c95bf1d21ec642f",
+  "objective": "historical",
+  "fit_instrument": false,
+  "parameters": [
+    {
+      "name": "a_A",
+      "unit": "angstrom",
+      "owner": "specimen:gd1",
+      "lower": 4.51242,
+      "upper": 4.60358,
+      "sensitivity_scale": 0.0045579999999999996,
+      "lower_kind": "search",
+      "upper_kind": "search"
+    },
+    {
+      "name": "c_A",
+      "unit": "angstrom",
+      "owner": "specimen:gd1",
+      "lower": 6.9161399999999995,
+      "upper": 7.05586,
+      "sensitivity_scale": 0.006986,
+      "lower_kind": "search",
+      "upper_kind": "search"
+    },
+    {
+      "name": "iodine_fractional_z",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.2821600157188886,
+      "upper": 0.2921600157188886,
+      "sensitivity_scale": 0.001,
+      "lower_kind": "search",
+      "upper_kind": "search"
+    },
+    {
+      "name": "pb_occupancy",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.8,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "search",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "iodine_occupancy",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.8,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "search",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "pb_u_radial_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 0.3,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "physical",
+      "upper_kind": "search"
+    },
+    {
+      "name": "pb_u_normal_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 0.3,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "physical",
+      "upper_kind": "search"
+    },
+    {
+      "name": "iodine_u_radial_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 0.3,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "physical",
+      "upper_kind": "search"
+    },
+    {
+      "name": "iodine_u_normal_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 0.3,
+      "sensitivity_scale": 0.01,
+      "lower_kind": "physical",
+      "upper_kind": "search"
+    },
+    {
+      "name": "gaussian_sigma_rad",
+      "unit": "radian",
+      "owner": "specimen:gd1",
+      "lower": 1e-05,
+      "upper": 0.15,
+      "sensitivity_scale": 0.0048106916673827695,
+      "lower_kind": "search",
+      "upper_kind": "search"
+    },
+    {
+      "name": "lorentzian_half_width_rad",
+      "unit": "radian",
+      "owner": "specimen:gd1",
+      "lower": 1e-05,
+      "upper": 2.9785714238134826,
+      "sensitivity_scale": 0.19857142825423219,
+      "lower_kind": "search",
+      "upper_kind": "search"
+    },
+    {
+      "name": "lorentzian_probability",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "surface_fraction_0",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "surface_1_share_of_remainder",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "extra_film_thickness_A",
+      "unit": "angstrom",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 5000.0,
+      "sensitivity_scale": 50.0,
+      "lower_kind": "physical",
+      "upper_kind": "search"
+    },
+    {
+      "name": "initial_plus_probability",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "phase_0_share_of_remainder",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "phase_0_epsilon",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "phase_1_epsilon",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "phase_1_parent_0_share_of_remainder",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    },
+    {
+      "name": "phase_1_parent_1_share_of_remainder",
+      "unit": "1",
+      "owner": "specimen:gd1",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.1,
+      "lower_kind": "physical",
+      "upper_kind": "physical"
+    }
+  ],
+  "starts": [
+    [
+      4.558,
+      6.986,
+      0.2871600157188886,
+      1.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.048106916673827695,
+      1.9857142825423217,
+      0.0,
+      1.0,
+      0.0,
+      1.1368683772161603e-13,
+      0.0,
+      1,
+      0,
+      0,
+      0.3333333333333333,
+      0.5
+    ],
+    [
+      4.558,
+      6.986,
+      0.2871600157188886,
+      1.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.048106916673827695,
+      1.9857142825423217,
+      0.0,
+      1.0,
+      0.0,
+      1.1368683772161603e-13,
+      0.0,
+      0.9090810668273658,
+      0.01,
+      0.0,
+      0.3333333333333333,
+      0.5
+    ]
+  ],
+  "repeat_choices": [
+    72
+  ],
+  "proposal_mosaic": [
+    0.048106916673827695,
+    1.9857142825423217,
+    0.0
+  ],
+  "integration_override": {
+    "angular_integration": "nominal",
+    "axial_power": 10,
+    "angular_power": 3
+  },
+  "workers": 4,
+  "finite_difference_step": 1e-06,
+  "require_initial_qualification": false,
+  "qualify_fitted_candidates": false,
+  "stages": [
+    {
+      "name": "mosaic",
+      "active_parameters": [
+        "gaussian_sigma_rad",
+        "lorentzian_half_width_rad",
+        "lorentzian_probability"
+      ],
+      "method": "slsqp",
+      "maximum_iterations": 250,
+      "enforce_historical_guards": true
+    },
+    {
+      "name": "ordered_structure_and_surface",
+      "active_parameters": [
+        "a_A",
+        "c_A",
+        "iodine_fractional_z",
+        "pb_occupancy",
+        "iodine_occupancy",
+        "pb_u_radial_A2",
+        "pb_u_normal_A2",
+        "iodine_u_radial_A2",
+        "iodine_u_normal_A2",
+        "surface_fraction_0",
+        "surface_1_share_of_remainder",
+        "extra_film_thickness_A",
+        "initial_plus_probability"
+      ],
+      "method": "slsqp",
+      "maximum_iterations": 250,
+      "enforce_historical_guards": true
+    },
+    {
+      "name": "disorder",
+      "active_parameters": [
+        "phase_0_share_of_remainder",
+        "phase_0_epsilon",
+        "phase_1_epsilon",
+        "phase_1_parent_0_share_of_remainder",
+        "phase_1_parent_1_share_of_remainder"
+      ],
+      "method": "slsqp",
+      "maximum_iterations": 250,
+      "enforce_historical_guards": true
+    },
+    {
+      "name": "joint",
+      "active_parameters": [
+        "a_A",
+        "c_A",
+        "iodine_fractional_z",
+        "pb_occupancy",
+        "iodine_occupancy",
+        "pb_u_radial_A2",
+        "pb_u_normal_A2",
+        "iodine_u_radial_A2",
+        "iodine_u_normal_A2",
+        "gaussian_sigma_rad",
+        "lorentzian_half_width_rad",
+        "lorentzian_probability",
+        "surface_fraction_0",
+        "surface_1_share_of_remainder",
+        "extra_film_thickness_A",
+        "initial_plus_probability",
+        "phase_0_share_of_remainder",
+        "phase_0_epsilon",
+        "phase_1_epsilon",
+        "phase_1_parent_0_share_of_remainder",
+        "phase_1_parent_1_share_of_remainder"
+      ],
+      "method": "slsqp",
+      "maximum_iterations": 250,
+      "enforce_historical_guards": true
+    }
+  ],
+  "sensitivity": true,
+  "profiles": [],
+  "notes": [
+    "New staged search declaration; not replay of the archived optimization or numerical qualification.",
+    "Geometry, source and spectrum adopted unchanged; N72 is a conditional model choice, not a gauge.",
+    "First start is pure2H so ordered initialization has no mixed transition law. Initial orientation remains an admitted coordinate.",
+    "Second start and all21 parameter ranges/scales come from full_native_gd1_plan.json SHA256 6fb571088391b026ed0607064eb4f977fd601a310297f9d3a02c949a32143ecc.",
+    "Phase1 averages transition laws; epsilon0 with mixed parent weights is not necessarily ordered.",
+    "Final stage releases all21 admitted physical coordinates; weak directions and boundaries remain visible.",
+    "Nominal p10/g3 is explicitly new cost setting; not qualified and not a speed guarantee."
+  ]
+}

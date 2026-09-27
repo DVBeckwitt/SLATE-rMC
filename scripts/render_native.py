@@ -31,6 +31,7 @@ def render(
     checkpoint_seconds=60,
     resume=False,
 ):
+    started = perf_counter()
     physics_path, observation_path, result_path, output = map(
         Path, (physics_path, observation_path, result_path, output)
     )
@@ -95,9 +96,18 @@ def render(
         payload = Path(profile_projection_path).read_bytes()
         projection_sha256 = hashlib.sha256(payload).hexdigest()
         with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
+            shape = archive["detector_shape_rc"]
+            count = archive["observation_count"]
+            if (
+                shape.shape != (2,)
+                or shape.dtype.kind not in "iu"
+                or count.shape != ()
+                or count.dtype.kind not in "iu"
+            ):
+                raise ValueError("projection shape and count must be integral metadata")
             profile_projection = NativePixelRegionProjection(
-                detector_shape_rc=tuple(int(v) for v in archive["detector_shape_rc"]),
-                observation_count=int(archive["observation_count"]),
+                detector_shape_rc=tuple(int(v) for v in shape),
+                observation_count=int(count),
                 quadrature_revision=projection_sha256,
                 **{
                     name: archive[name]
@@ -184,6 +194,18 @@ def render(
                     raise ValueError(
                         "render checkpoint belongs to a different result or pixel rule"
                     )
+            if profile_projection is not None and "display_profile_count" in saved:
+                profile = saved["display_profile_count"]
+                if (
+                    profile.shape != (profile_projection.observation_count,)
+                    or np.iscomplexobj(profile)
+                    or np.any(~np.isfinite(profile))
+                    or np.any(profile < 0)
+                ):
+                    raise ValueError(
+                        "render checkpoint profile must contain aligned finite nonnegative counts"
+                    )
+                arrays["display_profile_count"] = profile.copy()
             if full_image:
                 for name in (image_key,):
                     if saved[name].shape != arrays[name].shape:
@@ -217,14 +239,14 @@ def render(
     elif output.exists():
         raise ValueError("render output exists; use resume or another path")
     root = Path(__file__).resolve().parents[1]
-    started = last_checkpoint = perf_counter()
+    last_checkpoint = perf_counter()
 
     def save():
         manifest["elapsed_seconds"] = perf_counter() - started
         write_diagnostic(output, arrays=arrays, manifest=manifest, repository_root=root)
 
     save()
-    if profile_projection is not None:
+    if profile_projection is not None and "display_profile_count" not in arrays:
         arrays["display_profile_count"] = sum(
             (
                 scale * detector.compile_native_response(profile_projection).evaluate()

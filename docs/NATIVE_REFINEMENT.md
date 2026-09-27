@@ -667,3 +667,24 @@ per-species `G(-Q)=conj(G(Q))`, but anomalous `f` stays unchanged. Generally
 centrosymmetry, mirroring detector pixels or merging signed intensities. Finite
 stacking already uses its authoritative closed-form repeat factor; no duplicate
 stacking implementation or intensity-equality assumption is introduced.
+
+
+## Full display support
+
+`render_native.py --candidate --full-image --bin-size-px 12` reproduces the saved
+unqualified candidate before integrating complete 12x12 native-pixel rectangles.
+Bin size must divide the detector dimensions. Output is `simulated_detector_cell_count`
+with native-coordinate cell centers; size1 retains `simulated_detector_native_count`.
+Mass is integrated, not sampled/interpolated. No display-only scale or background is fitted.
+
+`--profile-projection PATH` optionally supplies a numeric NPZ with integer
+`detector_shape_rc[2]`, scalar integer `observation_count`, and the usual projection
+arrays `flat_pixel_index`, `observation_row`, `pixel_column_index`,
+`detector_area_weight_px2`. Its SHA binds the projection and checkpoint. The output
+`display_profile_count` uses the same bound physical candidate and fitted scale;
+profiles are integrated separately, never reconstructed from coarse image cells.
+Resume preserves completed profiles and image batches and rejects changed identities.
+The display projection does not change the fitting observations or objective.
+
+See [supported staged fitting](STAGED_FITTING.md) for Bi ordered continuation,
+Pb disorder/control recipes and the shared generic-CIF/acquisition boundary.
