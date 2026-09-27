@@ -18,6 +18,7 @@ from painted_ewald import (
 )
 from painted_ewald.validation import positive_integer, reject_complex
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
+from rasim_next.geometry.detector import _broadcast_detector_coordinates
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.optics import (
@@ -842,18 +843,7 @@ def compile_source_averaged_detector_structure_response(
     if not isfinite(polarization) or polarization < 0.0:
         raise ValueError("polarization_weight must be finite and nonnegative")
 
-    supplied_column = np.asarray(column_px)
-    supplied_row = np.asarray(row_px)
-    if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-        np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-    ):
-        raise ValueError("detector coordinates must be real")
-    column, row = np.broadcast_arrays(
-        np.asarray(supplied_column.real, dtype=np.float64),
-        np.asarray(supplied_row.real, dtype=np.float64),
-    )
-    if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-        raise ValueError("detector coordinates must be finite")
+    column, row = _broadcast_detector_coordinates(column_px, row_px)
     column = np.array(column, dtype=np.float64, copy=True, order="C")
     row = np.array(row, dtype=np.float64, copy=True, order="C")
 

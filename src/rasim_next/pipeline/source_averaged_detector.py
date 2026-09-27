@@ -18,6 +18,7 @@ from painted_ewald import (
 from painted_ewald.rotations import mosaic_axes
 from painted_ewald.validation import integer, positive_integer
 from rasim_next.core.contracts import MaterialOptics, canonical_revision_sha256
+from rasim_next.geometry.detector import _broadcast_detector_coordinates
 from rasim_next.geometry.instrument import CompiledInstrument
 from rasim_next.geometry.transport import IncidentTransportResult
 from rasim_next.optics import (
@@ -1958,18 +1959,7 @@ class SourceAveragedDetectorEwaldMeasure:
         execution_backend: str,
         cuda_coordinate_chunk_size: int | None = None,
     ) -> SourceAveragedDetectorCoordinateIntensity:
-        supplied_column = np.asarray(column_px)
-        supplied_row = np.asarray(row_px)
-        if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-            np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-        ):
-            raise ValueError("detector coordinates must be real")
-        column, row = np.broadcast_arrays(
-            np.asarray(supplied_column.real, dtype=np.float64),
-            np.asarray(supplied_row.real, dtype=np.float64),
-        )
-        if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-            raise ValueError("detector coordinates must be finite")
+        column, row = _broadcast_detector_coordinates(column_px, row_px)
         shape = column.shape
         flat_column = np.ascontiguousarray(column.reshape(-1))
         flat_row = np.ascontiguousarray(row.reshape(-1))
@@ -2232,18 +2222,7 @@ class SourceAveragedDetectorEwaldMeasure:
 
         self._require_sampled_positions()
 
-        supplied_column = np.asarray(column_px)
-        supplied_row = np.asarray(row_px)
-        if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-            np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-        ):
-            raise ValueError("detector coordinates must be real")
-        column, row = np.broadcast_arrays(
-            np.asarray(supplied_column.real, dtype=np.float64),
-            np.asarray(supplied_row.real, dtype=np.float64),
-        )
-        if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-            raise ValueError("detector coordinates must be finite")
+        column, row = _broadcast_detector_coordinates(column_px, row_px)
         if execution_backend not in {"cpu", "cuda"}:
             raise ValueError("execution_backend must be 'cpu' or 'cuda'")
         cuda_chunk_size = _validated_cuda_coordinate_chunk_size(

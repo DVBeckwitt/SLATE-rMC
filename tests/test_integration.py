@@ -516,6 +516,18 @@ def test_incidence_angle_averaged_detector_equals_explicit_weighted_sum() -> Non
 
     evaluated = detector.evaluate_detector_coordinates_all_roots(column_px, row_px)
     total_only = detector.evaluate_detector_density_all_roots(column_px, row_px)
+    for evaluate in (
+        detector.evaluate_detector_coordinates_all_roots,
+        detector.evaluate_detector_density_all_roots,
+    ):
+        complex_result = evaluate(column_px + 0j, row_px + 0j)
+        np.testing.assert_array_equal(
+            complex_result.density_A2_per_px2, evaluated.density_A2_per_px2
+        )
+        for invalid, message in ((1 + 1j, "real"), (np.nan, "finite"), (np.inf, "finite")):
+            for coordinates in ((invalid, row_px), (column_px, invalid)):
+                with pytest.raises(ValueError, match=f"detector coordinates must be {message}"):
+                    evaluate(*coordinates)
     np.testing.assert_allclose(
         evaluated.per_rod_density_A2_per_px2,
         expected_per_rod,

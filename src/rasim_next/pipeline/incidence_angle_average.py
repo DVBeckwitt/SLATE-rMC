@@ -20,6 +20,7 @@ from rasim_next.core.contracts import (
     canonical_revision_sha256,
     incidence_scan_calibration_binding_revision,
 )
+from rasim_next.geometry.detector import _broadcast_detector_coordinates
 from rasim_next.pipeline.incidence_acquisition import IncidenceAngleQuadrature
 
 FloatArray = NDArray[np.float64]
@@ -550,18 +551,7 @@ def _validated_evaluation_request(
         or cuda_coordinate_chunk_size < 1
     ):
         raise ValueError("cuda_coordinate_chunk_size requires a positive CUDA chunk size")
-    supplied_column = np.asarray(column_px)
-    supplied_row = np.asarray(row_px)
-    if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-        np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-    ):
-        raise ValueError("detector coordinates must be real")
-    column, row = np.broadcast_arrays(
-        np.asarray(supplied_column.real, dtype=np.float64),
-        np.asarray(supplied_row.real, dtype=np.float64),
-    )
-    if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-        raise ValueError("detector coordinates must be finite")
+    column, row = _broadcast_detector_coordinates(column_px, row_px)
     column = np.array(column, dtype=np.float64, copy=True, order="C")
     row = np.array(row, dtype=np.float64, copy=True, order="C")
     column.setflags(write=False)

@@ -993,8 +993,8 @@
     },
     {
       "path": "src/rasim_next/fitting/geometry.py",
-      "sha256": "826cc1aead7452f1e4aaf4d39d3efae37090c25a8237bbe7858ab253667dcefd",
-      "size_bytes": 125845
+      "sha256": "b4b766ba8813bdf861ad743e3d2455d6d798dc68115f1b32ae3f92302495f69b",
+      "size_bytes": 124754
     },
     {
       "path": "src/rasim_next/fitting/hbn.py",
@@ -1038,8 +1038,8 @@
     },
     {
       "path": "src/rasim_next/fitting/native_execution.py",
-      "sha256": "4f87bc858bf099a5bf997a3e23056118e279d4135a5ffef8ea6b951c6520171f",
-      "size_bytes": 6615
+      "sha256": "34fbce663c226bd79cd3983764c69e421e640d240cc1258ce69f27263cfe0272",
+      "size_bytes": 6515
     },
     {
       "path": "src/rasim_next/fitting/native_input.py",
@@ -1133,8 +1133,8 @@
     },
     {
       "path": "src/rasim_next/geometry/detector.py",
-      "sha256": "48386ba17d6aa1cfd652d33334ef3d64a737e81c9dbc175644954e9140db807f",
-      "size_bytes": 14581
+      "sha256": "2f1441c5eef8e839d6c9c7999c379ea9270a32ba96e0171f813f8c634ad6dbbd",
+      "size_bytes": 15443
     },
     {
       "path": "src/rasim_next/geometry/instrument.py",
@@ -1298,8 +1298,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/continuous_detector.py",
-      "sha256": "cd8d79bd96ce976367db22ea1e46a1e70aafe30405bd9af019a3743eebbb7b51",
-      "size_bytes": 146439
+      "sha256": "8a5940781fa9fb14dc5202c78b26fa0c2b1c4fa105c0992b7aa10c916cf9e44e",
+      "size_bytes": 145934
     },
     {
       "path": "src/rasim_next/pipeline/continuous_fold.py",
@@ -1323,8 +1323,8 @@
     },
     {
       "path": "src/rasim_next/pipeline/incidence_angle_average.py",
-      "sha256": "3ae1fce3d46f19cb87162f37e5f04eefb1265cd3a5ef507d08e1cc3d3f4654c6",
-      "size_bytes": 45051
+      "sha256": "888918dc2b5ed63c0c2da5dcdc9267b9ed79761dbcbdb4e38967bca33a3af5e4",
+      "size_bytes": 44582
     },
     {
       "path": "src/rasim_next/pipeline/reciprocal_detector_chart.py",
@@ -1333,13 +1333,13 @@
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_detector.py",
-      "sha256": "420925545b318e8be02f0de4846581e1757b2722dcb2d5658e821b6677efd2ab",
-      "size_bytes": 134578
+      "sha256": "73f7433def63a8c7d6c318680821ac6854d31a0eabb6bc1477988304a5e19658",
+      "size_bytes": 133479
     },
     {
       "path": "src/rasim_next/pipeline/source_averaged_structure.py",
-      "sha256": "6041a7f926137e7ce7f66c0beee353f116725e8e756487cb48f22053a64f3155",
-      "size_bytes": 47352
+      "sha256": "55971f41db39118f686f526101a8bed3c06f3545c8cad0c0b49e56581d2e73bb",
+      "size_bytes": 46883
     },
     {
       "path": "src/rasim_next/pipeline/source_spatial.py",
@@ -1913,8 +1913,8 @@
     },
     {
       "path": "tests/test_integration.py",
-      "sha256": "e5dca929d2c02d148a38499960c225120681ff98aac78eb92c077f242a7c9585",
-      "size_bytes": 359852
+      "sha256": "4bca819e1141a49e59518c038ad54f87fa463b00839141d753409a0e2bf87b38",
+      "size_bytes": 360487
     },
     {
       "path": "tests/test_joint_geometry.py",

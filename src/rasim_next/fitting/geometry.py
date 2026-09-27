@@ -1215,15 +1215,10 @@ class ExactTagGeometryModel:
             ("film_thickness_A", np.asarray(instrument.film_thickness_A)),
         )
 
-    def predict_integer_l_tags(
-        self,
-        keys: tuple[IntegerLMarkerKey, ...],
-        *,
-        instrument: CompiledInstrument | None = None,
-    ) -> IntegerLMarkerPrediction:
-        """Predict frozen tags through direct Ewald geometry and native projection."""
-
-        frozen_keys = _frozen_nonzero_keys(keys)
+    def _active_incident_geometry(
+        self, instrument: CompiledInstrument | None
+    ) -> tuple[CompiledInstrument, IncidentTransportResult]:
+        """Prepare the nominal incident geometry shared by exact-tag predictions."""
         active_instrument = self._inputs.instrument if instrument is None else instrument
         if not isinstance(active_instrument, CompiledInstrument):
             raise TypeError("instrument must be CompiledInstrument")
@@ -1236,6 +1231,18 @@ class ExactTagGeometryModel:
             raise GeometryPredictionError(
                 f"nominal incident state became {incident.states.status[0].value}"
             )
+        return active_instrument, incident
+
+    def predict_integer_l_tags(
+        self,
+        keys: tuple[IntegerLMarkerKey, ...],
+        *,
+        instrument: CompiledInstrument | None = None,
+    ) -> IntegerLMarkerPrediction:
+        """Predict frozen tags through direct Ewald geometry and native projection."""
+
+        frozen_keys = _frozen_nonzero_keys(keys)
+        active_instrument, incident = self._active_incident_geometry(instrument)
 
         rods = {(rod.h, rod.k): rod for rod in self._inputs.rods}
         basis = self._inputs.reciprocal.basis_Ainv
@@ -1327,18 +1334,7 @@ class ExactTagGeometryModel:
         basis_revision = self.reciprocal_basis_revision
         if any(definition.key.reciprocal_basis_revision != basis_revision for definition in frozen):
             raise ValueError("layer-L marker reciprocal-basis revision does not match the model")
-        active_instrument = self._inputs.instrument if instrument is None else instrument
-        if not isinstance(active_instrument, CompiledInstrument):
-            raise TypeError("instrument must be CompiledInstrument")
-        incident = build_incident_states(
-            self._inputs.samples,
-            self._inputs.material,
-            active_instrument,
-        )
-        if not bool(incident.states.valid[0]):
-            raise GeometryPredictionError(
-                f"nominal incident state became {incident.states.status[0].value}"
-            )
+        active_instrument, incident = self._active_incident_geometry(instrument)
 
         rods = {(rod.h, rod.k): rod for rod in self._inputs.rods}
         for definition in frozen:
@@ -1456,18 +1452,7 @@ class ExactTagGeometryModel:
             or len(set(orders)) != len(orders)
         ):
             raise ValueError("layer_orders must contain unique CommensurateLayerOrder values")
-        active_instrument = self._inputs.instrument if instrument is None else instrument
-        if not isinstance(active_instrument, CompiledInstrument):
-            raise TypeError("instrument must be CompiledInstrument")
-        incident = build_incident_states(
-            self._inputs.samples,
-            self._inputs.material,
-            active_instrument,
-        )
-        if not bool(incident.states.valid[0]):
-            raise GeometryPredictionError(
-                f"nominal incident state became {incident.states.status[0].value}"
-            )
+        active_instrument, incident = self._active_incident_geometry(instrument)
         basis = self._inputs.reciprocal.basis_Ainv
         crystal_to_sample = active_instrument.sample_from_crystal.rotation
         ki_sample = incident.states.k_film_phase_sample_Ainv[0]
@@ -1561,18 +1546,7 @@ class ExactTagGeometryModel:
         """Map the unconstrained minimum-tilt point on each exact nonzero ``00L`` curve."""
 
         frozen_l = _frozen_m0_integer_l(integer_L)
-        active_instrument = self._inputs.instrument if instrument is None else instrument
-        if not isinstance(active_instrument, CompiledInstrument):
-            raise TypeError("instrument must be CompiledInstrument")
-        incident = build_incident_states(
-            self._inputs.samples,
-            self._inputs.material,
-            active_instrument,
-        )
-        if not bool(incident.states.valid[0]):
-            raise GeometryPredictionError(
-                f"nominal incident state became {incident.states.status[0].value}"
-            )
+        active_instrument, incident = self._active_incident_geometry(instrument)
         specular_rods = tuple(rod for rod in self._inputs.rods if rod.family_m == 0)
         if len(specular_rods) != 1:
             raise ValueError("minimum-tilt exact-L landmarks require one physical m=0 rod")

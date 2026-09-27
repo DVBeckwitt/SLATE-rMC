@@ -30,6 +30,7 @@ from rasim_next.core.validity import ValidityCode
 from rasim_next.core.wave_modes import _phase_shell_offset_Ainv2
 from rasim_next.geometry.detector import (
     _DETECTOR_INCIDENCE_COSINE_TOL,
+    _broadcast_detector_coordinates,
     _detector_coordinates_to_lab_points,
     _detector_incidence_cosine,
     _project_detector_rays,
@@ -1083,18 +1084,7 @@ def evaluate_detector_coordinates_geometry(
         ki_sample_Ainv=ki_sample_Ainv,
         incident_state_index=incident_state_index,
     )
-    supplied_column = np.asarray(column_px)
-    supplied_row = np.asarray(row_px)
-    if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
-        np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
-    ):
-        raise ValueError("detector coordinates must be real")
-    column, row = np.broadcast_arrays(
-        np.asarray(supplied_column.real, dtype=np.float64),
-        np.asarray(supplied_row.real, dtype=np.float64),
-    )
-    if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
-        raise ValueError("detector coordinates must be finite")
+    column, row = _broadcast_detector_coordinates(column_px, row_px)
     shape = column.shape
     flat_column = column.reshape(-1)
     flat_row = row.reshape(-1)

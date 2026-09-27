@@ -131,6 +131,25 @@ def _inside(column_px: float, row_px: float, shape_rc: tuple[int, int]) -> bool:
     return -0.5 <= column_px <= columns - 0.5 and -0.5 <= row_px <= rows - 0.5
 
 
+def _broadcast_detector_coordinates(
+    column_px: ArrayLike, row_px: ArrayLike
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Validate and broadcast native coordinates; callers own storage and panel bounds."""
+    supplied_column = np.asarray(column_px)
+    supplied_row = np.asarray(row_px)
+    if (np.iscomplexobj(supplied_column) and np.any(supplied_column.imag != 0.0)) or (
+        np.iscomplexobj(supplied_row) and np.any(supplied_row.imag != 0.0)
+    ):
+        raise ValueError("detector coordinates must be real")
+    column, row = np.broadcast_arrays(
+        np.asarray(supplied_column.real, dtype=np.float64),
+        np.asarray(supplied_row.real, dtype=np.float64),
+    )
+    if not np.all(np.isfinite(column)) or not np.all(np.isfinite(row)):
+        raise ValueError("detector coordinates must be finite")
+    return column, row
+
+
 def _detector_coordinates_to_lab_points(
     column_px: ArrayLike,
     row_px: ArrayLike,

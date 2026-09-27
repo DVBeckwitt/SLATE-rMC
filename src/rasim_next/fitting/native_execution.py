@@ -18,12 +18,11 @@ class NativePredictionStore:
     revision: str
     parameter_count: int
     observation_count: int
-    _completed: list = field(default_factory=list, init=False, repr=False)
+    _completed: dict = field(default_factory=dict, init=False, repr=False)
     pending_values: np.ndarray = field(default_factory=lambda: np.empty((0, 0)), init=False)
     pending_repeats: int | None = field(default=None, init=False)
     dispatched_count: int = field(default=0, init=False)
     replayed_count: int = field(default=0, init=False)
-    _indices: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
         if not self.revision or any(
@@ -34,15 +33,15 @@ class NativePredictionStore:
 
     @property
     def values(self):
-        return [entry[0] for entry in self._completed]
+        return [entry[0] for entry in self._completed.values()]
 
     @property
     def repeats(self):
-        return [entry[1] for entry in self._completed]
+        return [entry[1] for entry in self._completed.values()]
 
     @property
     def raw(self):
-        return [entry[2] for entry in self._completed]
+        return [entry[2] for entry in self._completed.values()]
 
     def arrays(self):
         return dict(
@@ -57,12 +56,12 @@ class NativePredictionStore:
             revision=self.revision,
             pending_repeats=self.pending_repeats,
             dispatched_count=self.dispatched_count,
-            completed_count=len(self.raw),
+            completed_count=len(self._completed),
             replayed_count=self.replayed_count,
         )
 
     def restore(self, arrays, state):
-        if self.raw or state["revision"] != self.revision:
+        if self._completed or state["revision"] != self.revision:
             raise ValueError("prediction checkpoint revision differs or store is not empty")
         values, repeats, raw = (
             arrays[k] for k in ("prediction_values", "prediction_repeats", "prediction_raw")
@@ -84,7 +83,7 @@ class NativePredictionStore:
 
     def _insert(self, values, repeats, raw):
         key = repeats, np.asarray(values, dtype=float).tobytes()
-        if key in self._indices:
+        if key in self._completed:
             raise ValueError("duplicate completed prediction in checkpoint or worker output")
         values = np.array(values, dtype=float, copy=True)
         values.setflags(write=False)
@@ -92,8 +91,7 @@ class NativePredictionStore:
         row.setflags(write=False)
         # Publish one complete record: an interrupt cannot leave the serialized
         # parameter, N and raw arrays at different lengths.
-        self._completed.append((values, repeats, row))
-        self._indices[key] = len(self._completed) - 1
+        self._completed[key] = values, repeats, row
 
     def evaluate(self, values, repeats, execute, *, checkpoint=None):
         """Execute missing rows; execute yields (input index, raw row), in any order."""
@@ -111,7 +109,7 @@ class NativePredictionStore:
         keys = [(repeats, row.tobytes()) for row in values]
         missing = {}
         for key, row in zip(keys, values, strict=True):
-            if key in self._indices:
+            if key in self._completed:
                 self.replayed_count += 1
             else:
                 missing.setdefault(key, row)
@@ -148,4 +146,4 @@ class NativePredictionStore:
                     self.pending_repeats = None
                 if checkpoint is not None:
                     checkpoint()
-        return np.array([self._completed[self._indices[key]][2] for key in keys])
+        return np.array([self._completed[key][2] for key in keys])
