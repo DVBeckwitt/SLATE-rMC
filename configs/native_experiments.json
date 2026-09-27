@@ -33,6 +33,35 @@
       "physics": {
         "path": "native_fit_inputs_20260911/bi2te3_physics.json",
         "sha256": "bf26d8b59ecaa28ba443654b7ce8ce66374ed207fa4f3b6f5eb5371b613408e3"
+      },
+      "archived_baseline": {
+        "delivery_date": "2026-09-11",
+        "objective": "Historical weighted native-count objective with original guards; not a GLS optimization",
+        "parameters": {
+          "path": "bi2te3_nominal_accepted_fit.json",
+          "sha256": "4deb63ad88bda4d52f8d54287f7bef44b44458604b8bbd4bc30ad29905482f0d"
+        },
+        "prediction": {
+          "path": "bi2te3_nominal_accepted_fit.npz",
+          "sha256": "56b424fdf0fdb0a2b17c9eb2cd7dd10734cb883b4a3d2d29e8b6e3b19272427f",
+          "array": "selected",
+          "units": "count",
+          "scale_already_applied": true
+        },
+        "figures": {
+          "profiles_png": {
+            "path": "bi2te3_new_fiber_fit.png",
+            "sha256": "808bdbe6ec5e3b8c18894181b3b58cde5de2022f402555e4758bd4e83b429292"
+          },
+          "profiles_pdf": {
+            "path": "bi2te3_new_fiber_fit.pdf",
+            "sha256": "4a7c92e0f0dd1569ad2df3f17e1029b775c8ac6a9477fc1cf8f0b2b48398c056"
+          },
+          "detector_png": {
+            "path": "bi2te3_full_detector_comparison.png",
+            "sha256": "d9606e38a6f7bca5f74e79399764077b7c44d1e9e26b95ff80140a1b03623cf0"
+          }
+        }
       }
     },
     {

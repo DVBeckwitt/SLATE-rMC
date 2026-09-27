@@ -35,7 +35,8 @@ Development enumeration/proof harnesses have retired; they are not fitting workf
 
 The empirical whole-pattern baseline is the genuine September 11 Gaussian/Lorentzian fit bound by
 `configs/native_experiments.json`. It used complete native families, correlated source/spectral
-inputs, covariance/background and a shared scale. It was nominal, not numerically qualified. The
+inputs, a frozen background, historical weighting/guards and a shared scale. Its objective
+was not the modern full-covariance GLS objective. It was nominal, not numerically qualified. The
 later two-profile spline experiment changed those inputs and assumptions, improved central signed
 profiles and left large radial excess. It is archived research, not the default replacement.
 

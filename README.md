@@ -74,6 +74,17 @@ uv run --frozen python scripts/refine_native.py `
   --plan C:\external\fit_plan.json --output C:\external\fit.ra_diag.npz
 ```
 
+Recover the saved September 11 Bi2Te3 G/L baseline and its original figures:
+
+```powershell
+uv run --frozen python scripts/prepare_native.py `
+  --sample bi2te3 --input-root C:\external\september11 `
+  --with-baseline --output-directory C:\external\prepared-baseline
+```
+
+This verifies the archive and copies saved results without a fit or forward simulation.
+The prepared descriptor links the original nominal parameters, predictions and figures.
+
 Preparation verifies and relocates an existing calibrated experiment; it preserves measured
 support, background and covariance. Use the hash-prefixed physics filename referenced by the
 prepared descriptor. `--resume` reuses exact completed predictions and restarts the public

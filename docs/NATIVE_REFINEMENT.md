@@ -36,6 +36,37 @@ unchanged payloads and publishes the descriptor last. The descriptor references
 hash-prefixed local filenames. This is frozen-calibration adoption, not a new
 background estimator or a substitute for validating a new acquisition's calibration.
 
+Recover the catalogued September 11 Bi2Te3 baseline with one command:
+
+```powershell
+uv run --frozen python scripts/prepare_native.py `
+  --sample bi2te3 --input-root C:\external\september11 `
+  --with-baseline --output-directory C:\external\prepared-baseline
+```
+
+The input root contains `native_fit_inputs_20260911/` and the archived fit/figure files
+named in the catalog. Catalog paths must stay inside that root and their hashes must
+match. Existing `--raw`/`--dark` overrides still support relocated acquisition files.
+`--sample` works for all six catalog entries; `--with-baseline` currently binds only
+Bi2Te3. Without that option, preparation adopts observations and physics only.
+
+The prepared observation descriptor's `archived_baseline` field links the unchanged
+parameter JSON, already-scaled `selected` count vector and original profile/detector
+figures. Open its `figures` PNG/PDF paths directly. Preparation checks the historical
+objective and guards through the existing observation owner, without refitting the
+scale or evaluating physics. Its separately reported GLS score is a diagnostic; the
+historical result did not optimize that objective. The original JSON retains the
+source rule, structural parameters, scale and nominal-acceptance limitations.
+
+This is saved-result recovery, not a new optimizer result or numerical qualification.
+Historical paths embedded inside unchanged archives remain provenance, not relocated
+runtime dependencies. Only the references in the prepared descriptor are relocated.
+To prepare another baseline copy, repeat the catalog command against its original input
+root; baseline-bearing prepared descriptors are rejected as preparation sources.
+The baseline is not a v2 refinement result for `render_native.py`; that command
+recomputes a modern saved fit. A subsequent refit still requires an explicit plan and
+objective. No plan or optimizer-success record is manufactured during preparation.
+
 Render a saved fit with the same physical and observation inputs:
 
 ```powershell
