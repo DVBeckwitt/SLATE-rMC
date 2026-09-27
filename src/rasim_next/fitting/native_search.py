@@ -100,16 +100,32 @@ class GaussianCalibration:
 
 
 def score_native_prediction(
-    observations, parameters, values, raw, calibration=(), *, guarded=False
+    observations, parameters, values, raw, calibration=(), *, guarded=False, literal_scale=None
 ):
-    """Score one exact physical vector, including profiled scale and calibration once."""
+    """Score one physical vector, with literal or profiled scale and calibration once."""
     values, raw = np.asarray(values, dtype=float), np.asarray(raw)
     names = tuple(p.name for p in parameters)
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
     width = upper - lower
     root_count = np.sqrt(int(observations.valid.sum()))
-    scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
+    if guarded and not observations.allow_guard_constraints:
+        raise ValueError("historical guards may only be diagnostic on a training split")
+    if literal_scale is None:
+        scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
+    else:
+        scalar = np.asarray(literal_scale)
+        if (
+            observations.exposure_index is not None
+            or scalar.shape != ()
+            or scalar.dtype.kind not in "fiu"
+            or not np.isfinite(scalar)
+            or scalar < 0
+        ):
+            raise ValueError("literal scale must be a finite nonnegative scalar without exposures")
+        scale = float(scalar)
     prediction = observations.apply_scale(raw, scale)
+    if literal_scale is not None:
+        residual = observations.objective_residual(prediction)
     scores = observations.scores(prediction)
     calibration_chi_square = assumption_chi_square = 0.0
     residual_blocks = [residual]
@@ -288,39 +304,103 @@ def fit_native_parameters(
     _, distinct = np.unique(effective_starts, axis=0, return_index=True)
     for start_index in sorted(distinct.tolist()):
         base = effective_starts[start_index].copy()
+        initial = (base[active] - lower[active]) / width[active]
         last_x, last_point = None, None
         prediction_buffer = {}
+        raw_cache = {}
+        cache_limit = 3 * len(active) + 4
+        scale_reference = None
+
+        def remember_raw(values, raw, raw_cache=raw_cache, cache_limit=cache_limit):
+            if not enforce_historical_guards:
+                return raw
+            owned = np.array(raw, copy=True)
+            owned.setflags(write=False)
+            key = values.tobytes()
+            raw_cache.pop(key, None)
+            raw_cache[key] = owned
+            if len(raw_cache) > cache_limit:
+                raw_cache.pop(next(iter(raw_cache)))
+            return owned
+
+        if enforce_historical_guards:
+            initial_values = base.copy()
+            initial_values[active] = lower[active] + width[active] * initial
+            base_raw = remember_raw(initial_values, predict(initial_values))
+            free_scale, _ = observations.profile_scale(base_raw)
+            if free_scale > 0:
+                scale_reference = free_scale
+            else:
+                shape, target = observations.scalar_scale_design(base_raw)
+                scale_reference = (
+                    float(np.linalg.norm(target) / np.linalg.norm(shape)) if np.any(target) else 1.0
+                )
+            if not np.isfinite(scale_reference) or scale_reference <= 0:
+                raise ValueError("the initial scale reference must be finite and positive")
+            interval = observations.guard_scale_interval(base_raw)
+            initial_scale = float(np.clip(free_scale, *interval)) if interval else free_scale
 
         def physical_values(x, base=base):
             values = base.copy()
-            values[active] = lower[active] + width[active] * x
+            values[active] = lower[active] + width[active] * x[: len(active)]
             return values
 
-        def prediction_map(function, points, prediction_buffer=prediction_buffer):
+        def prediction_map(
+            function, points, prediction_buffer=prediction_buffer, raw_cache=raw_cache
+        ):
             points = list(points)
             if not points:
                 return []
-            raw = np.asarray(predict_many(np.array([physical_values(x) for x in points])))
-            if (
-                raw.shape != (len(points), len(observations.net_count))
-                or np.iscomplexobj(raw)
-                or np.any(~np.isfinite(raw))
-            ):
-                raise ValueError("predict_many must return aligned finite real predictions")
+            physical = [physical_values(x) for x in points]
+            if enforce_historical_guards:
+                rows = dict(raw_cache)
+                missing = {}
+                for values in physical:
+                    key = values.tobytes()
+                    if key not in rows and key not in missing:
+                        missing[key] = values
+                if missing:
+                    computed = np.asarray(predict_many(np.array(list(missing.values()))))
+                    if (
+                        computed.shape != (len(missing), len(observations.net_count))
+                        or np.iscomplexobj(computed)
+                        or np.any(~np.isfinite(computed))
+                    ):
+                        raise ValueError("predict_many must return aligned finite real predictions")
+                    for (key, values), row in zip(missing.items(), computed, strict=True):
+                        rows[key] = remember_raw(values, row)
+                raw = [rows[values.tobytes()] for values in physical]
+            else:
+                raw = np.asarray(predict_many(np.array(physical)))
+                if (
+                    raw.shape != (len(points), len(observations.net_count))
+                    or np.iscomplexobj(raw)
+                    or np.any(~np.isfinite(raw))
+                ):
+                    raise ValueError("predict_many must return aligned finite real predictions")
             prediction_buffer.update((x.tobytes(), row) for x, row in zip(points, raw, strict=True))
             try:
                 return [function(x) for x in points]
             finally:
                 prediction_buffer.clear()
 
-        def evaluate(x, prediction_buffer=prediction_buffer, start_index=start_index):
+        def evaluate(
+            x,
+            prediction_buffer=prediction_buffer,
+            raw_cache=raw_cache,
+            scale_reference=scale_reference,
+            start_index=start_index,
+        ):
             nonlocal last_x, last_point, best, feasible, evaluation_count
             if last_x is not None and np.array_equal(x, last_x):
                 return last_point
             values = physical_values(x)
             raw = prediction_buffer.get(x.tobytes())
             if raw is None:
-                raw = predict(values)
+                raw = raw_cache.get(values.tobytes()) if enforce_historical_guards else None
+                if raw is None:
+                    raw = predict(values)
+                    raw = remember_raw(values, raw)
             point = score_native_prediction(
                 observations,
                 parameters,
@@ -328,6 +408,7 @@ def fit_native_parameters(
                 raw,
                 calibration,
                 guarded=enforce_historical_guards,
+                literal_scale=scale_reference * x[-1] if enforce_historical_guards else None,
             )
             point.start_index = start_index
             if best is None or point.objective < best.objective:
@@ -379,7 +460,8 @@ def fit_native_parameters(
                     ),
                 },
             )
-        initial = (base[active] - lower[active]) / width[active]
+        if enforce_historical_guards:
+            initial = np.append(initial, initial_scale / scale_reference)
         if len(active) and method == "trf":
             literal = score_native_prediction(
                 observations, parameters, base, predict(base), calibration, guarded=False
@@ -408,7 +490,7 @@ def fit_native_parameters(
                 xtol=1e-6,
                 gtol=1e-6,
             )
-        elif len(active):
+        elif len(active) or enforce_historical_guards:
             options = dict(maxiter=maximum_iterations, eps=finite_difference_step, ftol=1e-9)
             if predict_many is not None:
                 options["workers"] = prediction_map
@@ -416,7 +498,8 @@ def fit_native_parameters(
                 lambda x: evaluate(x).objective / int(observations.valid.sum()),
                 initial,
                 method="SLSQP",
-                bounds=[(0.0, 1.0)] * len(active),
+                bounds=[(0.0, 1.0)] * len(active)
+                + ([(0.0, None)] if enforce_historical_guards else []),
                 constraints=constraints,
                 options=options,
             )

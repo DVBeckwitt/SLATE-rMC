@@ -860,11 +860,12 @@ the identical serial batch order; no source survivor renormalization occurs.
 
 `fitting.native_observations.NativeFitObservations` freezes net native counts, supported rows and
 the full count covariance plus one background-mode covariance. GLS uses a Cholesky factor on
-supported rows. Historical F/G losses and guards remain separate measures. Nonnegative scale is
-profiled analytically; when guards are enforced, their exact quadratic scale intervals are
-intersected before profiling. An empty intersection denotes an infeasible shape, never a
-relaxed guard. The versioned numeric loader verifies array/projection hashes and unchanged net
-observations. No executable checkpoint is admitted.
+supported rows. Historical F/G losses and guards remain separate measures. Unguarded
+nonnegative scale is profiled analytically. Guarded SLSQP fits one literal nonnegative scale
+under the original inequalities; exact quadratic scale intervals remain available for
+fixed-shape profiling and diagnostics. An empty intersection denotes an infeasible shape,
+never a relaxed guard. The versioned numeric loader verifies array/projection hashes and
+unchanged net observations. No executable checkpoint is admitted.
 
 `fitting.bi_joint.BiJointCandidate` has the 13 atomic coordinates plus Gaussian width,
 Lorentzian width/mass, two bounded surface-mixture coordinates, extra film thickness and two
@@ -911,7 +912,8 @@ observables and handoff-selection equations are unchanged.
 An optional `NativeSpatialRegionProjection` can be reused by the response compiler
 only with its identical frozen observation-projection owner.
 
-`native_search` profiles a nonnegative scale in the full supported covariance, accepts
+`native_search` profiles unguarded nonnegative scale in the full supported covariance and
+fits guarded scale as a literal SLSQP nuisance coordinate. It accepts
 independently owned Gaussian calibration blocks, separates assumptions, refits every
 continuous nuisance at each discrete N and sweeps each profile in both directions.
 Best evaluated, feasible and converged points are distinct. An unfinished lower admissible

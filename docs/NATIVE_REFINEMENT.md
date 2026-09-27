@@ -205,6 +205,8 @@ unguarded stages and SLSQP for explicit historical inequalities. `method` may be
 declared per stage/profile; TRF rejects historical inequality constraints. Its
 `maximum_function_evaluations` bounds public solver evaluations; finite-difference
 probes are additional forward work and are counted separately by the raw ledger.
+Guarded SLSQP varies one dimensionless nonnegative scale coordinate alongside
+the active physical coordinates; raw predictions remain keyed only by the latter.
 TRF uses physical sensitivity scales, linear residual loss and bound-aware signed
 or shortened differences. It never fixes a weak coordinate merely to obtain rank.
 
@@ -580,7 +582,7 @@ predictions with shape `(candidate_count, observation_count)` in the same order.
 dependency range. The optimizer, finite-difference steps and statistical objective are
 unchanged.
 
-Only prediction calculation may be concurrent. Scale profiling, calibration, guards,
+Only prediction calculation may be concurrent. Scale scoring, calibration, guards,
 best-point updates and callbacks execute serially in the original candidate order.
 Callbacks must not alter predictor state within a batch. The caller owns worker isolation:
 native response caches and XrayDB sessions must not be shared between concurrent workers.

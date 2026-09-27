@@ -113,25 +113,36 @@ class NativeFitObservations:
             raise ValueError("predictions must be finite and match the frozen observations")
         return solve_triangular(self._cholesky, values[self.valid], lower=True)
 
+    def objective_residual(self, prediction_count: np.ndarray) -> np.ndarray:
+        """Residual in the declared fitting measure at literal predicted counts."""
+        if self.objective_kind == "historical":
+            return self.fit_operator @ prediction_count - self.fit_target
+        return self.whiten(prediction_count - self.net_count)
+
+    def scalar_scale_design(self, raw_prediction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Scalar scale design and target in the declared fitting measure."""
+        if self.exposure_index is not None:
+            raise ValueError("scalar scale design is unavailable for exposure groups")
+        whitened = self.whiten(raw_prediction)
+        if self.objective_kind == "historical":
+            return self.fit_operator @ raw_prediction, self.fit_target
+        return whitened, self._whitened_net
+
     def profile_scale(
         self, raw_prediction: np.ndarray, *, enforce_guards: bool = False
     ) -> tuple[float | np.ndarray, np.ndarray]:
         """Exact nonnegative scale for the declared quadratic objective."""
         if enforce_guards and not self.allow_guard_constraints:
             raise ValueError("historical guards may only be diagnostic on a training split")
-        shape = self.whiten(raw_prediction)
-        target = self._whitened_net
         if self.exposure_index is not None:
             design = np.zeros((len(raw_prediction), int(self.exposure_index.max()) + 1))
             design[np.arange(len(raw_prediction)), self.exposure_index] = raw_prediction
             design = solve_triangular(self._cholesky, design[self.valid], lower=True)
             if np.any(np.linalg.norm(design, axis=0) <= np.finfo(float).tiny):
                 raise ValueError("each acquisition requires scale-identifying signal")
-            scales, _ = nnls(design, target)
-            return scales, design @ scales - target
-        if self.objective_kind == "historical":
-            shape = self.fit_operator @ raw_prediction
-            target = self.fit_target
+            scales, _ = nnls(design, self._whitened_net)
+            return scales, self.objective_residual(self.apply_scale(raw_prediction, scales))
+        shape, target = self.scalar_scale_design(raw_prediction)
         denominator = float(shape @ shape)
         if denominator == 0:
             raise ValueError("a zero prediction cannot determine an intensity scale")
@@ -140,7 +151,7 @@ class NativeFitObservations:
             interval = self.guard_scale_interval(raw_prediction)
             if interval is not None:
                 scale = float(np.clip(scale, *interval))
-        return scale, scale * shape - target
+        return scale, self.objective_residual(self.apply_scale(raw_prediction, scale))
 
     def apply_scale(self, raw_prediction, scale):
         """Apply declared exposure scales using the explicit acquisition row mapping."""
@@ -199,8 +210,17 @@ class NativeFitObservations:
         return (low, high) if low <= high else None
 
     def scores(self, prediction_count: np.ndarray) -> dict:
-        residual = self.whiten(prediction_count - self.net_count)
-        old = self.fit_operator @ prediction_count - self.fit_target
+        declared = self.objective_residual(prediction_count)
+        residual = (
+            declared
+            if self.objective_kind == "gls"
+            else self.whiten(prediction_count - self.net_count)
+        )
+        old = (
+            declared
+            if self.objective_kind == "historical"
+            else self.fit_operator @ prediction_count - self.fit_target
+        )
         guard = self.guard_operator @ (prediction_count - self.net_count)
         rms = np.sqrt(np.add.reduceat(guard * guard, self.guard_pointer[:-1]))
         return dict(
