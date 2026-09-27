@@ -922,158 +922,41 @@ terminal stochastic estimator is not one of those retired runtimes: it exposes n
 sample/event object and streams weighted roots into its declared final pixel-mass estimate. Callers
 must use the continuous reciprocal and detector contracts above.
 
-## Mixed-chart matched-region fit
+## Shared native objective for generic-CIF matched regions
 
-`rasim-fixed-experiment-state-v2` is the modular handoff into this fit. It binds the ordered image
-IDs, commanded angles, one shared incidence delta, zero-sum trims, resulting effective angles,
-all shared rigid corrections, the exact position artifact, a `rasim-fixed-mosaic-state-v1`
-provided prior, and a `rasim-fixed-lattice-state-v1` decision. The lattice decision is either the
-unchanged CIF basis or a basis promoted by the public data-only lattice gate; rejected candidates
-cannot leak into construction. Source/material/reciprocal state is built once and immutably reused
-while only each view's commanded incidence is rebound. Any one of position, lattice, mosaic,
-prepare, background, A, B, C, joint, profiles, or render may be run separately when every required
-predecessor is supplied. The current generalized path validates a separately supplied mosaic
-checkpoint; it does not claim a generalized mosaic-fit CLI.
+`MatchedRegionObservations` declares acquisition IDs, complete signal/background blocks,
+native integrated count mass, physical support and full count covariance.
+`FixedMatchedRegionBackground` declares a frozen baseline with uncertainty; adjacent
+anchors may condition it once. `IntegratedPeakAreaProjection` optionally sums complete
+signal bins without changing the detector measure.
 
-`SpecularAngularProfileRegion` assigns `m=0` native pixels by `phi` and `2theta` and bins them in
-`2theta`. `OffSpecularBandLayout` assigns nonzero families jointly by signed detector side, `Qr`,
-and `L`. Every fitted block retains one or more signal rows and exactly two disjoint background
-anchors.
-Pixel-center signal and anchor memberships are frozen only for row discovery, background-exclusion
-seeding, and detector display. The authoritative measured fit observable is reprojected from the
-verified raw OSC over the declared continuous chart regions.
+`prepare_matched_region_objective` applies the same anchor operator H to model and data,
+then signal selection/peak aggregation S. It preserves
+`S (C + Cbackground - H C - C H.T) S.T`; no cross-acquisition covariance is dropped.
+H and peak groups cannot mix acquisitions. Each acquisition retains its own nonnegative
+scale, fitted jointly by covariance-whitened NNLS in `NativeFitObservations`.
+Background-corrected observations and model may be signed; underlying raw model masses
+remain nonnegative. No detector area or solid-angle correction is silently added.
 
-`MatchedRegionObservations` contains projected count mass, continuous detector-area support, full
-projected count covariance, background coordinate, dataset ID, family, and complete-block identity.
-A recipe may bind one declared dark OSC and nonnegative exposure scale. Raw and dark are
-projected through identical continuous regions before signed subtraction; neither the corrected
-data nor the conditioned background correction is clipped. A nonzero matched-dark scale propagates
-the shared dark exposure through the joint covariance. The explicit
-`no_acquisition_matched_dark.v1` basis uses scale zero and `no_dark_contribution.v1`; subtraction,
-dark covariance, and cross-OSC dark covariance are then exactly zero although the file identity is
-still verified.
-A separate `RadialBackgroundState` is calibrated from background-only radial-by-azimuth detector
-cells, with held-out azimuth sectors, and frozen before structure fitting. Calibration excludes
-every pixel touched by the oracle continuous-region projection and binds the exact fit plan,
-projection revisions, beam center, parameter vector, and covariance. `fit_matched_regions` accepts
-an arbitrary continuous-region model callable and
-fits one parameter vector across every dataset and family. One nonnegative scale is profiled per
-dataset and shared by all of that dataset's families; only signal rows enter the fixed-background
-objective, whose covariance includes the shared background-parameter covariance. A later stage is
-admissible only when its diagnostic, background artifact, and every
-predecessor hash match. No family scale, smoothed-data model, simulated raster, or bin-center
-structure-factor substitution is permitted.
+`ParameterizedStructureRegionModel` binds exact sparse response blocks to one compatible
+`StructureStrengthParameterization`. `AffineCifFiniteStackParameterization` retains explicit
+cell/site/occupancy/displacement modes and conventional-cell repeat semantics; it does not
+invent disorder from a CIF. Bi2X3 and the fixed-parent Pb provider share this strength seam.
+Reciprocal basis, source, optics, mosaic, rods and geometry must match the response revisions.
 
-After adjacent-anchor conditioning, `IntegratedPeakAreaProjection` applies one fixed aggregation
-matrix `G` to the measured mass, continuous model, and full covariance. Every signal row belongs to
-exactly one peak, and no peak crosses a dataset or family. Row partitioning therefore cannot change
-the fitted peak mass. The configured detector model also applies the event-wise unpolarized Thomson
-factor `(1 + (ki_hat_air dot kf_hat_air)^2)/2` exactly once, from external-air directions.
+`fit_structure_regions` accepts declared `FitParameter` names/units/bounds, one shared
+specimen owner, starts and optional `GaussianCalibration` blocks. It delegates to
+`fit_native_parameters`; there is no second least-squares implementation. Data-only
+profiled-scale sensitivity must pass numerical rank, practical rank and conditioning
+limits. An unresolved optimizer or rank failure raises `StructureRegionIdentifiabilityError`
+carrying the shared result. Calibration cannot supply missing data rank. Successful local
+identification is explicitly not numerical quadrature qualification or global uniqueness.
 
-The layered Bi2X3 adapter declares five coordinates in one immutable fit plan:
-`bi_delta_z_fractional`, `outer_chalcogen_delta_z_fractional`,
-`outer_chalcogen_vacancy_fraction`,
-`intensity_envelope_u_radial_A2`, and `intensity_envelope_u_normal_A2`. The crystallographic
-Wyckoff-site ADPs remain fixed inside the atomic amplitude; the last two coordinates instead apply
-the separate `SampleQIntensityEnvelope` factor `exp(-U_r Q_r^2-U_z Q_z^2)` once to each
-event intensity using the fixed-sample-frame Q after mosaic rotation and before source summation.
-Bi and central-chalcogen occupancies are fixed at one; Stage B's outer site is
-`(1-v) X + v vacancy` with Bi antisite fixed to zero. A Bi-on-X substitution is a separately named
-discrete competitor and never aliases `v`. Persisted representatives must bind this occupancy rule
-and the derived `1-v` occupancy. The v7 chained policy activates the two z offsets in A, `v` in B,
-the two global intensity-envelope parameters in C, and all five in `joint`. A/B/C are diagnostic
-initializers, not reportable alternatives: B, C, and joint start exactly from A, B, and C,
-respectively, with recursive predecessor and frozen-coordinate checks. The v8
-`seeded_joint_only.v1` policy instead requires an explicit five-coordinate start (or a verified
-same-stage progress restart) and exposes only the all-active joint stage; it has no fabricated
-A/B/C predecessors. Fit-v14 records the numeric start and its hash, not a seed-file identity. When
-v8 is launched by the outer workflow, workflow-v1 hashes the tracked seed-v2 file into its plan
-revision and passes that vector explicitly. Under either policy, only a gate-passing joint result is
-eligible downstream. A same-stage progress artifact is the sole resume source.
-
-The fit plan fixes parameter scales, bounds, practical sensitivity tolerance, and maximum condition.
-Admissibility uses the parameter-scaled data-only Jacobian and requires full practical rank and
-finite condition within the plan limit. `FIT` additionally requires convergence with no active
-bound. A declared bound-limited `MODEL_LIMITED_FIT` joint may feed only `FIT_CONDITIONED` profiles
-when optimizer, rank, trusted-recipe data projection, and anchor-conditioned cubature gates all
-pass; its limitation and `publication_ready=false` state are preserved. Penalized sensitivity is
-reported separately; near-CIF priors are numerical trust regularization and cannot manufacture
-identifiability.
-
-The diffraction observable is continuous density integrated directly over each declared
-phi/two-theta or signed-side Qr/L region. Verified finite native-pixel counts define a
-piecewise-constant measured field; a data-only sparse projector integrates it over those same
-rectangles and propagates the full count covariance when a pixel contributes fractionally to more
-than one row. The declared plug-in variance is `max(count, 1)`, so the one-count floor is explicit
-and revision-bound rather than described as exact Poisson variance. Display profiles use the frozen radial state and adjacent anchors to condition the
-measured background, and apply the same frozen anchor projection to the continuous diffraction
-model before the per-dataset scale. Data and model therefore use the same conditioned region and
-covariance measure without smoothing or pixelizing the model.
-
-A declared rod scope keeps the inverse problem bounded while preserving every fitted family. The
-current terminal is explicitly `FIT_CONDITIONED`: it renders full-Qz branches with the same fitted
-rod scope and fit-order cubature, records that scope, and sets `publication_ready=false`. Rendering
-does not imply an all-configured-rod or publication oracle.
-Resume artifacts bind the exact diagnostic, recipe, fit plan, numerical implementation, full
-A/B/C/joint chain, source, backend, device, cubature, chunk, state-block, pixel ordering, and rod
-scope; a mismatch fails rather than resumes.
-The callable intrinsic solid-angle density added in v12 is a continuous function result; it does
-not restore a retained sphere mesh or texture as model state.
-
-## General-CIF fitting boundary (introduced in contract v13)
-
-`CifFiniteStackStrength`, `Bi2X3FiniteStackStrength`, and
-`Pbi2ParentMixtureStrength` implement one revision-bearing, reciprocal-basis-bound, nonnegative
-strength contract `S(h,k,L;k)`. Bound/reference providers expose a lowercase SHA-256
-`structure_model_revision`; construction fails before evaluation when that lineage is absent or
-malformed. The generic provider is the complete periodic CIF unit-cell amplitude times a
-declared number of coherent conventional-cell `repeats`; the R-3m Bi2X3 provider retains its
-explicit quintuple-layer termination, and the PbI2 provider retains five fixed near-parent
-templates at `epsilon=0.001`. Provider selection is an explicit model declaration, never an
-element- or material-name dispatch.
-
-`read_crystal(...)` hashes the same source bytes it parses and retains that digest on the resolved
-immutable crystal. Providers that accept an explicit source digest validate it against this
-in-memory lineage; candidate evaluation never rereads a mutable filesystem path.
-
-`AffineCifSiteBasis` changes only declared expanded-CIF fractional coordinates, occupancies, and
-isotropic `U`. Cell, species, charge, site order, and topology are fixed. Coordinates are not
-wrapped, occupancies must remain in `[0,1]`, `Uiso` must remain nonnegative, and common-origin,
-no-op, or linearly dependent columns are rejected. `AffineCifFiniteStackParameterization`,
-`Bi2X3FiniteStackParameterization`, and `Pbi2ParentLogRatioParameterization` bind explicit vectors
-to their corresponding providers and retain immutable reference/model revisions.
-
-`SourceAveragedDetectorStructureResponse` freezes source mass, physical signed rods, exact source
-wavelength, inverse roots, mosaic, refraction/attenuation, polarization, detector projection, and
-the sample-Q envelope at requested continuous detector coordinates. It represents
-`d_i(theta) = sum_t R_it S_(h_t,k_t)(L_t;k_t)`. `R_it` has measure
-`fixed_source_averaged_detector_density_per_structure_strength_px2_inv.v1`; applying an `A2`
-strength returns the unchanged `raw_detector_coordinate_density_A2_per_px2.v1`. Reference
-strength establishes reciprocal-basis and structure lineage only and never prunes terms. Exact
-caustics fail closed. The current shared fitting backend is CPU sparse selected-coordinate
-evaluation, not a generic full-image renderer or Parratt/substrate stitch. The optimized Bi2X3
-renderer remains a parity-checked accelerator behind the same strength semantics.
-
-`StructureRegionResponseBlock` binds one response to one exact `ContinuousRegionQuadrature` and
-dataset. `ParameterizedStructureRegionModel` applies one shared candidate provider and integrates
-the resulting density without changing detector transfer. `fit_parameterized_matched_regions`
-profiles one scale per dataset through the existing covariance/background objective, requires
-explicit parameter scales, and fails closed on optimizer failure, rank deficiency, or excessive
-condition. A CIF does not infer fitted coordinates, mounting, repeat count, source/PSF,
-background, mosaic law, termination, or stacking law.
-
-The generic configured model requires `repeats`, forbids the Bi2X3 `layers` key and nonzero
-stacking epsilon, and requires explicit unknown-`Uiso` policy when needed. Specialized Bi2X3
-models require `layers` and use the same sparse fitting detector. Regular kinematic `00L` crosses
-this response after the positive direct-root-gap gate; exact direct beam and generic Parratt
-stitching remain excluded.
-
-`DetectorCalibrationCorrections` is an optional indexed-geometry pack containing native reference
-column/row offsets and a nominal panel-normal distance offset. It is inactive by default, so the
-old numerical and serialized path remains exact. An active pack is applied after once-only OSC
-orientation conversion and before shared pose corrections, survives in `FixedPositionState`, and
-must carry explicit calibration provenance. Its data-scaled Jacobian uses the ordinary rank and
-condition gates.
+The returned shared search result retains acquisition IDs, fitted native counts,
+parameterization and fitted-strength revisions and sensitivity. The former
+`fit_matched_regions`, `fit_parameterized_matched_regions`, their result wrappers and
+arbitrary prior callbacks are retired at revision `b3c1302`. The shared objective reports
+full squared residual sums; the old optimizer reported half. See [STAGED_FITTING.md](STAGED_FITTING.md).
 
 ## Continuous incidence-exposure contract
 

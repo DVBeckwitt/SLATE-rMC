@@ -49,12 +49,14 @@ def refine_axial_meshes(
         maximum_objective_contrast_error=maximum_objective_contrast_error,
         require_constrained_objective_agreement=require_constrained_objective_agreement,
     )
+    observations.apply_scale(np.ones_like(observations.net_count), fixed_scale)
+    if np.any(np.asarray(fixed_scale) <= 0):
+        raise ValueError("qualification scales must be positive")
     records = []
     coarse = None
     if not all(
         np.isfinite(v) and v > 0
         for v in (
-            fixed_scale,
             maximum_whitened_rms,
             maximum_contrast_rms,
             maximum_objective_contrast_error,
@@ -100,7 +102,10 @@ def refine_axial_meshes(
         combined = fine.reshape(len(coarse), count, 2, coarse.shape[2]).sum(axis=2)
         delta = np.array(
             [
-                [observations.whiten(fixed_scale * row) for row in candidate]
+                [
+                    observations.whiten(observations.apply_scale(row, fixed_scale))
+                    for row in candidate
+                ]
                 for candidate in combined - coarse
             ]
         )

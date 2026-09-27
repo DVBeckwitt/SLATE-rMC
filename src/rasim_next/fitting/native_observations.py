@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.linalg import cholesky, solve_triangular
+from scipy.optimize import nnls
 
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 
@@ -17,7 +18,7 @@ from rasim_next.measurement.continuous_regions import NativePixelRegionProjectio
 class NativeFitObservations:
     """Frozen counts, covariance and an explicitly selected fitting objective."""
 
-    projection: NativePixelRegionProjection
+    projection: NativePixelRegionProjection | None
     net_count: np.ndarray
     valid: np.ndarray
     covariance_count2: np.ndarray
@@ -29,6 +30,7 @@ class NativeFitObservations:
     input_revision: str
     allow_guard_constraints: bool = True
     objective_kind: str = "gls"
+    exposure_index: np.ndarray | None = None
     _cholesky: np.ndarray = field(init=False, repr=False)
     _whitened_net: np.ndarray = field(init=False, repr=False)
 
@@ -37,7 +39,7 @@ class NativeFitObservations:
             raise ValueError("objective_kind must be gls or historical")
         if self.objective_kind == "historical" and not self.allow_guard_constraints:
             raise ValueError("historical objective requires the complete frozen observation roster")
-        n = self.projection.observation_count
+        n = len(self.net_count) if self.projection is None else self.projection.observation_count
         for name in (
             "net_count",
             "valid",
@@ -79,6 +81,22 @@ class NativeFitObservations:
             self.covariance_count2, self.covariance_count2.T, rtol=1e-13, atol=1e-10
         ):
             raise ValueError("count covariance must be symmetric")
+        if self.exposure_index is not None:
+            indices = np.asarray(self.exposure_index)
+            if (
+                indices.shape != (n,)
+                or indices.dtype.kind not in "iu"
+                or not np.array_equal(np.unique(indices), np.arange(indices.max() + 1))
+                or not np.array_equal(np.unique(indices[self.valid]), np.unique(indices))
+                or self.objective_kind != "gls"
+                or self.allow_guard_constraints
+            ):
+                raise ValueError(
+                    "exposure groups require aligned contiguous GLS indices and no historical guards"
+                )
+            indices = np.array(indices, dtype=np.int64, copy=True)
+            indices.setflags(write=False)
+            object.__setattr__(self, "exposure_index", indices)
         covariance = self.covariance_count2[np.ix_(self.valid, self.valid)]
         factor = cholesky((covariance + covariance.T) * 0.5, lower=True)
         factor.setflags(write=False)
@@ -97,12 +115,20 @@ class NativeFitObservations:
 
     def profile_scale(
         self, raw_prediction: np.ndarray, *, enforce_guards: bool = False
-    ) -> tuple[float, np.ndarray]:
+    ) -> tuple[float | np.ndarray, np.ndarray]:
         """Exact nonnegative scale for the declared quadratic objective."""
         if enforce_guards and not self.allow_guard_constraints:
             raise ValueError("historical guards may only be diagnostic on a training split")
         shape = self.whiten(raw_prediction)
         target = self._whitened_net
+        if self.exposure_index is not None:
+            design = np.zeros((len(raw_prediction), int(self.exposure_index.max()) + 1))
+            design[np.arange(len(raw_prediction)), self.exposure_index] = raw_prediction
+            design = solve_triangular(self._cholesky, design[self.valid], lower=True)
+            if np.any(np.linalg.norm(design, axis=0) <= np.finfo(float).tiny):
+                raise ValueError("each acquisition requires scale-identifying signal")
+            scales, _ = nnls(design, target)
+            return scales, design @ scales - target
         if self.objective_kind == "historical":
             shape = self.fit_operator @ raw_prediction
             target = self.fit_target
@@ -117,7 +143,25 @@ class NativeFitObservations:
         return scale, scale * shape - target
 
     def apply_scale(self, raw_prediction, scale):
-        """Apply the single acquisition exposure scale to native counts."""
+        """Apply declared exposure scales using the explicit acquisition row mapping."""
+        scale = np.asarray(scale)
+        expected = () if self.exposure_index is None else (int(self.exposure_index.max()) + 1,)
+        if (
+            scale.shape != expected
+            or np.iscomplexobj(scale)
+            or np.any(~np.isfinite(scale))
+            or np.any(scale < 0)
+        ):
+            raise ValueError("scale must be finite nonnegative and match the declared acquisitions")
+        raw_prediction = np.asarray(raw_prediction)
+        if (
+            raw_prediction.shape != self.net_count.shape
+            or np.iscomplexobj(raw_prediction)
+            or np.any(~np.isfinite(raw_prediction))
+        ):
+            raise ValueError("predictions must be finite real aligned counts")
+        if self.exposure_index is not None:
+            scale = scale[self.exposure_index]
         return scale * raw_prediction
 
     def guard_scale_interval(self, raw_prediction: np.ndarray) -> tuple[float, float] | None:
@@ -126,6 +170,8 @@ class NativeFitObservations:
         None means this shape cannot pass at any scale. A constrained optimizer
         must then change the shape; the unconstrained scale is only a search diagnostic.
         """
+        if not self.allow_guard_constraints:
+            raise ValueError("historical scale constraints are unavailable for this objective")
         raw_prediction = np.asarray(raw_prediction)
         if (
             np.iscomplexobj(raw_prediction)
@@ -163,7 +209,7 @@ class NativeFitObservations:
             if self.objective_kind == "historical"
             else float(residual @ residual),
             gls_chi_square=float(residual @ residual),
-            historical_loss=float(old @ old),
+            historical_loss=float(old @ old) if len(old) else None,
             guard_scores=rms,
             guards_pass=bool(np.all(rms <= self.guard_limit + 1e-6)),
         )

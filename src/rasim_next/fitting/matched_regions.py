@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.linalg import cholesky, solve_triangular
-from scipy.optimize import least_squares, nnls
 
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.measurement.continuous_regions import ContinuousRegionQuadrature
@@ -275,40 +272,6 @@ class IntegratedPeakAreaProjection:
 
 
 @dataclass(frozen=True, slots=True)
-class MatchedRegionFitResult:
-    """One joint solution with dataset scales and affine block backgrounds."""
-
-    parameter_names: tuple[str, ...]
-    parameters: FloatArray
-    dataset_scales: FloatArray
-    fitted_model_mass: FloatArray
-    fitted_objective_model_mass: FloatArray
-    fitted_background_mass: FloatArray
-    fitted_signal_row: BoolArray
-    weighted_residual: FloatArray
-    objective_ids: tuple[str, ...]
-    objective_dataset_index: IntArray
-    objective_signal_family: IntArray
-    prior_weighted_residual: FloatArray
-    objective_half_chi_squared: float
-    data_objective_half_chi_squared: float
-    prior_objective_half_chi_squared: float
-    jacobian_singular_values: FloatArray
-    sensitivity_rank: int
-    sensitivity_numerical_rank: int
-    sensitivity_condition: float
-    sensitivity_relative_tolerance: float
-    penalized_jacobian_singular_values: FloatArray
-    penalized_sensitivity_rank: int
-    penalized_sensitivity_numerical_rank: int
-    penalized_sensitivity_condition: float
-    parameter_correlation: FloatArray
-    success: bool
-    optimizer_message: str
-    function_evaluations: int
-
-
-@dataclass(frozen=True, slots=True)
 class StructureRegionResponseBlock:
     """One dataset's sparse detector transfer and exact region quadrature."""
 
@@ -424,25 +387,6 @@ class ParameterizedStructureRegionModel:
         return result
 
 
-@dataclass(frozen=True, slots=True)
-class ParameterizedMatchedRegionFitResult:
-    """Identifiable matched-region result bound to model and structure revisions."""
-
-    fit: MatchedRegionFitResult
-    model_revision: str
-    parameterization_revision: str
-    fitted_structure_model_revision: str
-    maximum_sensitivity_condition: float
-
-
-class StructureRegionIdentifiabilityError(RuntimeError):
-    """Raised when a shared structure fit is not data-identifiable."""
-
-    def __init__(self, message: str, result: MatchedRegionFitResult) -> None:
-        super().__init__(message)
-        self.result = result
-
-
 def condition_matched_region_background_from_anchors(
     observations: MatchedRegionObservations,
     baseline: FixedMatchedRegionBackground,
@@ -533,404 +477,207 @@ def condition_matched_region_model_from_anchors(
     return model - np.asarray(background.anchor_projection) @ model
 
 
-def profile_matched_region_nuisance(
-    model_mass: ArrayLike,
+def prepare_matched_region_objective(
     observations: MatchedRegionObservations,
-    fixed_background: FixedMatchedRegionBackground,
+    background: FixedMatchedRegionBackground,
     *,
     peak_area_projection: IntegratedPeakAreaProjection | None = None,
-) -> tuple[FloatArray, FloatArray, FloatArray]:
-    """Profile dataset scales against one frozen conditioned background."""
+):
+    """Return shared count objective and raw-model operator with full covariance.
 
-    if not isinstance(observations, MatchedRegionObservations):
-        raise TypeError("observations must be MatchedRegionObservations")
-    model = np.asarray(model_mass, dtype=np.float64)
-    count = np.asarray(observations.count_mass)
-    if model.shape != count.shape or not np.all(np.isfinite(model)) or np.any(model < 0.0):
-        raise ValueError("model_mass must be a finite nonnegative aligned vector")
-    if not isinstance(fixed_background, FixedMatchedRegionBackground):
-        raise TypeError("fixed_background must be FixedMatchedRegionBackground")
-    if fixed_background.count_mass.shape != count.shape:
-        raise ValueError("fixed background and observations must align")
-    signal = ~np.asarray(observations.is_background)
-    signal_index = np.flatnonzero(signal)
-    count_covariance = np.asarray(observations.count_covariance_count2)
-    anchor_projection = np.asarray(fixed_background.anchor_projection)
-    covariance = (
-        count_covariance
-        + np.asarray(fixed_background.covariance_count2)
-        - anchor_projection @ count_covariance
-        - count_covariance @ anchor_projection.T
-    )
-    covariance = covariance[np.ix_(signal_index, signal_index)]
-    covariance = 0.5 * (covariance + covariance.T)
-    conditioned_model = condition_matched_region_model_from_anchors(fixed_background, model)
-    corrected = count[signal] - fixed_background.count_mass[signal]
-    model_signal = conditioned_model[signal]
-    if peak_area_projection is None:
-        objective_dataset = np.asarray(observations.dataset_index)[signal]
-    else:
+    The operator conditions diffraction on the same anchors as the data, selects
+    signal rows and optionally integrates peaks. Each acquisition keeps its own
+    exposure. Cross-acquisition covariance remains in the joint NNLS scale fit.
+    """
+    from rasim_next.fitting.native_observations import NativeFitObservations
+
+    if not isinstance(observations, MatchedRegionObservations) or not isinstance(
+        background, FixedMatchedRegionBackground
+    ):
+        raise TypeError("matched observations and frozen background are required")
+    count = observations.count_mass
+    if background.count_mass.shape != count.shape:
+        raise ValueError("background and observations must align")
+    h = background.anchor_projection
+    dataset = observations.dataset_index
+    if np.any(h[dataset[:, None] != dataset[None, :]] != 0):
+        raise ValueError("anchor conditioning cannot cross acquisitions")
+    signal = ~observations.is_background
+    selection = np.eye(len(count))[signal]
+    objective_dataset = dataset[signal]
+    if peak_area_projection is not None:
         if not isinstance(peak_area_projection, IntegratedPeakAreaProjection):
-            raise TypeError("peak_area_projection must be IntegratedPeakAreaProjection")
-        aggregation = peak_area_projection.aggregation_matrix(observations)
-        corrected = aggregation @ corrected
-        model_signal = aggregation @ model_signal
-        covariance = aggregation @ covariance @ aggregation.T
-        covariance = 0.5 * (covariance + covariance.T)
-        objective_dataset = np.asarray(peak_area_projection.peak_dataset_index)
-    root_covariance = cholesky(covariance, lower=True, check_finite=False)
-    design = np.zeros((corrected.size, len(observations.dataset_ids)), dtype=np.float64)
-    design[np.arange(corrected.size), objective_dataset] = model_signal
-    whitened_count = solve_triangular(
-        root_covariance,
-        corrected,
-        lower=True,
-        check_finite=False,
+            raise TypeError("peak aggregation must be IntegratedPeakAreaProjection")
+        selection = peak_area_projection.aggregation_matrix(observations) @ selection
+        objective_dataset = peak_area_projection.peak_dataset_index
+    covariance = observations.count_covariance_count2
+    covariance = (
+        selection
+        @ (covariance + background.covariance_count2 - h @ covariance - covariance @ h.T)
+        @ selection.T
     )
-    whitened_design = solve_triangular(
-        root_covariance,
-        design,
-        lower=True,
-        check_finite=False,
+    covariance = (covariance + covariance.T) * 0.5
+    target = selection @ (count - background.count_mass)
+    operator = selection @ (np.eye(len(count)) - h)
+    operator.setflags(write=False)
+    revision = canonical_revision_sha256(
+        ("definition_id", "matched_native_count_objective.v1"),
+        ("dataset_ids", observations.dataset_ids),
+        ("dataset_index", objective_dataset),
+        ("support_px2", observations.support_px2),
+        ("operator", operator),
+        ("net_count", target),
+        ("covariance", covariance),
+        ("background", background.revision),
     )
-    if np.any(np.linalg.norm(whitened_design, axis=0) <= np.finfo(np.float64).tiny):
-        raise ValueError("candidate model has no scale-identifying signal in one dataset")
-    scales, _ = nnls(whitened_design, whitened_count)
-    objective_residual = whitened_count - whitened_design @ scales
-    if peak_area_projection is None:
-        residual = np.zeros_like(count)
-        residual[signal] = objective_residual
-    else:
-        residual = objective_residual
-    return residual, scales, np.array(fixed_background.count_mass, copy=True)
+    n = len(target)
+    objective = NativeFitObservations(
+        projection=None,
+        net_count=target,
+        valid=np.ones(n, dtype=bool),
+        covariance_count2=covariance,
+        fit_operator=np.empty((0, n)),
+        fit_target=np.empty(0),
+        guard_operator=np.empty((0, n)),
+        guard_pointer=np.array([0]),
+        guard_limit=np.empty(0),
+        input_revision=revision,
+        allow_guard_constraints=False,
+        exposure_index=objective_dataset,
+    )
+    return objective, operator
 
 
-def fit_matched_regions(
-    observations: MatchedRegionObservations,
-    predict_model_mass: Callable[[FloatArray], ArrayLike],
+class StructureRegionIdentifiabilityError(RuntimeError):
+    """A failed or unresolved fit retains its shared-search result for inspection."""
+
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
+
+def fit_structure_regions(
+    observations,
+    model,
     *,
-    fixed_background: FixedMatchedRegionBackground,
-    parameter_names: Sequence[str],
-    initial_parameters: Sequence[ArrayLike],
-    lower_bounds: ArrayLike,
-    upper_bounds: ArrayLike,
-    parameter_scales: ArrayLike | None = None,
-    prior_residual: Callable[[FloatArray], ArrayLike] | None = None,
-    peak_area_projection: IntegratedPeakAreaProjection | None = None,
-    sensitivity_relative_tolerance: float = 1.0e-5,
-    maximum_function_evaluations: int = 200,
-) -> MatchedRegionFitResult:
-    """Fit one parameter vector to every family and dataset simultaneously."""
+    fixed_background,
+    parameters,
+    starts,
+    peak_area_projection=None,
+    calibration=(),
+    maximum_function_evaluations=200,
+    sensitivity_relative_tolerance=1e-5,
+    maximum_sensitivity_condition=1e5,
+):
+    """Fit generic-CIF or supported stacking responses through the native search.
 
-    if not isinstance(observations, MatchedRegionObservations):
-        raise TypeError("observations must be MatchedRegionObservations")
-    names = tuple(parameter_names)
-    if not names or any(not isinstance(name, str) or not name for name in names):
-        raise ValueError("parameter_names must contain nonempty strings")
-    lower = np.asarray(lower_bounds, dtype=np.float64)
-    upper = np.asarray(upper_bounds, dtype=np.float64)
+    Gaussian calibration blocks are explicit. The retired arbitrary prior callback
+    is not supported. Data-only rank is assessed after exposure profiling; priors
+    cannot turn a non-identifiable physical result into an accepted result.
+    """
+    from rasim_next.fitting.native_accuracy import native_sensitivity
+    from rasim_next.fitting.native_search import fit_native_parameters
+
+    if not isinstance(model, ParameterizedStructureRegionModel):
+        raise TypeError("model must be a ParameterizedStructureRegionModel")
+    parameters = tuple(parameters)
+    if len({p.owner for p in parameters}) != 1 or any(
+        not p.owner.startswith("specimen:") for p in parameters
+    ):
+        raise ValueError("shared structure coordinates must belong to one named specimen")
     if (
-        lower.shape != (len(names),)
-        or upper.shape != lower.shape
-        or np.any(~np.isfinite(lower))
-        or np.any(~np.isfinite(upper))
-        or np.any(lower >= upper)
+        tuple(p.name for p in parameters) != model.parameter_names
+        or tuple(p.unit for p in parameters) != model.parameter_units
     ):
-        raise ValueError("parameter bounds must be aligned, finite, and increasing")
-    starts = tuple(np.asarray(value, dtype=np.float64) for value in initial_parameters)
-    if not starts or any(
-        value.shape != lower.shape or np.any(value < lower) or np.any(value > upper)
-        for value in starts
-    ):
-        raise ValueError("initial parameters must lie inside the declared bounds")
-    maximum = int(maximum_function_evaluations)
-    if maximum <= 0:
-        raise ValueError("maximum_function_evaluations must be positive")
-    relative_tolerance = float(sensitivity_relative_tolerance)
+        raise ValueError("parameter names and units must match the physical structure binding")
     if (
-        not math.isfinite(relative_tolerance)
-        or relative_tolerance <= 0.0
-        or relative_tolerance >= 1.0
+        not 0 < sensitivity_relative_tolerance < 1
+        or not np.isfinite(maximum_sensitivity_condition)
+        or maximum_sensitivity_condition < 1
     ):
-        raise ValueError("sensitivity_relative_tolerance must lie strictly between zero and one")
-    if parameter_scales is None:
-        parameter_coordinate_scales = np.ones(len(names), dtype=np.float64)
-        optimizer_scales: FloatArray | str = "jac"
-    else:
-        parameter_coordinate_scales = np.asarray(parameter_scales, dtype=np.float64)
-        if (
-            parameter_coordinate_scales.shape != lower.shape
-            or np.any(~np.isfinite(parameter_coordinate_scales))
-            or np.any(parameter_coordinate_scales <= 0.0)
+        raise ValueError("invalid data-sensitivity rank or conditioning limits")
+    if observations.count_mass.size != model.observation_count or set(
+        observations.dataset_ids
+    ) != set(model.dataset_ids):
+        raise ValueError("model and observations must share rows and acquisition IDs")
+    by_id = {key: i for i, key in enumerate(observations.dataset_ids)}
+    for block in model.blocks:
+        if np.any(
+            observations.dataset_index[block.quadrature.observation_covered]
+            != by_id[block.dataset_id]
         ):
-            raise ValueError("parameter_scales must be aligned, finite, and positive")
-        optimizer_scales = parameter_coordinate_scales
-
-    def evaluated_prior(parameters: FloatArray) -> FloatArray:
-        if prior_residual is None:
-            return np.empty(0, dtype=np.float64)
-        values = np.asarray(prior_residual(parameters), dtype=np.float64)
-        if values.ndim != 1 or np.any(~np.isfinite(values)):
-            raise ValueError("prior_residual must return one finite vector")
-        return values
-
-    prior_size = evaluated_prior(starts[0]).size
-    if any(evaluated_prior(start).size != prior_size for start in starts[1:]):
-        raise ValueError("prior_residual shape must be parameter independent")
-
-    def data_residual(parameters: FloatArray) -> FloatArray:
-        model = np.asarray(predict_model_mass(parameters), dtype=np.float64)
-        values, _, _ = profile_matched_region_nuisance(
-            model,
-            observations,
-            fixed_background,
-            peak_area_projection=peak_area_projection,
-        )
-        return values[~observations.is_background] if peak_area_projection is None else values
-
-    def residual(parameters: FloatArray) -> FloatArray:
-        return np.concatenate((data_residual(parameters), evaluated_prior(parameters)))
-
-    fitted = tuple(
-        least_squares(
-            residual,
-            start,
-            bounds=(lower, upper),
-            max_nfev=maximum,
-            x_scale=optimizer_scales,
-        )
-        for start in starts
-    )
-    selected = min(fitted, key=lambda result: float(result.cost))
-    model = np.asarray(predict_model_mass(selected.x), dtype=np.float64)
-    weighted_residual, dataset_scales, background = profile_matched_region_nuisance(
-        model,
+            raise ValueError("a structure response cannot cross acquisitions")
+    objective, operator = prepare_matched_region_objective(
         observations,
         fixed_background,
         peak_area_projection=peak_area_projection,
     )
-    signal_row = ~np.asarray(observations.is_background)
-    data_weighted_residual = (
-        weighted_residual[signal_row] if peak_area_projection is None else weighted_residual
-    )
-    data_row_count = data_weighted_residual.size
-    data_jacobian = (
-        np.asarray(selected.jac[:data_row_count], dtype=np.float64)
-        * parameter_coordinate_scales[None, :]
-    )
-    penalized_jacobian = (
-        np.asarray(selected.jac, dtype=np.float64) * parameter_coordinate_scales[None, :]
-    )
 
-    def diagnostics(jacobian: FloatArray) -> tuple[FloatArray, int, int, float]:
-        singular = np.linalg.svd(jacobian, compute_uv=False)
-        if singular.size < len(names):
-            singular = np.pad(singular, (0, len(names) - singular.size))
-        if not singular.size or singular[0] == 0.0:
-            return singular, 0, 0, math.inf
-        numerical_tolerance = 64.0 * np.finfo(np.float64).eps * max(jacobian.shape) * singular[0]
-        practical_tolerance = max(
-            numerical_tolerance,
-            relative_tolerance * singular[0],
-        )
-        numerical_rank = int(np.count_nonzero(singular > numerical_tolerance))
-        practical_rank = int(np.count_nonzero(singular >= practical_tolerance))
-        condition = (
-            float(singular[0] / singular[-1])
-            if numerical_rank == len(names) and singular[-1] > 0.0
-            else math.inf
-        )
-        return singular, practical_rank, numerical_rank, condition
+    def predict(values):
+        return operator @ model.predict_mass_A2(values)
 
-    singular_values, rank, numerical_rank, condition = diagnostics(data_jacobian)
-    penalized_singular, penalized_rank, penalized_numerical_rank, penalized_condition = diagnostics(
-        penalized_jacobian
-    )
-    if rank == len(names):
-        covariance = np.linalg.inv(data_jacobian.T @ data_jacobian)
-        standard_deviation = np.sqrt(np.diag(covariance))
-        correlation = covariance / np.outer(standard_deviation, standard_deviation)
-    else:
-        correlation = np.full((len(names), len(names)), np.nan, dtype=np.float64)
-    prior_weighted_residual = evaluated_prior(np.asarray(selected.x, dtype=np.float64))
-    data_objective = 0.5 * float(data_weighted_residual @ data_weighted_residual)
-    prior_objective = 0.5 * float(prior_weighted_residual @ prior_weighted_residual)
-    frozen = (
-        np.array(selected.x, copy=True),
-        np.array(dataset_scales, copy=True),
-        np.array(dataset_scales[np.asarray(observations.dataset_index)] * model, copy=True),
-        np.array(
-            dataset_scales[np.asarray(observations.dataset_index)]
-            * condition_matched_region_model_from_anchors(fixed_background, model),
-            copy=True,
-        ),
-        np.array(background, copy=True),
-        np.array(
-            signal_row
-            if peak_area_projection is None
-            else np.ones(len(peak_area_projection.peak_ids), dtype=np.bool_),
-            copy=True,
-        ),
-        np.array(weighted_residual, copy=True),
-        np.array(prior_weighted_residual, copy=True),
-        np.array(singular_values, copy=True),
-        np.array(penalized_singular, copy=True),
-        np.array(correlation, copy=True),
-        np.array(
-            np.asarray(observations.dataset_index)[signal_row]
-            if peak_area_projection is None
-            else peak_area_projection.peak_dataset_index,
-            copy=True,
-        ),
-        np.array(
-            np.asarray(observations.signal_family)[signal_row]
-            if peak_area_projection is None
-            else peak_area_projection.peak_signal_family,
-            copy=True,
-        ),
-    )
-    for value in frozen:
-        value.setflags(write=False)
-    return MatchedRegionFitResult(
-        parameter_names=names,
-        parameters=frozen[0],
-        dataset_scales=frozen[1],
-        fitted_model_mass=frozen[2],
-        fitted_objective_model_mass=frozen[3],
-        fitted_background_mass=frozen[4],
-        fitted_signal_row=frozen[5],
-        weighted_residual=frozen[6],
-        objective_ids=(
-            tuple(f"signal-row:{index}" for index in np.flatnonzero(signal_row))
-            if peak_area_projection is None
-            else peak_area_projection.peak_ids
-        ),
-        objective_dataset_index=frozen[11],
-        objective_signal_family=frozen[12],
-        prior_weighted_residual=frozen[7],
-        objective_half_chi_squared=data_objective + prior_objective,
-        data_objective_half_chi_squared=data_objective,
-        prior_objective_half_chi_squared=prior_objective,
-        jacobian_singular_values=frozen[8],
-        sensitivity_rank=rank,
-        sensitivity_numerical_rank=numerical_rank,
-        sensitivity_condition=condition,
-        sensitivity_relative_tolerance=relative_tolerance,
-        penalized_jacobian_singular_values=frozen[9],
-        penalized_sensitivity_rank=penalized_rank,
-        penalized_sensitivity_numerical_rank=penalized_numerical_rank,
-        penalized_sensitivity_condition=penalized_condition,
-        parameter_correlation=frozen[10],
-        success=bool(selected.success),
-        optimizer_message=str(selected.message),
-        function_evaluations=int(sum(result.nfev for result in fitted)),
-    )
-
-
-def fit_parameterized_matched_regions(
-    observations: MatchedRegionObservations,
-    model: ParameterizedStructureRegionModel,
-    *,
-    fixed_background: FixedMatchedRegionBackground,
-    initial_parameters: Sequence[ArrayLike],
-    lower_bounds: ArrayLike,
-    upper_bounds: ArrayLike,
-    parameter_scales: ArrayLike | None = None,
-    prior_residual: Callable[[FloatArray], ArrayLike] | None = None,
-    peak_area_projection: IntegratedPeakAreaProjection | None = None,
-    sensitivity_relative_tolerance: float = 1.0e-5,
-    maximum_sensitivity_condition: float = 1.0e5,
-    maximum_function_evaluations: int = 200,
-) -> ParameterizedMatchedRegionFitResult:
-    """Fit one shared structure model and reject non-identifiable data directions."""
-
-    if not isinstance(observations, MatchedRegionObservations):
-        raise TypeError("observations must be MatchedRegionObservations")
-    if not isinstance(model, ParameterizedStructureRegionModel):
-        raise TypeError("model must be ParameterizedStructureRegionModel")
-    if parameter_scales is None:
-        raise ValueError(
-            "parameter_scales are required for coordinate-invariant structure identifiability"
-        )
-    maximum_condition = float(maximum_sensitivity_condition)
-    if not math.isfinite(maximum_condition) or maximum_condition < 1.0:
-        raise ValueError("maximum_sensitivity_condition must be finite and at least one")
-    if observations.count_mass.size != model.observation_count:
-        raise ValueError("observations and structure-region model row spaces differ")
-    if set(observations.dataset_ids) != set(model.dataset_ids):
-        raise ValueError("observations and structure-region model dataset IDs differ")
-    dataset_index_by_id = {
-        dataset_id: index for index, dataset_id in enumerate(observations.dataset_ids)
-    }
-    for block in model.blocks:
-        covered = block.quadrature.observation_covered
-        if np.any(
-            np.asarray(observations.dataset_index)[covered] != dataset_index_by_id[block.dataset_id]
-        ):
-            raise ValueError("one structure-region block crosses dataset observation rows")
-
-    result = fit_matched_regions(
-        observations,
-        model.predict_mass_A2,
-        fixed_background=fixed_background,
-        parameter_names=model.parameter_names,
-        initial_parameters=initial_parameters,
-        lower_bounds=lower_bounds,
-        upper_bounds=upper_bounds,
-        parameter_scales=parameter_scales,
-        prior_residual=prior_residual,
-        peak_area_projection=peak_area_projection,
-        sensitivity_relative_tolerance=sensitivity_relative_tolerance,
+    result = fit_native_parameters(
+        predict,
+        objective,
+        parameters,
+        starts,
+        calibration=calibration,
+        method="trf",
         maximum_function_evaluations=maximum_function_evaluations,
     )
-    parameter_count = len(model.parameter_names)
-    if not result.success:
+    result.acquisition_ids = observations.dataset_ids
+    result.model_revision = model.model_revision
+    result.parameterization_revision = model.parameterization.parameterization_revision
+    if not result.minimum_resolved or result.best_converged is None:
         raise StructureRegionIdentifiabilityError(
-            f"structure optimizer failed: {result.optimizer_message}",
-            result,
+            "structure optimization is unfinished or unresolved", result
         )
-    if (
-        result.sensitivity_rank != parameter_count
-        or result.sensitivity_numerical_rank != parameter_count
-    ):
-        raise StructureRegionIdentifiabilityError(
-            "structure sensitivity is rank deficient "
-            f"({result.sensitivity_rank}/{parameter_count})",
-            result,
-        )
-    if (
-        not math.isfinite(result.sensitivity_condition)
-        or result.sensitivity_condition > maximum_condition
-    ):
-        raise StructureRegionIdentifiabilityError(
-            "structure sensitivity condition exceeds the declared maximum",
-            result,
-        )
-    fitted_strength = model.parameterization.bind_strength(result.parameters)
-    fitted_revision = getattr(fitted_strength, "structure_model_revision", None)
-    if not isinstance(fitted_revision, str) or len(fitted_revision) != 64:
-        raise RuntimeError("fitted structure provider omitted its model revision")
-    return ParameterizedMatchedRegionFitResult(
-        fit=result,
-        model_revision=model.model_revision,
-        parameterization_revision=model.parameterization.parameterization_revision,
-        fitted_structure_model_revision=fitted_revision,
-        maximum_sensitivity_condition=maximum_condition,
+    point = result.best_converged
+    sensitivity = native_sensitivity(predict, objective, parameters, point.parameter_values)
+    singular = sensitivity["singular_values"]
+    count = len(parameters)
+    numerical_limit = 64 * np.finfo(float).eps * max(sensitivity["jacobian"].shape) * singular[0]
+    practical_limit = max(numerical_limit, sensitivity_relative_tolerance * singular[0])
+    numerical_rank = int(np.count_nonzero(singular > numerical_limit))
+    rank = int(np.count_nonzero(singular > practical_limit))
+    condition = (
+        float(singular[0] / singular[-1])
+        if len(singular) == count and singular[-1] > 0
+        else math.inf
     )
+    result.sensitivity = dict(
+        **sensitivity,
+        rank=rank,
+        numerical_rank=numerical_rank,
+        condition=condition,
+        relative_rank_tolerance=sensitivity_relative_tolerance,
+        maximum_condition=maximum_sensitivity_condition,
+    )
+    if rank != count or numerical_rank != count or condition > maximum_sensitivity_condition:
+        raise StructureRegionIdentifiabilityError(
+            "data sensitivity is rank deficient or ill-conditioned", result
+        )
+    strength = model.parameterization.bind_strength(point.parameter_values)
+    revision = getattr(strength, "structure_model_revision", None)
+    if not isinstance(revision, str) or len(revision) != 64:
+        raise RuntimeError("fitted strength omitted its model revision")
+    result.fitted_structure_model_revision = revision
+    result.fitted_native_count = point.scale[observations.dataset_index] * model.predict_mass_A2(
+        point.parameter_values
+    )
+    result.identification_status = "local_data_rank_passed_not_numerically_qualified"
+    return result
 
 
 __all__ = [
     "FixedMatchedRegionBackground",
     "IntegratedPeakAreaProjection",
-    "MatchedRegionFitResult",
     "MatchedRegionObservations",
-    "ParameterizedMatchedRegionFitResult",
     "ParameterizedStructureRegionModel",
     "StructureRegionIdentifiabilityError",
     "StructureRegionResponseBlock",
     "condition_matched_region_background_from_anchors",
     "condition_matched_region_model_from_anchors",
-    "fit_matched_regions",
-    "fit_parameterized_matched_regions",
-    "profile_matched_region_nuisance",
+    "fit_structure_regions",
+    "prepare_matched_region_objective",
 ]

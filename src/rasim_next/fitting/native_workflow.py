@@ -117,6 +117,8 @@ def native_physics_with(original, plan, overrides):
 
 
 def make_native_evaluator(physics, observations, plan, *, model=None):
+    if observations.projection is None:
+        raise ValueError("native detector evaluation requires a native pixel projection")
     parameters = tuple(FitParameter(**p) for p in plan["parameters"])
     names = tuple(p.name for p in parameters)
     model = (

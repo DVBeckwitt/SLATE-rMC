@@ -8,7 +8,7 @@ hash-bound. Earlier recipes below invoking `fit_layered_quintuple_regions.py`,
 `replay_staged_fit.py`, `staged_fit_ordered_intensity.py`, `run_layered_fit.py` or
 `fit_bi_native.py` are historical evidence, available at revision
 `349524d24f960198d75df8def104adbca204944a`. Those orchestration files are no longer live.
-Their numerical invariants remain with the current core owners and compact tests.
+Their numerical invariants remain with the current core owners and archived evidence.
 
 ## Canonical Bi2Se3 simulation
 
@@ -930,52 +930,13 @@ are supplied.
 
 ## General layered-CIF sparse fitting API
 
-The configured generic ordered default declares complete conventional-cell repeats:
-
-```yaml
-structure_factor:
-  model_id: cif_conventional_cell_finite_repeat.v1
-  repeats: 5
-  normalization: FINITE_TOTAL
-  unknown_u_iso_A2: 0.0
-```
-
-`FINITE_PER_LAYER` divides by this complete-cell repeat count; it does not reinterpret a repeat as
-an inferred monolayer or quintuple layer. The shared fitting entry is:
-
-```python
-inputs = build_configured_simulation_inputs(config)
-detector = build_source_averaged_structure_detector(inputs)
-response = detector.compile_structure_response(column_px, row_px)
-```
-
-`AffineCifSiteBasis` plus `AffineCifFiniteStackParameterization`, or the explicit Bi2X3/PbI2
-parameterizations, feeds `StructureRegionResponseBlock`, `ParameterizedStructureRegionModel`, and
-`fit_parameterized_matched_regions`. These are programmatic sparse fitting contracts, not a
-generic full-image renderer or raw-OSC observation-recipe generator. The PbI2 parent provider uses
-the five existing fixed near-parent templates; it does not infer a free stacking transition law.
-All five parents are identical on `00L`, so 001 has zero derivative with respect to every current
-Pb parent-population log ratio. It can constrain a profiled dataset scale jointly. A separately
-declared affine vertical-site basis does change 001 and uses the same response/fitter, but the
-fixed-parent log-ratio model cannot distinguish lateral parent populations there.
-
-The OSC geometry CLI can optionally polish a calibrated native center and detector-normal
-distance while fitting the ordinary shared geometry coordinates:
-
-```powershell
-uv run --frozen python scripts/fit_osc_geometry.py series.yaml `
-  --fit-detector-center --detector-center-half-span-px 6 `
-  --fit-detector-distance --detector-distance-half-span-mm 2 `
-  --freeze-parameter goniometer_pivot_yaw_offset_m `
-  --destination C:\external\fit\position.json --json
-```
-
-Center offsets are continuous detector-native `(column_px,row_px)` values; the distance offset is
-metres internally and the CLI bound is millimetres. Fitting distance while pivot yaw is active is
-forbidden by the CLI because those coordinates form the known Rigaku translation gauge; the data
-Jacobian still provides the general rank authority. Without either fit flag, no calibration pack is
-serialized and the legacy numerical/result-revision path is exact. These options polish an existing
-calibration and do not turn diffraction peaks into an absolute detector-calibration oracle.
+Use `AffineCifFiniteStackParameterization` with revision-bound sparse response blocks in
+`ParameterizedStructureRegionModel`. Prepare `MatchedRegionObservations`, frozen
+`FixedMatchedRegionBackground`, explicit `FitParameter` values and starts, then call
+`fit_structure_regions`. It delegates to the common native search while retaining
+separate acquisition scales, full covariance and data-only rank checks. See
+[the staged fitting guide](STAGED_FITTING.md#other-materials-and-acquisitions).
+The retired matched-region optimizer/result APIs are recoverable at `b3c1302`.
 
 ## Complete native Bi/Pb refinement
 

@@ -74,8 +74,8 @@ def compare_native_predictions(
         or np.iscomplexobj(refined)
         or np.any(~np.isfinite(reference))
         or np.any(~np.isfinite(refined))
-        or not np.isfinite(fixed_scale)
-        or fixed_scale <= 0
+        or np.any(~np.isfinite(fixed_scale))
+        or np.any(np.asarray(fixed_scale) <= 0)
         or np.any(~np.isfinite(thresholds))
         or np.any(thresholds <= 0)
     ):
@@ -84,7 +84,7 @@ def compare_native_predictions(
         )
     delta = np.array(
         [
-            observations.whiten(fixed_scale * (high - low))
+            observations.whiten(observations.apply_scale(high - low, fixed_scale))
             for low, high in zip(reference, refined, strict=True)
         ]
     )

@@ -92,7 +92,7 @@ detector intensity or pixel integration.
 | source + optics + mosaic + detector + selected coordinates | structure-independent sparse response | any compatible strength provider | CPU requested-coordinate fitting; no generic raster renderer |
 | detector + candidate mosaic state | finite angular profile bank | unchanged mosaic fitter | each candidate re-evaluates the detector; the structure-response factorization freezes mosaic |
 | sparse response + candidate provider | unchanged raw detector-coordinate density | exact region quadrature | basis and reference revisions must agree |
-| affine CIF, Bi2X3, or PbI2 log-ratio parameterization + region blocks | parameterized matched-region fitter | rank-qualified structure result | explicit scales; rank/condition failures reject |
+| affine CIF, Bi2X3, or PbI2 log-ratio parameterization + region blocks | shared native search through `fit_structure_regions` | locally identified structure result | explicit scales; rank/condition failures reject |
 | optional detector calibration fit | provenance-bearing fixed position | downstream staged physics | inactive pack preserves legacy position exactly |
 | continuous acquisition | calibrated acquisition-bound quadrature | incidence-averaged detector | normalized exposure mass, common calibration, and exact support identity |
 | finite-region node evaluator | adaptive panelwise oracle | scan score | source/evaluator revisions and signed ROI contrast remain frozen |

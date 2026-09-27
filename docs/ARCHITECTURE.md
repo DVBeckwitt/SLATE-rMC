@@ -287,83 +287,31 @@ terminal generates one fixed-width source/draw latent matrix and streams roots d
 final image; it retains no orientation/root/event Cartesian product. Historical equations remain
 only in the immutable reference pack and proof comparisons.
 
-## Detector-native matched-region fitting
+## Generic-CIF and multiple-acquisition fitting
 
-`measurement.region_observations` owns material-neutral angular and reciprocal region definitions
-and center-membership used only for preparation/display. `measurement.continuous_regions` owns
-chart-rectangle quadrature and the data-only sparse projection of piecewise-constant native counts
-onto those same rectangles. `fitting.radial_background` owns a shared
-rise-times-decay detector halo with per-dataset amplitude and pedestal; `fitting.matched_regions`
-owns the covariance-conditioned joint residual and one scale per dataset. None of these modules
-knows a material or Figure 7.
-
-`fitting.fixed_experiment` is the modular handoff between position, optional lattice, supplied
-mosaic, and intensity stages. It rebuilds one immutable source/material/reciprocal state, rebinds
-only the commanded incidence geometry for each image, and rejects incomplete predecessor state.
-The current adapter covers the tracked R-3m Bi2X3 layered-quintuple family. Material recipes freeze
-measured regions and site-specific constants; the common numerical path refines five shared
-coordinates against all three OSCs. The v7 diagnostic chain fits two Wyckoff-z offsets in A, one
-outer-chalcogen vacancy fraction in B with occupancy `1-v` and Bi antisite fixed to zero, the
-radial/normal sample-Q envelope in C, and all five in joint. The tracked fast workflow uses the v8
-`seeded_joint_only.v1` policy: the outer workflow hashes seed-v2 and passes its five-coordinate
-vector as the explicit all-active joint start, without synthetic initializer predecessors. The
-inner fit-v14 artifact records that numeric start and hash, not the seed-file identity.
-Crystallographic site ADPs are a separate fixed profile
-inside the atomic amplitude. The sample-Q envelope is applied once from sample-frame Q after mosaic
-rotation and is never folded into site ADPs.
-
-A/B/C are initializers only under the v7 policy. Each v7 child binds the exact predecessor bytes,
-starts from that predecessor, and keeps all inactive coordinates unchanged. V8 instead binds an
-explicit numeric start and has no predecessor chain; only the outer workflow binds seed-v2.
-Under either policy only the joint result may proceed,
-and fit stages checkpoint resumably;
-profiles publish atomically and restart as a whole. Completed stages are immutable predecessors.
-Prepare, background calibration, and render
-publish atomically. Pixel-center membership is only preparation/display discovery state. The fit
-integrates the verified piecewise-constant native count field over the same continuous
-phi/two-theta or signed-side Qr/L chart rectangles as the continuous model and propagates the full
-fractional-pixel count covariance.
-Adjacent anchors condition measured background and model with the same projection but do not become
-extra fitted signal rows. Only measured counts and the displayed area-detector image remain pixel
-arrays.
-
-The terminal profile is explicitly `FIT_CONDITIONED`: it evaluates complete Qz branches with the
-fitted rod roster, records cubature evidence, remains `publication_ready=false`, and makes no
-all-configured-rod claim. The detector panel still shows the actual integration regions. The
-R-centered RichEpsilon parent is explicit proof/CPU/CUDA finite-stack state with an exact-zero fast
-path. The retained production model keeps `epsilon=0` because screened nonzero values failed the
-cross-image gates; it is not a fitted 4H/6H population.
-If the optional lattice stage accepts a changed basis, every lattice-dependent material,
-reciprocal, rod, optical, and detector object is rebuilt before downstream fitting; otherwise the
-CIF basis is retained exactly.
-
-## General-CIF sparse fitting core
-
-Contract v13 introduced one material-neutral strength seam before detector fitting; contract v14
-retains it unchanged:
+`measurement.continuous_regions` owns exact region quadrature and measured native-pixel
+projection. `matched_regions` retains material-neutral observations, frozen background,
+anchor conditioning and parameterized sparse response blocks. It prepares the same
+`NativeFitObservations` consumed by `native_search`; each acquisition keeps an exposure
+scale and full cross-acquisition covariance. One named specimen owns shared structural
+coordinates. `fit_structure_regions` supplies data-only rank/condition diagnostics and
+fitted-strength provenance after the shared search. No alternate optimizer remains.
 
 ```text
-explicit CIF/model declaration
-  -> reciprocal-basis-bound strength provider
-  -> shared source/optics/mosaic/detector transfer
-  -> mosaic branch: rebind mosaic -> candidate profile bank -> unchanged mosaic fitter
-  -> structure branch: frozen sparse response x candidate strength
-       -> exact region integration -> unchanged matched-region fitter
+CIF + explicit repeat/site/displacement modes
+ -> AffineCifFiniteStackParameterization or supported physical provider
+ -> canonical sparse source/optics/mosaic/detector response
+ -> region quadrature + matched measurement/background covariance
+ -> NativeFitObservations -> fit_native_parameters
 ```
 
-`materials.crystal` owns the resolved-CIF revision and affine expanded-site basis.
-`pipeline.bragg_space` owns the generic conventional-cell repeat and specialized Bi2X3 providers.
-`pipeline.source_averaged_structure` owns the shared sparse response and fitting detector;
-`fitting.matched_regions` owns the parameterized region model and fail-closed identifiability gate.
-PbI2's five fixed near-parent provider lives beside its existing stacking compiler and implements
-the same detector-facing contract. No module dispatches on elements or a material name.
-
-The response is reusable only while reciprocal basis, source, optics, mosaic, rods, pose,
-calibration, sample-Q envelope, and requested coordinates are fixed. A candidate site structure
-may change strength but not those authorities. This path is CPU sparse fitting authority, not a
-replacement for the optimized Bi2X3 full-image renderer. Raw-image discovery, background/mask
-policy, fitted-coordinate declarations, and any non-CIF stacking law remain explicit experiment
-inputs rather than per-material Python files.
+Sparse response reuse freezes basis, source, optics, mosaic, rods, geometry and requested
+coordinates; admissible candidates change strength. A generic CIF does not define a
+measurement, background, arbitrary disorder law or full-image renderer. The supported
+native Bi/Pb evaluator is the separate physical binding for full detector fitting/rendering.
+Both bindings share objective/search ownership. Retired layered-stage and Figure-7
+orchestration remains archived evidence, not an active five-coordinate fitting workflow.
+See [STAGED_FITTING.md](STAGED_FITTING.md) and [CONTRACTS.md](CONTRACTS.md).
 
 ## Native Bi fitting extension
 
