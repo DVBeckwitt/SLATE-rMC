@@ -82,9 +82,11 @@ Immutable compiled states and an explicit invalidation graph are required so rep
 
 The integrated reference path is profiled before choosing CPU, GPU, or another production implementation.
 
-## D020: Few permanent tests
+## D020: Retired permanent-test policy
 
-Keep compact analytic and direct-oracle tests. Large legacy traces, sweeps, images, and benchmarks remain external.
+Superseded by the user-directed retirement of in-repository tests and proof runners.
+Current policy is [VALIDATION.md](VALIDATION.md). Preserve runtime numerical qualification;
+use only external, change-specific checks for concrete risks.
 
 ## D021: One external diagnostic file
 

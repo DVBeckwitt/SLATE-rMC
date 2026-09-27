@@ -12,6 +12,7 @@ from time import perf_counter
 
 import numpy as np
 
+from rasim_next.io.diagnostics import write_diagnostic
 from rasim_next.pipeline.configured_simulation import (
     CONFIGURED_RESULT_SCHEMA_VERSION,
     DetectorIntegerLMarkers,
@@ -27,7 +28,6 @@ from rasim_next.pipeline.configured_simulation import (
     load_simulation_config,
     sample_reciprocal_space,
 )
-from rasim_next.proof.diagnostics import write_diagnostic
 
 ROOT = Path(__file__).resolve().parents[1]
 

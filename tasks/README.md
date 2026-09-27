@@ -1,3 +1,7 @@
+> Historical record: task instructions and test/proof commands below describe earlier
+> revisions. Current `AGENTS.md` and `docs/VALIDATION.md` supersede those workflows;
+> this file does not authorize launching or recreating them.
+
 # Task routing
 
 `tasks/index.yaml` is the authoritative status registry.

@@ -43,8 +43,8 @@ from rasim_next.fitting.native_workflow import (
     native_prediction_group,
     prepare_native_axial_meshes,
 )
+from rasim_next.io.diagnostics import write_diagnostic
 from rasim_next.pipeline.detector_revisions import _instrument_revision
-from rasim_next.proof.diagnostics import write_diagnostic
 
 
 def _point_record(point):

@@ -21,7 +21,6 @@ Python 3.12 or 3.13 is required.
 ```powershell
 uv sync --frozen --group dev --extra visualization
 uv run python scripts/verify_seed.py
-uv run pytest
 ```
 
 The authoritative Bi2Se3 input is
@@ -111,5 +110,6 @@ entry points and in `docs/EXAMPLES.md`.
 - Pixel values are deterministic box integrals, never display interpolation.
 
 Read `AGENTS.md`, `docs/CONVENTIONS.md`, `docs/RESULT_MEASURE.md`, `docs/ARCHITECTURE.md`, and
-`docs/CONTRACTS.md` before changing the numerical core. Compact proof commands and accepted
-classifications are recorded in `docs/VALIDATION.md` and `docs/PHYSICS_LEDGER.md`.
+`docs/CONTRACTS.md` before changing the numerical core. The repository has no retained test
+or proof suite. Change-specific assessment is described in `docs/VALIDATION.md`; scientific
+classifications remain in `docs/PHYSICS_LEDGER.md`. Runtime fit qualification remains mandatory.

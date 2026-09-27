@@ -49,34 +49,34 @@ lightweight, optimized, and free of development residue.
 
 ### 4. No bloat or leftovers
 
-- Production modules contain no embedded tests, `__main__` demos, scratch harnesses, debug prints,
-  diagnostic writers, commented-out alternatives, abandoned implementations, or generated output.
-- Before handoff, delete temporary scripts, exploratory notebooks, one-off fixtures, duplicate
-  helpers, obsolete adapters, benchmark dumps, and tests that no longer protect a unique behavior.
-- Permanent tests are retained only when they protect a distinct scientific invariant, public
-  contract, accepted legacy comparison, or end-to-end integration boundary.
-- Do not keep tests of private implementation details, duplicate parameterizations of the same
-  equation, or large snapshot collections. Replace obsolete tests when behavior is replaced.
-- Temporary tests may be used while developing, but they must be removed before the branch moves on
-  unless they meet the permanent-test rule above.
-- Every committed file must be required by the production package, the compact permanent proof
-  suite, the tracked examples, or the project documentation.
-- No unresolved `TODO`, `FIXME`, temporary feature flag, dead branch, or unused dependency may
-  remain in touched code at handoff.
+- Production modules contain no embedded tests, demos, scratch harnesses, debug prints,
+  commented alternatives, abandoned implementations or generated output. Explicit runtime
+  result writers belong to I/O; callers opt into external diagnostics.
+- Remove temporary scripts, exploratory notebooks, duplicate helpers, obsolete adapters,
+  unused dependencies and generated files before handoff.
+- Every committed file must support the production package, live tools/examples,
+  immutable scientific evidence or current project documentation.
+- No unresolved TODO, FIXME, temporary flag or dead branch may remain in touched code.
 
-"No leftover tests" does not mean removing the minimum permanent regression suite. It means removing
-exploratory, redundant, obsolete, and implementation-detail tests once their purpose is complete.
+## Repository assessment policy
+
+No tests, proof runners or benchmark/error-injection harnesses are retained in this
+repository. Do not add test-only fixtures. Historical task files, prompts and skills do not authorize
+recreating them. Temporary checks must be external, specific to the changed behavior and
+removed when their purpose is complete; do not recreate the retired suite elsewhere.
+
+Preserve runtime input validation, numerical qualification, covariance/rank checks,
+checkpoint integrity, actual fitting methods and immutable scientific evidence. Removing
+development harnesses does not relax physical tolerances or promote an unqualified fit.
+See [docs/VALIDATION.md](docs/VALIDATION.md) for the current assessment policy.
 
 ## Read before editing
 
-Read `docs/SCOPE_AND_PHASES.md`, `docs/CONVENTIONS.md`, `docs/OSC_COORDINATES.md`,
-`docs/RESULT_MEASURE.md`, `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`,
-`docs/DOVETAIL_MATRIX.md`, the assigned task, its referenced rows in `docs/PHYSICS_LEDGER.md`,
-`docs/TRACE_SCHEMA.md`, `docs/VALIDATION.md`, `docs/ERROR_INJECTION.md`, `docs/EXAMPLES.md`, and
-`reference/README.md`.
-
-For Codex worktrees, also read `WORKTREE_LAUNCH.md`, `docs/CODEX_EXECUTION.md`,
-`tasks/OVERNIGHT_RUNBOOK.md`, and the assigned prompt.
+Read the assigned scope, `docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`,
+`docs/CONVENTIONS.md`, `docs/RESULT_MEASURE.md` and `docs/VALIDATION.md`.
+Read the relevant coordinate, physics-ledger, trace and example sections when the change
+touches those boundaries. For worktrees also read `WORKTREE_LAUNCH.md`.
+Historical tasks and reports are evidence, not active execution instructions.
 
 ## Numerical authority
 
@@ -94,7 +94,7 @@ sufficient proof.
 ## Working philosophy
 
 - Prefer the smallest correct implementation and one public implementation of each equation.
-- Keep an independent oracle only where it can detect a plausible mistake.
+- Use independent evidence for the observable being changed; keep temporary checks external.
 - Optimize work count, memory traffic, conditioning, and reuse before choosing CPU or GPU.
 - Use `float64` and `complex128` for proof unless final-observable error is explicitly bounded.
 - Make units, frames, probability measure, normalization, coherence, shape, and validity explicit.
@@ -102,8 +102,7 @@ sufficient proof.
 - No mutable globals, hidden caches, import-time computation, or import-time device setup.
 - No hidden normalization, reflection pruning, fabricated reflections, sentinel overloading, or
   silent fallbacks.
-- Never import or execute the tracked original-RASIM snapshot from production code or permanent
-  tests.
+- Never import or execute the tracked original-RASIM snapshot from production code.
 - Never copy legacy modules wholesale. Reimplement the selected equations behind the new contracts.
 - Prefer deleting unnecessary code over maintaining it.
 
@@ -142,37 +141,32 @@ sufficient proof.
   Detector solid angle is excluded from the raw image and applies only in an explicitly requested
   later analysis correction.
 
-## Automatic discovery workflow
+## Experiment history
 
-Use the personal `dream-rsi` skill automatically for substantial iterative work:
-consult relevant recorded attempts, retain measured failures and successes, and run
-bounded discovery/replay/policy improvement when a repeatable evaluator and competing
-approaches justify search. The user does not need to request this workflow separately.
-Follow [docs/DREAM_RSI.md](docs/DREAM_RSI.md) and narrow the project adapter to the task.
-Keep one coding writer, protected scientific evidence and tolerances, and all generated
-history outside the repository. Ordinary direct edits need no search episode. Prompts
-marked `DREAM_RSI_WORKER` perform only their assigned attempt without nested searches.
+Use the personal `dream-rsi` skill to consult relevant measured attempts before substantial
+iterative work and record useful outcomes outside the repository. History is evidence, not
+authorization. Direct cleanup uses direct edits; it does not need search or replay campaigns.
+Any justified discovery run needs a task-specific external evaluator, finite scope and budget,
+one coding writer, protected evidence and unchanged scientific tolerances. No repository-wide
+test/proof evaluator is supplied. See [docs/DREAM_RSI.md](docs/DREAM_RSI.md).
 
 ## Worktree isolation
 
-T02--T05 were created from one clean `PROOF_BASE_SHA`, reviewed, merged into `main` at
-`caf7acd649a27dc66c6c0b73a2f66dcd520389f9`, and retired. Do not recreate or resume those
-worktrees or feature branches. New write-heavy phases start from the approved current `main` in
-their own worktree and retain the same owned-path and read-only-contract discipline.
+Keep one local branch, `main`. Reuse a suitable free isolated worktree from current main,
+accounting for all existing changes first. An isolated checkout may use detached HEAD;
+review its coherent commit and fast-forward main after checking both checkouts are clean.
+Preserve ongoing or paused work and never resume retired scientific tasks implicitly.
 
-The main agent is the only writer. Subagents may be used for bounded read-heavy exploration,
-derivation challenge, test review, or log analysis. Stop `BLOCKED` when a shared contract is
-insufficient rather than editing protected files or weakening proof.
+The main agent is the only writer. Subagents may do bounded read-only exploration or review.
+Do not weaken a shared scientific contract to make a change pass.
 
-## Proof budget
+## Verification scope
 
-Every branch provides analytic or invariant proof, an independent oracle where specified, tracked
-reference comparison, first-divergence evidence for corrections, convergence, wall time, peak
-memory, and assigned error-injection detection.
-
-Keep the permanent suite compact. Large sweeps, full images, profiling runs, generated diagnostics,
-and legacy traces are proof artifacts, not permanent tests. Before handoff, review every test added
-by the branch and retain only those that protect a unique long-term failure mode.
+Choose checks for the actual change. Import, build, CLI and result-I/O checks can establish
+software compatibility; they cannot establish scientific adequacy. Scientific changes need
+named observables, fixed inputs/measures/tolerances and an independent comparison where
+appropriate. Reuse saved evidence when sufficient. Do not start fits, full images, sweeps or
+benchmarks merely because historical instructions mention them.
 
 ## Diagnostics
 
@@ -182,23 +176,18 @@ one JSON manifest. No sidecars or diagnostic directories.
 
 ## Handoff gate
 
-Before committing the branch result:
+- Remove development residue and review the diff and imports.
+- Run formatting, linting and configured type/build checks relevant to the change.
+- Perform only the external checks needed for concrete remaining risks; report their scope.
+- Preserve fitting qualification states and physical constraints.
+- Report added/deleted lines separately for production and retired development infrastructure.
+- End with one coherent commit, a clean main checkout and one local main branch.
 
-- Remove temporary tests, scratch files, debug output, dead code, commented alternatives, unused
-  imports, unused dependencies, and generated files.
-- Confirm every retained test protects a unique long-term invariant or interface.
-- Run formatting, linting, type checks where configured, the compact permanent test suite, assigned
-  proof commands, and the branch benchmark.
-- Confirm the optimized and proof paths agree within the frozen tolerance.
-- Confirm `git status --short` contains only the intended branch changes before the final commit and
-  is clean afterward.
-
-End a branch with one coherent commit and a handoff containing commit SHA, proof state, public APIs,
-legacy classifications, first divergences, convergence, benchmark, peak memory, limitations, the
-permanent tests retained and why, and minimum integration requests. End the Codex response with
-exactly `READY` or `BLOCKED`.
+Report the commit, behavior changed, checks performed and remaining limitations. Do not claim
+numerical validation from software checks. End the Codex response with exactly READY or BLOCKED.
 
 <!-- BEGIN VIDEO ANALYSIS WORKFLOW -->
+
 ## Video analysis workflow
 
 When the user supplies a local video or asks you to analyze one, first preprocess

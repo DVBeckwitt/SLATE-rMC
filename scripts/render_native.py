@@ -14,7 +14,7 @@ import numpy as np
 from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_observations import load_native_fit_observations
 from rasim_next.fitting.native_workflow import make_native_evaluator, native_physics_with
-from rasim_next.proof.diagnostics import write_diagnostic
+from rasim_next.io.diagnostics import write_diagnostic
 
 
 def render(

@@ -1,5 +1,6 @@
+# Historical task index, not an execution queue. Current AGENTS.md takes precedence.
 schema_version: rasim-task-index-v3
-current_phase: native_bi_cell_site_joint_refinement
+current_phase: historical_records_only
 
 tasks:
   - id: T00

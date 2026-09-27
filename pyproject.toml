@@ -27,17 +27,11 @@ visualization = [
 
 [dependency-groups]
 dev = [
-  "Pillow>=12,<13",
-  "pytest>=8,<10",
   "ruff>=0.12,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/painted_ewald", "src/rasim_next"]
-
-[tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py312"

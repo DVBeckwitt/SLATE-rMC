@@ -606,7 +606,7 @@ The standalone `recover_bi2se3_mosaic.py` workflow is archived at revision
 `4a2c2940a7de7f05004b77b173dc22a76a879b9f`. Its library owner remains
 `rasim_next.fitting.mosaic`: Gaussian/Lorentzian profile responses, independent
 nonnegative amplitude per complete profile, optional declared background, and
-identifiability checks. These shape-only equations and their permanent tests remain live.
+identifiability checks. These shape-only equations remain live; their former tests are archived in Git.
 
 The retired runner's synthetic case generation, old stage-artifact schemas, model-based
 profile eligibility and point-sampled display images are historical evidence. They do not
@@ -855,114 +855,31 @@ second scale, horizontal shift, detector raster for the model, smoothing, or syn
 
 The standalone `recover_bi2se3_ordered_intensity.py` workflow is archived at revision
 `4a2c2940a7de7f05004b77b173dc22a76a879b9f`. Its distinct mathematical implementation
-remains in `rasim_next.fitting.ordered_intensity`, with the registered ordered-intensity
-proof and permanent direct-response, occupancy-gauge and frozen-input tests.
+remains in `rasim_next.fitting.ordered_intensity`. Its former synthetic proof and
+tests are archived at Git revision `358362e`.
 
 This synthetic proof uses selected-group point densities in A^2/rad^2, an exact occupancy
 quadratic and a checked 13-node normal-displacement response. Its relative mode profiles
 one scale per incidence. It is not a fit of unseparated measured native counts, and its
 old display-only point-sampled detector images are not pixel-integrated predictions.
 Use [native refinement](NATIVE_REFINEMENT.md) for the latter observable; retain the
-library proof for its declared synthetic and conditional inference contract.
+declared conditional inference contract when using the library API.
 
-## PbI2 pure-polytype Bragg benchmark
+## Optional PbI2 rational landmarks
 
-The supplied PbI2 structures remain under `examples/pbi2/structures/`. A separate synthetic
-benchmark under `examples/pbi2/benchmark/` contains explicit-P1 ideal 2H, 4H+, and 6H+ cells built
-from one common 2H trilayer. It compares independently summed whole-CIF Bragg intensities with the
-pure transition parents at identical signed `(h,k,l)` coordinates:
+The geometry fitter accepts a frozen exact-rational landmark pack. Missing optional peaks add
+no observations. Discover peaks without a predicted structure-intensity catalogue, freeze native
+centroids, then use `admit_discovered_pbi2_layer_l_peaks(...)` with corrected geometry, complete
+parent catalogue and matching angle frame. Only an admitted pack is passed to
+`merge_layer_l_marker_observations(...)`; rejected admission leaves the integer baseline intact.
 
-```powershell
-python -m rasim_next.proof pbi2-polytype-bragg --json
-```
+Mosaic profiles may have independent per-profile amplitudes. Those amplitudes deliberately
+remove cross-peak strength information, so SF/population fitting requires its own declared
+cross-region measure and shared specimen scale. Intrinsic summed-rod strength in A2 is distinct
+from measured OSC counts and a detector-integrated response.
 
-The command writes JSON only to stdout. It applies no fitted scale, multiplicity, or peak
-normalization, and it checks both one cell and two coherent cells so the closing transition and
-`FINITE_TOTAL` measure are exercised. The ideal fixtures do not replace the separately relaxed
-native CIFs.
-
-## Current Bi2X3 optional-polytype null regression
-
-The rational-landmark path is additive and material-declared. Bi2Se3 and Bi2Te3 do not invoke the
-PbI2 catalogue or fixed-parent population compiler; their current workflows remain on the exact
-integer-L path with deterministic 3R stacking and `epsilon=0`:
-
-```powershell
-uv run --frozen python scripts/run_layered_fit.py `
-  configs/fit_workflows/bi2se3.toml `
-  --output-directory C:\path\outside\the\repository\bi2se3-current
-
-uv run --frozen python scripts/run_layered_fit.py `
-  configs/fit_workflows/bi2te3.toml `
-  --output-directory C:\path\outside\the\repository\bi2te3-current
-```
-
-The integration proof compares pre-extension and current integer roots, geometry, joint structure
-parameters, dataset scales, profile arrays, and rendered figures. It establishes that the optional
-path was not activated and the accepted outputs are unchanged within numerical replay tolerance;
-it does not claim that a material-neutral rational-peak search was run on Bi2X3.
-
-## PbI2 optional-polytype geometry validation
-
-The geometry fitter also accepts a frozen exact-rational landmark pack. The compact synthetic test
-uses the tracked one-trilayer 2H CIF as the declared layer metric, fits the same nine shared
-geometry coordinates at 5/10/15 degrees, and compares 2H integer orders with an augmented
-2H+4H+6H half-/third-order roster:
-
-```powershell
-uv run --frozen pytest -q tests/test_fitting.py `
-  -k optional_pbi2_polytype_landmarks_strengthen
-```
-
-This is not a raw-OSC example. Fractional peaks must already be detected, indexed, resolved, and
-centroid-qualified; missing optional peaks add no observations. The test fits no population or
-intensity, uses one detector calibration, and does not treat the relaxed native 4H/6H metrics as
-the common 2H layer coordinate.
-
-For measured data, run the existing catalogue-free cake discovery first and freeze its native
-centroids. Then call `admit_discovered_pbi2_layer_l_peaks(...)` with the corrected PbI2 geometry,
-complete five-parent catalogue, and matching angle frame. It returns either a complete
-`Pbi2LayerLPeakAdmission` or `None`; the former retains the hashed discovery, full catalogue, and
-exact source-row join, and its `observations` member is the only optional pack passed to
-`merge_layer_l_marker_observations(...)`. The latter leaves the integer baseline object unchanged.
-The admission pass uses no predicted structure-factor or parent-population intensity; measured
-discovery significance is required. It rejects ambiguous, uncertain, stale-geometry,
-incomplete-root, competing-owner, restricted-parent, and non-PbI2 inputs. This is a fitter-ready
-API preflight, not a measured PbI2 staged CLI.
-
-## PbI2 optional-polytype mosaic validation
-
-The same exact-rational landmarks can seed typed mosaic profiles. The compact synthetic test
-compares the integer-order baseline with the admitted half-/third-order roster, plants one
-population-weighted amplitude per physical profile (summing support at exact overlaps), and
-recovers one shared Gaussian/Lorentzian mosaic distribution:
-
-```powershell
-uv run --frozen pytest -q tests/test_fitting.py `
-  -k optional_pbi2_polytype_landmarks_strengthen_mosaic
-```
-
-This historical T23 proof is an analytic synthetic profile bank, not a measured detector-native
-fit. Contract v13 separately proves the same mosaic fitter with the shared PbI2 detector response,
-including regular kinematic 001. Independent per-profile nuisance amplitudes deliberately remove
-population and cross-peak strength from the mosaic objective; a structure stage needs its own
-declared cross-region measure.
-
-## PbI2 exact-rational intrinsic SF population validation
-
-The next synthetic boundary collapses the qualified detector-root landmarks into unique structural
-integer/half/third-order rows, sums all signed rods once, and fits separate fixed-parent population
-vectors for assumed 2H, 2H+6H, and 2H+4H+6H specimens:
-
-```powershell
-uv run --frozen pytest -q tests/test_fitting.py `
-  -k "layer_l_stacking_response or three_separate_pbi2_sf"
-```
-
-Parent overlaps remain columns in one response row and one scale ties all peaks within each
-specimen. Missing optional peaks add no rows. The example uses pointwise intrinsic summed-rod
-strength in `A2`; it is not measured OSC intensity, a detector-integrated PbI2 response, or a fit
-of continuous transition probabilities.
+The old synthetic polytype benchmarks and recovery commands are retired; their descriptions
+and results remain in Git at `358362e`. They are not current measured-fit examples.
 
 ## Reference and observed data
 

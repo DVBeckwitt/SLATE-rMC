@@ -9,17 +9,17 @@ batch count, completion and separate fit/image numerical status. Only consistent
 boundaries are atomically published; interruption retains the last published checkpoint.
 These are execution manifests, not new physical trace stages.
 
-Every proof trace uses stable stage IDs. A result may omit non-applicable stages, but it may not
+Transport records and archived proof traces use stable stage IDs. A result may omit non-applicable stages, but it may not
 invent branch-specific names for shared quantities. The frozen trace schema remains v4; contract
 API v17 does not renumber historical evidence.
 
 The registry preserves source/incident, reciprocal-root, ordered/stacking, optical,
 detector-coordinate, and total-detector-mass identifiers for reference comparison. Current
-`TraceRecord` producers cover transport, proof, and reference paths; a listed identifier is not a
+`TraceRecord` producers cover transport; proof/reference runners are retired; a listed identifier is not a
 claim that every continuous result emits a trace row. Candidate, selection, sampled-event,
 deposition-index, deposition-weight, and clipped-point identifiers below are frozen historical
-names only; the live runtime never emits them. New continuous proofs prefer typed result measure
-IDs over inventing replacement trace aliases. The stochastic result introduced in API v11 and
+names only; the live runtime never emits them. Continuous results use typed result measure
+IDs rather than replacement trace aliases. The stochastic result introduced in API v11 and
 execution-extended in API v12 records its measure, proposal, RNG, source, rod, backend/device, and
 work ledgers in typed results; it does not revive event or deposition trace rows. Progressive
 execution and the leased presentation frame are execution state, not new trace stages.
@@ -257,9 +257,10 @@ immutable object. Trace construction never rejoins raw source rows or recomputes
 v2 material/sample digest rebaseline changes provenance identifiers only; trace stage IDs and
 accepted numeric values remain unchanged.
 
-## Comparator
+## Historical comparator (retired)
 
-The common comparator:
+The former executable comparator is archived at Git revision `358362e`; no comparator
+runner is retained. Its historical record format used the following sequence:
 
 1. verifies schema and metadata
 2. aligns records by case and stage
@@ -267,7 +268,7 @@ The common comparator:
 4. reports the first failing stage
 5. accepts downstream disagreement only for a declared `CORRECTED` case with an independent proof record
 
-The comparator must not hide missing stages by comparing only final outputs.
+The historical comparator rejected missing stages rather than comparing final outputs alone.
 `mosaic.wrapped_line_density` has unit `rad^-1`, no coordinate frame, and `PROBABILITY_DENSITY` measure.
 
 Optional geometry calibration names/values, configured detector reference coordinates, and the

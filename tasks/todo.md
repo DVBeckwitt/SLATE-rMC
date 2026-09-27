@@ -1,3 +1,7 @@
+> Historical record: task instructions and test/proof commands below describe earlier
+> revisions. Current `AGENTS.md` and `docs/VALIDATION.md` supersede those workflows;
+> this file does not authorize launching or recreating them.
+
 # Full physical-intensity refit checklist (2026-09-06)
 
 - [x] Preserve main and isolate the approved base; locate existing six-sample replay tools.

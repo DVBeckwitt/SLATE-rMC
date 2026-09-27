@@ -1,5 +1,9 @@
 # Contracts
 
+> Test/proof references record historical evidence. Executable harnesses are retired;
+> current assessment policy is [VALIDATION.md](VALIDATION.md). Runtime physical and
+> numerical contracts below remain binding.
+
 ## Native response reuse and execution (T34)
 
 The current execution extension is documented in [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md).

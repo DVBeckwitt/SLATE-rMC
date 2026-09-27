@@ -1,29 +1,13 @@
-# Execution-plan convention
+# Change plans
 
-Long tasks update the execution-plan section in their assigned task file under `tasks/`. Do not create an additional planning document unless the task explicitly requests one.
+Keep each change small enough to explain and review. A plan records:
 
-Use these states:
+1. The user objective and the fitting/physical capability it supports.
+2. Owned paths, dependencies and behavior that must be preserved.
+3. The smallest implementation or deletion that achieves the objective.
+4. External checks justified by the actual change, and what they cannot establish.
+5. Completion evidence: commit, clean state, line reduction and remaining limitations.
 
-```text
-NS         not started
-PLANNED    source audit, equations, contracts, proof cases, and stop conditions recorded
-ORACLE     analytic or independent oracle passes
-REF        public reference implementation passes analytic checks
-LEGACY     shared characterization-pack comparisons are classified
-CONVERGED  numerical refinement converges
-BENCH      wall time and peak memory recorded
-READY      all merge gates pass
-BLOCKED    smallest unmet shared requirement recorded
-```
-
-At each transition, record:
-
-```text
-State:
-Evidence:
-Commands run:
-Remaining work:
-Contract or dependency issue:
-```
-
-A plan must identify the exact owned paths, forbidden paths, manuscript equations, original-RASIM source locations, shared-pack cases, independent proof, convergence variable, benchmark workload, and done conditions before source editing begins.
+Use current `AGENTS.md` and `docs/VALIDATION.md`. Historical task phases do not trigger
+test suites, proof campaigns or new fitting runs. Use one writer and read-only reviewers.
+Prefer removing duplicated work to adding orchestration or compatibility layers.

@@ -66,7 +66,7 @@ detector geometry.
   occupancy `1-v`; Bi substitution is fixed to zero and is tested only as a separate discrete
   competitor. Crystallographic site ADPs remain separate and fixed; only a gate-qualified joint
   result is authoritative.
-- Exact RichEpsilon finite stacks for the R-centered three-registry parent in the proof, compiled
+- Exact RichEpsilon finite stacks for the R-centered three-registry parent in the NumPy, compiled
   CPU, and CUDA detector paths, including a bit-preserving epsilon-zero fast path. The tracked
   Bi2X3 production model retains `epsilon=0`; this is not a fitted 4H/6H population.
 - The historical synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five
@@ -79,8 +79,8 @@ detector geometry.
   map. Both retain wavelength-resolved strength in `A2`; the conventions are not interchangeable.
   Interface roughness is physical Nevot--Croce roughness; neither implies an auxiliary count scale,
   model raster, smoothing, or detector-resolution convolution.
-- NumPy proof, compiled CPU, and CUDA detector evaluators.
-- Compact analytic, direct-oracle, mutation, convergence, reference, and integration proofs.
+- NumPy, compiled CPU, and CUDA detector evaluators.
+- Explicit runtime numerical qualification and input/result validation.
 
 ## Current result boundary
 
@@ -150,7 +150,6 @@ scripts remain until their raw-observation recipes are migrated to declarative e
 
 ## Phase discipline
 
-New work starts from current `main` in an isolated `codex/` worktree. A change owns a narrow set of
-contracts, proves its first divergent stage, retains only tests for distinct long-term invariants,
-places diagnostics outside the repository, and ends with one clean commit. Historical numbered task
-files remain provenance; this document and the live contracts describe the current runtime.
+Use the current `AGENTS.md`, `WORKTREE_LAUNCH.md` and `docs/VALIDATION.md` for narrow,
+reviewable changes. Keep one writer and one local main branch. Historical numbered tasks
+are provenance; their retired test/proof campaigns are not current work instructions.

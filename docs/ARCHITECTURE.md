@@ -22,16 +22,16 @@ is a different comparison, even if its figure looks better.
 | --- | --- | --- |
 | Geometry | `fitting/joint_geometry.py`, `hbn.py`, `joint_geometry_handoff.py`, shared `geometry` transforms | D043 reduced reference gauge with shared hBN/crystal calibration; D044 applies the accepted source/detector state once. Predictive geometry is qualified; the fixed mechanical pitch references are not measured parameters. |
 | Mosaic | `painted_ewald/normal_density.py`, `fitting/native_search.py` | Directed spherical Gaussian/Lorentzian density with independent uniform spin through full-family native observations. `fitting/mosaic.py` retains the distinct conditional shape-only objective; its per-profile amplitudes cannot establish cross-reflection SF agreement. |
-| Ordered SF | `ordered/amplitudes.py`, `ordered/finite_stack.py`, explicit Bi/Pb or generic CIF bindings | One complex atomic-amplitude equation and coherent finite structure. Geometry and source remain bound; occupancies, site ADPs and empirical sample-Q envelopes have distinct meanings. `fitting/ordered_intensity.py` retains its exact conditional response contraction and synthetic proof. |
-| SF with disorder | `stacking/transition.py`, `stacking/finite_intensity.py`, `stacking/parent_models.py` | One finite-stack transition recurrence with direct short-stack enumeration and ordered-limit proofs. Independent parents mix as intensities. Synthetic fixed-parent recovery does not qualify measured disorder estimates. |
+| Ordered SF | `ordered/amplitudes.py`, `ordered/finite_stack.py`, explicit Bi/Pb or generic CIF bindings | One complex atomic-amplitude equation and coherent finite structure. Geometry and source remain bound; occupancies, site ADPs and empirical sample-Q envelopes have distinct meanings. `fitting/ordered_intensity.py` retains its exact conditional response contraction and conditional inference contract. |
+| SF with disorder | `stacking/transition.py`, `stacking/finite_intensity.py`, `stacking/parent_models.py` | One finite-stack transition recurrence whose prior enumeration and ordered-limit evidence is archived in Git. Independent parents mix as intensities. Synthetic fixed-parent recovery does not qualify measured disorder estimates. |
 | Transport and fitting | `pipeline/fiber_detector.py`, `conditional_detector.py`, `source_spatial.py`; `fitting/native_observations.py`, `native_workflow.py`, `native_search.py`, `native_execution.py` | One conditional transport/spatial-probability path, frozen native memberships, declared covariance and shared-scale fit. Numerical routing is explicit; no extra detector engine or hidden physical fallback. |
 
 Use geometry, mosaic and SF stages to establish supported initial values. Release additional
 coordinates only under the declared inference contract and report weak directions; do not fix
 unidentified parameters merely to make a full-rank claim. Keep ordered structure as the nested
 control when testing disorder. Keep named specular models separate until evidence distinguishes
-their assumptions. Independent inverse-coordinate and enumeration oracles are retained for
-different declared observables or plausible error detection, not as duplicated fitting workflows.
+their assumptions. Independent inverse-coordinate APIs retain their distinct declared observables.
+Development enumeration/proof harnesses have retired; they are not fitting workflows.
 
 The empirical whole-pattern baseline is the genuine September 11 Gaussian/Lorentzian fit bound by
 `configs/native_experiments.json`. It used complete native families, correlated source/spectral
@@ -40,7 +40,7 @@ later two-profile spline experiment changed those inputs and assumptions, improv
 profiles and left large radial excess. It is archived research, not the default replacement.
 
 The two historical Bi2Se3 recovery CLIs are retired; their distinct fitting mathematics and
-permanent invariant tests remain. Bespoke point-source/full-field adapters, spline banks and
+scientific contracts remain. Bespoke point-source/full-field adapters, spline banks and
 failed performance experiments remain external evidence. Do not import their orchestration into
 production. The current `prepare_native`, `refine_native` and `render_native` commands own the
 native-count workflow; see [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md) for explicit nominal
@@ -166,7 +166,7 @@ contributing rod/orientation branches on the active detector panel.
   profiles. It also owns material-neutral layered reciprocal frames, immutable `Qr/L` profile
   regions, sample membership, and separate finite-bin signal/measure accumulation used equally by
   measured pixel centers and continuous detector cubature; never part of raw rendering.
-- `proof`: compact analytic, reference, mutation, convergence, and benchmark evidence.
+- `io/diagnostics.py`: atomic external result writing, shared by the runtime CLIs.
 
 ## Public runtime layers
 
@@ -216,16 +216,16 @@ contributing rod/orientation branches on the active detector panel.
     solver, then relabels exactly the selected native candidates under corrected geometry. A full
     corrected-geometry rediscovery is reported separately as a chart/candidate robustness
     diagnostic; it cannot delete or replace accepted observations.
-13. The retained historical synthetic ordered-intensity proof uses the finite-ROI mass path and a
-   certified source-averaged
+13. Historical ordered-intensity evidence at Git revision `358362e` covered the finite-ROI mass
+    path and a certified source-averaged
     selected-center path. The latter produces one combined detector function per incidence before
     any dataset scale or residual, retains every weak nonzero anchor and admitted `m=0` anchor, and
     contracts only occupancy coefficients and its historical global Q-damping factors. Atomic positions,
     geometry, mosaic, lattice, optics, and stacking law are immutable. Multi-incidence observations
-    join by dataset ID and exact observable-layout digest rather than tuple position. The active
-    Unfiltered Bi2Se3 proof mode uses 250 shared-revision source rows and `88/78/72` centers,
+    join by dataset ID and exact observable-layout digest rather than tuple position. The archived
+    Unfiltered Bi2Se3 proof used 250 shared-revision source rows and `88/78/72` centers,
     including six `m=0`; a measured-mosaic handoff instead propagates its exact fit-eligible
-    identity set. Both prove synthetic selected-component recovery, not unresolved raw-OSC
+    identity set. That evidence concerned synthetic selected-component recovery, not unresolved raw-OSC
     intensity recovery.
 14. The synthetic PbI2 rational-landmark SF boundary collapses detector-root duplicates to one
     intrinsic structural query, sums every unique signed rod once, and fits one fixed-parent amount

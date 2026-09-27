@@ -19,6 +19,7 @@ from painted_ewald import (
     ContinuousEwaldCoating,
     Rod,
 )
+from rasim_next.io.diagnostics import write_diagnostic
 from rasim_next.pipeline.bragg_space import Bi2X3FiniteStackStrength
 from rasim_next.pipeline.configured_simulation import (
     build_configured_simulation_inputs,
@@ -29,7 +30,6 @@ from rasim_next.pipeline.continuous_detector import (
     DetectorQuadrature,
     PixelIntegrationMethod,
 )
-from rasim_next.proof.diagnostics import write_diagnostic
 
 ROOT = Path(__file__).resolve().parents[1]
 M1_ROD_KEYS = ((-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0))

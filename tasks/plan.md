@@ -1,3 +1,7 @@
+> Historical record: task instructions and test/proof commands below describe earlier
+> revisions. Current `AGENTS.md` and `docs/VALIDATION.md` supersede those workflows;
+> this file does not authorize launching or recreating them.
+
 # Full physical-intensity refit plan (2026-09-06)
 
 Base: `04489309c606e9cd87505dcc4d8482b26060ce50`.

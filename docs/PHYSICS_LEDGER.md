@@ -1,5 +1,9 @@
 # Physics ledger
 
+> Test/proof references record historical evidence. Executable harnesses are retired;
+> current assessment policy is [VALIDATION.md](VALIDATION.md). Runtime physical and
+> numerical contracts below remain binding.
+
 Treatments:
 
 - `MATCH`: reproduce original-RASIM results where they satisfy the new specification
