@@ -69,10 +69,15 @@ def native_physics_with(original, plan, overrides):
             {
                 "axial_peak_spacing_L",
                 "axial_peak_half_width_L",
+                "local_m0_axial_peak_coordinate",
                 "regular_q_bounds_Ainv",
                 "local_m0_q_bounds_Ainv",
             }
         )
+    if result.specular_stitch_stack is None or not any(
+        rod.h == rod.k == 0 and rod.population > 0 for rod in result.rods
+    ):
+        ignored.add("local_m0_axial_peak_coordinate")
     if result.integration_rule.frozen_ewald_bounds_Ainv_rad is not None:
         ignored.add("angular_support")
     if (
