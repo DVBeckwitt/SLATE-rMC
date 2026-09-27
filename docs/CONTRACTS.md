@@ -745,7 +745,7 @@ remain nonnegative. No detector area or solid-angle correction is silently added
 
 `ParameterizedStructureRegionModel` binds exact sparse response blocks to one compatible
 `StructureStrengthParameterization`. `AffineCifFiniteStackParameterization` retains explicit
-cell/site/occupancy/displacement modes and conventional-cell repeat semantics; it does not
+fixed-cell site/occupancy/isotropic-`U` modes and conventional-cell repeat semantics; it does not
 invent disorder from a CIF. Bi2X3 and the fixed-parent Pb provider share this strength seam.
 Reciprocal basis, source, optics, mosaic, rods and geometry must match the response revisions.
 
@@ -760,7 +760,7 @@ identification is explicitly not numerical quadrature qualification or global un
 The returned shared search result retains acquisition IDs, fitted native counts,
 parameterization and fitted-strength revisions and sensitivity. The former
 `fit_matched_regions`, `fit_parameterized_matched_regions`, their result wrappers and
-arbitrary prior callbacks are retired at revision `b3c1302`. The shared objective reports
+arbitrary prior callbacks are retired at revision `b8dba2b`. The shared objective reports
 full squared residual sums; the old optimizer reported half. See [STAGED_FITTING.md](STAGED_FITTING.md).
 
 ## Continuous incidence-exposure contract

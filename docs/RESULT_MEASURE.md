@@ -491,10 +491,10 @@ the continuous detector density integrated directly over that rectangle with the
 Jacobian. It is never sampled or aggregated as a model raster.
 Dataset scale `s_d` multiplies every family in dataset `d` once.
 The frozen radial calibration supplies background mass `B_r` and covariance. Adjacent-anchor
-conditioning is applied first. A fixed aggregation matrix `G` then sums every conditioned signal
-row exactly once into its declared trusted peak: `y_peak=G y`, `mu_peak=G mu`, and
-`Sigma_peak=G Sigma G.T`. Active fitting uses only these integrated peak masses, with one
-nonnegative `s_d` per dataset. The identical
+conditioning is applied first. If peak aggregation is declared, a fixed matrix `G` sums every
+conditioned signal row exactly once into its trusted peak: `y_peak=G y`, `mu_peak=G mu`, and
+`Sigma_peak=G Sigma G.T`. Otherwise the conditioned signal rows remain separate. Both forms
+use one nonnegative `s_d` per dataset through the shared native search. The identical
 two-anchor projection transforms the full measured-count and radial-background covariance before
 whitening. Division by support occurs only for displayed density profiles. Where a
 continuous region crosses the inverse-map fold, fixed-rule mass from the complete same-`|b|` rod
@@ -513,6 +513,7 @@ wavelength, rod, root, and parent contributions remain incoherent intensities.
 
 `ParameterizedStructureRegionModel` integrates the applied raw detector density through each
 block's exact `ContinuousRegionQuadrature`. Candidate site or population coordinates change only
-`S`; transfer, quadrature, measured background, covariance, and one scale per dataset stay frozen.
+`S`; transfer, quadrature, measured background and covariance stay frozen. Separate dataset
+scales are profiled jointly with the full declared covariance at each candidate.
 Regular kinematic `00L` uses the same factorization after its positive-Q support gate. The optional
 local-lamella Parratt composite is a separate declared observable and is not part of this response.

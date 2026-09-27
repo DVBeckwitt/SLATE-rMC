@@ -489,8 +489,7 @@ unless the non-accepted override is explicit.
 ## Joint geometry fitting for an OSC series
 
 Fit one shared full-rank geometry correction to the frozen 5, 10, and user-authoritative 15 degree
-Bi2Se3 observations, cross-validate integer `L={4,11}`, rerun the measured outer audit, and include
-separate timing/memory evidence:
+Bi2Se3 observations, cross-validate integer `L={4,11}`, rerun the measured outer audit, and record the actual fit elapsed time:
 
 ```powershell
 uv run --frozen python scripts/fit_osc_geometry.py `
@@ -499,7 +498,6 @@ uv run --frozen python scripts/fit_osc_geometry.py `
   --fit-incidence-angle-trim `
   --freeze-parameter sample_normal_x_tilt_rad `
   --heldout-integer-l 4 11 `
-  --benchmark `
   --destination C:\path\outside\the\repository\position\geometry.json `
   --json
 ```
@@ -509,21 +507,10 @@ commanded-angle tuple. A different layered-hexagonal material uses the same comm
 simulation configuration and image records. Unrelated materials or mounts are separate fit groups.
 The current trim-enabled workflow deliberately uses the separate model-limited manifest above. It
 retains the complete selection revision in its result but does not claim the immutable historical
-qualification. The optional `qualification_profile` names a frozen data-specific acceptance
-profile. The tracked `bi2se3-osc-5-10-15.v1` profile predates the trim extension, requires the
-original no-trim common-delta parameterization plus `--heldout-integer-l 4 11` and `--benchmark`,
-and fails closed if the full indexed-manifest hash changes:
-
-```powershell
-uv run --frozen python scripts/fit_osc_geometry.py `
-  configs/bi2se3_osc_geometry_fit.yaml `
-  --fit-incidence-angle-delta `
-  --freeze-parameter sample_normal_x_tilt_rad `
-  --heldout-integer-l 4 11 `
-  --benchmark `
-  --destination C:\path\outside\the\repository\position\qualified-v1.json `
-  --json
-```
+qualification. The old `bi2se3-osc-5-10-15.v1` qualification profile is retired with
+its embedded development benchmark. A request for it remains explicitly unaccepted;
+the command never silently clears the request or promotes incomplete evidence.
+Use the model-limited manifest for current prediction diagnostics.
 
 A generic manifest omits the profile: the command reports numerical run completion without
 applying or claiming the frozen Bi2Se3 thresholds. Counts or reflection names never substitute for

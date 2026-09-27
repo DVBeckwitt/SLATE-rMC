@@ -7,7 +7,6 @@ import hashlib
 import json
 import math
 import sys
-import tracemalloc
 from dataclasses import asdict
 from itertools import combinations
 from pathlib import Path
@@ -360,7 +359,6 @@ def fit_osc_geometry_series(
     manifest_path: str | Path,
     *,
     heldout_integer_l: tuple[int, ...] = (),
-    benchmark: bool = False,
     fitted_parameter_names: tuple[str, ...] = SHARED_GEOMETRY_PARAMETER_NAMES,
     fitted_detector_calibration_parameter_names: tuple[str, ...] = (),
     detector_center_half_span_px: float = 10.0,
@@ -711,38 +709,6 @@ def fit_osc_geometry_series(
             "wall_time_seconds": perf_counter() - started,
         }
 
-    warm_residual_median_seconds: float | None = None
-    fit_peak_memory_bytes: int | None = None
-    if benchmark:
-        residual_times = []
-        for _ in range(25):
-            started = perf_counter()
-            evaluate_indexed_geometry_series_residual(
-                images,
-                result.corrections,
-                detector_calibration_corrections=(result.detector_calibration_corrections),
-                incidence_angle_delta_rad=result.incidence_angle_delta_rad,
-                incidence_angle_trim_by_image_id_rad=result_trims,
-            )
-            residual_times.append(perf_counter() - started)
-        warm_residual_median_seconds = float(np.median(residual_times))
-        tracemalloc.start()
-        fit_indexed_geometry_series(
-            images,
-            initial=initial_corrections,
-            bounds=bounds,
-            fitted_parameter_names=fitted_parameter_names,
-            initial_detector_calibration_corrections=initial_calibration,
-            detector_calibration_correction_bounds=calibration_bounds,
-            fitted_detector_calibration_parameter_names=fitted_calibration_names,
-            initial_incidence_angle_delta_rad=initial_incidence_angle_delta_rad,
-            incidence_angle_delta_bounds=incidence_bounds,
-            incidence_angle_trim_contrast_half_span_rad=trim_half_span_rad,
-            incidence_angle_trim_prior_sigma_rad=trim_prior_sigma_rad,
-        )
-        _, fit_peak_memory_bytes = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-
     baseline_by_id = {item.image_id: item for item in baseline.per_image}
     every_image_improved = all(
         item.site_rms_px < baseline_by_id[item.image_id].site_rms_px for item in post_fit.per_image
@@ -800,9 +766,7 @@ def fit_osc_geometry_series(
     )
     qualification_requested = series.qualification_profile is not None
     qualification_heldout_matches = heldout_set == {4, 11}
-    qualification_evidence_complete = (
-        cross_validation is not None and benchmark and qualification_heldout_matches
-    )
+    qualification_evidence_complete = False
     qualification_manifest_matches = (
         indexing.selection.manifest_hash == _BI2SE3_INDEXED_MANIFEST_HASH
     )
@@ -821,19 +785,8 @@ def fit_osc_geometry_series(
         and result.incidence_angle_trim_prior_sigma_rad is None
         and len(result.incidence_angle_trim_contrast_rad) == 0
     )
-    accepted = all(
-        (
-            run_completed,
-            fit_metrics_pass,
-            minimum_improvement_pass,
-            cross_validation_fit_succeeded,
-            heldout_metrics_pass,
-            qualification_requested,
-            qualification_evidence_complete,
-            qualification_manifest_matches,
-            qualification_parameterization_matches,
-        )
-    )
+    # Frozen historical qualification depended on the retired development benchmark.
+    accepted = False
     coordinate_prediction_accepted = all(
         (
             run_completed,
@@ -973,8 +926,9 @@ def fit_osc_geometry_series(
         "root_audit": asdict(root_audit),
         "outer_audit": outer_payload,
         "benchmark": {
-            "warm_residual_median_seconds": warm_residual_median_seconds,
-            "fit_peak_memory_bytes": fit_peak_memory_bytes,
+            "status": "retired",
+            "warm_residual_median_seconds": None,
+            "fit_peak_memory_bytes": None,
         },
         "assessment": {
             "classification": position_classification,
@@ -984,6 +938,9 @@ def fit_osc_geometry_series(
             "heldout_validation_performed": cross_validation is not None,
         },
         "qualification": {
+            "status": "historical_qualification_retired"
+            if qualification_requested
+            else "not_requested",
             "accepted": accepted,
             "requested": qualification_requested,
             "profile_id": series.qualification_profile,
@@ -1030,11 +987,6 @@ def _parser() -> argparse.ArgumentParser:
         nargs="+",
         default=(),
         help="integer-L values excluded from a separate cross-validation fit",
-    )
-    parser.add_argument(
-        "--benchmark",
-        action="store_true",
-        help="also run separate warm-residual and traced peak-memory measurements",
     )
     parser.add_argument(
         "--freeze-parameter",
@@ -1130,7 +1082,6 @@ def main(argv: list[str] | None = None) -> int:
         payload = fit_osc_geometry_series(
             arguments.manifest,
             heldout_integer_l=tuple(arguments.heldout_integer_l),
-            benchmark=arguments.benchmark,
             fitted_parameter_names=fitted_parameter_names,
             fitted_detector_calibration_parameter_names=(
                 fitted_detector_calibration_parameter_names
@@ -1258,13 +1209,6 @@ def main(argv: list[str] | None = None) -> int:
         "track_exports="
         f"{payload['outer_audit']['global_rediscovery']['track_export_counts']}"
     )
-    if payload["benchmark"]["warm_residual_median_seconds"] is not None:
-        print(
-            "warm_residual_median_seconds="
-            f"{payload['benchmark']['warm_residual_median_seconds']:.6g} "
-            "fit_peak_memory_bytes="
-            f"{payload['benchmark']['fit_peak_memory_bytes']}"
-        )
     print(f"primary_fit_wall_time_seconds={payload['primary_fit_wall_time_seconds']:.6g}")
     print(f"indexing_pass_wall_times_seconds={payload['indexing_pass_wall_times_seconds']}")
     print(f"root_audit={payload['root_audit']}")

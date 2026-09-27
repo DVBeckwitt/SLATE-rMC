@@ -31,8 +31,8 @@ detector geometry.
 - Continuous detector-to-`(phi, 2theta)` coordinate pullback with explicit signal and detector-area
   normalization densities before division.
 - Prepared finite-bin angle profiles that integrate signal and detector-area normalization
-  separately, plus response-bank recovery of Gaussian mosaic width, Lorentzian HWHM, and mixture
-  probability with one exact nuisance amplitude per individual profile profiled out.
+  separately. G/L fitting uses the shared native-count coordinator; the standalone profile-scale
+  optimizer and component response bank are retired.
 - Position-free measured-peak discovery in an angle chart, detector-native refinement, reciprocal
   integer-`L`/rod/root labeling, and immutable cross-incidence branch selection.
 - Incoherent source/wavelength/phase summation before selected-center comparison, display-only
@@ -56,24 +56,18 @@ detector geometry.
   gates and one full-basis handoff into every downstream lattice-dependent calculation.
 - A strict fixed-experiment checkpoint that composes position, optional accepted lattice, and
   provided mosaic states while reusing immutable material/source/reciprocal physics across views.
-- Material-neutral matched-region observations that combine angular `m=0` and signed-side
-  reciprocal `m!=0` charts, continuous chart-region cubature, one scale per image across
-  families, an independently frozen radial-background calibration, and staged hash-bound
-  fit/profile artifacts. Under the v7 diagnostic policy, the Bi2X3 layered-quintuple adapter runs
-  modular Wyckoff-z, physical outer-chalcogen vacancy, and sample-Q intensity-envelope initializers
-  followed by one joint five-coordinate refinement. Under v8, an explicit five-coordinate start
-  enters only the joint stage. The vacancy fraction `v` gives outer-chalcogen
-  occupancy `1-v`; Bi substitution is fixed to zero and is tested only as a separate discrete
-  competitor. Crystallographic site ADPs remain separate and fixed; only a gate-qualified joint
-  result is authoritative.
+- Material-neutral matched-region observations with continuous chart-region cubature, shared
+  specimen parameters, separate exposure scales, and explicit background conditioning. The
+  shared native search preserves full declared covariance and data-only rank gates. Optional
+  peak aggregation is declared by the caller. Historical v7/v8 five-coordinate orchestration
+  is retired; current stages and material limits are documented in `STAGED_FITTING.md`.
 - Exact RichEpsilon finite stacks for the R-centered three-registry parent in the NumPy, compiled
   CPU, and CUDA detector paths, including a bit-preserving epsilon-zero fast path. The tracked
   Bi2X3 production model retains `epsilon=0`; this is not a fitted 4H/6H population.
-- The historical synthetic intrinsic-strength PbI2 boundary fits nonnegative populations of five
-  fixed 2H/4H/6H near-parent responses at exact rational structural landmarks. Contract v13 can
-  now apply those same fixed parents through the shared selected-coordinate detector/source/optics
-  transfer; it still does not refine continuous transition-law parameters or supply measured
-  observation/background data.
+- Fixed five-parent PbI2 strength mixtures through the shared selected-coordinate detector
+  transfer, and native Pb transition-law fitting through the same staged search coordinator.
+  The separate intrinsic-landmark population optimizer is retired. Declared ordered controls
+  and independent parent intensity mixtures retain the canonical recurrence.
 - Optional Parratt--kinematic `(0,0)` stitching with an explicit interface convention: a unified
   local-lamella field following the mosaic, or fixed-external-Qz strength on the regular inverse
   map. Both retain wavelength-resolved strength in `A2`; the conventions are not interchangeable.
@@ -145,8 +139,8 @@ detector mask/PSF/background, fitted chemical constraints, or stacking transitio
 chemistry inference, species substitution through the affine basis, anisotropic per-site `Uij`, a
 generic raw-OSC recipe generator, a generic full-image renderer, arbitrary 3-D single-crystal or
 powder indexing, and arbitrary stacking-law inference remain deferred. The shared programmatic
-core removes the need for new per-material physics runners; accepted historical Bi2X3 workflow
-scripts remain until their raw-observation recipes are migrated to declarative experiment data.
+core uses declarative experiment data and the shared prepare/refine/render commands. Historical
+per-material workflow scripts are retired; their immutable scientific evidence remains available.
 
 ## Phase discipline
 

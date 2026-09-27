@@ -130,7 +130,9 @@ per-image trims and effective angles, combined
 Jacobian parameter names, scaled singular spectrum and weakest direction, active bounds,
 per-image native errors, the direct-root and frozen-candidate acceptance audits, the
 frozen-reindexing lineage, optional data-specific qualification profile, and the separate
-global-rediscovery diagnostic. Expected input or numerical rejection in JSON mode uses
+global-rediscovery diagnostic. The retired historical qualification records
+`status=historical_qualification_retired`, `accepted=false`; its old benchmark fields
+are null with `status=retired`. Actual fitting elapsed times remain measured. Expected input or numerical rejection in JSON mode uses
 the additive `rasim-osc-geometry-fit-rejection-v1` envelope rather than a traceback. These
 map to the existing `selection.manifest_hash`, `fitting.detector_parameters`,
 `fitting.sample_geometry_parameters`, `fitting.selection_revision`, `fitting.objective_value`,
@@ -159,7 +161,7 @@ and memory measurements do not enter a scientific revision. Decoded render ident
 stages cannot be hidden: verification always covers every stage through the requested terminal
 boundary.
 
-The outer layered-fit runner uses `rasim-layered-fit-workflow-progress-v2` as an exclusive attempt
+The retired outer layered-fit runner used `rasim-layered-fit-workflow-progress-v2` as an exclusive attempt
 marker and `rasim-layered-fit-workflow-stage-v3` as the terminal stage manifest. Progress v2 binds
 the stage, `status=started`, plan revision, live repository/runtime scientific revision, upstream
 revision, and completed-command count. Any surviving progress marker, including count zero,
@@ -169,7 +171,10 @@ artifact paths and hashes, and the derived stage revision. Reuse rehashes inputs
 recomputes that revision. These orchestration records are not physics trace stages and do not
 renumber trace schema v4.
 
-The current additive matched-region chain is independent of frozen trace-stage numbering:
+The following identifiers remain useful when reading archived matched-region evidence and do
+not change frozen trace-stage numbering. Lattice sensitivity and fixed-state contracts remain
+live. The layered-quintuple workflow, background/fit/profile and figure envelopes below are
+historical; they do not imply a current runner or a reusable native-search result.
 
 - `rasim-osc-lattice-sensitivity-v2` binds one verified completed position artifact, preserving
   whether its status is qualified or model-limited, and compares tightly

@@ -12,7 +12,8 @@ each rod and incident state.
 
 The selected geometry, mosaic, ordered-SF and disorder workflow and its scientific
 limits are summarized in [Architecture](docs/ARCHITECTURE.md#selected-fitting-workflow).
-Use that ownership map when extending the core; add no parallel fitting or physics pipeline.
+Use [the staged fitting guide](docs/STAGED_FITTING.md) for executable recipes and ordered/disorder controls.
+Add no parallel fitting or physics pipeline.
 
 ## Quick start
 
@@ -20,7 +21,6 @@ Python 3.12 or 3.13 is required.
 
 ```powershell
 uv sync --frozen --group dev --extra visualization
-uv run python scripts/verify_seed.py
 ```
 
 The authoritative Bi2Se3 input is
@@ -31,7 +31,7 @@ which external figures are rendered.
 For fitting at selected continuous detector coordinates, contract v13 also accepts a general
 layered CIF through `cif_conventional_cell_finite_repeat.v1` and the shared
 `build_source_averaged_structure_detector(...)` boundary. Bi2Se3, Bi2Te3, ordered generic CIFs,
-and the fixed five-parent PbI2 provider use the same sparse detector and rank-gated region fitter.
+and the fixed five-parent PbI2 provider use the same sparse detector and shared native search with data-only rank gates.
 The ordinary `run_configured_simulation.py` command below remains the optimized Bi2X3 full-image
 renderer; a CIF alone does not define observation regions, fit coordinates, background, mosaic, or
 stacking law. See `docs/EXAMPLES.md` for the shared API and limitations.
