@@ -35,8 +35,7 @@ def hbn_two_theta_rad(
         raise ValueError("hBN lattice constants and wavelength must be finite and positive")
     reciprocal_d2 = np.asarray(
         [
-            4.0 * (h * h + h * k + k * k) / (3.0 * a * a)
-            + layer * layer / (c * c)
+            4.0 * (h * h + h * k + k * k) / (3.0 * a * a) + layer * layer / (c * c)
             for h, k, layer in HBN_RING_HKL
         ],
         dtype=np.float64,
@@ -188,13 +187,8 @@ def _ring_curves_px(
     second = np.cross(beam, first)
     curves = []
     for angle in two_theta_rad:
-        direction = (
-            math.cos(float(angle)) * beam[:, None]
-            + math.sin(float(angle))
-            * (
-                first[:, None] * np.cos(azimuth_rad)
-                + second[:, None] * np.sin(azimuth_rad)
-            )
+        direction = math.cos(float(angle)) * beam[:, None] + math.sin(float(angle)) * (
+            first[:, None] * np.cos(azimuth_rad) + second[:, None] * np.sin(azimuth_rad)
         )
         distance_along_ray = distance_m * beam[2] / direction[2]
         detector_point_m = -distance_m * beam[:, None] + direction * distance_along_ray
@@ -372,8 +366,10 @@ def fit_hbn_detector_calibration(
     radial = np.arange(max(20.0, radii_px[0] - 80.0), radii_px[-1] + 100.0, 0.5)
     sampled = map_coordinates(
         log_signal,
-        [center[1] + np.sin(azimuth)[:, None] * radial,
-         center[0] + np.cos(azimuth)[:, None] * radial],
+        [
+            center[1] + np.sin(azimuth)[:, None] * radial,
+            center[0] + np.cos(azimuth)[:, None] * radial,
+        ],
         order=1,
         mode="constant",
         cval=0.0,

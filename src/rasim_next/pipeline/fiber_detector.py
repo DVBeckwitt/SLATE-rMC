@@ -1802,8 +1802,13 @@ class FiberIntegrationRule:
     angular_panel_edges_rad: tuple[float, ...] | None = None
     maximum_angular_panel_nodes: int = 4194304
     angular_resolution_fraction: float = 0.5
+    angular_integration: str = "native_panels"
 
     def __post_init__(self) -> None:
+        if self.angular_integration not in {"native_panels", "nominal"}:
+            raise ValueError("angular integration must be native_panels or nominal")
+        if self.angular_integration == "nominal" and self.angular_panel_edges_rad is not None:
+            raise ValueError("nominal angular integration cannot use explicit panel edges")
         if (
             np.ndim(self.angular_resolution_fraction) != 0
             or np.iscomplexobj(self.angular_resolution_fraction)
@@ -2070,7 +2075,12 @@ def iter_conditional_fiber_transfers(
                     )
                 source_bounds = np.asarray([frozen])
             channel_bounds[local][si] = source_bounds
-            if len(source_bounds) and si in active_sources and rule.angular_panel_edges_rad is None:
+            if (
+                len(source_bounds)
+                and si in active_sources
+                and rule.angular_panel_edges_rad is None
+                and rule.angular_integration == "native_panels"
+            ):
                 angular_regions[local, si] = native_angular_resolution_regions(
                     native_bounds_px=native_bounds_px,
                     source_state_index=si,

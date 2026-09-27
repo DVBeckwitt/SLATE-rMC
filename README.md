@@ -10,6 +10,10 @@ sample an orientation cloud, create scattering-event rows, resample candidates, 
 onto pixels. The Ewald sphere appears only through the elastic equation, solved analytically for
 each rod and incident state.
 
+The selected geometry, mosaic, ordered-SF and disorder workflow and its scientific
+limits are summarized in [Architecture](docs/ARCHITECTURE.md#selected-fitting-workflow).
+Use that ownership map when extending the core; add no parallel fitting or physics pipeline.
+
 ## Quick start
 
 Python 3.12 or 3.13 is required.

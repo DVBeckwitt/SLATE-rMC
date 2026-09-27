@@ -354,7 +354,8 @@ def test_native_physics_input_preserves_expanded_sites_and_stacking_averages(tmp
         load_native_fit_physics(path)
 
 
-def test_streamed_fiber_matches_native_pixels_and_individual_rods():
+@pytest.mark.parametrize("angular_integration", ["native_panels", "nominal"])
+def test_streamed_fiber_matches_native_pixels_and_individual_rods(angular_integration):
     from painted_ewald import MosaicParameters, Rod
     from painted_ewald.normal_density import SphericalMosaicDensity
     from rasim_next.core.contracts import MaterialOptics
@@ -419,7 +420,13 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
     def strength(rod, ell):
         return (1 + 0.07 * rod.h - 0.03 * rod.k + 0.01 * ell) ** 2 + 0.1
 
-    small_rule = FiberIntegrationRule(axial_power=2, angular_power=1, seed=1, batch_size=100000)
+    small_rule = FiberIntegrationRule(
+        axial_power=2,
+        angular_power=1,
+        seed=1,
+        batch_size=100000,
+        angular_integration=angular_integration,
+    )
     full = tuple(iter_conditional_fiber_transfers(**arguments, rule=small_rule))
     reference = {(batch.source_state_index, batch.radial_Ainv): batch for batch in full}
     assert len(reference) == len(full) > 0
@@ -525,7 +532,11 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
         for batch in iter_conditional_fiber_transfers(
             **arguments,
             rule=FiberIntegrationRule(
-                axial_power=3, angular_power=2, seed=1, batch_size=batch_size
+                axial_power=3,
+                angular_power=2,
+                seed=1,
+                batch_size=batch_size,
+                angular_integration=angular_integration,
             ),
         ):
             seen.update((rod.h, rod.k) for rod in batch.rods)
@@ -621,7 +632,11 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
         strength_model=SignedStrength(basis),
         mosaic=mosaic,
         integration_rule=FiberIntegrationRule(
-            axial_power=3, angular_power=2, seed=1, batch_size=100000
+            axial_power=3,
+            angular_power=2,
+            seed=1,
+            batch_size=100000,
+            angular_integration=angular_integration,
         ),
         spatial_quadrature_order=8,
     )
@@ -668,6 +683,12 @@ def test_streamed_fiber_matches_native_pixels_and_individual_rods():
         changed.compile_native_response(total_projection).response_revision
         != response.response_revision
     )
+    other_mode = "nominal" if angular_integration == "native_panels" else "native_panels"
+    other = replace(
+        detector,
+        integration_rule=replace(detector.integration_rule, angular_integration=other_mode),
+    )
+    assert other.fixed_physics_revision != detector.fixed_physics_revision
     seed_a = replace(detector, integration_rule=replace(detector.integration_rule, seed=2**53))
     seed_b = replace(detector, integration_rule=replace(detector.integration_rule, seed=2**53 + 1))
     assert seed_a.fixed_physics_revision != seed_b.fixed_physics_revision

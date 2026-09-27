@@ -34,20 +34,6 @@ _MIXTURE_Z_LIMIT = 32.0
 _MIXTURE_Z_GRID_COUNT = 8193
 _MIXTURE_Z_LENGTH_TOLERANCE = 1.0e-6
 _MIXTURE_Z_LOCAL_HALF_WIDTH = 0.05
-SOURCE_AVERAGED_PROFILE_SUPPORT_GATE_REVISION = "positive-combined-detector-m0-profile-signal.v2"
-
-
-def source_averaged_profile_has_support(
-    *,
-    family_m: int,
-    profile_signal_A2: float,
-) -> bool:
-    """Return whether a candidate has support in the combined-source detector."""
-
-    signal = float(profile_signal_A2)
-    if not math.isfinite(signal) or signal < 0.0:
-        raise ValueError("profile_signal_A2 must be finite and nonnegative")
-    return bool(int(family_m) != 0 or signal > np.finfo(np.float64).tiny)
 
 
 def _readonly_float(

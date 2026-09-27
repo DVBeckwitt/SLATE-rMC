@@ -283,7 +283,8 @@ compatibility. Fixed support removes a demonstrated remeshing discontinuity, but
 angular resolution must still be independently qualified. Observation grouping was an
 unsuccessful numerical prototype and is not a supported control.
 
-Native fitting and rendering now automatically resolve the angular proposal against
+By default (`angular_integration="native_panels"`), native fitting and rendering
+resolve the angular proposal against
 their complete requested detector support. Geometry-only tiles (at most 64 pixels
 per side, at most 65536 tiles per source/channel) provide corner/center rates of
 Gaussian-kernel and pixel motion. Each tile's physical-angle width applies only
@@ -306,9 +307,28 @@ weights restoring physical `dphi`. `angular_power` supplies
 the same initial angular rule. The existing Sobol axial grid is retained when
 `quadrature_kind="sobol"`; its angular integration is now deterministic conditional
 quadrature. Low-level coordinate calls without resolution inputs retain the paired
-proposal as a reference API, not as native production routing.
-Numerical-check overrides that change power within that ineffective range are
-rejected. A frozen support envelope alone does not freeze the adaptive panels
+proposal. The explicit `angular_integration="nominal"` option exposes that same
+existing coordinate rule through the shared fitter and renderer, without native
+resolution panels. It changes the numerical proposal only, not the source
+distribution, supported domain, signed rods, structure, optics or pixel integral.
+Here nominal does not mean a nominal source ray. It is an exploratory quadrature,
+not a numerical qualification or an exact historical replay unless all inputs match.
+Use angular power/order refinement; resolution-fraction changes are ineffective
+in this mode and rejected as numerical checks. Explicit angular edges cannot be
+combined with nominal mode. Mode identity is bound into cached responses.
+Select the nominal route explicitly in a fit plan, for example:
+
+```json
+{"integration_override": {"angular_integration": "nominal"}}
+```
+
+The saved effective rule is also used by `render_native.py`. Source sample count,
+spectral lines, specimen parameters, observations and objective stay independently
+declared; this switch does not recreate the September 11 fit by itself. Keep the
+existing initial/refined numerical checks and candidate-versus-selected distinction.
+
+In native-panel mode, numerical-check overrides that change power within that
+ineffective range are rejected. A frozen support envelope alone does not freeze the adaptive panels
 when detector or source geometry changes; qualify the actual parameter contrasts.
 
 Corner/center rates are resolution seeds, not a supremum or numerical certificate.

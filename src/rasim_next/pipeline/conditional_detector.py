@@ -625,6 +625,7 @@ class ConditionalStructureDetector:
                 ("proposal_seed", rule.seed),
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
+                ("angular_integration", rule.angular_integration),
                 ("angular_resolution_fraction", rule.angular_resolution_fraction),
                 ("maximum_angular_panel_nodes", rule.maximum_angular_panel_nodes),
                 *(("angular_panel_edges_rad", np.asarray(rule.angular_panel_edges_rad)),)

@@ -23,6 +23,7 @@ def native_physics_with(original, plan, overrides):
         "angular_power",
         "angular_panel_edges_rad",
         "angular_resolution_fraction",
+        "angular_integration",
         "local_m0_angular_power",
         "seed",
         "cone_quadrature_order",
@@ -73,11 +74,17 @@ def native_physics_with(original, plan, overrides):
         )
     if result.integration_rule.frozen_ewald_bounds_Ainv_rad is not None:
         ignored.add("angular_support")
-    if result.integration_rule.angular_panel_edges_rad is not None:
+    if (
+        result.integration_rule.angular_panel_edges_rad is not None
+        or result.integration_rule.angular_integration == "nominal"
+    ):
         ignored.add("angular_resolution_fraction")
     else:
         base_rule = replace(original.integration_rule, **plan.get("integration_override", {}))
-        if base_rule.angular_panel_edges_rad is None:
+        if (
+            base_rule.angular_panel_edges_rad is None
+            and base_rule.angular_integration == "native_panels"
+        ):
             for name in ("angular_power", "local_m0_angular_power"):
                 before, after = getattr(base_rule, name), getattr(result.integration_rule, name)
                 before = base_rule.angular_power if before is None else before

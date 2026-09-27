@@ -2387,3 +2387,26 @@ bytes of whole-process RSS. The historic prebuilt support/layout attempt reached
 about 9.3 GB before evaluating widths. The pilot establishes a numerical boundary, not a shared
 physical fit. Full corrected family/background checks and pitch-gauge propagation remain open;
 no fixed mosaic is updated.
+
+
+## Fitting-core consolidation
+
+The consolidated workflow retains the D043/D044 geometry and retires the two historical
+Bi2Se3 recovery CLIs. Their distinct conditional mosaic and ordered-response mathematics remain;
+native global-scale counts do not replace per-profile shape-only or synthetic point-density
+objectives. The nine removed tests exercised those retired CLI/schema/catalog boundaries.
+Permanent independent source-sum, m0 inclusion, geometry handoff, response-contraction,
+ordered-limit and detector-mass tests remain.
+
+The existing nominal angular route is explicit through `FiberIntegrationRule.angular_integration`.
+The default native-panel route is unchanged. Both use the same density, scattering, source and
+spatial-probability owners. Streamed native pixel/individual-rod agreement covers both modes;
+response identity distinguishes them, and numerical-refinement validation rejects ineffective
+nominal resolution-fraction changes. This is a numerical routing option, not a new physical model
+or waiver of the native qualification gates.
+
+The complete permanent suite passed 376 tests after consolidation. Relative to main at
+`4a2c2940a7de7f05004b77b173dc22a76a879b9f`, tracked first-party Python decreases from 119619
+to 117069 physical lines (2550 fewer), including the retained geometry additions and tests.
+Reference/vendor files and generated external evidence are excluded from that count. No code
+minification, new dependency, fit campaign or source-physics substitution was used.

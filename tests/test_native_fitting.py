@@ -93,6 +93,17 @@ def test_native_axial_panel_vectors_preserve_signed_detector_mass():
         physics, {}, {"integration": {"angular_resolution_fraction": 0.25}}
     )
     assert refined.integration_rule.angular_resolution_fraction == 0.25
+    assert physics.integration_rule.angular_integration == "native_panels"
+    nominal = native_physics_with(physics, {}, {"integration": {"angular_integration": "nominal"}})
+    for name in ("angular_power", "local_m0_angular_power"):
+        changed = native_physics_with(nominal, {}, {"integration": {name: 2}})
+        assert getattr(changed.integration_rule, name) == 2
+    with pytest.raises(ValueError, match="ignored by the effective mesh"):
+        native_physics_with(nominal, {}, {"integration": {"angular_resolution_fraction": 0.25}})
+    with pytest.raises(ValueError, match="angular integration"):
+        replace(physics.integration_rule, angular_integration="unknown")
+    with pytest.raises(ValueError, match="cannot use explicit panel edges"):
+        replace(nominal.integration_rule, angular_panel_edges_rad=(0.0, 2 * np.pi))
     meshes = (
         AxialPanelMesh(((0, 0),), "external_local_m0_q", (0.0, 7.5, 7.8, 8.0, 8.2, 9.0)),
         AxialPanelMesh(((1, 0),), "positive_phase_axial", (0.0, 7.5, 7.8, 8.0, 8.2, 9.0)),

@@ -11,6 +11,41 @@ arithmetic owner in `source_spatial`. See [NATIVE_REFINEMENT.md](NATIVE_REFINEME
 Historical layered-stage orchestration and eager fitting-package reexports have retired;
 geometry, scan and Monte Carlo paths retain their distinct live contracts.
 
+## Selected fitting workflow
+
+The purpose is inference from the same measured detector observables under one declared
+instrument/source and specimen model. Select methods by physical validity and matched-observable
+evidence before runtime or visual agreement. A different source, objective or specular assumption
+is a different comparison, even if its figure looks better.
+
+| Stage | Authoritative production owners | Scope and limit |
+| --- | --- | --- |
+| Geometry | `fitting/joint_geometry.py`, `hbn.py`, `joint_geometry_handoff.py`, shared `geometry` transforms | D043 reduced reference gauge with shared hBN/crystal calibration; D044 applies the accepted source/detector state once. Predictive geometry is qualified; the fixed mechanical pitch references are not measured parameters. |
+| Mosaic | `painted_ewald/normal_density.py`, `fitting/native_search.py` | Directed spherical Gaussian/Lorentzian density with independent uniform spin through full-family native observations. `fitting/mosaic.py` retains the distinct conditional shape-only objective; its per-profile amplitudes cannot establish cross-reflection SF agreement. |
+| Ordered SF | `ordered/amplitudes.py`, `ordered/finite_stack.py`, explicit Bi/Pb or generic CIF bindings | One complex atomic-amplitude equation and coherent finite structure. Geometry and source remain bound; occupancies, site ADPs and empirical sample-Q envelopes have distinct meanings. `fitting/ordered_intensity.py` retains its exact conditional response contraction and synthetic proof. |
+| SF with disorder | `stacking/transition.py`, `stacking/finite_intensity.py`, `stacking/parent_models.py` | One finite-stack transition recurrence with direct short-stack enumeration and ordered-limit proofs. Independent parents mix as intensities. Synthetic fixed-parent recovery does not qualify measured disorder estimates. |
+| Transport and fitting | `pipeline/fiber_detector.py`, `conditional_detector.py`, `source_spatial.py`; `fitting/native_observations.py`, `native_workflow.py`, `native_search.py`, `native_execution.py` | One conditional transport/spatial-probability path, frozen native memberships, declared covariance and shared-scale fit. Numerical routing is explicit; no extra detector engine or hidden physical fallback. |
+
+Use geometry, mosaic and SF stages to establish supported initial values. Release additional
+coordinates only under the declared inference contract and report weak directions; do not fix
+unidentified parameters merely to make a full-rank claim. Keep ordered structure as the nested
+control when testing disorder. Keep named specular models separate until evidence distinguishes
+their assumptions. Independent inverse-coordinate and enumeration oracles are retained for
+different declared observables or plausible error detection, not as duplicated fitting workflows.
+
+The empirical whole-pattern baseline is the genuine September 11 Gaussian/Lorentzian fit bound by
+`configs/native_experiments.json`. It used complete native families, correlated source/spectral
+inputs, covariance/background and a shared scale. It was nominal, not numerically qualified. The
+later two-profile spline experiment changed those inputs and assumptions, improved central signed
+profiles and left large radial excess. It is archived research, not the default replacement.
+
+The two historical Bi2Se3 recovery CLIs are retired; their distinct fitting mathematics and
+permanent invariant tests remain. Bespoke point-source/full-field adapters, spline banks and
+failed performance experiments remain external evidence. Do not import their orchestration into
+production. The current `prepare_native`, `refine_native` and `render_native` commands own the
+native-count workflow; see [NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md) for explicit nominal
+integration and qualification. Historical numerical successes never waive current physical gates.
+
 ## Design rule
 
 The repository has one production path from a configured incident beam to a detector-native
