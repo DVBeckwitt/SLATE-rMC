@@ -595,6 +595,15 @@ def profile_native_parameter(
     )
 
 
+def native_fit_candidate(result):
+    """Use one candidate for qualification, reporting and rendering."""
+    if result.best_converged is not None:
+        return result.best_converged
+    if result.guard_conditioned and result.best_feasible is not None:
+        return result.best_feasible
+    return result.best_evaluated
+
+
 def training_observations(observations, training_mask):
     """Use only predeclared training rows for GLS; retain old promotion diagnostics."""
     if observations.objective_kind != "gls":

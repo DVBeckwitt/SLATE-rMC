@@ -1,0 +1,265 @@
+{
+  "schema": "rasim-native-refinement-plan-v1",
+  "recipe_id": "bi2te3-september11-historical-objective-N15.v1",
+  "experiment_binding": {
+    "physics_sha256": "bf26d8b59ecaa28ba443654b7ce8ce66374ed207fa4f3b6f5eb5371b613408e3",
+    "observation_sha256": "b5b0fce10577992ca159a6eaa7a2f8c9a91523a5772b65c442e15d09e97d5477"
+  },
+  "objective": "historical",
+  "fit_instrument": false,
+  "parameters": [
+    {
+      "name": "a_A",
+      "unit": "angstrom",
+      "owner": "specimen:bi2te3",
+      "lower": 4.34214,
+      "upper": 4.429860000000001,
+      "sensitivity_scale": 0.1
+    },
+    {
+      "name": "c_A",
+      "unit": "angstrom",
+      "owner": "specimen:bi2te3",
+      "lower": 30.19203,
+      "upper": 30.80197,
+      "sensitivity_scale": 0.1
+    },
+    {
+      "name": "bi_fractional_z",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.39299999999999996,
+      "upper": 0.407,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "outer_x_fractional_z",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.20249999999999996,
+      "upper": 0.21649999999999997,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "bi_occupancy",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.8,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "central_x_occupancy",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.8,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "outer_x_occupancy",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.8,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "bi_u_radial_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "bi_u_normal_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "central_x_u_radial_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "central_x_u_normal_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "outer_x_u_radial_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "outer_x_u_normal_A2",
+      "unit": "angstrom^2",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 0.08,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "gaussian_sigma_rad",
+      "unit": "radian",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0005235987755982988,
+      "upper": 0.4363323129985824,
+      "sensitivity_scale": 0.001
+    },
+    {
+      "name": "lorentzian_half_width_rad",
+      "unit": "radian",
+      "owner": "specimen:bi2te3",
+      "lower": 0.00017453292519943296,
+      "upper": 3.141592653589793,
+      "sensitivity_scale": 0.001
+    },
+    {
+      "name": "lorentzian_probability",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "surface_fraction_0",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "surface_1_share_of_remainder",
+      "unit": "1",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 1.0,
+      "sensitivity_scale": 0.01
+    },
+    {
+      "name": "extra_film_thickness_A",
+      "unit": "angstrom",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 500.0,
+      "sensitivity_scale": 0.1
+    },
+    {
+      "name": "top_roughness_A",
+      "unit": "angstrom",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 25.0,
+      "sensitivity_scale": 0.1
+    },
+    {
+      "name": "bottom_roughness_A",
+      "unit": "angstrom",
+      "owner": "specimen:bi2te3",
+      "lower": 0.0,
+      "upper": 25.0,
+      "sensitivity_scale": 0.1
+    }
+  ],
+  "starts": [
+    [
+      4.386,
+      30.497,
+      0.39999999999999997,
+      0.20949999999999996,
+      1.0,
+      1.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.005743390037540386,
+      0.0034822973087175117,
+      0.11812986187924794,
+      0.0,
+      1.0,
+      42.545000000000016,
+      2.7203872409514145,
+      10.0
+    ]
+  ],
+  "repeat_choices": [
+    15
+  ],
+  "fixed_parameters": {
+    "a_A": 4.386,
+    "c_A": 30.497,
+    "bi_fractional_z": 0.39999999999999997,
+    "outer_x_fractional_z": 0.20949999999999996,
+    "bi_occupancy": 1.0,
+    "central_x_occupancy": 1.0,
+    "outer_x_occupancy": 1.0,
+    "bi_u_radial_A2": 0.0,
+    "bi_u_normal_A2": 0.0,
+    "central_x_u_radial_A2": 0.0,
+    "central_x_u_normal_A2": 0.0,
+    "outer_x_u_radial_A2": 0.0,
+    "outer_x_u_normal_A2": 0.0,
+    "extra_film_thickness_A": 42.545000000000016,
+    "top_roughness_A": 2.7203872409514145,
+    "bottom_roughness_A": 10.0
+  },
+  "proposal_mosaic": [
+    0.00581036088594495,
+    0.0005235987755982988,
+    0.1270495360527901
+  ],
+  "integration_override": {
+    "angular_integration": "nominal",
+    "axial_peak_half_width_L": 0.03125,
+    "local_m0_axial_peak_coordinate": "film_phase_q_first_source"
+  },
+  "workers": 4,
+  "finite_difference_step": 1e-06,
+  "require_initial_qualification": false,
+  "qualify_fitted_candidates": false,
+  "stages": [
+    {
+      "name": "conditional_mosaic_and_termination",
+      "active_parameters": [
+        "gaussian_sigma_rad",
+        "lorentzian_half_width_rad",
+        "lorentzian_probability",
+        "surface_fraction_0",
+        "surface_1_share_of_remainder"
+      ],
+      "method": "slsqp",
+      "maximum_iterations": 250,
+      "enforce_historical_guards": true
+    }
+  ],
+  "sensitivity": false,
+  "profiles": [],
+  "notes": [
+    "Conditional N15 and fixed 500 angstrom film, archived geometry/source/atoms/ADPs/roughness.",
+    "Initial point is the delivered September11 result; this is a new joint search through the shared optimizer, not the original optimizer trajectory.",
+    "Original final-stage guards with no internal reserve. Earlier mosaic guard repair had a 0.01 reserve; it is not reproduced here.",
+    "Nominal importance proposal; not numerical qualification or a global optimum.",
+    "A corrected-geometry continuation needs separately prepared inputs and a new experiment binding."
+  ],
+  "acquisition_id": "9e006a569af0b5158f4b7716a08e5e392b82feacf65bb4122374a06cac907f7f"
+}

@@ -30,6 +30,7 @@ def native_physics_with(original, plan, overrides):
         "stitch_grid_size",
         "axial_peak_spacing_L",
         "axial_peak_half_width_L",
+        "local_m0_axial_peak_coordinate",
         "source_latent_radius",
         "regular_q_bounds_Ainv",
         "local_m0_q_bounds_Ainv",

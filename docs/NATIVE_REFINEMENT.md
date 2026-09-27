@@ -97,6 +97,40 @@ Original virtual-environment bytes remain archived; recreate environments from
 the restored dependency metadata because launchers contain absolute paths.
 Immutable examples and scientific result artifacts are not rewritten.
 
+## September 11 G/L continuation
+
+`configs/bi2te3_historical_native.json` is the executable conditional recipe for
+that experiment. Run `scripts/refine_native.py --physics PHYSICS.json
+--observations bi2te3_observations.json --plan configs/bi2te3_historical_native.json
+--output EXTERNAL/fit.ra_diag.npz`, then render with `--candidate` until a qualified
+selection exists. The recipe binds both original input hashes, including through
+preparation. A corrected-geometry continuation needs a new, explicit binding.
+
+The five free coordinates are Gaussian sigma, Lorentzian HWHM, mixture probability
+and two termination shares. N=15, total film thickness=500 A, geometry/source,
+atomic sites/ADPs/occupancies and roughness remain fixed. This is a conditional
+mosaic/termination result. It cannot identify general atomic structure or disorder.
+The starting vector is the delivered result. Current SLSQP and exact scale profiling
+are used; this does not reproduce the sequence of historical optimizer iterations.
+Original final-structure guards apply without the earlier mosaic stage's 0.01 reserve.
+The full historical N sweep is not replayed: that sweep changed extra thickness for
+each N to hold total film thickness fixed.
+
+The declared nominal proposal uses 32 conditional source states, p12/g5, cone16,
+axial half-width 1/32 L and the September 9 proposal mosaic. The exported physical
+file's 1/30 L was based on selected N15, whereas the original proposal used N16.
+`film_phase_q_first_source` maps local-m0 proposal centers with the shared phase-Q
+function and first source wavelength. For this zero-bandwidth archive that is the
+first declared Cu line. For a broadened spectrum it is only the first sampled row.
+This alters importance sampling, never the physical density or support. The default
+proposal coordinate remains `external_q`. Neither proposal establishes convergence.
+
+An unfinished fit retains its best feasible evaluated candidate (or best evaluated
+candidate if no feasible point exists), including its convergence and guard status.
+It can be rendered for inspection; numerical selection remains separately gated.
+The baseline diagnostic scale is unconstrained. Compare archive replay at the
+archived fixed scale, rather than mistaking that diagnostic for the accepted scale.
+
 ## Admitted parameters
 
 | Model | Continuous specimen coordinates | With acquisition coordinates |

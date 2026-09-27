@@ -33,6 +33,7 @@ from rasim_next.fitting.native_search import (
     GaussianCalibration,
     conditional_validation,
     fit_native_parameters,
+    native_fit_candidate,
     profile_native_parameter,
     training_observations,
 )
@@ -136,6 +137,19 @@ def main():
     for block in calibration:
         if block.acquisition_id != plan["acquisition_id"]:
             raise ValueError("calibration must explicitly bind this target acquisition")
+    binding = plan.get("experiment_binding")
+    if binding is not None:
+        descriptor = json.loads(args.observations.read_bytes())
+        source_revision = descriptor.get("preparation", {}).get(
+            "source_observation_sha256", observations.input_revision
+        )
+        if binding != {
+            "physics_sha256": original.input_revision,
+            "observation_sha256": source_revision,
+        }:
+            raise ValueError(
+                "plan is bound to a different physical experiment or observation roster"
+            )
     training = plan.get("training_indices")
     validation_masks = {}
     if training is not None:
@@ -786,11 +800,7 @@ def main():
                         runs=[_point_record(p) for p in result.runs],
                     )
                 )
-                chosen = (
-                    result.best_converged
-                    if result.best_converged is not None
-                    else result.best_evaluated
-                )
+                chosen = native_fit_candidate(result)
                 warm_starts = np.vstack([chosen.parameter_values, starts])
                 arrays[f"fit_N{n}_{stage['name']}"] = chosen.prediction_count
                 save()
@@ -801,11 +811,7 @@ def main():
             label = f"fit_N{n}"
             manifest["fitted_numerical_status"][label] = "not_qualified"
             if checks and plan.get("qualify_fitted_candidates", True):
-                point = (
-                    result.best_converged
-                    if result.best_converged is not None
-                    else result.best_evaluated
-                )
+                point = native_fit_candidate(result)
                 center = point.parameter_values
                 directions = (
                     np.asarray(plan["qualification_candidates"])[1:]
@@ -847,7 +853,7 @@ def main():
                 and manifest["discrete_ranking_numerical_status"] != "not_qualified"
                 else "not_qualified"
             )
-        eligible = [(n, r.best_converged) for n, r in fitted if r.best_converged is not None]
+        eligible = [(n, native_fit_candidate(r)) for n, r in fitted]
         if eligible:
             selected_n, selected = min(eligible, key=lambda item: item[1].objective)
             manifest["optimizer_candidate"] = dict(N=selected_n, **_point_record(selected))
@@ -1168,6 +1174,7 @@ def main():
             manifest["numerical_status"] = "not_qualified"
         if (
             selected is not None
+            and selected.optimizer_converged
             and manifest.get("all_choices_resolved", False)
             and manifest["numerical_status"] != "not_qualified"
             and all(p["all_points_resolved"] for p in manifest["profiles"])

@@ -15,6 +15,7 @@ from time import perf_counter
 import numba
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from scipy.optimize import brentq
 from scipy.special import roots_legendre
 from scipy.stats import qmc
 
@@ -37,7 +38,7 @@ from rasim_next.optics.attenuation import (
     uniform_depth_attenuation,
 )
 from rasim_next.optics.refraction import _solve_exit_mode_arrays
-from rasim_next.pipeline._continuous_detector_kernel import local_m0_geometry
+from rasim_next.pipeline._continuous_detector_kernel import local_m0_geometry, local_m0_phase_q_Ainv
 from rasim_next.pipeline.continuous_detector import _incident_phase_shell_offset_Ainv2
 from rasim_next.pipeline.source_spatial import (
     DetectorSpatialKernels,
@@ -1785,6 +1786,7 @@ class FiberIntegrationRule:
     seed: int = 0
     axial_peak_spacing_L: float = 1.0
     axial_peak_half_width_L: float = 0.02
+    local_m0_axial_peak_coordinate: str = "external_q"
     source_latent_radius: float = 8.0
     maximum_backward_probability: float = 1e-12
     batch_size: int = 16384
@@ -1805,6 +1807,8 @@ class FiberIntegrationRule:
     angular_integration: str = "native_panels"
 
     def __post_init__(self) -> None:
+        if self.local_m0_axial_peak_coordinate not in {"external_q", "film_phase_q_first_source"}:
+            raise ValueError("unknown local-m0 axial proposal coordinate")
         if self.angular_integration not in {"native_panels", "nominal"}:
             raise ValueError("angular integration must be native_panels or nominal")
         if self.angular_integration == "nominal" and self.angular_panel_edges_rad is not None:
@@ -2110,7 +2114,31 @@ def iter_conditional_fiber_transfers(
         upper = np.sqrt(max(0.0, q_upper**2 - radius**2))
         spacing = b3 * rule.axial_peak_spacing_L
         centers = np.arange(np.floor(lower / spacing), np.ceil(upper / spacing) + 1) * spacing
-        centers = centers[(centers >= lower) & (centers <= upper)]
+        if local and rule.local_m0_axial_peak_coordinate == "film_phase_q_first_source":
+            # Historical numerical proposal: first source wavelength, unchanged full support.
+            wavelength = states.wavelength_A[0]
+            index = np.flatnonzero(material.wavelength_A == wavelength)
+            if len(index) != 1:
+                raise ValueError("proposal reference wavelength must have unique material optics")
+            k0, refractive_index = 2 * np.pi / wavelength, material.n_complex[index[0]]
+            if upper > 2 * k0:
+                raise ValueError("historical phase-Q proposal exceeds its reference elastic sphere")
+
+            phase_limits = [local_m0_phase_q_Ainv(q, k0, refractive_index) for q in (lower, upper)]
+            targets = centers[(centers >= phase_limits[0]) & (centers <= phase_limits[1])]
+            centers = np.array(
+                [
+                    brentq(
+                        lambda q, target, k0, n: local_m0_phase_q_Ainv(q, k0, n) - target,
+                        lower,
+                        upper,
+                        args=(target, k0, refractive_index),
+                    )
+                    for target in targets
+                ]
+            )
+        else:
+            centers = centers[(centers >= lower) & (centers <= upper)]
         if not len(centers):
             centers = np.array([(lower + upper) / 2])
         group_key = tuple(sorted((r.h, r.k) for r in group))

@@ -623,6 +623,7 @@ class ConditionalStructureDetector:
                     ),
                 ),
                 ("proposal_seed", rule.seed),
+                ("local_m0_axial_peak_coordinate", rule.local_m0_axial_peak_coordinate),
                 ("quadrature_kind", rule.quadrature_kind),
                 ("angular_support", rule.angular_support),
                 ("angular_integration", rule.angular_integration),
@@ -967,24 +968,40 @@ class ConditionalStructureDetector:
         return image
 
     def iter_native_pixel_batches(
-        self, *, row_bounds: tuple[int, int] | None = None, batch_offset: int = 0
+        self,
+        *,
+        row_bounds: tuple[int, int] | None = None,
+        batch_offset: int = 0,
+        bin_size_px: int = 1,
     ):
-        """One whole-panel proposal; checkpoint completed additive native image batches."""
+        """Integrate native rectangles; binning changes cells, never samples an image."""
         rows, columns = self.detector_shape_rc
         if type(batch_offset) is not int or batch_offset < 0:
             raise ValueError("batch_offset must be a nonnegative integer")
         first, stop = (0, rows) if row_bounds is None else row_bounds
         if type(first) is not int or type(stop) is not int or not 0 <= first < stop <= rows:
             raise ValueError("row_bounds must identify ordered native detector rows")
-        shape = stop - first, columns
+        if (
+            type(bin_size_px) is not int
+            or bin_size_px < 1
+            or any(value % bin_size_px for value in (first, stop, columns))
+        ):
+            raise ValueError("bin size must exactly divide detector columns and row bounds")
+        shape = (stop - first) // bin_size_px, columns // bin_size_px
         bounds = np.array([[-0.5, columns - 0.5, -0.5, rows - 0.5]])
         for kernels, mass in self._intensity_batches(bounds, batch_offset=batch_offset):
+            if bin_size_px != 1:
+                kernels = replace(
+                    kernels,
+                    mean_px=(kernels.mean_px + 0.5) / bin_size_px - 0.5,
+                    factor_px=kernels.factor_px / bin_size_px,
+                )
             yield kernels.integrate_native_pixels(
                 shape,
                 integrated_mass=mass,
                 quadrature_order=self.spatial_quadrature_order,
                 gaussian_tail_radius=self.gaussian_tail_radius,
-                row_offset=first,
+                row_offset=first // bin_size_px,
             )
 
     def sample_native_pixel_mass(

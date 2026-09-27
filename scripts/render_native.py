@@ -15,6 +15,7 @@ from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_observations import load_native_fit_observations
 from rasim_next.fitting.native_workflow import make_native_evaluator, native_physics_with
 from rasim_next.io.diagnostics import write_diagnostic
+from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 
 
 def render(
@@ -25,6 +26,8 @@ def render(
     *,
     candidate=False,
     full_image=False,
+    bin_size_px=1,
+    profile_projection_path=None,
     checkpoint_seconds=60,
     resume=False,
 ):
@@ -86,6 +89,28 @@ def render(
             for name in ("numpy", "scipy", "numba", "gemmi", "xraydb")
         },
     )
+    profile_projection = None
+    projection_sha256 = None
+    if profile_projection_path is not None:
+        payload = Path(profile_projection_path).read_bytes()
+        projection_sha256 = hashlib.sha256(payload).hexdigest()
+        with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
+            profile_projection = NativePixelRegionProjection(
+                detector_shape_rc=tuple(int(v) for v in archive["detector_shape_rc"]),
+                observation_count=int(archive["observation_count"]),
+                quadrature_revision=projection_sha256,
+                **{
+                    name: archive[name]
+                    for name in (
+                        "flat_pixel_index",
+                        "observation_row",
+                        "pixel_column_index",
+                        "detector_area_weight_px2",
+                    )
+                },
+            )
+        if profile_projection.detector_shape_rc != detectors[0].detector_shape_rc:
+            raise ValueError("render projection must use the fitted detector-native frame")
     manifest = dict(
         schema="rasim-native-render-v1",
         result_sha256=hashlib.sha256(result_bytes).hexdigest(),
@@ -97,6 +122,8 @@ def render(
         detector_revision=detectors[0].fixed_physics_revision,
         detector_partition_revisions=[d.fixed_physics_revision for d in detectors],
         full_image=full_image,
+        bin_size_px=bin_size_px,
+        profile_projection_sha256=projection_sha256,
         implementation=implementation,
         completed_batches=0,
         partition_completed_batches=[0] * len(detectors),
@@ -118,8 +145,22 @@ def render(
             "current renderer does not reproduce the saved candidate region prediction"
         )
     rows, columns = detectors[0].detector_shape_rc
+    if (
+        type(bin_size_px) is not int
+        or bin_size_px < 1
+        or rows % bin_size_px
+        or columns % bin_size_px
+    ):
+        raise ValueError("bin size must exactly divide the native detector")
+    image_key = (
+        "simulated_detector_native_count" if bin_size_px == 1 else "simulated_detector_cell_count"
+    )
     if full_image:
-        arrays.update(simulated_detector_native_count=np.zeros((rows, columns)))
+        arrays[image_key] = np.zeros((rows // bin_size_px, columns // bin_size_px))
+        arrays["cell_column_center_px"] = (
+            np.arange(columns // bin_size_px) + 0.5
+        ) * bin_size_px - 0.5
+        arrays["cell_row_center_px"] = (np.arange(rows // bin_size_px) + 0.5) * bin_size_px - 0.5
     if resume:
         with np.load(io.BytesIO(output.read_bytes()), allow_pickle=False) as saved:
             old = json.loads(saved["manifest_json"].tobytes())
@@ -135,6 +176,8 @@ def render(
                 "detector_partition_revisions",
                 "status",
                 "full_image",
+                "bin_size_px",
+                "profile_projection_sha256",
                 "implementation",
             ):
                 if old[name] != manifest[name]:
@@ -142,7 +185,7 @@ def render(
                         "render checkpoint belongs to a different result or pixel rule"
                     )
             if full_image:
-                for name in ("simulated_detector_native_count",):
+                for name in (image_key,):
                     if saved[name].shape != arrays[name].shape:
                         raise ValueError("render checkpoint shape mismatch")
                     arrays[name] = saved[name].copy()
@@ -181,15 +224,25 @@ def render(
         write_diagnostic(output, arrays=arrays, manifest=manifest, repository_root=root)
 
     save()
+    if profile_projection is not None:
+        arrays["display_profile_count"] = sum(
+            (
+                scale * detector.compile_native_response(profile_projection).evaluate()
+                for detector in detectors
+            ),
+            np.zeros(profile_projection.observation_count),
+        )
+        save()
     if full_image:
         for part, detector in enumerate(detectors):
             if manifest["partition_finished"][part]:
                 continue
             first = manifest["partition_completed_batches"][part]
             for i, contribution in enumerate(
-                detector.iter_native_pixel_batches(batch_offset=first), start=first
+                detector.iter_native_pixel_batches(batch_offset=first, bin_size_px=bin_size_px),
+                start=first,
             ):
-                arrays["simulated_detector_native_count"] += scale * contribution
+                arrays[image_key] += scale * contribution
                 manifest["completed_batches"] += 1
                 manifest["partition_completed_batches"][part] = i + 1
                 if perf_counter() - last_checkpoint >= checkpoint_seconds:
@@ -214,6 +267,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--candidate", action="store_true")
     parser.add_argument("--full-image", action="store_true")
+    parser.add_argument("--bin-size-px", type=int, default=1)
+    parser.add_argument("--profile-projection", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--checkpoint-seconds", type=float, default=60)
     args = parser.parse_args()
@@ -225,6 +280,8 @@ def main():
             args.output,
             candidate=args.candidate,
             full_image=args.full_image,
+            bin_size_px=args.bin_size_px,
+            profile_projection_path=args.profile_projection,
             checkpoint_seconds=args.checkpoint_seconds,
             resume=args.resume,
         )
