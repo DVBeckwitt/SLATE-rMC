@@ -109,7 +109,7 @@ def score_native_prediction(
     width = upper - lower
     root_count = np.sqrt(int(observations.valid.sum()))
     scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
-    prediction = scale * raw
+    prediction = observations.apply_scale(raw, scale)
     scores = observations.scores(prediction)
     calibration_chi_square = assumption_chi_square = 0.0
     residual_blocks = [residual]
@@ -126,7 +126,9 @@ def score_native_prediction(
         optimization_residual=np.concatenate(residual_blocks) / root_count,
         scale=scale,
         prediction_count=prediction,
-        data_chi_square=float(residual @ residual),
+        data_chi_square=scores["gls_chi_square"],
+        data_objective=float(residual @ residual),
+        objective_kind=observations.objective_kind,
         calibration_chi_square=calibration_chi_square,
         assumption_chi_square=assumption_chi_square,
         objective=float(residual @ residual) + calibration_chi_square + assumption_chi_square,
@@ -595,6 +597,10 @@ def profile_native_parameter(
 
 def training_observations(observations, training_mask):
     """Use only predeclared training rows for GLS; retain old promotion diagnostics."""
+    if observations.objective_kind != "gls":
+        raise ValueError(
+            "training splits require GLS; the historical operator uses the full roster"
+        )
     mask = np.asarray(training_mask)
     if mask.dtype.kind != "b" or mask.shape != observations.valid.shape:
         raise ValueError("training mask must be a boolean vector aligned with observations")

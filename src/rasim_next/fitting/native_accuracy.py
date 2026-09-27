@@ -96,14 +96,14 @@ def compare_native_predictions(
         intervals, constrained, constrained_objective = [], [], []
         for raw in predictions:
             scale, _ = observations.profile_scale(raw)
-            scores.append(observations.scores(scale * raw))
+            scores.append(observations.scores(observations.apply_scale(raw, scale)))
             if guard_diagnostics:
                 intervals.append(observations.guard_scale_interval(raw) is not None)
                 guarded_scale, _ = observations.profile_scale(raw, enforce_guards=True)
-                guarded = observations.scores(guarded_scale * raw)
+                guarded = observations.scores(observations.apply_scale(raw, guarded_scale))
                 constrained.append(guarded["guard_scores"])
-                constrained_objective.append(guarded["gls_chi_square"])
-        objectives.append(np.array([s["gls_chi_square"] for s in scores]))
+                constrained_objective.append(guarded["data_objective"])
+        objectives.append(np.array([s["data_objective"] for s in scores]))
         guards.append(
             np.array([s["guard_scores"] <= observations.guard_limit + 1e-6 for s in scores])
             if guard_diagnostics
@@ -149,13 +149,14 @@ def compare_native_predictions(
         refined_constrained_objective=constrained_objectives[1],
         empirical_agreement=bool(agreement),
         objective_observation_revision=observations.input_revision,
+        objective_kind=observations.objective_kind,
         guard_diagnostics_included=guard_diagnostics,
         error_bound_status="not_certified",
     )
 
 
 def native_sensitivity(predict, observations, parameters, values, *, relative_step=1e-3):
-    """Whitened scale-profiled Jacobian per declared physical sensitivity scale.
+    """Objective-residual scale-profiled Jacobian per physical sensitivity scale.
 
     A local SVD reveals weak combinations. It is neither a nuisance-refitted
     profile nor a confidence interval, and must itself pass numerical comparison.

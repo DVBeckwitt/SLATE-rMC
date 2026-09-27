@@ -52,6 +52,7 @@ def render(
     ):
         raise ValueError("render inputs differ from the fitted experiment")
     plan = result["plan"]
+    observations = replace(observations, objective_kind=plan.get("objective", "gls"))
     if "synthetic" in plan and (
         synthetic_target is None
         or synthetic_target.shape != observations.net_count.shape
@@ -92,6 +93,7 @@ def render(
         observation_input_revision=observations.input_revision,
         status="unqualified_optimizer_candidate" if candidate else "selected_fit",
         candidate=point,
+        objective_kind=observations.objective_kind,
         detector_revision=detectors[0].fixed_physics_revision,
         detector_partition_revisions=[d.fixed_physics_revision for d in detectors],
         full_image=full_image,

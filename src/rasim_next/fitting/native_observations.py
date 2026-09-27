@@ -15,7 +15,7 @@ from rasim_next.measurement.continuous_regions import NativePixelRegionProjectio
 
 @dataclass(frozen=True, slots=True)
 class NativeFitObservations:
-    """Counts and immutable GLS whitening; historical guards remain separate."""
+    """Frozen counts, covariance and an explicitly selected fitting objective."""
 
     projection: NativePixelRegionProjection
     net_count: np.ndarray
@@ -28,10 +28,15 @@ class NativeFitObservations:
     guard_limit: np.ndarray
     input_revision: str
     allow_guard_constraints: bool = True
+    objective_kind: str = "gls"
     _cholesky: np.ndarray = field(init=False, repr=False)
     _whitened_net: np.ndarray = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.objective_kind not in ("gls", "historical"):
+            raise ValueError("objective_kind must be gls or historical")
+        if self.objective_kind == "historical" and not self.allow_guard_constraints:
+            raise ValueError("historical objective requires the complete frozen observation roster")
         n = self.projection.observation_count
         for name in (
             "net_count",
@@ -93,25 +98,33 @@ class NativeFitObservations:
     def profile_scale(
         self, raw_prediction: np.ndarray, *, enforce_guards: bool = False
     ) -> tuple[float, np.ndarray]:
-        """Exact nonnegative GLS scale, including correlated observation errors."""
+        """Exact nonnegative scale for the declared quadratic objective."""
         if enforce_guards and not self.allow_guard_constraints:
             raise ValueError("historical guards may only be diagnostic on a training split")
         shape = self.whiten(raw_prediction)
+        target = self._whitened_net
+        if self.objective_kind == "historical":
+            shape = self.fit_operator @ raw_prediction
+            target = self.fit_target
         denominator = float(shape @ shape)
         if denominator == 0:
             raise ValueError("a zero prediction cannot determine an intensity scale")
-        scale = max(0.0, float(shape @ self._whitened_net) / denominator)
+        scale = max(0.0, float(shape @ target) / denominator)
         if enforce_guards:
             interval = self.guard_scale_interval(raw_prediction)
             if interval is not None:
                 scale = float(np.clip(scale, *interval))
-        return scale, scale * shape - self._whitened_net
+        return scale, scale * shape - target
+
+    def apply_scale(self, raw_prediction, scale):
+        """Apply the single acquisition exposure scale to native counts."""
+        return scale * raw_prediction
 
     def guard_scale_interval(self, raw_prediction: np.ndarray) -> tuple[float, float] | None:
         """Intersect the exact nonnegative scale intervals allowed by every old guard.
 
         None means this shape cannot pass at any scale. A constrained optimizer
-        must then change the shape; the GLS scale is only a search diagnostic.
+        must then change the shape; the unconstrained scale is only a search diagnostic.
         """
         raw_prediction = np.asarray(raw_prediction)
         if (
@@ -145,6 +158,10 @@ class NativeFitObservations:
         guard = self.guard_operator @ (prediction_count - self.net_count)
         rms = np.sqrt(np.add.reduceat(guard * guard, self.guard_pointer[:-1]))
         return dict(
+            objective_kind=self.objective_kind,
+            data_objective=float(old @ old)
+            if self.objective_kind == "historical"
+            else float(residual @ residual),
             gls_chi_square=float(residual @ residual),
             historical_loss=float(old @ old),
             guard_scores=rms,

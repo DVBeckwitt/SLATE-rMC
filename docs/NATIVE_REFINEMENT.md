@@ -153,8 +153,15 @@ parameters across acquisitions.
 
 ## Search, profiles and evidence
 
-`fit_native_parameters` uses full count-plus-background covariance once and
-profiles one nonnegative intensity scale exactly. It accepts multiple starts,
+`fit_native_parameters` profiles one nonnegative intensity scale exactly. Plans
+select `"objective": "gls"` (the unchanged default, using full count-plus-background
+covariance once) or `"objective": "historical"` (the frozen operator and target).
+The historical operator requires the complete original observation roster; training
+splits and synthetic targets are rejected. Both use the same search and optional
+exact guard-feasible scale interval, with no blended loss or duplicated optimizer.
+Results report `data_objective`, `objective_kind` and diagnostic `data_chi_square`
+separately. Plan bytes, including objective selection, bind raw checkpoint reuse.
+Historical loss and guards do not define a noise likelihood or confidence interval. It accepts multiple starts,
 explicitly fixed initialization coordinates and separately declared calibration
 blocks. `refit_native_choices` refits every continuous coordinate for each N or
 other explicit discrete choice. It never rounds a continuous N.

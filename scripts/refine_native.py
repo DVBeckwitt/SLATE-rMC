@@ -54,6 +54,8 @@ def _point_record(point):
         parameters=point.parameter_values.tolist(),
         scale=point.scale,
         data_chi_square=point.data_chi_square,
+        data_objective=point.data_objective,
+        objective_kind=point.objective_kind,
         calibration_chi_square=point.calibration_chi_square,
         assumption_chi_square=point.assumption_chi_square,
         objective=point.objective,
@@ -117,7 +119,12 @@ def main():
     if type(require_qualification) is not bool:
         raise ValueError("require_initial_qualification must be boolean")
     original = load_native_fit_physics(args.physics)
-    observations = load_native_fit_observations(args.observations)
+    observations = replace(
+        load_native_fit_observations(args.observations),
+        objective_kind=plan.get("objective", "gls"),
+    )
+    if observations.objective_kind == "historical" and "synthetic" in plan:
+        raise ValueError("historical objective requires original frozen observations")
     observation_record = json.loads(args.observations.read_bytes())
     if observation_record["physical_input"]["sha256"] != original.input_revision:
         raise ValueError("observations and physical input are not bound together")
