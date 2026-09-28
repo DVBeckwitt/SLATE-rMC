@@ -33,10 +33,13 @@ plan["notes"] = ["New coupled search; archived geometry remains fixed.",
     "N15 is conditional. Film thickness is N*c + extra and now changes.",
     "All21 admitted coordinates released finally; weak directions are reported.",
     "No native Bi stacking-disorder coordinates are available."]
-Path("bi2te3_joint_plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+output_path = Path(r"C:\external\bi2te3_joint_plan.json")
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text(json.dumps(plan, indent=2) + "\n")
 ```
 
-Write generated plans and results outside the repository. Bounds are declarations,
+Replace the `C:\external` placeholder with a writable directory outside the repository.
+Write generated plans and results there. Bounds are declarations,
 not uncertainty intervals. Do not freeze a weak occupancy or ADP to manufacture
 identification. N, geometry and source remain explicitly conditional here.
 
@@ -70,7 +73,9 @@ plan["sensitivity"], plan["profiles"] = False, []
 plan["notes"] = ["Conditional pure2H nested control; initial orientation remains free.",
     "Final joint stage releases the same nonstacking coordinates as the full model.",
     "Inactive phase1 parent shares are explicit. Identification belongs to the released model."]
-Path("gd1_ordered_control.json").write_text(json.dumps(plan, indent=2) + "\n")
+output_path = Path(r"C:\external\gd1_ordered_control.json")
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text(json.dumps(plan, indent=2) + "\n")
 ```
 
 Zero epsilon in an average of different transition laws need not be ordered.
