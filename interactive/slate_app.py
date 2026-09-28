@@ -195,7 +195,8 @@ class ShellWindow(QMainWindow):
         self.project_tree.blockSignals(False)
 
     def _selection_changed(self) -> None:
-        item = self.project_tree.currentItem()
+        selected = self.project_tree.selectedItems()
+        item = selected[0] if selected else None
         value = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
         self.selected_acquisition_id = UUID(value) if value else None
         self.selection_label.setText(

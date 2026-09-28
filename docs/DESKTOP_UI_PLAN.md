@@ -1092,6 +1092,10 @@ recovery remain U01b.
 A temporary external PySide6 check launched and closed the real window, switched both workspaces,
 rendered empty/loading/error states and verified two independent IDs for identical path/hash,
 rename/reorder and selection retention. The actual styled 1280x800 shell was visually inspected.
+An identity follow-up corrected the selection handler to read selected rows: Qt can retain a
+current item after `clearSelection()`. A focused real-Qt check selected an acquisition, cleared
+selection, selected the project root, then renamed/reordered and restored an acquisition by UUID;
+the ID and inspector matched the selected row at every step.
 An entry-point check executed `interactive/slate_app.py` via `runpy` and closed the window normally.
 The documented `uv run` form requires the preceding dependency sync; a `--no-sync` attempt in this
 checkout found no prepared environment and was not used as launch evidence. Normal numerical imports
