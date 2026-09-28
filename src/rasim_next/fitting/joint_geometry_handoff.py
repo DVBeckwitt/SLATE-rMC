@@ -24,6 +24,7 @@ from rasim_next.fitting.joint_geometry import (
     joint_beam_origin_lab_m,
     specimen_local_geometry,
 )
+from rasim_next.io.json_publication import publish_json_document
 from rasim_next.pipeline.configured_simulation import (
     SimulationConfiguration,
     load_simulation_config,
@@ -447,15 +448,7 @@ def save_joint_geometry_handoff(
         "fixed_position": handoff.position.to_record(),
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+    return publish_json_document(destination, document)
 
 
 def load_joint_geometry_handoff(path: Path) -> JointGeometryFixedExperimentHandoff:

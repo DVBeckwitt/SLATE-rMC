@@ -13,6 +13,21 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 
+def validate_diagnostic_destination(
+    destination: str | Path, *, repository_root: str | Path
+) -> Path:
+    """Check the external retained-diagnostic path before expensive evaluation."""
+    path = Path(destination).resolve()
+    root = Path(repository_root).resolve()
+    if path == root or path.is_relative_to(root):
+        raise ValueError("diagnostic destination must be outside the repository")
+    if not path.name.endswith(".ra_diag.npz"):
+        raise ValueError("diagnostic destination must end with .ra_diag.npz")
+    if not path.parent.is_dir():
+        raise ValueError("diagnostic destination parent must already exist")
+    return path
+
+
 def write_diagnostic(
     destination: str | Path,
     *,
@@ -22,14 +37,7 @@ def write_diagnostic(
 ) -> Path:
     """Atomically write one external NPZ with one embedded JSON manifest."""
 
-    path = Path(destination).resolve()
-    root = Path(repository_root).resolve()
-    if path == root or path.is_relative_to(root):
-        raise ValueError("diagnostic destination must be outside the repository")
-    if not path.name.endswith(".ra_diag.npz"):
-        raise ValueError("diagnostic destination must end with .ra_diag.npz")
-    if not path.parent.is_dir():
-        raise ValueError("diagnostic destination parent must already exist")
+    path = validate_diagnostic_destination(destination, repository_root=repository_root)
     if "manifest_json" in arrays:
         raise ValueError("manifest_json is reserved for the embedded manifest")
 

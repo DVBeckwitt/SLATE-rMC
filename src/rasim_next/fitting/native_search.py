@@ -169,47 +169,29 @@ def score_native_prediction(
     return point
 
 
-def fit_native_parameters(
-    predict: Callable[[np.ndarray], np.ndarray],
+def validate_native_search_request(
     observations: NativeFitObservations,
     parameters: tuple[FitParameter, ...],
     starts,
     *,
-    predict_many: Callable[[np.ndarray], np.ndarray] | None = None,
     fixed_values: dict[str, float] | None = None,
     calibration: tuple[GaussianCalibration, ...] = (),
     method: str = "slsqp",
-    previous_predictions: tuple[np.ndarray, np.ndarray] | None = None,
     maximum_iterations: int = 50,
     maximum_function_evaluations: int = 80,
     finite_difference_step: float = 1e-4,
     enforce_historical_guards: bool = False,
-    callback=None,
-):
-    """Refit every unfixed coordinate and scale from each supplied start.
-
-    Best evaluated, feasible and converged points remain separate. Optimization
-    success cannot qualify quadrature, establish identification or promote a fit.
-    Data-derived historical guards are optional promotion constraints, not priors.
-    Optional predict_many receives (candidate, parameter) physical coordinates and
-    returns (candidate, observation) raw predictions in the same order. Only these
-    predictions may run concurrently; objective history and callbacks remain serial.
-    The caller owns worker isolation. Batched SLSQP requires SciPy >= 1.16.
-    TRF uses the public least-squares API and a shared bounded difference batch.
-    Its function budget excludes derivative probes, which evaluation_count includes.
-    Callbacks must not change the predictor state within a precomputed batch.
-    """
+    batched: bool = False,
+) -> None:
+    """Validate a complete search request without calling a predictor."""
     if method not in ("slsqp", "trf"):
         raise ValueError("method must be slsqp or trf")
     if type(maximum_function_evaluations) is not int or maximum_function_evaluations < 1:
         raise ValueError("maximum_function_evaluations must be a positive integer")
     if method == "trf" and enforce_historical_guards:
         raise ValueError("TRF cannot enforce historical inequalities; use SLSQP")
-    if predict_many is not None:
-        if not callable(predict_many):
-            raise TypeError("predict_many must be callable")
-        if method == "slsqp" and Version(scipy_version) < Version("1.16"):
-            raise RuntimeError("predict_many requires SciPy >= 1.16")
+    if batched and method == "slsqp" and Version(scipy_version) < Version("1.16"):
+        raise RuntimeError("predict_many requires SciPy >= 1.16")
     names = tuple(p.name for p in parameters)
     if not names:
         raise ValueError("at least one declared parameter is required")
@@ -219,8 +201,7 @@ def fit_native_parameters(
     starts = np.asarray(starts)
     fixed_values = {} if fixed_values is None else dict(fixed_values)
     if (
-        not names
-        or len(set(names)) != len(names)
+        len(set(names)) != len(names)
         or set(fixed_values) - set(names)
         or starts.ndim != 2
         or starts.shape[1] != len(names)
@@ -255,6 +236,57 @@ def fit_native_parameters(
     identifiers = [(b.artifact_sha256, b.acquisition_id) for b in calibration]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("the same calibration block must not be counted twice")
+
+
+def fit_native_parameters(
+    predict: Callable[[np.ndarray], np.ndarray],
+    observations: NativeFitObservations,
+    parameters: tuple[FitParameter, ...],
+    starts,
+    *,
+    predict_many: Callable[[np.ndarray], np.ndarray] | None = None,
+    fixed_values: dict[str, float] | None = None,
+    calibration: tuple[GaussianCalibration, ...] = (),
+    method: str = "slsqp",
+    previous_predictions: tuple[np.ndarray, np.ndarray] | None = None,
+    maximum_iterations: int = 50,
+    maximum_function_evaluations: int = 80,
+    finite_difference_step: float = 1e-4,
+    enforce_historical_guards: bool = False,
+    callback=None,
+):
+    """Refit every unfixed coordinate and scale from each supplied start.
+
+    Best evaluated, feasible and converged points remain separate. Optimization
+    success cannot qualify quadrature, establish identification or promote a fit.
+    Data-derived historical guards are optional promotion constraints, not priors.
+    Optional predict_many receives (candidate, parameter) physical coordinates and
+    returns (candidate, observation) raw predictions in the same order. Only these
+    predictions may run concurrently; objective history and callbacks remain serial.
+    The caller owns worker isolation. Batched SLSQP requires SciPy >= 1.16.
+    TRF uses the public least-squares API and a shared bounded difference batch.
+    Its function budget excludes derivative probes, which evaluation_count includes.
+    Callbacks must not change the predictor state within a precomputed batch.
+    """
+    if predict_many is not None and not callable(predict_many):
+        raise TypeError("predict_many must be callable")
+    validate_native_search_request(
+        observations,
+        parameters,
+        starts,
+        fixed_values=fixed_values,
+        calibration=calibration,
+        method=method,
+        maximum_iterations=maximum_iterations,
+        maximum_function_evaluations=maximum_function_evaluations,
+        finite_difference_step=finite_difference_step,
+        enforce_historical_guards=enforce_historical_guards,
+        batched=predict_many is not None,
+    )
+    names = tuple(p.name for p in parameters)
+    lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
+    starts = np.asarray(starts)
+    fixed_values = {} if fixed_values is None else dict(fixed_values)
     active = np.array([i for i, name in enumerate(names) if name not in fixed_values], dtype=int)
     width = upper - lower
     best, feasible, converged = None, None, None

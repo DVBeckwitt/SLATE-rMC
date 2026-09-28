@@ -30,6 +30,7 @@ from rasim_next.fitting.indexed_series import (
     evaluate_indexed_geometry_series_residual,
     fit_indexed_geometry_series,
 )
+from rasim_next.io.json_publication import publish_json_document
 from rasim_next.selection import (
     MeasuredIndexingResult,
     audit_frozen_marker_visibility,
@@ -63,19 +64,7 @@ def _write_external_json(destination: Path, payload: dict[str, object]) -> Path:
     if path.exists():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    if temporary.exists():
-        raise FileExistsError(temporary)
-    try:
-        temporary.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    return path
+    return publish_json_document(path, payload)
 
 
 def _subset_images(
@@ -797,13 +786,10 @@ def fit_osc_geometry_series(
             heldout_metrics_pass,
         )
     )
-    parameter_precision_qualified = coordinate_prediction_accepted and no_active_bounds
+    # Predictive agreement, full rank and interior bounds do not estimate absolute precision.
+    parameter_precision_qualified = False
     position_classification = (
-        "POSITION_FIT"
-        if parameter_precision_qualified
-        else "POSITION_MODEL_LIMITED"
-        if coordinate_prediction_accepted
-        else "POSITION_UNQUALIFIED"
+        "POSITION_MODEL_LIMITED" if coordinate_prediction_accepted else "POSITION_UNQUALIFIED"
     )
     position_revision_payload = {
         "indexed_manifest_hash": indexing.selection.manifest_hash,
@@ -935,6 +921,7 @@ def fit_osc_geometry_series(
             "coordinate_prediction_accepted": coordinate_prediction_accepted,
             "dataset_qualified": accepted,
             "parameter_precision_qualified": parameter_precision_qualified,
+            "parameter_precision_status": "not_assessed_no_parameter_covariance",
             "heldout_validation_performed": cross_validation is not None,
         },
         "qualification": {

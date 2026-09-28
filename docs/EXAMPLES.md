@@ -632,7 +632,11 @@ gauge representation of the two fitted ratios.
 
 ## Jointly fit and recreate a layered-quintuple Figure 7 view
 
-For repeatable geometry -> mosaic -> structure-factor execution, use one tracked workflow case:
+Historical workflow only: `scripts/run_layered_fit.py` has retired, so the following commands
+are preserved as provenance and cannot be run on current main. Use the supported
+[staged fitting guide](STAGED_FITTING.md) for current execution.
+
+The former geometry -> mosaic -> structure-factor workflow used these tracked cases:
 
 ```powershell
 uv run --frozen python scripts/run_layered_fit.py configs/fit_workflows/bi2se3.toml `

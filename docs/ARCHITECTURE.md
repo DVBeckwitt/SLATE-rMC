@@ -290,7 +290,8 @@ See [STAGED_FITTING.md](STAGED_FITTING.md) and [CONTRACTS.md](CONTRACTS.md).
 ## Native Bi fitting extension
 
 Contract v15 adds `fitting.bi_native` for symmetry-preserving 13-coordinate candidate construction
-and `fitting.bi_joint` for explicitly bounded optimization. `fitting.native_input` reads typed
+and `fitting.bi_joint` for physical candidate binding. `fitting.native_search` owns bounded
+optimization. `fitting.native_input` reads typed
 numerical experiment inputs; `fitting.native_observations` owns frozen native support, full GLS
 covariance and historical guards. Their prediction path is `pipeline.conditional_detector`
 through `fiber_detector` and `source_spatial`: conditional position is integrated over native

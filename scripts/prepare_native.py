@@ -35,6 +35,15 @@ def prepare(
         raise ValueError(
             "prepare archived baselines from their catalog source, not a prepared copy"
         )
+    original_source_sha256 = record.get("preparation", {}).get(
+        "source_observation_sha256", hashlib.sha256(source_bytes).hexdigest()
+    )
+    if (
+        not isinstance(original_source_sha256, str)
+        or len(original_source_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in original_source_sha256)
+    ):
+        raise ValueError("prepared source observation SHA256 must be a lowercase digest")
     observations = load_native_fit_observations(source)
     controls = load_native_background_controls(source)
     payloads = []
@@ -133,7 +142,7 @@ def prepare(
         record["archived_baseline"] = baseline
     record["preparation"] = dict(
         kind="verified_frozen_calibration_adoption",
-        source_observation_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        source_observation_sha256=original_source_sha256,
         measured_convention="raw counts; selected subtraction is carried by background",
     )
     for path, digest in snapshots:

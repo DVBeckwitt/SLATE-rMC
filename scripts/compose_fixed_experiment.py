@@ -13,7 +13,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 
@@ -29,6 +28,7 @@ from rasim_next.fitting.fixed_experiment import (
     fixed_position_from_fit_record,
 )
 from rasim_next.fitting.fixed_lattice import FixedLatticeState, fixed_lattice_from_fit_record
+from rasim_next.io.json_publication import publish_json_document
 from rasim_next.io.osc import read_osc
 from rasim_next.materials import read_crystal
 from rasim_next.pipeline.configured_simulation import (
@@ -280,15 +280,7 @@ def compose_fixed_experiment(
             "adapter": _identity(Path(__file__)),
         },
     }
-    temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    publish_json_document(destination, document, allow_nan=False)
     return destination
 
 

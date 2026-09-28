@@ -38,6 +38,7 @@ from rasim_next.fitting.indexed_series import (
     evaluate_indexed_geometry_series_metrics,
     evaluate_indexed_geometry_series_residual,
 )
+from rasim_next.io.json_publication import publish_json_document
 from rasim_next.pipeline.configured_simulation import (
     rebind_configured_geometry_direct_basis,
     rebind_configured_geometry_instrument,
@@ -355,12 +356,7 @@ def fit_lattice_sensitivity(
             "adapter_sha256": _sha256(Path(__file__)),
         },
     }
-    temporary = destination.with_name(f"{destination.name}.tmp")
-    temporary.write_text(
-        json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(destination)
+    publish_json_document(destination, document, allow_nan=False)
     return document
 
 

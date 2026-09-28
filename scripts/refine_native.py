@@ -36,6 +36,7 @@ from rasim_next.fitting.native_search import (
     native_fit_candidate,
     profile_native_parameter,
     training_observations,
+    validate_native_search_request,
 )
 from rasim_next.fitting.native_structure import validate_native_rod_coverage
 from rasim_next.fitting.native_workflow import (
@@ -44,7 +45,7 @@ from rasim_next.fitting.native_workflow import (
     native_prediction_group,
     prepare_native_axial_meshes,
 )
-from rasim_next.io.diagnostics import write_diagnostic
+from rasim_next.io.diagnostics import validate_diagnostic_destination, write_diagnostic
 from rasim_next.pipeline.detector_revisions import _instrument_revision
 
 
@@ -200,8 +201,16 @@ def main():
     ):
         raise ValueError("repeat choices must be distinct positive integers")
 
-    physics = native_physics_with(original, plan, {})
-    evaluator = make_native_evaluator(physics, observations, plan)
+    validate_native_search_request(
+        observations,
+        parameters,
+        starts,
+        calibration=calibration,
+        method="trf",
+        maximum_iterations=1,
+        maximum_function_evaluations=1,
+        finite_difference_step=plan["finite_difference_step"],
+    )
     stages = plan.get("stages", [])
     fixed_parameters = plan.get("fixed_parameters", {})
     if not isinstance(fixed_parameters, dict) or set(fixed_parameters) - set(names):
@@ -225,13 +234,114 @@ def main():
     free_names = tuple(name for name in names if name not in fixed_parameters)
     if stages and (not free_names or tuple(stages[-1]["active_parameters"]) != free_names):
         raise ValueError("the final fit stage must release every admitted continuous coordinate")
+    stage_names = [stage["name"] for stage in stages]
+    if any(not isinstance(name, str) or not name for name in stage_names) or len(
+        set(stage_names)
+    ) != len(stage_names):
+        raise ValueError("fit stages require distinct nonempty names")
+    search_observations = (
+        training_observations(observations, mask) if training is not None else observations
+    )
     for stage in stages:
+        if type(stage["enforce_historical_guards"]) is not bool:
+            raise ValueError("stage historical guard policy must be boolean")
+        active = tuple(stage["active_parameters"])
+        if not active or len(set(active)) != len(active) or set(active) - set(names):
+            raise ValueError("fit stages require distinct declared active parameters")
         if set(stage["active_parameters"]) & set(fixed_parameters):
             raise ValueError("a fit stage cannot release a declared fixed control parameter")
         if (training is not None or "synthetic" in plan) and stage["enforce_historical_guards"]:
             raise ValueError(
                 "historical guards cannot constrain synthetic or prospective training fits"
             )
+        fixed = {name: float(starts[0, i]) for i, name in enumerate(names) if name not in active}
+        method = stage.get(
+            "method", plan.get("method", "slsqp" if stage["enforce_historical_guards"] else "trf")
+        )
+        budget = stage.get(
+            "maximum_function_evaluations", plan.get("maximum_function_evaluations", 80)
+        )
+        validate_native_search_request(
+            search_observations,
+            parameters,
+            starts,
+            fixed_values=fixed,
+            calibration=calibration,
+            method=method,
+            maximum_iterations=stage["maximum_iterations"],
+            maximum_function_evaluations=budget,
+            finite_difference_step=plan["finite_difference_step"],
+            enforce_historical_guards=stage["enforce_historical_guards"],
+            batched=True,
+        )
+        correction = stage.get("reference_correction")
+        if correction is not None:
+            native_physics_with(original, plan, correction["numerical_override"])
+            radius = np.asarray(correction["trust_radii"])
+            if (
+                radius.shape != (len(parameters),)
+                or np.iscomplexobj(radius)
+                or np.any(~np.isfinite(radius))
+                or np.any(radius <= 0)
+                or type(correction.get("maximum_updates", 2)) is not int
+                or correction.get("maximum_updates", 2) < 1
+            ):
+                raise ValueError(
+                    "reference correction requires positive finite trust radii and updates"
+                )
+            validate_native_search_request(
+                search_observations,
+                parameters,
+                starts,
+                fixed_values=fixed,
+                calibration=calibration,
+                method=method,
+                maximum_iterations=stage["maximum_iterations"],
+                maximum_function_evaluations=correction.get("maximum_function_evaluations", 30),
+                finite_difference_step=plan["finite_difference_step"],
+                enforce_historical_guards=stage["enforce_historical_guards"],
+            )
+    for profile in plan.get("profiles", ()):
+        if profile["name"] not in names:
+            raise ValueError("profile names an undeclared parameter")
+        grid = np.asarray(profile["grid"])
+        profiled_parameter = parameters[names.index(profile["name"])]
+        if (
+            grid.ndim != 1
+            or not len(grid)
+            or np.iscomplexobj(grid)
+            or np.any(~np.isfinite(grid))
+            or len(np.unique(grid)) != len(grid)
+            or np.any(grid < profiled_parameter.lower)
+            or np.any(grid > profiled_parameter.upper)
+        ):
+            raise ValueError("profile grid must contain distinct finite in-range values")
+        validate_native_search_request(
+            search_observations,
+            parameters,
+            starts,
+            calibration=calibration,
+            method=profile.get("method", plan.get("method", "trf")),
+            maximum_iterations=profile["maximum_iterations"],
+            maximum_function_evaluations=profile.get(
+                "maximum_function_evaluations", plan.get("maximum_function_evaluations", 80)
+            ),
+            finite_difference_step=plan["finite_difference_step"],
+            batched=True,
+        )
+    validate_diagnostic_destination(
+        args.output, repository_root=Path(__file__).resolve().parents[1]
+    )
+    if args.resume and not args.output.is_file():
+        raise FileNotFoundError(args.output)
+    if not args.resume and args.output.exists():
+        raise ValueError("output already exists; use --resume or a new output path")
+    prediction_workers = plan.get("prediction_workers", 1)
+    group_size = plan.get("prediction_group_size", 16)
+    if any(type(n) is not int or n < 1 for n in (prediction_workers, group_size)):
+        raise ValueError("prediction worker and group counts must be positive integers")
+    physics = native_physics_with(original, plan, {})
+    evaluator = make_native_evaluator(physics, observations, plan)
     # Validate every supplied start and the complete physical candidate roster.
     for start in starts:
         for n in repeats:
@@ -360,10 +470,6 @@ def main():
         manifest["resumed_from_completed_predictions"] = len(predictions.raw)
     elif args.output.exists():
         raise ValueError("output already exists; use --resume or a new output path")
-    prediction_workers = plan.get("prediction_workers", 1)
-    group_size = plan.get("prediction_group_size", 16)
-    if any(type(n) is not int or n < 1 for n in (prediction_workers, group_size)):
-        raise ValueError("prediction worker and group counts must be positive integers")
 
     def save():
         manifest.update(
@@ -710,8 +816,6 @@ def main():
             warm_starts = starts
             for stage in stages:
                 active = tuple(stage["active_parameters"])
-                if set(active) - set(names):
-                    raise ValueError("stage names an undeclared parameter")
                 fixed = {
                     name: float(warm_starts[0, i])
                     for i, name in enumerate(names)

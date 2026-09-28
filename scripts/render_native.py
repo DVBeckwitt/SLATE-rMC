@@ -14,7 +14,7 @@ import numpy as np
 from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_observations import load_native_fit_observations
 from rasim_next.fitting.native_workflow import make_native_evaluator, native_physics_with
-from rasim_next.io.diagnostics import write_diagnostic
+from rasim_next.io.diagnostics import validate_diagnostic_destination, write_diagnostic
 from rasim_next.measurement.continuous_regions import NativePixelRegionProjection
 
 
@@ -35,6 +35,13 @@ def render(
     physics_path, observation_path, result_path, output = map(
         Path, (physics_path, observation_path, result_path, output)
     )
+    validate_diagnostic_destination(output, repository_root=Path(__file__).resolve().parents[1])
+    if not np.isfinite(checkpoint_seconds) or checkpoint_seconds <= 0:
+        raise ValueError("render checkpoint interval must be positive")
+    if resume and not output.is_file():
+        raise FileNotFoundError(output)
+    if not resume and output.exists():
+        raise ValueError("render output exists; use resume or another path")
     result_bytes = result_path.read_bytes()
     with np.load(io.BytesIO(result_bytes), allow_pickle=False) as saved:
         result = json.loads(saved["manifest_json"].tobytes())
@@ -76,8 +83,14 @@ def render(
         )
         for part in bound.integration_parts()
     )
-    if not np.isfinite(checkpoint_seconds) or checkpoint_seconds <= 0:
-        raise ValueError("render checkpoint interval must be positive")
+    rows, columns = detectors[0].detector_shape_rc
+    if (
+        type(bin_size_px) is not int
+        or bin_size_px < 1
+        or rows % bin_size_px
+        or columns % bin_size_px
+    ):
+        raise ValueError("bin size must exactly divide the native detector")
     root = Path(__file__).resolve().parents[1]
     implementation = dict(
         source_sha256={
@@ -146,22 +159,7 @@ def render(
     arrays = dict(
         measured_region_count=synthetic_target if "synthetic" in plan else observations.net_count,
         valid=observations.valid,
-        prediction_region_count=scale * evaluator.predict(values, n),
     )
-    if expected_prediction is None or not np.allclose(
-        arrays["prediction_region_count"], expected_prediction, rtol=5e-12, atol=1e-10
-    ):
-        raise ValueError(
-            "current renderer does not reproduce the saved candidate region prediction"
-        )
-    rows, columns = detectors[0].detector_shape_rc
-    if (
-        type(bin_size_px) is not int
-        or bin_size_px < 1
-        or rows % bin_size_px
-        or columns % bin_size_px
-    ):
-        raise ValueError("bin size must exactly divide the native detector")
     image_key = (
         "simulated_detector_native_count" if bin_size_px == 1 else "simulated_detector_cell_count"
     )
@@ -236,8 +234,13 @@ def render(
                     raise ValueError("invalid native render partition checkpoint")
                 manifest["partition_completed_batches"] = counts
                 manifest["partition_finished"] = finished
-    elif output.exists():
-        raise ValueError("render output exists; use resume or another path")
+    arrays["prediction_region_count"] = scale * evaluator.predict(values, n)
+    if expected_prediction is None or not np.allclose(
+        arrays["prediction_region_count"], expected_prediction, rtol=5e-12, atol=1e-10
+    ):
+        raise ValueError(
+            "current renderer does not reproduce the saved candidate region prediction"
+        )
     root = Path(__file__).resolve().parents[1]
     last_checkpoint = perf_counter()
 

@@ -33,6 +33,7 @@ from rasim_next.fitting.joint_geometry import (  # noqa: E402
     NUISANCE_PARAMETER_NAMES,
     fit_joint_geometry,
 )
+from rasim_next.io.json_publication import publish_json_document  # noqa: E402
 from rasim_next.io.osc import read_osc  # noqa: E402
 from rasim_next.pipeline.configured_simulation import (  # noqa: E402
     build_configured_geometry_inputs,
@@ -68,14 +69,7 @@ def _write_external_json(destination: Path, payload: dict[str, object]) -> Path:
     if path.exists():
         raise FileExistsError(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    try:
-        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    return path
+    return publish_json_document(path, payload)
 
 
 def _parameter_payload(result: object, names: tuple[str, ...]) -> dict[str, object]:

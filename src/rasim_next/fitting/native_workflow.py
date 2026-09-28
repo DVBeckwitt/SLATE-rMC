@@ -74,10 +74,18 @@ def native_physics_with(original, plan, overrides):
                 "local_m0_q_bounds_Ainv",
             }
         )
-    if result.specular_stitch_stack is None or not any(
+    local_m0_active = result.specular_stitch_stack is not None and any(
         rod.h == rod.k == 0 and rod.population > 0 for rod in result.rods
-    ):
-        ignored.add("local_m0_axial_peak_coordinate")
+    )
+    if not local_m0_active:
+        ignored.update(
+            {
+                "local_m0_axial_peak_coordinate",
+                "local_m0_angular_power",
+                "local_m0_q_bounds_Ainv",
+                "local_m0_maximum_axial_panel_width_Ainv",
+            }
+        )
     if result.integration_rule.frozen_ewald_bounds_Ainv_rad is not None:
         ignored.add("angular_support")
     if (
@@ -97,9 +105,32 @@ def native_physics_with(original, plan, overrides):
                 after = result.integration_rule.angular_power if after is None else after
                 if before != after and max(3, before) == max(3, after):
                     ignored.add(name)
+    if local_m0_active:
+        base_rule = replace(original.integration_rule, **plan.get("integration_override", {}))
+        for name, inherited in (
+            ("local_m0_angular_power", "angular_power"),
+            ("local_m0_maximum_axial_panel_width_Ainv", "maximum_axial_panel_width_Ainv"),
+        ):
+            before = getattr(base_rule, name)
+            after = getattr(result.integration_rule, name)
+            before = getattr(base_rule, inherited) if before is None else before
+            after = getattr(result.integration_rule, inherited) if after is None else after
+            if before == after and getattr(base_rule, inherited) == getattr(
+                result.integration_rule, inherited
+            ):
+                ignored.add(name)
     if ignored & set(overrides.get("integration", {})):
         raise ValueError("numerical overrides cannot refine controls ignored by the effective mesh")
     source_override = {**plan.get("source_override", {}), **overrides.get("source", {})}
+    if "local_m0_divergence_order" in overrides.get("source", {}):
+        if not local_m0_active:
+            raise ValueError("numerical overrides cannot refine an inactive local m0 source")
+        base_source = replace(original.source_definition, **plan.get("source_override", {}))
+        refined_source = replace(base_source, **overrides["source"])
+        before = base_source.local_m0_divergence_order or base_source.divergence_order
+        after = refined_source.local_m0_divergence_order or refined_source.divergence_order
+        if before == after and base_source.divergence_order == refined_source.divergence_order:
+            raise ValueError("numerical overrides cannot refine an unchanged local m0 source")
     if "stitch_overlap_measure" in plan:
         if result.specular_stitch_stack is None:
             raise ValueError("a stitch overlap measure requires the declared Bi composite")
