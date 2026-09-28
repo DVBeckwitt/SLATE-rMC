@@ -1,7 +1,7 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; planned implementation, not delivered functionality.
-Updated: 2026-09-28. Implementation-readiness audit baseline: `caaf9e6`.
+Updated: 2026-09-28. Independent objective and simplicity audit baseline: `bc47d7b`.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -425,6 +425,14 @@ Deliver configuration-load/run/save first, using an independent draft and the sh
 complete the supported parameter forms next. Neither needs fitted observations or the full 3D
 editor. Later, connect scene handles and experiment-copy actions to the same parameter owner.
 
+Cover the configured Monte Carlo and native physical-input routes explicitly. The native render
+CLI requires observations and a saved fit, so it is not the entry point for an independent native
+simulation. Bind an independent native draft through the existing physical model, detector and
+integration owners; extract only fit-independent parameter binding where needed. Support admitted
+surface/phase fractions, coherent repeats, thickness, fault and other model parameters without
+manufacturing observations or a fit result. Preserve each route's input contract, output measure
+and numerical status; simulation mass is not measured counts without an explicit calibration.
+
 Later fitting stages have a separate preparation boundary. `scripts/prepare_native.py` currently
 relocates and verifies existing frozen observation/background arrays and their provenance; it is
 not a raw-image-to-native-observations builder. First expose supported prepared recipes. Preparing
@@ -504,6 +512,13 @@ rotation. Provide signed/linear and positive-log modes with explicit invalid/non
 Use ordered layers within a compatible compositor, not Matplotlib markers hidden behind an opaque
 GL child. Verify non-square corner/interior fiducials through pan, zoom, resize and DPI changes.
 
+Use ordinary Qt widgets, direct signals, small typed snapshots and the existing I/O functions.
+Introduce shared presentation helpers only for real consumers, and keep new numerical code limited
+to the explicitly missing input/selection boundaries. A task ID is not a module or class. Prefer
+the existing atomic JSON publisher for compatible project documents; no application database,
+generic serializer, job service or parameter registry is needed. Judge dependencies by the code
+and maintenance they remove as well as runtime and installation cost.
+
 Define a documented repository launch command in the first shell slice. The current wheel does
 not include `interactive/`; creating a script there is not an installed application entry point.
 Assign project schema/version ownership to one small I/O helper from U01. Basic save/reopen and
@@ -558,11 +573,11 @@ events, measure input-to-present latency. Stop repainting when idle; do not main
   handles, crosshair and the two profile value buffers. Do not clear/rebuild figures, legends,
   colorbars or tick layouts for each event. Intensity autoscale is explicit and rate-limited;
   offer pinned limits. Basic plots use thin opaque lines without per-sample markers.
-- Batch peak markers and ring polylines; keep label count bounded by visibility/selection. Use a
-  native-coordinate spatial index for pointer picking rather than scanning every feature each
-  mouse event. Rebuild that index on geometry changes, not camera movement. Drawing culls never
-  alter fit membership. Screen-pixel min/max envelopes may reduce dense 1D drawing while preserving
-  extrema, missing-data gaps and exact underlying values/exports.
+- Batch peak markers and ring polylines; keep label count bounded by visibility/selection. Start
+  picking with straightforward vectorized distances over the visible feature set. Add a native-
+  coordinate spatial index only if picking misses the declared workload's latency budget; rebuild
+  it on geometry changes, not camera movement. Drawing culls never alter fit membership. Optional
+  screen-pixel min/max envelopes preserve extrema, missing-data gaps and exact underlying values.
 - Keep scene meshes, detector texture, overlay buffers and picking geometry alive. Camera motion
   changes view matrices; physical edits change only the affected transforms/geometry buffers.
   Use a schematic low-complexity goniometer, not unnecessary hardware mesh detail. Decorative
@@ -700,8 +715,9 @@ checks only its new risk against this contract; U15 integrates the results, not 
 
 This is the implementation plan and sole task checklist. All tasks remain unimplemented. Existing
 U identifiers are retained, with smaller lettered slices where the previous task was too broad.
-Execution follows the order and dependencies below, not numeric ID order. The main agent is the
-only writer; independent reviewers can inspect interfaces and completed changes.
+Dependencies govern execution; milestones group completion criteria and are not serial barriers.
+Use the early-delivery order below instead of waiting for every row in the preceding milestone.
+The main agent is the only writer; independent reviewers can inspect completed changes.
 
 ### Releases a researcher can use
 
@@ -709,7 +725,7 @@ only writer; independent reviewers can inspect interfaces and completed changes.
 | --- | --- | --- |
 | M0: choose the implementation | A measured rendering choice and a capability map grounded in current APIs | Alignment, buffer ownership and resource limits established before broad UI work |
 | M1: inspect real data | Import one/many OSCs, exact marginal profiles, masks, comparison, save/reopen and basic export | A researcher can inspect and export an image without configuring a fit |
-| M2: run the simulator | Independent configuration loading, supported parameter forms and explicit preview/quantitative output | Load, change, run, inspect and save a simulation without an experiment |
+| M2: run the simulator | Independent configured and native simulation drafts, supported forms and explicit preview/quantitative output | Each admitted route loads, changes, runs, inspects and saves without observations or a fit |
 | M3: fit geometry | Reviewed observations, numeric starting values, beam-center tools, fitted overlays and statistics | hBN first, then supported sample-only and joint routes each work end to end |
 | M4: edit the experiment visually | Reciprocal coverage and textured beam/sample/goniometer/detector scene with synchronized controls | Click-to-zoom and physical edits preserve canonical geometry and parameter ownership |
 | M5: fit prepared native experiments | Supported mosaic, ordered and disorder workflows using existing prepared recipes | States, observations, measure, covariance and qualification remain intact |
@@ -721,6 +737,25 @@ wait for every 3D handle. M5 can use an existing valid prepared experiment witho
 fit. M6 is required for the promised later-stage workflow on newly imported data; opening an
 existing recipe alone does not complete that requirement.
 
+Prioritize these demonstrable steps while retaining every later task:
+
+1. U00 and a bounded U08a inventory, then U01/U01c/U01a/U01b/U02/U03/U02a/U14b: real images,
+   exact profiles, several acquisitions and save/export.
+2. U09a/U07/U08/U09: numeric values, per-image reciprocal coverage and the textured experiment
+   scene with click-to-zoom and supported callouts/handles. Preview editing needs no completed fit;
+   fit-specific controls activate only when their route is implemented and its input mapping verified.
+3. U12/U12a/U12b/U12c: complete independent simulator routes. Reuse the same views and provide
+   U09b snapshot transfer without waiting for additional fitting routes.
+4. U04/U05a/U08b/U05b/U05/U10: reviewed hBN calibration, fitted ring overlays, statistics
+   and beam-center seed handoff in the already useful experiment views. U05d can expose its hBN
+   result immediately; sample-derived proposals appear when an admitted sample result is available.
+5. Add sample-only/joint fitting and later native stages under their own dependencies. Brush/cut,
+   template and archive refinements remain in scope but do not block the first scene or simulation.
+
+The first geometry-user walkthrough must combine import, profiles, starting-value edits, reciprocal
+coverage, the textured scene, a supported geometry fit, overlays/statistics and save/reopen. A fast
+image reader alone is an intermediate delivery, not completion of the requested geometry interface.
+
 ### M0 — settle expensive decisions first
 
 Likely ownership: this document, existing optional viewer components and visualization dependencies.
@@ -730,8 +765,8 @@ components; remove discarded alternatives and all temporary checking code.
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U08a: capability inventory | None | List each admitted simulation/fit route, acquisition requirements, parameter names/units/scopes, seed/bounds support, observation inputs, output schema and safe-stop limits. Include hBN wavelength/ring assumptions, calibrant-private distance, one-axis indexing, joint-series requirements and prepared-native limits. Every promised enabled control maps to an actual input; missing boundaries get an explicit task below. |
-| [ ] U00: rendering decision | U08a | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; no full application or optimizer is needed here. |
+| [ ] U08a: initial capability map | None | Map reader/presentation contracts and the first configured simulator's physical fields, units and output measure. Identify both simulator routes and known fit limitations without enumerating every future control. Extend this same map before each corresponding form/fitter task: required inputs, seeds/bounds, scopes, qualification and safe-stop limits must be verified before that route is enabled. |
+| [ ] U00: rendering decision | None | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; neither a full fit inventory nor an optimizer is needed. |
 
 ### M1 — a useful detector reader
 
@@ -755,15 +790,17 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 
 ### M2 — independent simulator
 
-Likely ownership: the optional application forms/controller and the current detector worker;
-`pipeline/configured_simulation.py` remains the configuration/scientific authority.
+Likely ownership: optional forms/controller and the current detector worker. Configured simulations
+reuse `pipeline/configured_simulation.py`; native drafts reuse `fitting/native_input.py`, supported
+material bindings and `pipeline/conditional_detector.py`. Keep these actual contracts distinct.
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
 | [ ] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
 | [ ] U12: configured simulator | U02/U03/U01c/U09a | Load an existing supported configuration, run the current preview/quantitative owner and save/reopen the independent draft. Show measure, backend, prefix/progress and failure state; no experimental image, fitted observations or 3D editor is required. |
 | [ ] U12a: complete supported parameter forms | U12 | Expose all supported selected-model configuration fields in searchable grouped forms, including source, instrument, structure, mosaic, optics and execution. Compare field coverage with the capability inventory; unsupported combinations explain why. Keep configuration import/export working. |
-| [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
+| [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix or route-specific numerical settings. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
+| [ ] U12c: independent native simulator | U12a/U12b | Map each admitted native model's physical/numerical parameters into an independent draft and the existing detector/integration owners. Load/edit/run/save with no observation pack or fit record; verify field coverage, canonical parameter binding and bounded like-observable output equivalence. Reuse shared views/jobs; do not wrap the fit-required render CLI, duplicate physics or invent a universal schema. |
 
 ### M3 — geometry fitting, one route at a time
 
@@ -784,7 +821,7 @@ actually need it; do not copy the orchestration into widgets.
 | [ ] U10a: sample-only geometry workflow | U05c/U08c/U05/U09a | Fit one admitted indexed series using its exact reviewed pack; save/export per-image/shared diagnostics and seed/fitted comparison. Insufficient tracks or unsupported single-image cases remain clearly unavailable; no manufactured observations or qualification. |
 | [ ] U08d: joint geometry execution boundary | U08a/U01c | Add explicit admitted starting-state and safe-stop inputs while preserving the reduced gauge and existing defaults. Verify core seed/bounds handoff and required hBN/Bi2Se3/Bi2Te3 roster; do not generalize to arbitrary material groups through GUI assumptions. |
 | [ ] U10b: joint geometry workflow | U10/U10a/U08d | Combine the admitted frozen calibrant/sample packs, review shared/local/fixed scopes and run the current joint owner. Persist result and supported hash-bound handoff; verify IDs, private calibrant distance, rank/qualification and stale downstream state. |
-| [ ] U05d: geometry-derived center proposals | U10/U10a | Offer supported ring/sample estimates beside direct/manual proposals, including their physical interpretation and coupling. Applying a shared estimate lists affected acquisitions; derived evidence is not counted twice. |
+| [ ] U05d: geometry-derived center proposals | U05/U09a | Offer ring or sample estimates when the matching admitted result is available, including interpretation and coupling. An hBN result need not wait for a sample fit. Applying a shared estimate lists affected acquisitions; derived evidence is not counted twice. |
 
 ### M4 — reciprocal and experiment views
 
@@ -795,8 +832,8 @@ controller. These are new presentations of the same model, not new geometry impl
 | --- | --- | --- |
 | [ ] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. |
 | [ ] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
-| [ ] U09: synchronized physical handles | U05a/U07/U08/U09a/U10 | Connect callouts, numeric fields and constrained arcs/arrows to the existing parameter state. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. For each admitted route, compare handle edits with the actual launched vector; the scene cannot enable an unsupported fit scope. |
-| [ ] U09b: experiment/simulator transfer | U09/U12a/U12b | Copy a compatible experiment snapshot into an independent simulation draft, or adopt a compatible simulation into a new experiment draft. Show exactly what transfers; verify units, provenance and unchanged source projects. |
+| [ ] U09: synchronized physical handles | U07/U08/U09a | Connect callouts, numeric fields and constrained arcs/arrows to existing parameter state without requiring a fit. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. Simulator edits match canonical configuration. Enable each fit-specific mapping only after its execution boundary verifies the launched vector; handles cannot enable an unsupported scope. |
+| [ ] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
 
 ### M5 — existing prepared native fitting
 
@@ -861,11 +898,11 @@ section. A document review or an unchecked feature is not completion. At each mi
 its end-to-end user journey; future capability limits must remain visible. New scientific support
 needs its own evidence before enabling it, while independent UI/simulator work can continue.
 
-The first implementation packet is U08a followed by U00: complete the precise capability/control
-map, choose a reference machine/resource budget, then build and measure the small rendering slice.
-Stop expanding that slice once the choice is justified. The next packet is U01/U01c/U01a so a user
-can launch the app and open a real detector image. No full fit, parameter sweep or full-image
-scientific campaign is required to make the rendering decision.
+The first packet is U00 with the bounded U08a map: choose a reference machine/resource budget and
+measure the small rendering slice. Stop expanding it once the choice is justified; inventory later
+routes when they are next to be built. U01/U01c/U01a then lets a user open a real image. Follow the
+early-delivery order above for the scene and simulator. No full fit, parameter sweep or full-image
+scientific campaign is required for the rendering decision.
 
 Usability completion must be observed through complete journeys:
 
@@ -910,57 +947,34 @@ coherent reviewed commit per delivered change, following the repository's main/w
 
 ## 13. Independent audit disposition
 
-A separate read-only reviewer audited the usability draft against the current code on 2026-09-28.
-The main writer checked the findings and revised this plan. The following are planning repairs;
-they do not establish that runtime performance or missing implementation is already resolved.
-The independent reviewer checked the revision and confirmed the findings were incorporated;
-follow-up clarifications limit U00's scope and apply frame cadence only under active redraw demand.
+A fresh read-only reviewer audited `bc47d7b` against the original objectives and the repository's
+lightweight-design rules. Two required corrections and two optional simplifications were accepted
+below. Earlier rendering/scientific-boundary and implementation-readiness repairs remain in their
+own sections; their detailed audit history is preserved in `caaf9e6` and `bc47d7b`.
 
-| Finding | Plan correction and implementation evidence still required |
+| Finding | Disposition |
 | --- | --- |
-| Initial-value controls can exceed current fitting APIs | Sections 2/6, the U08a inventory, route-specific U08b/U08c/U08d and U09 require explicit seed/bounds handoff. Every enabled field must reach the optimizer; existing gauges/defaults remain authoritative. |
-| Current GL presenter lacks viewport/layer alignment | Sections 9/10 and U00/U02 require one native transform, signed display, compatible overlay composition and DPI/alignment checks. Reuse narrow texture helpers, not the complete opaque widget unchanged. |
-| Progressive float32 images cannot provide promised exact profiles | Section 4 and U12 bind inspection to named immutable quantitative snapshots, with explicit pending/historical states and no per-cursor full snapshot allocation. |
-| Cancel/close promises exceed current safe interruption points | Section 10, U01c and the route-specific execution tasks require job lifecycle states, narrow execution hooks, measured noninterruptible phases and responsive safe shutdown. |
-| Ewald illustration is not general acquisition geometry | Section 9 and U07 exclude its fixed formulas/textures from scientific data paths; verify canonical geometry at nondefault wavelength/direction. |
-| Cache-only limits miss peak copies and history | Section 10 and U00/U04/U15 add a complete resource ledger, globally bounded publication, compact undo and reconstructible-buffer eviction. |
-| 60 fps claim and 33 ms criterion disagree; cold/tail latency unbounded | Section 10 separates cadence, event latency, tails, preparation and stop time, with declared workloads/hardware and early measurement. |
-| Packaging and early save/recovery ownership unclear | Section 9 and U01/U01b establish repository launch, schema and basic recovery before editing workflows; every slice saves its outputs and U14 completes archive/export coverage. |
+| Required: native independent simulation had no delivery boundary | U12c now binds the existing native physics/detector/integration owners without observations or saved fit records. M2 completes both admitted simulator contracts, with explicit parameter coverage and no universal schema. |
+| Required: independent geometry tools waited for fitting routes | Milestones are completion groupings. U07/U08 and simulator handles arrive after viewport/numeric state; only actual fit mappings wait for their execution boundary. Snapshot transfer needs numeric state, and hBN center proposals need only a matching hBN result. |
+| Optional: exhaustive route inventory blocked the first plot | U08a starts with reader/presentation and one configured simulation route, then grows before each route is enabled. U00 no longer depends on an all-route inventory. |
+| Optional: spatial picking index was mandatory before measurement | Begin with vectorized visible-feature picking; add the index only for a measured miss. Prefix tables, asynchronous uploads and extra processes remain conditional too. |
 
-Source boundaries checked: [detector presentation](../interactive/detector_viewer.py),
-[illustrative Ewald viewer](../interactive/ewald_sphere_viewer.py),
-[Monte Carlo presentation/quantitative snapshots](../src/rasim_next/pipeline/source_averaged_detector.py),
-[joint geometry](../src/rasim_next/fitting/joint_geometry.py),
-[hBN calibration](../src/rasim_next/fitting/hbn.py),
-[indexed series](../src/rasim_next/fitting/indexed_series.py),
-[OSC I/O](../src/rasim_next/io/osc.py) and [packaging](../pyproject.toml).
-Recorded experiment history supplied no combined-UI timing evidence. No discovery/replay campaign
-is justified for this documentation audit; future bounded measured comparisons follow the current
-assessment and experiment-memory policies.
+The reviewer found the other objectives covered: native local import, calibrated overlays, exact
+horizontal/vertical bands, center proposals, initial values and parameter scopes/statistics,
+per-image reciprocal coverage, physical scene controls, staged qualification, save/recovery/export
+and responsive work. The early-delivery walkthrough now requires these geometry views together;
+an image reader alone cannot be presented as the completed experiment interface.
 
-### Implementation-readiness audit and repair
+Use current owners: [geometry-only construction](../src/rasim_next/pipeline/configured_simulation.py),
+[native physical inputs](../src/rasim_next/fitting/native_input.py),
+[native integration](../src/rasim_next/pipeline/conditional_detector.py) and the
+[fit-bound native renderer](../scripts/render_native.py). Existing
+[OSC selection](../src/rasim_next/selection/osc_series.py),
+[geometry qualification orchestration](../scripts/fit_osc_geometry.py) and
+[prepared-native adoption](../scripts/prepare_native.py) retain the previously identified frozen
+observation, qualification and prepared-versus-new-input boundaries.
 
-A second read-only audit at `caaf9e6` checked whether the plan could be executed in small usable
-deliveries. It found five sequencing/integration gaps; section 11 now addresses each one.
-
-| Gap | Concrete repair |
-| --- | --- |
-| No task creates reviewed geometry observations from new images | U05b/U05c own canonical discovery, admissible review, frozen-pack persistence and exact fit consumption. Preserve qualification orchestration; no fit-time rediscovery. |
-| Prepared native inputs were mistaken for preparation of new acquisitions | M5 opens existing supported recipes; M6 separately declares and implements a scientifically qualified observation/background/covariance preparation path. |
-| Simulator waited for the entire geometry editor and fit APIs | U09a and U12/U12a/U12b deliver independent configuration, parameter forms and quantitative inspection in M2. |
-| First fit required every physical handle and several fitters at once | Numeric state is early; hBN, indexed-series and joint routes have separate input/execution/result slices. M4 attaches scene controls to that existing state. |
-| Export/persistence waited for unrelated advanced features | U01b and U14b deliver early saving/export; observations, simulator drafts and fit results persist in their own slices. U14 integrates complete archives. |
-
-Additional source checks confirmed the fixed hBN wavelength/ring assumptions and the current
-single-axis OSC-indexing admission rule; the capability inventory must expose those limits.
-Relevant live boundaries include [OSC selection](../src/rasim_next/selection/osc_series.py),
-[geometry CLI orchestration](../scripts/fit_osc_geometry.py),
-[prepared native adoption](../scripts/prepare_native.py),
-[native observation records](../src/rasim_next/fitting/native_observations.py),
-[native physics inputs](../src/rasim_next/fitting/native_input.py) and
-[measurement regions](../src/rasim_next/measurement/continuous_regions.py).
-No application implementation or numerical/performance validation was performed by this audit.
-The independent reviewer checked the revised sequence and identified one final route correction:
-native geometry adoption currently consumes an indexed OSC fit record, not the distinct joint
-handoff artifact. U11d now names that boundary and depends on U10a; joint adoption remains conditional
-on its own supported binding. No remaining material sequence or qualification issue was reported.
+No evidence justified another optimizer, backend framework, general serializer or broader numerical
+rewrite. U12c fills a missing application binding; new-acquisition native preparation remains its
+own explicitly qualified scientific integration task. No runtime work or numerical/performance
+validation was performed by these document audits; targets still require implementation evidence.

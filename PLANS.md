@@ -19,6 +19,8 @@ interface scope, OSC-style marginal profiles, beam-center estimation, initial-va
 performance targets and independent audit findings. Section 11 is the executable build sequence:
 inspection, independent simulator, geometry routes, experiment views, prepared native fitting,
 new-acquisition preparation and release integration, each with dependencies and acceptance checks.
+Its early-delivery order brings reciprocal/experiment views forward, and milestones do not block
+independent tasks. Simulator completion covers both configured and native physical-input routes.
 It is the current plan for this UI work; implementation has not started. Its checklist is kept in that
 same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
 their original evidence and do not schedule additional scientific work.
