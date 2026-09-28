@@ -26,7 +26,7 @@ from rasim_next.fitting.indexed_series import (
     apply_shared_geometry_corrections,
     zero_sum_helmert_basis,
 )
-from rasim_next.geometry import build_incident_states
+from rasim_next.geometry import CompiledInstrument, build_incident_states
 from rasim_next.materials import read_crystal
 from rasim_next.pipeline.configured_simulation import (
     ConfiguredSimulationInputs,
@@ -663,6 +663,31 @@ class FixedIncidenceScanSeries:
         )
 
 
+def apply_fixed_position_to_instrument(
+    configured_instrument: CompiledInstrument,
+    axis_rotations: tuple,
+    position: FixedPositionState,
+) -> CompiledInstrument:
+    """Apply one fitted detector calibration and rigid correction to a configured pose."""
+
+    if not isinstance(position, FixedPositionState):
+        raise TypeError("position must be FixedPositionState")
+    configured_center = configured_instrument.detector_reference_coordinate_px
+    calibrated = apply_detector_calibration_corrections(
+        configured_instrument,
+        DetectorCalibrationCorrections(
+            detector_reference_column_offset_px=(
+                position.beam_center_column_row_px[0] - configured_center[0]
+            ),
+            detector_reference_row_offset_px=(
+                position.beam_center_column_row_px[1] - configured_center[1]
+            ),
+            detector_plane_normal_offset_m=position.detector_plane_normal_offset_m,
+        ),
+    )
+    return apply_shared_geometry_corrections(calibrated, axis_rotations, position.corrections)
+
+
 def _build_fixed_experiment_series_at_effective_angles(
     config: SimulationConfiguration,
     *,
@@ -758,25 +783,8 @@ def _build_fixed_experiment_series_at_effective_angles(
         )
         inputs = rebind_configured_simulation_instrument(base_inputs, angle_config)
 
-        configured_center = tuple(
-            float(value) for value in inputs.instrument.detector_reference_coordinate_px
-        )
-        calibrated_instrument = apply_detector_calibration_corrections(
-            inputs.instrument,
-            DetectorCalibrationCorrections(
-                detector_reference_column_offset_px=(
-                    position.beam_center_column_row_px[0] - configured_center[0]
-                ),
-                detector_reference_row_offset_px=(
-                    position.beam_center_column_row_px[1] - configured_center[1]
-                ),
-                detector_plane_normal_offset_m=position.detector_plane_normal_offset_m,
-            ),
-        )
-        instrument = apply_shared_geometry_corrections(
-            calibrated_instrument,
-            angle_config.instrument.axis_rotations,
-            position.corrections,
+        instrument = apply_fixed_position_to_instrument(
+            inputs.instrument, angle_config.instrument.axis_rotations, position
         )
         incident = build_incident_states(inputs.samples, inputs.material, instrument)
         if incident.states.incident_state_id.size != source_sample_count or not bool(

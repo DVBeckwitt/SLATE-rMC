@@ -7,20 +7,204 @@ import io
 import json
 import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
+from rasim_next.fitting.fixed_experiment import (
+    apply_fixed_position_to_instrument,
+    fixed_position_from_fit_record,
+)
+from rasim_next.fitting.geometry import ExactTagGeometryModel, IntegerLMarkerKey
 from rasim_next.fitting.native_input import load_native_fit_physics
 from rasim_next.fitting.native_observations import (
     load_native_background_controls,
     load_native_fit_observations,
 )
 from rasim_next.io.osc import read_osc
+from rasim_next.materials import read_crystal
+from rasim_next.pipeline.configured_simulation import (
+    build_configured_geometry_inputs,
+    load_simulation_config,
+)
+from rasim_next.selection.osc_series import load_osc_geometry_series
+
+
+def _geometry_bound_physics(physics_path, position_path, manifest_path, image_id, raw):
+    """Adopt one fitted OSC pose without changing native source or specimen physics."""
+    position_path = Path(position_path).resolve()
+    manifest_path = Path(manifest_path).resolve()
+    position_bytes = position_path.read_bytes()
+    manifest_bytes = manifest_path.read_bytes()
+    position_record = json.loads(position_bytes)
+    position, status, selection = fixed_position_from_fit_record(
+        position_record,
+        expected_manifest_path=manifest_path,
+        expected_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
+    series = load_osc_geometry_series(manifest_path)
+    images = tuple(series.images)
+    matches = [index for index, image in enumerate(images) if image.image_id == image_id]
+    if len(matches) != 1:
+        raise ValueError("geometry image ID must identify exactly one frozen OSC image")
+    image_index = matches[0]
+    image = images[image_index]
+    commanded = tuple(item.axis_rotation_angles_deg[series.incidence_axis_index] for item in images)
+    if not np.allclose(
+        position.commanded_incidence_angles_rad, np.radians(commanded), rtol=0, atol=2e-14
+    ):
+        raise ValueError("fitted position and geometry image angles differ")
+    if position.incidence_angle_image_ids and tuple(item.image_id for item in images) != (
+        position.incidence_angle_image_ids
+    ):
+        raise ValueError("fitted position and geometry image IDs differ")
+    if not np.array_equal(read_osc(image.osc_path).detector_native_counts, raw):
+        raise ValueError("native acquisition differs from the selected geometry OSC image")
+
+    config = load_simulation_config(series.config_path)
+    original = load_native_fit_physics(physics_path)
+    source = config.source
+    definition = original.source_definition
+    source_pairs = (
+        (source.mean_origin_lab_m, definition.mean_origin_lab_m),
+        (source.mean_direction_lab, definition.mean_direction_lab),
+        (source.transverse_axes_lab, definition.transverse_axes_lab),
+        (source.spatial_sigma_m, definition.spatial_sigma_m),
+        (source.divergence_sigma_rad, definition.divergence_sigma_rad),
+        (source.position_divergence_correlation, definition.position_divergence_correlation),
+        (source.line_wavelength_A, definition.line_wavelength_A),
+        (source.line_probability, definition.line_probability),
+        (source.common_line_sigma_A, definition.common_wavelength_sigma_A),
+    )
+    if any(not np.allclose(left, right, rtol=0, atol=1e-14) for left, right in source_pairs):
+        raise ValueError("native source differs from the geometry configuration")
+    if source.polarization_state_id != definition.polarization_state_id:
+        raise ValueError("native polarization differs from the geometry configuration")
+    crystal = read_crystal(
+        config.material.cif_path,
+        phase_id=config.material.phase_id,
+        expected_sha256=config.cif_sha256,
+    )
+    reciprocal = 2 * np.pi * np.linalg.inv(crystal.direct_basis_A).T
+    if not np.allclose(reciprocal, original.reciprocal_basis_Ainv, rtol=0, atol=1e-14):
+        raise ValueError("native reciprocal basis differs from the geometry crystal")
+    if len(config.instrument.axis_rotations) != 1 or series.incidence_axis_index != 0:
+        raise ValueError("native geometry adoption requires one incidence rotation axis")
+    angle_config = replace(
+        config,
+        instrument=replace(
+            config.instrument,
+            axis_rotations=(
+                replace(
+                    config.instrument.axis_rotations[series.incidence_axis_index],
+                    angle_deg=float(
+                        np.degrees(position.effective_incidence_angles_rad[image_index])
+                    ),
+                ),
+            ),
+        ),
+    )
+    geometry_inputs = build_configured_geometry_inputs(angle_config)
+    selected = apply_fixed_position_to_instrument(
+        geometry_inputs.instrument, angle_config.instrument.axis_rotations, position
+    )
+    saved_images = [item for item in position_record["predictions"] if item["image_id"] == image_id]
+    if len(saved_images) != 1:
+        raise ValueError("position result lacks exactly one selected image prediction")
+    saved_sites = saved_images[0]["sites"]
+    if not saved_sites:
+        raise ValueError("selected geometry image has no frozen markers")
+    keys = tuple(
+        IntegerLMarkerKey(
+            family_m=site["key"]["family_m"],
+            integer_L=site["key"]["integer_L"],
+            branch=site["key"]["analytic_ewald_branch"],
+            root_sign=site["key"]["root_sign"],
+            representative_rod_hk=tuple(site["key"]["representative_rod_hk"]),
+        )
+        for site in saved_sites
+    )
+    replay = ExactTagGeometryModel(geometry_inputs).predict_integer_l_tags(
+        keys, instrument=selected
+    )
+    if tuple(replay.detector_status) != tuple(site["detector_status"] for site in saved_sites):
+        raise ValueError("geometry adoption changed selected marker statuses")
+    saved_coordinates = np.asarray(
+        [site["predicted_coordinate_px"] for site in saved_sites], dtype=np.float64
+    )
+    if (
+        not np.all(np.isfinite(saved_coordinates))
+        or not np.all(np.isfinite(replay.coordinates_px))
+        or not np.allclose(replay.coordinates_px, saved_coordinates, rtol=0, atol=2e-9)
+    ):
+        raise ValueError("geometry adoption changed selected marker coordinates")
+    native = original.instrument
+    if not np.allclose(
+        selected.sample_from_crystal.rotation, original.crystal_to_sample, rtol=0, atol=1e-14
+    ) or not np.allclose(
+        native.sample_from_crystal.rotation, original.crystal_to_sample, rtol=0, atol=1e-14
+    ):
+        raise ValueError("crystal-to-sample and native instrument frames differ")
+    for name in (
+        "detector_shape_rc",
+        "detector_row_pitch_m",
+        "detector_column_pitch_m",
+        "sample_support_model_id",
+        "sample_width_m",
+        "sample_length_m",
+        "film_thickness_A",
+        "detector_path_medium_id",
+        "detector_path_linear_attenuation_m_inv",
+    ):
+        left, right = getattr(selected, name), getattr(native, name)
+        if left != right and not (
+            isinstance(left, (int, float))
+            and isinstance(right, (int, float))
+            and np.isclose(left, right, rtol=1e-12, atol=0)
+        ):
+            raise ValueError(f"native and geometry instrument {name} differ")
+
+    record = json.loads(Path(physics_path).read_bytes())
+    instrument = record["instrument"]
+    for name in ("lab_from_detector", "lab_from_sample"):
+        transform = getattr(selected, name)
+        instrument[name] = {
+            "rotation": transform.rotation.tolist(),
+            "translation_m": transform.translation_m.tolist(),
+            "source_frame": transform.source_frame,
+            "target_frame": transform.target_frame,
+        }
+    instrument["detector_reference_coordinate_px"] = list(selected.detector_reference_coordinate_px)
+    payload = (json.dumps(record, indent=2) + "\n").encode()
+    return payload, {
+        "position_path": str(position_path),
+        "position_sha256": hashlib.sha256(position_bytes).hexdigest(),
+        "position_status": status,
+        "position_artifact_revision": position.artifact_revision,
+        "indexed_selection_revision": selection,
+        "geometry_manifest_path": str(manifest_path),
+        "geometry_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "simulation_config_sha256": hashlib.sha256(series.config_path.read_bytes()).hexdigest(),
+        "image_id": image_id,
+        "osc_sha256": hashlib.sha256(image.osc_path.read_bytes()).hexdigest(),
+        "marker_replay_count": len(keys),
+        "marker_replay_max_abs_error_px": float(
+            np.max(np.abs(replay.coordinates_px - saved_coordinates))
+        ),
+    }
 
 
 def prepare(
-    observation_path, output_directory, *, raw_path=None, dark_path=None, archived_baseline=None
+    observation_path,
+    output_directory,
+    *,
+    raw_path=None,
+    dark_path=None,
+    archived_baseline=None,
+    geometry_position=None,
+    geometry_manifest=None,
+    geometry_image_id=None,
 ):
     """Keep all calibrated arrays unchanged; paths are relocatable, hashes authoritative."""
     source = Path(observation_path).resolve()
@@ -64,6 +248,7 @@ def prepare(
 
     _, array_bytes = verified(record["arrays"])
     physics_path, _ = verified(record["physical_input"])
+    physics_payload_index = len(payloads) - 1
     load_native_fit_physics(physics_path)
     raw_reference = record["raw_acquisition"]
     raw_file, raw_bytes = verified(raw_reference, raw_path)
@@ -74,6 +259,36 @@ def prepare(
         raw = np.asarray(read_osc(raw_file).detector_native_counts, dtype=float)
     else:
         raise ValueError("raw acquisition must explicitly declare its native orientation")
+    geometry_options = (geometry_position, geometry_manifest, geometry_image_id)
+    if any(value is not None for value in geometry_options):
+        if not all(value is not None for value in geometry_options):
+            raise ValueError("geometry adoption requires position, manifest, and image ID")
+        if archived_baseline is not None:
+            raise ValueError("an archived baseline cannot be rebound to new geometry")
+        bound_bytes, geometry_provenance = _geometry_bound_physics(
+            physics_path, geometry_position, geometry_manifest, geometry_image_id, raw
+        )
+        bound_digest = hashlib.sha256(bound_bytes).hexdigest()
+        bound_name = bound_digest[:16] + "_" + physics_path.name
+        payloads[physics_payload_index] = (bound_name, bound_bytes)
+        record["physical_input"] = {"path": bound_name, "sha256": bound_digest}
+        snapshots.extend(
+            (
+                (Path(geometry_provenance[path_name]), geometry_provenance[digest_name])
+                for path_name, digest_name in (
+                    ("position_path", "position_sha256"),
+                    ("geometry_manifest_path", "geometry_manifest_sha256"),
+                )
+            )
+        )
+        geometry_series = load_osc_geometry_series(geometry_manifest)
+        snapshots.append(
+            (geometry_series.config_path, geometry_provenance["simulation_config_sha256"])
+        )
+        selected_image = next(
+            image for image in geometry_series.images if image.image_id == geometry_image_id
+        )
+        snapshots.append((selected_image.osc_path, geometry_provenance["osc_sha256"]))
     variance = np.maximum(raw, 1.0)
     dark = record["background"]["dark"]
     if dark["kind"] == "scaled_osc":
@@ -140,11 +355,16 @@ def prepare(
         }
         baseline["status"] = "archived_nominal_not_recomputed"
         record["archived_baseline"] = baseline
+    previous_adoption = record.get("preparation", {}).get("geometry_adoption")
     record["preparation"] = dict(
         kind="verified_frozen_calibration_adoption",
         source_observation_sha256=original_source_sha256,
         measured_convention="raw counts; selected subtraction is carried by background",
     )
+    if any(value is not None for value in geometry_options):
+        record["preparation"]["geometry_adoption"] = geometry_provenance
+    elif previous_adoption is not None:
+        record["preparation"]["geometry_adoption"] = previous_adoption
     for path, digest in snapshots:
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError(f"input changed during preparation: {path}")
@@ -181,6 +401,9 @@ def prepare_catalog(
     catalog_path=None,
     raw_path=None,
     dark_path=None,
+    geometry_position=None,
+    geometry_manifest=None,
+    geometry_image_id=None,
 ):
     """Resolve one hash-bound experiment; archived absolute paths are not authority."""
     catalog_path = (
@@ -227,7 +450,14 @@ def prepare_catalog(
         baseline["observation_sha256"] = entry["observations"]["sha256"]
         baseline["physics_sha256"] = entry["physics"]["sha256"]
     return prepare(
-        source, output_directory, raw_path=raw_path, dark_path=dark_path, archived_baseline=baseline
+        source,
+        output_directory,
+        raw_path=raw_path,
+        dark_path=dark_path,
+        archived_baseline=baseline,
+        geometry_position=geometry_position,
+        geometry_manifest=geometry_manifest,
+        geometry_image_id=geometry_image_id,
     )
 
 
@@ -245,6 +475,9 @@ def main():
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--raw", type=Path)
     parser.add_argument("--dark", type=Path)
+    parser.add_argument("--geometry-position", type=Path)
+    parser.add_argument("--geometry-manifest", type=Path)
+    parser.add_argument("--geometry-image-id")
     args = parser.parse_args()
     if args.sample:
         if args.input_root is None:
@@ -256,12 +489,21 @@ def main():
             with_baseline=args.with_baseline,
             raw_path=args.raw,
             dark_path=args.dark,
+            geometry_position=args.geometry_position,
+            geometry_manifest=args.geometry_manifest,
+            geometry_image_id=args.geometry_image_id,
         )
     else:
         if args.input_root is not None or args.with_baseline:
             parser.error("--input-root and --with-baseline require --sample")
         output = prepare(
-            args.observations, args.output_directory, raw_path=args.raw, dark_path=args.dark
+            args.observations,
+            args.output_directory,
+            raw_path=args.raw,
+            dark_path=args.dark,
+            geometry_position=args.geometry_position,
+            geometry_manifest=args.geometry_manifest,
+            geometry_image_id=args.geometry_image_id,
         )
     print(output)
 

@@ -36,6 +36,31 @@ unchanged payloads and publishes the descriptor last. The descriptor references
 hash-prefixed local filenames. This is frozen-calibration adoption, not a new
 background estimator or a substitute for validating a new acquisition's calibration.
 
+For a new mosaic fit conditional on a saved OSC position result, prepare one
+matching native acquisition with an explicit image ID:
+
+```powershell
+uv run --frozen python scripts/prepare_native.py `
+  --sample bi2se3 --input-root C:\external\native-inputs `
+  --geometry-position C:\external\geometry.json `
+  --geometry-manifest configs/bi2se3_osc_geometry_fit_model_limited.yaml `
+  --geometry-image-id Bi2Se3_5m_5d `
+  --output-directory C:\external\prepared-current-pose
+```
+
+The adapter verifies that the selected native counts equal the manifest OSC in
+detector-native orientation, applies the fitted position once from the configured
+base, and replays that image's saved integer-`L` markers before publishing new
+hash-bound physics. It leaves the measured projection, background, covariance,
+source sampling, structure, and numerical integration unchanged. Its descriptor
+records the position, selection, configuration, OSC, and marker-replay provenance.
+Use `refine_native.py` with a new plan bound to the prepared physics hash and
+original observation lineage; the old plan or archived baseline belongs to the
+old pose. The catalogued Bi2Se3 observation contains only the five-degree
+acquisition, so this route supports a conditional single-image mosaic estimate.
+The saved three-image position result remains model-limited, and this preparation
+does not make either position or mosaic scientifically qualified.
+
 Recover the catalogued September 11 Bi2Te3 baseline with one command:
 
 ```powershell

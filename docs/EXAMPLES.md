@@ -488,15 +488,22 @@ unless the non-accepted override is explicit.
 
 ## Joint geometry fitting for an OSC series
 
-Fit one shared full-rank geometry correction to the frozen 5, 10, and user-authoritative 15 degree
-Bi2Se3 observations, cross-validate integer `L={4,11}`, rerun the measured outer audit, and record the actual fit elapsed time:
+Fit nine shared position coordinates to the frozen 5, 10, and user-authoritative 15 degree
+Bi2Se3 observations. Detector center, detector distance, one common incidence delta, and five
+rigid corrections are fitted; four gauge/reference coordinates are held fixed. Cross-validate
+integer `L={4,11}` and audit the frozen observations:
 
 ```powershell
 uv run --frozen python scripts/fit_osc_geometry.py `
   configs/bi2se3_osc_geometry_fit_model_limited.yaml `
+  --fit-detector-center --detector-center-half-span-px 10 `
+  --fit-detector-distance --detector-distance-half-span-mm 10 `
   --fit-incidence-angle-delta `
-  --fit-incidence-angle-trim `
+  --incidence-angle-delta-half-span-deg 0.5 `
   --freeze-parameter sample_normal_x_tilt_rad `
+  --freeze-parameter goniometer_axis_pitch_rad `
+  --freeze-parameter goniometer_pivot_pitch_offset_m `
+  --freeze-parameter goniometer_pivot_yaw_offset_m `
   --heldout-integer-l 4 11 `
   --destination C:\path\outside\the\repository\position\geometry.json `
   --json
@@ -505,9 +512,9 @@ uv run --frozen python scripts/fit_osc_geometry.py `
 The manifest is the reusable boundary: each record declares an exact image ID, OSC path, and full
 commanded-angle tuple. A different layered-hexagonal material uses the same command with its own
 simulation configuration and image records. Unrelated materials or mounts are separate fit groups.
-The current trim-enabled workflow deliberately uses the separate model-limited manifest above. It
-retains the complete selection revision in its result but does not claim the immutable historical
-qualification. The old `bi2se3-osc-5-10-15.v1` qualification profile is retired with
+This current model-limited recipe retains the complete selection revision and saved per-image
+marker predictions. Its position status does not claim parameter precision or an adequate
+physical model. The old `bi2se3-osc-5-10-15.v1` qualification profile is retired with
 its embedded development benchmark. A request for it remains explicitly unaccepted;
 the command never silently clears the request or promotes incomplete evidence.
 Use the model-limited manifest for current prediction diagnostics.
@@ -559,10 +566,9 @@ uv run --frozen python scripts/fit_osc_geometry.py `
 
 The JSON fit record lists canonical `fitted_parameter_names`, `fixed_parameter_names`, combined
 `jacobian_parameter_names`, the common delta, and every commanded/effective incidence pair. The
-current model-limited workflow also lists two canonical Helmert trim contrasts and three zero-sum
-per-image trims; the immutable qualified v1 record has an empty trim pack. The common delta controls
-the mean incidence correction and any bounded trims describe only deviations around that mean. Beam
-center and lattice constants are not switchable coordinates inside the position fit. A separate
+current nine-coordinate recipe has no per-image incidence trims. The common delta controls
+the shared incidence correction. Detector center and distance are explicit fitted calibration
+coordinates; lattice constants remain outside the position fit. A separate
 near-CIF lattice-sensitivity stage may follow an accepted position artifact:
 
 ```powershell
