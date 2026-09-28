@@ -11,7 +11,12 @@ from time import perf_counter
 
 import numpy as np
 from numpy.typing import NDArray
-from project_state import FLOAT32_DISPLAY_MAX, linear_display_limits, validate_display_limits
+from project_state import (
+    FLOAT32_DISPLAY_MAX,
+    DetectorViewState,
+    linear_display_limits,
+    validate_display_limits,
+)
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QPolygonF, QShortcut, QTransform
 from PySide6.QtOpenGL import (
@@ -29,6 +34,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QWidget,
 )
 from shiboken6 import VoidPtr
@@ -44,6 +50,37 @@ class BandProfiles:
     column_bounds: tuple[int, int]
 
 
+def _mean_per_valid(
+    total: NDArray[np.int64] | NDArray[np.float64], support: NDArray[np.int64]
+) -> NDArray[np.float64]:
+    mean = np.full(total.shape, np.nan, dtype=np.float64)
+    np.divide(total, support, out=mean, where=support > 0)
+    mean.setflags(write=False)
+    return mean
+
+
+def _effective_band_bounds(
+    rows: int, columns: int, column_px: int, row_px: int, row_width: int, column_width: int
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    row_start = row_px - (row_width - 1) // 2
+    column_start = column_px - (column_width - 1) // 2
+    return (
+        (max(0, row_start), min(rows, row_start + row_width)),
+        (max(0, column_start), min(columns, column_start + column_width)),
+    )
+
+
+def _segment_crossing(a: float, b: float, bound: float) -> float:
+    """Position where a finite segment crosses a bound without overflow."""
+
+    difference = b - a
+    distance = bound - a
+    if math.isfinite(difference) and math.isfinite(distance):
+        return distance / difference
+    scale = max(abs(a), abs(b), abs(bound))
+    return ((bound / scale) - (a / scale)) / ((b / scale) - (a / scale))
+
+
 def exact_band_profiles(
     native_image: NDArray[np.generic],
     *,
@@ -52,8 +89,15 @@ def exact_band_profiles(
     row_width: int = 1,
     column_width: int = 1,
     mask: NDArray[np.bool] | None = None,
+    scope: str = "band",
+    roi_column_row_bounds: tuple[int, int, int, int] | None = None,
+    measure: str = "sum",
 ) -> BandProfiles:
-    """Sum native pixel values and valid support over two clipped bands."""
+    """Reduce native values over bands, the full panel, or a half-open native ROI.
+
+    ROI bounds are ``(column_start, column_stop, row_start, row_stop)``.
+    Both returned vectors retain full native column/row alignment.
+    """
 
     image = np.asarray(native_image)
     if image.ndim != 2 or image.dtype.kind not in "iuf":
@@ -67,10 +111,26 @@ def exact_band_profiles(
         raise ValueError("crosshair is outside the native detector")
     if row_width < 1 or column_width < 1:
         raise ValueError("band widths must be positive")
-    row_start = row_px - (row_width - 1) // 2
-    column_start = column_px - (column_width - 1) // 2
-    r0, r1 = max(0, row_start), min(rows, row_start + row_width)
-    c0, c1 = max(0, column_start), min(columns, column_start + column_width)
+    if measure not in ("sum", "mean"):
+        raise ValueError("profile measure must be sum or mean per valid pixel")
+    if scope == "band":
+        (r0, r1), (c0, c1) = _effective_band_bounds(
+            rows, columns, column_px, row_px, row_width, column_width
+        )
+    elif scope == "full":
+        r0, r1, c0, c1 = 0, rows, 0, columns
+    elif scope == "roi":
+        if (
+            roi_column_row_bounds is None
+            or len(roi_column_row_bounds) != 4
+            or any(type(value) is not int for value in roi_column_row_bounds)
+        ):
+            raise ValueError("ROI needs four integer native column/row bounds")
+        c0, c1, r0, r1 = roi_column_row_bounds
+        if not (0 <= c0 < c1 <= columns and 0 <= r0 < r1 <= rows):
+            raise ValueError("ROI bounds are outside the native detector")
+    else:
+        raise ValueError("profile scope must be band, full, or roi")
     if mask is not None and (mask.dtype != np.bool_ or mask.shape != image.shape):
         raise ValueError("mask must be a Boolean native-detector plane")
     integer = image.dtype.kind in "iu"
@@ -81,24 +141,42 @@ def exact_band_profiles(
             raise ValueError("integer band may overflow int64 exact accumulation")
     accumulator = np.int64 if integer else np.float64
 
-    def reduce_band(values: NDArray[np.generic], included: NDArray[np.bool], axis: int):
-        valid = included & np.isfinite(values)
+    def reduce_band(values: NDArray[np.generic], included: NDArray[np.bool] | None, axis: int):
+        if integer and included is None:
+            total = np.sum(values, axis=axis, dtype=np.int64)
+            support = np.full(total.shape, values.shape[axis], dtype=np.int64)
+            if measure == "mean":
+                return _mean_per_valid(total, support), support
+            return total, support
+        valid = np.isfinite(values)
+        if included is not None:
+            valid &= included
         safe = np.where(valid, values, 0)
-        return (
-            np.sum(safe, axis=axis, dtype=accumulator),
-            np.sum(valid, axis=axis, dtype=np.int64),
-        )
+        total = np.sum(safe, axis=axis, dtype=accumulator)
+        support = np.sum(valid, axis=axis, dtype=np.int64)
+        if measure == "mean":
+            return _mean_per_valid(total, support), support
+        return total, support
 
-    horizontal_values = image[r0:r1]
-    vertical_values = image[:, c0:c1]
-    horizontal_mask = (
-        np.ones(horizontal_values.shape, dtype=np.bool_) if mask is None else mask[r0:r1]
-    )
-    vertical_mask = (
-        np.ones(vertical_values.shape, dtype=np.bool_) if mask is None else mask[:, c0:c1]
-    )
-    horizontal, horizontal_support = reduce_band(horizontal_values, horizontal_mask, 0)
-    vertical, vertical_support = reduce_band(vertical_values, vertical_mask, 1)
+    if scope == "roi":
+        values = image[r0:r1, c0:c1]
+        included = None if mask is None else mask[r0:r1, c0:c1]
+        h_values, h_support = reduce_band(values, included, 0)
+        v_values, v_support = reduce_band(values, included, 1)
+        empty = np.nan if measure == "mean" else 0
+        horizontal = np.full(columns, empty, dtype=np.float64 if measure == "mean" else accumulator)
+        vertical = np.full(rows, empty, dtype=np.float64 if measure == "mean" else accumulator)
+        horizontal_support = np.zeros(columns, dtype=np.int64)
+        vertical_support = np.zeros(rows, dtype=np.int64)
+        horizontal[c0:c1], horizontal_support[c0:c1] = h_values, h_support
+        vertical[r0:r1], vertical_support[r0:r1] = v_values, v_support
+    else:
+        horizontal_values = image[r0:r1]
+        vertical_values = image[:, c0:c1]
+        horizontal_mask = None if mask is None else mask[r0:r1]
+        vertical_mask = None if mask is None else mask[:, c0:c1]
+        horizontal, horizontal_support = reduce_band(horizontal_values, horizontal_mask, 0)
+        vertical, vertical_support = reduce_band(vertical_values, vertical_mask, 1)
     for array in (horizontal, vertical, horizontal_support, vertical_support):
         array.setflags(write=False)
     return BandProfiles(
@@ -167,8 +245,11 @@ class DetectorTextureView(QOpenGLWidget):
     painted = Signal(int, float)
     crosshair_changed = Signal()
     view_state_changed = Signal()
+    pin_requested = Signal()
     cursor_changed = Signal(object)
     overlays_changed = Signal(int)
+    band_edge_dragged = Signal(str, int)
+    roi_selected = Signal(object)
 
     def __init__(self, *, plane: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -202,6 +283,17 @@ class DetectorTextureView(QOpenGLWidget):
         self._box_start: QPointF | None = None
         self._box_end: QPointF | None = None
         self.box_zoom_enabled = False
+        self.roi_select_enabled = False
+        self._roi_start: QPointF | None = None
+        self._roi_end: QPointF | None = None
+        self._press_position: QPointF | None = None
+        self._dragging = False
+        self._band_drag: str | None = None
+        self.follow_cursor = True
+        self.profile_scope = "band"
+        self.profile_row_bounds = (0, 1)
+        self.profile_column_bounds = (0, 1)
+        self.profile_roi: tuple[int, int, int, int] | None = None
         self.crosshair = (0, 0)
         self.overlays = np.empty((0, 2), dtype=np.float64)
         self._overlay_points = QPolygonF()
@@ -236,6 +328,11 @@ class DetectorTextureView(QOpenGLWidget):
         self.zoom, self.pan, self.scale_mode = 1.0, QPointF(), "fit"
         self._pan_dpr = self.devicePixelRatioF()
         self.crosshair = (supplied.shape[1] // 2, supplied.shape[0] // 2)
+        self.follow_cursor = True
+        self.profile_scope = "band"
+        self.profile_row_bounds = (self.crosshair[1], self.crosshair[1] + 1)
+        self.profile_column_bounds = (self.crosshair[0], self.crosshair[0] + 1)
+        self.profile_roi = None
         self._clear_overlays()
         self.cursor_changed.emit(None)
         self.data_revision += 1
@@ -281,6 +378,11 @@ class DetectorTextureView(QOpenGLWidget):
         self.zoom, self.pan, self.scale_mode = 1.0, QPointF(), "fit"
         self._pan_dpr = self.devicePixelRatioF()
         self.crosshair = (native_counts.shape[1] // 2, native_counts.shape[0] // 2)
+        self.follow_cursor = True
+        self.profile_scope = "band"
+        self.profile_row_bounds = (self.crosshair[1], self.crosshair[1] + 1)
+        self.profile_column_bounds = (self.crosshair[0], self.crosshair[0] + 1)
+        self.profile_roi = None
         self._clear_overlays()
         self.cursor_changed.emit(None)
         self.data_revision += 1
@@ -372,6 +474,50 @@ class DetectorTextureView(QOpenGLWidget):
         extent = rect.height() if vertical else rect.width()
         count = rows if vertical else columns
         return origin + (index + 0.5) * extent / count
+
+    def set_profile_overlay(
+        self,
+        *,
+        scope: str,
+        row_bounds: tuple[int, int],
+        column_bounds: tuple[int, int],
+        roi: tuple[int, int, int, int] | None,
+    ) -> None:
+        state = (scope, row_bounds, column_bounds, roi)
+        if state == (
+            self.profile_scope,
+            self.profile_row_bounds,
+            self.profile_column_bounds,
+            self.profile_roi,
+        ):
+            return
+        (
+            self.profile_scope,
+            self.profile_row_bounds,
+            self.profile_column_bounds,
+            self.profile_roi,
+        ) = state
+        self._request_paint()
+
+    def _band_hit(self, position: QPointF) -> str | None:
+        if self.image is None or self.profile_scope != "band" or self.follow_cursor:
+            return None
+        rect = self._rect()
+        if not rect.contains(position):
+            return None
+        rows, columns = self.image.shape
+        edges = (
+            ("row_start", rect.top() + self.profile_row_bounds[0] * rect.height() / rows),
+            ("row_stop", rect.top() + self.profile_row_bounds[1] * rect.height() / rows),
+            ("column_start", rect.left() + self.profile_column_bounds[0] * rect.width() / columns),
+            ("column_stop", rect.left() + self.profile_column_bounds[1] * rect.width() / columns),
+        )
+        candidates = [
+            (abs((position.y() if name.startswith("row") else position.x()) - edge), name)
+            for name, edge in edges
+        ]
+        nearest, name = min(candidates)
+        return name if nearest <= 6 else None
 
     def widget_to_native(self, position: QPointF) -> tuple[int, int] | None:
         rect = self._rect()
@@ -536,6 +682,51 @@ class DetectorTextureView(QOpenGLWidget):
             self._program.release()
         if not self.plane:
             painter = QPainter(self)
+            rows, columns = self.image.shape
+            row_scale = rect.height() / rows
+            column_scale = rect.width() / columns
+            painter.setClipRect(rect)
+            if self.profile_scope == "band":
+                r0, r1 = self.profile_row_bounds
+                c0, c1 = self.profile_column_bounds
+                painter.fillRect(
+                    QRectF(
+                        rect.left(),
+                        rect.top() + r0 * row_scale,
+                        rect.width(),
+                        (r1 - r0) * row_scale,
+                    ),
+                    QColor(110, 215, 170, 55),
+                )
+                painter.fillRect(
+                    QRectF(
+                        rect.left() + c0 * column_scale,
+                        rect.top(),
+                        (c1 - c0) * column_scale,
+                        rect.height(),
+                    ),
+                    QColor(120, 170, 255, 55),
+                )
+                painter.setPen(QPen(QColor(130, 240, 185, 220), 1))
+                for edge in (r0, r1):
+                    y = rect.top() + edge * row_scale
+                    painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+                painter.setPen(QPen(QColor(145, 190, 255, 220), 1))
+                for edge in (c0, c1):
+                    x = rect.left() + edge * column_scale
+                    painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            elif self.profile_scope == "roi" and self.profile_roi is not None:
+                c0, c1, r0, r1 = self.profile_roi
+                bounds = QRectF(
+                    rect.left() + c0 * column_scale,
+                    rect.top() + r0 * row_scale,
+                    (c1 - c0) * column_scale,
+                    (r1 - r0) * row_scale,
+                )
+                painter.fillRect(bounds, QColor(160, 220, 160, 58))
+                painter.setPen(QPen(QColor(175, 235, 175, 230), 1))
+                painter.drawRect(bounds)
+            painter.setClipping(False)
             if self.show_markers and self.overlays.size:
                 pen = QPen(QColor(100, 245, 235), 1)
                 pen.setCosmetic(True)
@@ -562,6 +753,9 @@ class DetectorTextureView(QOpenGLWidget):
             if self._box_start is not None and self._box_end is not None:
                 painter.setPen(QPen(QColor(255, 255, 255), 1, Qt.PenStyle.DashLine))
                 painter.drawRect(QRectF(self._box_start, self._box_end).normalized())
+            if self._roi_start is not None and self._roi_end is not None:
+                painter.setPen(QPen(QColor(175, 235, 175), 1, Qt.PenStyle.DashLine))
+                painter.drawRect(QRectF(self._roi_start, self._roi_end).normalized())
             painter.end()
         self.painted.emit(self.request_generation, perf_counter())
 
@@ -572,28 +766,56 @@ class DetectorTextureView(QOpenGLWidget):
 
     def mousePressEvent(self, event) -> None:
         self._last_pointer = event.position()
-        if (
-            self.image is not None
-            and self.box_zoom_enabled
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
+        self._press_position = (
+            event.position() if event.button() == Qt.MouseButton.LeftButton else None
+        )
+        self._dragging = False
+        if self.image is None or event.button() != Qt.MouseButton.LeftButton or self.plane:
+            return
+        if self.roi_select_enabled:
+            self._roi_start = self._roi_end = event.position()
+            self._request_paint()
+        elif self.box_zoom_enabled:
             self._box_start = event.position()
             self._box_end = event.position()
             self._request_paint()
+        else:
+            self._band_drag = self._band_hit(event.position())
 
     def mouseMoveEvent(self, event) -> None:
-        if self._box_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
+        if self._roi_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self._roi_end = event.position()
+            self._request_paint()
+        elif self._box_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
             self._box_end = event.position()
             self._request_paint()
+        elif self._band_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if self._press_position is not None and (
+                self._dragging or (event.position() - self._press_position).manhattanLength() >= 5
+            ):
+                self._dragging = True
+                rect = self._rect()
+                rows, columns = self.image.shape
+                vertical = self._band_drag.startswith("row")
+                origin = rect.top() if vertical else rect.left()
+                extent = rect.height() if vertical else rect.width()
+                count = rows if vertical else columns
+                position = event.position().y() if vertical else event.position().x()
+                edge = round((position - origin) * count / extent)
+                self.band_edge_dragged.emit(self._band_drag, max(0, min(count, edge)))
         elif self._last_pointer is not None and event.buttons() & Qt.MouseButton.LeftButton:
             delta = event.position() - self._last_pointer
-            if self.plane:
-                self.yaw += delta.x() * 0.008
-                self.pitch = max(-1.3, min(1.3, self.pitch + delta.y() * 0.008))
-            else:
-                self.pan += delta
-            self._request_paint()
-            self.view_state_changed.emit()
+            if self._press_position is not None and (
+                self._dragging or (event.position() - self._press_position).manhattanLength() >= 5
+            ):
+                self._dragging = True
+                if self.plane:
+                    self.yaw += delta.x() * 0.008
+                    self.pitch = max(-1.3, min(1.3, self.pitch + delta.y() * 0.008))
+                else:
+                    self.pan += delta
+                self._request_paint()
+                self.view_state_changed.emit()
         if self.image is not None and not self.plane:
             native = self.widget_to_native(event.position())
             if native is None:
@@ -601,14 +823,37 @@ class DetectorTextureView(QOpenGLWidget):
             else:
                 row, column = native[1], native[0]
                 self.cursor_changed.emit((column, row, self.image[row, column].item()))
-                if not event.buttons() and native != self.crosshair:
+                if not event.buttons() and self.follow_cursor and native != self.crosshair:
                     self.crosshair = native
                     self._request_paint()
                     self.crosshair_changed.emit()
         self._last_pointer = event.position()
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._box_start is not None and self.image is not None:
+        if self._roi_start is not None and self.image is not None:
+            box = QRectF(self._roi_start, event.position()).normalized().intersected(self._rect())
+            self._roi_start = self._roi_end = None
+            if box.width() >= 4 and box.height() >= 4:
+                rect = self._rect()
+                rows, columns = self.image.shape
+                c0 = max(0, math.floor((box.left() - rect.left()) * columns / rect.width()))
+                c1 = min(columns, math.ceil((box.right() - rect.left()) * columns / rect.width()))
+                r0 = max(0, math.floor((box.top() - rect.top()) * rows / rect.height()))
+                r1 = min(rows, math.ceil((box.bottom() - rect.top()) * rows / rect.height()))
+                if c0 < c1 and r0 < r1:
+                    self.roi_selected.emit((c0, c1, r0, r1))
+            self._request_paint()
+        elif self._band_drag is not None:
+            self._band_drag = None
+            if not self._dragging and self.image is not None:
+                native = self.widget_to_native(event.position())
+                if native is not None:
+                    self.pin_requested.emit()
+                    if native != self.crosshair:
+                        self.crosshair = native
+                        self._request_paint()
+                        self.crosshair_changed.emit()
+        elif self._box_start is not None and self.image is not None:
             box = QRectF(self._box_start, event.position()).normalized().intersected(self._rect())
             self._box_start = self._box_end = None
             if box.width() >= 8 and box.height() >= 8:
@@ -622,7 +867,22 @@ class DetectorTextureView(QOpenGLWidget):
                 self.view_state_changed.emit()
             else:
                 self._request_paint()
+        elif (
+            self.image is not None
+            and not self.plane
+            and event.button() == Qt.MouseButton.LeftButton
+            and not self._dragging
+        ):
+            native = self.widget_to_native(event.position())
+            if native is not None:
+                self.pin_requested.emit()
+                if native != self.crosshair:
+                    self.crosshair = native
+                    self._request_paint()
+                    self.crosshair_changed.emit()
         self._last_pointer = None
+        self._press_position = None
+        self._dragging = False
 
     def leaveEvent(self, event) -> None:
         self.cursor_changed.emit(None)
@@ -682,7 +942,14 @@ class ProfilePlot(QWidget):
         self.values: NDArray[np.generic] | None = None
         self.support: NDArray[np.int64] | None = None
         self.generation = 0
+        self.intensity_limits: tuple[float, float] | None = None
         self.setMinimumSize(50 if vertical else 180, 50)
+
+    def set_intensity_limits(self, limits: tuple[float, float] | None) -> None:
+        if self.intensity_limits != limits:
+            self.intensity_limits = limits
+            self.generation = self.source_view.request_generation
+            self.update()
 
     def set_values(self, values: NDArray[np.generic], support: NDArray[np.int64]) -> None:
         self.values = values
@@ -700,8 +967,11 @@ class ProfilePlot(QWidget):
         ):
             valid = np.isfinite(self.values) & (self.support > 0)
             selected = self.values[valid]
-            minimum = min(float(np.min(selected, initial=0)), 0.0)
-            maximum = max(float(np.max(selected, initial=0)), 1.0)
+            if self.intensity_limits is None:
+                minimum = min(float(np.min(selected, initial=0)), 0.0)
+                maximum = max(float(np.max(selected, initial=0)), 1.0)
+            else:
+                minimum, maximum = self.intensity_limits
             span = maximum - minimum
             rect = self.source_view._rect()
             painter.setPen(QPen(QColor(104, 218, 243), 1))
@@ -734,25 +1004,63 @@ class ProfilePlot(QWidget):
                         (np.where(first <= last, low, high), np.where(first <= last, high, low))
                     ).ravel()
                     positions = np.repeat(positions, 2)
-                normalized = (amplitudes - minimum) / span
-                if self.vertical:
+
+                def plot_point(position: float, amplitude: float) -> QPointF:
+                    normalized = (amplitude - minimum) / span
+                    if self.vertical:
+                        return QPointF(normalized * (self.width() - 1), position)
+                    return QPointF(position, (1 - normalized) * (self.height() - 1))
+
+                if np.all((amplitudes >= minimum) & (amplitudes <= maximum)):
                     points = QPolygonF(
                         [
-                            QPointF(float(value) * (self.width() - 1), float(position))
-                            for position, value in zip(positions, normalized, strict=True)
+                            plot_point(float(position), float(amplitude))
+                            for position, amplitude in zip(positions, amplitudes, strict=True)
                         ]
                     )
-                else:
-                    points = QPolygonF(
-                        [
-                            QPointF(float(position), (1 - float(value)) * (self.height() - 1))
-                            for position, value in zip(positions, normalized, strict=True)
-                        ]
+                    if len(points) == 1:
+                        painter.drawPoint(points[0])
+                    else:
+                        painter.drawPolyline(points)
+                    continue
+
+                segment: list[QPointF] = []
+                for index in range(len(amplitudes) - 1):
+                    a, b = float(amplitudes[index]), float(amplitudes[index + 1])
+                    if max(a, b) < minimum or min(a, b) > maximum:
+                        if len(segment) > 1:
+                            painter.drawPolyline(QPolygonF(segment))
+                        segment = []
+                        continue
+
+                    first_position, last_position = (
+                        float(positions[index]),
+                        float(positions[index + 1]),
                     )
-                if len(points) == 1:
-                    painter.drawPoint(points[0])
-                else:
-                    painter.drawPolyline(points)
+                    first_value, last_value = a, b
+                    if a < minimum or a > maximum:
+                        first_value = minimum if a < minimum else maximum
+                        first_position += (last_position - first_position) * _segment_crossing(
+                            a, b, first_value
+                        )
+                    if b < minimum or b > maximum:
+                        last_value = minimum if b < minimum else maximum
+                        last_position = float(positions[index]) + (
+                            float(positions[index + 1]) - float(positions[index])
+                        ) * _segment_crossing(a, b, last_value)
+                    first_point = plot_point(first_position, first_value)
+                    last_point = plot_point(last_position, last_value)
+                    if segment and segment[-1] != first_point:
+                        if len(segment) > 1:
+                            painter.drawPolyline(QPolygonF(segment))
+                        segment = []
+                    if not segment:
+                        segment.append(first_point)
+                    segment.append(last_point)
+                if len(segment) > 1:
+                    painter.drawPolyline(QPolygonF(segment))
+                if len(amplitudes) == 1 and minimum <= float(amplitudes[0]) <= maximum:
+                    painter.drawPoint(plot_point(float(positions[0]), float(amplitudes[0])))
             count = self.source_view.image.shape[0 if self.vertical else 1]
             origin = rect.top() if self.vertical else rect.left()
             extent = rect.height() if self.vertical else rect.width()
@@ -840,6 +1148,85 @@ class DetectorPanel(QWidget):
         ):
             contrast_layout.addWidget(widget)
 
+        profile_controls = QWidget(self)
+        profile_layout = QGridLayout(profile_controls)
+        profile_layout.setContentsMargins(0, 0, 0, 0)
+        self.pin_center_button = QPushButton("Follow pointer")
+        self.pin_center_button.setCheckable(True)
+        self.pin_center_button.setToolTip(
+            "Pin the integration center; pointer readout still follows the mouse."
+        )
+        self.column_control = QSpinBox()
+        self.row_control = QSpinBox()
+        self.row_width_control = QSpinBox()
+        self.column_width_control = QSpinBox()
+        for control in (
+            self.column_control,
+            self.row_control,
+            self.row_width_control,
+            self.column_width_control,
+        ):
+            control.setKeyboardTracking(False)
+            control.setMaximum(16_384)
+        for control in (self.row_width_control, self.column_width_control):
+            control.setMinimum(1)
+        for label, control, column in (
+            ("column_px", self.column_control, 1),
+            ("row_px", self.row_control, 3),
+            ("row width", self.row_width_control, 5),
+            ("column width", self.column_width_control, 7),
+        ):
+            profile_layout.addWidget(QLabel(label), 0, column - 1)
+            profile_layout.addWidget(control, 0, column)
+        profile_layout.addWidget(self.pin_center_button, 1, 0, 1, 2)
+        self.profile_measure_control = QComboBox()
+        self.profile_measure_control.addItem("Sum", "sum")
+        self.profile_measure_control.addItem("Mean / valid px", "mean")
+        self.profile_scope_control = QComboBox()
+        for label, scope in (
+            ("Bands", "band"),
+            ("Full detector", "full"),
+            ("Inspection ROI", "roi"),
+        ):
+            self.profile_scope_control.addItem(label, scope)
+        self.profile_scope_control.model().item(2).setEnabled(False)
+        self.draw_roi_button = QPushButton("Draw ROI")
+        self.draw_roi_button.setCheckable(True)
+        profile_layout.addWidget(self.profile_measure_control, 1, 2, 1, 2)
+        profile_layout.addWidget(self.profile_scope_control, 1, 4, 1, 2)
+        profile_layout.addWidget(self.draw_roi_button, 1, 6, 1, 2)
+
+        scale_controls = QWidget(self)
+        scale_layout = QHBoxLayout(scale_controls)
+        scale_layout.setContentsMargins(0, 0, 0, 0)
+        self.horizontal_pin_scale = QCheckBox("H pinned scale")
+        self.vertical_pin_scale = QCheckBox("V pinned scale")
+        self.horizontal_scale_low = QLineEdit("0")
+        self.horizontal_scale_high = QLineEdit("1")
+        self.vertical_scale_low = QLineEdit("0")
+        self.vertical_scale_high = QLineEdit("1")
+        for entry in (
+            self.horizontal_scale_low,
+            self.horizontal_scale_high,
+            self.vertical_scale_low,
+            self.vertical_scale_high,
+        ):
+            entry.setMaximumWidth(90)
+            entry.setPlaceholderText("scientific value")
+        self.apply_profile_scale = QPushButton("Apply scales")
+        for widget in (
+            self.horizontal_pin_scale,
+            self.horizontal_scale_low,
+            self.horizontal_scale_high,
+            self.vertical_pin_scale,
+            self.vertical_scale_low,
+            self.vertical_scale_high,
+            self.apply_profile_scale,
+        ):
+            scale_layout.addWidget(widget)
+        self.profile_status = QLabel("Bands: 1 row x 1 column · sum")
+        self.profile_status.setWordWrap(True)
+
         layers = QWidget(self)
         layer_layout = QHBoxLayout(layers)
         layer_layout.setContentsMargins(0, 0, 0, 0)
@@ -870,15 +1257,22 @@ class DetectorPanel(QWidget):
         layout.setSpacing(2)
         layout.addWidget(navigation, 0, 0, 1, 2)
         layout.addWidget(contrast, 1, 0, 1, 2)
-        layout.addWidget(self.horizontal, 2, 0)
-        layout.addWidget(self.view, 3, 0)
-        layout.addWidget(self.vertical, 3, 1)
-        layout.addWidget(self.cursor_label, 4, 0, 1, 2)
-        layout.addWidget(self.contrast_note, 5, 0, 1, 2)
-        layout.addWidget(layers, 6, 0, 1, 2)
-        layout.setRowStretch(3, 1)
+        layout.addWidget(profile_controls, 2, 0, 1, 2)
+        layout.addWidget(scale_controls, 3, 0, 1, 2)
+        layout.addWidget(self.horizontal, 4, 0)
+        layout.addWidget(self.view, 5, 0)
+        layout.addWidget(self.vertical, 5, 1)
+        layout.addWidget(self.profile_status, 6, 0, 1, 2)
+        layout.addWidget(self.cursor_label, 7, 0, 1, 2)
+        layout.addWidget(self.contrast_note, 8, 0, 1, 2)
+        layout.addWidget(layers, 9, 0, 1, 2)
+        layout.setRowStretch(5, 1)
         layout.setColumnStretch(0, 1)
         self.view.crosshair_changed.connect(self._refresh_profile_if_needed)
+        self.view.crosshair_changed.connect(self._sync_profile_position)
+        self.view.pin_requested.connect(lambda: self.pin_center_button.setChecked(True))
+        self.view.band_edge_dragged.connect(self._drag_band_edge)
+        self.view.roi_selected.connect(self._apply_roi)
         self.view.painted.connect(self._refresh_axes)
         self.view.view_state_changed.connect(self._sync_controls)
         self.view.cursor_changed.connect(self._show_cursor)
@@ -886,6 +1280,17 @@ class DetectorPanel(QWidget):
         self.fit_button.clicked.connect(self.view.fit_image)
         self.native_button.clicked.connect(self.view.native_pixel_scale)
         self.box_button.toggled.connect(self._set_box_zoom)
+        self.draw_roi_button.toggled.connect(self._set_roi_selection)
+        self.pin_center_button.toggled.connect(self._set_pin_center)
+        for control in (self.column_control, self.row_control):
+            control.valueChanged.connect(self._center_controls_changed)
+        for control in (self.row_width_control, self.column_width_control):
+            control.valueChanged.connect(self._query_changed)
+        self.profile_measure_control.currentIndexChanged.connect(self._query_changed)
+        self.profile_scope_control.currentIndexChanged.connect(self._query_changed)
+        self.apply_profile_scale.clicked.connect(self._apply_profile_scales)
+        self.horizontal_pin_scale.toggled.connect(self._apply_profile_scales)
+        self.vertical_pin_scale.toggled.connect(self._apply_profile_scales)
         self._shortcuts = []
         for sequence, action in (
             ("Ctrl+0", self.view.fit_image),
@@ -901,14 +1306,159 @@ class DetectorPanel(QWidget):
         self.auto_button.clicked.connect(self._auto_contrast)
         for control in (self.image_layer, self.crosshair_layer, self.marker_layer):
             control.toggled.connect(self._apply_layers)
-        self._profile_crosshair: tuple[int, int] | None = None
+        self._profile_key: tuple[object, ...] | None = None
+        self._full_profiles: BandProfiles | None = None
+        self._full_mean_profiles: BandProfiles | None = None
+        self._current_profiles: BandProfiles | None = None
+        self._roi_bounds: tuple[int, int, int, int] | None = None
+        self.acquisition_identity: object = None
         self._profile_axis_rect: QRectF | None = None
         self._sync_controls()
         self._marker_count_changed(0)
 
     def _set_box_zoom(self, enabled: bool) -> None:
+        if enabled and self.draw_roi_button.isChecked():
+            self.draw_roi_button.setChecked(False)
         self.view.box_zoom_enabled = enabled
         self.view.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def _set_roi_selection(self, enabled: bool) -> None:
+        if enabled and self.box_button.isChecked():
+            self.box_button.setChecked(False)
+        self.view.roi_select_enabled = enabled
+        self.view.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def _set_pin_center(self, pinned: bool) -> None:
+        self.view.follow_cursor = not pinned
+        self.pin_center_button.setText("Pinned center" if pinned else "Follow pointer")
+        self.view.view_state_changed.emit()
+
+    def _sync_profile_position(self) -> None:
+        if self.view.image is None:
+            return
+        for control, value in zip(
+            (self.column_control, self.row_control), self.view.crosshair, strict=True
+        ):
+            if control.value() != value:
+                control.blockSignals(True)
+                control.setValue(value)
+                control.blockSignals(False)
+
+    def _center_controls_changed(self) -> None:
+        if self.view.image is None:
+            return
+        center = (self.column_control.value(), self.row_control.value())
+        if center == self.view.crosshair:
+            return
+        if not self.pin_center_button.isChecked():
+            self.pin_center_button.setChecked(True)
+        self.view.crosshair = center
+        self.view._request_paint()
+        self.view.crosshair_changed.emit()
+
+    def _query_changed(self) -> None:
+        if self.view.image is None:
+            return
+        self._refresh_profile_if_needed()
+        self.view.view_state_changed.emit()
+
+    def _drag_band_edge(self, edge: str, index: int) -> None:
+        if self.view.image is None or self.profile_scope_control.currentData() != "band":
+            return
+        current = (
+            self.view.profile_row_bounds
+            if edge.startswith("row")
+            else self.view.profile_column_bounds
+        )
+        start, stop = current
+        if edge.endswith("start"):
+            start = min(index, stop - 1)
+        else:
+            stop = max(index, start + 1)
+        width = stop - start
+        center = start + (width - 1) // 2
+        vertical = edge.startswith("row")
+        width_control = self.row_width_control if vertical else self.column_width_control
+        width_control.blockSignals(True)
+        width_control.setValue(width)
+        width_control.blockSignals(False)
+        column, row = self.view.crosshair
+        self.view.crosshair = (column, center) if vertical else (center, row)
+        self._sync_profile_position()
+        if not self.pin_center_button.isChecked():
+            self.pin_center_button.setChecked(True)
+        self.view._request_paint()
+        self._query_changed()
+
+    def _apply_roi(self, bounds: object) -> None:
+        assert isinstance(bounds, tuple) and len(bounds) == 4
+        self._roi_bounds = bounds
+        self.profile_scope_control.model().item(2).setEnabled(True)
+        already_selected = self.profile_scope_control.currentIndex() == 2
+        self.profile_scope_control.setCurrentIndex(2)
+        self.draw_roi_button.setChecked(False)
+        if already_selected:
+            self._query_changed()
+
+    def _apply_profile_scales(self) -> None:
+        def limits(checked: bool, low_text: str, high_text: str) -> tuple[float, float] | None:
+            if not checked:
+                return None
+            low, high = float(low_text), float(high_text)
+            if (
+                not math.isfinite(low)
+                or not math.isfinite(high)
+                or not low < high
+                or not math.isfinite(high - low)
+            ):
+                raise ValueError("pinned profile limits need finite low < high")
+            return low, high
+
+        try:
+            horizontal = limits(
+                self.horizontal_pin_scale.isChecked(),
+                self.horizontal_scale_low.text(),
+                self.horizontal_scale_high.text(),
+            )
+            vertical = limits(
+                self.vertical_pin_scale.isChecked(),
+                self.vertical_scale_low.text(),
+                self.vertical_scale_high.text(),
+            )
+        except (ValueError, OverflowError) as exc:
+            for checkbox, low_entry, high_entry, plot in (
+                (
+                    self.horizontal_pin_scale,
+                    self.horizontal_scale_low,
+                    self.horizontal_scale_high,
+                    self.horizontal,
+                ),
+                (
+                    self.vertical_pin_scale,
+                    self.vertical_scale_low,
+                    self.vertical_scale_high,
+                    self.vertical,
+                ),
+            ):
+                applied = plot.intensity_limits
+                checkbox.blockSignals(True)
+                checkbox.setChecked(applied is not None)
+                checkbox.blockSignals(False)
+                if applied is not None:
+                    low_entry.setText(format(applied[0], ".17g"))
+                    high_entry.setText(format(applied[1], ".17g"))
+            self.profile_status.setText(str(exc))
+            return
+        if (
+            self.horizontal.intensity_limits != horizontal
+            or self.vertical.intensity_limits != vertical
+        ):
+            self.view._request_paint()
+        self.horizontal.set_intensity_limits(horizontal)
+        self.vertical.set_intensity_limits(vertical)
+        if self._current_profiles is not None:
+            self._update_profile_status(self._current_profiles)
+        self.view.view_state_changed.emit()
 
     def _sync_controls(self) -> None:
         view = self.view
@@ -983,6 +1533,166 @@ class DetectorPanel(QWidget):
                 " · Q/angles unavailable · saturation unknown"
             )
 
+    def _reset_profile_state(self, acquisition_identity: object = None) -> None:
+        self.acquisition_identity = acquisition_identity
+        self._profile_key = None
+        self._full_profiles = None
+        self._full_mean_profiles = None
+        self._current_profiles = None
+        self._roi_bounds = None
+        self.view.follow_cursor = True
+        self.view.roi_select_enabled = False
+        self.view.profile_scope = "band"
+        self.profile_scope_control.model().item(2).setEnabled(False)
+        for control, value in (
+            (self.pin_center_button, False),
+            (self.draw_roi_button, False),
+            (self.horizontal_pin_scale, False),
+            (self.vertical_pin_scale, False),
+        ):
+            control.blockSignals(True)
+            control.setChecked(value)
+            control.blockSignals(False)
+        self.pin_center_button.setText("Follow pointer")
+        for control, index in (
+            (self.profile_measure_control, 0),
+            (self.profile_scope_control, 0),
+        ):
+            control.blockSignals(True)
+            control.setCurrentIndex(index)
+            control.blockSignals(False)
+        rows, columns = self.view.image.shape
+        for control, maximum, value in (
+            (self.column_control, columns - 1, self.view.crosshair[0]),
+            (self.row_control, rows - 1, self.view.crosshair[1]),
+            (self.row_width_control, 16_384, 1),
+            (self.column_width_control, 16_384, 1),
+        ):
+            control.blockSignals(True)
+            control.setMaximum(maximum)
+            control.setValue(value)
+            control.blockSignals(False)
+        self.horizontal.set_intensity_limits(None)
+        self.vertical.set_intensity_limits(None)
+        self.profile_status.setText("Bands: 1 row x 1 column · sum")
+
+    def restore_profile_state(self, state: DetectorViewState) -> None:
+        """Apply a validated saved inspection query before publishing its profiles."""
+
+        if self.view.image is None:
+            raise ValueError("cannot restore profiles before the native image")
+        rows, columns = self.view.image.shape
+        if state.profile_roi is not None:
+            _, c1, _, r1 = state.profile_roi
+            if c1 > columns or r1 > rows:
+                raise ValueError("saved inspection ROI is outside this detector")
+        self._roi_bounds = state.profile_roi
+        self.profile_scope_control.model().item(2).setEnabled(self._roi_bounds is not None)
+        for control, value in (
+            (self.row_width_control, state.profile_row_width),
+            (self.column_width_control, state.profile_column_width),
+        ):
+            control.blockSignals(True)
+            control.setValue(value)
+            control.blockSignals(False)
+        for control, value in (
+            (
+                self.profile_measure_control,
+                self.profile_measure_control.findData(state.profile_measure),
+            ),
+            (self.profile_scope_control, self.profile_scope_control.findData(state.profile_scope)),
+        ):
+            control.blockSignals(True)
+            control.setCurrentIndex(value)
+            control.blockSignals(False)
+        self.pin_center_button.blockSignals(True)
+        self.pin_center_button.setChecked(not state.profile_follow)
+        self.pin_center_button.blockSignals(False)
+        self.pin_center_button.setText(
+            "Follow pointer" if state.profile_follow else "Pinned center"
+        )
+        self.view.follow_cursor = state.profile_follow
+        for checkbox, low_entry, high_entry, limits, plot in (
+            (
+                self.horizontal_pin_scale,
+                self.horizontal_scale_low,
+                self.horizontal_scale_high,
+                state.horizontal_intensity_limits,
+                self.horizontal,
+            ),
+            (
+                self.vertical_pin_scale,
+                self.vertical_scale_low,
+                self.vertical_scale_high,
+                state.vertical_intensity_limits,
+                self.vertical,
+            ),
+        ):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(limits is not None)
+            checkbox.blockSignals(False)
+            if limits is not None:
+                low_entry.setText(format(limits[0], ".17g"))
+                high_entry.setText(format(limits[1], ".17g"))
+            plot.set_intensity_limits(limits)
+        self._sync_profile_position()
+        self._profile_key = None
+        self._refresh_profile_if_needed()
+
+    def _query_key(self) -> tuple[object, ...]:
+        scope = self.profile_scope_control.currentData()
+        band_bounds = None
+        if scope == "band":
+            rows, columns = self.view.image.shape
+            band_bounds = _effective_band_bounds(
+                rows,
+                columns,
+                *self.view.crosshair,
+                self.row_width_control.value(),
+                self.column_width_control.value(),
+            )
+        return (
+            self.acquisition_identity,
+            id(self.view.image),
+            self.view.data_revision,
+            scope,
+            self.profile_measure_control.currentData(),
+            band_bounds,
+            self._roi_bounds if scope == "roi" else None,
+        )
+
+    def _update_profile_status(self, profiles: BandProfiles) -> None:
+        column, row = self.view.crosshair
+        h_support = int(profiles.horizontal_support[column])
+        v_support = int(profiles.vertical_support[row])
+        r0, r1 = profiles.row_bounds
+        c0, c1 = profiles.column_bounds
+        scope = self.profile_scope_control.currentData()
+        measure = self.profile_measure_control.currentData()
+        self.profile_status.setText(
+            f"{scope} · {measure} · rows [{r0},{r1}) · columns [{c0},{c1})"
+            f" · valid support H@column={h_support}, V@row={v_support}"
+            " · zero support is missing"
+        )
+
+    def _present_profiles(
+        self, profiles: BandProfiles, scope: str, key: tuple[object, ...]
+    ) -> None:
+        prior_generation = self.view.request_generation
+        self.view.set_profile_overlay(
+            scope=scope,
+            row_bounds=profiles.row_bounds,
+            column_bounds=profiles.column_bounds,
+            roi=self._roi_bounds,
+        )
+        if self.view.request_generation == prior_generation:
+            self.view._request_paint()
+        self.horizontal.set_values(profiles.horizontal, profiles.horizontal_support)
+        self.vertical.set_values(profiles.vertical, profiles.vertical_support)
+        self._current_profiles = profiles
+        self._profile_key = key
+        self._update_profile_status(profiles)
+
     def set_image(self, image: NDArray[np.generic]) -> None:
         supplied = np.asarray(image)
         if supplied.ndim != 2 or not all(supplied.shape):
@@ -991,9 +1701,9 @@ class DetectorPanel(QWidget):
             supplied, column_px=supplied.shape[1] // 2, row_px=supplied.shape[0] // 2
         )
         self.view.set_image(image)
+        self._reset_profile_state()
         self._profile_axis_rect = None
         self._sync_controls()
-        self._profile_crosshair = None
         self._refresh_profile_if_needed()
 
     def set_prepared_image(
@@ -1001,21 +1711,31 @@ class DetectorPanel(QWidget):
         native_counts: NDArray[np.int32],
         display: NDArray[np.float32],
         profiles: BandProfiles,
+        full_profiles: BandProfiles,
         low_value: float,
         high_value: float,
         max_value: float,
         min_positive: float | None = None,
+        acquisition_identity: object = None,
     ) -> None:
         """Publish a worker-prepared OSC result with its exact center bands."""
 
+        rows, columns = native_counts.shape
+        if (
+            full_profiles.row_bounds != (0, rows)
+            or full_profiles.column_bounds != (0, columns)
+            or full_profiles.horizontal.shape != (columns,)
+            or full_profiles.vertical.shape != (rows,)
+        ):
+            raise ValueError("prepared full marginals do not cover the native detector")
         self.view.set_prepared_image(
             native_counts, display, low_value, high_value, max_value, min_positive
         )
+        self._reset_profile_state(acquisition_identity)
         self._profile_axis_rect = None
         self._sync_controls()
-        self.horizontal.set_values(profiles.horizontal, profiles.horizontal_support)
-        self.vertical.set_values(profiles.vertical, profiles.vertical_support)
-        self._profile_crosshair = self.view.crosshair
+        self._full_profiles = full_profiles
+        self._present_profiles(profiles, "band", self._query_key())
 
     def _refresh_axes(self, _generation: int, _timestamp: float) -> None:
         if self.view.image is None:
@@ -1028,11 +1748,49 @@ class DetectorPanel(QWidget):
         self.vertical.update()
 
     def _refresh_profile_if_needed(self) -> None:
-        if self.view.image is None or self._profile_crosshair == self.view.crosshair:
+        if self.view.image is None:
             return
-        profiles = exact_band_profiles(
-            self.view.image, column_px=self.view.crosshair[0], row_px=self.view.crosshair[1]
+        key = self._query_key()
+        if self._profile_key == key and self._current_profiles is not None:
+            self._update_profile_status(self._current_profiles)
+            return
+        scope = self.profile_scope_control.currentData()
+        measure = self.profile_measure_control.currentData()
+        rows, columns = self.view.image.shape
+        covers_full_detector = scope == "full" or (
+            scope == "band" and key[5] == ((0, rows), (0, columns))
         )
-        self.horizontal.set_values(profiles.horizontal, profiles.horizontal_support)
-        self.vertical.set_values(profiles.vertical, profiles.vertical_support)
-        self._profile_crosshair = self.view.crosshair
+        if covers_full_detector:
+            if self._full_profiles is None:
+                self._full_profiles = exact_band_profiles(
+                    self.view.image,
+                    column_px=self.view.crosshair[0],
+                    row_px=self.view.crosshair[1],
+                    scope="full",
+                )
+            if measure == "mean":
+                if self._full_mean_profiles is None:
+                    sums = self._full_profiles
+                    self._full_mean_profiles = BandProfiles(
+                        _mean_per_valid(sums.horizontal, sums.horizontal_support),
+                        _mean_per_valid(sums.vertical, sums.vertical_support),
+                        sums.horizontal_support,
+                        sums.vertical_support,
+                        sums.row_bounds,
+                        sums.column_bounds,
+                    )
+                profiles = self._full_mean_profiles
+            else:
+                profiles = self._full_profiles
+        else:
+            profiles = exact_band_profiles(
+                self.view.image,
+                column_px=self.view.crosshair[0],
+                row_px=self.view.crosshair[1],
+                row_width=self.row_width_control.value(),
+                column_width=self.column_width_control.value(),
+                scope=scope,
+                roi_column_row_bounds=self._roi_bounds if scope == "roi" else None,
+                measure=measure,
+            )
+        self._present_profiles(profiles, scope, key)

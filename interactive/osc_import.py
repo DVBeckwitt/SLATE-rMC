@@ -39,6 +39,7 @@ class PreparedOsc:
     native_counts: NDArray[np.int32]
     display: NDArray[np.float32]
     profiles: BandProfiles
+    full_profiles: BandProfiles
     low_value: float
     high_value: float
     max_value: float
@@ -76,6 +77,9 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
     profiles = exact_band_profiles(
         native, column_px=native.shape[1] // 2, row_px=native.shape[0] // 2
     )
+    full_profiles = exact_band_profiles(
+        native, column_px=native.shape[1] // 2, row_px=native.shape[0] // 2, scope="full"
+    )
     if control.canceled:
         raise OscReadCancelled("OSC import canceled")
     assert image.decoded_sha256 is not None
@@ -86,6 +90,7 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
         native,
         display,
         profiles,
+        full_profiles,
         low_value,
         high_value,
         maximum,
@@ -104,6 +109,10 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
                 profiles.vertical,
                 profiles.horizontal_support,
                 profiles.vertical_support,
+                full_profiles.horizontal,
+                full_profiles.vertical,
+                full_profiles.horizontal_support,
+                full_profiles.vertical_support,
             )
         )
         + len(image.metadata.header)

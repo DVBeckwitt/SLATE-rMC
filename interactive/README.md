@@ -53,15 +53,24 @@ when the pointer is outside the image. Horizontal and vertical marginal position
 same native viewport transform. Numeric Low/High entries accept scientific notation; **Apply**
 validates them and **Auto** uses extrema cached at image admission. Linear and signed modes change
 only color; positive log marks nonpositive and nonfinite texture values with a checkerboard.
-The native counts and exact marginal values remain unchanged. Image, crosshair and available
+The native counts and exact marginal values remain unchanged. The profile center follows the
+pointer until **Pinned center** is chosen or its native column/row is entered. The two shaded
+integration bands have independent widths, adjustable by numeric entry or dragging their edges.
+Choose sum or mean per valid pixel and integrate over bands, the full detector, or a drawn
+inspection ROI. The status line shows effective native bounds and valid support at the selected
+center. Missing bins are omitted from the plots. Horizontal and vertical intensity scales can be
+pinned separately with finite low/high values; otherwise each plot scales to its current data.
+Project save and recovery preserve these inspection settings. Full-detector projections are
+prepared with the OSC import and cached per selected native image.
+Image, crosshair and available
 marker layers can be shown independently; fitted-result overlays are unavailable without a fit.
 Contrast clipping is a display choice, while detector saturation remains unknown without a
 supported source threshold. Q and scattering angles remain unavailable until geometry is bound.
 
 Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
 16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
-The 96 MiB worker result limit includes the native int32 plane, float32 display plane and exact
-center profiles. Imports outside those limits fail with a visible message. The acquisition SHA-256
+The 96 MiB worker result limit includes the native int32 plane, float32 display plane, exact
+center profiles and full-detector marginals. Imports outside those limits fail with a visible message. The acquisition SHA-256
 is over the decoded OSC byte stream; it identifies exactly the header and payload consumed by the
 reader, whether the file was plain or gzip compressed.
 

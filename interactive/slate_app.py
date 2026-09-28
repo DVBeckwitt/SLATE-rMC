@@ -364,6 +364,14 @@ class ShellWindow(QMainWindow):
                 view.show_image,
                 view.show_crosshair,
                 view.show_markers,
+                view.follow_cursor,
+                self.detector_panel.row_width_control.value(),
+                self.detector_panel.column_width_control.value(),
+                self.detector_panel.profile_measure_control.currentData(),
+                self.detector_panel.profile_scope_control.currentData(),
+                self.detector_panel._roi_bounds,
+                self.detector_panel.horizontal.intensity_limits,
+                self.detector_panel.vertical.intensity_limits,
             )
         elif (
             self._pending_view_restore is not None
@@ -976,10 +984,12 @@ class ShellWindow(QMainWindow):
                 value.native_counts,
                 value.display,
                 value.profiles,
+                value.full_profiles,
                 value.low_value,
                 value.high_value,
                 value.max_value,
                 value.min_positive,
+                identity.acquisition_id,
             )
         except ValueError as exc:
             self._show_state("error", "Unsupported detector size", str(exc))
@@ -1030,6 +1040,13 @@ class ShellWindow(QMainWindow):
                 "error", "Saved view unavailable", "Crosshair is outside this detector."
             )
             return
+        if detector.profile_roi is not None:
+            _, c1, _, r1 = detector.profile_roi
+            if c1 > view.image.shape[1] or r1 > view.image.shape[0]:
+                self._show_state(
+                    "error", "Saved view unavailable", "Inspection ROI is outside this detector."
+                )
+                return
         self._restoring_view = True
         try:
             current_dpr = view.devicePixelRatioF()
@@ -1065,7 +1082,7 @@ class ShellWindow(QMainWindow):
             view.show_markers = detector.show_markers
             view.set_levels(detector.low_value, detector.high_value, mode=detector.contrast_mode)
             self.detector_panel._sync_controls()
-            self.detector_panel._refresh_profile_if_needed()
+            self.detector_panel.restore_profile_state(detector)
         finally:
             self._restoring_view = False
 

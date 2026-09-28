@@ -1067,7 +1067,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
 | [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Accepted after review repair. |
 | [x] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. Accepted after focused review. |
-| [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
+| [x] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. Accepted after sustained native-loop review at `4c921c1`. |
 | [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
 | [ ] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
 | [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
@@ -1513,7 +1513,7 @@ physical monitor scanout latency. The sustained
 native-loop packet below follows this diagnostic; no renderer change is supported by the pair.
 U02 remains open, and the original measured misses and target remain unchanged.
 
-#### U02 sustained native-loop qualification packet (2026-09-28; supervisor review pending)
+#### U02 sustained native-loop qualification packet (2026-09-28; accepted)
 
 The reviewed pair authorized a new 100 s aggregate active allowance. A tiny 0.01503 s
 preflight checked empty/nonempty percentile inputs, a pre-construction OpenGL timing hook on
@@ -1617,8 +1617,65 @@ reported Qt composition boundary is not physical scanout. Profile paints were co
 timed, but this packet did not bind each profile-state paint to a matching composed frame;
 it does not newly qualify presented-profile latency. Earlier exact profile-value and
 unchanged core evidence remain separate. The historical 13 ms request-supply misses are
-preserved and their cause is still unknown. U02 completion remains for supervisor review;
-the plan checkbox is not changed here.
+preserved and their cause is still unknown. Independent review accepted U02 at `4c921c1`
+for the declared changed-state scenario without promoting the older misses or claiming new
+presented-profile latency.
+
+#### U03 implementation checkpoint (2026-09-28; qualification pending)
+
+The detector reader now follows or pins a native-coordinate profile center, supports independent
+shaded row/column bands with numeric widths and pinned edge dragging, and offers sum, mean per
+valid pixel, full-detector and drawn-ROI projections. The two intensity plots auto-scale or accept
+independent finite pinned limits. Effective half-open bounds and center-bin support are visible.
+Project and recovery documents save these choices with strict legacy/U02 defaults. Native int32
+OSC import prepares both center bands and full-detector marginals in the worker; full projections
+are cached by data identity and equivalent clipped band support. No prefix table was introduced.
+
+Small independent enumeration covered non-square band/full/ROI sum, support and mean with and
+without masks; separate checks covered signed/nonfinite and zero-support values, edge clipping,
+integer overflow rejection, JSON roundtrip/older-view defaults, offscreen Qt click/pan/edge
+gestures, rendered profile crossings and re-entry gaps at pinned intensity bounds, and an
+external atomic project writer/reader roundtrip with the new state. The clipping check also
+covered nearby large finite values and an overflowing opposite-sign difference. A direct
+3000x3000 int32 broad ROI reduction cost about 39-43 ms before the one measured repair and
+about 8-9 ms after using native
+int64 sums without temporary validity arrays. The named hBN OSC worker prepared the 3000x3000
+native image, center bands and full marginals in 0.157 s with 68.85 MiB retained result bytes.
+
+An initial standalone-panel timing attempt ran three 30 s windows with a 13 ms requested timer.
+Its 13.77-13.98 ms matched-profile p95 values are component observations only: it lacked the
+production shell and markers, and its swap attribution did not prove presented profiles. A
+corrected single native-shell window used the same 3000x3000 hBN source, 4,000 markers, the
+production Fusion style, an 8 ms PreciseTimer input request and 10 ms heartbeat on the Sceptre
+C27 (2) 1920x1080, DPR 1 display. The source decoded SHA-256 was
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`. The external
+reporter was run with `QT_QPA_PLATFORM=windows`, `PYTHONPATH=interactive;src` and `python -u -B`;
+it was removed after the packet. Its 30.009 s active interval had 2,650 mixed profile-query
+callbacks and 2,231 requests with matching profile paints before the attributed composition.
+All values below are p50/p95/p99/max in milliseconds.
+
+| Corrected native-shell window | p50 / p95 / p99 / max |
+| --- | --- |
+| Profile input to matching composition | 12.567 / 14.215 / 17.051 / 24.278 |
+| Fresh composition interval | 13.341 / 18.305 / 22.624 / 27.716 |
+| All swap interval | 13.328 / 18.229 / 19.455 / 26.678 |
+| Input callback duration | 0.361 / 9.288 / 9.817 / 14.158 |
+| Actual input interval | 12.622 / 14.557 / 17.073 / 24.792 |
+| Heartbeat interval | 13.025 / 22.322 / 23.788 / 35.540 |
+
+There were 2,231 profile requests presented within the active window, 34 repeated swaps,
+zero same-generation or superseded paints, zero unmatched swaps and one texture upload. Repeated
+swap counts include setup and drain. The final generation `3316` and profile key matched after
+the 4.021 s drain. The detector viewport was 616x180 logical pixels; process RSS was 312.8 MiB
+at active start and 306.2 MiB at report, with no sampled process peak. The 18.305 ms fresh-frame
+p95 misses the 16.7 ms target. Recovery save revision remained `-1` against view revision `2651`:
+the external temporary recovery directory denied writes, so saved-document equality was not
+verified. The corrected reporter emitted summaries without per-request raw streams or exact active
+timestamps, preventing independent recomputation. The first three windows plus the corrected
+window used 120.015 s of the 180 s active allowance; no further large run followed. This one
+corrected window is partial evidence; sustained three-window qualification and shell recovery
+readback remain open. No renderer or GUI bottleneck cause was established. Timing ends at Qt
+composition, not physical scanout.
 
 ### M2 — independent simulator
 

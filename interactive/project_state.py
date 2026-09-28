@@ -154,6 +154,14 @@ class DetectorViewState:
     show_image: bool = True
     show_crosshair: bool = True
     show_markers: bool = True
+    profile_follow: bool = True
+    profile_row_width: int = 1
+    profile_column_width: int = 1
+    profile_measure: str = "sum"
+    profile_scope: str = "band"
+    profile_roi: tuple[int, int, int, int] | None = None
+    horizontal_intensity_limits: tuple[float, float] | None = None
+    vertical_intensity_limits: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -184,6 +192,44 @@ class DetectorViewState:
             for value in (self.show_image, self.show_crosshair, self.show_markers)
         ):
             raise ProjectFormatError("detector layer visibility must be Boolean")
+        if type(self.profile_follow) is not bool:
+            raise ProjectFormatError("profile follow state must be Boolean")
+        if any(
+            type(width) is not int or not 1 <= width <= 16_384
+            for width in (self.profile_row_width, self.profile_column_width)
+        ):
+            raise ProjectFormatError("profile band widths must be integers from 1 to 16384")
+        if self.profile_measure not in ("sum", "mean") or self.profile_scope not in (
+            "band",
+            "full",
+            "roi",
+        ):
+            raise ProjectFormatError("unsupported profile measure or scope")
+        if self.profile_roi is not None:
+            roi = self.profile_roi
+            if (
+                type(roi) is not tuple
+                or len(roi) != 4
+                or any(type(bound) is not int for bound in roi)
+            ):
+                raise ProjectFormatError("profile ROI needs four integer native bounds")
+            c0, c1, r0, r1 = roi
+            if not (0 <= c0 < c1 <= 16_384 and 0 <= r0 < r1 <= 16_384):
+                raise ProjectFormatError("profile ROI bounds are invalid")
+        if self.profile_scope == "roi" and self.profile_roi is None:
+            raise ProjectFormatError("profile ROI scope needs explicit bounds")
+        for label, limits in (
+            ("horizontal", self.horizontal_intensity_limits),
+            ("vertical", self.vertical_intensity_limits),
+        ):
+            if limits is None:
+                continue
+            if type(limits) is not tuple or len(limits) != 2:
+                raise ProjectFormatError(f"{label} intensity limits need two numbers")
+            low_limit = _float(limits[0], f"{label} intensity minimum")
+            high_limit = _float(limits[1], f"{label} intensity maximum")
+            if not low_limit < high_limit or not math.isfinite(high_limit - low_limit):
+                raise ProjectFormatError(f"{label} intensity limits must have finite span")
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +330,16 @@ def _detector_view(value: Any) -> DetectorViewState | None:
         "show_crosshair",
         "show_markers",
     }
+    profile_fields = current_fields | {
+        "profile_follow",
+        "profile_row_width",
+        "profile_column_width",
+        "profile_measure",
+        "profile_scope",
+        "profile_roi",
+        "horizontal_intensity_limits",
+        "vertical_intensity_limits",
+    }
     if type(value) is not dict:
         raise ProjectFormatError("detector view must be an object")
     if set(value) == legacy_fields:
@@ -301,7 +357,19 @@ def _detector_view(value: Any) -> DetectorViewState | None:
             data["high_value"],
             mode,
         )
-    data = _object(value, current_fields, "detector view")
+    data = _object(
+        value, profile_fields if set(value) == profile_fields else current_fields, "detector view"
+    )
+    earlier = set(data) == current_fields
+
+    def optional_tuple(field: str, length: int) -> tuple[Any, ...] | None:
+        supplied = data[field]
+        if supplied is None:
+            return None
+        if type(supplied) is not list or len(supplied) != length:
+            raise ProjectFormatError(f"{field} needs a {length}-element array")
+        return tuple(supplied)
+
     return DetectorViewState(
         data["column_px"],
         data["row_px"],
@@ -316,6 +384,14 @@ def _detector_view(value: Any) -> DetectorViewState | None:
         data["show_image"],
         data["show_crosshair"],
         data["show_markers"],
+        True if earlier else data["profile_follow"],
+        1 if earlier else data["profile_row_width"],
+        1 if earlier else data["profile_column_width"],
+        "sum" if earlier else data["profile_measure"],
+        "band" if earlier else data["profile_scope"],
+        None if earlier else optional_tuple("profile_roi", 4),
+        None if earlier else optional_tuple("horizontal_intensity_limits", 2),
+        None if earlier else optional_tuple("vertical_intensity_limits", 2),
     )
 
 
@@ -368,6 +444,24 @@ def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str
                 "show_image": detector.show_image,
                 "show_crosshair": detector.show_crosshair,
                 "show_markers": detector.show_markers,
+                "profile_follow": detector.profile_follow,
+                "profile_row_width": detector.profile_row_width,
+                "profile_column_width": detector.profile_column_width,
+                "profile_measure": detector.profile_measure,
+                "profile_scope": detector.profile_scope,
+                "profile_roi": (
+                    None if detector.profile_roi is None else list(detector.profile_roi)
+                ),
+                "horizontal_intensity_limits": (
+                    None
+                    if detector.horizontal_intensity_limits is None
+                    else list(detector.horizontal_intensity_limits)
+                ),
+                "vertical_intensity_limits": (
+                    None
+                    if detector.vertical_intensity_limits is None
+                    else list(detector.vertical_intensity_limits)
+                ),
             }
         ),
     }
