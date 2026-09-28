@@ -1,6 +1,6 @@
 # Native desktop UI grand plan
 
-Status: accepted feature scope; planned implementation, not delivered functionality.
+Status: accepted feature scope; staged implementation in progress.
 Updated: 2026-09-28. Delivery breakdown incorporates the audited plan at `a80e995`.
 
 Build one local desktop application for inspecting detector images, understanding experimental
@@ -713,7 +713,7 @@ checks only its new risk against this contract; U15 integrates the results, not 
 
 ## 11. Delivery plan and acceptance checklist
 
-This is the implementation plan and sole task checklist. All tasks remain unimplemented. Existing
+This is the implementation plan and sole task checklist. Eight tasks are accepted; 38 remain. Existing
 U identifiers are retained, with smaller lettered slices where the previous task was too broad.
 Dependencies govern execution; milestones group completion criteria and are not serial barriers.
 Use the delivery order below instead of waiting for every row in the preceding milestone.
@@ -1068,12 +1068,20 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Accepted after review repair. |
 | [x] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. Accepted after focused review. |
 | [x] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. Accepted after sustained native-loop review at `4c921c1`. |
-| [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
+| [x] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. Accepted after independent sustained native-shell review at `14c9799`; first/new ROI remains synchronous. |
 | [ ] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
 | [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
 | [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
 | [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
 | [ ] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+
+U02a is split into sequential subchanges without adding task IDs: (1) strict acquisition
+metadata, provenance and backward-compatible project persistence; (2) bounded per-candidate
+admission, retry/relink/cancel and selected-image ownership through the existing global job;
+(3) UUID-based review table, bulk mapping, material/reference pickers, filmstrip and explicit
+metadata export; (4) focused integrated checks and resource accounting. Each implementation
+commit touches at most five files. The sustained qualification gate remains open after these
+implementation commits.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 

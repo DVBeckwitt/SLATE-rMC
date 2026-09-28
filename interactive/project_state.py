@@ -4,17 +4,31 @@ import json
 import math
 import struct
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
 MAX_NAME_LENGTH = 256
 MAX_SOURCE_PATH_LENGTH = 4096
+METADATA_FIELDS = (
+    "role",
+    "specimen",
+    "mount",
+    "incidence_rad",
+    "exposure_s",
+    "detector_setup",
+    "material_id",
+    "cif_path",
+    "configuration_path",
+    "calibrant_id",
+    "dark_acquisition_id",
+    "mask_acquisition_id",
+)
 FLOAT32_DISPLAY_MAX = 3.4028234663852886e38
 FLOAT32_NORMAL_MIN = 1.1754943508222875e-38
 
@@ -71,11 +85,86 @@ def linear_display_limits(minimum: float, maximum: float) -> tuple[float, float]
 
 
 @dataclass(frozen=True, slots=True)
+class AcquisitionMetadata:
+    role: str | None = None
+    specimen: str | None = None
+    mount: str | None = None
+    incidence_rad: float | None = None
+    exposure_s: float | None = None
+    native_shape: tuple[int, int] | None = None
+    detector_setup: str | None = None
+    material_id: str | None = None
+    cif_path: Path | None = None
+    cif_sha256: str | None = None
+    configuration_path: Path | None = None
+    configuration_sha256: str | None = None
+    calibrant_id: str | None = None
+    dark_acquisition_id: UUID | None = None
+    mask_acquisition_id: UUID | None = None
+    provenance: tuple[tuple[str, str], ...] = ()
+    proposals: tuple[tuple[str, str, str], ...] = ()
+    revision: int = 0
+
+    def __post_init__(self) -> None:
+        if self.role is not None and self.role not in ("sample", "calibrant", "dark", "mask"):
+            raise ProjectFormatError("unsupported acquisition role")
+        for name in ("specimen", "mount", "detector_setup", "material_id", "calibrant_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _name(value, name)
+        if (
+            self.incidence_rad is not None
+            and not 0 <= _float(self.incidence_rad, "incidence_rad") <= math.pi / 2
+        ):
+            raise ProjectFormatError("commanded incidence must be from 0 to pi/2 radians")
+        if self.exposure_s is not None and _float(self.exposure_s, "exposure_s") <= 0:
+            raise ProjectFormatError("exposure must be positive seconds")
+        if self.native_shape is not None and (
+            type(self.native_shape) is not tuple
+            or len(self.native_shape) != 2
+            or any(type(axis) is not int or not 1 <= axis <= 16_384 for axis in self.native_shape)
+            or self.native_shape[0] * self.native_shape[1] > 12_000_000
+        ):
+            raise ProjectFormatError("invalid detector-native shape")
+        for label in ("cif", "configuration"):
+            path = getattr(self, f"{label}_path")
+            digest = getattr(self, f"{label}_sha256")
+            if (path is None) != (digest is None):
+                raise ProjectFormatError(f"{label} reference needs path and SHA-256")
+            if path is not None:
+                if (
+                    not isinstance(path, Path)
+                    or not str(path)
+                    or len(str(path)) > MAX_SOURCE_PATH_LENGTH
+                ):
+                    raise ProjectFormatError(f"invalid {label} path")
+                _digest(digest)
+        if type(self.revision) is not int or self.revision < 0:
+            raise ProjectFormatError("metadata revision must be nonnegative")
+        sources = [field for field, _ in self.provenance]
+        if len(sources) != len(set(sources)):
+            raise ProjectFormatError("duplicate metadata provenance")
+        for field_name, origin in self.provenance:
+            if field_name not in METADATA_FIELDS or getattr(self, field_name) is None:
+                raise ProjectFormatError("metadata provenance references an unset field")
+            _name(origin, "metadata provenance")
+        for field_name, value, origin in self.proposals:
+            if field_name not in METADATA_FIELDS or type(value) is not str or not value:
+                raise ProjectFormatError("invalid metadata proposal")
+            if len(value) > MAX_NAME_LENGTH:
+                raise ProjectFormatError("metadata proposal is too long")
+            _name(origin, "proposal provenance")
+        if len(self.proposals) > len(METADATA_FIELDS):
+            raise ProjectFormatError("too many metadata proposals")
+
+
+@dataclass(frozen=True, slots=True)
 class Acquisition:
     acquisition_id: UUID
     name: str
     source_path: Path
     source_sha256: str
+    metadata: AcquisitionMetadata = field(default_factory=AcquisitionMetadata)
 
     @classmethod
     def create(
@@ -110,6 +199,19 @@ class Project:
             raise ValueError("Acquisition IDs must be unique within a project")
         if len(ids) > MAX_ACQUISITIONS:
             raise ValueError(f"Project exceeds {MAX_ACQUISITIONS} acquisitions")
+        by_id = {item.acquisition_id: item for item in self.acquisitions}
+        for item in self.acquisitions:
+            for field_name, role in (
+                ("dark_acquisition_id", "dark"),
+                ("mask_acquisition_id", "mask"),
+            ):
+                linked = getattr(item.metadata, field_name)
+                if linked is not None and (
+                    linked == item.acquisition_id
+                    or linked not in by_id
+                    or by_id[linked].metadata.role != role
+                ):
+                    raise ValueError(f"{field_name} must name another {role} acquisition")
 
     @classmethod
     def create(cls, name: str = "Untitled project") -> "Project":
@@ -137,6 +239,51 @@ class Project:
         if len(order) != len(by_id) or set(order) != set(by_id):
             raise ValueError("Order must contain each acquisition ID exactly once")
         return replace(self, acquisitions=tuple(by_id[acquisition_id] for acquisition_id in order))
+
+    def update_metadata(self, acquisition_id: UUID, **changes: Any) -> "Project":
+        if not changes or not set(changes) <= set(METADATA_FIELDS) | {
+            "native_shape",
+            "provenance",
+            "proposals",
+        }:
+            raise ValueError("unsupported metadata change")
+        if acquisition_id not in {item.acquisition_id for item in self.acquisitions}:
+            raise KeyError(acquisition_id)
+        return replace(
+            self,
+            acquisitions=tuple(
+                replace(
+                    item,
+                    metadata=replace(item.metadata, **changes, revision=item.metadata.revision + 1),
+                )
+                if item.acquisition_id == acquisition_id
+                else item
+                for item in self.acquisitions
+            ),
+        )
+
+    def remove_acquisition(self, acquisition_id: UUID) -> "Project":
+        if acquisition_id not in {item.acquisition_id for item in self.acquisitions}:
+            raise KeyError(acquisition_id)
+        remaining = []
+        for item in self.acquisitions:
+            if item.acquisition_id == acquisition_id:
+                continue
+            changes = {
+                field_name: None
+                for field_name in ("dark_acquisition_id", "mask_acquisition_id")
+                if getattr(item.metadata, field_name) == acquisition_id
+            }
+            metadata = item.metadata
+            if changes:
+                sources = tuple(
+                    (name, source) for name, source in metadata.provenance if name not in changes
+                )
+                metadata = replace(
+                    metadata, **changes, provenance=sources, revision=metadata.revision + 1
+                )
+            remaining.append(replace(item, metadata=metadata))
+        return replace(self, acquisitions=tuple(remaining))
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +553,97 @@ def _source_reference(source: Path, document_path: Path) -> str:
     return reference
 
 
+def _resolved_reference(value: Any, document_path: Path, label: str) -> Path:
+    if type(value) is not str or not value or len(value) > MAX_SOURCE_PATH_LENGTH or "\0" in value:
+        raise ProjectFormatError(f"{label} has an invalid path")
+    source = Path(value)
+    if not source.is_absolute():
+        windows = PureWindowsPath(value)
+        if windows.drive or windows.root:
+            raise ProjectFormatError(f"{label} path is drive-relative or rooted")
+        source = document_path.parent / source
+    return source.absolute()
+
+
+def _metadata_document(metadata: AcquisitionMetadata, document_path: Path) -> dict[str, Any]:
+    return {
+        **{
+            field_name: (
+                str(getattr(metadata, field_name))
+                if field_name.endswith("_id") and isinstance(getattr(metadata, field_name), UUID)
+                else getattr(metadata, field_name)
+            )
+            for field_name in METADATA_FIELDS
+            if field_name not in ("cif_path", "configuration_path")
+        },
+        "native_shape": None if metadata.native_shape is None else list(metadata.native_shape),
+        "cif_path": None
+        if metadata.cif_path is None
+        else _source_reference(metadata.cif_path, document_path),
+        "cif_sha256": metadata.cif_sha256,
+        "configuration_path": None
+        if metadata.configuration_path is None
+        else _source_reference(metadata.configuration_path, document_path),
+        "configuration_sha256": metadata.configuration_sha256,
+        "provenance": [list(entry) for entry in metadata.provenance],
+        "proposals": [list(entry) for entry in metadata.proposals],
+        "revision": metadata.revision,
+    }
+
+
+def _metadata_from_document(value: Any, document_path: Path) -> AcquisitionMetadata:
+    keys = set(METADATA_FIELDS) | {
+        "native_shape",
+        "cif_sha256",
+        "configuration_sha256",
+        "provenance",
+        "proposals",
+        "revision",
+    }
+    data = _object(value, keys, "acquisition metadata")
+    shape = data["native_shape"]
+    if shape is not None and (type(shape) is not list or len(shape) != 2):
+        raise ProjectFormatError("native shape needs two axes")
+    provenance = data["provenance"]
+    proposals = data["proposals"]
+    if type(provenance) is not list or type(proposals) is not list:
+        raise ProjectFormatError("metadata provenance and proposals must be arrays")
+    if any(type(entry) is not list or len(entry) != 2 for entry in provenance):
+        raise ProjectFormatError("invalid metadata provenance entry")
+    if any(type(entry) is not list or len(entry) != 3 for entry in proposals):
+        raise ProjectFormatError("invalid metadata proposal entry")
+    return AcquisitionMetadata(
+        role=data["role"],
+        specimen=data["specimen"],
+        mount=data["mount"],
+        incidence_rad=data["incidence_rad"],
+        exposure_s=data["exposure_s"],
+        native_shape=None if shape is None else tuple(shape),
+        detector_setup=data["detector_setup"],
+        material_id=data["material_id"],
+        cif_path=None
+        if data["cif_path"] is None
+        else _resolved_reference(data["cif_path"], document_path, "CIF"),
+        cif_sha256=None if data["cif_sha256"] is None else _digest(data["cif_sha256"]),
+        configuration_path=None
+        if data["configuration_path"] is None
+        else _resolved_reference(data["configuration_path"], document_path, "configuration"),
+        configuration_sha256=None
+        if data["configuration_sha256"] is None
+        else _digest(data["configuration_sha256"]),
+        calibrant_id=data["calibrant_id"],
+        dark_acquisition_id=None
+        if data["dark_acquisition_id"] is None
+        else _uuid(data["dark_acquisition_id"], "dark acquisition ID"),
+        mask_acquisition_id=None
+        if data["mask_acquisition_id"] is None
+        else _uuid(data["mask_acquisition_id"], "mask acquisition ID"),
+        provenance=tuple(tuple(entry) for entry in provenance),
+        proposals=tuple(tuple(entry) for entry in proposals),
+        revision=data["revision"],
+    )
+
+
 def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str, Any]:
     """Encode only the currently supported numeric project and view state."""
     if len(state.project.acquisitions) > MAX_ACQUISITIONS:
@@ -416,6 +654,7 @@ def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str
             "name": _name(item.name, "acquisition name"),
             "source_path": _source_reference(item.source_path, document_path),
             "source_sha256": _digest(item.source_sha256),
+            "metadata": _metadata_document(item.metadata, document_path),
         }
         for item in state.project.acquisitions
     ]
@@ -486,7 +725,10 @@ def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str
 def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     """Validate a complete project before replacing the current shell state."""
     top = _object(value, {"schema_version", "source_hash_kind", "project", "view"}, "document")
-    if type(top["schema_version"]) is not int or top["schema_version"] != PROJECT_SCHEMA_VERSION:
+    if type(top["schema_version"]) is not int or top["schema_version"] not in (
+        1,
+        PROJECT_SCHEMA_VERSION,
+    ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
     if top["source_hash_kind"] != SOURCE_HASH_KIND:
         raise ProjectFormatError("unsupported source hash kind; expected decoded OSC bytes")
@@ -496,29 +738,22 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         raise ProjectFormatError(f"acquisitions must be a list of at most {MAX_ACQUISITIONS}")
     acquisitions = []
     for index, item in enumerate(items):
-        row = _object(item, {"id", "name", "source_path", "source_sha256"}, f"acquisition {index}")
-        reference = row["source_path"]
-        if (
-            type(reference) is not str
-            or not reference
-            or len(reference) > MAX_SOURCE_PATH_LENGTH
-            or "\0" in reference
-        ):
-            raise ProjectFormatError(f"acquisition {index} has an invalid source path")
-        source = Path(reference)
-        if not source.is_absolute():
-            windows = PureWindowsPath(reference)
-            if windows.drive or windows.root:
-                raise ProjectFormatError(
-                    f"acquisition {index} source path is drive-relative or rooted"
-                )
-            source = document_path.parent / source
+        fields = {"id", "name", "source_path", "source_sha256"}
+        row = _object(
+            item,
+            fields if top["schema_version"] == 1 else fields | {"metadata"},
+            f"acquisition {index}",
+        )
+        source = _resolved_reference(row["source_path"], document_path, f"acquisition {index}")
         acquisitions.append(
             Acquisition(
                 _uuid(row["id"], f"acquisition {index} ID"),
                 _name(row["name"], f"acquisition {index} name"),
-                source.absolute(),
+                source,
                 _digest(row["source_sha256"]),
+                AcquisitionMetadata()
+                if top["schema_version"] == 1
+                else _metadata_from_document(row["metadata"], document_path),
             )
         )
     try:
@@ -526,6 +761,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             _uuid(data["id"], "project ID"),
             _name(data["name"], "project name"),
             tuple(acquisitions),
+            PROJECT_SCHEMA_VERSION,
         )
     except ValueError as exc:
         raise ProjectFormatError(str(exc)) from exc
