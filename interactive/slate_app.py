@@ -353,12 +353,17 @@ class ShellWindow(QMainWindow):
             detector = DetectorViewState(
                 view.crosshair[0],
                 view.crosshair[1],
-                view.zoom,
+                view.effective_zoom(),
                 view.pan.x(),
                 view.pan.y(),
                 view.low_value,
                 view.high_value,
-                view.positive_log,
+                view.contrast_mode,
+                view.devicePixelRatioF(),
+                view.scale_mode,
+                view.show_image,
+                view.show_crosshair,
+                view.show_markers,
             )
         elif (
             self._pending_view_restore is not None
@@ -973,6 +978,8 @@ class ShellWindow(QMainWindow):
                 value.profiles,
                 value.low_value,
                 value.high_value,
+                value.max_value,
+                value.min_positive,
             )
         except ValueError as exc:
             self._show_state("error", "Unsupported detector size", str(exc))
@@ -1025,12 +1032,39 @@ class ShellWindow(QMainWindow):
             return
         self._restoring_view = True
         try:
+            current_dpr = view.devicePixelRatioF()
             view.zoom = detector.zoom
-            view.pan = QPointF(detector.pan_x_px, detector.pan_y_px)
-            view.crosshair = (detector.column_px, detector.row_px)
-            view.set_levels(
-                detector.low_value, detector.high_value, positive_log=detector.positive_log
+            if detector.scale_mode == "native":
+                view.zoom = 1.0 / (
+                    current_dpr
+                    * min(view.width() / view.image.shape[1], view.height() / view.image.shape[0])
+                )
+            elif detector.scale_mode == "fit":
+                view.zoom = 1.0
+            else:
+                minimum, maximum = view._zoom_bounds()
+                view.zoom = min(max(view.zoom, minimum), maximum)
+            view.scale_mode = detector.scale_mode
+            view.pan = QPointF(
+                detector.pan_x_px
+                * (
+                    detector.device_pixel_ratio / current_dpr
+                    if detector.device_pixel_ratio is not None
+                    else 1.0
+                ),
+                detector.pan_y_px
+                * (
+                    detector.device_pixel_ratio / current_dpr
+                    if detector.device_pixel_ratio is not None
+                    else 1.0
+                ),
             )
+            view.crosshair = (detector.column_px, detector.row_px)
+            view.show_image = detector.show_image
+            view.show_crosshair = detector.show_crosshair
+            view.show_markers = detector.show_markers
+            view.set_levels(detector.low_value, detector.high_value, mode=detector.contrast_mode)
+            self.detector_panel._sync_controls()
             self.detector_panel._refresh_profile_if_needed()
         finally:
             self._restoring_view = False

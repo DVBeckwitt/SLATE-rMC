@@ -2,6 +2,7 @@
 
 import json
 import math
+import struct
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
@@ -14,10 +15,59 @@ MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
 MAX_NAME_LENGTH = 256
 MAX_SOURCE_PATH_LENGTH = 4096
+FLOAT32_DISPLAY_MAX = 3.4028234663852886e38
+FLOAT32_NORMAL_MIN = 1.1754943508222875e-38
 
 
 class ProjectFormatError(ValueError):
     """An unsupported or malformed desktop project document."""
+
+
+def _display_float32(value: float) -> float:
+    try:
+        return struct.unpack("f", struct.pack("f", value))[0]
+    except OverflowError as exc:
+        raise ProjectFormatError("display value exceeds the float32 shader range") from exc
+
+
+def validate_display_limits(low: float, high: float, mode: str) -> None:
+    if not all(math.isfinite(value) and abs(value) <= FLOAT32_DISPLAY_MAX for value in (low, high)):
+        raise ProjectFormatError("display limits must be finite within the float32 shader range")
+    low32, high32 = _display_float32(low), _display_float32(high)
+    if high32 <= low32 or max(abs(low32), abs(high32)) < FLOAT32_NORMAL_MIN:
+        raise ProjectFormatError(
+            "display limits must be distinguishable at float32 shader precision"
+        )
+    if mode not in ("linear", "signed", "positive_log"):
+        raise ProjectFormatError("unsupported detector contrast mode")
+    if mode == "positive_log":
+        if low32 < FLOAT32_NORMAL_MIN:
+            raise ProjectFormatError(
+                "positive-log display requires a normal positive float32 lower level"
+            )
+        if math.log(high32) - math.log(low32) <= 1.0e-5:
+            raise ProjectFormatError("positive-log limits are too close for shader precision")
+    if mode == "signed" and not (low32 <= -FLOAT32_NORMAL_MIN and high32 >= FLOAT32_NORMAL_MIN):
+        raise ProjectFormatError("signed display needs normal float32 limits around zero")
+
+
+def linear_display_limits(minimum: float, maximum: float) -> tuple[float, float]:
+    """Choose finite float32-distinguishable display bounds without changing source values."""
+    if not all(
+        math.isfinite(value) and abs(value) <= FLOAT32_DISPLAY_MAX for value in (minimum, maximum)
+    ):
+        raise ProjectFormatError("finite image values exceed the float32 display range")
+    if maximum < minimum:
+        raise ProjectFormatError("image extrema are reversed")
+    if (
+        _display_float32(maximum) > _display_float32(minimum)
+        and max(abs(minimum), abs(maximum)) >= FLOAT32_NORMAL_MIN
+    ):
+        return minimum, maximum
+    span = 1.0 if minimum == 0 else max(abs(minimum) * 0.01, 1.0e-30)
+    if minimum + span <= FLOAT32_DISPLAY_MAX:
+        return minimum, minimum + span
+    return minimum - span, minimum
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +148,12 @@ class DetectorViewState:
     pan_y_px: float
     low_value: float
     high_value: float
-    positive_log: bool
+    contrast_mode: str
+    device_pixel_ratio: float | None = None
+    scale_mode: str = "custom"
+    show_image: bool = True
+    show_crosshair: bool = True
+    show_markers: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -112,10 +167,23 @@ class DetectorViewState:
         _float(self.pan_y_px, "pan_y_px")
         low = _float(self.low_value, "low_value")
         high = _float(self.high_value, "high_value")
-        if not 0.25 <= zoom <= 30.0 or high <= low or type(self.positive_log) is not bool:
+        dpr = (
+            None
+            if self.device_pixel_ratio is None
+            else _float(self.device_pixel_ratio, "device_pixel_ratio")
+        )
+        if not 0.0001 <= zoom <= 10000.0:
             raise ProjectFormatError("detector view has invalid zoom, levels or contrast mode")
-        if self.positive_log and low <= 0.0:
-            raise ProjectFormatError("positive-log contrast needs a positive lower level")
+        if dpr is not None and not 0.25 <= dpr <= 16.0:
+            raise ProjectFormatError("detector device pixel ratio is outside the supported range")
+        validate_display_limits(low, high, self.contrast_mode)
+        if self.scale_mode not in ("fit", "native", "custom"):
+            raise ProjectFormatError("unsupported detector scale mode")
+        if any(
+            type(value) is not bool
+            for value in (self.show_image, self.show_crosshair, self.show_markers)
+        ):
+            raise ProjectFormatError("detector layer visibility must be Boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +266,7 @@ def _float(value: Any, label: str) -> float:
 def _detector_view(value: Any) -> DetectorViewState | None:
     if value is None:
         return None
-    fields = {
+    legacy_fields = {
         "column_px",
         "row_px",
         "zoom",
@@ -208,7 +276,32 @@ def _detector_view(value: Any) -> DetectorViewState | None:
         "high_value",
         "positive_log",
     }
-    data = _object(value, fields, "detector view")
+    current_fields = (legacy_fields - {"positive_log"}) | {
+        "contrast_mode",
+        "device_pixel_ratio",
+        "scale_mode",
+        "show_image",
+        "show_crosshair",
+        "show_markers",
+    }
+    if type(value) is not dict:
+        raise ProjectFormatError("detector view must be an object")
+    if set(value) == legacy_fields:
+        data = value
+        if type(data["positive_log"]) is not bool:
+            raise ProjectFormatError("legacy detector contrast flag must be Boolean")
+        mode = "positive_log" if data["positive_log"] else "linear"
+        return DetectorViewState(
+            data["column_px"],
+            data["row_px"],
+            data["zoom"],
+            data["pan_x_px"],
+            data["pan_y_px"],
+            data["low_value"],
+            data["high_value"],
+            mode,
+        )
+    data = _object(value, current_fields, "detector view")
     return DetectorViewState(
         data["column_px"],
         data["row_px"],
@@ -217,7 +310,12 @@ def _detector_view(value: Any) -> DetectorViewState | None:
         data["pan_y_px"],
         data["low_value"],
         data["high_value"],
-        data["positive_log"],
+        data["contrast_mode"],
+        data["device_pixel_ratio"],
+        data["scale_mode"],
+        data["show_image"],
+        data["show_crosshair"],
+        data["show_markers"],
     )
 
 
@@ -264,7 +362,12 @@ def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str
                 "pan_y_px": detector.pan_y_px,
                 "low_value": detector.low_value,
                 "high_value": detector.high_value,
-                "positive_log": detector.positive_log,
+                "contrast_mode": detector.contrast_mode,
+                "device_pixel_ratio": detector.device_pixel_ratio,
+                "scale_mode": detector.scale_mode,
+                "show_image": detector.show_image,
+                "show_crosshair": detector.show_crosshair,
+                "show_markers": detector.show_markers,
             }
         ),
     }

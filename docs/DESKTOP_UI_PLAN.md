@@ -1066,7 +1066,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
 | [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
 | [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Accepted after review repair. |
-| [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
+| [x] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. Accepted after focused review. |
 | [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
 | [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
 | [ ] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
@@ -1247,7 +1247,7 @@ sample, not the peak counter. The three phase/peak probes used 1.324 + 1.088 + 0
 of measured active process time; all narrow review diagnostics together used under 30 s of
 reported tool wall time, including startup and tool overhead, within the 180 s allowance.
 
-#### U01b project persistence checkpoint (2026-09-28; review pending)
+#### U01b project persistence checkpoint (2026-09-28; accepted)
 
 The optional desktop shell now owns one versioned `.slate.json` document containing project and
 acquisition UUIDs, ordered source references and decoded-stream SHA-256 identities, the selected
@@ -1308,6 +1308,89 @@ Save/Discard dialog; it was stopped and rerun with the intended Discard choice. 
 caught the expected exception through the duplicate module class and exited nonzero; the consistent
 import rerun passed. All task-owned scratch directories from these attempts were removed. Ruff
 lint/format, module parse/import and Git diff checks passed after the production edits.
+
+#### U02 detector viewport checkpoint (2026-09-28; frame cadence gate open)
+
+The existing Qt/OpenGL panel now has pointer-anchored wheel zoom, drag pan, box zoom, Fit and
+physical-device-pixel 1:1 controls. Fit, 1:1 and box have keyboard shortcuts; arrows pan the
+focused image. The one native-to-viewport transform drives image pixels, marker/crosshair overlays,
+pointer picking and both marginal position axes. Off-image pointer events clear the readout instead
+of clamping to an edge. The readout uses the original native count, names `column_px` and `row_px`,
+and leaves Q/angles and physical saturation unknown. Image, crosshair and external marker layers
+are independently visible in that order; fitted-result controls remain unavailable until a fit
+exists. New image admission clears old markers/cursor and resets the camera. No extra backend or
+dependency was added.
+
+Linear, zero-centered signed and positive-log display use validated numeric limits without
+changing native values or exact profile arrays. The float32 display shader marks nonfinite values
+and log-nonpositive values with a checkerboard. Scientific-notation entry retains finite float64
+limits that the float32 shader can distinguish; unsupported bounds reject before mutation. The
+worker computes extrema and minimum positive count once on OSC admission; interaction handlers
+do not reduce the whole image. Project schema version 1 now saves contrast mode, layer visibility,
+scale mode and the measured DPR. The explicit legacy version 1 field set still opens. Its absent
+DPR remains unknown, so old logical pan is not scaled as though measured at DPR 1; current drafts
+scale recorded pan between DPRs. Native 1:1 derives its scale from current DPR even if logical
+viewport size does not change.
+
+Focused `python -B -` native checks used both tracked 7x11 endian OSCs and 2x3 float64 planes.
+Actual framebuffers matched the original corner/interior values through drag pan, wheel and box
+zoom, resize and separate DPR 1/1.5 Qt launches; a DPR 2 launch reopened legacy pan `(60,20)`
+unchanged. A patched `devicePixelRatioF` with a real Qt DPR-change event at unchanged logical size
+kept one physical pixel per detector pixel and converted physical pan without uploading. This is
+a focused DPR-only transition simulation, not a physical monitor move. Framebuffer marker and
+crosshair centers, exact cursor counts and off-image behavior matched the shared transform.
+Tiny signed/nonfinite planes retained native values and exact profiles through contrast changes;
+invalid controls and an unrepresentable display plane left prior state intact. Actual framebuffers
+mapped low/mid/high red values to `[0,127,255]` for `[0,1e-20]` and `[-3e38,3e38]`. Adjacent
+float32 bounds `1.300000184382815e20` and `1.3000002723437452e20` mapped to opposite display
+endpoints. Underflowed positive-log and signed limits rejected atomically. A current DPR 1.5
+Save As/reopen retained source/project IDs, native 1:1, signed contrast, visibility and pan.
+
+The changed-path workload was one named existing 3000x3000 image,
+`examples/calibration/hbn/hBN_calibrant_5m.osc.gz`, with 4,000 external grid fiducials and two
+exact marginals. The temporary external command was
+`python -u -B <task-scratch>/u02_viewport_probe.py 30 3` with `QT_QPA_PLATFORM=windows` and
+`PYTHONPATH=interactive;src`; the three windows continuously mixed synthetic Qt pointer, wheel,
+drag-pan and contrast-control events at an actual approximately 13 ms request timer cadence.
+Input time was paired to the newest completed `paintGL` generation before `frameSwapped`, then to
+that composition signal. Intermediate requests without paint and paints superseded before swap
+were counted separately. Profile paint signals were counted, but no new composed-profile latency
+was inferred from their count. The boundary is Qt composition, not monitor scanout.
+
+| 30 s window | Callbacks / requests / composed; coalesced | Callback interval p50/p95/p99/max ms | Composed interval p50/p95/p99/max ms | Input-to-swap p50/p95/p99/max ms | Longest 10 ms heartbeat gap |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1959 / 1958 / 1957; 1 | 14.836 / 22.418 / 24.085 / 45.396 | 13.914 / 28.528 / 29.167 / 56.183 | 12.254 / 16.834 / 17.622 / 43.505 | 45.951 ms |
+| 2 | 1935 / 1935 / 1919; 16 | 13.486 / 26.729 / 27.105 / 31.295 | 13.351 / 26.710 / 28.455 / 45.987 | 11.779 / 13.721 / 16.981 / 29.441 | 31.294 ms |
+| 3 | 1928 / 1928 / 1897; 31 | 13.463 / 26.810 / 27.175 / 35.889 | 13.349 / 26.701 / 26.814 / 42.389 | 11.667 / 12.076 / 12.315 / 30.646 | 35.890 ms |
+
+All completed paints reached composition; coalesced/unpresented counts were 1/16/31 and no
+completed paint was superseded. Each final requested generation composed, then the 750 ms debounced
+autosave wrote its matching contrast, native cursor and unchanged source hash. One image texture
+upload remained one through every window; instrumented cursor/camera/contrast reductions touched
+no full native plane. Horizontal and vertical profile paint counts were 2188/2136/2099 per window.
+Process RSS was approximately 241-246 MiB around the windows and Windows peak working set was
+266.22 MiB, including shell/import setup; GPU allocation was not measured.
+
+One targeted repaint repair skipped marginal-axis updates when the native viewport rectangle was
+unchanged and avoided rewriting unchanged control text. A single comparable 30 s follow-up had
+1959 requests, 1937 composed, 22 coalesced/unpresented, 1852 paints per marginal, one upload,
+no full-plane reductions, 263.16 MiB peak working set and final autosave. Its composed-frame
+interval p50/p95/p99/max was 13.350/26.678/26.730/35.545 ms; input-to-swap was
+11.678/12.142/13.693/23.905 ms. Cursor/wheel/pan/contrast dispatch p95 was
+0.547/0.330/0.414/0.299 ms, while callback interval p95 was 26.530 ms and the longest
+heartbeat gap 27.836 ms. The reduced profile paints did not restore 60 Hz composition. All four
+windows met the 50 ms p95 input-to-composition, 33.3 ms p99 interval and 100 ms GUI gap limits,
+but **all missed the 16.7 ms p95 composed-frame interval target**. The extra interval is beyond
+the measured direct input dispatch; its split among Qt scheduling, OpenGL composition and the
+remaining profile/marker work is unqualified. No further performance repair or replay was run.
+
+The completed active timing windows totaled 122.027 s. One earlier setup `app.exec()` attempt
+stalled and was stopped after roughly 35 s wall time; conservatively counting all of it keeps the
+packet under the 180 s cap. An initial scan counter incorrectly treated zero-copy `np.asarray` as
+a full-image scan; the corrected counter checked actual reductions. One small repaint assertion
+encountered a queued profile paint from admission and was not used as evidence. The task-owned
+scratch project and checking script were removed after extracting these results. U02 stays open
+for the measured frame-cadence miss; these checks do not qualify a scientific fit.
 
 ### M2 — independent simulator
 

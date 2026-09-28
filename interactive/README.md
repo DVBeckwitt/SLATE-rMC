@@ -45,6 +45,19 @@ the replacement must have the same decoded OSC hash. A moved source can therefor
 without changing its acquisition UUID. Project save never modifies its OSC sources. Portable
 project archives, multi-file import and simulation controls arrive in later workflows.
 
+The detector panel supports pointer-anchored wheel zoom, drag pan, **Box zoom**, **Fit** (Ctrl+0)
+and **1:1 px** (Ctrl+1). The latter means one detector pixel per physical display pixel at the
+current device pixel ratio. Arrow keys pan when the image has focus; Ctrl+B toggles box zoom.
+The pointer readout names native `column_px`, `row_px` and the exact original count, and reports
+when the pointer is outside the image. Horizontal and vertical marginal position labels use the
+same native viewport transform. Numeric Low/High entries accept scientific notation; **Apply**
+validates them and **Auto** uses extrema cached at image admission. Linear and signed modes change
+only color; positive log marks nonpositive and nonfinite texture values with a checkerboard.
+The native counts and exact marginal values remain unchanged. Image, crosshair and available
+marker layers can be shown independently; fitted-result overlays are unavailable without a fit.
+Contrast clipping is a display choice, while detector saturation remains unknown without a
+supported source threshold. Q and scattering angles remain unavailable until geometry is bound.
+
 Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
 16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
 The 96 MiB worker result limit includes the native int32 plane, float32 display plane and exact

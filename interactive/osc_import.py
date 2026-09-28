@@ -8,6 +8,7 @@ import numpy as np
 from detector_panel import BandProfiles, exact_band_profiles
 from job_lifecycle import JobControl, JobResult
 from numpy.typing import NDArray
+from project_state import linear_display_limits
 
 SOURCE_LIMIT_BYTES = 64 * 1024 * 1024
 DECODED_LIMIT_BYTES = 32 * 1024 * 1024
@@ -40,6 +41,8 @@ class PreparedOsc:
     profiles: BandProfiles
     low_value: float
     high_value: float
+    max_value: float
+    min_positive: float | None
     version: int
     byte_order: str
     raw_shape: tuple[int, int]
@@ -63,20 +66,30 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
     display = native.astype(np.float32)
     display.setflags(write=False)
     minimum, maximum = float(np.min(native)), float(np.max(native))
+    positive = native > 0
+    min_positive = (
+        float(np.min(native, where=positive, initial=np.iinfo(np.int32).max))
+        if np.any(positive)
+        else None
+    )
+    del positive
     profiles = exact_band_profiles(
         native, column_px=native.shape[1] // 2, row_px=native.shape[0] // 2
     )
     if control.canceled:
         raise OscReadCancelled("OSC import canceled")
     assert image.decoded_sha256 is not None
+    low_value, high_value = linear_display_limits(minimum, maximum)
     prepared = PreparedOsc(
         path,
         image.decoded_sha256,
         native,
         display,
         profiles,
-        minimum,
-        max(maximum, minimum + 1.0),
+        low_value,
+        high_value,
+        maximum,
+        min_positive,
         image.metadata.version,
         image.metadata.byte_order,
         image.metadata.raw_shape,
