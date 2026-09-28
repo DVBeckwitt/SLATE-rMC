@@ -143,6 +143,7 @@ class DetectorTextureView(QOpenGLWidget):
 
     painted = Signal(int, float)
     crosshair_changed = Signal()
+    view_state_changed = Signal()
 
     def __init__(self, *, plane: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -251,6 +252,7 @@ class DetectorTextureView(QOpenGLWidget):
             raise ValueError("positive-log display requires a positive lower level")
         self.low_value, self.high_value, self.positive_log = low, high, positive_log
         self._request_paint()
+        self.view_state_changed.emit()
 
     def _rect(self) -> QRectF:
         assert self.image is not None
@@ -399,6 +401,7 @@ class DetectorTextureView(QOpenGLWidget):
             30.0, max(0.25, self.zoom * (1.2 if event.angleDelta().y() > 0 else 1 / 1.2))
         )
         self._request_paint()
+        self.view_state_changed.emit()
 
     def mousePressEvent(self, event) -> None:
         self._last_pointer = event.position()
@@ -412,6 +415,7 @@ class DetectorTextureView(QOpenGLWidget):
             else:
                 self.pan += delta
             self._request_paint()
+            self.view_state_changed.emit()
         elif self.image is not None and not self.plane:
             self.crosshair = self.widget_to_native(event.position())
             self._request_paint()

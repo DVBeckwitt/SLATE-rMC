@@ -1065,7 +1065,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | --- | --- | --- |
 | [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
 | [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
-| [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Review repair awaits acceptance. |
+| [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Accepted after review repair. |
 | [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
 | [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
 | [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
@@ -1246,6 +1246,36 @@ not a measured driver allocation. The original at-result RSS of 279.84 MiB remai
 sample, not the peak counter. The three phase/peak probes used 1.324 + 1.088 + 0.886 = 3.298 s
 of measured active process time; all narrow review diagnostics together used under 30 s of
 reported tool wall time, including startup and tool overhead, within the 180 s allowance.
+
+#### U01b project persistence checkpoint (2026-09-28; review pending)
+
+The optional desktop shell now owns one versioned `.slate.json` document containing project and
+acquisition UUIDs, ordered source references and decoded-stream SHA-256 identities, the selected
+workspace and the detector view. JSON admission is strict and bounded to 1 MiB and 128 acquisitions.
+The document contains neither source pixels nor solver state. A named project autosaves to its file;
+an unnamed project autosaves to one UUID-named draft in the external local recovery location. That
+location admits at most 32 drafts and 32 MiB. Explicit Save/Save As, Open, Recover Draft, rename,
+reorder and hash-matched Relink actions are visible in the shell. The existing atomic JSON publisher
+provides a flushed temporary file, replacement and cleanup. Writes are serialized as immutable
+snapshots through the existing job owner, and save status names only the completed revision.
+
+Reopen validates source references independently. Missing, changed and unreadable OSC files retain
+their acquisition identities and appear with actionable status; a relink requires identical decoded
+bytes. The selected source reloads on demand. Saved view state remains available while a source is
+missing or loading; empty projects do not inherit a prior resident image's view. Project switching
+rejects a delayed open if current edits changed meanwhile. Selection and import transitions supersede
+deferred work without canceling an active durable write.
+
+Focused task-owned external checks covered schema/version/path/duplicate-key/size rejection; actual
+Qt import, Save As, close and reopen with stable IDs, order, names and crosshair; unnamed draft
+recovery with Save/Discard/Cancel; moved/missing source and matching/mismatching relink; serialized
+delayed writes and autosave of a newer edit; injected atomic replacement failure preserving old
+bytes and removing its temporary file; delayed-open edit retention; missing-source view retention;
+empty-project capture after a previous image; A-B-A selection during a save; A-active/B-pending/C
+replacement; and a corrupt deflate source alongside a valid source. Scratch files were external
+and removed. These checks establish local project I/O and shell transitions only, not numerical
+fitting adequacy. Portable archives, later editable scientific state and solver resume are outside
+U01b; no solver resume is implied by a saved draft.
 
 ### M2 — independent simulator
 

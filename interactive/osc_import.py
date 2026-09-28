@@ -15,6 +15,22 @@ PIXEL_LIMIT = 12_000_000
 AXIS_LIMIT = 16_384
 
 
+def encode_bounded_path(path: Path, axis_limit: int) -> bytes:
+    if not 0 < axis_limit <= AXIS_LIMIT:
+        raise ValueError("OSC texture axis limit is outside the supported range")
+    return str(axis_limit).encode("ascii") + b"\0" + os.fsencode(path)
+
+
+def decode_bounded_path(argument: bytes) -> tuple[Path, int]:
+    axis_bytes, separator, path_bytes = argument.partition(b"\0")
+    if not separator or not path_bytes:
+        raise ValueError("OSC request must include a texture limit and path")
+    axis_limit = int(axis_bytes)
+    if not 0 < axis_limit <= AXIS_LIMIT:
+        raise ValueError("OSC texture axis limit is outside the supported range")
+    return Path(os.fsdecode(path_bytes)), axis_limit
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedOsc:
     source_path: Path
@@ -34,13 +50,7 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
 
     from rasim_next.io.osc import OscReadCancelled, OscReadLimits, read_osc
 
-    axis_bytes, separator, path_bytes = argument.partition(b"\0")
-    if not separator or not path_bytes:
-        raise ValueError("OSC request must include a texture limit and path")
-    axis_limit = int(axis_bytes)
-    if not 0 < axis_limit <= AXIS_LIMIT:
-        raise ValueError("OSC texture axis limit is outside the supported range")
-    path = Path(os.fsdecode(path_bytes))
+    path, axis_limit = decode_bounded_path(argument)
     control.report(f"Reading {path.name}")
     image = read_osc(
         path,

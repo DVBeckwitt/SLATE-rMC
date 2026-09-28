@@ -27,10 +27,23 @@ project and an empty acquisition browser. Use **Import OSC** or drop exactly one
 counts with exact linked profiles. A failed or canceled import leaves the previously selected image
 usable. Selecting an older acquisition reloads its source and checks its stored decoded hash before
 showing it. The OSC header supplies image dimensions and byte order, but angles and calibration remain
-unknown. The project is not saved yet; project opening/saving, multi-file import and simulation
-controls arrive in later workflows. No image is loaded or calculation started at launch. Close the
-window normally to exit. The `interactive/` directory is not part of the installed numerical wheel,
-so run this entry point from the checkout.
+unknown. No image is loaded or calculation started at launch. The `interactive/` directory is not
+part of the installed numerical wheel, so run this entry point from the checkout.
+
+Use **Save As** to name a `.slate.json` project, **Save** to write its current state, and **Open**
+to reopen one. The document records project and acquisition UUIDs, acquisition order and names,
+source paths and decoded OSC SHA-256 identities, selected workspace and detector view. It does not
+embed image pixels or claim a resumable solver. Edits autosave atomically to the named project;
+before a project is named, they autosave to one UUID-named draft in the local SLATE-rMC recovery
+location. **Recover Draft** opens the recovery chooser. Save status is shown beside the project
+controls. Closing or opening another project offers Save, Discard and Cancel for unsaved edits.
+Drafts are bounded to 32 project files and 32 MiB in that location.
+
+Reopening checks each referenced OSC source independently. A missing, unreadable or changed source
+remains in the browser with its original acquisition identity. Select it and use **Relink OSC**;
+the replacement must have the same decoded OSC hash. A moved source can therefore be restored
+without changing its acquisition UUID. Project save never modifies its OSC sources. Portable
+project archives, multi-file import and simulation controls arrive in later workflows.
 
 Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
 16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
