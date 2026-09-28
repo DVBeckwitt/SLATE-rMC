@@ -1828,8 +1828,9 @@ Of 2,340 changed requests/publications, ROI was selected 292 times: one cold red
 8.941 ms and 291 cache hits. Warm ROI callback p50/p95/p99/max was
 0.147/0.190/0.239/0.399 ms; its one cold callback took 9.244 ms. The canonical reducer
 handled 1,756 bands (p95 0.255 ms), zero full projections and one ROI. All 2,245 fresh
-swaps had matching completed detector and horizontal/vertical profile generations and buffer
-identities before composition; the independent trace check found no stale match. There were
+swaps matched completed detector and horizontal/vertical profile generations and buffer
+identities in the worker reporter; its matching could reuse historical marginal paints, so
+this window alone did not exclude a newer mismatched marginal paint at swap. There were
 2,247 paints per marginal, 2,248 active swap events, one repeated swap, two initial unmatched
 swaps, zero same-generation/superseded paints and no no-op callbacks. Final generation `2928`
 composed at `379057.1598216`, before active end, and the final query key matched. Actual
@@ -1859,6 +1860,85 @@ RSS was 305.6/311.9 MiB, Windows peak working set 327.5 MiB and precisely active
 CPU time 20.938 s; memory figures include Qt/driver/runtime and are not a GPU allocation
 measure. U03 remains unaccepted pending supervisor review and later sustained evidence;
 U02a has not started.
+
+#### U03 sustained native-shell qualification (2026-09-28; reviewed evidence, acceptance pending)
+
+The repaired production source stayed at `ba80bf9`; `interactive/detector_panel.py` SHA-256 was
+`372677217dafbaf3f28770563e7ef4c993daf940c8f0679ae11a6f3499b3f8bb`. One external
+reporter (SHA-256 `a9d2cd35cc49ee421cbd125e912695c38594fa540bae668dba9abeb9a0c05c76`)
+ran `python -u -B <reporter> --selfcheck`, then `python -u -B <reporter> 1`, `2` and `3` in
+separate fresh processes, with `QT_QPA_PLATFORM=windows`, `QT_SCALE_FACTOR=1` and
+`PYTHONPATH=interactive;src`. Here `<reporter>` was
+`C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u03_final_reporter.py`;
+each command ran from this worktree root. The self-check rejected a historical H/V match after a newer
+marginal paint and checked missing/future marginal paints, repeated swaps and empty/single
+quantiles; a tiny native GL-hook/normal-shutdown and external file-write preflight passed.
+No failed large active window or retry followed. Three active windows totaled 89.9553962 s;
+even adding the entire 1.301 s preflight command yields 91.2563962 s under the closed 100 s
+allowance. The reporter and raw telemetry were removed after independent review.
+
+Each process used the tracked 3000x3000 hBN OSC (decoded SHA-256
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`), 4,000
+markers, a 616x180 viewport at DPR 1 on Sceptre C27 (2), 1920x1080 at 74.99 Hz, and the
+production Shell/Fusion/Segoe UI 10 style. Its worker prepared the native image and full
+marginals before timing; the fixed ROI `[100,2900)` columns by `[100,2900)` rows was selected
+with an empty ROI cache at active start. An 8 ms PreciseTimer cycled pointer A
+`(30+37n mod 2940, 30+53n mod 2940)`, row width `1+n mod 11`, column width `1+n mod 13`,
+sum/mean toggle, full, fixed ROI, band, then pointer B
+`(30+19n mod 2940, 30+29n mod 2940)` for zero-based callback index `n`. A separate
+10 ms PreciseTimer supplied heartbeat observations. All callbacks changed the profile key.
+Quantiles below are p50/p95/p99/max in ms; cold ROI samples remain in their active intervals.
+
+| Window, active bounds on process clock | All-swap interval | Fresh interval | Profile input to matching composition |
+| --- | --- | --- | --- |
+| 1: `379940.8703575`–`379970.8545207` (29.984 s) | 13.322 / 14.089 / 14.568 / 19.279 | 13.323 / 14.089 / 14.568 / 19.279 | 12.947 / 13.727 / 14.223 / 18.784 |
+| 2: `379981.5690493`–`380011.551757` (29.983 s) | 13.337 / 13.998 / 14.412 / 33.155 | 13.337 / 13.995 / 14.409 / 33.155 | 12.938 / 13.641 / 14.103 / 32.381 |
+| 3: `380022.3541054`–`380052.3426307` (29.989 s) | 13.327 / 14.097 / 14.416 / 28.081 | 13.327 / 14.097 / 14.416 / 28.081 | 12.956 / 13.728 / 14.066 / 27.832 |
+
+| Window | Actual supply interval | Callback duration | Heartbeat interval | Detector / horizontal / vertical paint p95 |
+| --- | --- | --- | --- | --- |
+| 1 | 13.288 / 14.088 / 14.569 / 19.235 | 0.344 / 0.492 / 0.554 / 9.473 | 13.297 / 14.347 / 14.755 / 20.111 | 0.811 / 0.916 / 0.529 |
+| 2 | 13.280 / 14.024 / 14.465 / 32.922 | 0.333 / 0.471 / 0.539 / 8.843 | 13.323 / 14.196 / 14.699 / 33.706 | 0.735 / 0.926 / 0.530 |
+| 3 | 13.290 / 14.092 / 14.417 / 28.146 | 0.321 / 0.459 / 0.508 / 8.622 | 13.281 / 14.208 / 14.578 / 28.145 | 0.771 / 0.949 / 0.570 |
+
+Windows 1/2/3 had 2,324/2,372/2,331 changed callbacks and requests; 2,250/2,249/2,249
+active swaps and 2,248/2,247/2,248 fresh compositions with current H/V content. The
+unpresented or coalesced request counts were 76/125/83. Repeated swaps were 0/0/1;
+initial unmatched swaps 2/2/0. Obsolete-profile swaps, same-generation paints and
+superseded paints were zero in every window. Each window made exactly one cold broad ROI
+reduction (9.163/8.527/8.351 ms) and 289/295/290 ROI cache hits; band reductions were
+1,744/1,780/1,749 and full reductions zero. Warm ROI callback p95 was
+0.178/0.168/0.156 ms. The intervals containing the cold ROI were
+18.5549/16.9358/16.9637 ms, retained in the distributions. Each window had three
+fresh intervals above 16.7 ms; outliers including the 33.155 ms window-2 maximum remain
+visible rather than trimmed. All p95 fresh intervals were below 16.7 ms, p99 below
+33.3 ms, profile response p95 below 50 ms and observed heartbeat gap below 100 ms for
+this declared input and display.
+
+The serialized traces contained 17,664/17,795/17,743 records, with SHA-256
+`f393a472fae0c92807f59d227c55be9c3ecbe28423142ab10b8006a3fbd96d7f`,
+`270b1a25f7ed466adfdd1e4b780659f38096b5ffc5983b551126f43dfbef1bbb`, and
+`b2aafe5202103b9f1f73c2c2817bcad2d90b21a5a17d5924401503c0c334e625`.
+Unlike the earlier worker reporter, the new matcher used the **latest completed** G/H/V
+paint before each swap, matched generation and actual H/V buffer IDs to the published
+profile pack, and tracked paints through normal drain. Independent root and guardrail
+reviews chronologically sorted the serialized completion timestamps and checked all
+2,258/2,257/2,257 active-plus-drain swaps: zero false matches, phase-boundary errors or
+frozen-action mismatches. Final requests 2908/2968/2917 matched the current key and
+composed at `379970.8541936`/`380011.5513933`/`380052.3423131`, before their respective
+active ends; later drain swaps also matched. Actual saved JSON equaled the final
+`ProjectDocument` at revisions 2325/2373/2332. All owners drained and windows closed
+normally. Native/display array identities and read-only flags persisted; active texture
+upload delta was zero in each window.
+
+Active start/end RSS was 306.5/311.5, 301.8/307.2 and 303.9/307.2 MiB; Windows process
+peak working set was 328.6/327.7/327.8 MiB and active process CPU time
+20.328/20.344/19.906 s. These process figures include Qt/runtime costs and do not measure
+driver GPU allocation. This qualifies the frozen hBN mixed workload through Qt composition;
+it does not measure physical scanout or qualify arbitrary masked/float64/max-shape broad
+queries. First/new ROI reduction remains synchronous. Historical failed U03 windows and
+their limits above remain evidence. U03 qualification is reviewed complete, pending final
+supervisor acceptance; no scientific fitting inference or U02a work is implied.
 
 ### M2 — independent simulator
 
