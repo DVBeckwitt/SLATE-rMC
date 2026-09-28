@@ -1064,7 +1064,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
 | [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
-| [ ] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
+| [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
 | [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
 | [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
 | [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
@@ -1103,6 +1103,47 @@ remain GUI-independent; importing the shell does not import `rasim_next` or init
 No OSC file, physics, fit, asynchronous worker, persistence or latency campaign was exercised.
 Temporary screenshots and checking code were removed after review. U01c owns the next job-state
 and late-result boundary; U01a then connects real OSC import to this shell.
+
+#### U01c bounded job lifecycle checkpoint (2026-09-28)
+
+`interactive/job_lifecycle.py` owns the shell's single application-wide worker thread, one newest
+pending request, one replaceable progress message, one ready result slot and eight retained
+terminal summaries. The GUI polls the slot every 20 ms; the worker touches no widget and has no
+unbounded command, result or progress queue. Request arguments are currently immutable bytes,
+text, paths or byte views backed by bytes; workers use plain functions without
+captured state. A request declares at most 4 MiB of argument bytes and 96 MiB of expected result;
+the worker result declares and is checked against both its estimate and the 96 MiB global cap.
+Flat bytes, byte views (`nbytes`), text/path encodings and objects exposing integer `nbytes` have
+a checked lower bound. Nested result ownership and temporary decode peaks remain the specific
+producer's responsibility, not a claimed generic deep-size calculation. U01a must preflight OSC
+source/decoded size and count every retained buffer against the existing CPU ledger.
+
+Each request freezes project/acquisition IDs, data/mask/calibration/model revisions and an
+application-monotonic generation. New requests cancel the active work and replace the one pending
+slot. Selection changes invalidate the generation even before another request starts. Cancellation
+immediately suppresses progress/result publication, including ignored cancellation, late success,
+late failure, equal-input A-B-A and synchronous status-signal reentrancy. The states are queued,
+running, cancel-requested, completed, canceled and failed. Summaries contain only short messages,
+identity and safe-stop time; no traceback or result array is retained in history. Shell Cancel and
+close request cancellation without a GUI-thread join. Close remains visibly pending until the
+worker exits and resources have been released; no successful close or resumable work is claimed
+before then. A selected-acquisition change leaves a visible stopping state that clears after the
+obsolete worker safely exits. Project persistence remains U01b, real OSC loading U01a and
+numerical cancellation hooks stay with their later owners.
+
+A finite external check used a 64 KiB file read/hash operation, controlled worker barriers and a
+250 ms noninterruptible preparation section. It covered normal success/failure, pre-start and
+during-work cancellation, replacement/coalescing, late success/failure, A-B-A and selection
+invalidation, request/result byte rejection (including non-byte memory views and mutable input),
+COMPLETED-listener cancellation, reentrant newest-request retention and 13 repeated outcomes with
+history capped at eight. In the shown native shell, Cancel dispatch returned in 0.163 ms and its
+changed status label reached a Qt paint event in 1.629 ms; safe stop/release took 262.205 ms.
+Close dispatch returned in 0.065 ms, its waiting label painted in 0.426 ms and safe stop/release
+took 260.790 ms. The longest 10 ms GUI heartbeat gap during the close wait was 11.091 ms; no
+result was published after close. These are GUI dispatch/Qt paint boundaries, not monitor scanout.
+The command was `python <external>/u01c_lifecycle_check.py`; Ruff format/lint, numerical/shell
+import separation and diff checks were run separately. The checking script and input file were
+removed. No full image, fit, scientific validation, dependency or reusable harness was added.
 
 ### M2 — independent simulator
 

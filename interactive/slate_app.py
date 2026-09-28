@@ -4,12 +4,14 @@ import sys
 from typing import Literal
 from uuid import UUID
 
+from job_lifecycle import JobIdentity, JobOwner, JobState, JobSummary
 from project_state import Project
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QCloseEvent, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -73,6 +75,11 @@ class ShellWindow(QMainWindow):
         tabs.addTab(self._build_simulator(), "Simulator")
         self.setCentralWidget(tabs)
         self.workspaces = tabs
+        self.jobs = JobOwner(self)
+        self.jobs.state_changed.connect(self._job_state_changed)
+        self.jobs.progress_changed.connect(self._job_progress)
+        self.jobs.drained.connect(self.close)
+        self.cancel_button.clicked.connect(self.jobs.cancel)
         self.statusBar().showMessage("Local project · Not saved")
         self.refresh_project()
 
@@ -124,7 +131,13 @@ class ShellWindow(QMainWindow):
         import_button = QPushButton("Import files")
         import_button.setEnabled(False)
         import_button.setToolTip("File import is unavailable in this version")
-        center_layout.addWidget(import_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        controls = QHBoxLayout()
+        controls.addWidget(import_button)
+        self.cancel_button = QPushButton("Cancel operation")
+        self.cancel_button.setEnabled(False)
+        controls.addWidget(self.cancel_button)
+        controls.addStretch()
+        center_layout.addLayout(controls)
         splitter.addWidget(center)
 
         inspector = QFrame()
@@ -198,12 +211,64 @@ class ShellWindow(QMainWindow):
         selected = self.project_tree.selectedItems()
         item = selected[0] if selected else None
         value = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
-        self.selected_acquisition_id = UUID(value) if value else None
+        selected_id = UUID(value) if value else None
+        if selected_id != self.selected_acquisition_id:
+            self.jobs.invalidate()
+            if self.jobs.busy:
+                self.experiment_status.set_state(
+                    "loading", "Stopping obsolete work", "Waiting for the prior operation to stop."
+                )
+        self.selected_acquisition_id = selected_id
         self.selection_label.setText(
             f"Selected acquisition: {item.text(0)}"
             if self.selected_acquisition_id
             else "No acquisition selected"
         )
+
+    def _job_state_changed(self, summary: JobSummary) -> None:
+        if summary.identity.generation != self.jobs.latest_generation:
+            if (
+                not self.jobs.busy
+                and self.experiment_status.title.text() == "Stopping obsolete work"
+            ):
+                self.experiment_status.set_state(
+                    "empty", "No image open", "The previous operation was discarded."
+                )
+            return
+        state = summary.state
+        self.cancel_button.setEnabled(state in (JobState.QUEUED, JobState.RUNNING))
+        if state in (JobState.QUEUED, JobState.RUNNING):
+            self.experiment_status.set_state("loading", "Working", "Preparing the requested data.")
+        elif state == JobState.CANCEL_REQUESTED:
+            self.experiment_status.set_state(
+                "loading",
+                "Stopping safely",
+                "Waiting for the current operation to release its resources.",
+            )
+        elif state == JobState.FAILED:
+            self.experiment_status.set_state("error", "Operation failed", summary.detail)
+        elif state == JobState.CANCELED:
+            self.experiment_status.set_state(
+                "empty", "Operation canceled", "No result was applied."
+            )
+        else:
+            self.experiment_status.set_state("empty", "Operation finished", "No result is open.")
+        self.statusBar().showMessage(f"Operation: {state.value}")
+
+    def _job_progress(self, identity: JobIdentity, message: str) -> None:
+        if identity.generation == self.jobs.latest_generation:
+            self.experiment_status.detail.setText(message)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self.jobs.request_close():
+            event.ignore()
+            self.cancel_button.setEnabled(False)
+            self.experiment_status.set_state(
+                "loading", "Closing safely", "Waiting for the current operation to stop."
+            )
+            self.statusBar().showMessage("Close requested · Waiting for safe stop")
+            return
+        super().closeEvent(event)
 
 
 def main() -> int:
