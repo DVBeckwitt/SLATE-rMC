@@ -10,6 +10,23 @@ Install the visualization dependencies from the repository root:
 uv sync --frozen --group dev --extra visualization
 ```
 
+## SLATE desktop shell
+
+Launch the native application from the repository root:
+
+```powershell
+uv run --extra visualization python interactive/slate_app.py
+```
+
+If the visualization dependencies are already installed in the active Python environment, the
+equivalent direct command is `python interactive/slate_app.py`.
+
+The shell has **Fit experiments** and **Simulator** workspaces. It starts with a local, unsaved
+project and an empty acquisition browser. Import, project opening/saving and simulation controls
+are visibly unavailable until their corresponding workflows are delivered. No image is loaded or
+calculation started at launch. Close the window normally to exit. The `interactive/` directory is
+not part of the installed numerical wheel, so run this entry point from the checkout.
+
 ## Monte Carlo detector viewer
 
 Render the complete native detector while changing source, mosaic, sample, and detector parameters:

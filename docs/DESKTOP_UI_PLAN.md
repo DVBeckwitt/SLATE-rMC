@@ -1063,7 +1063,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
+| [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
 | [ ] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
 | [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
 | [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
@@ -1074,6 +1074,31 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
 | [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
 | [ ] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+
+#### U01 shell and identity checkpoint (2026-09-28)
+
+Launch from the repository root with
+`uv run --extra visualization python interactive/slate_app.py`. The native PySide6 shell opens an
+unsaved local project, a project/acquisition browser, detector placeholder, inspector and the two
+named workspaces. File import, project opening/saving and simulation are visibly unavailable; no
+placeholder data, worker or calculation starts. The experiment status view has explicit empty,
+loading and error presentations for the upcoming import lifecycle. The shell owns only transient
+selection/display state; its immutable, Qt-free project records carry schema version 1, project and
+acquisition UUIDs, source path and SHA-256 identity. Adding records does not deduplicate matching
+paths or bytes. Renaming/reordering preserves acquisition IDs and current selection by ID rather
+than row or filename. The schema owner is `interactive/project_state.py`; atomic save/reopen and
+recovery remain U01b.
+
+A temporary external PySide6 check launched and closed the real window, switched both workspaces,
+rendered empty/loading/error states and verified two independent IDs for identical path/hash,
+rename/reorder and selection retention. The actual styled 1280x800 shell was visually inspected.
+An entry-point check executed `interactive/slate_app.py` via `runpy` and closed the window normally.
+The documented `uv run` form requires the preceding dependency sync; a `--no-sync` attempt in this
+checkout found no prepared environment and was not used as launch evidence. Normal numerical imports
+remain GUI-independent; importing the shell does not import `rasim_next` or initialize a device.
+No OSC file, physics, fit, asynchronous worker, persistence or latency campaign was exercised.
+Temporary screenshots and checking code were removed after review. U01c owns the next job-state
+and late-result boundary; U01a then connects real OSC import to this shell.
 
 ### M2 — independent simulator
 
