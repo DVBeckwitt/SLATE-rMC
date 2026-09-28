@@ -1772,9 +1772,92 @@ alongside a prior image's `8N_old` native/display arrays and prior caches during
 before decoder, Python, Qt and driver overhead. Generic `set_image` copies its input and does
 not have the OSC admission caps. These are conservative formulas, not measured RSS peaks or
 allocator guarantees. Process RSS was 307.4/307.1 MiB at active start/report, Windows peak
-working set was 327.5 MiB, and process CPU time rose 7.797 s during active timing. New broad
+working set was 327.5 MiB, and process CPU time rose 7.797 s from active start through
+report/drain, not solely within active timing. New broad
 ROI queries remain synchronous in the GUI; no worker cancellation or prefix-table behavior is
 claimed. U03 remains unaccepted pending a reviewed correction and sustained qualification;
+U02a has not started.
+
+#### U03 single-entry ROI reuse repair (2026-09-28; one-window comparison)
+
+The detector panel now retains one ROI sum/support pack keyed by acquisition identity, native
+image identity, data revision and effective native ROI bounds. It survives band/full views,
+cursor/camera/contrast changes and measure toggles. Mean derives from the same readonly sums
+and shares support; a new ROI, image or acquisition replaces the entry. The panel does not have
+a mask/correction input or revision. The canonical reducer still owns masked, signed and
+nonfinite semantics. First/new ROI queries remain synchronous in the GUI. No prefix table,
+worker, dependency or backend was added.
+
+Tiny external checks on non-square int32 and masked signed float64 arrays compared band/full/ROI
+sum/support/mean to independent direct enumeration, including nonfinite and missing bins.
+Instrumented canonical-reducer calls showed one ROI reduction through
+ROI→band→full→same ROI and no extra reduction for sum/mean reuse. Different bounds, data
+revision, image replacement and A–B–A acquisition resets caused misses. Invalid ROI bounds
+and an invalid image were rejected without changing the prior image/cache; arrays stayed
+readonly and the offscreen check made zero display uploads. Previously reviewed native DPR,
+framebuffer, clipping, autosave/reopen and navigation evidence was not replayed.
+
+One native comparison window used the same Shell/Fusion/Segoe UI 10 style, 3000x3000 hBN OSC
+(decoded SHA-256 `137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`),
+4,000 markers, 616x180 viewport, DPR 1 and Sceptre C27 (2) 1920x1080 at 74.99 Hz. The
+same eight actions and formulas from the prior attribution packet supplied pointerA,
+row width, column width, measure, full, fixed ROI `(100,2900,100,2900)`, band, pointerB
+using an 8 ms PreciseTimer; heartbeat requested 10 ms. The ROI cache was empty before active
+timing. External script SHA-256 was
+`3871992fd1cae8d2dc229792963ddac98c027cdad13d37ebc4c265e2ad3c8c23`;
+`python -u -B` ran with `QT_QPA_PLATFORM=windows`, `QT_SCALE_FACTOR=1` and
+`PYTHONPATH=interactive;src`. A tiny hook/statistics/shutdown preflight and a direct writable
+file preflight preceded the large image. Active bounds `379027.2025452`–`379057.1599226`
+on the process clock span 29.957 s. The two tiny numerical attempts, the preflight command
+and this one native window conservatively used under 40 s even counting the tiny commands'
+full wall times. There was no large-image retry. The externally buffered trace contained
+15,444 records, 1,596,632 bytes, SHA-256
+`4c9465cf7e286e4d7cde7648d75f6ea2c8b4a70459a87b92ef31fc5084c50428`.
+It was independently recomputed before cleanup. Values are p50/p95/p99/max milliseconds.
+
+| U03 ROI reuse comparison | p50 / p95 / p99 / max |
+| --- | --- |
+| Fresh composition interval | 13.339 / 14.164 / 14.552 / 25.332 |
+| All swap interval | 13.338 / 14.164 / 14.552 / 18.884 |
+| Profile input to matching composition | 12.907 / 13.787 / 14.201 / 17.145 |
+| Actual input interval | 13.276 / 14.218 / 14.653 / 17.424 |
+| Callback duration | 0.367 / 0.522 / 0.582 / 9.244 |
+| Heartbeat interval | 13.279 / 14.413 / 14.999 / 22.094 |
+
+Of 2,340 changed requests/publications, ROI was selected 292 times: one cold reduction at
+8.941 ms and 291 cache hits. Warm ROI callback p50/p95/p99/max was
+0.147/0.190/0.239/0.399 ms; its one cold callback took 9.244 ms. The canonical reducer
+handled 1,756 bands (p95 0.255 ms), zero full projections and one ROI. All 2,245 fresh
+swaps had matching completed detector and horizontal/vertical profile generations and buffer
+identities before composition; the independent trace check found no stale match. There were
+2,247 paints per marginal, 2,248 active swap events, one repeated swap, two initial unmatched
+swaps, zero same-generation/superseded paints and no no-op callbacks. Final generation `2928`
+composed at `379057.1598216`, before active end, and the final query key matched. Actual
+saved JSON equaled the captured final `ProjectDocument` at revision 2341; the owner drained
+and the window closed normally. Native/display identities and readonly flags persisted; the
+texture uploaded once in total. The preparation snapshot showed zero uploads before its settle
+period, so an active-only upload delta was not recorded.
+
+The prior one-window baseline on unchanged `5dd2561` had 108 repeated ROI reductions at
+9.389 ms p95 and fresh-frame/profile-response p95 of 18.206/14.062 ms. Under this repair,
+fresh-frame/profile-response p95 were 14.164/13.787 ms. The first cold ROI was retained in
+the new distribution: its one associated fresh interval was 17.371 ms. Only two of 2,244
+fresh intervals exceeded 16.7 ms: that cold ROI interval and a 25.332 ms band-containing
+interval. This one window meets the p95 16.7 ms, p99 33.3 ms, profile 50 ms and observed
+heartbeat 100 ms thresholds for its declared supply, but does not establish sustained U03
+acceptance or prove a sole frame-delay cause. The baseline and comparison have different
+durations and incidental machine load; no second repair or run followed. Timing stops at Qt
+composition, not monitor scanout or GPU execution.
+
+The one-entry ROI sum/support pack adds `16S` bytes for `S = rows + columns`; optional mean
+adds `8S` and shares support. At 3000x3000 these are 96,000 and 48,000 bytes. A new ROI
+query can briefly overlap the old pack and its optional mean before the cache is replaced;
+the current band/full view may also retain a distinct profile. No history of ROI planes or
+additional native image is retained. First/new broad ROI work remains synchronous and was
+not qualified for arbitrary masks, float64 data or larger admitted shapes. Active start/end
+RSS was 305.6/311.9 MiB, Windows peak working set 327.5 MiB and precisely active process
+CPU time 20.938 s; memory figures include Qt/driver/runtime and are not a GPU allocation
+measure. U03 remains unaccepted pending supervisor review and later sustained evidence;
 U02a has not started.
 
 ### M2 — independent simulator

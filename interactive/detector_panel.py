@@ -1309,6 +1309,9 @@ class DetectorPanel(QWidget):
         self._profile_key: tuple[object, ...] | None = None
         self._full_profiles: BandProfiles | None = None
         self._full_mean_profiles: BandProfiles | None = None
+        self._roi_cache_key: tuple[object, ...] | None = None
+        self._roi_sum_profiles: BandProfiles | None = None
+        self._roi_mean_profiles: BandProfiles | None = None
         self._current_profiles: BandProfiles | None = None
         self._roi_bounds: tuple[int, int, int, int] | None = None
         self.acquisition_identity: object = None
@@ -1391,7 +1394,17 @@ class DetectorPanel(QWidget):
         self._query_changed()
 
     def _apply_roi(self, bounds: object) -> None:
-        assert isinstance(bounds, tuple) and len(bounds) == 4
+        if (
+            self.view.image is None
+            or type(bounds) is not tuple
+            or len(bounds) != 4
+            or any(type(bound) is not int for bound in bounds)
+        ):
+            raise ValueError("inspection ROI needs four integer native bounds")
+        c0, c1, r0, r1 = bounds
+        rows, columns = self.view.image.shape
+        if not (0 <= c0 < c1 <= columns and 0 <= r0 < r1 <= rows):
+            raise ValueError("inspection ROI is outside this detector")
         self._roi_bounds = bounds
         self.profile_scope_control.model().item(2).setEnabled(True)
         already_selected = self.profile_scope_control.currentIndex() == 2
@@ -1538,6 +1551,9 @@ class DetectorPanel(QWidget):
         self._profile_key = None
         self._full_profiles = None
         self._full_mean_profiles = None
+        self._roi_cache_key = None
+        self._roi_sum_profiles = None
+        self._roi_mean_profiles = None
         self._current_profiles = None
         self._roi_bounds = None
         self.view.follow_cursor = True
@@ -1782,6 +1798,38 @@ class DetectorPanel(QWidget):
                 profiles = self._full_mean_profiles
             else:
                 profiles = self._full_profiles
+        elif scope == "roi":
+            roi_key = (
+                self.acquisition_identity,
+                id(self.view.image),
+                self.view.data_revision,
+                self._roi_bounds,
+            )
+            if roi_key != self._roi_cache_key:
+                sums = exact_band_profiles(
+                    self.view.image,
+                    column_px=self.view.crosshair[0],
+                    row_px=self.view.crosshair[1],
+                    scope="roi",
+                    roi_column_row_bounds=self._roi_bounds,
+                )
+                self._roi_cache_key = roi_key
+                self._roi_sum_profiles = sums
+                self._roi_mean_profiles = None
+            if measure == "mean":
+                if self._roi_mean_profiles is None:
+                    sums = self._roi_sum_profiles
+                    self._roi_mean_profiles = BandProfiles(
+                        _mean_per_valid(sums.horizontal, sums.horizontal_support),
+                        _mean_per_valid(sums.vertical, sums.vertical_support),
+                        sums.horizontal_support,
+                        sums.vertical_support,
+                        sums.row_bounds,
+                        sums.column_bounds,
+                    )
+                profiles = self._roi_mean_profiles
+            else:
+                profiles = self._roi_sum_profiles
         else:
             profiles = exact_band_profiles(
                 self.view.image,
