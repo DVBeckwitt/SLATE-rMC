@@ -1078,7 +1078,8 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 U02a is split into sequential subchanges without adding task IDs: (1) strict acquisition
 metadata, provenance and backward-compatible project persistence; (2) bounded per-candidate
 admission, retry/relink/cancel and selected-image ownership through the existing global job;
-(3) UUID-based review table, bulk mapping, material/reference pickers, filmstrip and explicit
+(3) UUID-based review table, bulk mapping, material/reference pickers with a bounded canonical
+configuration-reader snapshot, filmstrip and explicit
 metadata export; (4) focused integrated checks and resource accounting. Each implementation
 commit touches at most five files. The sustained qualification gate remains open after these
 implementation commits.
