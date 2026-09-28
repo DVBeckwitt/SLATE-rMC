@@ -1,7 +1,7 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; planned implementation, not delivered functionality.
-Updated: 2026-09-28. Independent objective and simplicity audit baseline: `bc47d7b`.
+Updated: 2026-09-28. Delivery breakdown incorporates the audited plan at `a80e995`.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -711,46 +711,108 @@ repeated mask/history operations. Verify exact final values, orientation, leases
 alongside latency; a speed gain cannot offset a scientific or coordinate failure. Each later slice
 checks only its new risk against this contract; U15 integrates the results, not the first measurement.
 
-## 11. Build sequence and acceptance checklist
+## 11. Delivery plan and acceptance checklist
 
 This is the implementation plan and sole task checklist. All tasks remain unimplemented. Existing
 U identifiers are retained, with smaller lettered slices where the previous task was too broad.
 Dependencies govern execution; milestones group completion criteria and are not serial barriers.
-Use the early-delivery order below instead of waiting for every row in the preceding milestone.
+Use the delivery order below instead of waiting for every row in the preceding milestone.
 The main agent is the only writer; independent reviewers can inspect completed changes.
 
-### Releases a researcher can use
+### Delivery roadmap and provisional effort
 
-| Milestone | User-visible deliverable | Exit condition |
+The packages below are a delivery view of the same 46 tasks, not another backlog or a new set of
+milestone IDs. Each task appears in one package; its detailed row below remains authoritative.
+Build in this order by default, taking individual tasks early when their dependencies are met.
+The M0-M7 sections group capabilities and do not impose a second execution order.
+
+Effort ranges are low-confidence planning judgments for one experienced implementation owner,
+expressed in focused engineering weeks of five working days. They are not measured agent runtime,
+calendar commitments or claims about existing functionality. They include the slice's focused
+verification and documentation, but exclude waiting for data/feedback and new scientific models.
+Re-estimate after U00 and the first detector/profile delivery using actual completed work. The
+largest uncertainty is new-acquisition native preparation; do not assign it a delivery date before
+its measurement recipe and independent comparison are established.
+
+| Delivery package | Existing tasks, in dependency order | Usable outcome and completion gate | Provisional effort |
+| --- | --- | --- | --- |
+| Foundation | U00, U08a, U01, U01c, U01a, U01b | Select one measured rendering path; launch the native shell; open a real image asynchronously; save/reopen and recover project state. Declare memory budgets and confirm orientation, late-job rejection and responsive close. | 1-2 weeks |
+| Detector reader | U02, U03, U02a, U14b | Pan/zoom native images with exact horizontal/vertical bands, browse several acquisitions, assign metadata and export figures/data. Verify alignment, support/counts and the applicable latency targets. | 1-2 weeks |
+| Visual experiment editor | U09a, U07, U08, U09 | Edit initial values and see per-image reciprocal coverage plus the textured beam/sample/goniometer/detector scene. Click-to-zoom, camera return, callouts and constrained handles share canonical state and undo. | 1-2 weeks |
+| Independent simulator | U12, U12a, U12b, U12c, U09b | Both configured and admitted native routes load/edit/run/save without a fitted experiment. Cover supported parameters, exact quantitative inspection and explicit experiment-to-draft transfer. | 1-2 weeks |
+| First geometry release | U04, U05a, U08b, U05b, U05, U10, U05d | Review masks/rings, propose a beam center, pass exact seeds/bounds to hBN fitting and inspect overlays, residuals, statistics and qualification status in the existing views. Save and reopen the complete journey. | 2-3 weeks |
+| Extend geometry routes | U05c, U08c, U10a, U08d, U10b | Add admitted sample-only and joint workflows with frozen observations, per-image/shared/fixed scopes and validated execution boundaries. Keep unsupported materials and underdetermined fits explicit. | 1-2 weeks |
+| Prepared native fitting | U11, U11a, U11b, U11c, U11d | Open existing prepared experiments; run supported mosaic, ordered and disorder stages; adopt compatible indexed geometry while preserving provenance and qualification. | 1-2 weeks |
+| New-acquisition native preparation | U11e, U11f, U11g | Qualify one raw-image-to-observation recipe, then deliver preparation/review and stage handoff without handwritten manifests. Show invalidation after upstream changes. | About 1 week to specify the recipe; estimate implementation after U11e |
+| Complete daily use | U04a, U06, U13, U02b, U14, U14a, U15 | Finish brush/imported masks, comparison/cuts, sensitivity, templates, portable archives and repeated-use recovery. Complete the combined performance/usability journey on declared hardware. | 1-2 weeks |
+
+The first cohesive researcher release includes the first five packages: approximately 6-11 focused
+engineering weeks under these assumptions, to be revised after early measurements. Earlier reader,
+scene and simulator deliveries are independently usable. This first release does not complete
+sample/joint fitting, later native stages or the daily-use refinements; those remain accepted scope.
+No defensible full-scope completion date exists yet because U11f/U11g depend on the preparation
+recipe. A repository launch is the initial distribution target; no standalone installer is promised.
+
+A first geometry fit can use numeric inputs while individual handles are being completed. Preview
+editing never requires a completed fit; fit-specific controls activate only after their execution
+mapping is verified. U05d can expose an hBN-derived center as soon as that result exists, adding
+sample-derived proposals only when an admitted sample result becomes available. Prepared native
+fitting can use a valid existing recipe without waiting for a new geometry fit. Completing that
+workflow does not establish preparation of newly imported data.
+
+### Ownership, priorities and progress reporting
+
+- Product/scientific owner: the researcher supplies representative inputs when available, resolves
+  scientific intent and gives feedback on completed journeys. Existing tracked examples allow
+  independent work to continue; missing evidence blocks only the capability that requires it.
+- Implementation/delivery owner: the main agent owns task ordering, code, integration, scope and
+  evidence. Work on one implementation slice at a time; do not create competing writers or treat
+  parallelism as an assumption in the effort estimates.
+- Review role: read-only review checks the actual diff and scientific boundaries when commissioned.
+  A document review is not a substitute for a measured interaction or qualified numerical result.
+
+Priority is the first complete inspection -> geometry editing -> simulation/calibration journey,
+with persistence and responsiveness in every slice. Then extend supported routes and complete
+repeat-use refinements. Move brush, comparison or template tasks forward when user feedback
+justifies it and their dependencies are ready; retain the same task IDs and scope.
+
+Use this checklist as the single status record. At a delivery update, report the current task,
+completed behavior/commit, focused checks, remaining blocker and next task; report a blocked
+scientific route separately from independent UI progress. Record a completion entry when checking
+a task. Reforecast at package boundaries rather than reporting unchecked rows as percentage done.
+New requests are mapped to an existing task or added here with their dependency and effort impact;
+do not silently expand the first researcher release.
+
+### First build cycle
+
+This cycle delivers the foundation package, not the whole application. Use three reviewable
+checkpoints; each may require several small commits under the task-delivery rules below.
+
+| Checkpoint | Work | Concrete handoff |
 | --- | --- | --- |
-| M0: choose the implementation | A measured rendering choice and a capability map grounded in current APIs | Alignment, buffer ownership and resource limits established before broad UI work |
-| M1: inspect real data | Import one/many OSCs, exact marginal profiles, masks, comparison, save/reopen and basic export | A researcher can inspect and export an image without configuring a fit |
-| M2: run the simulator | Independent configured and native simulation drafts, supported forms and explicit preview/quantitative output | Each admitted route loads, changes, runs, inspects and saves without observations or a fit |
-| M3: fit geometry | Reviewed observations, numeric starting values, beam-center tools, fitted overlays and statistics | hBN first, then supported sample-only and joint routes each work end to end |
-| M4: edit the experiment visually | Reciprocal coverage and textured beam/sample/goniometer/detector scene with synchronized controls | Click-to-zoom and physical edits preserve canonical geometry and parameter ownership |
-| M5: fit prepared native experiments | Supported mosaic, ordered and disorder workflows using existing prepared recipes | States, observations, measure, covariance and qualification remain intact |
-| M6: prepare new native experiments | One explicitly admitted new-acquisition preparation path, then additional supported recipes | Imported counts become reproducible native observations under a qualified measurement contract |
-| M7: complete daily use | Sensitivity, supported uncertainty, templates, archives and integrated release checks | Complete user journeys and declared performance/resource criteria pass |
+| Choose the rendering path | U00 and the bounded U08a map | One baseline and at most one justified alternative compared with two real images, exact bands, overlays and a textured plane. Record hardware, cold/warm timing, peak memory and coordinate correctness; retain only the chosen live components. |
+| Open the first image | U01, U01c, U01a | Documented launch, file picker/drop, asynchronous OSC decode, native image presentation and useful error states. Verify corrupt-file behavior, stale completion and responsive cancellation/close. |
+| Preserve the work | U01b | Save/reopen and draft recovery preserve acquisition identity and references, with atomic writes and actionable missing-file handling. Record the foundation's actual effort and remaining limitations. |
 
-M1 and M2 are useful deliveries on their own. A first geometry fit uses numeric inputs; it does not
-wait for every 3D handle. M5 can use an existing valid prepared experiment without a new geometry
-fit. M6 is required for the promised later-stage workflow on newly imported data; opening an
-existing recipe alone does not complete that requirement.
+The next cycle completes U02/U03/U02a/U14b: the production viewport, exact marginal profiles,
+multi-image metadata and inspection exports. Do not turn the rendering decision into a full
+application prototype or scientific benchmark campaign. Keep the comparison finite, then build
+on the selected components.
 
-Prioritize these demonstrable steps while retaining every later task:
+### Delivery risks and decision rules
 
-1. U00 and a bounded U08a inventory, then U01/U01c/U01a/U01b/U02/U03/U02a/U14b: real images,
-   exact profiles, several acquisitions and save/export.
-2. U09a/U07/U08/U09: numeric values, per-image reciprocal coverage and the textured experiment
-   scene with click-to-zoom and supported callouts/handles. Preview editing needs no completed fit;
-   fit-specific controls activate only when their route is implemented and its input mapping verified.
-3. U12/U12a/U12b/U12c: complete independent simulator routes. Reuse the same views and provide
-   U09b snapshot transfer without waiting for additional fitting routes.
-4. U04/U05a/U08b/U05b/U05/U10: reviewed hBN calibration, fitted ring overlays, statistics
-   and beam-center seed handoff in the already useful experiment views. U05d can expose its hBN
-   result immediately; sample-derived proposals appear when an admitted sample result is available.
-5. Add sample-only/joint fitting and later native stages under their own dependencies. Brush/cut,
-   template and archive refinements remain in scope but do not block the first scene or simulation.
+| Risk | Owner and decision rule |
+| --- | --- |
+| Plotting or background work causes lag or excessive memory | Implementation owner measures U00, then each new interaction against section 10. Fix the observed reduction/copy/upload/queue cost before adding acceleration or features on the same failing path. Unrelated work may continue. |
+| A control has no valid numerical binding or the fit is not identifiable | Scientific and implementation owners retain the explicit capability limit. Enable only verified seeds/scopes; permit inspection of unqualified results while enforcing existing downstream admission rules. A drawable mechanical degree of freedom is not automatically a fitted parameter. |
+| New raw-data preparation needs unimplemented scientific support | Resolve the admitted recipe and independent evidence at U11e, then split/re-estimate its implementation. Deliver existing prepared workflows and independent simulation in the meantime. |
+| UI scope or architecture grows faster than usable outcomes | Delivery owner keeps one writer, one backlog, direct state/signal bindings and the existing numerical owners. Additional dependencies or abstractions require a demonstrated need; finish the current user journey before adding another subsystem. |
+
+Each package must demonstrate its user journey, save/reopen introduced state, preserve coordinate
+and scientific contracts, reject stale work, and meet the applicable resource/interaction targets.
+The first reader package cannot establish behavior for later unbuilt features; U15 checks the combined
+application. Acceptance is evidence about delivered behavior, not a routine request for permission
+to continue already authorized work. This update delivers planning only; implementation has not started.
 
 The first geometry-user walkthrough must combine import, profiles, starting-value edits, reciprocal
 coverage, the textured scene, a supported geometry fit, overlays/statistics and save/reopen. A fast
@@ -897,12 +959,6 @@ For every checked task, record its coherent commit, delivered flow and measured 
 section. A document review or an unchecked feature is not completion. At each milestone, perform
 its end-to-end user journey; future capability limits must remain visible. New scientific support
 needs its own evidence before enabling it, while independent UI/simulator work can continue.
-
-The first packet is U00 with the bounded U08a map: choose a reference machine/resource budget and
-measure the small rendering slice. Stop expanding it once the choice is justified; inventory later
-routes when they are next to be built. U01/U01c/U01a then lets a user open a real image. Follow the
-early-delivery order above for the scene and simulator. No full fit, parameter sweep or full-image
-scientific campaign is required for the rendering decision.
 
 Usability completion must be observed through complete journeys:
 

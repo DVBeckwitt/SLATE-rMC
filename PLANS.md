@@ -16,11 +16,14 @@ Prefer removing duplicated work to adding orchestration or compatibility layers.
 
 The consolidated [desktop UI grand plan](docs/DESKTOP_UI_PLAN.md) records the accepted
 interface scope, OSC-style marginal profiles, beam-center estimation, initial-value controls, staged fitting,
-performance targets and independent audit findings. Section 11 is the executable build sequence:
-inspection, independent simulator, geometry routes, experiment views, prepared native fitting,
-new-acquisition preparation and release integration, each with dependencies and acceptance checks.
-Its early-delivery order brings reciprocal/experiment views forward, and milestones do not block
-independent tasks. Simulator completion covers both configured and native physical-input routes.
+performance targets and independent audit findings. Section 11 provides the delivery roadmap,
+provisional effort ranges, ownership, first build cycle, risks and the single 46-task backlog.
+The first cohesive researcher release combines inspection, reciprocal/experiment editing,
+independent simulation and hBN calibration. Later packages extend geometry routes, prepared native
+fitting, new-acquisition preparation and daily use, each with dependencies and acceptance checks.
+Milestones group capabilities without blocking independent tasks. Simulator completion covers both
+configured and native physical-input routes; new-acquisition preparation has a separate scientific
+decision point before its implementation can be estimated.
 It is the current plan for this UI work; implementation has not started. Its checklist is kept in that
 same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
 their original evidence and do not schedule additional scientific work.
