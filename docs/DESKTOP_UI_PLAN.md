@@ -1176,9 +1176,9 @@ is at most 24,006,000 bytes. For any admitted shape, native plus display planes 
 profile arrays are bounded by `8*pixels + 16*(rows + columns)` bytes. The 16,384-axis cap bounds
 this to 96,524,288 bytes plus the 6,000-byte header allowance, below U01c's 96 MiB result cap.
 The largest simultaneous decode/prepare arrays are the decoded content, raw and native int32
-planes, Boolean high-range mask and float32 display plane, at most about 180 MiB plus the bounded
-band-reduction temporaries, a 1 MiB read chunk and Python/Qt overhead. One
-image is resident in the panel; selecting an older acquisition reloads it through the same owner
+planes, Boolean high-range mask and float32 display plane, at most about 180,000,000 bytes
+(172 MiB) plus bounded band-reduction temporaries, a 1 MiB read chunk and Python/Qt overhead.
+One image is resident in the panel; selecting an older acquisition reloads it through the same owner
 and verifies its decoded SHA-256. Importing another file creates a new immutable acquisition UUID.
 Angles and calibration remain explicitly unknown. Failed/canceled replacement retains the prior
 usable image; changed source bytes reject reload and require a new import. Generation and UUID
@@ -1224,6 +1224,28 @@ timer and is reported as startup latency, not a measured responsive interval. Th
 are not a latency distribution or monitor-scanout measurement. Software/I/O checks do not establish
 fitting or scientific adequacy. No permanent checker, test fixture, simulation, fit or full-image
 timing campaign was added.
+
+One final cold-process hBN check closed the memory evidence gap without repeating interaction
+profiling. Windows `psutil.Process.memory_info().peak_wset` reported **316.03 MiB** from process
+creation through the matching panel swap and both exact profile paints. This OS peak working-set
+counter includes Python, Qt/OpenGL startup, the worker, and display admission; it is not a NumPy
+allocation peak or GPU-memory measurement. RSS was 171.95 MiB after shell creation/show and
+294.88 MiB 50 ms after composition, when the worker's temporary decode buffers had been released.
+RSS was 291.11 MiB after closing with the Python window object still referenced, so that last
+value does not claim complete object reclamation. Windows private commit at composition was
+1,072.36 MiB; its Qt/driver attribution was not decomposed. The one displayed 3000x3000 hBN
+native/display pair retains 72,000,000 bytes plus 96,000 profile bytes. While replacing a prior
+same-sized resident image, the new producer's largest decoded/raw/mask/native/display arrays add
+about 135,000,000 bytes, plus the 1 MiB read chunk and bounded band temporaries. The pair and
+producer therefore account for about 208,000,000 bytes (199 MiB) before Python/Qt overhead. At
+admitted maxima, an old resident result is at most 96,524,288 bytes and new producer arrays at
+most about 180,000,000 bytes (172 MiB), before the small chunk/bands and runtime overhead. One
+hBN R32F texture is 36,000,000 bytes; allowing one equally sized upload/staging copy gives a
+72,000,000-byte display estimate,
+not a measured driver allocation. The original at-result RSS of 279.84 MiB remains an at-result
+sample, not the peak counter. The three phase/peak probes used 1.324 + 1.088 + 0.886 = 3.298 s
+of measured active process time; all narrow review diagnostics together used under 30 s of
+reported tool wall time, including startup and tool overhead, within the 180 s allowance.
 
 ### M2 — independent simulator
 
