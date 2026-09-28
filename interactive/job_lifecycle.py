@@ -8,7 +8,7 @@ can accumulate large payloads or progress messages.
 import threading
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from time import perf_counter
@@ -168,8 +168,6 @@ class JobOwner(QObject):
             raise RuntimeError("Application close has been requested")
         if not isinstance(request.argument, (bytes, str, Path, memoryview)):
             raise TypeError("Request argument must be immutable bytes, text, path or byte view")
-        if isinstance(request.argument, memoryview) and not isinstance(request.argument.obj, bytes):
-            raise TypeError("Byte views must be backed by immutable bytes")
         if not isinstance(request.run, FunctionType) or request.run.__closure__ is not None:
             raise TypeError("Worker must be a plain function without captured state")
         if not 0 <= request.argument_bytes <= MAX_REQUEST_BYTES:
@@ -178,6 +176,9 @@ class JobOwner(QObject):
             raise ValueError("Request byte count understates its payload")
         if not 0 <= request.expected_result_bytes <= MAX_RESULT_BYTES:
             raise ValueError("Expected result exceeds the 96 MiB application limit")
+        if isinstance(request.argument, memoryview):
+            owned_bytes = request.argument.tobytes()
+            request = replace(request, argument=owned_bytes, argument_bytes=len(owned_bytes))
         self._generation += 1
         identity = JobIdentity(
             request.project_id, request.acquisition_id, request.revisions, self._generation
@@ -204,10 +205,17 @@ class JobOwner(QObject):
     def cancel(self) -> None:
         if self._publishing is not None:
             self._publication_canceled = True
-        if self._pending is not None:
-            self._terminal(self._pending.identity, JobState.CANCELED, "Canceled before start")
-            self._pending = None
-        self._request_active_cancel()
+        pending, self._pending = self._pending, None
+        active = self._active
+        canceled_active = None
+        if active is not None and not active.control.canceled:
+            active.cancel_at = perf_counter()
+            active.control.cancel()
+            canceled_active = JobSummary(active.scheduled.identity, JobState.CANCEL_REQUESTED)
+        if pending is not None:
+            self._terminal(pending.identity, JobState.CANCELED, "Canceled before start")
+        if canceled_active is not None:
+            self.state_changed.emit(canceled_active)
 
     def invalidate(self) -> None:
         """Reject prior publications when selection or input revisions change."""

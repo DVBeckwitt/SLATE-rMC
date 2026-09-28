@@ -65,6 +65,7 @@ class ShellWindow(QMainWindow):
         super().__init__()
         self.project = project if project is not None else Project.create()
         self.selected_acquisition_id: UUID | None = None
+        self._obsolete_pending = False
         self.setWindowTitle(f"SLATE · {self.project.name}")
         self.resize(1280, 800)
         self.setMinimumSize(820, 540)
@@ -213,11 +214,20 @@ class ShellWindow(QMainWindow):
         value = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
         selected_id = UUID(value) if value else None
         if selected_id != self.selected_acquisition_id:
+            had_work = self.jobs.busy
             self.jobs.invalidate()
-            if self.jobs.busy:
+            self.cancel_button.setEnabled(False)
+            self._obsolete_pending = had_work and self.jobs.busy
+            if self._obsolete_pending:
                 self.experiment_status.set_state(
                     "loading", "Stopping obsolete work", "Waiting for the prior operation to stop."
                 )
+                self.statusBar().showMessage("Selection changed · Waiting for prior work to stop")
+            else:
+                self.experiment_status.set_state(
+                    "empty", "No image open", "No result has been applied to this selection."
+                )
+                self.statusBar().showMessage("Selection changed · Ready")
         self.selected_acquisition_id = selected_id
         self.selection_label.setText(
             f"Selected acquisition: {item.text(0)}"
@@ -227,14 +237,15 @@ class ShellWindow(QMainWindow):
 
     def _job_state_changed(self, summary: JobSummary) -> None:
         if summary.identity.generation != self.jobs.latest_generation:
-            if (
-                not self.jobs.busy
-                and self.experiment_status.title.text() == "Stopping obsolete work"
-            ):
+            if self._obsolete_pending and not self.jobs.busy:
+                self._obsolete_pending = False
+                self.cancel_button.setEnabled(False)
                 self.experiment_status.set_state(
                     "empty", "No image open", "The previous operation was discarded."
                 )
+                self.statusBar().showMessage("Prior operation discarded · Ready")
             return
+        self._obsolete_pending = False
         state = summary.state
         self.cancel_button.setEnabled(state in (JobState.QUEUED, JobState.RUNNING))
         if state in (JobState.QUEUED, JobState.RUNNING):

@@ -1110,8 +1110,10 @@ and late-result boundary; U01a then connects real OSC import to this shell.
 pending request, one replaceable progress message, one ready result slot and eight retained
 terminal summaries. The GUI polls the slot every 20 ms; the worker touches no widget and has no
 unbounded command, result or progress queue. Request arguments are currently immutable bytes,
-text, paths or byte views backed by bytes; workers use plain functions without
-captured state. A request declares at most 4 MiB of argument bytes and 96 MiB of expected result;
+text or paths; admitted byte views are copied to owned bytes after their `nbytes` is checked,
+so a caller can release the view and a small slice cannot retain a large backing allocation.
+Workers use plain functions without captured state. A request declares at most 4 MiB of argument
+bytes and 96 MiB of expected result;
 the worker result declares and is checked against both its estimate and the 96 MiB global cap.
 Flat bytes, byte views (`nbytes`), text/path encodings and objects exposing integer `nbytes` have
 a checked lower bound. Nested result ownership and temporary decode peaks remain the specific
@@ -1130,6 +1132,15 @@ worker exits and resources have been released; no successful close or resumable 
 before then. A selected-acquisition change leaves a visible stopping state that clears after the
 obsolete worker safely exits. Project persistence remains U01b, real OSC loading U01a and
 numerical cancellation hooks stay with their later owners.
+
+A focused follow-up corrected three lifecycle edges without repeating the timing campaign. Cancel
+now detaches its pending request and marks the captured old active worker canceled before emitting
+terminal signals; a listener that submits newer work from the pending-canceled signal cannot have
+that new request erased by the outer cancel. Byte views are snapshotted once after byte-limit
+validation, including a non-byte typed view and a one-byte slice of a larger backing buffer.
+Selection invalidation immediately disables Cancel and updates the status bar, then clears the
+waiting message when obsolete work actually stops. A temporary real-Qt check covered those three
+cases via `python <external>/u01c_repair_check.py`; its script was removed after the result.
 
 A finite external check used a 64 KiB file read/hash operation, controlled worker barriers and a
 250 ms noninterruptible preparation section. It covered normal success/failure, pre-start and
