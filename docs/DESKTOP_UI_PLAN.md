@@ -1481,34 +1481,144 @@ machine CPU and memory were sampled outside timed GUI callbacks.
 | Matched composed-frame interval p50 / p95 / p99 ms | 13.354 / 15.157 / 15.664 | 13.342 / 15.245 / 15.864 |
 | Detector `paintGL` p95 / p99 ms | 0.736 / 0.865 | 0.698 / 0.790 |
 | Completed paint to matching swap p95 / p99 ms | 4.629 / 4.958 | 4.697 / 5.131 |
-| First new request after previous swap p95 / max ms | 0.606 / 1.169 | 2.037 / 2.854 |
+| Wait to a later request after previous swap p95 / max ms | 0.606 / 1.169 | 2.037 / 2.854 |
 | Duplicate/unmatched swaps; superseded completed paints | 9; 0 | 8; 0 |
 | Unpresented requested generations | 25 | 136 |
 
-The first new request followed each preceding matched swap within 4 ms in both streams;
-the measured intervals were therefore not created by long no-request gaps. The manual loop
-delivered more callbacks and coalesced more intermediate generations into essentially the
-same number of composed frames. Both final generations composed, each task-owned autosave
-revision receipt reached the final revision, both windows closed through the approved shell
-close path, and neither uploaded the detector texture during the active window. The final modes were
-linear; cursor coordinates differed because the drivers delivered different callback counts.
+The wait-to-later-request statistic did not account for a generation already pending at the
+preceding swap, so it is not a true idle/backlog measure. These pair summaries also included
+post-active drain swaps in their interval statistics; they are short-loop diagnostics, not
+qualified active-only frame distributions. The manual loop delivered more callbacks and
+coalesced more intermediate generations into essentially the same number of composed frames.
+Both final generations composed, each task-owned autosave revision receipt reached the final
+revision, both windows closed through the approved shell close path, and neither uploaded the
+detector texture during the active window. The pair did not read the saved JSON back from disk.
+The final modes were linear; cursor coordinates differed because callback counts differed.
 The compact per-callback/paint/swap streams were 86,848/95,969 bytes with SHA-256
 `320309502b9137e12bc2656dc76d704b9e81e15b4b426db91ebe764ec53675c1` and
 `363798c62410e67fc0c8109810dc70280a13787faf360f0800b29e23979a1aa3`, respectively.
-The external script and streams were removed after summary extraction. The manual window had
-563 horizontal and 563 vertical profile paints, with p95 paint durations 1.053/0.704 ms;
-the native profile hooks ran, but their separate counts/durations were omitted from the
-compact stream and the console summary was truncated, so they are not claimed here.
-Presented-profile latency was not measured. Approximate process RSS was 240.1 to 237.7 MiB
-native and 244.1 to 241.6 MiB manual; final whole-machine CPU samples were 9.8%/12.0%.
+The external script and streams were removed after summary extraction. Native and manual
+windows each had 563 horizontal and 563 vertical profile paints. Horizontal/vertical p95 paint
+durations were 1.088/0.698 and 1.053/0.704 ms, respectively; native input-to-swap p95 was
+15.021 ms and its heartbeat maximum 16.506 ms. Presented-profile latency was not measured.
+Approximate process RSS was 245.5 to 241.5 MiB native and 244.1 to 241.6 MiB manual;
+final whole-machine CPU samples were 11.5%/12.0%. The native console output was available
+for this correction; the removed raw streams were not independently recalculated for the pair.
 
 The short pair **did not reveal a composed-cadence difference between loop drivers** under its
-continuous changed-state 8 ms requested supply: both p95 intervals were below 16.7 ms and
-both p99 intervals below 33.3 ms. It does not prove sustained U02 acceptance, isolate the
-earlier 13 ms condition, or establish physical monitor scanout latency. The next decision is
-whether a separately scoped sustained run with frozen input cadence and complete profile
-latency capture is justified; no renderer change is supported by this pair alone. U02 remains
-open, and the original measured misses and target remain unchanged.
+changed-state 8 ms requested supply: both reported p95 intervals were below 16.7 ms and
+both p99 intervals below 33.3 ms, with the active/drain boundary limitation above. It does
+not prove sustained U02 acceptance, isolate the earlier 13 ms condition, or establish
+physical monitor scanout latency. The sustained
+native-loop packet below follows this diagnostic; no renderer change is supported by the pair.
+U02 remains open, and the original measured misses and target remain unchanged.
+
+#### U02 sustained native-loop qualification packet (2026-09-28; supervisor review pending)
+
+The reviewed pair authorized a new 100 s aggregate active allowance. A tiny 0.01503 s
+preflight checked empty/nonempty percentile inputs, a pre-construction OpenGL timing hook on
+an 8x8 plane and approved window shutdown. Three native `QApplication.exec()` windows then ran
+for 30.006, 30.003 and 30.000 s, totaling 90.025 s including preflight. No failed full-image
+attempt or retry occurred. The external command was
+`python -u -B <task-scratch>/u02_sustained.py selfcheck|run <worktree> <task-scratch>
+[0.01503]` with `QT_QPA_PLATFORM=windows` and `PYTHONPATH=interactive;src`; the bracketed
+preflight duration was passed only to `run` for the cumulative cap. The reporter SHA-256 was
+`2d4c1130237bf58afd142b57a88f508f63fe98d9045f26995dc837978bbf8060`.
+
+Production source `a5d645f41089f70be7f5be7ddbe1081dca373454` was unchanged. The shell
+used the same Fusion/Segoe UI 10 stylesheet (SHA-256
+`49d1b8aa7fb9a0798ce8500596cb2b7ecd084cfce46b85d4ab23a7b6a6fa8572`),
+616x255 detector viewport, DPR 1 and Sceptre C27 (2) 1920x1080 screen at 74.99 Hz. The
+same named 3000x3000 hBN OSC had decoded SHA-256
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`.
+All 4,000 markers and both exact marginals remained enabled. Before each window the viewport
+was reset to Fit, centered crosshair, linear automatic levels and visible layers, then settled
+for 750 ms. A repeating four-way in-image cursor, alternating ±120 wheel, alternating ±(4,3)
+pan with Fit every 64 actions, and alternating linear/signed contrast supplied changed state.
+The input timer requested 8 ms and the heartbeat timer 10 ms, both `PreciseTimer`; actual
+delivery is reported below. Machine load was sampled only at active boundaries. The earlier
+13 ms traces remain separate conditions.
+
+The external reporter recorded each callback's timestamp, action index, generation before/after
+and desired state; `paintGL` start/end/generation; profile paint durations; and every swap's
+timestamp, latest completed generation and current requested generation. Its swap match used
+the newest completed paint, counted superseded paints and labeled swaps without a new paint
+as repeated or unmatched. At runtime, all-swap intervals and fresh-generation intervals
+included only pairs whose endpoints fell inside the same active window; final paint/save/close
+drain was separate. Input-to-composition used the request timestamp for the matching
+generation. For a *matched* preceding swap, a newer requested generation already pending
+makes no-request gap zero; otherwise the gap ends at the next request. Two initial unmatched
+swaps per window have unknown preceding state and were excluded from the corrected supply-gap
+summary. This is request-supply timing, not a claim that GPU composition itself was idle.
+
+The following values are p50 / p95 / p99 / max in ms. "All swaps" preserves the two initial
+unmatched signals in each active window; "fresh" uses new, requested paint generations.
+
+| Active-window measure | Window 1 | Window 2 | Window 3 |
+| --- | --- | --- | --- |
+| All-swap interval | 13.387 / 15.127 / 15.650 / 94.445 | 13.338 / 15.101 / 15.646 / 20.565 | 13.335 / 13.418 / 13.450 / 13.543 |
+| Fresh requested composition interval | 13.387 / 15.118 / 15.633 / 16.484 | 13.338 / 15.101 / 15.646 / 20.565 | 13.335 / 13.418 / 13.450 / 13.543 |
+| Input to matching composition | 13.027 / 14.938 / 15.495 / 16.344 | 12.917 / 14.879 / 15.424 / 20.037 | 12.947 / 13.200 / 13.268 / 13.337 |
+| Actual callback/request interval | 13.266 / 15.239 / 15.802 / 16.669 | 13.292 / 15.211 / 15.781 / 20.504 | 13.333 / 13.682 / 13.887 / 14.840 |
+| 10 ms requested heartbeat interval | 13.342 / 15.217 / 15.774 / 25.948 | 13.347 / 15.204 / 15.814 / 20.783 | 13.336 / 13.792 / 13.985 / 14.544 |
+| Detector `paintGL` duration | 0.524 / 0.705 / 0.861 / 1.356 | 0.601 / 0.813 / 0.901 / 1.085 | 0.620 / 0.887 / 1.001 / 1.174 |
+| Horizontal profile paint duration | 0.721 / 0.933 / 1.109 / 1.290 | 0.776 / 1.108 / 1.217 / 1.320 | 0.745 / 0.899 / 1.024 / 1.218 |
+| Vertical profile paint duration | 0.554 / 0.685 / 0.782 / 0.949 | 0.565 / 0.726 / 0.812 / 0.962 | 0.539 / 0.652 / 0.713 / 0.845 |
+
+| Active-window count | Window 1 | Window 2 | Window 3 |
+| --- | ---: | ---: | ---: |
+| Callbacks / requested generations / no-op callbacks | 2275 / 2311 / 0 | 2307 / 2344 / 0 | 2326 / 2363 / 0 |
+| Active swap signals / fresh requested compositions | 2246 / 2244 | 2251 / 2249 | 2251 / 2249 |
+| Detector paints / horizontal paints / vertical paints | 2244 / 2244 / 2244 | 2249 / 2249 / 2249 | 2249 / 2249 / 2249 |
+| Coalesced or unpresented requests | 67 | 95 | 114 |
+| Initial unmatched active swaps / same-generation repaints / superseded paints | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 |
+| Repeated swaps during post-active drain | 7 | 8 | 7 |
+| Corrected known no-request gap p95 / max ms | 0.555 / 1.129 | 0.645 / 1.706 | 0.666 / 1.795 |
+| Texture uploads during active window | 0 | 0 | 0 |
+
+All fresh matched paint generations were requested and distinct, including the final
+generations 2316, 4663 and 7029; none was a same-generation repaint or unrequested setup
+paint. A read-only review recalculated the fresh-frame, response and heartbeat tuples from
+the streams and found they matched the reporter's output. The 94.445 ms maximum between *all*
+swap signals in window 1 is retained; its relation to the two unmatched initial signals is
+unresolved, while the fresh-frame maximum was 16.484 ms and observed heartbeat maximum
+25.948 ms. Among intervals with a matched preceding swap, no corrected no-request gap exceeded
+4 ms. The reporter's original pending count of two per window came from treating preceding
+unmatched swaps as if their prior generation were known; the corrected matched-predecessor
+pending count was zero. All final requested generations composed.
+
+After each active interval, the reporter waited for the final composition and matching
+autosave revision, drained the owner/queue, then read the task-owned recovery JSON from disk.
+Each document exactly equaled the final accepted project/view snapshot, including camera,
+contrast, crosshair, layers, DPR, project/acquisition IDs and decoded source hash. The common
+project/acquisition UUIDs were `cd4ee4fe-d35d-40a0-9a43-3d5038c99e5a` and
+`b690edf3-7f36-4abc-a69d-4fbeb181ab71`. The native image stayed read-only with the same
+native/display array identities and no texture reupload. Process RSS started/ended at
+241.5/238.8, 240.0/239.7 and 240.5/240.6 MiB; final whole-machine CPU samples were
+9.2%, 14.6% and 12.3%. Drains took 0.815/0.835/0.818 s outside active timing, and the
+owned shell closed without a modal dialog. No fit or physical simulation ran.
+
+The external result JSON SHA-256 was
+`0f9d74ce30ba9dffc4aecd349f472ebfe57d7272beeafe7b4b95c1f0dc28c813`.
+The three compact callback/paint/swap stream SHA-256 values were
+`460146510f4049e70fd6f8bd54f66adf011ab67a8a23795b38c46502e17b1016`,
+`53dee862263143fb6e0d08c5e3cb72ffe61ef20e394f97aab0e7bc3dd68cc8b5` and
+`f0d94e1417c066984313b231b255df9466703adaee6c840b258988f616fb436c`.
+The raw streams omitted exact active start/end timestamps, so their active boundary cannot
+be reconstructed independently after cleanup; the live reporter filtered endpoints before
+emitting summaries. The stream's active-swap prefix counts permit the reviewed all-fresh
+recalculation above. Temporary reporter, streams, results and recovery root were removed
+after extracting this evidence.
+
+For this frozen 8 ms requested-supply scenario, all three active windows met the 16.7 ms p95
+and 33.3 ms p99 frame targets using both all-swap and fresh-request distributions, the
+50 ms p95 input-to-composition target, and no GUI heartbeat gap exceeded 100 ms. The
+reported Qt composition boundary is not physical scanout. Profile paints were counted and
+timed, but this packet did not bind each profile-state paint to a matching composed frame;
+it does not newly qualify presented-profile latency. Earlier exact profile-value and
+unchanged core evidence remain separate. The historical 13 ms request-supply misses are
+preserved and their cause is still unknown. U02 completion remains for supervisor review;
+the plan checkbox is not changed here.
 
 ### M2 — independent simulator
 
