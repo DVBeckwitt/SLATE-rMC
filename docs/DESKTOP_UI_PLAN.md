@@ -1437,15 +1437,78 @@ not monitor scanout. The reconstructed input sequence produced only 707 requests
 callbacks, so this is not a like-for-like throughput comparison with the earlier manual-pump
 windows that requested a paint on almost every callback.
 
-The 28.412 ms p95 native-loop interval misses the 16.7 ms target, so use of
-`QApplication.exec()` alone did not eliminate the observed cadence miss in this trace. Direct
-dispatch and measured paint methods were short; delayed timer delivery and paint-to-swap time
-both contributed more than the paint calls. The exact share of Qt scheduling, compositor pacing,
-instrumentation overhead and remaining viewport work is still unqualified. The smallest next
-action is a separately authorized, paired event trace with identical in-bounds requests under
-both loop drivers and generation-aware swap attribution, followed by a full sustained acceptance
-window only if a specific cause is repaired. This diagnostic neither supersedes the earlier
-26.7-28.5 ms misses nor completes U02.
+The 28.412 ms p95 is the interval between *changed* composed frames under only 707 new
+requests in 15 s, or about 47 requests/s. It does **not** establish a continuous-demand
+rendering miss or a causal effect of `QApplication.exec()`. Direct dispatch and measured paints
+were short; paint-to-swap includes ordinary refresh waiting and is not a compositor-cost
+measurement. The exact share of input supply, Qt scheduling, instrumentation and remaining
+viewport work was unqualified. The controlled pair below addresses this measurement gap;
+this sparse-demand diagnostic neither supersedes the earlier 26.7-28.5 ms misses nor completes
+U02.
+
+#### U02 controlled loop-driver pair (2026-09-28; diagnostic only)
+
+A new 25 s aggregate active allowance covered one failed 9.999 s window and two corrected
+windows of 7.511/7.499 s, totaling 25.009 s; Qt timer scheduling exceeded the cap by 9 ms.
+No further active run was made. The first native window generated 776 requests but its
+external OpenGL timing hook had been installed after widget construction: it recorded zero
+detector paints despite 758 swap signals, so its frame result was discarded. A small-array
+preflight then verified empty/nonempty percentile calculation, all four input events, OpenGL
+hook invocation and the task-owned close path before the corrected full-image windows.
+
+The unchanged production source was `a5d645f41089f70be7f5be7ddbe1081dca373454`.
+An external Python script with SHA-256
+`3b46bc9a84afc263b7cd4f0780e05cf07a2fd9b2ca54968843cc93a68bb84f2a` used
+`python -u -B <task-scratch>/u02_pair.py native|manual <worktree> <task-scratch>/STREAM.json
+7.5`, with `QT_QPA_PLATFORM=windows` and `PYTHONPATH=interactive;src`. Both separate processes
+used the existing shell, production Fusion style/font/stylesheet, the named hBN 3000x3000 OSC
+(decoded SHA-256 `137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`),
+4,000 grid markers, exact marginal profiles, DPR 1 and the same 74.99 Hz 1920x1080 screen.
+Their stylesheet SHA-256 was
+`49d1b8aa7fb9a0798ce8500596cb2b7ecd084cfce46b85d4ab23a7b6a6fa8572`.
+The deterministic repeating input generator used an in-image cursor, alternating wheel,
+alternating pan with periodic Fit, and alternating contrast; every callback changed state.
+Both requested an 8 ms **PreciseTimer** cadence, distinct from the earlier 13 ms traces.
+The only intended configuration change between corrected windows was normal `app.exec()`
+versus `app.processEvents()` with a 1 ms sleep. A 10 ms PreciseTimer heartbeat ran in both;
+machine CPU and memory were sampled outside timed GUI callbacks.
+
+| Corrected 7.5 s window | Native `app.exec()` | Manual pump |
+| --- | ---: | ---: |
+| Callbacks / requested generations / no-op callbacks | 578 / 587 / 0 | 688 / 699 / 0 |
+| Detector paints / matched compositions | 562 / 562 | 563 / 563 |
+| Actual callback and request interval p50 / p95 / p99 ms | 13.250 / 15.357 / 15.880 | 12.517 / 14.698 / 15.592 |
+| Matched composed-frame interval p50 / p95 / p99 ms | 13.354 / 15.157 / 15.664 | 13.342 / 15.245 / 15.864 |
+| Detector `paintGL` p95 / p99 ms | 0.736 / 0.865 | 0.698 / 0.790 |
+| Completed paint to matching swap p95 / p99 ms | 4.629 / 4.958 | 4.697 / 5.131 |
+| First new request after previous swap p95 / max ms | 0.606 / 1.169 | 2.037 / 2.854 |
+| Duplicate/unmatched swaps; superseded completed paints | 9; 0 | 8; 0 |
+| Unpresented requested generations | 25 | 136 |
+
+The first new request followed each preceding matched swap within 4 ms in both streams;
+the measured intervals were therefore not created by long no-request gaps. The manual loop
+delivered more callbacks and coalesced more intermediate generations into essentially the
+same number of composed frames. Both final generations composed, each task-owned autosave
+revision receipt reached the final revision, both windows closed through the approved shell
+close path, and neither uploaded the detector texture during the active window. The final modes were
+linear; cursor coordinates differed because the drivers delivered different callback counts.
+The compact per-callback/paint/swap streams were 86,848/95,969 bytes with SHA-256
+`320309502b9137e12bc2656dc76d704b9e81e15b4b426db91ebe764ec53675c1` and
+`363798c62410e67fc0c8109810dc70280a13787faf360f0800b29e23979a1aa3`, respectively.
+The external script and streams were removed after summary extraction. The manual window had
+563 horizontal and 563 vertical profile paints, with p95 paint durations 1.053/0.704 ms;
+the native profile hooks ran, but their separate counts/durations were omitted from the
+compact stream and the console summary was truncated, so they are not claimed here.
+Presented-profile latency was not measured. Approximate process RSS was 240.1 to 237.7 MiB
+native and 244.1 to 241.6 MiB manual; final whole-machine CPU samples were 9.8%/12.0%.
+
+The short pair **did not reveal a composed-cadence difference between loop drivers** under its
+continuous changed-state 8 ms requested supply: both p95 intervals were below 16.7 ms and
+both p99 intervals below 33.3 ms. It does not prove sustained U02 acceptance, isolate the
+earlier 13 ms condition, or establish physical monitor scanout latency. The next decision is
+whether a separately scoped sustained run with frozen input cadence and complete profile
+latency capture is justified; no renderer change is supported by this pair alone. U02 remains
+open, and the original measured misses and target remain unchanged.
 
 ### M2 — independent simulator
 
