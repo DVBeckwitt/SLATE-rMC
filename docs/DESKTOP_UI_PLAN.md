@@ -1,7 +1,7 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; planned implementation, not delivered functionality.
-Updated: 2026-09-28. Repository baseline inspected: `32af6af`.
+Updated: 2026-09-28. Independent audit baseline: `fb32664` plus the import/usability draft.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -39,9 +39,65 @@ Stages organize the interface; they do not create new optimizers or revive retir
 Inspecting an unqualified candidate is allowed. Using it as a qualified upstream result is not.
 Keep upstream revisions visible and mark affected downstream results stale after an input edit.
 
+### First successful session
+
+The opening screen offers **Import images**, **Open project**, **Recent projects**, **Open example**
+and **Simulator**. Importing an image must make its raw detector view available before demanding
+every scientific setting. Use existing example acquisitions for a short optional guided tour;
+do not add a second set of demonstration physics or test fixtures.
+
+The default guided path is:
+
+```text
+Import images -> review roles and acquisition metadata -> choose instrument/material
+-> inspect image and beam center -> set geometry starting values -> review fit readiness
+-> run geometry fit -> inspect and choose a result -> continue or save/export
+```
+
+Users can leave setup to inspect images and return without losing their progress. The simulator
+can be opened independently. Expert users can navigate directly to any inspectable stage;
+execution still honors that stage's scientific prerequisites.
+
+Start with the selected image and its profiles as the dominant view. Show the experiment scene
+when setting geometry, reciprocal space when reviewing coverage, and results when evaluating a
+fit. Keep optional panes collapsible and remember layouts rather than showing every panel at once.
+Use one context-sensitive inspector and one clear next action per stage. Common controls appear
+first; advanced sections and search expose every supported parameter without duplicating forms.
+
+Every tool has a visible active mode: Inspect/select, Set beam center, Draw mask or Measure profile.
+Escape returns to Inspect/select and cancels the current gesture. Clicking the image while masking
+must not change the beam center. Give concise inline gesture hints, tooltips and keyboard equivalents;
+use familiar names such as "shared across these images" with formal scope details available nearby.
+
+### Guidance and repeat experiments
+
+Save named instrument and experiment templates containing declared source/detector settings,
+material/mount defaults and compatible starting values. Show where a value came from: file metadata,
+template, manual entry, calibration or previous fit. Copy templates into project snapshots;
+later template edits cannot alter old projects. Applying a calibration to another acquisition
+requires matching setup/pose and an explicit affected-image review.
+
+Show a compact readiness panel with concrete actions, such as **Enter angles for 2 images**,
+**Choose a material**, **Review ambiguous peaks**, or **Resolve redundant active parameters**.
+Clicking an item opens the relevant field or view. Disabled actions have a visible reason, not
+only a hover tooltip. Missing metadata, unsupported capabilities and scientific failures remain
+distinct. Do not replace rank/qualification evidence with a readiness percentage or confidence score.
+
+Before starting a fit, show its images, parameter scopes, starting values, fixed references and
+output destination together. During execution show the current activity, available progress and
+Cancel; estimate remaining time only from defensible run information. Inspecting another image
+must remain possible. On failure, preserve the draft and partial diagnostic evidence, explain the
+condition in plain language and offer an appropriate edit/retry action with technical details
+expandable. Offer resume only where the existing execution contract supports it.
+
+At completion, summarize what changed, which images/features still disagree, and which conclusions
+remain unresolved. Provide **Compare with initial**, **Name this result**, **Use as selected result**
+when qualified, and **Continue to next stage** when prerequisites pass. Keep named attempts and
+their inputs available; a later run never silently overwrites the user's selected result.
+
 ## 2. Import, acquisition management and comparison
 
-- Import one or many supported detector files by file picker or drag/drop. OSC is the initial
+- Import one or many supported detector files by file picker or drag/drop. OSC/OSC.GZ are the initial
   format; further formats need explicit readers. Show thumbnails and load full images lazily.
 - Group by instrument setup, specimen/mount and acquisition. Store stable IDs, file hashes,
   commanded incidence, exposure, detector calibration and material/calibrant assignments.
@@ -54,6 +110,37 @@ Keep upstream revisions visible and mark affected downstream results stale after
   and pan when detector calibrations are compatible; otherwise state the comparison frame.
   Shared display limits are optional and visibly locked. Exposure-normalized comparisons require
   an explicit mode and units; independent automatic rescaling must not imply intensity agreement.
+
+### File import and metadata review
+
+In this local desktop app, label the action **Import files**. Accept individual files, multiple
+selections and a folder with a reviewable candidate list. Never recursively import an entire
+folder tree without showing its scope. Expose the supported extensions in the file picker/drop
+area; report unsupported files individually. Allow images to be added to an existing project.
+
+The import review is a compact table with thumbnail, filename, role (sample/calibrant/dark/mask),
+specimen/mount, commanded angle, exposure, shape, detector setup and status. Provide multi-select,
+paste-from-spreadsheet metadata, an explicit CSV column mapping, and **Apply to selected** for shared
+settings. Allow sorting/reordering without changing acquisition IDs. Header/filename suggestions
+show their source and remain unconfirmed until reviewed; angles are never accepted silently.
+Provide file pickers for supported material/CIF and configuration inputs as well as calibrant presets.
+
+Decode and validate in the background with per-file progress/cancel. Keep successfully imported
+images when another file is corrupt, missing or incompatible, and offer retry/relink on affected
+rows. Exact content duplicates and repeated nominal angles are different conditions: duplicate
+imports should be flagged; legitimate repeated exposures at the same angle remain representable.
+Use declared acquisition identity when deduplicating, not filename alone.
+
+Make the storage choice explicit: reference files in place by default, or copy them into the user's
+external project data folder. Display source and project locations and show the size before a
+large copy. Never modify originals. **Remove from project** removes a reference, not the source
+file. Relinking a moved file verifies its identity and cannot substitute different image bytes.
+
+Before fitting, the review indicates unresolved required fields. Raw image browsing still works.
+Users must be able to import an hBN-only calibration, a sample-only image, a multi-angle sample
+series or a mixed calibrant/sample project without following an irrelevant mandatory wizard branch.
+Import support does not imply that every combination supports the same fitting recipe. The readiness
+panel routes each combination to its actual fitting owner and names unavailable combinations.
 
 ## 3. Detector inspection and fitted overlays
 
@@ -139,6 +226,15 @@ Native marginal profiles are inspection observables. They do not replace the sci
 objective or reciprocal/angle-region projector. Any later use as fit observations needs its own
 declared support and covariance boundary. Error bars are optional evidence, not an independent
 Poisson assumption applied to dark-subtracted or correlated data.
+
+For simulator data, distinguish the progressing presentation from a quantitative snapshot. The
+current Monte Carlo preview supplies a leased float32 plane; it cannot supply these exact profiles.
+Initially, exact simulator profiles/cursor values bind to the latest immutable float64 snapshot,
+showing its revision and draw prefix. Until a matching snapshot exists, show **Awaiting quantitative
+snapshot**; an older pinned profile remains visibly historical. Offer **Inspect this snapshot** to
+hold a matching image and profiles together. Obtain snapshots in the worker at explicit inspection
+or quantitative completion boundaries, never on every cursor event. A future worker-owned exact
+reduction API is a separate measured extension, not a reason to silently sum presentation pixels.
 
 ## 5. Masks, feature review and reciprocal-space inspection
 
@@ -262,6 +358,16 @@ An initial estimate is neither a prior penalty nor an uncertainty interval. A us
 bounds independently within the core's admitted physical range; silently clipping a bad seed or
 activating an unsupported parameter is prohibited.
 
+Before enabling these controls, inventory each fitting owner's admitted coordinates, seed inputs,
+bounds, fixed references and supported acquisition combinations. Current `fit_joint_geometry`
+constructs its starting state from hBN and requires both Bi2Se3 and Bi2Te3 series; it does not accept
+an arbitrary starting vector. Current hBN calibration accepts center/distance seeds but initializes
+tilts internally and fixes its search bounds. Add narrow, explicit seed/bounds arguments where
+needed, preserving defaults and gauge constraints. These are prerequisites for the promised
+controls, not transformations hidden in widgets. Until supported, explain unavailable controls;
+never display an editable value that the launched optimizer ignores. Use the hBN, indexed-series
+and joint owners only for their respective admitted workflows.
+
 ## 7. Parameters, statistics and uncertainty
 
 Keep ownership scope separate from fitting status: a shared instrument parameter can be fixed or
@@ -301,6 +407,20 @@ results. Save/reopen a project with numeric configuration, file identities, acqu
 masks/assignments, drafts, selected result references and view layout. Validate file hashes and
 schema when reopening; relocation requires verification. Do not use executable serialized objects.
 
+Autosave editable project state atomically to the chosen external project location, visibly report
+save status and offer recovery after a crash. Retain undo/redo for metadata, masks, feature edits
+and initial values, with clear separation from camera history. An unsaved project can use an
+explicit local recovery location until named. Bound recovery history and never write diagnostics
+under the repository. Checkpoints for long calculations use the existing execution owner; restoring
+an autosaved UI cannot imply that an interrupted solver is resumable.
+
+Provide recent projects, Save as, named result history and **Duplicate experiment** for trying a
+different supported hypothesis while sharing immutable image references. Warn about missing input
+files on reopening and provide a guided relink action. A share/archive export offers a self-contained
+copy of selected inputs, numeric project state and result products with file identities, estimates
+its size, and preserves existing files. It never includes executable checkpoints or an implicit
+cloud upload. Keep routine figure/table export a short selection of content, format and destination.
+
 Export detector figures with optional overlays, profiles with support/units, feature tables,
 parameter tables and the fit/configuration provenance needed to reproduce them. Preserve original
 inputs. Generated results and diagnostics remain external to the repository; existing result
@@ -309,10 +429,16 @@ figures/tables are user-requested result products, not a second hidden diagnosti
 
 ## 9. Small implementation architecture
 
-Reuse `interactive/detector_viewer.py` for its current full-native presentation, progressive worker,
-input coalescing and invalidation behavior; reuse the geometry consumers in
-`interactive/ewald_sphere_viewer.py`. These tools stay usable during incremental extraction.
-Extract only helpers shared by actual consumers, into narrow optional presentation modules.
+Use `interactive/detector_viewer.py` as evidence for full-native texture presentation, progressive
+work, input coalescing and invalidation. Its current opaque OpenGL child covers Matplotlib axes,
+maps the entire image to the widget, and implements positive logarithmic display. It is not yet a
+zoomable, layered detector panel. Extract only helpers shared by actual consumers and establish the
+viewport/composition contract below before reusing it. Keep existing tools usable during extraction.
+
+`interactive/ewald_sphere_viewer.py` is a fixed-wavelength, six-case illustration with embedded
+textures and specialized geometry. Reuse suitable interaction ideas only; its formulas, positive-z
+display cutoff and embedded images are not acquisition geometry or quantitative data authorities.
+Build the experiment/reciprocal scene from canonical geometry APIs and retained drawing objects.
 Keep GUI imports/device initialization out of the numerical package's normal import path.
 
 | Concern | Existing authority / proposed boundary |
@@ -328,7 +454,8 @@ Keep GUI imports/device initialization out of the numerical package's normal imp
 
 Use PySide6/Qt and the existing optional OpenGL image path first. PyQtGraph is a candidate for
 linked axes, profiles and ROIs only if a small integration comparison shows that it removes more
-code/maintenance risk than it adds; it is not currently a dependency. Keep any addition in the
+code/maintenance risk than it adds and meets the same rendering contract; it is not currently a
+dependency. Make this decision in U00 before building the full interface. Keep any addition in the
 visualization extra. Do not add a browser shell, web service, generic plugin system, second physics
 engine or interchangeable backend framework for this UI.
 
@@ -337,6 +464,19 @@ widgets. This follows the [Qt worker-object guidance](https://doc.qt.io/qtforpyt
 If PyQtGraph is selected, configure native row-major interpretation and explicit display levels;
 its [ImageItem documentation](https://pyqtgraph.readthedocs.io/en/latest/api_reference/graphicsItems/imageitem.html)
 is an implementation reference, not evidence that a particular workload meets latency targets.
+
+The detector panel owns one explicit native-pixel-to-viewport transform, shared by the image,
+crosshair, mask, fitted overlays, pointer picking and both marginal position axes. Account for
+pixel centers/edges, row direction, aspect ratio and device-pixel ratio without a second OSC
+rotation. Provide signed/linear and positive-log modes with explicit invalid/nonpositive handling.
+Use ordered layers within a compatible compositor, not Matplotlib markers hidden behind an opaque
+GL child. Verify non-square corner/interior fiducials through pan, zoom, resize and DPI changes.
+
+Define a documented repository launch command in the first shell slice. The current wheel does
+not include `interactive/`; creating a script there is not an installed application entry point.
+Assign project schema/version ownership to one small I/O helper from U01. Basic save/reopen and
+atomic draft recovery arrive with the shell; portable archives and complete result exports follow
+later. Packaging a desktop installer is a separate delivery decision, not an assumed capability.
 
 Keep immutable scientific/result snapshots separate from mutable camera, selection and display
 state. Jobs bind acquisition ID and data/mask/calibration/model revisions plus a request generation.
@@ -347,62 +487,133 @@ may remain inspectable as a labeled historical result, but cannot replace the cu
 
 Responsiveness is an acceptance requirement. The following are proposed engineering targets,
 not measurements or guarantees already achieved. Start with the existing 3000 x 3000 native
-detector, one powder plus three sample images, and a stress case of twenty lazily loaded images.
-Record CPU, GPU, RAM, backend, screen scale and cold/warm state; record disk decode/JIT separately.
+detector, one powder plus three sample images, two displayed together, and a stress case of twenty
+lazily loaded images. U00 declares the reference CPU/GPU/RAM, presentation and execution backends,
+screen refresh/DPI, maximum displayed overlay workload and numeric memory budgets before comparison.
 
 | Warm interaction | Target on the declared reference machine |
 | --- | --- |
-| Pan, zoom, crosshair and camera feedback | 60 fps target; p95 frame time <= 33 ms |
-| Two native band profiles following a crosshair | p95 input-to-visible profiles <= 50 ms after profile preparation |
+| Pan, zoom, crosshair and camera feedback | Under sustained redraw demand on a 60 Hz reference display: p95 presented-frame interval <= 16.7 ms, p99 <= 33.3 ms; input-to-present p95 <= 50 ms |
+| Two native band profiles following a crosshair | p95 input-to-presented profiles <= 50 ms for the declared prepared workload; preparation is measured separately |
 | Selecting an already prepared image | p95 visible image/overlay/profile update <= 150 ms |
-| Parameter edit, start/cancel command acknowledgment | <= 100 ms; expensive computation has independent progress |
-| Superseded preview work | Cancellation observed at bounded checkpoints; aim <= 100 ms on the reference workload |
-| UI while loading/fitting/rendering | No synchronous heavy compute or I/O on the GUI thread; no stale result publication |
+| Parameter edit, start/cancel/close acknowledgment | <= 100 ms, independently of actual job termination |
+| UI during cold load, profile preparation, fitting and rendering | No observed GUI event-loop stall > 100 ms in the declared interaction window; no heavy synchronous compute/I/O or stale result publication |
+| Superseded work and shutdown | State the longest noninterruptible phase; measure cancellation-request-to-safe-stop and resource-release time separately |
 
 Do not promise fixed full-fit or full-simulation completion time. Show initialization/progress and
-keep navigation responsive. A missed target requires measured diagnosis; do not silently reduce
-scientific support, change tolerance or relabel an approximation as a completed result.
+keep navigation responsive. A 33 ms cadence is approximately 30 fps, not evidence of a 60 fps pass.
+Report lower-capability hardware separately with its measured limits. A missed target requires
+measured diagnosis; do not silently reduce scientific support, change tolerance or relabel an
+approximation as a completed result.
+Frame-interval targets apply only while continuous interaction requires new frames. For isolated
+events, measure input-to-present latency. Stop repainting when idle; do not maintain a permanent
+60 Hz loop merely to satisfy a timing statistic.
+
+### Retained plots and image presentation
+
+- Upload an imported image only on cache admission or data revision. Camera, pan/zoom, contrast,
+  crosshair and selection changes must cause zero image uploads and zero whole-image scans.
+  Cache contrast statistics when admitting the plane; sliders change shader uniforms/colormaps.
+  Keep full-native precision available independently of the float32 display texture.
+- Keep 1D curve objects, position arrays, pens and axes alive. Cursor movement changes only band
+  handles, crosshair and the two profile value buffers. Do not clear/rebuild figures, legends,
+  colorbars or tick layouts for each event. Intensity autoscale is explicit and rate-limited;
+  offer pinned limits. Basic plots use thin opaque lines without per-sample markers.
+- Batch peak markers and ring polylines; keep label count bounded by visibility/selection. Use a
+  native-coordinate spatial index for pointer picking rather than scanning every feature each
+  mouse event. Rebuild that index on geometry changes, not camera movement. Drawing culls never
+  alter fit membership. Screen-pixel min/max envelopes may reduce dense 1D drawing while preserving
+  extrema, missing-data gaps and exact underlying values/exports.
+- Keep scene meshes, detector texture, overlay buffers and picking geometry alive. Camera motion
+  changes view matrices; physical edits change only the affected transforms/geometry buffers.
+  Use a schematic low-complexity goniometer, not unnecessary hardware mesh detail. Decorative
+  complexity and label work are adjustable presentation costs, never scientific support changes.
+- Budget uploads and upload staging as part of frame latency. Progressive images carry a data
+  revision/draw prefix; present only the newest safe completed frame. Do not assume that a worker
+  makes an OpenGL upload asynchronous. Add asynchronous staging only if measured upload stalls
+  justify it, with explicit ownership and completion fences.
+- Share owned textures between compatible 2D/3D contexts where supported; otherwise upload once
+  per admitted data revision per context. Keep GL operations/context lifecycle on their declared
+  threads, release resources on context loss and rebuild from owned data. Never use framebuffer
+  readback to calculate cursor values or profiles.
+
+If PyQtGraph is selected, its [PlotDataItem guidance](https://pyqtgraph.readthedocs.io/en/latest/api_reference/graphicsItems/plotdataitem.html)
+supports ndarray inputs, reused pens, thin opaque lines, clipping and optional display downsampling.
+Do not disable finite checks when masked profiles contain missing values. Qt documents context
+sharing, synchronization and potentially stalling readback in
+[QOpenGLWidget](https://doc.qt.io/qtforpython-6/PySide6/QtOpenGLWidgets/QOpenGLWidget.html).
+These mechanisms are options to measure, not evidence of achieved performance.
 
 ### Profile and image work
 
-- Read/hash/decode once per acquisition revision in a worker. Cache only the selected/compared
-  native planes plus a bounded working set; prefetch nearby thumbnails with low priority.
-  Avoid a full image copy, file read or whole-image reduction on each mouse event.
+- Read/hash/decode on admission or a cache miss in a worker, reusing valid resident data. Avoid
+  repeated reads/conversions while cached. Stream/validate import with bounded concurrency,
+  declared size limits and per-file errors; a large folder is not a request to decode every image
+  at once. Prefetch only nearby thumbnails at low priority. Never read a file on a cursor event.
 - For one-pixel/narrow bands start with direct native slices. If timings justify it, prepare one
   summed-area table for signal and one for valid support for each active data/mask revision.
   Four-corner differences produce a whole horizontal/vertical profile in O(width + height), after
   O(width * height) preparation. Choose the direct path or prefix path explicitly by workload.
   Verify prefix subtraction against direct reductions, including large backgrounds/small signals.
-- A 3000 x 3000 float64 plane is about 68.7 MiB. Float64 signal plus uint32 support prefix tables
-  cost about 103 MiB per plane, in addition to image/texture storage. Set and expose a bounded cache
-  budget; do not allocate these tables for every loaded image. Check support-counter overflow for
-  larger arrays. Evict only reconstructible buffers, never source data or accepted results.
-- Update only the crosshair, band handles and two 1D curves when the cursor moves. Cache full-image
-  marginals. Key profile reuse by data, mask, correction, bounds and reduction mode; log/contrast
-  changes do not recompute native profiles. Mask edits prepare a new generation atomically.
-- Preserve full-native image textures and authoritative precision. Float32 GPU frames are
-  presentation only. Reuse textures/buffers and change shader levels/colormaps without rerunning
-  physics. Share owned texture data between 2D and 3D where the Qt context permits it; otherwise
-  upload once per data revision to each context, never once per camera movement.
-- Reuse vector overlay items and profile curves. Clip offscreen drawings and labels without
-  changing observation membership. Screen-pixel min/max envelopes may reduce drawn 1D vertices
-  while exact profile values, extrema and exports remain available.
+- Cold decode, mask rasterization and prefix preparation are cancellable worker work, with visible
+  **Preparing profiles** status. Use exact direct reductions while preparing only if their measured
+  cost fits the budget. Otherwise retain an explicitly old/pending profile; never label an old-mask
+  profile current. The crosshair and navigation remain interactive throughout preparation.
+- Cache full-image marginals. Key profile reuse by acquisition/data, mask, correction, ROI/band
+  bounds, reduction mode and quantitative snapshot/prefix. Contrast changes do not recompute them.
+  Publish a new mask/profile generation atomically. Cursor coalescing must still show the final
+  requested position when movement stops.
+
+### One resource ledger
+
+Declare numeric CPU resident/peak, GPU display and numerical-engine budgets in U00, including the
+available-memory margin. Track their combined peak, not just one cache. A 3000 x 3000 float64 plane
+is about 68.7 MiB; current OSC loading also holds raw and native int32 planes totaling about 68.7 MiB.
+Signal float64 plus support uint32 prefix tables cost about 103 MiB per active plane, and a float32
+display plane is about 34.3 MiB before any second staging or GPU copy. Check prefix-counter overflow
+for larger arrays and numerical cancellation in signal differences.
+
+The ledger includes decoded data, corrections/model snapshots, masks, prefix tables, textures per
+context, upload staging, worker outputs, process-transfer copies, numerical workspaces, result
+history and undo. Keep only selected/compared planes and a bounded nearby working set resident;
+do not prepare prefixes for all twenty images. Bound mask undo using deltas/compact strokes with
+periodic checkpoints and a visible undo limit. Keep older accepted results on disk with lightweight
+metadata. Evict reconstructible RAM/GPU copies while preserving original files, project state and
+accepted result artifacts. Reload asynchronously without changing their identities or values.
+
+Bound both request count and payload bytes globally. Initially permit one running and one newest
+pending interactive request per key, within one application-wide worker/resource limit; hidden
+panels cannot each accumulate jobs. Keep at most one ready presentation frame plus the worker's
+owned working frame per active producer. A leased buffer is consumed/copied before reuse, with
+acknowledgment and all copies counted. Do not serialize whole images for every process command;
+pass stable IDs/configuration and use a measured bounded data-transfer strategy.
 
 ### Jobs and invalidation
 
 - Extend the existing latest-only preview scheduling; coalesce input to the next paint tick,
-  retain at most the running request and newest pending preview per view, and drop superseded
-  progress frames. Never launch one worker per mouse move or parameter control.
+  apply the global limits above and drop superseded progress frames. Never launch one worker per
+  mouse move or parameter control. Return small summaries unless the consumer requests a plane.
 - Separate priority interactive previews from explicit fit/quantitative jobs. Bound CPU workers,
-  BLAS threads and GPU ownership so a fit cannot starve navigation. Use a dedicated process where
-  required by Python-heavy work or thread-unsafe numerical/database resources; queue numeric
+  nested BLAS threads and GPU compute ownership, leaving measured capacity for presentation. A
+  background thread alone cannot prevent GPU compute from delaying drawing. Measure simultaneous
+  work; use bounded existing compute batches/checkpoints without changing numerical support or
+  accumulation semantics. Use a dedicated process where required by Python-heavy work or
+  thread-unsafe numerical/database resources; queue numeric
   snapshots, not live mutable models. No generic job-service layer is needed.
 - Use cooperative cancellation; never force-terminate a thread holding scientific/device state.
-  Keep GUI/OpenGL context affinity and the existing thread-confined sampler contract. A leased
-  preview frame must be consumed/copied safely before the sampler reuses it.
-- During parameter dragging, immediately update scene transforms and inexpensive geometric
-  landmarks. Update selected-image reciprocal coverage at a bounded cadence. On release, request
-  its settled preview, then other visible images. Hidden panels need no paint/evaluation until used.
+  Preserve the existing thread-confined sampler contract. Existing geometry optimizers need
+  explicit safe cancellation boundaries; GUI wrapping alone does not add them. Report setup,
+  compilation and optimizer phases that cannot yet be interrupted, and their observed stop times.
+- Jobs have queued, running, cancel-requested, completed, canceled and failed states. Cancellation
+  immediately invalidates publication; acknowledgment is not termination. Application close saves
+  the draft, requests cancellation and remains responsive while safe shutdown releases worker,
+  sampler and GL resources. Do not copy the current viewer's blocking close-handler thread join.
+  No successful shutdown or resumable checkpoint is claimed while owned work remains active.
+- During parameter dragging, update cheap scene transforms immediately. Canonical landmark/Q
+  calculation may be expensive: schedule it with latest-only revisions and show **Updating geometry**
+  rather than running it in the pointer handler. An old prediction remains clearly labeled or hidden.
+  On release, request selected-image settled geometry, then other visible images. Hidden panels
+  need no paint/evaluation until used; each visible panel shows the revision it represents.
 - Preserve existing full-native progressive Monte Carlo prefixes, source/rod/root support and final
   requested draw count. Source-count changes commit on release; previews never qualify a fit.
   CPU/CUDA and presentation choices remain explicit, with no silent fallback.
@@ -418,6 +629,34 @@ scientific support, change tolerance or relabel an approximation as a completed 
 | Sample/goniometer/source/material | Corresponding canonical transport/geometry/physics dependencies; no blanket projection-only shortcut |
 | Structure/mosaic/numerical settings | Only the responses and execution state whose declared keys depend on that change |
 
+### Measurement and decision gate
+
+U00 is a thin rendering/interaction slice, not a new retained benchmark suite. Compare the current
+optional presentation components and at most one plotting alternative using equivalent native
+images, profiles, masks, overlay density and numerical work. Record actual versions, hardware,
+workload, budget and outcomes. Choose the smallest path that meets both alignment and responsiveness
+requirements; remove discarded code and temporary external checking scripts.
+
+Keep U00 limited to its two-image/profile/overlay/textured-plane prototype and a bounded background
+workload. It does not build mask history, the full goniometer editor or fitting workflows early.
+Apply the following protocol only to scenarios available in the current slice: U04 adds mask/undo
+journeys, U08 scene/context handling, U10 optimizer cancel/close, and U15 the combined twenty-image
+journey. Reuse delivered application components; do not build a separate reusable checking framework.
+
+Use at least three 30-second repeatable interaction windows per declared scenario: pan/zoom,
+crosshair/band movement, mask editing, two-image comparison, textured 3D orbit, and those gestures
+during cold preparation or a bounded representative background job. Include rapid A-B-A selection,
+at least ten repeated image switches, context recreation and cancel/close races. Measure event to
+paint/composition completion (not merely dispatch), frame intervals, p50/p95/p99 and longest GUI
+stall; state the measurement boundary rather than claiming physical monitor latency. Report
+time-to-first-image/profile and cold decode/compile/preparation separately from warm interaction.
+
+Diagnose misses by file decode, array reductions/copies, CPU plotting, texture upload, GPU compute
+contention and composition. Memory must stabilize under the declared twenty-image journey and
+repeated mask/history operations. Verify exact final values, orientation, leases and stale rejection
+alongside latency; a speed gain cannot offset a scientific or coordinate failure. Each later slice
+checks only its new risk against this contract; U15 integrates the results, not the first measurement.
+
 ## 11. Implementation sequence and acceptance checklist
 
 All entries below are unimplemented. Paths name likely ownership, not a mandate for one module per
@@ -427,33 +666,54 @@ externally where code is needed, then removed under [VALIDATION.md](VALIDATION.m
 
 | ID / delivery slice | Dependencies and likely paths | Acceptance and verification |
 | --- | --- | --- |
-| [ ] U01: project/acquisition shell | None; `interactive/slate_app.py`, narrow project-state helper, `interactive/README.md` | Import one/many OSCs with explicit grouping/angles; reject duplicate or incompatible metadata; verify native coordinates on a non-square input and clean close/reopen with existing I/O. |
-| [ ] U02: native detector inspection | U01; app, shared optional detector presenter | Pan/zoom/native pixels, contrast and lazy filmstrip work; switching images never mixes IDs; inspect full-native orientation/precision and warm frame timing. |
-| [ ] U03: marginal profiles | U02; narrow profile helper and detector panel | Both aligned profiles follow/pin crosshair and independent bands; sum/mean/full-image/ROI modes handle masks, edges, signed/nonfinite data and zero support; compare with direct reductions and measure prepared cursor latency. |
-| [ ] U04: masks and regions | U03; detector panel, project-state helper | Rectangle/polygon/brush masks have undo and reasons; observations remain frozen during a run; verify profile/fit invalidation and separate display/inclusion controls. |
+| [ ] U00: rendering and resource decision | None; bounded vertical slice using existing optional viewer components | Declare reference hardware, workload and numeric resource budgets; compare at most one plotting alternative with two native images, linked profiles, dense overlays, a textured plane and bounded background work. Establish viewport/composition and buffer ownership, measure cold/warm latency and peak memory, select one path and remove discarded/temporary checking code. |
+| [ ] U01: project/acquisition shell | U00; `interactive/slate_app.py`, narrow project-state/I/O helper, `interactive/README.md` | Document a working repository launch; import one/many OSCs with explicit grouping/angles and schema ownership. Distinguish duplicate imports from repeated acquisitions. Basic save/reopen and atomic draft recovery work before editing tools; verify non-square native coordinates, interrupted saves, missing files and responsive close. |
+| [ ] U02: native detector inspection | U01; app, shared optional detector presenter | Pan/zoom/native pixels, signed/linear/log contrast and lazy filmstrip work; switching never mixes IDs. Non-square image, pointer, overlay fiducials and marginal axes align through resize/DPI changes; camera/contrast/cursor changes perform zero image uploads. Measure cold admission and warm interaction. |
+| [ ] U02a: guided import and reusable setup | U01/U02; import-review panel and project-state helper | Files/folders, roles, bulk metadata and template provenance are reviewable while images remain inspectable; verify mixed valid/corrupt inputs, repeated exposures versus duplicate imports, and reference/copy/relink behavior; complete a first-use sample-only and mixed calibrant/sample setup without editing configuration files. |
+| [ ] U03: marginal profiles | U02; narrow profile helper and detector panel | Both aligned profiles follow/pin crosshair and independent bands; sum/mean/full-image/ROI modes handle masks, edges, signed/nonfinite data and zero support. Compare with direct reductions, including cancellation-prone prefix differences; measure cold preparation responsiveness, warm cursor latency and exact settled values. |
+| [ ] U04: masks and regions | U03; detector panel, project-state helper | Rectangle/polygon/brush masks have bounded undo and reasons; observations remain frozen during a run. Verify atomic profile/fit invalidation, worker preparation, display/inclusion separation and memory under repeated strokes. |
 | [ ] U05: saved fits and feature inspection | U02/U04; result binding, overlays/inspector | Peaks/rings, feature list, labels, held-out/excluded states and residuals match saved IDs/coordinates; reject mismatched provenance; verify unfitted/current/stale/candidate states and unavailable uncertainty. |
 | [ ] U05a: beam-center proposals | U03/U04/U05; narrow ROI estimator, detector tool and calibration consumer | Manual and Gaussian ROI proposals plus supported hBN/sample-derived estimates retain source/reliability; shared application is explicit and unsupported spots remain unqualified; check known off-center/non-square spots, background, saturation/occlusion, rejected stale proposals and exact seed handoff. |
 | [ ] U06: linked comparison and profiles | U03/U05; panel layout/profile controls | Two images support compatible linked pan/limits, magnifier and straight-line cuts; model/profile comparisons use matched measures/support; verify pinning, exposure labels and before/after selection. |
-| [ ] U07: reciprocal geometry preview | U05; canonical geometry consumer, reciprocal panel | Every image has on-demand draft/saved coverage; linked feature selection and cursor Q use the declared frame; verify valid/off-panel cases against current geometry APIs and stale-job rejection. |
-| [ ] U08: textured experiment scene | U02/U05; scene helper, app | Beam/sample/goniometer/detector use canonical poses and image/overlays; click-to-zoom, context return and camera presets work; verify detector texture corners and that camera actions preserve parameters. |
-| [ ] U09: physical parameters and initial estimates | U05a/U07/U08; parameter metadata/inspector and scene | Callouts/handles and table edit one complete initial vector with scopes, units, bounds, provenance and gauges; launch snapshots preserve initial/current/fitted values; verify beam-center seed mapping, nonzero compound rotations, one-drag undo and dependent invalidation. |
-| [ ] U10: geometry fitting jobs | U04/U05/U09; job/controller and current geometry fit boundaries | Single/multi-image and calibrant/sample workflows call supported owners; results preserve fixed/local/shared diagnostics and qualification; verify cancellation/revision races with small controlled jobs, not full scientific campaigns. |
+| [ ] U07: reciprocal geometry preview | U05; canonical geometry consumer, reciprocal panel | Every image has on-demand draft/saved coverage; linked feature selection and cursor Q use the declared frame. Verify valid/off-panel cases, nondefault wavelength and nonzero beam x component against canonical APIs; reject stale jobs and never substitute fixed Ewald illustration data. |
+| [ ] U08: textured experiment scene | U02/U05; scene helper, app | Beam/sample/goniometer/detector use canonical poses and image/overlays; click-to-zoom, context return and camera presets work. Verify detector texture corners, compound rotations, context recreation, no image reupload on orbit and unchanged scientific parameters after camera actions. |
+| [ ] U08a: fitting capability and execution prerequisites | U01; current `hbn.py`, `joint_geometry.py`, `indexed_series.py` and relevant execution owners | Inventory admitted image combinations, seeds/bounds, gauges and cancellation boundaries. Add narrowly scoped initial-state/bounds and cancellation inputs where required; preserve defaults, fixed references and qualification. Inspect actual optimizer arguments against the requested snapshot and check safe-stop behavior with bounded external checks. |
+| [ ] U09: physical parameters and initial estimates | U05a/U07/U08/U08a; parameter metadata/inspector and scene | Callouts/handles and table edit one admitted initial vector with scopes, units, bounds, provenance and gauges; launch snapshots preserve initial/current/fitted values. Every enabled control reaches the actual optimizer input; verify beam-center seed mapping, nonzero compound rotations, one-drag undo and dependent invalidation. |
+| [ ] U10: geometry fitting jobs | U02a/U04/U05/U09; job/controller and current geometry fit boundaries | Route hBN-only, supported sample-only and supported joint workflows to their respective owners, with readiness, run review and failure recovery. Preserve diagnostics/qualification; verify cancel acknowledgment versus safe stop, asynchronous close, resource release, revision races and result selection using small controlled jobs. |
 | [ ] U11: supported later fitting stages | U10; current native plan/result binding and stage panel | Mosaic/ordered/disorder controls reflect actual material support and ordered controls; hash-bound handoffs and stale-stage handling work; verify nominal/candidate/selected results and unsupported cases using current records. |
-| [ ] U12: independent simulator | U02/U03/U09; simulator forms/current viewer worker | Every supported parameter is available with units/validation; preview/quantitative jobs and measures are distinct; verify copied experiment drafts stay independent and unchanged current CLI configurations still load. |
+| [ ] U12: independent simulator | U02/U03/U09; simulator forms/current viewer worker | Every supported parameter is available with units/validation; preview/quantitative jobs and measures are distinct. Exact profiles bind to immutable float64 snapshots and name their draw prefix; progression cannot mutate them. Verify direct reductions, safe presentation leases, independent copied drafts and unchanged current CLI configuration loading. |
 | [ ] U13: sensitivity and supported uncertainty | U05/U09/U10; result inspector and narrow worker task | On-demand parameter perturbations show motion and validity; covariance bands appear only with defensible evidence; compare a tiny supported case with canonical predictions and preserve unavailable/unidentified states. |
-| [ ] U14: persistence and export | U06/U10/U11/U12; project I/O and existing result writers | Save/reopen restores bindings, edits and layout; altered/moved input files require verification; exported profiles, features and figures preserve native coordinates, support, units, fit status and provenance. |
-| [ ] U15: responsiveness and release review | Each earlier slice measures its own risk; app, optional dependency declaration and documentation | Meet the declared latency/resource targets with simultaneous cursor/3D/fit activity; verify bounded memory, cancellation, failure recovery and optional GUI imports; record cold/warm limits and remove temporary checks. |
+| [ ] U14: complete result persistence and export | U06/U10/U11/U12; extend U01 project I/O and existing result writers | Save/reopen restores all result bindings, edits and layout; altered/moved input files require verification. Exported profiles, features and figures preserve native coordinates, support, units, fit status and provenance. |
+| [ ] U14a: complete recovery and repeat-use workflow | U02a/U14; project I/O and result-history panel | Extend U01 atomic recovery to all stages without falsely resuming a solver; named attempts, selected results and duplicate experiments remain independent. Verify interrupted saves, relink, portable archive reopening and bounded disk/memory history. |
+| [ ] U15: responsiveness and release review | All earlier slices; app, optional dependency declaration and documentation | Integrate previously measured targets under simultaneous cursor/3D/fit activity and twenty-image mask/history use; verify bounded CPU/GPU peak memory, cancellation, asynchronous close, failure recovery and optional imports. Report distributions/stalls, cold/warm limits and chosen launch route; remove temporary checks. |
 
 Checkpoints:
 
-- [ ] After U03: real detector images and exact marginal profiles remain responsive; choose any
-  optional plotting dependency from this measured slice before expanding the interface.
+- [ ] After U00: a measured rendering choice, shared viewport contract and numeric resource budgets
+  exist before broad UI work. A failed target changes the implementation choice, not scientific support.
+- [ ] After U03: real detector images and exact marginal profiles remain responsive, including cold
+  preparation; the rendering choice remains supported by actual integration measurements.
 - [ ] After U05a/U06: beam-center, image/feature/mask review and comparison are useful with saved results, independently
   of launching a new optimizer; no fit observations are altered by presentation actions.
 - [ ] After U10: the complete geometry workflow has one parameter state, canonical transforms,
   preserved gauge/qualification rules and a verified stale-job boundary.
 - [ ] After U15: review the coherent diff, optional imports, relevant formatting/lint/build checks,
   user flows and remaining scientific limitations. Report actual measurements separately from targets.
+
+Usability completion is observed through complete journeys, not just functioning individual buttons:
+
+- [ ] A first-time user imports one image and sees the detector/profiles without prior configuration.
+- [ ] A researcher imports hBN plus an angle series, assigns metadata in bulk, chooses the center,
+  supplies initial geometry and understands exactly what will be fitted before starting.
+- [ ] A user sees why a stage is blocked, reaches the relevant setting directly and preserves work
+  when fixing a corrupt file, bad estimate or unsupported configuration.
+- [ ] A returning user reopens or recovers a project, compares named attempts, and exports a figure
+  plus the corresponding numerical values without accidentally overwriting the selected fit.
+- [ ] An expert can reach every supported parameter and operate inspection/selection with keyboard
+  equivalents; accidental mode changes do not edit geometry, masks or observation membership.
+
+Use the tracked example inputs for bounded walkthroughs. Obtain real researcher feedback when
+available and record observed friction; no usability or latency success is claimed from this plan.
 
 ## 12. Risks, limits and completion evidence
 
@@ -479,3 +739,33 @@ The present deliverable is this documentation and its plan-index link. No produc
 dependency installation, fit, simulation, performance run or retained checking harness is part of
 this planning change. Implementation completion requires evidence for every checked slice and one
 coherent reviewed commit per delivered change, following the repository's main/worktree policy.
+
+## 13. Independent audit disposition
+
+A separate read-only reviewer audited the usability draft against the current code on 2026-09-28.
+The main writer checked the findings and revised this plan. The following are planning repairs;
+they do not establish that runtime performance or missing implementation is already resolved.
+The independent reviewer checked the revision and confirmed the findings were incorporated;
+follow-up clarifications limit U00's scope and apply frame cadence only under active redraw demand.
+
+| Finding | Plan correction and implementation evidence still required |
+| --- | --- |
+| Initial-value controls can exceed current fitting APIs | Sections 2/6 and U08a/U09 inventory actual workflows and require explicit seed/bounds handoff. Every enabled field must reach the optimizer; existing gauges/defaults remain authoritative. |
+| Current GL presenter lacks viewport/layer alignment | Sections 9/10 and U00/U02 require one native transform, signed display, compatible overlay composition and DPI/alignment checks. Reuse narrow texture helpers, not the complete opaque widget unchanged. |
+| Progressive float32 images cannot provide promised exact profiles | Section 4 and U12 bind inspection to named immutable quantitative snapshots, with explicit pending/historical states and no per-cursor full snapshot allocation. |
+| Cancel/close promises exceed current safe interruption points | Section 10 and U08a/U10 require job lifecycle states, narrow execution hooks, measured noninterruptible phases and responsive safe shutdown. |
+| Ewald illustration is not general acquisition geometry | Section 9 and U07 exclude its fixed formulas/textures from scientific data paths; verify canonical geometry at nondefault wavelength/direction. |
+| Cache-only limits miss peak copies and history | Section 10 and U00/U04/U15 add a complete resource ledger, globally bounded publication, compact undo and reconstructible-buffer eviction. |
+| 60 fps claim and 33 ms criterion disagree; cold/tail latency unbounded | Section 10 separates cadence, event latency, tails, preparation and stop time, with declared workloads/hardware and early measurement. |
+| Packaging and early save/recovery ownership unclear | Section 9 and U01 establish repository launch, schema and basic recovery before editing workflows; U14 completes result/export coverage. |
+
+Source boundaries checked: [detector presentation](../interactive/detector_viewer.py),
+[illustrative Ewald viewer](../interactive/ewald_sphere_viewer.py),
+[Monte Carlo presentation/quantitative snapshots](../src/rasim_next/pipeline/source_averaged_detector.py),
+[joint geometry](../src/rasim_next/fitting/joint_geometry.py),
+[hBN calibration](../src/rasim_next/fitting/hbn.py),
+[indexed series](../src/rasim_next/fitting/indexed_series.py),
+[OSC I/O](../src/rasim_next/io/osc.py) and [packaging](../pyproject.toml).
+Recorded experiment history supplied no combined-UI timing evidence. No discovery/replay campaign
+is justified for this documentation audit; future bounded measured comparisons follow the current
+assessment and experiment-memory policies.
