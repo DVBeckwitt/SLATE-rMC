@@ -858,7 +858,7 @@ U08a's initial capability map is intentionally limited to the reader and first c
 | --- | --- | --- |
 | OSC bytes, raw indices and native counts | `io/osc.py`, `io/orientation.py` | One clockwise conversion at decode: native `[row, column] = [raw column, raw height - 1 - raw row]`; counts remain int32. A presentation widget receives native data only. |
 | Detector texture, coordinates and bands | `interactive/detector_panel.py` | Column/row pixel centers map through one view rectangle; exact bands reduce original int32 with int64 sums or corrected real data with float64 sums. Float32 R32F and display levels are presentation only; support excludes masked and nonfinite pixels. |
-| Configured material, source and spectrum | `pipeline/configured_simulation.py` `SimulationConfiguration` | CIF/phase identity; LAB origin/axes in m, direction dimensionless, spatial sigma m, divergence sigma rad, wavelength and lines Å with probabilities, correlation, polarization and source sampling. YAML angle fields in degrees are converted by the core constructor path to radians internally. |
+| Configured material, source and spectrum | `pipeline/configured_simulation.py` `SimulationConfiguration` | CIF/phase identity; LAB origin in m; transverse axes and mean direction dimensionless, spatial sigma m, divergence sigma rad, wavelength and lines Å with probabilities, correlation, polarization and source sampling. YAML angle fields in degrees are converted by the core constructor path to radians internally. |
 | Configured instrument and specimen | same config, `geometry` compiled instrument | Declared active LAB/goniometer/sample/crystal/detector transforms, detector shape `[row,column]`, pitch and positions m, reference coordinate `(column_px,row_px)`, film thickness Å, path medium and attenuation m^-1. Only existing rigid-transform and detector mapping owners calculate geometry. |
 | Configured scattering and numerics | same config and configured pipeline | Mosaic widths/quadrature (degree-valued YAML to internal radian measures), structure model/layers/normalization, physical `(h,k)` rods, populations, polarization and worker/backend/quadrature settings. These are distinct physical and numerical fields; no controls are enabled by this map. |
 | Configured outputs | `run_configured_simulation.py`, configured pipeline | Reciprocal/Ewald display densities are Å² rad^-2; detector macrobin quadrature is raw Å² per macrobin, and native center density is Å²/px². The separate Monte Carlo native pixel mass is raw Å². A preview is not a converged fit observable. |
@@ -926,11 +926,77 @@ probe; twenty-image memory, mask history, full scene geometry, asynchronous stal
 close/cancel races and real monitor scanout remain for their dependent tasks.
 
 The compositor path is retained without PyQtGraph because the measured direct Qt components
-aligned the probe, kept uploads stable and met the 50 ms input-to-composition/profile target.
-U00 cannot yet pass its sustained 16.7 ms p95 interval or no-stall-over-100-ms targets. The next
-small U00 task is to profile the retained QPainter profile/overlay paint work and Qt scheduling on
-this exact two-image workload, then make one targeted cadence repair or report a defensible lower
-capability limit. Do not broaden to U01 before reviewing this measured miss.
+aligned the probe and kept uploads stable. The original 15 ms supply windows missed the 16.7 ms
+p95 interval target and observed one over-100-ms GUI gap. The supervised cadence follow-up below
+investigates those misses; this original evidence is retained rather than relabeled.
+
+#### U00 cadence follow-up (2026-09-28)
+
+The supervised follow-up used the same i9-13900K/RTX 3060, 74.99 Hz screen, two native 3000x3000
+OSC images, 4,000 overlays per image, exact bands and visible schematic plane. An unrelated Python
+numerical process remained active at about 0.95 GiB working set with rising CPU time; total GPU
+use was about 2.2 GiB and 29-36% during spot checks, not attributable to this presentation alone.
+The 10 ms Qt timer was a *request*, not the observed event rate. With one panel, its callback
+interval p50 was 13.31-13.34 ms and p95 13.64-14.54 ms; with both panels updating per callback,
+the pre-repair callback p95 slowed to 16.95-17.92 ms. This explains why the original 15 ms supply
+could alias against 74.99 Hz refresh and show a 26.68 ms p95 cursor interval without proving a
+slow `paintGL` path. The original data still demonstrate a miss under that request pattern.
+
+The pre-repair source SHA256 was `15a47328697ba763ff8a322bbefe32de994f33bcdb5fd755017cf5e050ae5f4e`.
+A 10-second controlled pan/cursor probe found matched-frame interval p95 14.03/14.11 ms and
+`paintGL` p95 about 0.66 ms. The unchanged-source three 30-second windows at the 10 ms setting
+gave pan p95 intervals 14.12-14.22 ms, cursor 14.18-14.48 ms, and cursor with bounded background
+work 13.45-14.34 ms. Their FIFO paint-to-swap attribution did not prove that two paints could not
+precede one composition, so those interval labels remain provisional. Their directly measured
+two-image callback p95 16.95-17.92 ms and horizontal/vertical QPainter paint costs of
+3.27-3.40/3.06-3.18 ms p95 are valid work-count evidence. Four profile paints per two-image
+update consumed the available callback interval; `paintGL` stayed below 0.7 ms p95. The old
+two-image frame-interval p95 of 16.92-17.87 ms is an exploratory estimate, not the basis for a
+claimed speedup. No second backend or dependency was added.
+
+One measured repair uses a screen-pixel min/max envelope for each visible contiguous valid profile
+segment when its exact native samples outnumber twice the available display pixels. Each displayed
+bucket retains both extrema; mask/nonfinite gaps break polylines, and isolated valid bins draw a
+point. The exact int64/float64 source profile and support arrays are unchanged. A focused rendered
+check retained a positive spike, a negative trough, an unbridged gap and an isolated valid point.
+The dense-path timing source SHA256 was
+`841d1cb31465c87d2f27a58113ee5d1f869eb6884fa92d9be0650dc1ffe685ed`; the enclosing
+commit adds only the isolated-point edge branch afterward (source SHA256
+`57e78c4edd18bcf1484c7394272028af9c11a1930249bf457c67f0f667d24808`). That branch was
+verified directly, not separately benchmarked.
+
+The repaired two-image path had three 30-second windows with 2,251 timer callbacks and 4,502
+panel requests each. The tracer matched every request to the newest completed paint before its
+composition: 4,502 presented, zero superseded paints/profiles and zero pending paints in every
+window. Each top-level composition also emitted a `frameSwapped` from the plane without a new
+plane paint; those 2,251 extra signals per window were counted separately. Horizontal/vertical
+profile paint completion was paired to the next composition for the same view generation.
+
+| Repaired two-image window | Actual callback p50/p95/p99 (ms) | Composed frame interval p50/p95/p99 (ms) | Input-to-composition / presented-profile p95 (ms) | GUI callback gap max (ms) |
+| --- | --- | --- | --- | --- |
+| 1 | 13.324 / 14.351 / 14.720 | 13.330 / 14.327 / 14.709 | 14.133 / 14.133 | 16.609 |
+| 2 | 13.313 / 14.242 / 14.676 | 13.322 / 14.219 / 14.703 | 14.047 / 14.047 | 18.554 |
+| 3 | 13.337 / 14.189 / 14.614 | 13.328 / 14.175 / 14.608 | 14.008 / 14.008 | 22.525 |
+
+Repaired horizontal/vertical profile paint costs were 1.45-1.48/1.27-1.28 ms p95, and image
+`paintGL` 0.66-0.67 ms p95. The three frame interval maxima were 16.60, 18.53 and 22.13 ms;
+all p99 values were below 33.3 ms. The two-image 16.7 ms p95 frame and 50 ms response/profile
+targets are supported under this actual 74.99 Hz supply. Peak presentation RSS was 513.7 MiB,
+and image/plane uploads remained `[1,1,1]`. Cold OSC decode was 116.09/91.73 ms and initial
+image/plane composition after admission 151.23/120.38/80.54 ms, separately from warm windows.
+No scientific simulation, optimizer or fit ran. Focused checking code/results were external and
+removed after recording this evidence. Active profiling/interaction time was about 470 seconds,
+within the new eight-minute cap; no further campaign was launched.
+
+U00 remains open. The repaired two-image window supports its frame, response, profile and GUI-gap
+targets, but the earlier single-panel/background FIFO timing is provisional and the first pan
+window's over-100-ms heartbeat gap was not separated from setup/window-transition time. Its
+99.462 ms reported *lateness* would be a 109.462 ms callback gap if it occurred wholly within the
+window. The repaired tracer resets heartbeat at each boundary, but was used only for two-image
+windows under the remaining budget. Thus the no-GUI-stall claim for the complete U00 workload is
+not established. The smallest next decision is a separately budgeted, correctly labeled
+single-panel/background interaction check if the supervisor requires that gate before U01; do not
+weaken the target or reuse the exhausted budget.
 
 ### M1 — a useful detector reader
 

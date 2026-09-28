@@ -418,24 +418,49 @@ class ProfilePlot(QWidget):
             span = maximum - minimum
             rect = self.source_view._rect()
             painter.setPen(QPen(QColor(104, 218, 243), 1))
-            points: list[QPointF] = []
-            for index, value in enumerate(self.values):
-                if not valid[index]:
-                    if points:
-                        painter.drawPolyline(QPolygonF(points))
-                        points = []
+            origin = rect.top() if self.vertical else rect.left()
+            extent = rect.height() if self.vertical else rect.width()
+            limit = self.height() if self.vertical else self.width()
+            starts = np.flatnonzero(valid & ~np.r_[False, valid[:-1]])
+            stops = np.flatnonzero(valid & ~np.r_[valid[1:], False]) + 1
+            for start, stop in zip(starts, stops, strict=True):
+                positions = origin + (np.arange(start, stop) + 0.5) * extent / self.values.size
+                visible = (positions >= -1) & (positions <= limit)
+                if not np.any(visible):
                     continue
-                position = (index + 0.5) / self.values.size
-                magnitude = (float(value) - minimum) / span
-                points.append(
-                    QPointF(magnitude * (self.width() - 1), rect.top() + position * rect.height())
-                    if self.vertical
-                    else QPointF(
-                        rect.left() + position * rect.width(), (1 - magnitude) * (self.height() - 1)
+                positions = positions[visible]
+                amplitudes = self.values[start:stop][visible]
+                if amplitudes.size > limit * 2:
+                    pixel = np.floor(positions).astype(np.int64)
+                    group_start = np.r_[0, np.flatnonzero(np.diff(pixel)) + 1]
+                    low = np.minimum.reduceat(amplitudes, group_start)
+                    high = np.maximum.reduceat(amplitudes, group_start)
+                    first = amplitudes[group_start]
+                    last = amplitudes[np.r_[group_start[1:] - 1, amplitudes.size - 1]]
+                    positions = pixel[group_start].astype(np.float64) + 0.5
+                    amplitudes = np.column_stack(
+                        (np.where(first <= last, low, high), np.where(first <= last, high, low))
+                    ).ravel()
+                    positions = np.repeat(positions, 2)
+                normalized = (amplitudes - minimum) / span
+                if self.vertical:
+                    points = QPolygonF(
+                        [
+                            QPointF(float(value) * (self.width() - 1), float(position))
+                            for position, value in zip(positions, normalized, strict=True)
+                        ]
                     )
-                )
-            if points:
-                painter.drawPolyline(QPolygonF(points))
+                else:
+                    points = QPolygonF(
+                        [
+                            QPointF(float(position), (1 - float(value)) * (self.height() - 1))
+                            for position, value in zip(positions, normalized, strict=True)
+                        ]
+                    )
+                if len(points) == 1:
+                    painter.drawPoint(points[0])
+                else:
+                    painter.drawPolyline(points)
         painter.end()
         self.painted.emit(self.generation, perf_counter())
 
