@@ -827,8 +827,110 @@ components; remove discarded alternatives and all temporary checking code.
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U08a: initial capability map | None | Map reader/presentation contracts and the first configured simulator's physical fields, units and output measure. Identify both simulator routes and known fit limitations without enumerating every future control. Extend this same map before each corresponding form/fitter task: required inputs, seeds/bounds, scopes, qualification and safe-stop limits must be verified before that route is enabled. |
+| [x] U08a: initial capability map | None | Map reader/presentation contracts and the first configured simulator's physical fields, units and output measure. Identify both simulator routes and known fit limitations without enumerating every future control. Extend this same map before each corresponding form/fitter task: required inputs, seeds/bounds, scopes, qualification and safe-stop limits must be verified before that route is enabled. |
 | [ ] U00: rendering decision | None | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; neither a full fit inventory nor an optimizer is needed. |
+
+#### U00/U08a implementation checkpoint (2026-09-28)
+
+For this supervised implementation, the user requested `codex/desktop-ui-implementation` in the
+isolated `desktop-ui-plan` checkout. Keep the branch for review; do not fast-forward `main` at
+these checkpoints. This is a task-specific exception to the usual one-local-branch handoff.
+
+Reference machine for the U00 decision: Intel Core i9-13900K (32 logical CPUs), 64 GiB RAM,
+NVIDIA GeForce RTX 3060 (12 GiB, driver 572.47), Windows, 1920x1080 at 74.99 Hz and 1.0 device
+pixel ratio. Python 3.13.13, NumPy 2.2.6, PySide6/Qt 6.10.2 and Matplotlib 3.10.3 are installed.
+The selected presentation backend is Qt OpenGL 3.3/R32F with QPainter overlays/profiles; no
+PyQtGraph dependency is admitted. The measured presentation process uses three 3000x3000 textures
+(two detector panels and one schematic plane). Its fixed upload allocation is about 103 MiB of
+GPU R32F storage; actual driver allocations are not inferred from that figure.
+
+Initial resource ledger for this reference machine: presentation resident CPU <= 1.5 GiB,
+presentation peak CPU <= 2.0 GiB, GPU display textures/staging <= 512 MiB, concurrent numerical
+engine <= 4 GiB RAM, and at least 8 GiB available system RAM retained. The 3000x3000 two-plane
+OSC raw/native int32 decode costs about 68.7 MiB per acquisition (34.3 MiB per plane) before the
+panel's owned native int32 and display float32 copies (34.3 MiB each per displayed image). No
+prefix tables or twenty-image cache are allocated in this slice. The one-thread background check is bounded to
+one 1024x1024 array; it is not an optimizer or a scientific forward calculation.
+
+U08a's initial capability map is intentionally limited to the reader and first configured route:
+
+| Field / result | Authority | Units, frame, measure and current limit |
+| --- | --- | --- |
+| OSC bytes, raw indices and native counts | `io/osc.py`, `io/orientation.py` | One clockwise conversion at decode: native `[row, column] = [raw column, raw height - 1 - raw row]`; counts remain int32. A presentation widget receives native data only. |
+| Detector texture, coordinates and bands | `interactive/detector_panel.py` | Column/row pixel centers map through one view rectangle; exact bands reduce original int32 with int64 sums or corrected real data with float64 sums. Float32 R32F and display levels are presentation only; support excludes masked and nonfinite pixels. |
+| Configured material, source and spectrum | `pipeline/configured_simulation.py` `SimulationConfiguration` | CIF/phase identity; LAB origin/axes in m, direction dimensionless, spatial sigma m, divergence sigma rad, wavelength and lines Å with probabilities, correlation, polarization and source sampling. YAML angle fields in degrees are converted by the core constructor path to radians internally. |
+| Configured instrument and specimen | same config, `geometry` compiled instrument | Declared active LAB/goniometer/sample/crystal/detector transforms, detector shape `[row,column]`, pitch and positions m, reference coordinate `(column_px,row_px)`, film thickness Å, path medium and attenuation m^-1. Only existing rigid-transform and detector mapping owners calculate geometry. |
+| Configured scattering and numerics | same config and configured pipeline | Mosaic widths/quadrature (degree-valued YAML to internal radian measures), structure model/layers/normalization, physical `(h,k)` rods, populations, polarization and worker/backend/quadrature settings. These are distinct physical and numerical fields; no controls are enabled by this map. |
+| Configured outputs | `run_configured_simulation.py`, configured pipeline | Reciprocal/Ewald display densities are Å² rad^-2; detector macrobin quadrature is raw Å² per macrobin, and native center density is Å²/px². The separate Monte Carlo native pixel mass is raw Å². A preview is not a converged fit observable. |
+| Progressive native preview | `source_averaged_detector.py` | `MonteCarloDetectorPresentation.image_A2` is a leased float32 plane valid only until the sampler's next operation; `MonteCarloDetectorPixelMass.image_A2` is immutable float64 quantitative mass. The panel copies its input before retaining it. The existing viewer's `SimpleQueue` and blocking `join()` do not supply the new app's job/shutdown contract. |
+| Other simulator / known fit boundary | `fitting/native_input.py`, `scripts/render_native.py`, `native_workflow.py` | `NativeFitPhysics.detector` is the physical entry point for an independent supported native draft; `render_native` binds prepared observations/fit records and is not that draft. Rank/covariance and numerical qualification limit fit promotion; new acquisition preparation and native Bi disorder support remain separate admitted work. U12c maps only supported independent native inputs later. |
+
+For the later geometry controls, hBN's current `_fit_observations` fits two detector tilts (rad),
+native center `(column_px,row_px)` and a calibrant-private distance (m) with fixed bounds and
+automatic ring selection; it does not yet expose arbitrary reviewed seeds/bounds or cooperative
+optimizer cancellation. The reduced joint fit starts from the hBN calibration, requires Bi2Se3
+and Bi2Te3 indexed series, keeps named mechanical references fixed, and omits unobserved PbI2
+local coordinates. Neither route's drawable degrees of freedom imply independently fitted scope.
+Their GUI seed and safe-stop boundaries remain U08b/U08d, not controls enabled by U08a.
+
+The retained OpenGL child in `detector_viewer.py` proved texture feasibility but hides Matplotlib
+layers and has no shared native pan/zoom overlay transform. The chosen U00 component is a separate
+Qt detector pane that owns one transform and keeps exact profile arrays apart from the display
+texture. It does not claim U01's launch, project identity, job ownership or shutdown behavior.
+
+U08a's bounded map above is complete in this checkpoint's enclosing commit. Its later route
+extensions remain dependencies of U08b/U08c/U08d and U12c, not finished form specifications.
+U00 remains open because the 60 Hz cadence and one GUI-stall target were missed. One Qt/GL baseline
+and one focused repair were used; no alternative package or scientific simulation was run.
+
+U00 measured two tracked 3000x3000 native OSC images (hBN 5 m and Bi2Te3 5 m/5°), 4,000 points
+per image, two exact one-pixel band profiles and a third textured schematic detector plane. The
+background case used one numerical thread repeatedly reducing a 1024x1024 array; another Python
+numerical process was active on the machine (roughly 1.3-1.5 GiB working set and rising CPU time).
+The reference screen ran at 74.99 Hz. After short setup probes and one aborted exploratory run with
+flawed event labeling/pan drift, the corrected run used three 30-second windows per scenario with
+15 ms input requests. Active comparison time stayed below the 20-minute cap. Times below are
+milliseconds from synthetic Qt event dispatch to the matching generation's `paintGL` completion or
+Qt `frameSwapped` after top-level composition/buffer swap; they do not measure physical scanout.
+Horizontal and vertical QPainter profile paint completion is measured separately. Intervals count
+only matched presented generations; unpresented requests are listed instead of assigned a later
+frame's timestamp.
+
+| Scenario, 3 x 30 s | Input-to-swap p95 across repeats | Swap interval p95 across repeats | Other evidence |
+| --- | --- | --- | --- |
+| Bounded pan/zoom, one panel | 20.05-20.15 | 20.32-20.40 | 1,996-1,999 requests/window, all presented; first-window longest GUI timer overrun 102.07 ms, later maxima 18.14/15.87 ms. |
+| Cursor and exact profiles, one panel | 13.35-19.93 | 26.68-27.05 | Both profile paints p95 7.59-17.99; ~1,997 requests/window, all presented; native cursor covered columns 1-2999 and rows 1-2998. |
+| Two images updated per input | 17.17-19.90 | 17.64-20.40 per panel | 3,682-3,768 panel requests/window, 0-2 unpresented; both profile paints p95 13.75-14.67. |
+| Schematic plane orbit | 1.06-1.11 | 16.05-16.11 | ~2,000 requests/window, all presented. This is a textured presentation plane, not canonical geometry. |
+| Cursor during bounded background work | 13.32-13.35 | 26.68 | Both profile paints p95 7.92-8.03; all ~2,000 requests/window presented; longest GUI timer overrun 17.22 ms. |
+
+Cold OSC decode was 99.96/90.93 ms; first image/plane composition after `set_image` was
+169.86/140.85/107.01 ms respectively. Peak presentation-process RSS across measured windows was
+591.6 MiB, within the declared CPU budget. Each texture uploaded once from admission through all
+camera, cursor, profile and orbit windows: `[1,1,1]` before and after. GPU driver allocation and
+uncontended timing were not measured; total GPU memory use during the run was affected by unrelated
+activity. The small direct probe verified non-square OSC orientation, exact int64 accumulation of
+native int32 counts, float64 masked/nonfinite bands (including clipped edges), integer-overflow rejection,
+positive-log replacement, and distinct framebuffer corner values (red 212 versus 38). An overlay
+pixel changed from `#444c4d` to `#64f5eb` at the native `(column,row)` marker. Reparenting the GL
+view recreated the context and caused one expected reupload; ten A-B cursor pairs caused none.
+Rejected unsupported integer replacement preserved the prior image revision and profile values.
+
+The direct integer bound rejects int64/uint64 planes conservatively; even-width bands include one
+more higher-index pixel than lower-index pixel before independent edge clipping. A pan with
+unchanged profile values retains the prior profile generation, so missing profile-paint samples in
+that scenario are not interpreted as fast updates. Float32 presentation leases cannot enter the
+quantitative band API. The profile/cursor result is inspection only and establishes no fitting
+observable, convergence or scientific adequacy. Context recreation was checked on the small
+probe; twenty-image memory, mask history, full scene geometry, asynchronous stale-job rejection,
+close/cancel races and real monitor scanout remain for their dependent tasks.
+
+The compositor path is retained without PyQtGraph because the measured direct Qt components
+aligned the probe, kept uploads stable and met the 50 ms input-to-composition/profile target.
+U00 cannot yet pass its sustained 16.7 ms p95 interval or no-stall-over-100-ms targets. The next
+small U00 task is to profile the retained QPainter profile/overlay paint work and Qt scheduling on
+this exact two-image workload, then make one targeted cadence repair or report a defensible lower
+capability limit. Do not broaden to U01 before reviewing this measured miss.
 
 ### M1 — a useful detector reader
 
