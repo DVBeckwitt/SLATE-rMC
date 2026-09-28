@@ -425,11 +425,14 @@ class ProfilePlot(QWidget):
             stops = np.flatnonzero(valid & ~np.r_[valid[1:], False]) + 1
             for start, stop in zip(starts, stops, strict=True):
                 positions = origin + (np.arange(start, stop) + 0.5) * extent / self.values.size
-                visible = (positions >= -1) & (positions <= limit)
-                if not np.any(visible):
+                if positions[0] > limit or positions[-1] < -1:
                     continue
-                positions = positions[visible]
-                amplitudes = self.values[start:stop][visible]
+                first_inside = int(np.searchsorted(positions, -1, side="left"))
+                last_inside = int(np.searchsorted(positions, limit, side="right"))
+                first = max(0, first_inside - 1)
+                last = min(positions.size, last_inside + 1)
+                positions = positions[first:last]
+                amplitudes = self.values[start + first : start + last]
                 if amplitudes.size > limit * 2:
                     pixel = np.floor(positions).astype(np.int64)
                     group_start = np.r_[0, np.flatnonzero(np.diff(pixel)) + 1]

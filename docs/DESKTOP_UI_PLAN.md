@@ -828,7 +828,7 @@ components; remove discarded alternatives and all temporary checking code.
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
 | [x] U08a: initial capability map | None | Map reader/presentation contracts and the first configured simulator's physical fields, units and output measure. Identify both simulator routes and known fit limitations without enumerating every future control. Extend this same map before each corresponding form/fitter task: required inputs, seeds/bounds, scopes, qualification and safe-stop limits must be verified before that route is enabled. |
-| [ ] U00: rendering decision | None | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; neither a full fit inventory nor an optimizer is needed. |
+| [x] U00: rendering decision | None | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; neither a full fit inventory nor an optimizer is needed. |
 
 #### U00/U08a implementation checkpoint (2026-09-28)
 
@@ -997,6 +997,63 @@ windows under the remaining budget. Thus the no-GUI-stall claim for the complete
 not established. The smallest next decision is a separately budgeted, correctly labeled
 single-panel/background interaction check if the supervisor requires that gate before U01; do not
 weaken the target or reuse the exhausted budget.
+
+#### U00 final interaction gate (2026-09-28)
+
+The final source SHA256 was `45a583b083ba1454af72666e803fed9d69ad2d244c98d7759f20869552e47866`.
+The only further production change retained the immediate offscreen sample on either side of a
+visible profile interval within each contiguous valid run. A two-sample line crossing the entire
+plot now remains visible even when neither sample center is inside it. Focused horizontal and
+vertical rendering checks also verified the exact source arrays, signed extrema, an unbridged
+invalid gap and an isolated valid point. The earlier envelope work and its physical values are
+unchanged.
+
+On the same 74.99 Hz reference setup, the final tracer ran three 30-second active windows each
+for bounded pan/zoom, one-panel cursor with both exact bands, cursor with a bounded 1024x1024
+NumPy reduction job, and schematic plane orbit. The 10 ms Qt timer yielded the measured callback
+cadence below. Each `paintGL` generation was matched to the *latest* completed paint before that
+view's `frameSwapped`; paints superseded before composition, swap signals with no new paint, and
+unmatched requests were counted separately. Both profile paints were paired to a subsequent
+composition of the same panel. Times end at Qt composition/swap completion, not physical monitor
+scanout. The table gives the **largest per-window** p50/p95/p99/max tuple across three repeats,
+in ms; it is not a pooled percentile.
+
+| Scenario | Requests -> composed; profiles composed, per 30 s window | Actual callback p50/p95/p99/max | Composed frame interval p50/p95/p99/max | Input-to-composition p50/p95/p99/max | Longest GUI callback gap |
+| --- | --- | --- | --- | --- | --- |
+| Pan/zoom | 2,249-2,250 -> all; n/a | 13.329 / 14.145 / 15.123 / 20.634 | 13.336 / 14.071 / 15.020 / 20.597 | 13.223 / 13.973 / 14.741 / 20.431 | 20.797 |
+| Cursor and exact bands | 2,249-2,250 -> all; all | 13.332 / 13.545 / 13.711 / 16.407 | 13.335 / 13.420 / 13.468 / 14.121 | 13.209 / 13.337 / 13.388 / 13.981 | 16.375 |
+| Cursor plus background | 2,248-2,250 -> all; all | 13.332 / 13.610 / 13.879 / 26.618 | 13.335 / 13.459 / 13.654 / 26.654 | 13.184 / 13.326 / 13.518 / 26.325 | 26.619 |
+| Schematic plane orbit | 2,279-2,298 -> 2,249-2,250; n/a | 13.331 / 13.513 / 13.645 / 14.946 | 13.335 / 13.420 / 13.460 / 14.005 | 13.232 / 13.348 / 13.396 / 13.807 | 15.083 |
+
+For cursor and background windows, the presented horizontal-plus-vertical profile response had
+the same p50/p95/p99/max tuples as their input-to-composition columns. Every panel request and
+profile pair in those windows was presented, with zero superseded or pending paints/profiles.
+Every window ended on the exact requested native cursor coordinate; coverage reached columns and
+rows 1-2999. Orbit ran slightly faster than the available composition cadence, so 30-48
+intermediate requested generations per window were coalesced before paint; no completed paint was
+superseded or left pending. A separate 10-second orbit check confirmed its final requested
+generation was presented (752 requests, 751 composed). This coalescing is not counted as 100%
+request presentation. The previous 109.462 ms inferred GUI gap remains historical unclassified
+evidence; the new active-window callback gaps were measured from a reset clock and did not exceed
+26.619 ms.
+
+A 10-second two-image smoke on this source presented all 1,500 panel requests and both exact
+profile pairs, with zero superseded or pending paints/profiles. Its callback p50/p95/p99/max was
+13.305/14.339/15.041/27.152 ms; per-panel composed interval was
+13.330/14.288/15.084/26.816 ms; input-to-composition and presented-profile response was
+13.111/14.111/14.802/26.737 ms; the longest GUI callback gap was 27.359 ms. The preceding
+three 30-second two-image windows supply the sustained dense-path evidence.
+
+Cold OSC decode was 114.60/106.77 ms; first image/plane swap after admission was
+161.37/121.42/83.87 ms. The initial transition cost 101.20 ms; later transition costs were
+9.51-11.43 ms, measured outside active windows. Peak presentation RSS was 516.4 MiB and texture
+uploads remained `[1,1,1]`. All active scenarios met the 16.7 ms p95 and 33.3 ms p99 frame
+limits, 50 ms p95 interaction and presented-profile limits, and no observed >100 ms GUI stall on
+this 74.99 Hz hardware. U00 therefore selects the existing direct Qt/OpenGL image, QPainter
+profile and Qt composition path. Future mask, project, context-recreation and fitting interactions
+retain their own delivery gates. No scientific fit or physical detector calculation was inferred
+from these presentation measurements. Temporary checking scripts and raw outputs were external
+and removed after this record; no reusable benchmark harness or new dependency was retained.
 
 ### M1 — a useful detector reader
 
