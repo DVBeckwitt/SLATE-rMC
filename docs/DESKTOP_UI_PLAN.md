@@ -1677,6 +1677,106 @@ corrected window is partial evidence; sustained three-window qualification and s
 readback remain open. No renderer or GUI bottleneck cause was established. Timing ends at Qt
 composition, not physical scanout.
 
+#### U03 native correctness and cadence attribution (2026-09-28; evidence only)
+
+Production source remained `5dd2561`. An owned file directly under the writable external
+visualization root passed create/write/read/delete before Qt; the previously denied temporary
+child directory was not reused. The external native probe/reporter SHA-256 values were
+`f081f0495c853eadb9a6cd9b93e843038d66e90c5293bfb0d4fdfac394821a71` and
+`144c0c3e1263e896657510a9b951dabfeab41c776d87f08457b30c310a5c648d`.
+Commands used `QT_QPA_PLATFORM=windows`, `PYTHONPATH=interactive;src`, `python -u -B`, and
+`QT_SCALE_FACTOR=1` or `1.25` for tiny native runs. The tracked little-endian non-square OSC
+decoded as 11 rows by 7 columns, SHA-256
+`da0a7d85e8be6461ae3985b9514e5cbaf75d7f3d499d342c80b6841f7e118a63`; the
+paired big-endian OSC produced the same native values.
+
+At actual DPR 1.0 and 1.25, shown Qt windows mapped corner/interior native centers back to
+the same coordinates. Framebuffer samples at every native row/column center matched the
+independently calculated shaded row band `[4,8)`, column band `[2,5)`, and drawn ROI
+`[1,6)` columns by `[2,9)` rows. Hover at `(2,3)` read 2,222 counts; click pinned it;
+numeric placement and edge drags changed four rows to five and three columns to four. The
+DPR 1 shell made a newer profile edit during an externally delayed save; normal autosave
+published the exact final `ProjectDocument`. Reopening the recovery draft restored project
+and acquisition IDs, source hash, center, follow state, widths, measure, scope, ROI and both
+pinned scales. Both windows closed through normal owner drain. These are static native
+geometry and recovery checks, not a new pan/zoom or monitor-migration campaign.
+
+One 9.902 s attribution window then used the unchanged Shell/Fusion/Segoe UI 10 style,
+3000x3000 hBN OSC (decoded SHA-256
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`), 4,000
+markers, 616x180 viewport, DPR 1 and Sceptre C27 (2) 1920x1080 at 74.99 Hz. Its 8 ms
+PreciseTimer repeated pointer-in-band, row width, column width, measure, full, the same broad
+ROI `(100,2900,100,2900)`, band, pointer; the heartbeat requested 10 ms. There were no
+no-op callbacks. Active performance-clock bounds were `378267.712927`–`378277.6148138`.
+The three tiny commands and this active window together used under 20 s even counting the
+tiny commands' full wall times. The independently recomputed active trace contained 5,456
+action/reduction/publication/paint/swap records, 521,506 bytes, SHA-256
+`c40dd7c6d644c330c764b34c3d1683081801497b042cf611598c30ce728555ef`.
+The reporter and trace were external, with no repository harness retained. Values below are
+p50/p95/p99/max ms; microsecond serialization changes a recomputed percentile by at most
+0.001 ms.
+
+| One U03 attribution window | p50 / p95 / p99 / max |
+| --- | --- |
+| Fresh composition interval | 13.356 / 18.206 / 22.699 / 28.075 |
+| All swap interval | 13.342 / 18.116 / 18.628 / 19.205 |
+| Profile input to matching composition | 12.573 / 14.062 / 16.990 / 18.910 |
+| Actual input interval | 12.764 / 14.457 / 16.853 / 19.083 |
+| Callback duration | 0.382 / 9.275 / 9.652 / 9.815 |
+| Heartbeat interval | 13.198 / 22.261 / 23.667 / 25.165 |
+
+Of 868 changed queries/publications, 732 had matching detector and marginal content at
+composition; 136 were coalesced or unpresented within active timing. The trace has 732 fresh
+detector paints, 743 paints for each marginal, 742 swaps, ten repeated swaps, two initial
+unmatched swaps, and zero same-generation or superseded paints. Every recorded swap used the
+newest completed detector paint; all 732 fresh presentations matched both profile generation
+and buffer identity before composition. Final generation `1088` finished all paints by
+`378277.610954` and swapped at `378277.614733`, before active end. The reporter stops paint
+tracking at active end, so a hypothetical later final request would not be proven; this
+observed final is proven inside the trace. The final normal autosave equaled the captured
+document at revision 869, the owner drained on normal close, native/display arrays retained
+identity and read-only flags, and the texture uploaded once.
+
+There were 652 narrow-band reductions (p95 0.249 ms), 108 broad ROI reductions (p95 9.389 ms),
+and zero full reductions because full marginals were cached. ROI callback p95 was 9.683 ms;
+full-mode callback p95 was 0.216 ms. Independent trace review found 119 of 731 fresh intervals
+over 16.7 ms: 108 included ROI work, ten band work, one no reduction. ROI-containing intervals
+had median/p95 17.783/18.552 ms; band-containing intervals 13.171/14.470 ms, but the eight
+longest intervals (22.699–28.075 ms) followed narrow-band actions. Known no-request gaps
+after matched prior swaps had median/p95/max 0.383/0.666/9.164 ms, with no known pending
+request at those prior swaps. These associations do not establish a sole cause or measure GPU
+execution or physical scanout. Fresh-frame p95 still misses 16.7 ms. Reusing the unchanged ROI
+projection across intervening full/band views, keyed by data and measure, is a small candidate
+for a separately authorized measured repair; no optimization was made in this packet.
+
+Source-derived resource accounting uses `N = rows * columns` and `S = rows + columns`.
+One sum/support profile pack is `16S` bytes; imported center and full packs total `32S`.
+Full mean shares support and adds `8S`; retained full, full mean and distinct current packs
+use at most `40S`, with up to `56S` during a new-pack overlap. The two plots alias these
+buffers; the imported center pack may be transiently retained while the worker result is
+published. At 3000x3000, `N = 9,000,000`, `S = 6,000`, native int32 and display float32
+planes each use 36,000,000 bytes, and retained profile caches are at most 240,000 bytes.
+The reported OSC result was `8N + 32S + 6000` header bytes, or 68.85 MiB, below its 96 MiB
+result cap. Admission also caps source bytes at 64 MiB, decoded bytes at 32 MiB, pixels at
+12 million, and axes at 16,384 plus the OpenGL limit.
+
+Unmasked int32 direct sums need output-sized scratch. For area `A`, a masked int32 reduction
+can allocate approximately `5A` bytes (validity plus safe values) and a float64 reduction
+approximately `9A` bytes; horizontal and vertical passes are sequential. Compact ROI outputs
+add `16(h+w)` bytes alongside `16S` native-length aligned outputs; mean adds up to
+`9 * max(h,w)` intermediate bytes. A 2800x2800 masked int32 ROI therefore has roughly
+39.2 MB of broad scratch, and float64 roughly 70.56 MB; a full 3000x3000 float64 pass can
+reach about 81 MB. An existing input mask is separate. The result cap is not a process peak
+cap: preparation can hold raw/native/display arrays near `12N` plus an `N`-byte positive mask,
+alongside a prior image's `8N_old` native/display arrays and prior caches during replacement,
+before decoder, Python, Qt and driver overhead. Generic `set_image` copies its input and does
+not have the OSC admission caps. These are conservative formulas, not measured RSS peaks or
+allocator guarantees. Process RSS was 307.4/307.1 MiB at active start/report, Windows peak
+working set was 327.5 MiB, and process CPU time rose 7.797 s during active timing. New broad
+ROI queries remain synchronous in the GUI; no worker cancellation or prefix-table behavior is
+claimed. U03 remains unaccepted pending a reviewed correction and sustained qualification;
+U02a has not started.
+
 ### M2 — independent simulator
 
 Likely ownership: optional forms/controller and the current detector worker. Configured simulations
