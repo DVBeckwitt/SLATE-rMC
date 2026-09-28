@@ -197,6 +197,35 @@ class DetectorTextureView(QOpenGLWidget):
         self.data_revision += 1
         self._request_paint()
 
+    def set_prepared_image(
+        self,
+        native_counts: NDArray[np.int32],
+        display: NDArray[np.float32],
+        low_value: float,
+        high_value: float,
+    ) -> None:
+        """Adopt an immutable worker-prepared OSC plane without a GUI copy or scan."""
+
+        if (
+            native_counts.ndim != 2
+            or not native_counts.size
+            or native_counts.dtype != np.int32
+            or not native_counts.flags.c_contiguous
+            or native_counts.flags.writeable
+            or display.shape != native_counts.shape
+            or display.dtype != np.float32
+            or not display.flags.c_contiguous
+            or display.flags.writeable
+        ):
+            raise ValueError("prepared image needs aligned, read-only native and display planes")
+        if not math.isfinite(low_value) or not math.isfinite(high_value) or high_value <= low_value:
+            raise ValueError("prepared display levels must be finite and increasing")
+        self.image, self._display = native_counts, display
+        self.low_value, self.high_value, self.positive_log = low_value, high_value, False
+        self.crosshair = (native_counts.shape[1] // 2, native_counts.shape[0] // 2)
+        self.data_revision += 1
+        self._request_paint()
+
     def set_overlays(self, column_row_px: NDArray[np.float64]) -> None:
         points = np.asarray(column_row_px, dtype=np.float64)
         if points.ndim != 2 or points.shape[1] != 2 or not np.all(np.isfinite(points)):
@@ -498,6 +527,21 @@ class DetectorPanel(QWidget):
         self.view.set_image(image)
         self._profile_crosshair = None
         self._refresh_profile_if_needed()
+
+    def set_prepared_image(
+        self,
+        native_counts: NDArray[np.int32],
+        display: NDArray[np.float32],
+        profiles: BandProfiles,
+        low_value: float,
+        high_value: float,
+    ) -> None:
+        """Publish a worker-prepared OSC result with its exact center bands."""
+
+        self.view.set_prepared_image(native_counts, display, low_value, high_value)
+        self.horizontal.set_values(profiles.horizontal, profiles.horizontal_support)
+        self.vertical.set_values(profiles.vertical, profiles.vertical_support)
+        self._profile_crosshair = self.view.crosshair
 
     def _refresh_axes(self, _generation: int, _timestamp: float) -> None:
         self.horizontal.update()

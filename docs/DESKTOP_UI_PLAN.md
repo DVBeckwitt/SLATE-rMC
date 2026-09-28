@@ -1065,7 +1065,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | --- | --- | --- |
 | [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
 | [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
-| [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
+| [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
 | [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
 | [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
 | [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
@@ -1155,6 +1155,48 @@ result was published after close. These are GUI dispatch/Qt paint boundaries, no
 The command was `python <external>/u01c_lifecycle_check.py`; Ruff format/lint, numerical/shell
 import separation and diff checks were run separately. The checking script and input file were
 removed. No full image, fit, scientific validation, dependency or reusable harness was added.
+
+#### U01a first OSC import checkpoint (2026-09-28)
+
+The shell's **Import OSC** picker and one-local-file drop submit a `Path` to the U01c owner. The
+worker calls the canonical `io/osc.py` reader with 64 MiB source, 32 MiB decoded-stream and
+12-million-pixel admission limits. It reads gzip in 1 MiB chunks after checking header dimensions,
+checks the source file identity/size/mtime before and after, and hashes the exact decoded header
+and payload. The sole clockwise `raw_to_detector_native` conversion stays in the reader. The
+existing unlimited reader call remains available to non-interactive callers. High-range int32
+decoding now uses in-place masked NumPy operations with the same values.
+
+The worker prepares a read-only native int32 plane, a separate read-only float32 texture plane,
+display levels and exact center bands. The panel adopts those buffers on the GUI thread without
+another full image copy, scan or profile reduction. At the 12-million-pixel cap, decoded content
+is at most 24,006,000 bytes; native plus display planes use 96,000,000 bytes, below the U01c
+96 MiB result cap including the small profiles and header allowance. The largest simultaneous
+decode/prepare arrays are the decoded content, raw and native int32 planes, Boolean high-range
+mask and float32 display plane, roughly 180 MiB at the pixel cap before Python/Qt overhead. One
+image is resident in the panel; selecting an older acquisition reloads it through the same owner
+and verifies its decoded SHA-256. Importing another file creates a new immutable acquisition UUID.
+Angles and calibration remain explicitly unknown. Failed/canceled replacement retains the prior
+usable image; changed source bytes reject reload and require a new import. Generation and UUID
+checks reject replaced, canceled, selection-obsolete and closing results.
+
+Focused checks used `python -B -` with external scratch inputs, removed on completion. Both
+tracked 7x11 big/little endian fixtures retained exact raw/native counts and the documented
+corner/interior mapping; the independent unsigned-16-bit high-range expression matched both
+fixtures and the tracked 3000x3000 hBN gzip image. The SHA-256 matched the decoded stream.
+Short header, wrong/extra plain or gzip payload, bad signature, source/decoded/pixel overlimits,
+cancellation and changed-during-load were rejected. In real Qt, the picker and one-file drop imported;
+multiple drop explained its limit; a failed new path, immediate cancel and A-B-A replacement
+left the prior image intact or published only the newest result. Older selection reloaded under
+the original UUID without duplication; an injected in-memory hash mismatch refused to replace
+the resident plane. Close during hBN import drained with no late publication.
+Native corners/interior values and widget pixel-center round trips aligned on the non-square
+fixture. One cold hBN shell probe reached worker result in 0.248 s and first panel `paintGL` in
+0.267 s; native+display retained planes were 68.66 MiB and RSS at result was 279.84 MiB. Its
+10 ms heartbeat's longest gap was 139.97 ms during first texture/context admission, outside the
+steady interaction windows already accepted at U00. This one probe is no latency distribution or
+monitor-scanout measurement. These software/I/O checks do not establish fitting or scientific
+adequacy. No permanent checker, test fixture, simulation, fit or full-image timing campaign was
+added.
 
 ### M2 — independent simulator
 

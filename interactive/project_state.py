@@ -20,7 +20,14 @@ class Acquisition:
     source_sha256: str
 
     @classmethod
-    def create(cls, name: str, source_path: Path, source_sha256: str) -> "Acquisition":
+    def create(
+        cls,
+        name: str,
+        source_path: Path,
+        source_sha256: str,
+        *,
+        acquisition_id: UUID | None = None,
+    ) -> "Acquisition":
         name = name.strip()
         if not name:
             raise ValueError("An acquisition needs a name")
@@ -28,7 +35,7 @@ class Acquisition:
             char not in "0123456789abcdef" for char in source_sha256
         ):
             raise ValueError("source_sha256 must be a lowercase SHA-256 digest")
-        return cls(uuid4(), name, Path(source_path), source_sha256)
+        return cls(acquisition_id or uuid4(), name, Path(source_path), source_sha256)
 
 
 @dataclass(frozen=True, slots=True)

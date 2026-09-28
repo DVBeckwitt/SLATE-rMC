@@ -22,10 +22,21 @@ If the visualization dependencies are already installed in the active Python env
 equivalent direct command is `python interactive/slate_app.py`.
 
 The shell has **Fit experiments** and **Simulator** workspaces. It starts with a local, unsaved
-project and an empty acquisition browser. Import, project opening/saving and simulation controls
-are visibly unavailable until their corresponding workflows are delivered. No image is loaded or
-calculation started at launch. Close the window normally to exit. The `interactive/` directory is
-not part of the installed numerical wheel, so run this entry point from the checkout.
+project and an empty acquisition browser. Use **Import OSC** or drop exactly one local `.osc` or
+`.osc.gz` file onto the window. Import runs in a bounded worker; the detector shows native int32
+counts with exact linked profiles. A failed or canceled import leaves the previously selected image
+usable. Selecting an older acquisition reloads its source and checks its stored decoded hash before
+showing it. The OSC header supplies image dimensions and byte order, but angles and calibration remain
+unknown. The project is not saved yet; project opening/saving, multi-file import and simulation
+controls arrive in later workflows. No image is loaded or calculation started at launch. Close the
+window normally to exit. The `interactive/` directory is not part of the installed numerical wheel,
+so run this entry point from the checkout.
+
+Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes and 12 million pixels.
+The 96 MiB worker result limit includes the native int32 plane, float32 display plane and exact
+center profiles. Imports outside those limits fail with a visible message. The acquisition SHA-256
+is over the decoded OSC byte stream; it identifies exactly the header and payload consumed by the
+reader, whether the file was plain or gzip compressed.
 
 ## Monte Carlo detector viewer
 
