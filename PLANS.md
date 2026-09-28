@@ -16,7 +16,9 @@ Prefer removing duplicated work to adding orchestration or compatibility layers.
 
 The consolidated [desktop UI grand plan](docs/DESKTOP_UI_PLAN.md) records the accepted
 interface scope, OSC-style marginal profiles, beam-center estimation, initial-value controls, staged fitting,
-performance targets, implementation order and acceptance checks. It is the current
-plan for this UI work; implementation has not started. Its checklist is kept in that
+performance targets and independent audit findings. Section 11 is the executable build sequence:
+inspection, independent simulator, geometry routes, experiment views, prepared native fitting,
+new-acquisition preparation and release integration, each with dependencies and acceptance checks.
+It is the current plan for this UI work; implementation has not started. Its checklist is kept in that
 same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
 their original evidence and do not schedule additional scientific work.

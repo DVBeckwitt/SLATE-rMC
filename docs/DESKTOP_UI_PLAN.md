@@ -1,7 +1,7 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; planned implementation, not delivered functionality.
-Updated: 2026-09-28. Independent audit baseline: `fb32664` plus the import/usability draft.
+Updated: 2026-09-28. Implementation-readiness audit baseline: `caaf9e6`.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -141,6 +141,11 @@ Users must be able to import an hBN-only calibration, a sample-only image, a mul
 series or a mixed calibrant/sample project without following an irrelevant mandatory wizard branch.
 Import support does not imply that every combination supports the same fitting recipe. The readiness
 panel routes each combination to its actual fitting owner and names unavailable combinations.
+In particular, the current automatic hBN calibration uses five declared hBN reflections and a
+fixed Cu K-alpha wavelength. Its distance is calibrant-private. A different wavelength/calibrant
+or a transferred sample distance needs an admitted core path, not a changed label in the UI.
+The current OSC-series indexer also admits only one configured incidence axis. Displaying a
+multi-axis goniometer does not make that indexing recipe support arbitrary motion chains.
 
 ## 3. Detector inspection and fitted overlays
 
@@ -249,6 +254,20 @@ Feature review supports accepting/rejecting candidates and correcting assignment
 Retain original discovery, edited value, reason and provenance; validate a new frozen manifest
 through current selection ownership. Flag overlaps/ambiguous assignments and unsupported manual
 admissions. Fits never reassign branch identities during optimization.
+
+Make **Find features -> Review -> Freeze for fit** an explicit workflow. Bind the acquisition,
+instrument/material configuration, mask and discovery policy before calling canonical selection.
+Retain discovered positions separately from reviewed inclusions/assignments. Publish one immutable
+observation pack with its identities and revisions, and pass that exact pack into the fitter.
+The current OSC-series convenience path reads images and supplies its own zero-edge mask; its
+fitting wrapper reindexes internally. Add narrow input boundaries where needed to consume reviewed
+data/masks, rather than bypassing review by calling that wrapper unchanged. hBN automatic tracing
+and any preliminary refinement belong to preparation; after review, the fit cannot retrace points
+silently. Unsupported manual edits remain inspectable proposals until admitted by selection.
+Preserve qualification and post-fit audits when exposing this boundary. A direct core optimizer
+result is a candidate until the applicable existing qualification checks pass. If the CLI owns
+required orchestration, extract a narrow shared operation that accepts the frozen pack while
+preserving the CLI path; do not promote optimizer success by omitting its qualification work.
 
 For every acquisition, show approximate reciprocal-space coverage from the active geometry and
 link selections to detector features. Identify geometry-only previews and their approximation.
@@ -402,6 +421,19 @@ qualification. Reuse detector/profile/geometry views and allow explicitly copyin
 snapshot into a simulation draft or adopting a compatible result into a new experiment draft.
 Never silently alter an accepted experiment while exploring the simulator.
 
+Deliver configuration-load/run/save first, using an independent draft and the shared job lifecycle;
+complete the supported parameter forms next. Neither needs fitted observations or the full 3D
+editor. Later, connect scene handles and experiment-copy actions to the same parameter owner.
+
+Later fitting stages have a separate preparation boundary. `scripts/prepare_native.py` currently
+relocates and verifies existing frozen observation/background arrays and their provenance; it is
+not a raw-image-to-native-observations builder. First expose supported prepared recipes. Preparing
+new imported images then requires an explicit measurement projection, membership, dark/background
+policy and covariance recipe using the current measurement/fitting owners. Ordinary side profiles
+and geometry feature lists are not substitutes for those native intensity observations. Keep
+unsupported combinations visible until that preparation path is implemented and scientifically
+qualified; do not promise automatic progression merely because geometry has converged.
+
 Before/after comparison locks image/support/units and distinguishes input, candidate and selected
 results. Save/reopen a project with numeric configuration, file identities, acquisition grouping,
 masks/assignments, drafts, selected result references and view layout. Validate file hashes and
@@ -475,8 +507,15 @@ GL child. Verify non-square corner/interior fiducials through pan, zoom, resize 
 Define a documented repository launch command in the first shell slice. The current wheel does
 not include `interactive/`; creating a script there is not an installed application entry point.
 Assign project schema/version ownership to one small I/O helper from U01. Basic save/reopen and
-atomic draft recovery arrive with the shell; portable archives and complete result exports follow
-later. Packaging a desktop installer is a separate delivery decision, not an assumed capability.
+atomic draft recovery arrive in U01b before editing tools; portable archives and complete result
+exports follow later. Packaging a desktop installer is a separate delivery decision, not an assumed capability.
+
+One explicit parameter description per supported binding supplies labels, units, scope, bounds and
+editability to forms, callouts and saved drafts. Core constructors remain the validators. Keep
+simulation configuration, geometry-fit inputs and native-intensity recipes as their actual distinct
+contracts; write explicit mappings only for supported transfers. Do not invent a universal fitting
+schema, introspection framework or registry. Save newly introduced masks, observations, seeds and
+results in the slice that creates them, and export each slice's supported outputs at that point.
 
 Keep immutable scientific/result snapshots separate from mutable camera, selection and display
 state. Jobs bind acquisition ID and data/mask/calibration/model revisions plus a request generation.
@@ -657,63 +696,192 @@ repeated mask/history operations. Verify exact final values, orientation, leases
 alongside latency; a speed gain cannot offset a scientific or coordinate failure. Each later slice
 checks only its new risk against this contract; U15 integrates the results, not the first measurement.
 
-## 11. Implementation sequence and acceptance checklist
+## 11. Build sequence and acceptance checklist
 
-All entries below are unimplemented. Paths name likely ownership, not a mandate for one module per
-task. Keep each slice to a few files; subdivide before broad changes. Dependencies are task IDs.
-One writer owns edits. The numbered checks are focused acceptance work for that slice, performed
-externally where code is needed, then removed under [VALIDATION.md](VALIDATION.md).
+This is the implementation plan and sole task checklist. All tasks remain unimplemented. Existing
+U identifiers are retained, with smaller lettered slices where the previous task was too broad.
+Execution follows the order and dependencies below, not numeric ID order. The main agent is the
+only writer; independent reviewers can inspect interfaces and completed changes.
 
-| ID / delivery slice | Dependencies and likely paths | Acceptance and verification |
+### Releases a researcher can use
+
+| Milestone | User-visible deliverable | Exit condition |
 | --- | --- | --- |
-| [ ] U00: rendering and resource decision | None; bounded vertical slice using existing optional viewer components | Declare reference hardware, workload and numeric resource budgets; compare at most one plotting alternative with two native images, linked profiles, dense overlays, a textured plane and bounded background work. Establish viewport/composition and buffer ownership, measure cold/warm latency and peak memory, select one path and remove discarded/temporary checking code. |
-| [ ] U01: project/acquisition shell | U00; `interactive/slate_app.py`, narrow project-state/I/O helper, `interactive/README.md` | Document a working repository launch; import one/many OSCs with explicit grouping/angles and schema ownership. Distinguish duplicate imports from repeated acquisitions. Basic save/reopen and atomic draft recovery work before editing tools; verify non-square native coordinates, interrupted saves, missing files and responsive close. |
-| [ ] U02: native detector inspection | U01; app, shared optional detector presenter | Pan/zoom/native pixels, signed/linear/log contrast and lazy filmstrip work; switching never mixes IDs. Non-square image, pointer, overlay fiducials and marginal axes align through resize/DPI changes; camera/contrast/cursor changes perform zero image uploads. Measure cold admission and warm interaction. |
-| [ ] U02a: guided import and reusable setup | U01/U02; import-review panel and project-state helper | Files/folders, roles, bulk metadata and template provenance are reviewable while images remain inspectable; verify mixed valid/corrupt inputs, repeated exposures versus duplicate imports, and reference/copy/relink behavior; complete a first-use sample-only and mixed calibrant/sample setup without editing configuration files. |
-| [ ] U03: marginal profiles | U02; narrow profile helper and detector panel | Both aligned profiles follow/pin crosshair and independent bands; sum/mean/full-image/ROI modes handle masks, edges, signed/nonfinite data and zero support. Compare with direct reductions, including cancellation-prone prefix differences; measure cold preparation responsiveness, warm cursor latency and exact settled values. |
-| [ ] U04: masks and regions | U03; detector panel, project-state helper | Rectangle/polygon/brush masks have bounded undo and reasons; observations remain frozen during a run. Verify atomic profile/fit invalidation, worker preparation, display/inclusion separation and memory under repeated strokes. |
-| [ ] U05: saved fits and feature inspection | U02/U04; result binding, overlays/inspector | Peaks/rings, feature list, labels, held-out/excluded states and residuals match saved IDs/coordinates; reject mismatched provenance; verify unfitted/current/stale/candidate states and unavailable uncertainty. |
-| [ ] U05a: beam-center proposals | U03/U04/U05; narrow ROI estimator, detector tool and calibration consumer | Manual and Gaussian ROI proposals plus supported hBN/sample-derived estimates retain source/reliability; shared application is explicit and unsupported spots remain unqualified; check known off-center/non-square spots, background, saturation/occlusion, rejected stale proposals and exact seed handoff. |
-| [ ] U06: linked comparison and profiles | U03/U05; panel layout/profile controls | Two images support compatible linked pan/limits, magnifier and straight-line cuts; model/profile comparisons use matched measures/support; verify pinning, exposure labels and before/after selection. |
-| [ ] U07: reciprocal geometry preview | U05; canonical geometry consumer, reciprocal panel | Every image has on-demand draft/saved coverage; linked feature selection and cursor Q use the declared frame. Verify valid/off-panel cases, nondefault wavelength and nonzero beam x component against canonical APIs; reject stale jobs and never substitute fixed Ewald illustration data. |
-| [ ] U08: textured experiment scene | U02/U05; scene helper, app | Beam/sample/goniometer/detector use canonical poses and image/overlays; click-to-zoom, context return and camera presets work. Verify detector texture corners, compound rotations, context recreation, no image reupload on orbit and unchanged scientific parameters after camera actions. |
-| [ ] U08a: fitting capability and execution prerequisites | U01; current `hbn.py`, `joint_geometry.py`, `indexed_series.py` and relevant execution owners | Inventory admitted image combinations, seeds/bounds, gauges and cancellation boundaries. Add narrowly scoped initial-state/bounds and cancellation inputs where required; preserve defaults, fixed references and qualification. Inspect actual optimizer arguments against the requested snapshot and check safe-stop behavior with bounded external checks. |
-| [ ] U09: physical parameters and initial estimates | U05a/U07/U08/U08a; parameter metadata/inspector and scene | Callouts/handles and table edit one admitted initial vector with scopes, units, bounds, provenance and gauges; launch snapshots preserve initial/current/fitted values. Every enabled control reaches the actual optimizer input; verify beam-center seed mapping, nonzero compound rotations, one-drag undo and dependent invalidation. |
-| [ ] U10: geometry fitting jobs | U02a/U04/U05/U09; job/controller and current geometry fit boundaries | Route hBN-only, supported sample-only and supported joint workflows to their respective owners, with readiness, run review and failure recovery. Preserve diagnostics/qualification; verify cancel acknowledgment versus safe stop, asynchronous close, resource release, revision races and result selection using small controlled jobs. |
-| [ ] U11: supported later fitting stages | U10; current native plan/result binding and stage panel | Mosaic/ordered/disorder controls reflect actual material support and ordered controls; hash-bound handoffs and stale-stage handling work; verify nominal/candidate/selected results and unsupported cases using current records. |
-| [ ] U12: independent simulator | U02/U03/U09; simulator forms/current viewer worker | Every supported parameter is available with units/validation; preview/quantitative jobs and measures are distinct. Exact profiles bind to immutable float64 snapshots and name their draw prefix; progression cannot mutate them. Verify direct reductions, safe presentation leases, independent copied drafts and unchanged current CLI configuration loading. |
-| [ ] U13: sensitivity and supported uncertainty | U05/U09/U10; result inspector and narrow worker task | On-demand parameter perturbations show motion and validity; covariance bands appear only with defensible evidence; compare a tiny supported case with canonical predictions and preserve unavailable/unidentified states. |
-| [ ] U14: complete result persistence and export | U06/U10/U11/U12; extend U01 project I/O and existing result writers | Save/reopen restores all result bindings, edits and layout; altered/moved input files require verification. Exported profiles, features and figures preserve native coordinates, support, units, fit status and provenance. |
-| [ ] U14a: complete recovery and repeat-use workflow | U02a/U14; project I/O and result-history panel | Extend U01 atomic recovery to all stages without falsely resuming a solver; named attempts, selected results and duplicate experiments remain independent. Verify interrupted saves, relink, portable archive reopening and bounded disk/memory history. |
-| [ ] U15: responsiveness and release review | All earlier slices; app, optional dependency declaration and documentation | Integrate previously measured targets under simultaneous cursor/3D/fit activity and twenty-image mask/history use; verify bounded CPU/GPU peak memory, cancellation, asynchronous close, failure recovery and optional imports. Report distributions/stalls, cold/warm limits and chosen launch route; remove temporary checks. |
+| M0: choose the implementation | A measured rendering choice and a capability map grounded in current APIs | Alignment, buffer ownership and resource limits established before broad UI work |
+| M1: inspect real data | Import one/many OSCs, exact marginal profiles, masks, comparison, save/reopen and basic export | A researcher can inspect and export an image without configuring a fit |
+| M2: run the simulator | Independent configuration loading, supported parameter forms and explicit preview/quantitative output | Load, change, run, inspect and save a simulation without an experiment |
+| M3: fit geometry | Reviewed observations, numeric starting values, beam-center tools, fitted overlays and statistics | hBN first, then supported sample-only and joint routes each work end to end |
+| M4: edit the experiment visually | Reciprocal coverage and textured beam/sample/goniometer/detector scene with synchronized controls | Click-to-zoom and physical edits preserve canonical geometry and parameter ownership |
+| M5: fit prepared native experiments | Supported mosaic, ordered and disorder workflows using existing prepared recipes | States, observations, measure, covariance and qualification remain intact |
+| M6: prepare new native experiments | One explicitly admitted new-acquisition preparation path, then additional supported recipes | Imported counts become reproducible native observations under a qualified measurement contract |
+| M7: complete daily use | Sensitivity, supported uncertainty, templates, archives and integrated release checks | Complete user journeys and declared performance/resource criteria pass |
 
-Checkpoints:
+M1 and M2 are useful deliveries on their own. A first geometry fit uses numeric inputs; it does not
+wait for every 3D handle. M5 can use an existing valid prepared experiment without a new geometry
+fit. M6 is required for the promised later-stage workflow on newly imported data; opening an
+existing recipe alone does not complete that requirement.
 
-- [ ] After U00: a measured rendering choice, shared viewport contract and numeric resource budgets
-  exist before broad UI work. A failed target changes the implementation choice, not scientific support.
-- [ ] After U03: real detector images and exact marginal profiles remain responsive, including cold
-  preparation; the rendering choice remains supported by actual integration measurements.
-- [ ] After U05a/U06: beam-center, image/feature/mask review and comparison are useful with saved results, independently
-  of launching a new optimizer; no fit observations are altered by presentation actions.
-- [ ] After U10: the complete geometry workflow has one parameter state, canonical transforms,
-  preserved gauge/qualification rules and a verified stale-job boundary.
-- [ ] After U15: review the coherent diff, optional imports, relevant formatting/lint/build checks,
-  user flows and remaining scientific limitations. Report actual measurements separately from targets.
+### M0 — settle expensive decisions first
 
-Usability completion is observed through complete journeys, not just functioning individual buttons:
+Likely ownership: this document, existing optional viewer components and visualization dependencies.
+Keep the rendering comparison finite: one baseline, at most one alternative, and one focused repair
+pass before recording the remaining bottleneck and a scoped next step. Preserve chosen live
+components; remove discarded alternatives and all temporary checking code.
 
-- [ ] A first-time user imports one image and sees the detector/profiles without prior configuration.
-- [ ] A researcher imports hBN plus an angle series, assigns metadata in bulk, chooses the center,
-  supplies initial geometry and understands exactly what will be fitted before starting.
-- [ ] A user sees why a stage is blocked, reaches the relevant setting directly and preserves work
-  when fixing a corrupt file, bad estimate or unsupported configuration.
-- [ ] A returning user reopens or recovers a project, compares named attempts, and exports a figure
-  plus the corresponding numerical values without accidentally overwriting the selected fit.
-- [ ] An expert can reach every supported parameter and operate inspection/selection with keyboard
-  equivalents; accidental mode changes do not edit geometry, masks or observation membership.
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U08a: capability inventory | None | List each admitted simulation/fit route, acquisition requirements, parameter names/units/scopes, seed/bounds support, observation inputs, output schema and safe-stop limits. Include hBN wavelength/ring assumptions, calibrant-private distance, one-axis indexing, joint-series requirements and prepared-native limits. Every promised enabled control maps to an actual input; missing boundaries get an explicit task below. |
+| [ ] U00: rendering decision | U08a | Use two existing native images, exact band profiles, batched overlays and a textured plane with bounded background work. Declare reference hardware/versions and numeric CPU/GPU budgets; compare alignment, cold/warm interaction and peak memory under section 10. Choose one compositor/plot path before expanding features; no full application or optimizer is needed here. |
 
-Use the tracked example inputs for bounded walkthroughs. Obtain real researcher feedback when
-available and record observed friction; no usability or latency success is claimed from this plan.
+### M1 — a useful detector reader
+
+Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presenter/profile helpers,
+`src/rasim_next/io/osc.py` only if a measured boundary change is necessary, and
+`interactive/README.md`. Do not allocate one module per row by default.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
+| [ ] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
+| [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
+| [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
+| [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
+| [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
+| [ ] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
+| [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
+| [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
+| [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
+| [ ] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+
+### M2 — independent simulator
+
+Likely ownership: the optional application forms/controller and the current detector worker;
+`pipeline/configured_simulation.py` remains the configuration/scientific authority.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
+| [ ] U12: configured simulator | U02/U03/U01c/U09a | Load an existing supported configuration, run the current preview/quantitative owner and save/reopen the independent draft. Show measure, backend, prefix/progress and failure state; no experimental image, fitted observations or 3D editor is required. |
+| [ ] U12a: complete supported parameter forms | U12 | Expose all supported selected-model configuration fields in searchable grouped forms, including source, instrument, structure, mosaic, optics and execution. Compare field coverage with the capability inventory; unsupported combinations explain why. Keep configuration import/export working. |
+| [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
+
+### M3 — geometry fitting, one route at a time
+
+Likely ownership: optional observation/result panels and the existing `selection/`,
+`fitting/hbn.py`, `indexed_series.py` and `joint_geometry.py` owners. Preparation, fitting and
+qualification remain explicit stages. Share an extracted CLI routine only when both CLI and GUI
+actually need it; do not copy the orchestration into widgets.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U05a: direct/manual beam-center proposal | U03/U04/U09a | Add native click/numeric center and a worker-owned Gaussian ROI proposal with background, residuals and reliability. Check off-center/non-square coordinates, saturation/occlusion and stale rejection; adoption changes a seed only and survives save/reopen. |
+| [ ] U08b: hBN preparation/fit boundary | U08a/U01c | Expose the narrow preparation and frozen-observation fitting inputs needed for admitted hBN seeds/bounds and cooperative cancellation. Preserve existing automatic defaults; make wavelength/ring/dark assumptions explicit. Verify residual/coordinate equivalence and actual optimizer inputs before enabling new controls. |
+| [ ] U05b: hBN observation review | U04/U08b/U09a | Trace candidate rings with the canonical owner, show coverage/assignments and review only admitted edits. Persist the accepted ring pack, mask/config provenance and its revision; fitting consumes it unchanged and does not silently retrace. |
+| [ ] U05: result binding and overlays | U02/U04/U01b | Bind contract-valid result records to acquisition/observation IDs; draw predicted peaks/rings, observed points, residuals and feature inspection. Distinguish no-fit, draft, candidate, selected and stale states; reject mismatched records and retain unavailable uncertainty. |
+| [ ] U10: first hBN calibration workflow | U05a/U05b/U05/U08b/U09a | Numeric seeds -> reviewed ring pack -> explicit fit -> statistics/overlays -> named result/save/export works. Check seed/revision handoff, safe stop and late-result rejection; center/tilt and calibrant-private distance retain their meanings and actual qualification evidence. |
+| [ ] U05c: sample discovery and freeze | U02a/U04/U09a | Bind a supported OSC series, geometry/material and reviewed mask to canonical discovery/indexing. Add narrow explicit mask/data input boundaries where necessary. Persist candidates, admissible review decisions and one frozen fit-ready pack; the fit entry point must not reindex internally. |
+| [ ] U08c: indexed-series execution boundary | U08a/U01c/U05c | Use the existing explicit seeds/bounds and add safe cancellation/progress boundaries only where absent. Verify fixed references, incidence delta/trim gauges and unchanged frozen IDs with a small supported case. |
+| [ ] U10a: sample-only geometry workflow | U05c/U08c/U05/U09a | Fit one admitted indexed series using its exact reviewed pack; save/export per-image/shared diagnostics and seed/fitted comparison. Insufficient tracks or unsupported single-image cases remain clearly unavailable; no manufactured observations or qualification. |
+| [ ] U08d: joint geometry execution boundary | U08a/U01c | Add explicit admitted starting-state and safe-stop inputs while preserving the reduced gauge and existing defaults. Verify core seed/bounds handoff and required hBN/Bi2Se3/Bi2Te3 roster; do not generalize to arbitrary material groups through GUI assumptions. |
+| [ ] U10b: joint geometry workflow | U10/U10a/U08d | Combine the admitted frozen calibrant/sample packs, review shared/local/fixed scopes and run the current joint owner. Persist result and supported hash-bound handoff; verify IDs, private calibrant distance, rank/qualification and stale downstream state. |
+| [ ] U05d: geometry-derived center proposals | U10/U10a | Offer supported ring/sample estimates beside direct/manual proposals, including their physical interpretation and coupling. Applying a shared estimate lists affected acquisitions; derived evidence is not counted twice. |
+
+### M4 — reciprocal and experiment views
+
+Likely ownership: narrow optional scene/reciprocal helpers and the existing parameter/result
+controller. These are new presentations of the same model, not new geometry implementations.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. |
+| [ ] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
+| [ ] U09: synchronized physical handles | U05a/U07/U08/U09a/U10 | Connect callouts, numeric fields and constrained arcs/arrows to the existing parameter state. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. For each admitted route, compare handle edits with the actual launched vector; the scene cannot enable an unsupported fit scope. |
+| [ ] U09b: experiment/simulator transfer | U09/U12a/U12b | Copy a compatible experiment snapshot into an independent simulation draft, or adopt a compatible simulation into a new experiment draft. Show exactly what transfers; verify units, provenance and unchanged source projects. |
+
+### M5 — existing prepared native fitting
+
+Likely ownership: application stage/result bindings, `native_input.py`, `native_observations.py`,
+`native_workflow.py`, `native_search.py`, `native_accuracy.py` and current material bindings.
+Limit each delivery to one admitted model/stage. Existing physics and execution owners are reused.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U11: open a prepared native experiment | U01b/U01c/U05/U09a | Load one supported prepared physics/observations/plan set, verify hashes and show measured profiles, background/covariance policy and model capabilities. Save/reopen references without altering frozen arrays; do not describe this as preparation of new raw images. |
+| [ ] U11a: mosaic stage | U11 | Run the existing search with the admitted mosaic coordinates/controls; persist initial/candidate/selected values and qualification. Verify frozen observable identity and explicit numerical settings on a bounded case. |
+| [ ] U11b: ordered intensity stage | U11a | Bind a supported ordered model and declared upstream state, nuisance scale/background and active coordinates. Save/export matched-observable results; controls do not change membership or silently substitute an empirical baseline. |
+| [ ] U11c: supported disorder stage | U11b | Expose disorder only for an actual supporting material binding with the ordered control and weak-direction diagnostics. Verify identical observable/measure and preserve unsupported native Bi states. |
+| [ ] U11d: indexed geometry adoption | U11/U10a | Use the existing indexed OSC fit-record adoption path through `fixed_position_from_fit_record`; preserve its root/outer audits, provenance, qualification/model-limited distinction and downstream admission rules. Verify image/file/geometry identities and projector consistency; never reinterpret a joint handoff as an indexed result. |
+
+Joint-handoff adoption is a distinct conditional extension after U10b and requires an explicitly
+supported native binding. If one is unavailable, show that limitation and add a scoped task before
+implementing it; it does not block the existing indexed-fit adoption route or become an implicit
+artifact conversion.
+
+### M6 — native observations from new acquisitions
+
+This is scientific integration work, not a stage-panel widget. Likely ownership:
+`measurement/continuous_regions.py`, current native measurement projectors,
+`fitting/native_observations.py`, `radial_background.py` and a narrow preparation entry point.
+Name the exact existing owner during U11e before editing; never duplicate the projection equation.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U11e: declare one preparation recipe | U04/U10a/U11 | Specify admitted acquisition/material/source/geometry, native membership, observable units, dark/background, full covariance, output identities and independent comparison/tolerances. Identify missing production boundaries before coding; unsupported recipes remain explicit. |
+| [ ] U11f: implement numerical preparation | U11e | Produce a valid frozen native observation/background/covariance set for that recipe using authoritative projectors. Verify support, masks, signed counts, shared-dark covariance and hashes against the declared independent calculation; save external reproducible outputs. Split by numerical owner if more than five files are needed. |
+| [ ] U11g: preparation UI and stage handoff | U11f/U11a | Guide selection/review/preparation of new imported acquisitions, show progress and persist the frozen result. A changed mask/calibration invalidates dependent preparations; a supported new input reaches each delivered admitted fitting stage without a handwritten manifest. Completion applies only to qualified recipes; it need not wait for unrelated disorder support. |
+
+### M7 — complete daily use and release
+
+Likely ownership: existing application inspector, project I/O and runtime result writers.
+
+| Task | Dependencies | Deliverable and focused verification |
+| --- | --- | --- |
+| [ ] U13: sensitivity and supported uncertainty | U05/U09/U10 | Request bounded canonical parameter perturbations with declared held-fixed assumptions. Show covariance-based bands only with defensible evidence; retain rank/branch/invalid states and distinguish sensitivity from posterior confidence. |
+| [ ] U02b: reusable import/setup | U02a/U09a | Add templates, source/reference/copy storage review and guided relink. Defaults carry provenance; template edits cannot mutate projects and matching filenames cannot substitute different bytes. |
+| [ ] U14: complete exports and portable archive | U06/U10b/U11g/U12b/U14b | Extend earlier per-slice exports to selected cross-workflow products and a self-contained archive with size/identity review. Verify reopened inputs, parameters, observations/results and qualified/nominal statuses; retain exact underlying values for figures. |
+| [ ] U14a: repeat-use and recovery integration | U02b/U14 | Integrate named attempts, duplicate experiments, selected result history and bounded recovery across all delivered stages. Verify interrupted saves, missing files and independence; no executable checkpoint or false solver resume. |
+| [ ] U15: integrated release check | All prior tasks | Complete section 10's simultaneous inspection/3D/job and twenty-image journeys on declared hardware. Review optional imports, launch, keyboard/DPI behavior, cold/warm latency distributions, memory, cancel/close and failure recovery. Record actual limitations and remove temporary checks. |
+
+### How each task is delivered
+
+Keep each implementation commit to a small coherent change, normally one to three files and at
+most five. If a row exceeds that, split it here before coding while retaining its acceptance
+conditions; do not hide a second subsystem in the same commit. Share paths sequentially.
+
+Each slice includes persistence for the state/results it introduces and export for usable outputs.
+U14 integrates archive/export coverage; it is not permission to postpone earlier save or export.
+Use the configured Ruff formatting/lint rules on touched Python; run package/import/affected CLI
+checks when those boundaries change. Perform only focused external temporary numerical/interaction
+checks for concrete risks, record inputs/commands/outcomes/limits, then remove the check code.
+No retained test, proof or benchmark suite is introduced. A runtime diagnostic, when explicitly
+requested, still follows the single external `.ra_diag.npz` contract.
+
+For every checked task, record its coherent commit, delivered flow and measured evidence in this
+section. A document review or an unchecked feature is not completion. At each milestone, perform
+its end-to-end user journey; future capability limits must remain visible. New scientific support
+needs its own evidence before enabling it, while independent UI/simulator work can continue.
+
+The first implementation packet is U08a followed by U00: complete the precise capability/control
+map, choose a reference machine/resource budget, then build and measure the small rendering slice.
+Stop expanding that slice once the choice is justified. The next packet is U01/U01c/U01a so a user
+can launch the app and open a real detector image. No full fit, parameter sweep or full-image
+scientific campaign is required to make the rendering decision.
+
+Usability completion must be observed through complete journeys:
+
+- A first-time user imports one image and sees the detector/profiles without prior configuration.
+- A researcher imports hBN plus a supported angle series, assigns metadata in bulk, chooses the
+  center, reviews frozen features, sets initial geometry and sees exactly what will be fitted.
+- A simulator user loads/runs/saves a configuration without preparing an experiment.
+- A user can follow an actionable blocked-stage explanation and preserve work after a corrupt
+  file, bad estimate, unqualified fit or unsupported model.
+- A returning user reopens/recovers a project, compares named attempts and exports a figure plus
+  numerical values without overwriting the selected result.
+- An expert reaches every supported parameter with keyboard alternatives; inspection/camera
+  actions never edit geometry, masks or observation membership.
+
+Use tracked example inputs for bounded walkthroughs. Obtain real researcher feedback when
+available and record friction. This document makes no claim of implemented or measured success.
 
 ## 12. Risks, limits and completion evidence
 
@@ -750,14 +918,14 @@ follow-up clarifications limit U00's scope and apply frame cadence only under ac
 
 | Finding | Plan correction and implementation evidence still required |
 | --- | --- |
-| Initial-value controls can exceed current fitting APIs | Sections 2/6 and U08a/U09 inventory actual workflows and require explicit seed/bounds handoff. Every enabled field must reach the optimizer; existing gauges/defaults remain authoritative. |
+| Initial-value controls can exceed current fitting APIs | Sections 2/6, the U08a inventory, route-specific U08b/U08c/U08d and U09 require explicit seed/bounds handoff. Every enabled field must reach the optimizer; existing gauges/defaults remain authoritative. |
 | Current GL presenter lacks viewport/layer alignment | Sections 9/10 and U00/U02 require one native transform, signed display, compatible overlay composition and DPI/alignment checks. Reuse narrow texture helpers, not the complete opaque widget unchanged. |
 | Progressive float32 images cannot provide promised exact profiles | Section 4 and U12 bind inspection to named immutable quantitative snapshots, with explicit pending/historical states and no per-cursor full snapshot allocation. |
-| Cancel/close promises exceed current safe interruption points | Section 10 and U08a/U10 require job lifecycle states, narrow execution hooks, measured noninterruptible phases and responsive safe shutdown. |
+| Cancel/close promises exceed current safe interruption points | Section 10, U01c and the route-specific execution tasks require job lifecycle states, narrow execution hooks, measured noninterruptible phases and responsive safe shutdown. |
 | Ewald illustration is not general acquisition geometry | Section 9 and U07 exclude its fixed formulas/textures from scientific data paths; verify canonical geometry at nondefault wavelength/direction. |
 | Cache-only limits miss peak copies and history | Section 10 and U00/U04/U15 add a complete resource ledger, globally bounded publication, compact undo and reconstructible-buffer eviction. |
 | 60 fps claim and 33 ms criterion disagree; cold/tail latency unbounded | Section 10 separates cadence, event latency, tails, preparation and stop time, with declared workloads/hardware and early measurement. |
-| Packaging and early save/recovery ownership unclear | Section 9 and U01 establish repository launch, schema and basic recovery before editing workflows; U14 completes result/export coverage. |
+| Packaging and early save/recovery ownership unclear | Section 9 and U01/U01b establish repository launch, schema and basic recovery before editing workflows; every slice saves its outputs and U14 completes archive/export coverage. |
 
 Source boundaries checked: [detector presentation](../interactive/detector_viewer.py),
 [illustrative Ewald viewer](../interactive/ewald_sphere_viewer.py),
@@ -769,3 +937,30 @@ Source boundaries checked: [detector presentation](../interactive/detector_viewe
 Recorded experiment history supplied no combined-UI timing evidence. No discovery/replay campaign
 is justified for this documentation audit; future bounded measured comparisons follow the current
 assessment and experiment-memory policies.
+
+### Implementation-readiness audit and repair
+
+A second read-only audit at `caaf9e6` checked whether the plan could be executed in small usable
+deliveries. It found five sequencing/integration gaps; section 11 now addresses each one.
+
+| Gap | Concrete repair |
+| --- | --- |
+| No task creates reviewed geometry observations from new images | U05b/U05c own canonical discovery, admissible review, frozen-pack persistence and exact fit consumption. Preserve qualification orchestration; no fit-time rediscovery. |
+| Prepared native inputs were mistaken for preparation of new acquisitions | M5 opens existing supported recipes; M6 separately declares and implements a scientifically qualified observation/background/covariance preparation path. |
+| Simulator waited for the entire geometry editor and fit APIs | U09a and U12/U12a/U12b deliver independent configuration, parameter forms and quantitative inspection in M2. |
+| First fit required every physical handle and several fitters at once | Numeric state is early; hBN, indexed-series and joint routes have separate input/execution/result slices. M4 attaches scene controls to that existing state. |
+| Export/persistence waited for unrelated advanced features | U01b and U14b deliver early saving/export; observations, simulator drafts and fit results persist in their own slices. U14 integrates complete archives. |
+
+Additional source checks confirmed the fixed hBN wavelength/ring assumptions and the current
+single-axis OSC-indexing admission rule; the capability inventory must expose those limits.
+Relevant live boundaries include [OSC selection](../src/rasim_next/selection/osc_series.py),
+[geometry CLI orchestration](../scripts/fit_osc_geometry.py),
+[prepared native adoption](../scripts/prepare_native.py),
+[native observation records](../src/rasim_next/fitting/native_observations.py),
+[native physics inputs](../src/rasim_next/fitting/native_input.py) and
+[measurement regions](../src/rasim_next/measurement/continuous_regions.py).
+No application implementation or numerical/performance validation was performed by this audit.
+The independent reviewer checked the revised sequence and identified one final route correction:
+native geometry adoption currently consumes an indexed OSC fit record, not the distinct joint
+handoff artifact. U11d now names that boundary and depends on U10a; joint adoption remains conditional
+on its own supported binding. No remaining material sequence or qualification issue was reported.
