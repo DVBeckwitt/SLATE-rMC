@@ -1257,7 +1257,9 @@ an unnamed project autosaves to one UUID-named draft in the external local recov
 location admits at most 32 drafts and 32 MiB. Explicit Save/Save As, Open, Recover Draft, rename,
 reorder and hash-matched Relink actions are visible in the shell. The existing atomic JSON publisher
 provides a flushed temporary file, replacement and cleanup. Writes are serialized as immutable
-snapshots through the existing job owner, and save status names only the completed revision.
+snapshots through the existing job owner, and save status names only the completed revision. The
+750 ms autosave debounce coalesces queued autosaves. Up to eight pending writes/3 MiB are admitted
+behind one active request; a full queue is visible and explicit writes are never silently replaced.
 
 Reopen validates source references independently. Missing, changed and unreadable OSC files retain
 their acquisition identities and appear with actionable status; a relink requires identical decoded
@@ -1276,6 +1278,36 @@ replacement; and a corrupt deflate source alongside a valid source. Scratch file
 and removed. These checks establish local project I/O and shell transitions only, not numerical
 fitting adequacy. Portable archives, later editable scientific state and solver resume are outside
 U01b; no solver resume is implied by a saved draft.
+
+The task-owned checks ran as `python -B -` inline commands from this checkout, with
+`PYTHONPATH=interactive;src`, native `QT_QPA_PLATFORM=windows` for Qt checks, and a temporary
+directory under the external Codex visualization scratch root. Inputs were the tracked 7x11
+big/little-endian OSC fixtures, a deliberately malformed deflate gzip source, and small generated
+project JSON documents. The final delayed-open/missing-view check used the shell's top-level
+`project_state` imports and waited for the written path, matching receipt, drained owner and empty
+queue. The actual unnamed-draft Discard path deleted its UUID-named file. A Save As path through an
+existing `child/../UUID.slate.json` alias was rejected before publication; the draft and another
+saved file remained byte-identical, with no temporary file left.
+
+One native-window persistence timing run delayed each atomic publisher by 250 ms and made a second
+edit while the first Save As was active. Save dispatch returned in 0.192 ms and its status reached a
+Qt paint event in 1.058 ms. Close dispatch returned in 0.100 ms and its waiting status reached a
+Qt paint event in 0.760 ms. Final close and worker release took 469.696 ms after the close request;
+the on-disk project contained the final accepted name. The longest gap in a 10 ms GUI heartbeat
+during the write was 13.819 ms. Both status-paint and heartbeat observations met the 100 ms bound.
+Qt paint events are not monitor scanout, and this single small-project run is not a latency
+distribution or a full-image performance claim. No numerical fit or physical observable was run.
+
+Initial check attempts did not all pass: offscreen Qt had no detector OpenGL context, and sandboxed
+temporary-file permissions prevented a scratch write. Native Qt with an explicit external scratch
+root resolved those setup limits. One combined assertion failed because the check imported
+`interactive.project_state` while the shell loaded `project_state`, giving duplicate class identity;
+a later wait also treated a pre-existing saved revision as a completed Save As receipt. The corrected
+top-level-import/path-and-drain check passed. An A-B-A check initially waited in an unhandled
+Save/Discard dialog; it was stopped and rerun with the intended Discard choice. An alias check first
+caught the expected exception through the duplicate module class and exited nonzero; the consistent
+import rerun passed. All task-owned scratch directories from these attempts were removed. Ruff
+lint/format, module parse/import and Git diff checks passed after the production edits.
 
 ### M2 — independent simulator
 
