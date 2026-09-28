@@ -11,3 +11,12 @@ Keep each change small enough to explain and review. A plan records:
 Use current `AGENTS.md` and `docs/VALIDATION.md`. Historical task phases do not trigger
 test suites, proof campaigns or new fitting runs. Use one writer and read-only reviewers.
 Prefer removing duplicated work to adding orchestration or compatibility layers.
+
+## Native desktop simulation and fitting interface
+
+The consolidated [desktop UI grand plan](docs/DESKTOP_UI_PLAN.md) records the accepted
+interface scope, OSC-style marginal profiles, beam-center estimation, initial-value controls, staged fitting,
+performance targets, implementation order and acceptance checks. It is the current
+plan for this UI work; implementation has not started. Its checklist is kept in that
+same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
+their original evidence and do not schedule additional scientific work.
