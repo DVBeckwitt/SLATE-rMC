@@ -1392,6 +1392,61 @@ encountered a queued profile paint from admission and was not used as evidence. 
 scratch project and checking script were removed after extracting these results. U02 stays open
 for the measured frame-cadence miss; these checks do not qualify a scientific fit.
 
+#### U02 native-event-loop attribution checkpoint (2026-09-28; diagnostic only)
+
+The prior U02 timing packet was closed. A separate 30 s aggregate active-window allowance was
+used only to attribute its frame miss. The committed source was `a5d645f41089f70be7f5be7ddbe1081dca373454`;
+there was no production rendering edit. An external `python -u -B <task-scratch>/u02_native_loop_probe.py
+<worktree>` launched the existing `ShellWindow`, imported
+`examples/calibration/hbn/hBN_calibrant_5m.osc.gz` through the native import worker, and ran
+the window with `QApplication.exec()`. The decoded OSC SHA-256 was
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`.
+An external recovery root was task-owned. After the 3000x3000 image and 4,000 grid markers were
+ready, Qt timers supplied pointer, wheel, drag-pan and contrast-control events with a 13 ms
+requested interval. The visible screen was Sceptre C27 (2), 1920x1080 logical pixels, DPR 1,
+74.99 Hz. During the measured window, sampled whole-machine CPU was median 15.6%, p95 34.5%,
+maximum 53.6%, with about 31.3 GiB available RAM at finalization. These samples do not isolate
+the presentation process's CPU share.
+
+The first 15 s native-loop window completed, but the temporary reporter raised while formatting
+a NumPy interval array; its counters were not emitted or retained. The process was stopped, that
+reporter-only error was corrected, and the remaining 15 s yielded one usable diagnostic window.
+The temporary reporter also failed to exit after printing its second result on `app.quit()`;
+the owned process was stopped and its empty external recovery folders and script were removed.
+This exit behavior was not attributed to the production app. No further window was run.
+
+| Native `app.exec()` window, 15 s | p50 / p95 / p99 / max (ms) |
+| --- | --- |
+| Actual interval between 13 ms requested input callbacks | 13.279 / 21.804 / 25.157 / 30.989 |
+| Input callback dispatch duration | 0.205 / 0.443 / 0.599 / 1.138 |
+| Matched composed-frame interval | 21.249 / 28.412 / 40.283 / 51.113 |
+| Input to matched `frameSwapped` | 11.704 / 15.923 / 17.387 / 20.854 |
+| Detector `paintGL` duration | 0.663 / 0.974 / 1.258 / 5.910 |
+| Completed detector paint to matching `frameSwapped` | 1.433 / 11.750 / 12.045 / 12.385 |
+| Horizontal / vertical profile `paintEvent` p95 | 1.172 / 0.760 |
+
+There were 1,122 callbacks, 707 new paint-request generations, 704 detector paints/compositions,
+three unpresented generations and 418 duplicate or unmatched `frameSwapped` signals without a
+new detector paint. Both marginals painted 551 times, the texture uploaded once, and the final
+generation was composed with signed contrast and native cursor `(column_px=60, row_px=1655)`.
+Dispatch p95 by event was 0.344/0.444/0.497/0.474 ms for cursor/wheel/pan/contrast. A 100 ms
+heartbeat observed p95 119.930 ms and maximum 123.388 ms, corresponding to at most 23.388 ms
+over its requested interval; this is not a measure of a >100 ms GUI stall. Profile paint
+durations were measured, not matched presented-profile latency. Timing ends at Qt composition,
+not monitor scanout. The reconstructed input sequence produced only 707 requests from 1,122
+callbacks, so this is not a like-for-like throughput comparison with the earlier manual-pump
+windows that requested a paint on almost every callback.
+
+The 28.412 ms p95 native-loop interval misses the 16.7 ms target, so use of
+`QApplication.exec()` alone did not eliminate the observed cadence miss in this trace. Direct
+dispatch and measured paint methods were short; delayed timer delivery and paint-to-swap time
+both contributed more than the paint calls. The exact share of Qt scheduling, compositor pacing,
+instrumentation overhead and remaining viewport work is still unqualified. The smallest next
+action is a separately authorized, paired event trace with identical in-bounds requests under
+both loop drivers and generation-aware swap attribution, followed by a full sustained acceptance
+window only if a specific cause is repaired. This diagnostic neither supersedes the earlier
+26.7-28.5 ms misses nor completes U02.
+
 ### M2 — independent simulator
 
 Likely ownership: optional forms/controller and the current detector worker. Configured simulations
