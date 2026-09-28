@@ -54,13 +54,12 @@ def _parameter_value(
     section: Mapping[str, object],
     name: str,
     *,
-    fixed_reference: bool,
+    role: str,
 ) -> float:
     entry = _mapping(section.get(name), f"joint geometry parameter {name!r}")
-    expected_role = "fixed_reference" if fixed_reference else "fitted"
-    expected_confidence: bool | None = None if fixed_reference else True
+    expected_confidence: bool | None = True if role == "fitted" else None
     if (
-        entry.get("role") != expected_role
+        entry.get("role") != role
         or entry.get("confidence_qualified") is not expected_confidence
         or entry.get("active_bound") is not False
     ):
@@ -96,18 +95,54 @@ def qualified_joint_geometry_state(record: object) -> tuple[JointGeometryState, 
         raise ValueError("joint geometry nuisance parameter roster changed")
 
     fixed = dict(DEFAULT_FIXED_REFERENCE_PARAMETERS)
+    parameterization = _mapping(root.get("parameterization"), "joint parameterization")
+    unobserved = tuple(parameterization.get("unobserved_specimen_parameters", ()))
+    metrics = _mapping(root.get("crystalline_metrics"), "crystalline metrics")
+    per_image = metrics.get("per_image")
+    if not isinstance(per_image, (tuple, list)):
+        raise ValueError("joint geometry image roster is missing")
+    observed = {
+        _mapping(metric, "crystalline image metric").get("specimen_id") for metric in per_image
+    }
+    expected_unobserved = tuple(
+        name
+        for name in LOCAL_PARAMETER_NAMES
+        if (name.startswith("pbi2_y1_") and "pbi2_y1" not in observed)
+        or (name.startswith("pbi2_y2_") and "pbi2_y2" not in observed)
+    )
+    if unobserved != expected_unobserved:
+        raise ValueError("joint geometry unobserved parameters disagree with image roster")
+    expected_fitted = tuple(
+        name
+        for name in JOINT_GEOMETRY_PARAMETER_NAMES
+        if name not in fixed and name not in unobserved
+    )
+    if tuple(parameterization.get("fitted_parameter_names", ())) != expected_fitted:
+        raise ValueError("joint geometry fitted parameter roster changed")
     sections = {
         **dict.fromkeys(GLOBAL_PARAMETER_NAMES, global_section),
         **dict.fromkeys(LOCAL_PARAMETER_NAMES, local_section),
         **dict.fromkeys(NUISANCE_PARAMETER_NAMES, nuisance_section),
     }
     values = tuple(
-        _parameter_value(sections[name], name, fixed_reference=name in fixed)
+        _parameter_value(
+            sections[name],
+            name,
+            role=(
+                "fixed_reference"
+                if name in fixed
+                else "unobserved_specimen"
+                if name in unobserved
+                else "fitted"
+            ),
+        )
         for name in JOINT_GEOMETRY_PARAMETER_NAMES
     )
     state = JointGeometryState.from_array(values)
     if any(getattr(state, name) != expected for name, expected in fixed.items()):
         raise ValueError("joint geometry fixed references changed")
+    if any(getattr(state, name) != 0.0 for name in unobserved):
+        raise ValueError("joint geometry unobserved specimen references changed")
 
     derived = _mapping(root.get("derived"), "joint geometry derived values")
     beam_origin = _finite_vector(

@@ -75,16 +75,17 @@ def _write_external_json(destination: Path, payload: dict[str, object]) -> Path:
 def _parameter_payload(result: object, names: tuple[str, ...]) -> dict[str, object]:
     state = result.state
     fixed = dict(result.fixed_reference_parameters)
+    unobserved = set(result.unobserved_specimen_parameters)
     payload = {}
     for name in names:
         index = JOINT_GEOMETRY_PARAMETER_NAMES.index(name)
-        if name in fixed:
+        if name in fixed or name in unobserved:
             payload[name] = {
                 "value": float(getattr(state, name)),
                 "standard_error": None,
                 "confidence_qualified": None,
                 "active_bound": False,
-                "role": "fixed_reference",
+                "role": "fixed_reference" if name in fixed else "unobserved_specimen",
             }
         else:
             payload[name] = {
@@ -125,24 +126,26 @@ def _replicated_sparse_images(
 
 def run(manifest_path: Path) -> dict[str, object]:
     manifest = load_strict_yaml_mapping(manifest_path)
-    root = _mapping(
-        manifest,
-        "joint geometry manifest",
-        {
-            "schema_version",
-            "detector_base_simulation_config",
-            "hbn",
-            "bi2se3_series",
-            "bi2te3_series",
-            "pbi2_parent",
-            "pbi2_y1_series",
-            "pbi2_y2_series",
-        },
-    )
+    required_keys = {
+        "schema_version",
+        "detector_base_simulation_config",
+        "hbn",
+        "bi2se3_series",
+        "bi2te3_series",
+    }
+    optional_keys = {"pbi2_parent", "pbi2_y1_series", "pbi2_y2_series"}
+    if (
+        not isinstance(manifest, dict)
+        or not required_keys <= set(manifest)
+        or set(manifest) - required_keys - optional_keys
+    ):
+        raise ValueError("joint geometry manifest has missing or unknown fields")
+    root = manifest
     if root["schema_version"] != "rasim-joint-hbn-crystal-geometry-v2":
         raise ValueError("unsupported joint geometry schema_version")
-    if root["pbi2_parent"] != "2H":
-        raise ValueError("pbi2_parent must be exactly '2H'")
+    has_pbi2 = "pbi2_y1_series" in root or "pbi2_y2_series" in root
+    if (has_pbi2 and root.get("pbi2_parent") != "2H") or (not has_pbi2 and "pbi2_parent" in root):
+        raise ValueError("pbi2_parent must be '2H' exactly when a PbI2 series is supplied")
     hbn = _mapping(
         root["hbn"],
         "hbn",
@@ -163,8 +166,16 @@ def run(manifest_path: Path) -> dict[str, object]:
     dark_path = _path(base_directory, hbn["dark_path"], "hbn.dark_path")
     bi2se3_path = _path(base_directory, root["bi2se3_series"], "bi2se3_series")
     bi2te3_path = _path(base_directory, root["bi2te3_series"], "bi2te3_series")
-    pbi2_y1_path = _path(base_directory, root["pbi2_y1_series"], "pbi2_y1_series")
-    pbi2_y2_path = _path(base_directory, root["pbi2_y2_series"], "pbi2_y2_series")
+    pbi2_y1_path = (
+        _path(base_directory, root["pbi2_y1_series"], "pbi2_y1_series")
+        if "pbi2_y1_series" in root
+        else None
+    )
+    pbi2_y2_path = (
+        _path(base_directory, root["pbi2_y2_series"], "pbi2_y2_series")
+        if "pbi2_y2_series" in root
+        else None
+    )
     center = np.asarray(hbn["initial_beam_center_px"], dtype=np.float64)
     if center.shape != (2,) or not np.all(np.isfinite(center)):
         raise ValueError("hbn.initial_beam_center_px must contain finite column and row")
@@ -188,10 +199,16 @@ def run(manifest_path: Path) -> dict[str, object]:
     te3_run = index_osc_geometry_series(load_osc_geometry_series(bi2te3_path))
     if se3_run.indexed_images is None or te3_run.indexed_images is None:
         raise RuntimeError("both BiX series must retain fit-ready multi-L observations")
-    y1_run = index_osc_geometry_series(load_osc_geometry_series(pbi2_y1_path))
-    y2_run = index_osc_geometry_series(load_osc_geometry_series(pbi2_y2_path))
-    y1_images = _replicated_sparse_images(y1_run)
-    y2_images = _replicated_sparse_images(y2_run)
+    y1_images = (
+        _replicated_sparse_images(index_osc_geometry_series(load_osc_geometry_series(pbi2_y1_path)))
+        if pbi2_y1_path is not None
+        else ()
+    )
+    y2_images = (
+        _replicated_sparse_images(index_osc_geometry_series(load_osc_geometry_series(pbi2_y2_path)))
+        if pbi2_y2_path is not None
+        else ()
+    )
     result = fit_joint_geometry(
         hbn_observations=hbn_observations,
         hbn_calibration=hbn_calibration,
@@ -233,7 +250,7 @@ def run(manifest_path: Path) -> dict[str, object]:
         "detector_roll_rad": 0.0,
         "bi2se3_sample_x_tilt_rad": 0.0,
         "bi2se3_sample_x_tilt_role": "fixed gauge reference for common incidence-angle zero",
-        "pbi2_parent": "2H",
+        "pbi2_parent": root.get("pbi2_parent"),
         "hbn_lattice_a_A": HBN_LATTICE_A_A,
         "hbn_lattice_c_A": HBN_LATTICE_C_A,
         "hbn_wavelength_A": CU_K_ALPHA_WAVELENGTH_A,
@@ -318,6 +335,7 @@ def run(manifest_path: Path) -> dict[str, object]:
                 "fixed to nominal references; common incidence-angle delta fitted"
             ),
             "fixed_reference_parameters": dict(result.fixed_reference_parameters),
+            "unobserved_specimen_parameters": result.unobserved_specimen_parameters,
             "fitted_parameter_names": result.fitted_parameter_names,
             "qualification_scope": (
                 "detector-predictive geometry over the observed angle range; fixed mechanical "
@@ -327,7 +345,9 @@ def run(manifest_path: Path) -> dict[str, object]:
                 "same exact 2H integer-L key recovered blindly at both distinct incidences, "
                 "with observed incidence motion coherent to 8 px RMS; at least two retained "
                 "keys per image"
-            ),
+            )
+            if has_pbi2
+            else None,
         },
         "static": static,
         "global": global_parameters,

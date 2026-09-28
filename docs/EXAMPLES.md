@@ -538,6 +538,11 @@ python scripts/fit_joint_hbn_crystal_geometry.py `
   --json
 ```
 
+For the hBN, Bi2Se3 and Bi2Te3 subset, use
+`configs/joint_hbn_bix_geometry_fit.yaml` with the same command. The two PbI2 series may be
+omitted; their specimen-local coordinates are then fixed at zero and reported as unobserved, not
+estimated. The shared detector and global coordinates still use one fit across all six BiX images.
+
 The configured detector translation, pitch, shape, roll, and native orientation remain fixed.  A
 private hBN calibrant distance supplies ring scale but is never exported as shared detector
 distance.  The JSON separates static declarations, session-global fitted coordinates, specimen-

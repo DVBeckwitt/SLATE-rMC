@@ -265,6 +265,7 @@ class JointGeometryFitResult:
     z_b_standard_error_m: float
     fitted_parameter_names: tuple[str, ...]
     fixed_reference_parameters: tuple[tuple[str, float], ...]
+    unobserved_specimen_parameters: tuple[str, ...]
 
     def __post_init__(self) -> None:
         count = len(JOINT_GEOMETRY_PARAMETER_NAMES)
@@ -277,8 +278,9 @@ class JointGeometryFitResult:
         axis = np.asarray(self.corrected_goniometer_axis_lab, dtype=np.float64)
         pivot = np.asarray(self.corrected_goniometer_pivot_lab_m, dtype=np.float64)
         fixed_names = tuple(name for name, _ in self.fixed_reference_parameters)
+        excluded_names = set(fixed_names) | set(self.unobserved_specimen_parameters)
         expected_fitted_names = tuple(
-            name for name in JOINT_GEOMETRY_PARAMETER_NAMES if name not in set(fixed_names)
+            name for name in JOINT_GEOMETRY_PARAMETER_NAMES if name not in excluded_names
         )
         if (
             standard_error.shape != (count,)
@@ -296,7 +298,16 @@ class JointGeometryFitResult:
         ):
             raise ValueError("fixed reference parameters must use canonical parameter order")
         if self.fitted_parameter_names != expected_fitted_names:
-            raise ValueError("fitted parameters must be the canonical fixed-reference complement")
+            raise ValueError("fitted parameters must exclude references and absent specimens")
+        observed_specimens = {metric.specimen_id for metric in self.per_image}
+        expected_unobserved = tuple(
+            name
+            for name in LOCAL_PARAMETER_NAMES
+            if (name.startswith("pbi2_y1_") and "pbi2_y1" not in observed_specimens)
+            or (name.startswith("pbi2_y2_") and "pbi2_y2" not in observed_specimens)
+        )
+        if self.unobserved_specimen_parameters != expected_unobserved:
+            raise ValueError("unobserved parameters disagree with the image roster")
         for value in (standard_error, confident, singular, weakest, active, origin, axis, pivot):
             value.setflags(write=False)
         object.__setattr__(self, "standard_error", standard_error)
@@ -491,7 +502,7 @@ def evaluate_joint_geometry_residual(
     pbi2_y2_images: tuple[IndexedGeometryImage, ...],
     base_detector_rotation: ArrayLike,
 ) -> FloatArray:
-    """Evaluate hBN and all four fixed indexed specimen series in one residual vector."""
+    """Evaluate hBN and the supplied indexed specimen series in one residual vector."""
 
     if not isinstance(state, JointGeometryState):
         raise TypeError("state must be JointGeometryState")
@@ -604,8 +615,8 @@ def fit_joint_geometry(
     te3 = tuple(bi2te3_images)
     y1 = tuple(pbi2_y1_images)
     y2 = tuple(pbi2_y2_images)
-    if not se3 or not te3 or not y1 or not y2:
-        raise ValueError("Bi2Se3, Bi2Te3, PbI2 Y1, and PbI2 Y2 image series are required")
+    if not se3 or not te3:
+        raise ValueError("Bi2Se3 and Bi2Te3 image series are required")
     rotation = np.asarray(base_detector_rotation, dtype=np.float64)
     initial = JointGeometryState.from_hbn(hbn_calibration)
     active_bounds = JointGeometryBounds.around_hbn(hbn_calibration) if bounds is None else bounds
@@ -613,13 +624,18 @@ def fit_joint_geometry(
     upper = active_bounds.upper.as_array()
     initial_values = np.array(initial.as_array(), copy=True)
     fixed_reference = dict(DEFAULT_FIXED_REFERENCE_PARAMETERS)
+    unobserved = tuple(
+        name
+        for name in LOCAL_PARAMETER_NAMES
+        if (name.startswith("pbi2_y1_") and not y1) or (name.startswith("pbi2_y2_") and not y2)
+    )
     for name, value in fixed_reference.items():
         initial_values[JOINT_GEOMETRY_PARAMETER_NAMES.index(name)] = value
     fitted_indices = np.asarray(
         [
             index
             for index, name in enumerate(JOINT_GEOMETRY_PARAMETER_NAMES)
-            if name not in fixed_reference
+            if name not in fixed_reference and name not in unobserved
         ],
         dtype=np.int64,
     )
@@ -900,6 +916,11 @@ def fit_joint_geometry(
         corrected_goniometer_pivot_lab_m=pivot,
         z_b_m=z_b_m,
         z_b_standard_error_m=z_b_standard_error_m,
-        fitted_parameter_names=DEFAULT_FITTED_PARAMETER_NAMES,
+        fitted_parameter_names=tuple(
+            name
+            for name in JOINT_GEOMETRY_PARAMETER_NAMES
+            if name not in fixed_reference and name not in unobserved
+        ),
         fixed_reference_parameters=DEFAULT_FIXED_REFERENCE_PARAMETERS,
+        unobserved_specimen_parameters=unobserved,
     )
