@@ -135,6 +135,7 @@ void main() {
     color = vec4(level, level * 0.82 + 0.08, 0.12 + level * 0.68, 1.0);
 }
 """
+_GL_MAX_TEXTURE_SIZE = 0x0D33
 
 
 class DetectorTextureView(QOpenGLWidget):
@@ -152,6 +153,7 @@ class DetectorTextureView(QOpenGLWidget):
         self._program: QOpenGLShaderProgram | None = None
         self._vao: QOpenGLVertexArrayObject | None = None
         self._uploaded_revision = -1
+        self.max_texture_axis: int | None = None
         self.data_revision = 0
         self.request_generation = 0
         self.upload_count = 0
@@ -220,6 +222,12 @@ class DetectorTextureView(QOpenGLWidget):
             raise ValueError("prepared image needs aligned, read-only native and display planes")
         if not math.isfinite(low_value) or not math.isfinite(high_value) or high_value <= low_value:
             raise ValueError("prepared display levels must be finite and increasing")
+        if self.max_texture_axis is None:
+            raise ValueError("Detector OpenGL context is unavailable; reopen the display")
+        if max(native_counts.shape) > self.max_texture_axis:
+            raise ValueError(
+                f"Detector axis exceeds this OpenGL display's {self.max_texture_axis} pixel limit"
+            )
         self.image, self._display = native_counts, display
         self.low_value, self.high_value, self.positive_log = low_value, high_value, False
         self.crosshair = (native_counts.shape[1] // 2, native_counts.shape[0] // 2)
@@ -274,6 +282,9 @@ class DetectorTextureView(QOpenGLWidget):
         return min(max(column, 0), columns - 1), min(max(row, 0), rows - 1)
 
     def initializeGL(self) -> None:
+        self.max_texture_axis = int(self.context().functions().glGetIntegerv(_GL_MAX_TEXTURE_SIZE))
+        if self.max_texture_axis <= 0:
+            raise RuntimeError("OpenGL did not report a usable detector texture size")
         program = QOpenGLShaderProgram(self)
         for kind, source in (
             (QOpenGLShader.ShaderTypeBit.Vertex, _VERTEX),
@@ -304,6 +315,7 @@ class DetectorTextureView(QOpenGLWidget):
             self._vao = None
             self._program = None
             self._uploaded_revision = -1
+            self.max_texture_axis = None
             self.doneCurrent()
 
     def _upload_if_needed(self) -> None:

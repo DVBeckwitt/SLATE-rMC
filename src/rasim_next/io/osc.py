@@ -35,6 +35,7 @@ class OscReadLimits:
     source_bytes: int
     decoded_bytes: int
     pixels: int
+    axis_pixels: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +87,9 @@ def _layout(header: bytes) -> tuple[OscMetadata, np.dtype, int]:
 def _bounded_bytes(
     path: Path, limits: OscReadLimits, canceled: Callable[[], bool] | None
 ) -> tuple[bytearray, str]:
-    if min(limits.source_bytes, limits.decoded_bytes, limits.pixels) <= 0:
+    if min(limits.source_bytes, limits.decoded_bytes, limits.pixels) <= 0 or (
+        limits.axis_pixels is not None and limits.axis_pixels <= 0
+    ):
         raise ValueError("OSC read limits must be positive")
     before = path.stat()
     if before.st_size > limits.source_bytes:
@@ -131,6 +134,10 @@ def _bounded_bytes(
                     )
                 metadata, dtype, pixels = _layout(header)
                 expected = _HEADER_BYTES + pixels * dtype.itemsize
+                if limits.axis_pixels is not None and max(metadata.raw_shape) > limits.axis_pixels:
+                    raise OscFormatError(
+                        f"OSC axis exceeds the {limits.axis_pixels} pixel import limit"
+                    )
                 if pixels > limits.pixels or expected > limits.decoded_bytes:
                     raise OscFormatError(
                         f"OSC {metadata.raw_shape[0]}x{metadata.raw_shape[1]} image "

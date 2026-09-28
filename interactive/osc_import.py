@@ -1,5 +1,6 @@
 """Bounded OSC import preparation for the desktop worker."""
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from numpy.typing import NDArray
 SOURCE_LIMIT_BYTES = 64 * 1024 * 1024
 DECODED_LIMIT_BYTES = 32 * 1024 * 1024
 PIXEL_LIMIT = 12_000_000
+AXIS_LIMIT = 16_384
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,16 +29,22 @@ class PreparedOsc:
     raw_shape: tuple[int, int]
 
 
-def prepare_osc(argument: Path, control: JobControl) -> JobResult:
+def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
     """Decode and prepare one image; Qt widgets consume only the bounded result."""
 
     from rasim_next.io.osc import OscReadCancelled, OscReadLimits, read_osc
 
-    path = Path(argument)
+    axis_bytes, separator, path_bytes = argument.partition(b"\0")
+    if not separator or not path_bytes:
+        raise ValueError("OSC request must include a texture limit and path")
+    axis_limit = int(axis_bytes)
+    if not 0 < axis_limit <= AXIS_LIMIT:
+        raise ValueError("OSC texture axis limit is outside the supported range")
+    path = Path(os.fsdecode(path_bytes))
     control.report(f"Reading {path.name}")
     image = read_osc(
         path,
-        limits=OscReadLimits(SOURCE_LIMIT_BYTES, DECODED_LIMIT_BYTES, PIXEL_LIMIT),
+        limits=OscReadLimits(SOURCE_LIMIT_BYTES, DECODED_LIMIT_BYTES, PIXEL_LIMIT, axis_limit),
         canceled=lambda: control.canceled,
     )
     if control.canceled:

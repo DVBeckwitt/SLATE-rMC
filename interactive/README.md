@@ -32,7 +32,8 @@ controls arrive in later workflows. No image is loaded or calculation started at
 window normally to exit. The `interactive/` directory is not part of the installed numerical wheel,
 so run this entry point from the checkout.
 
-Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes and 12 million pixels.
+Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
+16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
 The 96 MiB worker result limit includes the native int32 plane, float32 display plane and exact
 center profiles. Imports outside those limits fail with a visible message. The acquisition SHA-256
 is over the decoded OSC byte stream; it identifies exactly the header and payload consumed by the

@@ -1065,7 +1065,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | --- | --- | --- |
 | [x] U01: shell and project identity | U00 | Provide a documented repository launch, the two workspaces, stable acquisition IDs and explicit empty/loading/error states. Widgets contain no scientific model state; normal numerical imports remain GUI-independent. |
 | [x] U01c: shared job lifecycle | U01 | Introduce bounded worker ownership, queued/running/cancel-requested/terminal states, generation rejection and responsive close. Exercise a small loading/preparation operation and late completion; acknowledgment and safe stop remain distinct. Numerical owners gain only their own later cancellation hooks. |
-| [x] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. |
+| [ ] U01a: first file import | U01c | File picker/drop imports one OSC/OSC.GZ asynchronously through the existing orientation boundary. Show native counts before scientific metadata is complete; verify tracked non-square inputs, corrupt-file handling and no second rotation. Review repair awaits acceptance. |
 | [ ] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. |
 | [ ] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. |
 | [ ] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. |
@@ -1158,9 +1158,12 @@ removed. No full image, fit, scientific validation, dependency or reusable harne
 
 #### U01a first OSC import checkpoint (2026-09-28)
 
-The shell's **Import OSC** picker and one-local-file drop submit a `Path` to the U01c owner. The
-worker calls the canonical `io/osc.py` reader with 64 MiB source, 32 MiB decoded-stream and
-12-million-pixel admission limits. It reads gzip in 1 MiB chunks after checking header dimensions,
+The shell's **Import OSC** picker and one-local-file drop submit a bounded path/texture-limit
+request to the U01c owner. The worker calls the canonical `io/osc.py` reader with 64 MiB source,
+32 MiB decoded-stream, 12-million-pixel and per-axis admission limits. The axis limit is the
+smaller of 16,384 pixels and the actual detector OpenGL context's `GL_MAX_TEXTURE_SIZE`, queried
+once before the shell is shown and checked again on panel adoption. It reads gzip in 1 MiB chunks
+after checking header dimensions,
 checks the source file identity/size/mtime before and after, and hashes the exact decoded header
 and payload. The sole clockwise `raw_to_detector_native` conversion stays in the reader. The
 existing unlimited reader call remains available to non-interactive callers. High-range int32
@@ -1169,10 +1172,12 @@ decoding now uses in-place masked NumPy operations with the same values.
 The worker prepares a read-only native int32 plane, a separate read-only float32 texture plane,
 display levels and exact center bands. The panel adopts those buffers on the GUI thread without
 another full image copy, scan or profile reduction. At the 12-million-pixel cap, decoded content
-is at most 24,006,000 bytes; native plus display planes use 96,000,000 bytes, below the U01c
-96 MiB result cap including the small profiles and header allowance. The largest simultaneous
-decode/prepare arrays are the decoded content, raw and native int32 planes, Boolean high-range
-mask and float32 display plane, roughly 180 MiB at the pixel cap before Python/Qt overhead. One
+is at most 24,006,000 bytes. For any admitted shape, native plus display planes and four int64
+profile arrays are bounded by `8*pixels + 16*(rows + columns)` bytes. The 16,384-axis cap bounds
+this to 96,524,288 bytes plus the 6,000-byte header allowance, below U01c's 96 MiB result cap.
+The largest simultaneous decode/prepare arrays are the decoded content, raw and native int32
+planes, Boolean high-range mask and float32 display plane, at most about 180 MiB plus the bounded
+band-reduction temporaries, a 1 MiB read chunk and Python/Qt overhead. One
 image is resident in the panel; selecting an older acquisition reloads it through the same owner
 and verifies its decoded SHA-256. Importing another file creates a new immutable acquisition UUID.
 Angles and calibration remain explicitly unknown. Failed/canceled replacement retains the prior
@@ -1192,11 +1197,33 @@ the resident plane. Close during hBN import drained with no late publication.
 Native corners/interior values and widget pixel-center round trips aligned on the non-square
 fixture. One cold hBN shell probe reached worker result in 0.248 s and first panel `paintGL` in
 0.267 s; native+display retained planes were 68.66 MiB and RSS at result was 279.84 MiB. Its
-10 ms heartbeat's longest gap was 139.97 ms during first texture/context admission, outside the
-steady interaction windows already accepted at U00. This one probe is no latency distribution or
-monitor-scanout measurement. These software/I/O checks do not establish fitting or scientific
-adequacy. No permanent checker, test fixture, simulation, fit or full-image timing campaign was
-added.
+10 ms heartbeat's longest gap was 139.97 ms. That first probe started import immediately after
+`show()` and quit inside the first `paintGL` signal; it did not separate shell startup from import
+or wait for composition. It was an ambiguous responsiveness miss, not an accepted cold-load gate.
+
+The narrow U01a review repair rejected a crafted 1x12,000,000-pixel header at the axis check
+before payload allocation (6 KiB file; 17,914 traced Python bytes peak). A controlled delayed
+import followed by clearing selection hid the old A plane immediately while retaining A's exact
+profiles; B never published, and reselecting A restored aligned display/profile identity. A
+forced 1,024-pixel active-context cap reached the worker header check and rejected a 3000x3000
+image before decode. The measured context reported a 32,768-pixel GL texture limit, so the
+application's 16,384-pixel cap applied on this machine.
+
+A phase-attributed probe without startup context preparation showed a 107.39 ms longest startup
+heartbeat gap, then a 38.10 ms longest gap when import began after the shell had settled. It
+measured worker preparation at 145.86 ms, `initializeGL` at 8.26 ms, texture upload at 6.10 ms
+and panel `paintGL` at 9.76 ms. The final path prepares the actual detector context before the
+shell is shown, which also supplies the active GL dimension limit. One final cold process probe
+measured construction to 384.22 ms (including 354.68 ms context preparation), first exposure
+at 452.09 ms, empty-status paint at 456.43 ms and usable shell at 477.92 ms. Import was requested
+250 ms after that ready point. The hBN worker ran for 138.35 ms; the result arrived at 144.91 ms
+from request, panel paint at 153.77 ms, exact horizontal/vertical profile paints at 157.83/158.74
+ms and matching panel swap at 162.55 ms. The longest 10 ms GUI heartbeat gap from request through
+swap was 11.76 ms; no synthetic repaint was added. Startup construction precedes the heartbeat
+timer and is reported as startup latency, not a measured responsive interval. These few probes
+are not a latency distribution or monitor-scanout measurement. Software/I/O checks do not establish
+fitting or scientific adequacy. No permanent checker, test fixture, simulation, fit or full-image
+timing campaign was added.
 
 ### M2 — independent simulator
 

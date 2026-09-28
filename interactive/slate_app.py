@@ -1,5 +1,6 @@
 """Native desktop shell for SLATE-rMC; launch with ``python interactive/slate_app.py``."""
 
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -16,7 +17,7 @@ from job_lifecycle import (
     JobSummary,
     Revisions,
 )
-from osc_import import PreparedOsc, prepare_osc
+from osc_import import AXIS_LIMIT, PreparedOsc, prepare_osc
 from project_state import Acquisition, Project
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QFont
@@ -106,6 +107,17 @@ class ShellWindow(QMainWindow):
         self.import_button.clicked.connect(self._choose_import)
         self.statusBar().showMessage("Local project · Not saved")
         self.refresh_project()
+        self._max_import_axis = 0
+        try:
+            frame = self.detector_panel.view.grabFramebuffer()
+            texture_axis = self.detector_panel.view.max_texture_axis
+            if frame.isNull() or texture_axis is None:
+                raise RuntimeError("Detector OpenGL context is unavailable")
+            self._max_import_axis = min(AXIS_LIMIT, texture_axis)
+        except (RuntimeError, ValueError) as exc:
+            self.import_button.setEnabled(False)
+            self.import_button.setToolTip(str(exc))
+            self._show_state("error", "Detector display unavailable", str(exc))
 
     def _build_experiments(self) -> QWidget:
         page = QWidget()
@@ -295,14 +307,22 @@ class ShellWindow(QMainWindow):
         self._submit_import(source, uuid4())
 
     def _submit_import(self, source: Path, acquisition_id: UUID) -> None:
+        texture_axis = self.detector_panel.view.max_texture_axis
+        if texture_axis is None or texture_axis <= 0:
+            self._show_state(
+                "error", "Detector display unavailable", "An OpenGL detector context is required."
+            )
+            return
+        self._max_import_axis = min(AXIS_LIMIT, texture_axis)
+        argument = str(self._max_import_axis).encode("ascii") + b"\0" + os.fsencode(source)
         try:
             self.jobs.submit(
                 JobRequest(
                     self.project.project_id,
                     acquisition_id,
                     Revisions(data=1),
-                    source,
-                    len(str(source).encode("utf-8")),
+                    argument,
+                    len(argument),
                     MAX_RESULT_BYTES,
                     prepare_osc,
                 )
@@ -365,6 +385,19 @@ class ShellWindow(QMainWindow):
                 value.decoded_sha256,
                 acquisition_id=identity.acquisition_id,
             )
+        try:
+            self.detector_panel.set_prepared_image(
+                value.native_counts,
+                value.display,
+                value.profiles,
+                value.low_value,
+                value.high_value,
+            )
+        except ValueError as exc:
+            self._show_state("error", "Unsupported detector size", str(exc))
+            self.statusBar().showMessage("Unsupported detector size · No image applied")
+            return
+        if existing is None:
             self.project = replace(
                 self.project, acquisitions=(*self.project.acquisitions, acquisition)
             )
@@ -375,9 +408,6 @@ class ShellWindow(QMainWindow):
             f"{value.native_counts.shape[1]} columns\n"
             f"OSC header: version {value.version}, {value.byte_order} endian"
         )
-        self.detector_panel.set_prepared_image(
-            value.native_counts, value.display, value.profiles, value.low_value, value.high_value
-        )
         self.refresh_project()
         self.statusBar().showMessage(f"Imported {value.source_path.name} · detector-native counts")
 
@@ -386,25 +416,22 @@ class ShellWindow(QMainWindow):
         item = selected[0] if selected else None
         value = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
         selected_id = UUID(value) if value else None
-        if selected_id != self.selected_acquisition_id:
-            had_work = self.jobs.busy
-            self.jobs.invalidate()
-            self.cancel_button.setEnabled(False)
-            self._obsolete_pending = had_work and self.jobs.busy
-            if self._obsolete_pending:
-                self._show_state(
-                    "loading", "Stopping obsolete work", "Waiting for the prior operation to stop."
-                )
-                self.statusBar().showMessage("Selection changed · Waiting for prior work to stop")
-            else:
-                self._show_state(
-                    "empty", "No image open", "No image is resident for this selection."
-                )
-                self.statusBar().showMessage("Selection changed · Ready")
+        if selected_id == self.selected_acquisition_id:
+            return
         self.selected_acquisition_id = selected_id
         self._update_selection_label()
-        if not self._obsolete_pending:
+        had_work = self.jobs.busy
+        self.jobs.invalidate()
+        self.cancel_button.setEnabled(False)
+        self._obsolete_pending = had_work and self.jobs.busy
+        if self._obsolete_pending:
+            self._show_state(
+                "loading", "Stopping obsolete work", "Waiting for the prior operation to stop."
+            )
+            self.statusBar().showMessage("Selection changed · Waiting for prior work to stop")
+        else:
             self._show_state("empty", "No image open", "No image is resident for this selection.")
+            self.statusBar().showMessage("Selection changed · Ready")
         if selected_id is not None and selected_id != self._visible_acquisition_id:
             acquisition = next(
                 item for item in self.project.acquisitions if item.acquisition_id == selected_id
