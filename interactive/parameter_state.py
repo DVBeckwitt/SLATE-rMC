@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import yaml
+from numeric_fields import description, validate_proposal
 from project_state import (
     MAX_NUMERIC_BASELINE_BYTES,
     Acquisition,
@@ -26,225 +26,6 @@ if TYPE_CHECKING:
 
 MAX_HISTORY_ACTIONS = 32
 MAX_HISTORY_BYTES = 256 * 1024
-
-
-@dataclass(frozen=True, slots=True)
-class ParameterDescription:
-    field: str
-    label: str
-    path: tuple[str | int, ...]
-    stored_unit: str
-    display_unit: str
-    display_to_stored: float
-    frame: str
-    scope: str
-    domain: str
-    editable: bool = True
-    reason: str = ""
-
-
-PARAMETERS = (
-    ParameterDescription(
-        "source.origin_x",
-        "Beam origin X",
-        ("source", "mean_origin_lab_m", 0),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared source",
-        "finite",
-    ),
-    ParameterDescription(
-        "source.origin_y",
-        "Beam origin Y",
-        ("source", "mean_origin_lab_m", 1),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared source",
-        "finite",
-    ),
-    ParameterDescription(
-        "source.origin_z",
-        "Beam origin Z",
-        ("source", "mean_origin_lab_m", 2),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared source",
-        "finite",
-    ),
-    ParameterDescription(
-        "source.spatial_sigma_x",
-        "Beam width X",
-        ("source", "spatial_sigma_m", 0),
-        "m",
-        "µm",
-        1e-6,
-        "source transverse",
-        "shared source",
-        "nonnegative",
-    ),
-    ParameterDescription(
-        "source.spatial_sigma_y",
-        "Beam width Y",
-        ("source", "spatial_sigma_m", 1),
-        "m",
-        "µm",
-        1e-6,
-        "source transverse",
-        "shared source",
-        "nonnegative",
-    ),
-    ParameterDescription(
-        "source.divergence_x",
-        "Divergence X",
-        ("source", "divergence_sigma_rad", 0),
-        "rad",
-        "mrad",
-        0.001,
-        "source transverse",
-        "shared source",
-        "nonnegative",
-    ),
-    ParameterDescription(
-        "source.divergence_y",
-        "Divergence Y",
-        ("source", "divergence_sigma_rad", 1),
-        "rad",
-        "mrad",
-        0.001,
-        "source transverse",
-        "shared source",
-        "nonnegative",
-    ),
-    ParameterDescription(
-        "source.wavelength",
-        "Mean wavelength",
-        ("source", "mean_wavelength_A"),
-        "Å",
-        "Å",
-        1.0,
-        "source",
-        "shared source",
-        "positive",
-    ),
-    ParameterDescription(
-        "detector.x",
-        "Detector X",
-        ("instrument", "lab_from_detector", "translation_m", 0),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared instrument",
-        "finite",
-    ),
-    ParameterDescription(
-        "detector.y",
-        "Detector Y",
-        ("instrument", "lab_from_detector", "translation_m", 1),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared instrument",
-        "finite",
-    ),
-    ParameterDescription(
-        "detector.z",
-        "Detector Z",
-        ("instrument", "lab_from_detector", "translation_m", 2),
-        "m",
-        "mm",
-        0.001,
-        "LAB",
-        "shared instrument",
-        "finite",
-    ),
-    ParameterDescription(
-        "detector.reference_column",
-        "Detector reference column",
-        ("instrument", "detector_reference_coordinate_px", 0),
-        "px",
-        "px",
-        1.0,
-        "detector native",
-        "shared instrument",
-        "finite",
-    ),
-    ParameterDescription(
-        "detector.reference_row",
-        "Detector reference row",
-        ("instrument", "detector_reference_coordinate_px", 1),
-        "px",
-        "px",
-        1.0,
-        "detector native",
-        "shared instrument",
-        "finite",
-    ),
-    ParameterDescription(
-        "goniometer.angle_0",
-        "First axis angle",
-        ("instrument", "axis_rotations", 0, "angle_deg"),
-        "deg",
-        "deg",
-        1.0,
-        "LAB active rotation",
-        "acquisition geometry",
-        "finite",
-    ),
-    ParameterDescription(
-        "source.direction",
-        "Beam direction",
-        ("source", "mean_direction_lab"),
-        "unit vector",
-        "unit vector",
-        1.0,
-        "LAB",
-        "shared source",
-        "unit vector and transverse basis must change together",
-        False,
-        "Edit with the coupled direction/basis form in U12a.",
-    ),
-    ParameterDescription(
-        "detector.rotation",
-        "Detector rotation",
-        ("instrument", "lab_from_detector", "rotation"),
-        "matrix",
-        "matrix",
-        1.0,
-        "LAB from detector",
-        "shared instrument",
-        "proper active rotation",
-        False,
-        "Use the constrained geometry editor in U09.",
-    ),
-    ParameterDescription(
-        "detector.shape",
-        "Detector shape",
-        ("instrument", "detector_shape_rc"),
-        "native px",
-        "native px",
-        1.0,
-        "detector native",
-        "fixed input",
-        "match admitted OSC",
-        False,
-        "Shape is fixed by the admitted detector and source.",
-    ),
-)
-
-
-def description(field: str) -> ParameterDescription:
-    for item in PARAMETERS:
-        if item.field == field:
-            return item
-    raise ProjectFormatError(f"unsupported numeric field {field}")
 
 
 def _value_at(mapping: dict[str, Any], path: tuple[str | int, ...]) -> Any:
@@ -281,9 +62,11 @@ def configured_draft(draft: NumericDraft) -> SimulationConfiguration:
 
     mapping = _source_mapping(draft)
     for field, value, unit, _origin in draft.proposed:
+        try:
+            validate_proposal(field, value, unit)
+        except ValueError as exc:
+            raise ProjectFormatError(str(exc)) from exc
         item = description(field)
-        if not item.editable or unit != item.stored_unit:
-            raise ProjectFormatError(f"numeric proposal {field} has an unsupported unit or scope")
         _set_at(mapping, item.path, value)
     encoded = yaml.safe_dump(mapping, sort_keys=False).encode("utf-8")
     if len(encoded) > MAX_NUMERIC_BASELINE_BYTES:
@@ -353,10 +136,10 @@ def edit_draft(draft: NumericDraft, field: str, display_text: str) -> NumericDra
             f"{item.label} must be a finite {item.display_unit} number"
         ) from exc
     stored = display_value * item.display_to_stored
-    if not math.isfinite(stored):
-        raise ProjectFormatError(f"{item.label} must be finite")
-    if (item.domain == "positive" and stored <= 0) or (item.domain == "nonnegative" and stored < 0):
-        raise ProjectFormatError(f"{item.label} must be {item.domain}")
+    try:
+        validate_proposal(field, stored, item.stored_unit)
+    except ValueError as exc:
+        raise ProjectFormatError(str(exc)) from exc
     baseline = _value_at(_source_mapping(draft), item.path)
     proposals = {name: (value, unit, origin) for name, value, unit, origin in draft.proposed}
     if stored == baseline:
@@ -589,6 +372,24 @@ class SessionHistory:
         while len(self.undo_actions) > MAX_HISTORY_ACTIONS or self.bytes_used > MAX_HISTORY_BYTES:
             self.bytes_used -= self.undo_actions.pop(0).bytes_used
         return True
+
+    def discard_draft_actions(self) -> None:
+        for stack in (self.undo_actions, self.redo_actions):
+            retained = []
+            for action in stack:
+                changes = [
+                    change for change in action.changes if not change.field.startswith("draft.")
+                ]
+                if len(changes) == len(action.changes):
+                    retained.append(action)
+                elif changes:
+                    retained_action = _action(action.label, changes)
+                    assert retained_action is not None
+                    retained.append(retained_action)
+            stack[:] = retained
+        self.bytes_used = sum(
+            action.bytes_used for action in (*self.undo_actions, *self.redo_actions)
+        )
 
     def apply(
         self,

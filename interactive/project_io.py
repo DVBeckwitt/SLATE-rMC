@@ -256,6 +256,44 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                     file_identity,
                 )
             )
+    draft = document.numeric_draft
+    if draft is not None:
+        acquisition = next(
+            item
+            for item in document.project.acquisitions
+            if item.acquisition_id == draft.acquisition_id
+        )
+        metadata = acquisition.metadata
+        matching_identity = (
+            acquisition.source_sha256 == draft.source_sha256
+            and metadata.configuration_path == draft.configuration_path
+            and metadata.configuration_sha256 == draft.configuration_sha256
+            and metadata.configuration_cif_path == draft.cif_path
+            and metadata.configuration_cif_sha256 == draft.cif_sha256
+        )
+        source_verified = next(
+            check.state == "verified"
+            for check in checks
+            if check.acquisition_id == draft.acquisition_id
+        )
+        reference_states = {
+            check.kind: check.state
+            for check in reference_checks
+            if check.acquisition_id == draft.acquisition_id
+        }
+        verified = source_verified and all(
+            reference_states.get(kind) == "verified"
+            for kind in ("configuration", "configuration_cif")
+        )
+        if matching_identity and verified:
+            if control.canceled:
+                raise RuntimeError("Project opening canceled")
+            from parameter_state import configured_draft
+
+            try:
+                configured_draft(draft)
+            except (OSError, ValueError) as exc:
+                raise ProjectFormatError(f"saved numeric draft is invalid: {exc}") from exc
     loaded = LoadedProject(document, path, tuple(checks), tuple(reference_checks))
     resident = path.stat().st_size + sum(
         len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks)

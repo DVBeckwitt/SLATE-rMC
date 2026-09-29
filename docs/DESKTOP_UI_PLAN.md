@@ -2180,6 +2180,47 @@ memory-accounting correction received static and focused pure checks after the
 second launch; the two-launch cap prevented another native check. U09a awaits
 independent supervisor acceptance.
 
+#### U09a focused repair (2026-09-29; review pending)
+
+The independent review found three state defects after `d09fe794`: a rejected
+numeric Load could clear another job's routing, persisted proposals admitted
+unsupported fields/units/domains, and reloading numeric values erased metadata
+undo. Load now checks busy/open/close state before claiming the numeric job and
+rolls back only its own failed submission. The one Qt-free numeric field catalog
+validates saved proposals at document admission. The existing project-load
+worker reconstructs the complete configured object when the matching source,
+configuration and dependent CIF are verified; missing/changed references keep
+the draft unavailable. A same-identity reload retains current proposals and
+history. Replacing a baseline drops only obsolete draft changes from undo/redo
+with corrected byte accounting, preserving metadata actions.
+
+Focused external checks passed for the actual shell methods: a rejected Load
+during a save left its receipt routable, own submission failure rolled back,
+same-identity reload preserved metadata undo and edited values, and replacement
+removed obsolete draft redo only. Project admission rejected negative wavelength,
+wrong stored unit and unsupported field; schemas 1-3 and a valid schema-4
+project reopened. The actual project reader and load worker rejected the saved
+negative-wavelength file, and the shell's failed-open handler mapped that worker
+failure to its visible error state in a focused non-GUI check.
+
+The new native allowance used two distinct `slate_app.main()` journeys with
+whole-command launcher times **3.421940 s** and **26.236326 s** (29.658266 s
+aggregate of 60 s, two-launch cap exhausted). Tool-call wall times were
+3.547 and 26.377 s, a different boundary. The first journey painted load,
+edit, undo and save at 9.9, 39.0, 27.6 and 11.7 ms, but asserted the invalid
+open state before its pending operation resolved; its whole-journey heartbeat
+maximum was 164.2 ms. The second painted those controls at 10.3, 39.3, 28.4
+and 12.7 ms, with a 37.9 ms maximum heartbeat from numeric Load through normal
+hide/drain and a 156.2 ms cold-import whole-journey maximum. Its invalid-open
+observer timed out because it ran after the shell cleared the failed job kind;
+the script therefore did not prove the visible invalid-open transition in a
+native run. This remains an explicit evidence limit, not a successful native
+claim. Both journeys exercised U02a metadata undo retention, valid save/reopen,
+snapshot independence and final styled 1280x800 controls; the inspector's
+selection details were scrollable in the first run. All 82 protected external
+files remained SHA-256 identical. No fit or forward calculation was run. U09a
+still awaits independent supervisor acceptance.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with

@@ -39,9 +39,9 @@ from metadata_review import (
     parse_table_text,
     prepare_reference,
 )
+from numeric_fields import PARAMETERS
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
 from parameter_state import (
-    PARAMETERS,
     SessionHistory,
     description,
     displayed_value,
@@ -541,12 +541,12 @@ class ShellWindow(QMainWindow):
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
         self.selection_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        selection_scroll = QScrollArea()
-        selection_scroll.setWidgetResizable(True)
-        selection_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        selection_scroll.setMinimumHeight(140)
-        selection_scroll.setWidget(self.selection_label)
-        inspector_layout.addWidget(selection_scroll, 1)
+        self.selection_scroll = QScrollArea()
+        self.selection_scroll.setWidgetResizable(True)
+        self.selection_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.selection_scroll.setMinimumHeight(140)
+        self.selection_scroll.setWidget(self.selection_label)
+        inspector_layout.addWidget(self.selection_scroll, 1)
         inspector_layout.addWidget(QLabel("NUMERIC INITIAL VALUES"))
         self.numeric_status = QLabel("Load a validated configuration for one acquisition.")
         self.numeric_status.setObjectName("mutedText")
@@ -1420,6 +1420,16 @@ class ShellWindow(QMainWindow):
                 raise ProjectFormatError(f"{kind} must be verified; choose the configuration again")
         return acquisition
 
+    def _sync_numeric_load_button(self) -> None:
+        self.numeric_load_button.setEnabled(
+            self._numeric_acquisition() is not None
+            and not self.jobs.busy
+            and self._active_kind is None
+            and not self._write_queue
+            and self._pending_open is None
+            and not self._close_intent
+        )
+
     def _refresh_numeric_editor(self, _value: object = None) -> None:
         acquisition = self._numeric_acquisition()
         field = self.numeric_field.currentData()
@@ -1472,9 +1482,20 @@ class ShellWindow(QMainWindow):
         self.numeric_freeze_button.setEnabled(available)
         self.numeric_undo_button.setEnabled(bool(self._numeric_history.undo_actions))
         self.numeric_redo_button.setEnabled(bool(self._numeric_history.redo_actions))
+        self._sync_numeric_load_button()
 
     def _load_numeric_draft(self) -> None:
         try:
+            if (
+                self.jobs.busy
+                or self._active_kind is not None
+                or self._write_queue
+                or self._pending_open is not None
+                or self._close_intent
+            ):
+                raise ProjectFormatError(
+                    "finish the current operation before loading numeric values"
+                )
             acquisition = self._numeric_validated_acquisition()
             metadata = acquisition.metadata
             if (
@@ -1484,10 +1505,6 @@ class ShellWindow(QMainWindow):
                 or metadata.configuration_cif_sha256 is None
             ):
                 raise ProjectFormatError("configuration reference is missing")
-            if self.jobs.busy or self._pending_open is not None or self._close_intent:
-                raise ProjectFormatError(
-                    "finish the current operation before loading numeric values"
-                )
             argument = json.dumps(
                 {
                     "acquisition_id": str(acquisition.acquisition_id),
@@ -1498,12 +1515,17 @@ class ShellWindow(QMainWindow):
                     "cif_sha256": metadata.configuration_cif_sha256,
                 }
             ).encode("utf-8")
-            self._active_kind = "numeric"
-            self._active_numeric = (
-                acquisition.acquisition_id,
-                self._revision,
-                metadata.configuration_sha256,
-            )
+        except (OSError, UnicodeError, ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Numeric draft unavailable", str(exc))
+            return
+        request_identity = (
+            acquisition.acquisition_id,
+            self._revision,
+            metadata.configuration_sha256,
+        )
+        self._active_kind = "numeric"
+        self._active_numeric = request_identity
+        try:
             identity = self.jobs.submit(
                 JobRequest(
                     self.project.project_id,
@@ -1516,9 +1538,10 @@ class ShellWindow(QMainWindow):
                 )
             )
             self._active_generation = identity.generation
-        except (OSError, UnicodeError, ProjectFormatError, ValueError, RuntimeError) as exc:
-            self._active_kind = None
-            self._active_numeric = None
+        except (OSError, ValueError, RuntimeError) as exc:
+            if self._active_kind == "numeric" and self._active_numeric == request_identity:
+                self._active_kind = None
+                self._active_numeric = None
             QMessageBox.warning(self, "Numeric draft unavailable", str(exc))
             return
         self.numeric_status.setText("Loading and validating numeric values…")
@@ -1564,9 +1587,13 @@ class ShellWindow(QMainWindow):
         except (ProjectFormatError, ValueError) as exc:
             self.statusBar().showMessage(f"Numeric draft cannot be admitted: {exc}")
             return
+        if self._numeric_draft is not None and self._numeric_identity_matches(acquisition):
+            self._refresh_numeric_editor()
+            self.statusBar().showMessage("Numeric draft already loaded; proposed edits retained")
+            return
+        self._numeric_history.discard_draft_actions()
         self._numeric_draft = value
         self._launch_snapshot = None
-        self._numeric_history = SessionHistory()
         self._refresh_numeric_editor()
         self._mark_dirty()
         self.statusBar().showMessage("Loaded validated numeric initial values")
@@ -2959,6 +2986,7 @@ class ShellWindow(QMainWindow):
 
     def _job_state_changed(self, summary: JobSummary) -> None:
         state = summary.state
+        self._sync_numeric_load_button()
         terminal = state in (JobState.COMPLETED, JobState.CANCELED, JobState.FAILED)
         if summary.identity.generation != self.jobs.latest_generation:
             if terminal and summary.identity.generation == self._active_generation:
@@ -3127,6 +3155,7 @@ class ShellWindow(QMainWindow):
             self._active_load_id = None
             self._active_load_path = None
             self._active_load_hash = None
+            self._sync_numeric_load_button()
             QTimer.singleShot(0, self._dispatch_pending)
 
     def _export_ready(self, identity: JobIdentity, value: object) -> None:

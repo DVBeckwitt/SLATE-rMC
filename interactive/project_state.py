@@ -10,6 +10,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
+from numeric_fields import validate_proposal
+
 PROJECT_SCHEMA_VERSION = 4
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
@@ -488,6 +490,10 @@ class NumericDraft:
             _float(value, name)
             _name(unit, "numeric proposal unit")
             _name(provenance, "numeric proposal provenance")
+            try:
+                validate_proposal(name, value, unit)
+            except ValueError as exc:
+                raise ProjectFormatError(str(exc)) from exc
             names.append(name)
         if len(names) != len(set(names)):
             raise ProjectFormatError("duplicate numeric proposal field")
