@@ -63,6 +63,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QComboBox,
     QDialog,
@@ -101,6 +102,10 @@ MAX_IMPORT_CANDIDATES = 128
 MAX_IMPORT_PATH_BYTES = 512 * 1024
 MAX_CACHED_PLANES = 2
 MAX_THUMBNAIL_BYTES = 128 * 96 * 96
+# A fully populated detector view with native ROI bounds, both intensity ranges,
+# all flags and finite double-precision values is below this serialization margin.
+# Reserve it at project admission so later browsing cannot exhaust the document cap.
+MAX_FUTURE_VIEW_BYTES = 4096
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,6 +391,7 @@ class ShellWindow(QMainWindow):
         )
         self.review_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.review_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.review_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.review_table.setSortingEnabled(True)
         self.review_table.setMinimumHeight(165)
         center_layout.addWidget(self.review_table)
@@ -528,7 +534,9 @@ class ShellWindow(QMainWindow):
         if selected_id is not None:
             view = replace(view, selected_acquisition_id=selected_id, detector=None)
         project_to_document(
-            ProjectDocument(candidate, view), self._project_path or self._recovery_path()
+            ProjectDocument(candidate, view),
+            self._project_path or self._recovery_path(),
+            reserved_bytes=MAX_FUTURE_VIEW_BYTES,
         )
 
     def _update_save_status(self) -> None:

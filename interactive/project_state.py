@@ -672,8 +672,12 @@ def _metadata_from_document(value: Any, document_path: Path) -> AcquisitionMetad
     )
 
 
-def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str, Any]:
+def project_to_document(
+    state: ProjectDocument, document_path: Path, *, reserved_bytes: int = 0
+) -> dict[str, Any]:
     """Encode only the currently supported numeric project and view state."""
+    if type(reserved_bytes) is not int or reserved_bytes < 0:
+        raise ValueError("reserved project bytes must be nonnegative")
     if len(state.project.acquisitions) > MAX_ACQUISITIONS:
         raise ProjectFormatError(f"project exceeds {MAX_ACQUISITIONS} acquisitions")
     acquisitions = [
@@ -745,7 +749,7 @@ def project_to_document(state: ProjectDocument, document_path: Path) -> dict[str
     encoded = (json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n").encode(
         "utf-8"
     )
-    if len(encoded) > MAX_PROJECT_BYTES:
+    if len(encoded) + reserved_bytes > MAX_PROJECT_BYTES:
         raise ProjectFormatError(f"project document exceeds {MAX_PROJECT_BYTES} bytes")
     return document
 
