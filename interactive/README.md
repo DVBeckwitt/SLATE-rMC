@@ -23,7 +23,8 @@ equivalent direct command is `python interactive/slate_app.py`.
 
 The shell has **Fit experiments** and **Simulator** workspaces. It starts with a local, unsaved
 project and an empty acquisition browser. Use **Import files**, drop local `.osc` or `.osc.gz`
-files, or **Review folder** to confirm a bounded candidate list. Each file has its own review
+files, or **Review folder** to scroll the complete bounded list of direct files before confirming;
+unsupported types are labeled. Each file has its own review
 status and acquisition UUID. Failed and canceled rows can be retried; removing a row leaves its
 source file untouched. Exact decoded-content duplicates are labeled but admitted separately, so
 repeated exposures keep separate identities. The first admitted image opens automatically. Select
@@ -49,6 +50,14 @@ the replacement must have the same decoded OSC hash. A moved source can therefor
 without changing its acquisition UUID. Project save never modifies its OSC sources. Portable
 project archives and simulation controls arrive in later workflows.
 
+Reopening also checks the saved byte identities of standalone CIFs, configurations and recorded
+configuration-dependent CIFs in the background. The review and inspector show current verified,
+missing, changed, unreadable or unverified status while retaining the historical path and hash.
+Older projects without a recorded dependent CIF identity show **unverified**; choose the
+configuration again to bind its current dependent identity. Raw OSC browsing remains available.
+Rechecking a reference updates the displayed status of every acquisition bound to the same file;
+an unsuccessful recheck leaves those statuses unverified until the bytes can be checked again.
+
 Select one or more admitted rows and use **Apply to selected** to enter role, specimen/mount,
 commanded incidence in degrees, exposure in seconds, detector setup and material label. Unknown
 values remain explicit. The review table is display only; changes go through these validated
@@ -57,7 +66,9 @@ controls. A filename such as `sample_5d.osc` offers an unconfirmed angle proposa
 column mappings before applying rows by acquisition UUID or selected-row order. The supported
 hBN calibrant preset is a declared identifier; it does not infer calibration from image pixels.
 **Bind CIF** and **Bind configuration** validate references through the package readers and retain
-their path and SHA-256. **Export metadata CSV** writes an explicitly chosen external file with
+their path and SHA-256. A configuration also retains the bounded hash and resolved path of its
+dependent CIF; configuration loading does not structurally parse that CIF. **Export metadata CSV**
+writes an explicitly chosen file outside Git checkouts with
 units and provenance. These metadata inputs do not start fitting or qualify a calibration.
 
 The detector panel supports pointer-anchored wheel zoom, drag pan, **Box zoom**, **Fit** (Ctrl+0)

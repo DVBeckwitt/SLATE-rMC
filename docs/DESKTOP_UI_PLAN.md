@@ -1084,6 +1084,14 @@ metadata export; (4) focused integrated checks and resource accounting. Each imp
 commit touches at most five files. The sustained qualification gate remains open after these
 implementation commits.
 
+The remaining U02a source closure is split within the same task: (5) full
+folder-candidate review and an external metadata-export boundary; (6) retained
+standalone/dependent reference identities, bounded reopen checks and visible
+current-state statuses; (7) focused schema/I/O/UI checks and resource accounting.
+U09a owns undo/redo for these metadata mutations together with later physical
+and initial-value edits. U02b still owns guided relocation, templates and copy
+storage. These are explicit later acceptance items, not completed U02a features.
+
 #### U02a import and metadata implementation checkpoint (2026-09-28; review pending)
 
 Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5`, `3977f05`, `9adcf87` and
@@ -1189,18 +1197,23 @@ held at most two prepared packs and thumbnails occupied 110,592 bytes; observed
 RSS was 369.7 MiB and Windows peak working set 484.9 MiB. The selected detector
 panel can retain a third distinct old plane after a selection, removal or Open,
 and one worker result may coexist with these. Four worst-case 96 MiB prepared
-packs total 384 MiB. A conservative concurrent CPU allowance adds 64 MiB
-source bytes, 32 MiB decoded bytes, a 48,000,000-byte raw int32 plane, two
+packs total 384 MiB. A conservative concurrent CPU allowance includes the
+64 MiB source-file admission maximum, although the reader streams it in 1 MiB
+chunks; it also adds 32 MiB decoded bytes, a 48,000,000-byte raw int32 plane, two
 12,000,000-byte Boolean high-range/positive masks and a 1 MiB read chunk;
 the worker result already counts native/display planes and exact profiles.
-Allow another 8 MiB for the one-entry U03 full/ROI profile state, 32 MiB for
-up to 1,179,648 thumbnail bytes and Qt icon copies, 8 MiB for the bounded
-3 MiB pending write queue plus active request, and 16 MiB for table/other Qt
-items. Against the previously observed 172 MiB shown-shell baseline, this
-accounted CPU subtotal is approximately 786 MiB, leaving about 750 MiB to the
-1.5 GiB resident budget and 1.2 GiB to the 2 GiB peak budget before allocator,
-driver and other unmeasured overhead. These allowances are resource accounting,
-not measured hard bounds for Qt or the driver. A maximum admitted
+Allow another 8 MiB for the one-entry U03 full/ROI profile state and 32 MiB for
+up to 1,179,648 thumbnail bytes plus Qt icon copies. Reserve 32 MiB for the
+bounded 3 MiB pending write queue, active serialized request, publisher's
+parsed object and second JSON serialization; reserve 16 MiB for the bounded
+loaded JSON bytes, project dataclasses and up to 384 small reference-status
+records. Another 16 MiB covers table/other Qt items. Against the previously
+observed 172 MiB shown-shell baseline, this accounted CPU subtotal is about
+826 MiB, leaving about 710 MiB to the 1.5 GiB resident budget and about
+1.19 GiB to the 2 GiB peak budget before allocator, driver and other
+unmeasured overhead. The queue and file-size caps are enforced; these extra
+Qt/serialization allowances are planning reserves, not measured hard bounds.
+A maximum admitted
 12-million-pixel R32F texture is 48,000,000 bytes with an equally sized upload
 copy, about 91.6 MiB combined and about 420 MiB below the 512 MiB GPU display
 budget before driver allocation. The measured 3000 x 3000 hBN shape uses
@@ -1215,6 +1228,65 @@ remains open for independent review and the declared responsiveness gate.
 Remaining qualification includes sustained final composition/hit-test matching,
 mixed-source twenty-image behavior and presentation-latency distributions.
 The tiny checks do not claim those gates or scientific fitting adequacy.
+
+#### U02a reference and review source closure (2026-09-28; review pending)
+
+Source commit `f1f6d68` closes these bounded implementation gaps; U02a remains
+unchecked pending independent review and the stated sustained qualification.
+The folder action now presents all direct candidates in a bounded scrollable
+dialog, with each unsupported extension labeled and the folder/count/scope
+shown before confirmation. Cancel retains the project and candidate queue.
+Metadata CSV export rejects both local checkouts and aliases of the project or
+OSC sources, including resolved and hard-link identities; no check wrote under
+either checkout. Configuration binding stores its own YAML identity and the
+canonical configured reader's resolved dependent-CIF path and bounded byte
+SHA-256, separately from an independently selected standalone CIF. It replaces
+or clears the dependent pair with its configuration. Schema 3 writes these
+fields; strict schema 1 and 2 reads leave the absent dependent identity
+explicitly unknown. The configuration reader hashes that bounded CIF snapshot
+for revision identity but does not structurally parse the crystal.
+
+Project Open still runs through the one global background owner. It reads each
+distinct reference at most once under the 1 MiB picker limit, compares saved
+byte hashes, and publishes per-acquisition verified, missing, changed,
+unreadable or unverified status without changing saved metadata. Raw OSC
+browsing remains available when a reference fails. Current states and
+choose-again guidance appear beside historical binding provenance. Reopening
+does not claim current structural/material validity from a matching hash.
+An explicit recheck clears the current status for every acquisition bound to
+that path (and the recorded dependent CIF when rechecking its configuration).
+The observed digest then updates all matching bindings independently against
+their saved hashes; failed, canceled and stale rechecks leave them unverified.
+CSV now exports both dependent-reference columns (25 total against a declared
+26-column parser cap); editable mapping remains limited to the existing fields
+and the 64 KiB/128-row input bounds.
+
+External pure check `07a8e6` used copies of the tracked Bi2Te3 configuration
+and CIF plus the tiny non-square OSC. Two acquisitions shared the same
+references; all six current checks initially verified. A changed dependent
+CIF with unchanged YAML reported standalone/dependent changed and YAML
+verified. Separate changed, missing and over-limit unreadable CIF and YAML
+cases produced their named states while both OSC source checks stayed verified.
+The schema-2 read kept two dependent checks unverified without deriving a
+hash from disk; schema 1 retained empty metadata. CSV readback preserved 25
+headers and the exact dependent SHA. Pure `70800f` rejected an oversized
+dependent-reference candidate while the previous immutable project stayed
+unchanged. Pure `322765` rejected destinations in main/worktree and external
+hard-link aliases of project/OSC inputs. Tiny native `c8fc63` inspected all
+23 folder candidates, the unsupported row, cancel invariants and reference
+status labels. First replacement checker `3df72f` failed because its fixture
+used a non-hex digest; corrected `f699b6` showed configuration A then B
+atomically replacing the dependent pair while standalone CIF identity stayed
+unchanged. These targeted checks consumed another 3.738 s of native command
+wall time, raising the conservative aggregate to 55.512 s of the original
+60 s allowance. No additional GUI run or twenty-record smoke is authorized
+in this packet.
+An external pure shared-reference check observed one digest across two
+acquisitions and standalone/dependent bindings: matching hashes verified,
+different saved hashes changed without mutation, and a canceled recheck
+cleared every shared status to unverified. It also checked alias path matching
+and shared-configuration status comparison. This proves the status transform,
+not the remaining native interaction and latency gates.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
@@ -2089,7 +2161,7 @@ material bindings and `pipeline/conditional_detector.py`. Keep these actual cont
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
+| [ ] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo/redo for U02a metadata mutations as well as physical and initial-value edits, and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
 | [ ] U12: configured simulator | U02/U03/U01c/U09a | Load an existing supported configuration, run the current preview/quantitative owner and save/reopen the independent draft. Show measure, backend, prefix/progress and failure state; no experimental image, fitted observations or 3D editor is required. |
 | [ ] U12a: complete supported parameter forms | U12 | Expose all supported selected-model configuration fields in searchable grouped forms, including source, instrument, structure, mosaic, optics and execution. Compare field coverage with the capability inventory; unsupported combinations explain why. Keep configuration import/export working. |
 | [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix or route-specific numerical settings. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
