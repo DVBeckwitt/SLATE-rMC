@@ -812,7 +812,7 @@ Each package must demonstrate its user journey, save/reopen introduced state, pr
 and scientific contracts, reject stale work, and meet the applicable resource/interaction targets.
 The first reader package cannot establish behavior for later unbuilt features; U15 checks the combined
 application. Acceptance is evidence about delivered behavior, not a routine request for permission
-to continue already authorized work. This update delivers planning only; implementation has not started.
+to continue already authorized work. At the time of this planning update, implementation had not started.
 
 The first geometry-user walkthrough must combine import, profiles, starting-value edits, reciprocal
 coverage, the textured scene, a supported geometry fit, overlays/statistics and save/reopen. A fast
@@ -1091,6 +1091,14 @@ current-state statuses; (7) focused schema/I/O/UI checks and resource accounting
 U09a owns undo/redo for these metadata mutations together with later physical
 and initial-value edits. U02b still owns guided relocation, templates and copy
 storage. These are explicit later acceptance items, not completed U02a features.
+
+The later geometry work follows these ownership boundaries. U05b and U05c use
+U09a's shared feature-review undo state for accepted ring and sample indexing edits;
+neither fit entry point silently regenerates a frozen observation pack. U09 may bind
+fit-specific handles only after U08b, U08c or U08d verifies the corresponding
+launched parameter vector and scope. U05d may offer an hBN-derived center after an
+admitted U10 result; a sample-derived proposal requires an admitted U10a result.
+These are conditional follow-through items, not acceptance of those tasks.
 
 #### U02a import and metadata implementation checkpoint (2026-09-28; review pending)
 
@@ -1584,6 +1592,38 @@ window-3 entry point, reservation or release values were prepared. There was
 no child, QApplication, preflight, retry or native time. Windows 1 and 2
 remain failed; the active-old-write/newer-final-edit window-3 journey and
 three-window U02a qualification remain unrun and unaccepted.
+
+#### U02a fresh-series release packet (2026-09-29; pure preparation, pending approval)
+
+The external reporter and manifest now describe a prospective new 180 s allowance,
+reserved as three separate 60 s whole-command attempts. Ordinals 1 and 2 repeat
+the mixed browse, bulk metadata, final save and reopen journey into output indices
+4 and 5; ordinal 3 records the active old-write/newer-final-edit journey into
+output index 6. Each uses a fresh receipt, project, event log and summary. The
+original window-1/window-2 evidence and 80.797 s charged/49.203 s suspended
+ledger remain untouched. This proposal does not revive that allowance.
+
+Admission requires a separate root-written release file after explicit user
+approval of native time. The release binds the clean source freeze, reporter,
+manifest, fixed input and original budget/receipt hashes, journey mapping and
+180/60 s limits. It does not exist in this preparation packet. The controller
+rejects missing or altered release, duplicate/future outputs, a missing or
+failed prior receipt, changed prior evidence and exhausted reservations before
+launching a child. It reserves the entire 60 s in an exclusive durable receipt
+at attempt start; timeout, incomplete evidence and budget failure cannot be
+replayed. A candidate success remains unqualified until the root records the
+supervisor's whole-command duration, including interpreter/import, admission,
+child and parent/reporting time. A duration over 60 s fails the attempt and
+stops the series. The internal child timeout is a second bound, not a substitute
+for whole-command supervision. No preflight or replacement attempt is included.
+
+Pure synthetic admission/accounting checks exercised release mismatch,
+sequential and duplicate admission, prior failure, cumulative charge,
+whole-command threshold, successful provisional receipt/confirmation,
+child failure and timeout stop. They created no native application or OSC decode
+and were removed after use. The reporter's existing `--selfcheck` and source
+freeze are separate pure checks. Three fresh qualified windows are still needed;
+U02a remains unaccepted and U14b remains outside this release.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
@@ -2286,7 +2326,7 @@ working set was 327.5 MiB, and process CPU time rose 7.797 s from active start t
 report/drain, not solely within active timing. New broad
 ROI queries remain synchronous in the GUI; no worker cancellation or prefix-table behavior is
 claimed. U03 remains unaccepted pending a reviewed correction and sustained qualification;
-U02a has not started.
+U02a had not started at this checkpoint.
 
 #### U03 single-entry ROI reuse repair (2026-09-28; one-window comparison)
 
@@ -2369,7 +2409,7 @@ not qualified for arbitrary masks, float64 data or larger admitted shapes. Activ
 RSS was 305.6/311.9 MiB, Windows peak working set 327.5 MiB and precisely active process
 CPU time 20.938 s; memory figures include Qt/driver/runtime and are not a GPU allocation
 measure. U03 remains unaccepted pending supervisor review and later sustained evidence;
-U02a has not started.
+U02a had not started at this checkpoint.
 
 #### U03 sustained native-shell qualification (2026-09-28; reviewed evidence, acceptance pending)
 
