@@ -1808,6 +1808,70 @@ All 18 original external files remain unchanged. Failed window 4, its
 the original 80.797 s charged/49.203 s suspended ledger is also unchanged.
 U02a remains unaccepted pending supervisor review.
 
+#### U02a v3 fresh-series proposal (2026-09-29; pure preparation, pending new approval)
+
+Independent review accepted the prospective delayed-presentation classifier
+repair above as a **pure preparation result**. It did not change the failed
+output-4 verdict or authorize native time. Three fresh passing windows are
+still needed; the third must cover the active 220 ms old-write/newer-final-edit
+journey, final Save, disk comparison, reopen and normal close.
+
+The external proposal consists of only three new files in the existing
+evidence root: `u02a_mixed_reporter_v3.py`,
+`u02a_mixed_manifest_v3.json` and
+`u02a_fresh_watchdog_v3.py`. The reporter copies the accepted pure
+classifier candidate and changes the fresh-series output mapping to
+**7/8/9** for journeys **2/2/3**, the manifest/watchdog/release paths,
+the matching native-output admission, and the release binding to include
+the preserved stopped output-4 receipt and original fresh release hashes.
+Its CLI enables only the existing reviewed `--fresh-window`,
+`--fresh-child` and `--confirm-fresh` routes plus pure `--selfcheck`;
+legacy preparation, original-window and window-2-resume routes remain
+unavailable. The pure candidate itself remains unchanged and selfcheck-only.
+The new watchdog changes only the reporter/release filenames, output mapping
+and displayed usage. The new manifest preserves the fixed input hash,
+20 records, 27-selection sequence, source identities and frozen limits,
+while naming prospective v3 classification and the new proposal.
+
+This is a proposed **new 180 s whole-command allowance**, three separate
+60 s reservations at most, one nominal 30 s active journey each. It is
+**PENDING explicit new user approval and later supervisor release**. The
+release filename `u02a_fresh_release_v3.json` is declared but **absent**.
+The existing launcher still allows at most 57 s for reporter work and
+reserves 3 s for cleanup; the protected phase envelope remains up to 8 s
+readiness, nominal 30 s active work and up to 12 s post-active work inside
+the full 60 s command, including startup, analysis and receipt. Independent
+whole-command timing/confirmation and conservative 60 s charge remain.
+Stop on first failure; no preflight, retry, replacement or automatic
+extension is included. The old 80.797 s charged/49.203 s suspended ledger
+and the failed earlier new-series 60 s charge/120 s suspended remainder
+remain separate and cannot be borrowed or reclaimed. Outputs 5 and 6
+remain absent.
+
+One focused pure check imported the actual new reporter and watchdog
+without GUI or OSC decode, compared their 7/8/9 and 2/2/3 mappings with
+the parsed manifest, verified the exact source/input/new-file and
+preserved-ledger hash binding, and confirmed the new release was missing.
+Reporter attempt, child and confirmation entry functions and watchdog
+entry all rejected the missing release before a reservation, claim or
+process launch; outputs 7-9 remained absent. AST inspection found only
+the reviewed fresh-series routes in the reporter CLI. The changed
+reporter's existing pure selfcheck and focused prospective matrix passed;
+Ruff lint/format and JSON checks passed. No native window, release,
+budget, receipt, claim, project, raw log or summary was created.
+
+The prospective reporter is 159,236 bytes, SHA-256
+`9e8ecb806877c8b98414053a835a2163d6acdaf684fcc32b94cf2156df2895fb`;
+manifest 12,282 bytes,
+`19832b7c8607f06dfb44afffc0dfe92ab8624982a368272000c7e0fdaed630a2`;
+watchdog 6,810 bytes,
+`eecddf34f09a4b67f1b230ea4183452050bbc5daf74ed46a7e6e5c817d696732`.
+All 19 pre-existing external files, including the accepted pure candidate
+and all frozen failed evidence, remain byte-for-byte unchanged. This
+proposal awaits supervisor review before a single concrete runtime
+decision is put to the user; U02a remains unaccepted and U14b is outside
+the proposal.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
