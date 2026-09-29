@@ -15,7 +15,7 @@ from project_state import SOURCE_HASH_KIND, AcquisitionMetadata, Project, Projec
 
 MAX_METADATA_TEXT_BYTES = 64 * 1024
 MAX_METADATA_ROWS = 128
-MAX_METADATA_COLUMNS = 24
+MAX_METADATA_COLUMNS = 26
 MAX_METADATA_FIELD_LENGTH = 256
 MAX_REFERENCE_BYTES = 1024 * 1024
 MAX_METADATA_EXPORT_BYTES = 1024 * 1024
@@ -40,6 +40,8 @@ class ValidatedReference:
     path: Path
     sha256: str
     material_id: str | None
+    dependent_cif_path: Path | None = None
+    dependent_cif_sha256: str | None = None
 
 
 def prepare_reference(argument: bytes, control: JobControl) -> JobResult:
@@ -51,11 +53,13 @@ def prepare_reference(argument: bytes, control: JobControl) -> JobResult:
     if type(path) is not str or not path or len(path) > 4096:
         raise ProjectFormatError("invalid reference path")
     control.report(f"Checking {Path(path).name}")
-    digest, material_id = validate_reference(Path(path), kind)
+    value = validate_reference(Path(path), kind)
     if control.canceled:
         raise RuntimeError("reference validation canceled")
-    value = ValidatedReference(kind, Path(path).absolute(), digest, material_id)
-    return JobResult(value, len(path.encode("utf-8")) + 256)
+    resident = len(path.encode("utf-8")) + 256
+    if value.dependent_cif_path is not None:
+        resident += len(str(value.dependent_cif_path).encode("utf-8")) + 128
+    return JobResult(value, resident)
 
 
 def parse_table_text(text: str, *, delimiter: str) -> tuple[tuple[str, ...], ...]:
@@ -180,27 +184,42 @@ def apply_mapped_rows(
         raise ProjectFormatError(f"metadata associations after all rows: {exc}") from exc
 
 
-def validate_reference(path: Path, kind: str) -> tuple[str, str | None]:
+def bounded_reference_bytes(path: Path) -> bytes:
+    """Read one explicit reference under the same byte limit used at binding."""
+    with Path(path).open("rb") as stream:
+        source_bytes = stream.read(MAX_REFERENCE_BYTES + 1)
+    if len(source_bytes) > MAX_REFERENCE_BYTES:
+        raise ProjectFormatError("reference exceeds 1 MiB picker limit")
+    return source_bytes
+
+
+def validate_reference(path: Path, kind: str) -> ValidatedReference:
     """Use current scientific readers on a bounded, explicit local reference."""
     source = Path(path).absolute()
     if kind not in ("cif", "configuration"):
         raise ValueError("unsupported reference kind")
-    with source.open("rb") as stream:
-        source_bytes = stream.read(MAX_REFERENCE_BYTES + 1)
-    if len(source_bytes) > MAX_REFERENCE_BYTES:
-        raise ProjectFormatError("reference exceeds 1 MiB picker limit")
+    source_bytes = bounded_reference_bytes(source)
     digest = hashlib.sha256(source_bytes).hexdigest()
     if kind == "cif":
         from rasim_next.materials.crystal import read_crystal
 
         crystal = read_crystal(source, expected_sha256=digest, source_bytes=source_bytes)
-        return digest, crystal.phase_id
+        return ValidatedReference(kind, source, digest, crystal.phase_id)
     from rasim_next.pipeline.configured_simulation import load_simulation_config
 
     config = load_simulation_config(
         source, source_bytes=source_bytes, max_referenced_cif_bytes=MAX_REFERENCE_BYTES
     )
-    return digest, config.material.phase_id
+    if len(str(config.material.cif_path)) > 4096:
+        raise ProjectFormatError("dependent CIF path exceeds 4096 characters")
+    return ValidatedReference(
+        kind,
+        source,
+        digest,
+        config.material.phase_id,
+        config.material.cif_path,
+        config.cif_sha256,
+    )
 
 
 def metadata_csv(project: Project) -> str:
@@ -219,6 +238,8 @@ def metadata_csv(project: Project) -> str:
             "cif_sha256",
             "configuration_path",
             "configuration_sha256",
+            "configuration_cif_path",
+            "configuration_cif_sha256",
             "provenance_json",
             "proposals_json",
             "metadata_revision",
@@ -250,6 +271,10 @@ def metadata_csv(project: Project) -> str:
                 metadata.cif_sha256 or "",
                 "" if metadata.configuration_path is None else str(metadata.configuration_path),
                 metadata.configuration_sha256 or "",
+                ""
+                if metadata.configuration_cif_path is None
+                else str(metadata.configuration_cif_path),
+                metadata.configuration_cif_sha256 or "",
                 json.dumps(metadata.provenance, separators=(",", ":")),
                 json.dumps(metadata.proposals, separators=(",", ":")),
                 metadata.revision,

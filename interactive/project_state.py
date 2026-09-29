@@ -9,7 +9,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
-PROJECT_SCHEMA_VERSION = 2
+PROJECT_SCHEMA_VERSION = 3
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -25,6 +25,7 @@ METADATA_FIELDS = (
     "material_id",
     "cif_path",
     "configuration_path",
+    "configuration_cif_path",
     "calibrant_id",
     "dark_acquisition_id",
     "mask_acquisition_id",
@@ -99,6 +100,8 @@ class AcquisitionMetadata:
     cif_sha256: str | None = None
     configuration_path: Path | None = None
     configuration_sha256: str | None = None
+    configuration_cif_path: Path | None = None
+    configuration_cif_sha256: str | None = None
     calibrant_id: str | None = None
     dark_acquisition_id: UUID | None = None
     mask_acquisition_id: UUID | None = None
@@ -126,7 +129,7 @@ class AcquisitionMetadata:
             or self.native_shape[0] * self.native_shape[1] > 12_000_000
         ):
             raise ProjectFormatError("invalid detector-native shape")
-        for label in ("cif", "configuration"):
+        for label in ("cif", "configuration", "configuration_cif"):
             path = getattr(self, f"{label}_path")
             digest = getattr(self, f"{label}_sha256")
             if (path is None) != (digest is None):
@@ -139,6 +142,8 @@ class AcquisitionMetadata:
                 ):
                     raise ProjectFormatError(f"invalid {label} path")
                 _digest(digest)
+        if self.configuration_cif_path is not None and self.configuration_path is None:
+            raise ProjectFormatError("dependent CIF identity needs a configuration reference")
         if type(self.revision) is not int or self.revision < 0:
             raise ProjectFormatError("metadata revision must be nonnegative")
         if type(self.provenance) is not tuple or any(
@@ -269,14 +274,34 @@ class Project:
             "proposals",
             "cif_sha256",
             "configuration_sha256",
+            "configuration_cif_sha256",
         }:
             raise ValueError("unsupported metadata change")
-        for label in ("cif", "configuration"):
+        if acquisition_id not in {item.acquisition_id for item in self.acquisitions}:
+            raise KeyError(acquisition_id)
+        if "configuration_path" in changes and not any(
+            field_name in changes
+            for field_name in ("configuration_cif_path", "configuration_cif_sha256")
+        ):
+            changes["configuration_cif_path"] = None
+            changes["configuration_cif_sha256"] = None
+            existing = next(
+                item for item in self.acquisitions if item.acquisition_id == acquisition_id
+            )
+            excluded = (
+                {"configuration_cif_path"}
+                if "provenance" in changes
+                else {"configuration_path", "configuration_cif_path"}
+            )
+            changes["provenance"] = tuple(
+                (field_name, origin)
+                for field_name, origin in changes.get("provenance", existing.metadata.provenance)
+                if field_name not in excluded
+            )
+        for label in ("cif", "configuration", "configuration_cif"):
             path_field, hash_field = f"{label}_path", f"{label}_sha256"
             if (path_field in changes) != (hash_field in changes):
                 raise ValueError(f"{label} path and SHA-256 must change together")
-        if acquisition_id not in {item.acquisition_id for item in self.acquisitions}:
-            raise KeyError(acquisition_id)
         return replace(
             self,
             acquisitions=tuple(
@@ -602,7 +627,7 @@ def _metadata_document(metadata: AcquisitionMetadata, document_path: Path) -> di
                 else getattr(metadata, field_name)
             )
             for field_name in METADATA_FIELDS
-            if field_name not in ("cif_path", "configuration_path")
+            if field_name not in ("cif_path", "configuration_path", "configuration_cif_path")
         },
         "native_shape": None if metadata.native_shape is None else list(metadata.native_shape),
         "cif_path": None
@@ -613,13 +638,19 @@ def _metadata_document(metadata: AcquisitionMetadata, document_path: Path) -> di
         if metadata.configuration_path is None
         else _source_reference(metadata.configuration_path, document_path),
         "configuration_sha256": metadata.configuration_sha256,
+        "configuration_cif_path": None
+        if metadata.configuration_cif_path is None
+        else _source_reference(metadata.configuration_cif_path, document_path),
+        "configuration_cif_sha256": metadata.configuration_cif_sha256,
         "provenance": [list(entry) for entry in metadata.provenance],
         "proposals": [list(entry) for entry in metadata.proposals],
         "revision": metadata.revision,
     }
 
 
-def _metadata_from_document(value: Any, document_path: Path) -> AcquisitionMetadata:
+def _metadata_from_document(
+    value: Any, document_path: Path, schema_version: int
+) -> AcquisitionMetadata:
     keys = set(METADATA_FIELDS) | {
         "native_shape",
         "cif_sha256",
@@ -628,6 +659,10 @@ def _metadata_from_document(value: Any, document_path: Path) -> AcquisitionMetad
         "proposals",
         "revision",
     }
+    if schema_version >= 3:
+        keys |= {"configuration_cif_sha256"}
+    else:
+        keys -= {"configuration_cif_path"}
     data = _object(value, keys, "acquisition metadata")
     shape = data["native_shape"]
     if shape is not None and (type(shape) is not list or len(shape) != 2):
@@ -659,6 +694,14 @@ def _metadata_from_document(value: Any, document_path: Path) -> AcquisitionMetad
         configuration_sha256=None
         if data["configuration_sha256"] is None
         else _digest(data["configuration_sha256"]),
+        configuration_cif_path=None
+        if schema_version < 3 or data["configuration_cif_path"] is None
+        else _resolved_reference(
+            data["configuration_cif_path"], document_path, "configuration CIF"
+        ),
+        configuration_cif_sha256=None
+        if schema_version < 3 or data["configuration_cif_sha256"] is None
+        else _digest(data["configuration_cif_sha256"]),
         calibrant_id=data["calibrant_id"],
         dark_acquisition_id=None
         if data["dark_acquisition_id"] is None
@@ -759,6 +802,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     top = _object(value, {"schema_version", "source_hash_kind", "project", "view"}, "document")
     if type(top["schema_version"]) is not int or top["schema_version"] not in (
         1,
+        2,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -785,7 +829,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
                 _digest(row["source_sha256"]),
                 AcquisitionMetadata()
                 if top["schema_version"] == 1
-                else _metadata_from_document(row["metadata"], document_path),
+                else _metadata_from_document(row["metadata"], document_path, top["schema_version"]),
             )
         )
     try:

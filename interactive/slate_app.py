@@ -34,9 +34,12 @@ from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
 from project_io import (
     LoadedProject,
     PublishedProject,
+    ReferenceCheck,
     SourceCheck,
     discard_recovery,
     load_project,
+    reference_paths_match,
+    update_reference_checks,
     write_project,
 )
 from project_state import (
@@ -148,6 +151,30 @@ def _request_size(argument: bytes | Path) -> int:
     return len(argument) if isinstance(argument, bytes) else len(str(argument).encode("utf-8"))
 
 
+def metadata_export_destination(
+    destination: Path, project_path: Path | None, input_paths: tuple[Path, ...]
+) -> Path:
+    """Keep the explicit CSV outside Git checkouts and away from input aliases."""
+    path = Path(destination).absolute()
+    if path.suffix.lower() != ".csv":
+        path = path.with_suffix(".csv")
+    if len(str(path)) > 4096:
+        raise ProjectFormatError("metadata export path exceeds 4096 characters")
+    resolved = path.resolve(strict=False)
+    for candidate in (path, resolved):
+        if any((parent / ".git").exists() for parent in candidate.parents):
+            raise ProjectFormatError("choose a metadata export destination outside Git checkouts")
+    for protected in (project_path, *input_paths):
+        if protected is None:
+            continue
+        source = Path(protected).absolute()
+        if resolved == source.resolve(strict=False) or (
+            path.exists() and source.exists() and os.path.samefile(path, source)
+        ):
+            raise ProjectFormatError("metadata export would overwrite a project or input reference")
+    return path
+
+
 class StatusView(QFrame):
     """A visible empty, loading or error state for an unpopulated workspace."""
 
@@ -204,6 +231,7 @@ class ShellWindow(QMainWindow):
         self._restoring_view = False
         self._pending_view_restore: ProjectViewState | None = None
         self._source_checks: dict[UUID, SourceCheck] = {}
+        self._reference_checks: dict[tuple[UUID, str], ReferenceCheck] = {}
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
         self._active_kind: (
@@ -826,18 +854,23 @@ class ShellWindow(QMainWindow):
                             Revisions(data=revision),
                             argument,
                             len(argument),
-                            8192,
+                            64 * 1024,
                             prepare_reference,
                         )
                     )
                 except (OSError, RuntimeError, ValueError) as exc:
                     self._active_kind = None
                     self._active_reference = None
+                    self._invalidate_reference_request(
+                        kind, path, "Reference check could not start"
+                    )
                     self.statusBar().showMessage(f"Reference check could not start: {exc}")
                 else:
                     self._active_generation = identity.generation
                     return
             else:
+                if project_id == self.project.project_id:
+                    self._invalidate_reference_request(kind, path, "Stale reference request")
                 self._show_state(
                     "error",
                     "Reference not bound",
@@ -1002,8 +1035,27 @@ class ShellWindow(QMainWindow):
         if self._pending_reference is not None:
             self.statusBar().showMessage("Finish the pending reference check first")
             return
+        self._invalidate_reference_request(kind, path, "Reference recheck pending")
         self._pending_reference = (kind, path, ids, self.project.project_id, self._revision)
         QTimer.singleShot(0, self._dispatch_pending)
+
+    def _invalidate_reference_request(self, kind: str, path: Path, detail: str) -> None:
+        paths = [path]
+        if kind == "configuration":
+            for acquisition in self.project.acquisitions:
+                metadata = acquisition.metadata
+                if (
+                    metadata.configuration_path is not None
+                    and metadata.configuration_cif_path is not None
+                    and reference_paths_match(metadata.configuration_path, path)
+                ):
+                    paths.append(metadata.configuration_cif_path)
+        for reference_path in paths:
+            self._reference_checks = update_reference_checks(
+                self.project, self._reference_checks, reference_path, None, detail
+            )
+        self._update_selection_label()
+        self._refresh_review_table()
 
     def _reference_ready(self, identity: JobIdentity, value: object) -> None:
         task = self._active_reference
@@ -1015,6 +1067,8 @@ class ShellWindow(QMainWindow):
             or identity.revisions.data != self._revision
             or (value.kind, value.path) != task[:2]
         ):
+            if task is not None and task[3] == self.project.project_id:
+                self._invalidate_reference_request(task[0], task[1], "Stale reference result")
             self.statusBar().showMessage("Reference result became stale; choose it again")
             return
         kind, path, ids, _, _ = task
@@ -1035,6 +1089,16 @@ class ShellWindow(QMainWindow):
                     f"{kind}_sha256": value.sha256,
                     "provenance": tuple(sorted(provenance.items())),
                 }
+                if kind == "configuration":
+                    changes["configuration_cif_path"] = value.dependent_cif_path
+                    changes["configuration_cif_sha256"] = value.dependent_cif_sha256
+                    if value.dependent_cif_path is None:
+                        provenance.pop("configuration_cif_path", None)
+                    else:
+                        provenance["configuration_cif_path"] = (
+                            "bounded configuration-dependent CIF identity"
+                        )
+                    changes["provenance"] = tuple(sorted(provenance.items()))
                 if value.material_id:
                     changes["material_id"] = value.material_id
                     provenance["material_id"] = f"validated {kind} reader"
@@ -1042,12 +1106,39 @@ class ShellWindow(QMainWindow):
                 updated = updated.update_metadata(acquisition_id, **changes)
             self._validate_project_admission(updated)
         except (ProjectFormatError, ValueError) as exc:
+            self._invalidate_reference_request(kind, path, "Reference binding rejected")
             self.statusBar().showMessage(f"Reference binding rejected: {exc}")
             return
-        if updated != self.project:
-            self.project = updated
-            self.refresh_project()
+        changed = updated != self.project
+        self.project = updated
+        self._reference_checks = update_reference_checks(
+            updated,
+            self._reference_checks,
+            path,
+            value.sha256,
+            "SHA-256 checked against bound bytes",
+        )
+        if kind == "configuration":
+            if value.dependent_cif_path is not None and value.dependent_cif_sha256 is not None:
+                self._reference_checks = update_reference_checks(
+                    updated,
+                    self._reference_checks,
+                    value.dependent_cif_path,
+                    value.dependent_cif_sha256,
+                    "SHA-256 checked against bound bytes",
+                )
+            else:
+                for acquisition_id in ids:
+                    self._reference_checks[(acquisition_id, "configuration_cif")] = ReferenceCheck(
+                        acquisition_id,
+                        "configuration_cif",
+                        "unverified",
+                        "No dependent CIF identity recorded",
+                    )
+        if changed:
             self._mark_dirty()
+        self._update_selection_label()
+        self._refresh_review_table()
         self.statusBar().showMessage(
             f"Validated {kind} reference and SHA-256 for {len(ids)} acquisition(s)"
         )
@@ -1160,6 +1251,29 @@ class ShellWindow(QMainWindow):
         image = QImage(pixels, columns, rows, columns, QImage.Format.Format_Grayscale8)
         return QIcon(QPixmap.fromImage(image.copy()))
 
+    def _reference_states(self, acquisition: Acquisition) -> tuple[ReferenceCheck, ...]:
+        metadata = acquisition.metadata
+        states = []
+        for kind, path in (
+            ("cif", metadata.cif_path),
+            ("configuration", metadata.configuration_path),
+            ("configuration_cif", metadata.configuration_cif_path),
+        ):
+            if path is None and not (
+                kind == "configuration_cif" and metadata.configuration_path is not None
+            ):
+                continue
+            states.append(
+                self._reference_checks.get((acquisition.acquisition_id, kind))
+                or ReferenceCheck(
+                    acquisition.acquisition_id,
+                    kind,
+                    "unverified",
+                    "No current identity check; choose the reference again",
+                )
+            )
+        return tuple(states)
+
     def _refresh_review_table(self) -> None:
         table = self.review_table
         selected_ids = set(self._selected_review_ids())
@@ -1202,6 +1316,9 @@ class ShellWindow(QMainWindow):
                 status += " · detector-setup shape conflict"
             if metadata.proposals:
                 status += f" · {len(metadata.proposals)} unconfirmed suggestion(s)"
+            for reference in self._reference_states(acquisition):
+                if reference.state != "verified":
+                    status += f" · {reference.kind} {reference.state}"
             source = self._candidates.get(acquisition.acquisition_id)
             if source is not None and source.detail:
                 status += f" · {source.detail}"
@@ -1211,6 +1328,9 @@ class ShellWindow(QMainWindow):
                     metadata.material_id,
                     metadata.cif_path.name if metadata.cif_path else None,
                     metadata.configuration_path.name if metadata.configuration_path else None,
+                    metadata.configuration_cif_path.name
+                    if metadata.configuration_cif_path
+                    else None,
                 )
                 if value
             )
@@ -1352,6 +1472,9 @@ class ShellWindow(QMainWindow):
                     metadata.material_id,
                     str(metadata.cif_path) if metadata.cif_path else None,
                     str(metadata.configuration_path) if metadata.configuration_path else None,
+                    str(metadata.configuration_cif_path)
+                    if metadata.configuration_cif_path
+                    else None,
                     metadata.calibrant_id,
                 )
                 if value
@@ -1375,6 +1498,13 @@ class ShellWindow(QMainWindow):
         source_detail = (
             "; ".join(f"{field}: {origin}" for field, origin in metadata.provenance) or "none"
         )
+        reference_status = (
+            "; ".join(
+                f"{check.kind}: {check.state} ({check.detail})"
+                for check in self._reference_states(acquisition)
+            )
+            or "none bound"
+        )
         proposals = (
             "; ".join(
                 f"{field}={value} from {origin} (unconfirmed)"
@@ -1388,7 +1518,10 @@ class ShellWindow(QMainWindow):
             f"Role: {metadata.role or 'unknown'} · Specimen: {metadata.specimen or 'unknown'} · Mount: {metadata.mount or 'unknown'}\n"
             f"Angle: {angle} · Exposure: {exposure}\n"
             f"Detector setup: {metadata.detector_setup or 'unknown'} · References: {references}\n"
-            f"Metadata origin: {source_detail}\nSuggestions: {proposals}\n"
+            f"Recorded metadata origin: {source_detail}\n"
+            f"Current reference identity: {reference_status}\n"
+            f"Choose a failed or unverified reference again; saved identities are unchanged.\n"
+            f"Suggestions: {proposals}\n"
             f"Missing for review: {', '.join(missing) if missing else 'none declared'}\n"
             "Raw browsing remains available; no fitting, subtraction or mask application is implied."
         )
@@ -1444,20 +1577,43 @@ class ShellWindow(QMainWindow):
             )
             return
         paths.sort()
-        names = "\n".join(path.name for path in paths[:20])
-        detail = f"{len(paths)} direct files in {folder}; no subfolders.\n{names}"
-        if len(paths) > 20:
-            detail += f"\n… and {len(paths) - 20} more"
-        if (
-            QMessageBox.question(
-                self, "Review folder candidates", detail + "\nImport this explicit list?"
+        if not paths:
+            self._show_state(
+                "empty", "No direct files", f"The folder {folder} has no direct files."
             )
-            == QMessageBox.StandardButton.Yes
-        ):
-            try:
-                self.start_import_files(paths)
-            except ValueError as exc:
-                self._show_state("error", "Folder scope rejected", str(exc))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Review every folder candidate")
+        dialog.setMinimumSize(640, 420)
+        layout = QVBoxLayout(dialog)
+        unsupported = sum(not path.name.lower().endswith((".osc", ".osc.gz")) for path in paths)
+        summary = QLabel(
+            f"Folder: {folder}\n{len(paths)} direct files; {unsupported} unsupported. "
+            "No subfolders are scanned. Confirm this complete list before import."
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+        candidates = QListWidget()
+        candidates.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        for path in paths:
+            supported = path.name.lower().endswith((".osc", ".osc.gz"))
+            item = QListWidgetItem(f"{'OSC' if supported else 'Unsupported'} · {path.name}")
+            item.setToolTip(str(path))
+            candidates.addItem(item)
+        layout.addWidget(candidates)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import listed files")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.start_import_files(paths)
+        except ValueError as exc:
+            self._show_state("error", "Folder scope rejected", str(exc))
 
     def start_import(self, path: Path) -> None:
         self.start_import_files((path,))
@@ -1739,22 +1895,25 @@ class ShellWindow(QMainWindow):
         )
         if not filename:
             return
-        path = Path(filename).absolute()
-        if path.suffix.lower() != ".csv":
-            path = path.with_suffix(".csv")
-        if path == self._project_path or any(
-            path == item.source_path for item in self.project.acquisitions
-        ):
-            QMessageBox.warning(
-                self,
-                "Export rejected",
-                "Choose a destination separate from project and source files",
-            )
-            return
         try:
+            path = metadata_export_destination(
+                Path(filename),
+                self._project_path or self._recovery_path(),
+                tuple(
+                    path
+                    for item in self.project.acquisitions
+                    for path in (
+                        item.source_path,
+                        item.metadata.cif_path,
+                        item.metadata.configuration_path,
+                        item.metadata.configuration_cif_path,
+                    )
+                    if path is not None
+                ),
+            )
             path.write_text(metadata_csv(self.project), encoding="utf-8", newline="")
         except (OSError, ProjectFormatError) as exc:
-            QMessageBox.warning(self, "Metadata export failed", str(exc))
+            QMessageBox.warning(self, "Metadata export rejected", str(exc))
             return
         self.statusBar().showMessage(
             f"Exported metadata with explicit degrees and provenance: {path}"
@@ -1815,6 +1974,8 @@ class ShellWindow(QMainWindow):
                 self._resident_planes.pop(acquisition_id, None)
                 self._thumbnails.pop(acquisition_id, None)
                 self._source_checks.pop(acquisition_id, None)
+                for kind in ("cif", "configuration", "configuration_cif"):
+                    self._reference_checks.pop((acquisition_id, kind), None)
                 if self.selected_acquisition_id == acquisition_id:
                     self.selected_acquisition_id = None
                 if self._visible_acquisition_id == acquisition_id:
@@ -2244,6 +2405,13 @@ class ShellWindow(QMainWindow):
         terminal = state in (JobState.COMPLETED, JobState.CANCELED, JobState.FAILED)
         if summary.identity.generation != self.jobs.latest_generation:
             if terminal and summary.identity.generation == self._active_generation:
+                if self._active_kind == "reference" and self._active_reference is not None:
+                    task = self._active_reference
+                    if task[3] == self.project.project_id:
+                        self._invalidate_reference_request(
+                            task[0], task[1], "Reference result discarded"
+                        )
+                    self._active_reference = None
                 self._active_kind = None
                 self._active_generation = None
                 self._active_load_id = None
@@ -2279,6 +2447,12 @@ class ShellWindow(QMainWindow):
             return
         if kind == "reference":
             if state in (JobState.FAILED, JobState.CANCELED):
+                if self._active_reference is not None:
+                    task = self._active_reference
+                    if task[3] == self.project.project_id:
+                        self._invalidate_reference_request(
+                            task[0], task[1], f"Reference check {state.value}"
+                        )
                 self.statusBar().showMessage(f"Reference check {state.value}: {summary.detail}")
                 self._active_kind = None
                 self._active_generation = None
@@ -2439,6 +2613,9 @@ class ShellWindow(QMainWindow):
             self._visible_acquisition_id = None
             self._visible_details = ""
             self._source_checks = {item.acquisition_id: item for item in value.sources}
+            self._reference_checks = {
+                (item.acquisition_id, item.kind): item for item in value.references
+            }
             self._candidates.clear()
             self._candidate_queue.clear()
             self._batch_auto_select = False

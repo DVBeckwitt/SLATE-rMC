@@ -1,5 +1,6 @@
 """Bounded project-document workers using the canonical atomic JSON publisher."""
 
+import hashlib
 import json
 import os
 import zlib
@@ -10,6 +11,7 @@ from typing import Literal
 from uuid import UUID
 
 from job_lifecycle import JobControl, JobResult
+from metadata_review import bounded_reference_bytes
 from osc_import import (
     DECODED_LIMIT_BYTES,
     PIXEL_LIMIT,
@@ -18,6 +20,7 @@ from osc_import import (
 )
 from project_state import (
     MAX_PROJECT_BYTES,
+    Project,
     ProjectDocument,
     ProjectFormatError,
     project_from_document,
@@ -35,10 +38,69 @@ class SourceCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class ReferenceCheck:
+    acquisition_id: UUID
+    kind: Literal["cif", "configuration", "configuration_cif"]
+    state: Literal["verified", "missing", "changed", "unreadable", "unverified"]
+    detail: str = ""
+
+
+def reference_paths_match(left: Path, right: Path) -> bool:
+    """Recognize the same recorded path, including an existing file alias."""
+    try:
+        if os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
+            str(right.resolve(strict=False))
+        ):
+            return True
+    except (OSError, RuntimeError):
+        pass
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
+
+
+def update_reference_checks(
+    project: Project,
+    checks: dict[tuple[UUID, str], ReferenceCheck],
+    path: Path,
+    observed_sha256: str | None,
+    detail: str,
+) -> dict[tuple[UUID, str], ReferenceCheck]:
+    """Apply one observation to every binding of the same reference bytes."""
+    updated = checks.copy()
+    for acquisition in project.acquisitions:
+        metadata = acquisition.metadata
+        for kind, bound_path, expected in (
+            ("cif", metadata.cif_path, metadata.cif_sha256),
+            ("configuration", metadata.configuration_path, metadata.configuration_sha256),
+            (
+                "configuration_cif",
+                metadata.configuration_cif_path,
+                metadata.configuration_cif_sha256,
+            ),
+        ):
+            if bound_path is None or not reference_paths_match(bound_path, path):
+                continue
+            state = (
+                "unverified"
+                if observed_sha256 is None
+                else "verified"
+                if observed_sha256 == expected
+                else "changed"
+            )
+            updated[(acquisition.acquisition_id, kind)] = ReferenceCheck(
+                acquisition.acquisition_id, kind, state, detail
+            )
+    return updated
+
+
+@dataclass(frozen=True, slots=True)
 class LoadedProject:
     document: ProjectDocument
     path: Path
     sources: tuple[SourceCheck, ...]
+    references: tuple[ReferenceCheck, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +118,8 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
     document = read_project_document(path)
     seen: dict[Path, tuple[str, str, tuple[int, int] | None]] = {}
     checks: list[SourceCheck] = []
+    reference_checks: list[ReferenceCheck] = []
+    seen_references: dict[Path, tuple[str, str]] = {}
     limits = OscReadLimits(SOURCE_LIMIT_BYTES, DECODED_LIMIT_BYTES, PIXEL_LIMIT, axis_limit)
     for acquisition in document.project.acquisitions:
         if control.canceled:
@@ -93,8 +157,59 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                     and (detector.column_px >= shape[1] or detector.row_px >= shape[0])
                 ):
                     raise ProjectFormatError("saved crosshair is outside its detector source")
-    loaded = LoadedProject(document, path, tuple(checks))
-    resident = path.stat().st_size + sum(len(item.detail.encode("utf-8")) + 128 for item in checks)
+        metadata = acquisition.metadata
+        for kind, reference_path, expected in (
+            ("cif", metadata.cif_path, metadata.cif_sha256),
+            ("configuration", metadata.configuration_path, metadata.configuration_sha256),
+            (
+                "configuration_cif",
+                metadata.configuration_cif_path,
+                metadata.configuration_cif_sha256,
+            ),
+        ):
+            if control.canceled:
+                raise RuntimeError("Project opening canceled")
+            if reference_path is None:
+                if kind == "configuration_cif" and metadata.configuration_path is not None:
+                    reference_checks.append(
+                        ReferenceCheck(
+                            acquisition.acquisition_id,
+                            kind,
+                            "unverified",
+                            "No recorded dependent CIF identity; choose configuration again",
+                        )
+                    )
+                continue
+            if reference_path not in seen_references:
+                try:
+                    actual = hashlib.sha256(bounded_reference_bytes(reference_path)).hexdigest()
+                    seen_references[reference_path] = ("readable", actual)
+                except FileNotFoundError:
+                    seen_references[reference_path] = ("missing", str(reference_path))
+                except (OSError, ProjectFormatError) as exc:
+                    seen_references[reference_path] = ("unreadable", str(exc)[:120])
+            read_state, detail = seen_references[reference_path]
+            state = (
+                ("verified" if detail == expected else "changed")
+                if read_state == "readable"
+                else read_state
+            )
+            reference_checks.append(
+                ReferenceCheck(
+                    acquisition.acquisition_id,
+                    kind,
+                    state,
+                    "SHA-256 matches recorded bytes"
+                    if state == "verified"
+                    else "SHA-256 differs from recorded bytes"
+                    if state == "changed"
+                    else detail,
+                )
+            )
+    loaded = LoadedProject(document, path, tuple(checks), tuple(reference_checks))
+    resident = path.stat().st_size + sum(
+        len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks)
+    )
     control.report("Project and source references checked")
     return JobResult(loaded, resident)
 
