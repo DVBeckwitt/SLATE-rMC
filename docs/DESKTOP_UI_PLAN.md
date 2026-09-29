@@ -1365,11 +1365,16 @@ were no-ops and 923 changed only band widths every fourth callback. Effective
 input spacing had median 32.110 ms, and each of the 84 intervals contained
 exactly one such input. These measurements do not qualify sustained redraw or
 establish a renderer bottleneck. Future classification requires the delivered
-mouse handler to change the intended native query and every interval counted
-for sustained redraw to have changed cursor requests with no gap over 16 ms
-from its first swap through the last, including the boundary gaps. The old
-intervals and misses remain recorded; insufficient coverage is an additional
-qualification failure, never a reason to discard slow frames or relax gates.
+mouse handler to change the intended native query. Active-boundary and 10 ms
+heartbeat samples independently record selected/visible source, admission,
+image availability, cursor follow, plane and loading state. Every sampled ready
+browsing span, including its head and tail, requires changed native cursor
+requests with no gap over 16 ms; a ready telemetry gap over 16 ms also fails.
+An isolated ready sample is unqualified.
+Cold/loading/unavailable spans are excluded explicitly, with eligible, covered
+and excluded durations and maximum gaps reported. The old intervals and misses
+remain recorded; insufficient coverage is an additional qualification failure,
+never a reason to discard slow frames or relax gates.
 Ninety matched cursor/profile presentations had p95 14.595 ms; heartbeat maximum was
 22.961 ms. Process sampled RSS maximum was 447,082,496 bytes and Windows peak
 working set was 449,363,968 bytes; GPU driver allocation was unmeasured. The
@@ -1401,6 +1406,14 @@ stub checks covered sparse/missing and 8 ms supply, handler routing, delayed
 admission, and fresh matching G/H/V composition. These checks do not establish
 native delivery, twenty-image throughput, sustained frame latency, final
 save/reopen or U02a acceptance; no GUI window ran in this correction packet.
+A follow-up pure audit found that one cursor request in a 30 s otherwise ready
+window could pass the prior interval-only supply check. The reporter now checks
+whole sampled ready spans; actual-analyzer pure cases reject missing, initial
+and trailing silence and 32 ms sparse supply, accept 8 ms supply, and separate
+a bounded loading gap. The final query also explicitly requests one G/H/V
+redraw after setting its fixed controls, including when those controls were
+already equal. Pure actual-helper stubs require new post-request paints and
+reject historical paints. No GUI window ran in this follow-up either.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
