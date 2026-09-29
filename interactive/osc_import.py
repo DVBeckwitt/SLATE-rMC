@@ -47,6 +47,7 @@ class PreparedOsc:
     version: int
     byte_order: str
     raw_shape: tuple[int, int]
+    thumbnail: NDArray[np.uint8]
 
 
 def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
@@ -84,6 +85,15 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
         raise OscReadCancelled("OSC import canceled")
     assert image.decoded_sha256 is not None
     low_value, high_value = linear_display_limits(minimum, maximum)
+    sample_rows = np.linspace(0, native.shape[0] - 1, min(native.shape[0], 96), dtype=np.intp)
+    sample_columns = np.linspace(0, native.shape[1] - 1, min(native.shape[1], 96), dtype=np.intp)
+    sampled = native[np.ix_(sample_rows, sample_columns)].astype(np.float64)
+    scale = max(high_value - low_value, 1.0)
+    thumbnail = np.ascontiguousarray(
+        np.rint(255.0 * np.clip((sampled - low_value) / scale, 0.0, 1.0)),
+        dtype=np.uint8,
+    )
+    thumbnail.setflags(write=False)
     prepared = PreparedOsc(
         path,
         image.decoded_sha256,
@@ -98,6 +108,7 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
         image.metadata.version,
         image.metadata.byte_order,
         image.metadata.raw_shape,
+        thumbnail,
     )
     resident_bytes = (
         native.nbytes
@@ -116,6 +127,7 @@ def prepare_osc(argument: bytes, control: JobControl) -> JobResult:
             )
         )
         + len(image.metadata.header)
+        + thumbnail.nbytes
     )
     control.report("Detector image ready")
     return JobResult(prepared, resident_bytes)

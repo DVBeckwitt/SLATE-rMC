@@ -1,9 +1,11 @@
 """Native desktop shell for SLATE-rMC; launch with ``python interactive/slate_app.py``."""
 
+import csv
 import json
+import math
 import os
 import sys
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -19,6 +21,15 @@ from job_lifecycle import (
     JobSummary,
     Revisions,
 )
+from metadata_review import (
+    MAPPED_FIELDS,
+    ValidatedReference,
+    apply_mapped_rows,
+    filename_angle_proposal,
+    metadata_csv,
+    parse_table_text,
+    prepare_reference,
+)
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
 from project_io import (
     LoadedProject,
@@ -31,6 +42,7 @@ from project_io import (
 from project_state import (
     MAX_ACQUISITIONS,
     Acquisition,
+    AcquisitionMetadata,
     DetectorViewState,
     Project,
     ProjectDocument,
@@ -39,19 +51,39 @@ from project_state import (
     project_to_document,
 )
 from PySide6.QtCore import QPointF, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDragEnterEvent,
+    QDropEvent,
+    QFont,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -65,6 +97,10 @@ if str(ROOT / "src") not in sys.path:
 
 MAX_PENDING_WRITES = 8
 MAX_PENDING_WRITE_BYTES = 3 * 1024 * 1024
+MAX_IMPORT_CANDIDATES = 128
+MAX_IMPORT_PATH_BYTES = 512 * 1024
+MAX_CACHED_PLANES = 2
+MAX_THUMBNAIL_BYTES = 128 * 96 * 96
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +113,14 @@ class WriteTask:
     explicit: bool
     adopt_destination: bool = False
     discard: bool = False
+
+
+@dataclass(slots=True)
+class ImportCandidate:
+    acquisition_id: UUID
+    path: Path
+    status: Literal["queued", "reading", "imported", "unsupported", "failed", "canceled"]
+    detail: str = ""
 
 
 def _request_size(argument: bytes | Path) -> int:
@@ -141,9 +185,22 @@ class ShellWindow(QMainWindow):
         self._source_checks: dict[UUID, SourceCheck] = {}
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
-        self._active_kind: Literal["import", "relink", "open", "save", "discard"] | None = None
+        self._active_kind: (
+            Literal["import", "relink", "batch", "reference", "open", "save", "discard"] | None
+        ) = None
         self._active_generation: int | None = None
+        self._active_load_id: UUID | None = None
+        self._active_load_revision: int | None = None
+        self._active_load_hash: str | None = None
         self._deferred_import: tuple[Path, UUID, Literal["import", "relink"], UUID] | None = None
+        self._candidates: dict[UUID, ImportCandidate] = {}
+        self._candidate_queue: deque[UUID] = deque()
+        self._active_candidate_id: UUID | None = None
+        self._batch_auto_select = False
+        self._pending_reference: tuple[str, Path, tuple[UUID, ...], UUID, int] | None = None
+        self._active_reference: tuple[str, Path, tuple[UUID, ...], UUID, int] | None = None
+        self._resident_planes: OrderedDict[UUID, PreparedOsc] = OrderedDict()
+        self._thumbnails: dict[UUID, tuple[bytes, int, int]] = {}
         self._pending_open: tuple[Path, bool] | None = None
         self._opening_recovery = False
         self._opening_path: Path | None = None
@@ -155,6 +212,7 @@ class ShellWindow(QMainWindow):
         self._visible_acquisition_id: UUID | None = None
         self._visible_details = ""
         self._obsolete_pending = False
+        self._selection_from_review = False
         self.setAcceptDrops(True)
         self.setWindowTitle(f"SLATE · {self.project.name}")
         self.resize(1280, 800)
@@ -171,8 +229,21 @@ class ShellWindow(QMainWindow):
         self.jobs.progress_changed.connect(self._job_progress)
         self.jobs.result_ready.connect(self._job_result_ready)
         self.jobs.drained.connect(self.close)
-        self.cancel_button.clicked.connect(self.jobs.cancel)
+        self.cancel_button.clicked.connect(self._cancel_current)
         self.import_button.clicked.connect(self._choose_import)
+        self.folder_button.clicked.connect(self._choose_folder)
+        self.review_table.itemSelectionChanged.connect(self._review_selection_changed)
+        self.filmstrip.itemClicked.connect(self._filmstrip_clicked)
+        self.retry_button.clicked.connect(self._retry_review_selection)
+        self.cancel_row_button.clicked.connect(self._cancel_review_selection)
+        self.remove_button.clicked.connect(self._remove_review_selection)
+        self.metadata_button.clicked.connect(self._edit_selected_metadata)
+        self.confirm_button.clicked.connect(self._confirm_selected_proposals)
+        self.cif_button.clicked.connect(lambda: self._choose_reference("cif"))
+        self.configuration_button.clicked.connect(lambda: self._choose_reference("configuration"))
+        self.paste_button.clicked.connect(lambda: self._map_metadata_text("\t"))
+        self.csv_button.clicked.connect(lambda: self._map_metadata_text(","))
+        self.export_metadata_button.clicked.connect(self._choose_metadata_export)
         self.relink_button.clicked.connect(self._choose_relink)
         self.open_button.clicked.connect(self._choose_open)
         self.save_button.clicked.connect(self.save_project)
@@ -182,6 +253,10 @@ class ShellWindow(QMainWindow):
         self.rename_acquisition_button.clicked.connect(self._choose_acquisition_name)
         self.move_up_button.clicked.connect(lambda: self.move_selected_acquisition(-1))
         self.move_down_button.clicked.connect(lambda: self.move_selected_acquisition(1))
+        self.previous_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+        self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+        self.previous_shortcut.activated.connect(lambda: self._step_acquisition(-1))
+        self.next_shortcut.activated.connect(lambda: self._step_acquisition(1))
         self.workspaces.currentChanged.connect(self._mark_dirty)
         self.detector_panel.view.crosshair_changed.connect(self._mark_dirty)
         self.detector_panel.view.view_state_changed.connect(self._mark_dirty)
@@ -285,9 +360,50 @@ class ShellWindow(QMainWindow):
         self.detector_stack.addWidget(self.experiment_status)
         self.detector_stack.addWidget(detector_page)
         center_layout.addWidget(self.detector_stack, 1)
-        self.import_button = QPushButton("Import OSC")
+        self.filmstrip = QListWidget()
+        self.filmstrip.setObjectName("acquisitionFilmstrip")
+        self.filmstrip.setFlow(QListWidget.Flow.LeftToRight)
+        self.filmstrip.setViewMode(QListWidget.ViewMode.IconMode)
+        self.filmstrip.setIconSize(QPixmap(96, 96).size())
+        self.filmstrip.setFixedHeight(120)
+        center_layout.addWidget(self.filmstrip)
+        self.review_table = QTableWidget(0, 11)
+        self.review_table.setObjectName("acquisitionReview")
+        self.review_table.setHorizontalHeaderLabels(
+            (
+                "Preview",
+                "Filename",
+                "Role",
+                "Specimen / mount",
+                "Angle (deg)",
+                "Exposure (s)",
+                "Native shape",
+                "Detector setup",
+                "Material / references",
+                "Calibrant",
+                "Status",
+            )
+        )
+        self.review_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.review_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.review_table.setSortingEnabled(True)
+        self.review_table.setMinimumHeight(165)
+        center_layout.addWidget(self.review_table)
+        self.import_button = QPushButton("Import files")
         controls = QHBoxLayout()
         controls.addWidget(self.import_button)
+        self.folder_button = QPushButton("Review folder")
+        controls.addWidget(self.folder_button)
+        self.retry_button = QPushButton("Retry row")
+        controls.addWidget(self.retry_button)
+        self.cancel_row_button = QPushButton("Cancel row")
+        controls.addWidget(self.cancel_row_button)
+        self.remove_button = QPushButton("Remove from project")
+        controls.addWidget(self.remove_button)
+        self.metadata_button = QPushButton("Apply to selected")
+        controls.addWidget(self.metadata_button)
+        self.confirm_button = QPushButton("Confirm suggestions")
+        controls.addWidget(self.confirm_button)
         self.relink_button = QPushButton("Relink OSC")
         self.relink_button.setEnabled(False)
         controls.addWidget(self.relink_button)
@@ -296,6 +412,27 @@ class ShellWindow(QMainWindow):
         controls.addWidget(self.cancel_button)
         controls.addStretch()
         center_layout.addLayout(controls)
+        metadata_controls = QHBoxLayout()
+        self.cif_button = QPushButton("Choose CIF")
+        self.configuration_button = QPushButton("Choose configuration")
+        self.paste_button = QPushButton("Paste table")
+        self.csv_button = QPushButton("Map CSV")
+        self.export_metadata_button = QPushButton("Export metadata CSV")
+        for button in (
+            self.cif_button,
+            self.configuration_button,
+            self.paste_button,
+            self.csv_button,
+            self.export_metadata_button,
+        ):
+            metadata_controls.addWidget(button)
+        center_layout.addLayout(metadata_controls)
+        storage_notice = QLabel(
+            "Storage: reference OSC files in place. Originals are never copied or modified; copy-storage review is a later task."
+        )
+        storage_notice.setWordWrap(True)
+        storage_notice.setObjectName("mutedText")
+        center_layout.addWidget(storage_notice)
         splitter.addWidget(center)
 
         inspector = QFrame()
@@ -571,6 +708,18 @@ class ShellWindow(QMainWindow):
         self.refresh_project()
         self._mark_dirty()
 
+    def _step_acquisition(self, direction: int) -> None:
+        order = [item.acquisition_id for item in self.project.acquisitions]
+        if not order or direction not in (-1, 1):
+            return
+        if self.selected_acquisition_id not in order:
+            target = 0 if direction > 0 else len(order) - 1
+        else:
+            target = min(
+                max(order.index(self.selected_acquisition_id) + direction, 0), len(order) - 1
+            )
+        self._activate_acquisition(order[target])
+
     def _has_unsaved_edits(self) -> bool:
         if self._project_path is not None:
             return self._revision > self._saved_revision
@@ -624,11 +773,78 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_reference is not None:
+            kind, path, ids, project_id, revision = self._pending_reference
+            self._pending_reference = None
+            if project_id == self.project.project_id and revision == self._revision:
+                argument = json.dumps({"kind": kind, "path": str(path)}).encode("utf-8")
+                self._active_kind = "reference"
+                self._active_reference = (kind, path, ids, project_id, revision)
+                try:
+                    identity = self.jobs.submit(
+                        JobRequest(
+                            project_id,
+                            None,
+                            Revisions(data=revision),
+                            argument,
+                            len(argument),
+                            8192,
+                            prepare_reference,
+                        )
+                    )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self._active_kind = None
+                    self._active_reference = None
+                    self.statusBar().showMessage(f"Reference check could not start: {exc}")
+                else:
+                    self._active_generation = identity.generation
+                    return
         if self._deferred_import is not None:
             source, acquisition_id, mode, project_id = self._deferred_import
             self._deferred_import = None
             if project_id == self.project.project_id:
                 self._submit_import(source, acquisition_id, mode=mode)
+            return
+        self._start_next_candidate()
+
+    def _start_next_candidate(self) -> None:
+        if self.jobs.busy or self._active_kind is not None or self._close_intent:
+            return
+        while self._candidate_queue:
+            candidate_id = self._candidate_queue.popleft()
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None or candidate.status != "queued":
+                continue
+            if len(self.project.acquisitions) >= MAX_ACQUISITIONS:
+                candidate.status = "failed"
+                candidate.detail = f"Project limit: {MAX_ACQUISITIONS} acquisitions"
+                continue
+            candidate.status = "reading"
+            self._active_kind = "batch"
+            self._active_candidate_id = candidate_id
+            try:
+                argument = encode_bounded_path(candidate.path, self._max_import_axis)
+                identity = self.jobs.submit(
+                    JobRequest(
+                        self.project.project_id,
+                        candidate_id,
+                        Revisions(data=1),
+                        argument,
+                        len(argument),
+                        MAX_RESULT_BYTES,
+                        prepare_osc,
+                    )
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                candidate.status = "failed"
+                candidate.detail = str(exc)[:160]
+                self._active_kind = None
+                self._active_candidate_id = None
+                continue
+            self._active_generation = identity.generation
+            self._refresh_review_table()
+            return
+        self._refresh_review_table()
 
     def _choose_open(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -658,8 +874,16 @@ class ShellWindow(QMainWindow):
             return
         self._pending_open = (candidate, recovery)
         self._discard_confirmed = False
-        if self._active_kind in ("import", "relink"):
+        for candidate_id in self._candidate_queue:
+            queued = self._candidates.get(candidate_id)
+            if queued is not None and queued.status == "queued":
+                queued.status = "canceled"
+                queued.detail = "Interrupted by project open; retry if this project remains"
+        self._pending_reference = None
+        if self._active_kind in ("import", "relink", "batch", "reference"):
             self.jobs.cancel()
+        self._candidate_queue.clear()
+        self._refresh_review_table()
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _advance_open(self) -> None:
@@ -712,6 +936,73 @@ class ShellWindow(QMainWindow):
         )
         if filename:
             self.relink_selected(Path(filename))
+
+    def _choose_reference(self, kind: str) -> None:
+        ids = self._selected_project_ids()
+        if not ids:
+            self.statusBar().showMessage("Select acquisitions before choosing a reference")
+            return
+        extension = "CIF (*.cif)" if kind == "cif" else "Simulation configurations (*.yaml *.yml)"
+        filename, _ = QFileDialog.getOpenFileName(
+            self, f"Choose {kind} reference", str(Path.home()), extension
+        )
+        if not filename:
+            return
+        path = Path(filename).absolute()
+        if len(str(path)) > 4096:
+            self.statusBar().showMessage("Reference path exceeds 4096 characters")
+            return
+        if self._pending_reference is not None:
+            self.statusBar().showMessage("Finish the pending reference check first")
+            return
+        self._pending_reference = (kind, path, ids, self.project.project_id, self._revision)
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _reference_ready(self, identity: JobIdentity, value: object) -> None:
+        task = self._active_reference
+        self._active_reference = None
+        if (
+            task is None
+            or not isinstance(value, ValidatedReference)
+            or identity.project_id != self.project.project_id
+            or identity.revisions.data != self._revision
+            or (value.kind, value.path) != task[:2]
+        ):
+            self.statusBar().showMessage("Reference result became stale; choose it again")
+            return
+        kind, path, ids, _, _ = task
+        updated = self.project
+        try:
+            for acquisition_id in ids:
+                if acquisition_id not in {item.acquisition_id for item in updated.acquisitions}:
+                    continue
+                metadata = next(
+                    item.metadata
+                    for item in updated.acquisitions
+                    if item.acquisition_id == acquisition_id
+                )
+                provenance = dict(metadata.provenance)
+                provenance[f"{kind}_path"] = f"validated {kind} reader"
+                changes = {
+                    f"{kind}_path": path,
+                    f"{kind}_sha256": value.sha256,
+                    "provenance": tuple(sorted(provenance.items())),
+                }
+                if value.material_id:
+                    changes["material_id"] = value.material_id
+                    provenance["material_id"] = f"validated {kind} reader"
+                    changes["provenance"] = tuple(sorted(provenance.items()))
+                updated = updated.update_metadata(acquisition_id, **changes)
+        except (ProjectFormatError, ValueError) as exc:
+            self.statusBar().showMessage(f"Reference binding rejected: {exc}")
+            return
+        if updated != self.project:
+            self.project = updated
+            self.refresh_project()
+            self._mark_dirty()
+        self.statusBar().showMessage(
+            f"Validated {kind} reference and SHA-256 for {len(ids)} acquisition(s)"
+        )
 
     def relink_selected(self, path: Path) -> None:
         if self.selected_acquisition_id is None:
@@ -811,6 +1102,149 @@ class ShellWindow(QMainWindow):
                 "empty", "No acquisitions yet", "Choose one OSC or OSC.GZ file, or drop it here."
             )
         self.project_tree.blockSignals(False)
+        self._refresh_review_table()
+
+    def _thumbnail_icon(self, acquisition_id: UUID) -> QIcon:
+        item = self._thumbnails.get(acquisition_id)
+        if item is None:
+            return QIcon()
+        pixels, rows, columns = item
+        image = QImage(pixels, columns, rows, columns, QImage.Format.Format_Grayscale8)
+        return QIcon(QPixmap.fromImage(image.copy()))
+
+    def _refresh_review_table(self) -> None:
+        table = self.review_table
+        table.blockSignals(True)
+        table.setSortingEnabled(False)
+        candidate_rows = [item for item in self._candidates.values() if item.status != "imported"]
+        table.setRowCount(len(self.project.acquisitions) + len(candidate_rows))
+        selected_row = None
+        for row, acquisition in enumerate(self.project.acquisitions):
+            metadata = acquisition.metadata
+            check = self._source_checks.get(acquisition.acquisition_id)
+            duplicate_count = (
+                sum(
+                    other.source_sha256 == acquisition.source_sha256
+                    for other in self.project.acquisitions
+                )
+                - 1
+            )
+            status = check.state if check is not None else "verified"
+            if duplicate_count:
+                status += f" · exact-content duplicate ({duplicate_count})"
+            if (
+                metadata.detector_setup
+                and metadata.native_shape
+                and any(
+                    other.acquisition_id != acquisition.acquisition_id
+                    and other.metadata.detector_setup == metadata.detector_setup
+                    and other.metadata.native_shape is not None
+                    and other.metadata.native_shape != metadata.native_shape
+                    for other in self.project.acquisitions
+                )
+            ):
+                status += " · detector-setup shape conflict"
+            if metadata.proposals:
+                status += f" · {len(metadata.proposals)} unconfirmed suggestion(s)"
+            source = self._candidates.get(acquisition.acquisition_id)
+            if source is not None and source.detail:
+                status += f" · {source.detail}"
+            references = ", ".join(
+                value
+                for value in (
+                    metadata.material_id,
+                    metadata.cif_path.name if metadata.cif_path else None,
+                    metadata.configuration_path.name if metadata.configuration_path else None,
+                )
+                if value
+            )
+            cells = (
+                "",
+                acquisition.source_path.name,
+                metadata.role or "unknown",
+                " / ".join(value or "unknown" for value in (metadata.specimen, metadata.mount)),
+                "unknown"
+                if metadata.incidence_rad is None
+                else f"{math.degrees(metadata.incidence_rad):.6g}",
+                "unknown" if metadata.exposure_s is None else f"{metadata.exposure_s:.6g}",
+                "unknown"
+                if metadata.native_shape is None
+                else f"{metadata.native_shape[0]} x {metadata.native_shape[1]}",
+                metadata.detector_setup or "unknown",
+                references or "unknown",
+                metadata.calibrant_id or "unknown",
+                status,
+            )
+            for column, value in enumerate(cells):
+                cell = QTableWidgetItem(value)
+                cell.setData(Qt.ItemDataRole.UserRole, str(acquisition.acquisition_id))
+                if column == 0:
+                    cell.setIcon(self._thumbnail_icon(acquisition.acquisition_id))
+                table.setItem(row, column, cell)
+            if acquisition.acquisition_id == self.selected_acquisition_id:
+                selected_row = row
+        for offset, candidate in enumerate(candidate_rows):
+            row = len(self.project.acquisitions) + offset
+            cells = (
+                "",
+                candidate.path.name,
+                "unknown",
+                "unknown",
+                "unknown",
+                "unknown",
+                "unknown",
+                "unknown",
+                "unknown",
+                "unknown",
+                f"{candidate.status}: {candidate.detail}",
+            )
+            for column, value in enumerate(cells):
+                cell = QTableWidgetItem(value)
+                cell.setData(Qt.ItemDataRole.UserRole, str(candidate.acquisition_id))
+                table.setItem(row, column, cell)
+        table.setSortingEnabled(True)
+        if selected_row is not None:
+            for row in range(table.rowCount()):
+                cell = table.item(row, 0)
+                if cell is not None and cell.data(Qt.ItemDataRole.UserRole) == str(
+                    self.selected_acquisition_id
+                ):
+                    table.selectRow(row)
+                    break
+        self.filmstrip.blockSignals(True)
+        self.filmstrip.clear()
+        for acquisition in self.project.acquisitions:
+            item = QListWidgetItem(
+                self._thumbnail_icon(acquisition.acquisition_id), acquisition.name
+            )
+            item.setData(Qt.ItemDataRole.UserRole, str(acquisition.acquisition_id))
+            self.filmstrip.addItem(item)
+        self.filmstrip.blockSignals(False)
+        table.blockSignals(False)
+
+    def _review_selection_changed(self) -> None:
+        row = self.review_table.currentRow()
+        item = self.review_table.item(row, 0) if row >= 0 else None
+        value = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if value is not None:
+            self._selection_from_review = True
+            try:
+                self._activate_acquisition(UUID(value))
+            finally:
+                self._selection_from_review = False
+
+    def _filmstrip_clicked(self, item: QListWidgetItem) -> None:
+        self._activate_acquisition(UUID(item.data(Qt.ItemDataRole.UserRole)))
+
+    def _activate_acquisition(self, acquisition_id: UUID) -> None:
+        root = self.project_tree.topLevelItem(0)
+        if root is None:
+            return
+        for index in range(root.childCount()):
+            item = root.child(index)
+            if item.data(0, Qt.ItemDataRole.UserRole) == str(acquisition_id):
+                self.project_tree.setCurrentItem(item)
+                return
 
     def _update_selection_label(self) -> None:
         acquisition = next(
@@ -836,8 +1270,59 @@ class ShellWindow(QMainWindow):
             if check is not None and check.state != "verified"
             else "Source: verified"
         )
+        metadata = acquisition.metadata
+        angle = (
+            "unknown"
+            if metadata.incidence_rad is None
+            else f"{math.degrees(metadata.incidence_rad):.6g} deg (commanded)"
+        )
+        exposure = "unknown" if metadata.exposure_s is None else f"{metadata.exposure_s:.6g} s"
+        references = (
+            ", ".join(
+                value
+                for value in (
+                    metadata.material_id,
+                    str(metadata.cif_path) if metadata.cif_path else None,
+                    str(metadata.configuration_path) if metadata.configuration_path else None,
+                    metadata.calibrant_id,
+                )
+                if value
+            )
+            or "unknown"
+        )
+        missing = []
+        if metadata.role is None:
+            missing.append("role")
+        if metadata.detector_setup is None:
+            missing.append("detector setup")
+        if metadata.role == "sample":
+            if metadata.incidence_rad is None:
+                missing.append("commanded incidence")
+            if metadata.exposure_s is None:
+                missing.append("exposure")
+            if metadata.material_id is None and metadata.cif_path is None:
+                missing.append("material/CIF")
+        if metadata.role == "calibrant" and metadata.calibrant_id is None:
+            missing.append("calibrant reference")
+        source_detail = (
+            "; ".join(f"{field}: {origin}" for field, origin in metadata.provenance) or "none"
+        )
+        proposals = (
+            "; ".join(
+                f"{field}={value} from {origin} (unconfirmed)"
+                for field, value, origin in metadata.proposals
+            )
+            or "none"
+        )
         self.selection_label.setText(
-            f"{acquisition.name}\n{details}\n{source_state}\nAngles: unknown\nCalibration: unknown"
+            f"{acquisition.name}\n{details}\n{source_state}\n"
+            f"Source: {acquisition.source_path}\nProject: {self._project_path or 'unsaved'}\n"
+            f"Role: {metadata.role or 'unknown'} · Specimen: {metadata.specimen or 'unknown'} · Mount: {metadata.mount or 'unknown'}\n"
+            f"Angle: {angle} · Exposure: {exposure}\n"
+            f"Detector setup: {metadata.detector_setup or 'unknown'} · References: {references}\n"
+            f"Metadata origin: {source_detail}\nSuggestions: {proposals}\n"
+            f"Missing for review: {', '.join(missing) if missing else 'none declared'}\n"
+            "Raw browsing remains available; no fitting, subtraction or mask application is implied."
         )
         self.relink_button.setEnabled(True)
 
@@ -854,32 +1339,453 @@ class ShellWindow(QMainWindow):
         self.detector_notice.setVisible(show_image and kind != "empty")
 
     def _choose_import(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
+        filenames, _ = QFileDialog.getOpenFileNames(
             self,
-            "Import one OSC image",
+            "Import files",
             str(Path.home()),
             "OSC images (*.osc *.OSC *.osc.gz *.OSC.GZ)",
         )
-        if filename:
-            self.start_import(Path(filename))
+        if filenames:
+            self.start_import_files(Path(filename) for filename in filenames)
+
+    def _choose_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Review one folder", str(Path.home()))
+        if not folder:
+            return
+        paths = []
+        try:
+            with os.scandir(folder) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 256:
+                        raise ValueError("Folder has more than 256 direct entries")
+                    if entry.is_file():
+                        paths.append(Path(entry.path))
+                    if len(paths) > MAX_IMPORT_CANDIDATES:
+                        raise ValueError(
+                            f"Folder has more than {MAX_IMPORT_CANDIDATES} direct files"
+                        )
+        except (OSError, ValueError) as exc:
+            self._show_state(
+                "error",
+                "Folder scope too large",
+                f"{exc}. Subfolders were not scanned.",
+            )
+            return
+        paths.sort()
+        names = "\n".join(path.name for path in paths[:20])
+        detail = f"{len(paths)} direct files in {folder}; no subfolders.\n{names}"
+        if len(paths) > 20:
+            detail += f"\n… and {len(paths) - 20} more"
+        if (
+            QMessageBox.question(
+                self, "Review folder candidates", detail + "\nImport this explicit list?"
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            try:
+                self.start_import_files(paths)
+            except ValueError as exc:
+                self._show_state("error", "Folder scope rejected", str(exc))
 
     def start_import(self, path: Path) -> None:
-        source = Path(path).absolute()
-        if not source.name.lower().endswith((".osc", ".osc.gz")):
-            self._show_state("error", "Unsupported file", "Choose one .osc or .osc.gz file.")
+        self.start_import_files((path,))
+
+    def start_import_files(self, paths: object) -> tuple[UUID, ...]:
+        sources = tuple(Path(path).absolute() for path in paths)
+        if not sources or len(sources) > MAX_IMPORT_CANDIDATES:
+            raise ValueError(f"Choose 1 to {MAX_IMPORT_CANDIDATES} files")
+        encoded = sum(len(os.fsencode(source)) for source in sources)
+        if encoded > MAX_IMPORT_PATH_BYTES or any(len(str(source)) > 4096 for source in sources):
+            raise ValueError("Import candidate paths exceed the bounded request limit")
+        if len(self._candidates) + len(sources) > MAX_IMPORT_CANDIDATES:
+            raise ValueError("Import review is full; clear completed candidates first")
+        if not self.project.acquisitions and self.selected_acquisition_id is None:
+            self._batch_auto_select = True
+        added = []
+        for source in sources:
+            candidate = ImportCandidate(
+                uuid4(),
+                source,
+                "queued" if source.name.lower().endswith((".osc", ".osc.gz")) else "unsupported",
+                ""
+                if source.name.lower().endswith((".osc", ".osc.gz"))
+                else "Only OSC/OSC.GZ is supported",
+            )
+            self._candidates[candidate.acquisition_id] = candidate
+            added.append(candidate.acquisition_id)
+            if candidate.status == "queued":
+                self._candidate_queue.append(candidate.acquisition_id)
+        self._refresh_review_table()
+        QTimer.singleShot(0, self._dispatch_pending)
+        return tuple(added)
+
+    def retry_candidate(self, candidate_id: UUID) -> None:
+        candidate = self._candidates[candidate_id]
+        if candidate.status not in ("failed", "canceled"):
+            raise ValueError("Only failed or canceled candidates can be retried")
+        candidate.status = "queued"
+        candidate.detail = ""
+        self._candidate_queue.append(candidate_id)
+        self._refresh_review_table()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _selected_review_ids(self) -> tuple[UUID, ...]:
+        rows = sorted({index.row() for index in self.review_table.selectedIndexes()})
+        return tuple(
+            UUID(self.review_table.item(row, 0).data(Qt.ItemDataRole.UserRole))
+            for row in rows
+            if self.review_table.item(row, 0) is not None
+        )
+
+    def _selected_project_ids(self) -> tuple[UUID, ...]:
+        valid = {item.acquisition_id for item in self.project.acquisitions}
+        selected = tuple(item for item in self._selected_review_ids() if item in valid)
+        if not selected and self.selected_acquisition_id in valid:
+            return (self.selected_acquisition_id,)
+        return selected
+
+    def _edit_selected_metadata(self) -> None:
+        ids = self._selected_project_ids()
+        if not ids:
+            self.statusBar().showMessage("Select one or more admitted acquisitions")
             return
-        self._submit_import(source, uuid4())
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Apply metadata to {len(ids)} selected acquisition(s)")
+        layout = QFormLayout(dialog)
+        guidance = QLabel(
+            "Blank keeps a field. Enter ? to clear it. Angle is degrees; stored value is radians. Nothing is inferred from filenames."
+        )
+        guidance.setWordWrap(True)
+        layout.addRow(guidance)
+        role = QComboBox()
+        for label, value in (
+            ("Keep role", None),
+            ("Unknown", "?"),
+            ("Sample", "sample"),
+            ("Calibrant", "calibrant"),
+            ("Dark", "dark"),
+            ("Mask", "mask"),
+        ):
+            role.addItem(label, value)
+        layout.addRow("Role", role)
+        fields = {}
+        for field_name, label in (
+            ("specimen", "Specimen"),
+            ("mount", "Mount"),
+            ("incidence_deg", "Commanded incidence (deg)"),
+            ("exposure_s", "Exposure (s)"),
+            ("detector_setup", "Detector setup"),
+            ("material_id", "Material phase ID (label only)"),
+        ):
+            editor = QLineEdit()
+            editor.setMaxLength(256)
+            layout.addRow(label, editor)
+            fields[field_name] = editor
+        calibrant = QComboBox()
+        calibrant.addItem("Keep calibrant", None)
+        calibrant.addItem("Unknown", "?")
+        calibrant.addItem("hBN · Cu K-alpha · five declared rings", "hbn_cu_ka_5rings")
+        layout.addRow("Calibrant preset", calibrant)
+        associations = {}
+        for name, linked_role in (("dark_acquisition_id", "dark"), ("mask_acquisition_id", "mask")):
+            picker = QComboBox()
+            picker.addItem("Keep association", None)
+            picker.addItem("None", "?")
+            for item in self.project.acquisitions:
+                if item.metadata.role == linked_role and item.acquisition_id not in ids:
+                    picker.addItem(f"{item.name} · {item.acquisition_id}", str(item.acquisition_id))
+            layout.addRow(f"{linked_role.title()} association", picker)
+            associations[name] = picker
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        mapping = ["role", *fields, "calibrant_id", *associations]
+        values = [
+            role.currentData(),
+            *(editor.text().strip() for editor in fields.values()),
+            calibrant.currentData(),
+            *(picker.currentData() for picker in associations.values()),
+        ]
+        row = tuple("" if value is None else value for value in values)
+        try:
+            updated = apply_mapped_rows(
+                self.project,
+                tuple(row for _ in ids),
+                tuple(mapping),
+                selected_ids=ids,
+                origin="manual review",
+            )
+        except (ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Metadata rejected", str(exc))
+            return
+        if updated != self.project:
+            self.project = updated
+            self.refresh_project()
+            self._mark_dirty()
+
+    def _confirm_selected_proposals(self) -> None:
+        ids = self._selected_project_ids()
+        updated = self.project
+        for acquisition_id in ids:
+            metadata = next(
+                item.metadata
+                for item in updated.acquisitions
+                if item.acquisition_id == acquisition_id
+            )
+            if not metadata.proposals:
+                continue
+            changes = {}
+            provenance = dict(metadata.provenance)
+            for field_name, supplied, origin in metadata.proposals:
+                if field_name != "incidence_rad":
+                    continue
+                changes[field_name] = float(supplied)
+                provenance[field_name] = f"confirmed {origin}"
+            if changes:
+                updated = updated.update_metadata(
+                    acquisition_id,
+                    **changes,
+                    provenance=tuple(sorted(provenance.items())),
+                    proposals=(),
+                )
+        if updated != self.project:
+            self.project = updated
+            self.refresh_project()
+            self._mark_dirty()
+            self.statusBar().showMessage(
+                "Confirmed selected filename suggestions as commanded values"
+            )
+
+    def _map_metadata_text(self, delimiter: str) -> None:
+        origin = "spreadsheet paste"
+        if delimiter == ",":
+            filename, _ = QFileDialog.getOpenFileName(
+                self, "Choose metadata CSV", str(Path.home()), "CSV (*.csv)"
+            )
+            if not filename:
+                return
+            path = Path(filename)
+            try:
+                with path.open("rb") as stream:
+                    encoded = stream.read(64 * 1024 + 1)
+                if len(encoded) > 64 * 1024:
+                    raise ProjectFormatError("metadata CSV exceeds 64 KiB")
+                text = encoded.decode("utf-8-sig")
+            except (OSError, UnicodeError, ProjectFormatError) as exc:
+                QMessageBox.warning(self, "CSV unavailable", str(exc))
+                return
+            origin = f"CSV: {path.name}"
+        else:
+            clipboard_text = QApplication.clipboard().text()
+            if len(clipboard_text.encode("utf-8")) > 64 * 1024:
+                QMessageBox.warning(self, "Paste rejected", "Spreadsheet paste exceeds 64 KiB")
+                return
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Paste spreadsheet metadata with a header row")
+            layout = QVBoxLayout(dialog)
+            editor = QPlainTextEdit()
+            editor.setPlainText(clipboard_text)
+            layout.addWidget(editor)
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            text = editor.toPlainText()
+        try:
+            parsed = parse_table_text(text, delimiter=delimiter)
+            if len(parsed) < 2:
+                raise ProjectFormatError("metadata table needs a header and at least one data row")
+            headers, rows = parsed[0], parsed[1:]
+            if any(len(row) != len(headers) for row in rows):
+                raise ProjectFormatError("metadata rows must match header column count")
+        except (ProjectFormatError, csv.Error) as exc:
+            QMessageBox.warning(self, "Metadata table rejected", str(exc))
+            return
+        mapping_dialog = QDialog(self)
+        mapping_dialog.setWindowTitle("Map columns and preview metadata")
+        layout = QFormLayout(mapping_dialog)
+        preview = QLabel("\n".join(" | ".join(row) for row in parsed[:6]))
+        preview.setWordWrap(True)
+        layout.addRow("First rows", preview)
+        pickers = []
+        for index, header in enumerate(headers):
+            picker = QComboBox()
+            picker.addItem("Ignore", None)
+            for field_name in MAPPED_FIELDS:
+                picker.addItem(field_name, field_name)
+            if header.strip() in MAPPED_FIELDS:
+                picker.setCurrentIndex(MAPPED_FIELDS.index(header.strip()) + 1)
+            layout.addRow(f"Column {index + 1}: {header}", picker)
+            pickers.append(picker)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(mapping_dialog.accept)
+        buttons.rejected.connect(mapping_dialog.reject)
+        layout.addRow(buttons)
+        if mapping_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            updated = apply_mapped_rows(
+                self.project,
+                rows,
+                tuple(picker.currentData() for picker in pickers),
+                selected_ids=self._selected_project_ids(),
+                origin=origin,
+            )
+        except (ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Metadata mapping rejected", str(exc))
+            return
+        if updated != self.project:
+            self.project = updated
+            self.refresh_project()
+            self._mark_dirty()
+
+    def _choose_metadata_export(self) -> None:
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export acquisition metadata",
+            str(Path.home() / "acquisitions.csv"),
+            "CSV (*.csv)",
+        )
+        if not filename:
+            return
+        path = Path(filename).absolute()
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        if path == self._project_path or any(
+            path == item.source_path for item in self.project.acquisitions
+        ):
+            QMessageBox.warning(
+                self,
+                "Export rejected",
+                "Choose a destination separate from project and source files",
+            )
+            return
+        try:
+            path.write_text(metadata_csv(self.project), encoding="utf-8", newline="")
+        except (OSError, ProjectFormatError) as exc:
+            QMessageBox.warning(self, "Metadata export failed", str(exc))
+            return
+        self.statusBar().showMessage(
+            f"Exported metadata with explicit degrees and provenance: {path}"
+        )
+
+    def _retry_review_selection(self) -> None:
+        for candidate_id in self._selected_review_ids():
+            candidate = self._candidates.get(candidate_id)
+            if candidate is not None and candidate.status in ("failed", "canceled"):
+                if not candidate.path.exists():
+                    filename, _ = QFileDialog.getOpenFileName(
+                        self,
+                        "Locate failed OSC candidate",
+                        str(candidate.path.parent),
+                        "OSC images (*.osc *.OSC *.osc.gz *.OSC.GZ)",
+                    )
+                    if not filename:
+                        continue
+                    candidate.path = Path(filename).absolute()
+                self.retry_candidate(candidate_id)
+
+    def _cancel_review_selection(self) -> None:
+        for candidate_id in self._selected_review_ids():
+            if candidate_id in self._candidates:
+                self.cancel_candidate(candidate_id)
+
+    def _remove_review_selection(self) -> None:
+        ids = self._selected_review_ids()
+        if not ids:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Remove references",
+                f"Remove {len(ids)} selected rows from this project? Source files remain untouched.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        changed = False
+        for acquisition_id in ids:
+            candidate = self._candidates.pop(acquisition_id, None)
+            if candidate is not None and candidate.status == "reading":
+                self.jobs.cancel()
+            if candidate is not None and candidate.status == "queued":
+                self._candidate_queue = deque(
+                    item for item in self._candidate_queue if item != acquisition_id
+                )
+            if any(item.acquisition_id == acquisition_id for item in self.project.acquisitions):
+                if self._deferred_import is not None and self._deferred_import[1] == acquisition_id:
+                    self._deferred_import = None
+                if (
+                    self._active_kind in ("import", "relink")
+                    and self._active_load_id == acquisition_id
+                ):
+                    self.jobs.invalidate()
+                self.project = self.project.remove_acquisition(acquisition_id)
+                self._resident_planes.pop(acquisition_id, None)
+                self._thumbnails.pop(acquisition_id, None)
+                self._source_checks.pop(acquisition_id, None)
+                if self.selected_acquisition_id == acquisition_id:
+                    self.selected_acquisition_id = None
+                if self._visible_acquisition_id == acquisition_id:
+                    self._visible_acquisition_id = None
+                changed = True
+        if changed:
+            self._mark_dirty()
+        self.refresh_project()
+
+    def cancel_candidate(self, candidate_id: UUID) -> None:
+        candidate = self._candidates[candidate_id]
+        if candidate.status == "queued":
+            candidate.status = "canceled"
+            candidate.detail = "Canceled before decode"
+            self._candidate_queue = deque(
+                item for item in self._candidate_queue if item != candidate_id
+            )
+        elif candidate_id == self._active_candidate_id and candidate.status == "reading":
+            self.jobs.cancel()
+        self._refresh_review_table()
+
+    def _cancel_current(self) -> None:
+        if self._active_kind == "batch":
+            for candidate_id in self._candidate_queue:
+                candidate = self._candidates.get(candidate_id)
+                if candidate is not None:
+                    candidate.status = "canceled"
+                    candidate.detail = "Batch canceled"
+            self._candidate_queue.clear()
+            self._refresh_review_table()
+        self.jobs.cancel()
 
     def _submit_import(
         self, source: Path, acquisition_id: UUID, *, mode: Literal["import", "relink"] = "import"
     ) -> None:
         if (
             self._active_kind in ("save", "discard", "open")
+            or self.jobs.busy
+            or self._active_kind is not None
             or self._write_queue
             or self._pending_open
         ):
             self._deferred_import = (source, acquisition_id, mode, self.project.project_id)
             self.statusBar().showMessage("Import queued behind project I/O")
+            return
+        acquisition = next(
+            (item for item in self.project.acquisitions if item.acquisition_id == acquisition_id),
+            None,
+        )
+        if acquisition is None:
+            self.statusBar().showMessage("Removed acquisition load ignored")
             return
         texture_axis = self.detector_panel.view.max_texture_axis
         if texture_axis is None or texture_axis <= 0:
@@ -891,8 +1797,14 @@ class ShellWindow(QMainWindow):
         argument = encode_bounded_path(source, self._max_import_axis)
         previous_kind = self._active_kind
         previous_generation = self._active_generation
+        previous_load = self._active_load_id
+        previous_revision = self._active_load_revision
+        previous_hash = self._active_load_hash
         self._active_kind = mode
         self._active_generation = None
+        self._active_load_id = acquisition_id
+        self._active_load_revision = self._revision
+        self._active_load_hash = acquisition.source_sha256
         try:
             identity = self.jobs.submit(
                 JobRequest(
@@ -908,6 +1820,9 @@ class ShellWindow(QMainWindow):
         except (OSError, RuntimeError, ValueError) as exc:
             self._active_kind = previous_kind
             self._active_generation = previous_generation
+            self._active_load_id = previous_load
+            self._active_load_revision = previous_revision
+            self._active_load_hash = previous_hash
             self._show_state("error", "Import could not start", str(exc))
             return
         self._active_generation = identity.generation
@@ -920,21 +1835,111 @@ class ShellWindow(QMainWindow):
 
     def dropEvent(self, event: QDropEvent) -> None:
         paths = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.isLocalFile()]
-        if len(paths) != 1 or len(event.mimeData().urls()) != 1:
-            self._show_state(
-                "error",
-                "One file at a time",
-                "Drop exactly one local OSC file. Multiple-file import will arrive in a later version.",
-            )
-        else:
-            self.start_import(paths[0])
+        try:
+            self.start_import_files(paths)
+        except ValueError as exc:
+            self._show_state("error", "Import scope rejected", str(exc))
         event.acceptProposedAction()
+
+    def _batch_ready(self, identity: JobIdentity, value: object) -> None:
+        candidate = self._candidates.get(identity.acquisition_id)
+        if (
+            candidate is None
+            or candidate.status != "reading"
+            or identity.project_id != self.project.project_id
+            or identity.generation != self.jobs.latest_generation
+            or identity.revisions != Revisions(data=1)
+            or not isinstance(value, PreparedOsc)
+            or candidate.path != value.source_path
+        ):
+            return
+        if len(self.project.acquisitions) >= MAX_ACQUISITIONS:
+            candidate.status = "failed"
+            candidate.detail = "Project acquisition limit reached"
+            return
+        duplicate_ids = [
+            item.acquisition_id
+            for item in self.project.acquisitions
+            if item.source_sha256 == value.decoded_sha256
+        ]
+        metadata = AcquisitionMetadata(
+            native_shape=value.native_counts.shape,
+            proposals=filename_angle_proposal(value.source_path),
+        )
+        acquisition = Acquisition.create(
+            value.source_path.name,
+            value.source_path,
+            value.decoded_sha256,
+            acquisition_id=candidate.acquisition_id,
+        )
+        acquisition = replace(acquisition, metadata=metadata)
+        next_project = replace(self.project, acquisitions=(*self.project.acquisitions, acquisition))
+        select_on_admission = self._batch_auto_select and self.selected_acquisition_id is None
+        if select_on_admission:
+            try:
+                self._publish_plane(acquisition.acquisition_id, value)
+            except ValueError as exc:
+                candidate.status = "failed"
+                candidate.detail = f"Detector publication rejected: {exc}"
+                return
+        self.project = next_project
+        candidate.status = "imported"
+        candidate.detail = (
+            f"Exact decoded-content duplicate of {len(duplicate_ids)} acquisition(s)"
+            if duplicate_ids
+            else "Decoded source verified"
+        )
+        self._source_checks[acquisition.acquisition_id] = SourceCheck(
+            acquisition.acquisition_id, "verified"
+        )
+        self._thumbnails[acquisition.acquisition_id] = (
+            value.thumbnail.tobytes(),
+            *value.thumbnail.shape,
+        )
+        if sum(len(item[0]) for item in self._thumbnails.values()) > MAX_THUMBNAIL_BYTES:
+            raise RuntimeError("thumbnail residency exceeded its declared cap")
+        self._remember_plane(acquisition.acquisition_id, value)
+        if select_on_admission:
+            self.selected_acquisition_id = acquisition.acquisition_id
+            self._batch_auto_select = False
+        self.refresh_project()
+        self._refresh_review_table()
+        self._mark_dirty()
+
+    def _remember_plane(self, acquisition_id: UUID, value: PreparedOsc) -> None:
+        self._resident_planes[acquisition_id] = value
+        self._resident_planes.move_to_end(acquisition_id)
+        while len(self._resident_planes) > MAX_CACHED_PLANES:
+            victim = next(
+                item for item in self._resident_planes if item != self._visible_acquisition_id
+            )
+            del self._resident_planes[victim]
+
+    def _publish_plane(self, acquisition_id: UUID, value: PreparedOsc) -> None:
+        self.detector_panel.set_prepared_image(
+            value.native_counts,
+            value.display,
+            value.profiles,
+            value.full_profiles,
+            value.low_value,
+            value.high_value,
+            value.max_value,
+            value.min_positive,
+            acquisition_id,
+        )
+        self._visible_acquisition_id = acquisition_id
+        self._visible_details = (
+            f"Native detector: {value.native_counts.shape[0]} rows x "
+            f"{value.native_counts.shape[1]} columns\n"
+            f"OSC header: version {value.version}, {value.byte_order} endian"
+        )
 
     def _import_ready(self, identity: JobIdentity, value: object) -> None:
         if (
             identity.project_id != self.project.project_id
             or identity.generation != self.jobs.latest_generation
             or identity.acquisition_id is None
+            or identity.acquisition_id != self.selected_acquisition_id
             or identity.revisions != Revisions(data=1)
             or not isinstance(value, PreparedOsc)
         ):
@@ -948,58 +1953,41 @@ class ShellWindow(QMainWindow):
             None,
         )
         relinking = self._active_kind == "relink"
-        if existing is not None:
-            if existing.source_sha256 != value.decoded_sha256 or (
-                not relinking and existing.source_path != value.source_path
-            ):
-                self._show_state(
-                    "error",
-                    "Source mismatch",
-                    "Decoded OSC bytes do not match this acquisition. Choose the original source or import a new acquisition.",
-                )
-                self.statusBar().showMessage("Source mismatch · No image applied")
-                return
-            acquisition = (
-                replace(existing, source_path=value.source_path) if relinking else existing
+        if existing is None:
+            self.statusBar().showMessage("Removed acquisition ignored · No image applied")
+            return
+        if (
+            self._active_load_revision != self._revision
+            or self._active_load_hash != existing.source_sha256
+        ):
+            self._deferred_import = (
+                existing.source_path,
+                existing.acquisition_id,
+                "import",
+                self.project.project_id,
             )
-        else:
-            if relinking:
-                self._show_state("error", "Relink unavailable", "The acquisition no longer exists.")
-                return
-            if len(self.project.acquisitions) >= MAX_ACQUISITIONS:
-                self._show_state(
-                    "error",
-                    "Project is full",
-                    f"This project supports at most {MAX_ACQUISITIONS} acquisitions.",
-                )
-                return
-            acquisition = Acquisition.create(
-                value.source_path.name,
-                value.source_path,
-                value.decoded_sha256,
-                acquisition_id=identity.acquisition_id,
+            self.statusBar().showMessage(
+                "Project changed during image load · Reloading current source"
             )
+            return
+        if existing.source_sha256 != value.decoded_sha256 or (
+            not relinking and existing.source_path != value.source_path
+        ):
+            self._show_state(
+                "error",
+                "Source mismatch",
+                "Decoded OSC bytes do not match this acquisition. Choose the original source or import a new acquisition.",
+            )
+            self.statusBar().showMessage("Source mismatch · No image applied")
+            return
+        acquisition = replace(existing, source_path=value.source_path) if relinking else existing
         try:
-            self.detector_panel.set_prepared_image(
-                value.native_counts,
-                value.display,
-                value.profiles,
-                value.full_profiles,
-                value.low_value,
-                value.high_value,
-                value.max_value,
-                value.min_positive,
-                identity.acquisition_id,
-            )
+            self._publish_plane(identity.acquisition_id, value)
         except ValueError as exc:
             self._show_state("error", "Unsupported detector size", str(exc))
             self.statusBar().showMessage("Unsupported detector size · No image applied")
             return
-        if existing is None:
-            self.project = replace(
-                self.project, acquisitions=(*self.project.acquisitions, acquisition)
-            )
-        elif relinking and acquisition.source_path != existing.source_path:
+        if relinking and acquisition.source_path != existing.source_path:
             self.project = replace(
                 self.project,
                 acquisitions=tuple(
@@ -1008,18 +1996,17 @@ class ShellWindow(QMainWindow):
                 ),
             )
         self.selected_acquisition_id = acquisition.acquisition_id
-        self._visible_acquisition_id = acquisition.acquisition_id
-        self._visible_details = (
-            f"Native detector: {value.native_counts.shape[0]} rows x "
-            f"{value.native_counts.shape[1]} columns\n"
-            f"OSC header: version {value.version}, {value.byte_order} endian"
+        self._remember_plane(acquisition.acquisition_id, value)
+        self._thumbnails[acquisition.acquisition_id] = (
+            value.thumbnail.tobytes(),
+            *value.thumbnail.shape,
         )
         self._source_checks[acquisition.acquisition_id] = SourceCheck(
             acquisition.acquisition_id, "verified"
         )
         self.refresh_project()
         self._apply_restored_view()
-        if existing is None or (relinking and acquisition.source_path != existing.source_path):
+        if relinking and acquisition.source_path != existing.source_path:
             self._mark_dirty()
         self.statusBar().showMessage(f"Imported {value.source_path.name} · detector-native counts")
 
@@ -1094,10 +2081,27 @@ class ShellWindow(QMainWindow):
         if selected_id == self.selected_acquisition_id:
             return
         self.selected_acquisition_id = selected_id
+        self._batch_auto_select = False
         self._deferred_import = None
+        self._mark_dirty()
+        if not self._selection_from_review:
+            self.review_table.blockSignals(True)
+            self.review_table.clearSelection()
+            if selected_id is not None:
+                for row in range(self.review_table.rowCount()):
+                    cell = self.review_table.item(row, 0)
+                    if cell is not None and cell.data(Qt.ItemDataRole.UserRole) == str(selected_id):
+                        self.review_table.selectRow(row)
+                        break
+            self.review_table.blockSignals(False)
+        self.filmstrip.blockSignals(True)
+        for index in range(self.filmstrip.count()):
+            item = self.filmstrip.item(index)
+            item.setSelected(item.data(Qt.ItemDataRole.UserRole) == str(selected_id))
+        self.filmstrip.blockSignals(False)
         self._update_selection_label()
-        had_work = self.jobs.busy and self._active_kind not in ("save", "discard")
-        if self._active_kind not in ("save", "discard"):
+        had_work = self.jobs.busy and self._active_kind not in ("save", "discard", "batch")
+        if self._active_kind not in ("save", "discard", "batch"):
             self.jobs.invalidate()
             self.cancel_button.setEnabled(False)
         self._obsolete_pending = had_work and self.jobs.busy
@@ -1115,14 +2119,22 @@ class ShellWindow(QMainWindow):
             )
             check = self._source_checks.get(selected_id)
             if check is None or check.state == "verified":
-                self._submit_import(acquisition.source_path, acquisition.acquisition_id)
+                resident = self._resident_planes.get(selected_id)
+                if resident is not None:
+                    self._resident_planes.move_to_end(selected_id)
+                    self._publish_plane(selected_id, resident)
+                    self._apply_restored_view()
+                    self._show_state(
+                        "empty", "Image ready", "Resident source verified at admission"
+                    )
+                else:
+                    self._submit_import(acquisition.source_path, acquisition.acquisition_id)
             else:
                 self._show_state(
                     "error",
                     "Source unavailable",
                     f"{check.state}: {check.detail}. Use Relink OSC with the original bytes.",
                 )
-        self._mark_dirty()
 
     def _job_state_changed(self, summary: JobSummary) -> None:
         state = summary.state
@@ -1131,6 +2143,9 @@ class ShellWindow(QMainWindow):
             if terminal and summary.identity.generation == self._active_generation:
                 self._active_kind = None
                 self._active_generation = None
+                self._active_load_id = None
+                self._active_load_revision = None
+                self._active_load_hash = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -1141,8 +2156,32 @@ class ShellWindow(QMainWindow):
         kind = self._active_kind
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
-            kind in ("import", "relink", "open") and state in (JobState.QUEUED, JobState.RUNNING)
+            kind in ("import", "relink", "batch", "reference", "open")
+            and state in (JobState.QUEUED, JobState.RUNNING)
         )
+        if kind == "batch":
+            candidate = self._candidates.get(summary.identity.acquisition_id)
+            if state in (JobState.FAILED, JobState.CANCELED):
+                if candidate is not None:
+                    candidate.status = "failed" if state == JobState.FAILED else "canceled"
+                    candidate.detail = summary.detail or state.value
+                self._active_kind = None
+                self._active_generation = None
+                self._active_candidate_id = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            self._refresh_review_table()
+            self.statusBar().showMessage(
+                f"Import {candidate.path.name if candidate else ''}: {state.value}"
+            )
+            return
+        if kind == "reference":
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self.statusBar().showMessage(f"Reference check {state.value}: {summary.detail}")
+                self._active_kind = None
+                self._active_generation = None
+                self._active_reference = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind in ("save", "discard"):
             if state == JobState.FAILED or state == JobState.CANCELED:
                 self._save_failure = (
@@ -1198,6 +2237,9 @@ class ShellWindow(QMainWindow):
         if state in (JobState.FAILED, JobState.CANCELED):
             self._active_kind = None
             self._active_generation = None
+            self._active_load_id = None
+            self._active_load_revision = None
+            self._active_load_hash = None
             QTimer.singleShot(0, self._dispatch_pending)
         self.statusBar().showMessage(f"OSC operation: {state.value}")
 
@@ -1210,11 +2252,19 @@ class ShellWindow(QMainWindow):
                 self._write_ready(identity, value)
             elif kind == "open":
                 self._open_ready(identity, value)
+            elif kind == "batch":
+                self._batch_ready(identity, value)
+            elif kind == "reference":
+                self._reference_ready(identity, value)
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
             self._active_generation = None
+            self._active_candidate_id = None
+            self._active_load_id = None
+            self._active_load_revision = None
+            self._active_load_hash = None
             QTimer.singleShot(0, self._dispatch_pending)
 
     def _write_ready(self, identity: JobIdentity, value: object) -> None:
@@ -1286,8 +2336,14 @@ class ShellWindow(QMainWindow):
             self._visible_acquisition_id = None
             self._visible_details = ""
             self._source_checks = {item.acquisition_id: item for item in value.sources}
+            self._candidates.clear()
+            self._candidate_queue.clear()
+            self._batch_auto_select = False
+            self._resident_planes.clear()
+            self._thumbnails.clear()
             self._pending_view_restore = value.document.view
             self._deferred_import = None
+            self._pending_reference = None
             self._project_path = None if self._opening_recovery else value.path
             self._revision = 0
             self._saved_revision = -1 if self._opening_recovery else 0
@@ -1347,9 +2403,16 @@ class ShellWindow(QMainWindow):
             self._close_intent = True
             self._pending_open = None
             self._deferred_import = None
+            self._pending_reference = None
+            for candidate_id in self._candidate_queue:
+                candidate = self._candidates.get(candidate_id)
+                if candidate is not None and candidate.status == "queued":
+                    candidate.status = "canceled"
+                    candidate.detail = "Window closing"
+            self._candidate_queue.clear()
             self._autosave_timer.stop()
             self._write_queue = deque(task for task in self._write_queue if task.explicit)
-            if self._active_kind in ("import", "relink", "open"):
+            if self._active_kind in ("import", "relink", "batch", "reference", "open"):
                 self.jobs.cancel()
             self.statusBar().showMessage("Close requested · Preserving accepted state")
         QTimer.singleShot(0, self._dispatch_pending)
