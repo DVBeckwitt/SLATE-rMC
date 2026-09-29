@@ -686,11 +686,15 @@ def _artifact(value: Any, path: str) -> ArtifactConfiguration:
     )
 
 
-def load_strict_yaml_mapping(path: str | Path) -> dict[str, Any]:
+def load_strict_yaml_mapping(
+    path: str | Path, *, source_bytes: bytes | None = None
+) -> dict[str, Any]:
     """Load exactly one alias-free YAML mapping with duplicate-key rejection."""
 
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
+    text = (
+        path.read_text(encoding="utf-8") if source_bytes is None else source_bytes.decode("utf-8")
+    )
     if any(isinstance(event, AliasEvent) for event in yaml.parse(text)):
         raise ValueError("YAML aliases are not supported")
     documents = list(yaml.load_all(text, Loader=_StrictLoader))
@@ -705,6 +709,7 @@ def load_simulation_config(
     path: str | Path,
     *,
     repository_root: str | Path | None = None,
+    source_bytes: bytes | None = None,
 ) -> SimulationConfiguration:
     """Load one strict, config-relative ``rasim-simulation-v2`` document."""
 
@@ -715,7 +720,7 @@ def load_simulation_config(
         else Path(__file__).resolve().parents[3]
     )
     document = _mapping(
-        load_strict_yaml_mapping(config_path),
+        load_strict_yaml_mapping(config_path, source_bytes=source_bytes),
         "configuration",
         required={
             "schema_version",
