@@ -118,6 +118,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from reciprocal_preview import (
+    MAX_PREVIEW_BYTES,
+    ReciprocalCoverageView,
+    ReciprocalPreview,
+    prepare_reciprocal_preview,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -250,6 +256,11 @@ class ShellWindow(QMainWindow):
         self._numeric_history = SessionHistory()
         self._launch_snapshot = None
         self._active_numeric: tuple[UUID, int, str, NumericDraft | None] | None = None
+        self._reciprocal_cache: OrderedDict[UUID, tuple[tuple[object, ...], ReciprocalPreview]] = (
+            OrderedDict()
+        )
+        self._active_reciprocal: tuple[tuple[object, ...], int, str] | None = None
+        self._reciprocal_epoch = 0
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
         self._active_export: InspectionExportTask | None = None
@@ -264,6 +275,7 @@ class ShellWindow(QMainWindow):
                 "discard",
                 "export",
                 "numeric",
+                "reciprocal",
             ]
             | None
         ) = None
@@ -340,12 +352,15 @@ class ShellWindow(QMainWindow):
         self.numeric_redo_button.clicked.connect(lambda: self._numeric_undo_redo(undo=False))
         self.numeric_revert_button.clicked.connect(self._revert_numeric_draft)
         self.numeric_freeze_button.clicked.connect(self._freeze_numeric_draft)
+        self.reciprocal_button.clicked.connect(self._request_reciprocal_preview)
         self.previous_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
         self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
         self.previous_shortcut.activated.connect(lambda: self._step_acquisition(-1))
         self.next_shortcut.activated.connect(lambda: self._step_acquisition(1))
         self.workspaces.currentChanged.connect(self._mark_dirty)
         self.detector_panel.view.crosshair_changed.connect(self._mark_dirty)
+        self.detector_panel.view.crosshair_changed.connect(self._reciprocal_selection_changed)
+        self.detector_panel.view.cursor_changed.connect(self._reciprocal_cursor_changed)
         self.detector_panel.view.view_state_changed.connect(self._mark_dirty)
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -583,13 +598,35 @@ class ShellWindow(QMainWindow):
         ):
             numeric_buttons.addWidget(button, index // 2, index % 2)
         inspector_layout.addLayout(numeric_buttons)
+        inspector_layout.addWidget(QLabel("RECIPROCAL COVERAGE"))
+        self.reciprocal_button = QPushButton("Map selected geometry")
+        inspector_layout.addWidget(self.reciprocal_button)
+        self.reciprocal_status = QLabel("Select an acquisition with verified geometry.")
+        self.reciprocal_status.setObjectName("mutedText")
+        self.reciprocal_status.setWordWrap(True)
+        inspector_layout.addWidget(self.reciprocal_status)
+        self.reciprocal_view = ReciprocalCoverageView()
+        inspector_layout.addWidget(self.reciprocal_view)
+        self.reciprocal_cursor = QLabel("Pointer Q unavailable")
+        self.reciprocal_cursor.setObjectName("mutedText")
+        self.reciprocal_cursor.setWordWrap(True)
+        inspector_layout.addWidget(self.reciprocal_cursor)
+        self.reciprocal_selection = QLabel("Selected Q unavailable")
+        self.reciprocal_selection.setObjectName("mutedText")
+        self.reciprocal_selection.setWordWrap(True)
+        inspector_layout.addWidget(self.reciprocal_selection)
+        inspector_layout.addWidget(QLabel("No reviewed reciprocal features are available."))
         project_limit = QLabel(
             "Angles and calibration remain unknown. Saving a draft never resumes a solver."
         )
         project_limit.setWordWrap(True)
         project_limit.setObjectName("mutedText")
         inspector_layout.addWidget(project_limit)
-        splitter.addWidget(inspector)
+        self.inspector_scroll = QScrollArea()
+        self.inspector_scroll.setWidgetResizable(True)
+        self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.inspector_scroll.setWidget(inspector)
+        splitter.addWidget(self.inspector_scroll)
         splitter.setSizes([250, 680, 250])
         return page
 
@@ -1078,7 +1115,7 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_reference = None
-        if self._active_kind in ("import", "relink", "batch", "reference"):
+        if self._active_kind in ("import", "relink", "batch", "reference", "reciprocal"):
             self.jobs.cancel()
         self._candidate_queue.clear()
         self._refresh_review_table()
@@ -1433,6 +1470,7 @@ class ShellWindow(QMainWindow):
             and self._pending_open is None
             and not self._close_intent
         )
+        self._sync_reciprocal_button()
 
     def _refresh_numeric_editor(self, _value: object = None) -> None:
         acquisition = self._numeric_acquisition()
@@ -1492,6 +1530,229 @@ class ShellWindow(QMainWindow):
         self.numeric_undo_button.setEnabled(bool(self._numeric_history.undo_actions))
         self.numeric_redo_button.setEnabled(bool(self._numeric_history.redo_actions))
         self._sync_numeric_load_button()
+        self._refresh_reciprocal_editor()
+
+    def _reciprocal_key(self) -> tuple[object, ...] | None:
+        acquisition = self._numeric_acquisition()
+        if acquisition is None:
+            return None
+        metadata = acquisition.metadata
+        source = self._source_checks.get(acquisition.acquisition_id)
+        if source is None or source.state != "verified" or metadata.native_shape is None:
+            return None
+        if any(
+            (check := self._reference_checks.get((acquisition.acquisition_id, kind))) is None
+            or check.state != "verified"
+            for kind in ("configuration", "configuration_cif")
+        ):
+            return None
+        if any(
+            value is None
+            for value in (
+                metadata.configuration_path,
+                metadata.configuration_sha256,
+                metadata.configuration_cif_path,
+                metadata.configuration_cif_sha256,
+            )
+        ):
+            return None
+        draft = (
+            self._numeric_draft
+            if self._numeric_identity_matches(acquisition)
+            and self._validated_numeric == (self.project.project_id, self._numeric_draft)
+            else None
+        )
+        return (
+            self.project.project_id,
+            acquisition.acquisition_id,
+            acquisition.source_path,
+            acquisition.source_sha256,
+            metadata.configuration_path,
+            metadata.configuration_sha256,
+            metadata.configuration_cif_path,
+            metadata.configuration_cif_sha256,
+            metadata.native_shape,
+            metadata.incidence_rad,
+            draft,
+        )
+
+    def _sync_reciprocal_button(self) -> None:
+        self.reciprocal_button.setEnabled(
+            self._reciprocal_key() is not None
+            and not self.jobs.busy
+            and self._active_kind is None
+            and not self._write_queue
+            and self._pending_open is None
+            and not self._close_intent
+        )
+
+    def _visible_reciprocal(self) -> ReciprocalPreview | None:
+        key = self._reciprocal_key()
+        acquisition = self._numeric_acquisition()
+        if key is None or acquisition is None:
+            return None
+        cached = self._reciprocal_cache.get(acquisition.acquisition_id)
+        if cached is None or cached[0] != key:
+            return None
+        self._reciprocal_cache.move_to_end(acquisition.acquisition_id)
+        return cached[1]
+
+    def _refresh_reciprocal_editor(self) -> None:
+        preview = self._visible_reciprocal()
+        if self.reciprocal_view.preview is not preview:
+            self.reciprocal_view.set_preview(preview)
+        if preview is None:
+            self.reciprocal_status.setText(
+                "Verified source, configuration, dependent CIF and native shape required. "
+                "Map geometry on demand; an unvalidated retained draft is excluded."
+                if self._reciprocal_key() is None
+                else "Coverage not prepared for this acquisition and geometry revision."
+            )
+            self.reciprocal_cursor.setText("Pointer Q unavailable · no current geometry map")
+            self.reciprocal_selection.setText("Selected Q unavailable · no current geometry map")
+        else:
+            saved_valid = int(preview.saved.valid.sum())
+            draft_valid = int(preview.draft.valid.sum()) if preview.draft is not None else None
+            self.reciprocal_status.setText(
+                f"Saved baseline: {saved_valid}/{preview.grid_axis**2} grid points valid"
+                + (
+                    f" · draft revision {preview.draft_revision}: "
+                    f"{draft_valid}/{preview.grid_axis**2} valid"
+                    if draft_valid is not None
+                    else " · no validated proposed geometry"
+                )
+                + f" · gaps are omitted · {preview.approximation}"
+            )
+            self._reciprocal_selection_changed()
+        self._sync_reciprocal_button()
+
+    def _reciprocal_coordinate_text(self, column: float, row: float) -> tuple[str, object]:
+        preview = self._visible_reciprocal()
+        if preview is None:
+            return "Q unavailable · no current geometry map", None
+        mapping = preview.draft or preview.saved
+        status, internal, external = mapping.cursor(column, row)
+        if internal is None or external is None:
+            return f"({column:g}, {row:g}) px · Q unavailable: {status}", None
+        label = (
+            f"draft r{preview.draft_revision}" if preview.draft is not None else "saved baseline"
+        )
+        text = (
+            f"({column:g}, {row:g}) native px · {label} · "
+            f"Q internal film/sample=({internal[0]:.4g}, {internal[1]:.4g}, {internal[2]:.4g}) Å⁻¹ · "
+            f"Q external air/sample=({external[0]:.4g}, {external[1]:.4g}, {external[2]:.4g}) Å⁻¹"
+        )
+        return text, internal
+
+    def _reciprocal_cursor_changed(self, pixel: object) -> None:
+        if pixel is None:
+            self.reciprocal_cursor.setText("Pointer outside detector · Q unavailable")
+            if self._visible_reciprocal() is not None and self._active_kind is None:
+                self.statusBar().showMessage("Pointer outside detector · Q unavailable")
+            return
+        column, row, _intensity = pixel
+        text, _q = self._reciprocal_coordinate_text(column, row)
+        self.reciprocal_cursor.setText(f"Pointer {text}")
+        self.detector_panel.cursor_label.setText(
+            self.detector_panel.cursor_label.text().replace("Q/angles unavailable", text)
+        )
+        if self._visible_reciprocal() is not None and self._active_kind is None:
+            self.statusBar().showMessage(f"Pointer {text}")
+
+    def _reciprocal_selection_changed(self) -> None:
+        if self._visible_acquisition_id != self.selected_acquisition_id:
+            self.reciprocal_selection.setText("Selected Q unavailable · image not resident")
+            self.reciprocal_view.set_selected_q(None)
+            return
+        column, row = self.detector_panel.view.crosshair
+        text, q = self._reciprocal_coordinate_text(column, row)
+        self.reciprocal_selection.setText(f"Selected {text}")
+        self.reciprocal_view.set_selected_q(q)
+
+    def _request_reciprocal_preview(self) -> None:
+        key = self._reciprocal_key()
+        acquisition = self._numeric_acquisition()
+        if key is None or acquisition is None:
+            self.reciprocal_status.setText("Verify this source and its configuration first.")
+            return
+        if (
+            self.jobs.busy
+            or self._active_kind is not None
+            or self._write_queue
+            or self._pending_open
+            or self._close_intent
+        ):
+            self.reciprocal_status.setText("Finish the current operation before mapping geometry.")
+            return
+        metadata = acquisition.metadata
+        draft = key[-1]
+        argument = json.dumps(
+            {
+                "project_id": str(self.project.project_id),
+                "acquisition_id": str(acquisition.acquisition_id),
+                "source_sha256": acquisition.source_sha256,
+                "configuration_path": str(metadata.configuration_path),
+                "configuration_sha256": metadata.configuration_sha256,
+                "cif_path": str(metadata.configuration_cif_path),
+                "cif_sha256": metadata.configuration_cif_sha256,
+                "native_shape_rc": metadata.native_shape,
+                "proposed": draft.proposed if isinstance(draft, NumericDraft) else (),
+                "revision": draft.revision if isinstance(draft, NumericDraft) else 0,
+                "declared_incidence_rad": metadata.incidence_rad,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        active = (key, self._reciprocal_epoch, hashlib.sha256(argument).hexdigest())
+        self._active_kind = "reciprocal"
+        self._active_reciprocal = active
+        try:
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    acquisition.acquisition_id,
+                    Revisions(),
+                    argument,
+                    len(argument),
+                    MAX_PREVIEW_BYTES,
+                    prepare_reciprocal_preview,
+                )
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            if self._active_kind == "reciprocal" and self._active_reciprocal == active:
+                self._active_kind = None
+                self._active_reciprocal = None
+            self.reciprocal_status.setText(f"Coverage request unavailable: {exc}")
+            return
+        self._active_generation = identity.generation
+        self.reciprocal_status.setText(
+            "Mapping nominal reciprocal coverage on the background worker…"
+        )
+        self.statusBar().showMessage("Mapping selected reciprocal geometry…")
+
+    def _reciprocal_ready(self, identity: JobIdentity, value: object) -> None:
+        active = self._active_reciprocal
+        self._active_reciprocal = None
+        if (
+            active is None
+            or not isinstance(value, ReciprocalPreview)
+            or identity.project_id != self.project.project_id
+            or identity.acquisition_id != self.selected_acquisition_id
+            or active[0] != self._reciprocal_key()
+            or active[1] != self._reciprocal_epoch
+            or active[2] != value.request_sha256
+            or value.project_id != self.project.project_id
+            or value.acquisition_id != self.selected_acquisition_id
+        ):
+            self.reciprocal_status.setText(
+                "Obsolete coverage discarded; map current geometry again."
+            )
+            return
+        self._reciprocal_cache[value.acquisition_id] = (active[0], value)
+        self._reciprocal_cache.move_to_end(value.acquisition_id)
+        while len(self._reciprocal_cache) > 2:
+            self._reciprocal_cache.popitem(last=False)
+        self._refresh_reciprocal_editor()
+        self.statusBar().showMessage("Reciprocal coverage ready for selected geometry")
 
     def _load_numeric_draft(self) -> None:
         try:
@@ -2794,6 +3055,7 @@ class ShellWindow(QMainWindow):
             f"{value.native_counts.shape[1]} columns\n"
             f"OSC header: version {value.version}, {value.byte_order} endian"
         )
+        self._reciprocal_selection_changed()
 
     def _import_ready(self, identity: JobIdentity, value: object) -> None:
         if (
@@ -2956,6 +3218,7 @@ class ShellWindow(QMainWindow):
         selected_id = UUID(value) if value else None
         if selected_id == self.selected_acquisition_id:
             return
+        self._reciprocal_epoch += 1
         self.selected_acquisition_id = selected_id
         self._batch_auto_select = False
         self._deferred_import = None
@@ -3037,6 +3300,7 @@ class ShellWindow(QMainWindow):
                 self._active_load_path = None
                 self._active_load_hash = None
                 self._active_numeric = None
+                self._active_reciprocal = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -3047,7 +3311,7 @@ class ShellWindow(QMainWindow):
         kind = self._active_kind
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
-            kind in ("import", "relink", "batch", "reference", "open", "numeric")
+            kind in ("import", "relink", "batch", "reference", "open", "numeric", "reciprocal")
             and state in (JobState.QUEUED, JobState.RUNNING)
         )
         if kind == "numeric":
@@ -3057,6 +3321,18 @@ class ShellWindow(QMainWindow):
                 self._active_generation = None
                 self._refresh_numeric_editor()
                 self.statusBar().showMessage(f"Numeric draft {state.value}: {summary.detail}")
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
+        if kind == "reciprocal":
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_reciprocal = None
+                self._active_kind = None
+                self._active_generation = None
+                self._refresh_reciprocal_editor()
+                self.reciprocal_status.setText(
+                    f"Reciprocal coverage {state.value}: {summary.detail or 'no result published'}"
+                )
+                self.statusBar().showMessage(f"Reciprocal coverage {state.value}: {summary.detail}")
                 QTimer.singleShot(0, self._dispatch_pending)
             return
         if kind == "batch":
@@ -3180,6 +3456,8 @@ class ShellWindow(QMainWindow):
                 self._reference_ready(identity, value)
             elif kind == "numeric":
                 self._numeric_ready(identity, value)
+            elif kind == "reciprocal":
+                self._reciprocal_ready(identity, value)
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
@@ -3282,6 +3560,8 @@ class ShellWindow(QMainWindow):
         self._restoring_view = True
         try:
             self.project = value.document.project
+            self._reciprocal_epoch += 1
+            self._reciprocal_cache.clear()
             self._numeric_draft = value.document.numeric_draft
             self._validated_numeric = (
                 (self.project.project_id, self._numeric_draft)
@@ -3373,7 +3653,14 @@ class ShellWindow(QMainWindow):
             self._candidate_queue.clear()
             self._autosave_timer.stop()
             self._write_queue = deque(task for task in self._write_queue if task.explicit)
-            if self._active_kind in ("import", "relink", "batch", "reference", "open"):
+            if self._active_kind in (
+                "import",
+                "relink",
+                "batch",
+                "reference",
+                "open",
+                "reciprocal",
+            ):
                 self.jobs.cancel()
             self.statusBar().showMessage("Close requested · Preserving accepted state")
         QTimer.singleShot(0, self._dispatch_pending)

@@ -2260,6 +2260,63 @@ previously protected external files remained SHA-256 identical. This is UI and
 document-state evidence, not numerical fit qualification. U09a awaits
 independent supervisor acceptance.
 
+The independent review accepted U09a at
+`4d609dff32a903a425b36f810599f7d264bf4826`. The accepted checklist count
+is 11/46; the review-pending notes above preserve the earlier evidence state.
+
+#### U07 reciprocal preview candidate (2026-09-29; native qualification failed)
+
+The shell now requests nominal geometry coverage for one selected, source-verified
+acquisition through the existing bounded job owner. The worker checks exact
+configuration/dependent-CIF identities, native shape and any declared single
+commanded angle, then uses the configured geometry-only context and canonical
+detector-coordinate evaluator. It returns a 13-by-13 sample-frame reciprocal
+mesh for the bound reference baseline and a separately validated proposed
+draft when present. Invalid cells and connecting mesh edges are omitted. The
+view projects `(|Q_parallel|, Qz)` in sample-frame inverse angstroms; its labels
+state that it is a one-ray geometry approximation with no intensity or fit.
+The pointer and selected native coordinates report both internal-film and
+external-air sample-frame Q, or an explicit unavailable status. No feature
+pack exists yet, so none is drawn or linked. Two retained previews are keyed by
+project, acquisition, source, references, shape, declared angle and exact
+numeric draft; selection epochs and request hashes reject late A-B-A results.
+Configuration/CIF reads and the maximum 338 detector grid evaluations happen
+on the worker; cursor events reuse the retained mapping and do no file read.
+The measured two-state result payload was 65,314 bytes under a 256 KiB cap.
+
+Focused external checks passed for baseline/draft difference, nondefault
+1.61 Å wavelength, non-axial incident direction, seven-degree rigid pose,
+canonical internal/external Q at a continuous detector coordinate, valid and
+backward native corners, off-panel and nonfinite coordinates, a valid 1980 by
+3000 non-square detector, malformed identity/shape, separate acquisition IDs,
+exact stale A-B-A rejection, and a two-acquisition project whose source and
+references verified on reopen. A failed first pure fixture had non-tangent
+transverse source axes; a second had a detector dimension incompatible with
+the configured macrobin size. Both were corrected without changing numerical
+contracts. All 116 earlier external files remained SHA-256 identical.
+
+The **first and only** production `slate_app.main()` native window in the
+authorized three-launch series failed after a conservative 56.676 s whole
+command. Its initial status paint settled in 121.54 ms, the 10 ms heartbeat
+then ran continuously through normal close/drain, and the maximum observed
+gap was 80.696 ms. The start ACK painted in 41.072 ms. The matching A coverage
+paint arrived 127.255 ms after request; that interval includes background
+geometry preparation and is not a start-ACK failure. The checker timed out in
+`cursor_demand` without recording a matched final cursor-label paint, so no
+cursor latency, sustained frame interval, edit, A-B-A native or cancel/close
+qualification can be claimed. The detector cursor label is below the view in
+a scrollable center pane; the checker did not record whether it was visible,
+whether mouse coordinates matched or whether paint was suppressed. A focused
+post-failure check measured the retained canonical cursor mapping at median
+0.160 ms and p95 0.253 ms over 100 calls, which does not establish native
+paint latency. The smallest product change publishes the same Q and unavailable
+status to the always-visible status bar; a pure check passed, but its paint is
+unverified. A future native observer must watch that visible status region,
+preflight one final coordinate, and retain dispatch/paint counts on timeout.
+The native series stopped at its first failure; no remaining launch allowance
+was used. U07 remains unchecked pending native qualification and independent
+review. No fit or forward intensity image was run.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
@@ -3133,7 +3190,7 @@ material bindings and `pipeline/conditional_detector.py`. Keep these actual cont
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo/redo for U02a metadata mutations as well as physical and initial-value edits, and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
+| [x] U09a: numeric parameter state | U01b/U08a | Provide explicit parameter descriptions, unit conversion, provenance, validation, undo/redo for U02a metadata mutations as well as physical and initial-value edits, and immutable launch snapshots. Reuse core constructors; simulation drafts and fit seed packs retain distinct types. Verify round trips for an admitted configuration without inventing fitted coordinates. |
 | [ ] U12: configured simulator | U02/U03/U01c/U09a | Load an existing supported configuration, run the current preview/quantitative owner and save/reopen the independent draft. Show measure, backend, prefix/progress and failure state; no experimental image, fitted observations or 3D editor is required. |
 | [ ] U12a: complete supported parameter forms | U12 | Expose all supported selected-model configuration fields in searchable grouped forms, including source, instrument, structure, mosaic, optics and execution. Compare field coverage with the capability inventory; unsupported combinations explain why. Keep configuration import/export working. |
 | [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix or route-specific numerical settings. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
