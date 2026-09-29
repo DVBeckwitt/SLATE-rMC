@@ -2085,6 +2085,58 @@ SHA-256 manifest/checker verified all 46 older U02a/U14b evidence files
 unchanged. No additional native launch or production edit followed this
 failed recheck. The source layout remains unqualified and U14b unaccepted.
 
+The next layout repair kept the detector and vertical profile at matching
+180-pixel minima and made the center pane vertically scrollable. The first
+native launch exposed a concrete width constraint: the old action
+rows still made the center content 1196 pixels wide inside a 604-pixel
+viewport. The detector and vertical plot were both 180 pixels high, but the
+right plot was horizontally offscreen; no export was attempted. The two
+action rows and the detector's widest control row were then reflowed,
+preserving access to the filmstrip, review table and all actions without
+forcing the shell larger or shrinking the detector. This
+first failed command took **1.303 s** internally and **1.398 s** across the
+tool boundary; `u14b_layout_result.json` and `u14b_layout_phases.jsonl`
+retain the measured rectangles and first error.
+
+The second and final native layout launch passed. In the production 1280x800
+Fusion/Segoe UI 10 shell at DPR 1, the center content and viewport were both
+604 pixels wide, with zero horizontal and 677 pixels vertical scroll range.
+The 510x180 detector, 510x50 horizontal profile and 50x180 vertical profile
+were entirely visible, shared their respective native axes and did not
+overlap; the lower filmstrip, review table and action rows remained inside
+scrollable content. The checker used tracked hBN with custom 1.6 zoom,
+7-row/5-column bands and mean per valid pixel. A stub chose the new external
+filename; the actual export button, production event loop and worker then
+wrote the figure and exact profile CSV.
+
+The 560x262 physical-pixel PNG reopened with nine sampled pixels from each
+captured detector/profile layer matching and cyan curve pixels present in
+every third of both profile extents. Visual inspection showed the native
+column and row axis labels and ticks readable. The CSV reopened with all
+6000 native bins, values, support and missing flags exactly matching the
+captured canonical vectors, plus the current hBN decoded-source hash and
+panel data revision 1. PNG SHA-256 was
+`aefe56542175a7bb07ade9f267284064e439fcfd46b7f08defc392677795645e`;
+CSV SHA-256 was
+`6c51c9d60625b75bd83948d70c8e633375d0fd633954ab87e65968c3222776f2`.
+Capture/encoding took **20.738 ms**; input to completed worker write took
+**43.967 ms**. The completion message's status-bar paint region was observed
+before the conservative after-paint ACK at **49.709 ms** from button input.
+The 10 ms heartbeat had six active samples through normal drained close,
+with a **23.117 ms** maximum gap. RSS endpoints were 305.28 MiB before
+export and 304.03 MiB after close; these do not bound peak memory. The
+successful child command took **1.463 s**, the full tool boundary **1.555 s**.
+
+Both layout launches used **2.953 s** of the distinct 60 s allowance and
+exhausted its two-launch count. The second checker and output are external
+`u14b_layout2_*` files. SHA-256 manifests verified the 55 prior files before
+the first launch and all 62 prior files before/after the second, with no
+overwrites. This single event-loop action verifies the declared export and
+layout scope; it supplies no latency distribution or scientific-fit
+qualification. Handled write exceptions remove newly created pair files,
+but the pair is not claimed crash-atomic. U14b still awaits independent
+supervisor acceptance.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with

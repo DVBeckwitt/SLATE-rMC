@@ -84,6 +84,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -94,6 +95,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -442,42 +444,48 @@ class ShellWindow(QMainWindow):
         self.review_table.setMinimumHeight(165)
         center_layout.addWidget(self.review_table)
         self.import_button = QPushButton("Import files")
-        controls = QHBoxLayout()
-        controls.addWidget(self.import_button)
+        controls = QGridLayout()
         self.folder_button = QPushButton("Review folder")
-        controls.addWidget(self.folder_button)
         self.retry_button = QPushButton("Retry row")
-        controls.addWidget(self.retry_button)
         self.cancel_row_button = QPushButton("Cancel row")
-        controls.addWidget(self.cancel_row_button)
         self.remove_button = QPushButton("Remove from project")
-        controls.addWidget(self.remove_button)
         self.metadata_button = QPushButton("Apply to selected")
-        controls.addWidget(self.metadata_button)
         self.confirm_button = QPushButton("Confirm suggestions")
-        controls.addWidget(self.confirm_button)
         self.relink_button = QPushButton("Relink OSC")
         self.relink_button.setEnabled(False)
-        controls.addWidget(self.relink_button)
         self.cancel_button = QPushButton("Cancel operation")
         self.cancel_button.setEnabled(False)
-        controls.addWidget(self.cancel_button)
-        controls.addStretch()
+        for index, button in enumerate(
+            (
+                self.import_button,
+                self.folder_button,
+                self.retry_button,
+                self.cancel_row_button,
+                self.remove_button,
+                self.metadata_button,
+                self.confirm_button,
+                self.relink_button,
+                self.cancel_button,
+            )
+        ):
+            controls.addWidget(button, index // 3, index % 3)
         center_layout.addLayout(controls)
-        metadata_controls = QHBoxLayout()
+        metadata_controls = QGridLayout()
         self.cif_button = QPushButton("Choose CIF")
         self.configuration_button = QPushButton("Choose configuration")
         self.paste_button = QPushButton("Paste table")
         self.csv_button = QPushButton("Map CSV")
         self.export_metadata_button = QPushButton("Export metadata CSV")
-        for button in (
-            self.cif_button,
-            self.configuration_button,
-            self.paste_button,
-            self.csv_button,
-            self.export_metadata_button,
+        for index, button in enumerate(
+            (
+                self.cif_button,
+                self.configuration_button,
+                self.paste_button,
+                self.csv_button,
+                self.export_metadata_button,
+            )
         ):
-            metadata_controls.addWidget(button)
+            metadata_controls.addWidget(button, index // 3, index % 3)
         center_layout.addLayout(metadata_controls)
         storage_notice = QLabel(
             "Storage: reference OSC files in place. Originals are never copied or modified; copy-storage review is a later task."
@@ -485,7 +493,10 @@ class ShellWindow(QMainWindow):
         storage_notice.setWordWrap(True)
         storage_notice.setObjectName("mutedText")
         center_layout.addWidget(storage_notice)
-        splitter.addWidget(center)
+        center_scroll = QScrollArea()
+        center_scroll.setWidgetResizable(True)
+        center_scroll.setWidget(center)
+        splitter.addWidget(center_scroll)
 
         inspector = QFrame()
         inspector.setObjectName("sidePanel")

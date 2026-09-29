@@ -74,6 +74,8 @@ units and provenance. These metadata inputs do not start fitting or qualify a ca
 The detector panel supports pointer-anchored wheel zoom, drag pan, **Box zoom**, **Fit** (Ctrl+0)
 and **1:1 px** (Ctrl+1). The latter means one detector pixel per physical display pixel at the
 current device pixel ratio. Arrow keys pan when the image has focus; Ctrl+B toggles box zoom.
+Scroll the center pane to reach the filmstrip, review table and acquisition actions when they
+extend below the detector.
 The pointer readout names native `column_px`, `row_px` and the exact original count, and reports
 when the pointer is outside the image. Horizontal and vertical marginal position labels use the
 same native viewport transform. Numeric Low/High entries accept scientific notation; **Apply**

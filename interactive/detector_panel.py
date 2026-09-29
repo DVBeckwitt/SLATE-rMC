@@ -953,7 +953,7 @@ class ProfilePlot(QWidget):
         self.support: NDArray[np.int64] | None = None
         self.generation = 0
         self.intensity_limits: tuple[float, float] | None = None
-        self.setMinimumSize(50 if vertical else 180, 50)
+        self.setMinimumSize(50 if vertical else 180, 180 if vertical else 50)
         if vertical:
             self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
@@ -1135,7 +1135,9 @@ class DetectorPanel(QWidget):
         self.export_button.setEnabled(False)
         for button in (self.fit_button, self.native_button, self.box_button, self.export_button):
             nav_layout.addWidget(button)
-        nav_layout.addWidget(QLabel("Drag: pan · Wheel: zoom · Arrows: pan"), 1)
+        navigation_hint = QLabel("Drag: pan · Wheel: zoom · Arrows: pan")
+        navigation_hint.setWordWrap(True)
+        nav_layout.addWidget(navigation_hint, 1)
 
         contrast = QWidget(self)
         contrast_layout = QHBoxLayout(contrast)
@@ -1187,15 +1189,15 @@ class DetectorPanel(QWidget):
             control.setMaximum(16_384)
         for control in (self.row_width_control, self.column_width_control):
             control.setMinimum(1)
-        for label, control, column in (
-            ("column_px", self.column_control, 1),
-            ("row_px", self.row_control, 3),
-            ("row width", self.row_width_control, 5),
-            ("column width", self.column_width_control, 7),
+        for label, control, row, column in (
+            ("column_px", self.column_control, 0, 1),
+            ("row_px", self.row_control, 0, 3),
+            ("row width", self.row_width_control, 1, 1),
+            ("column width", self.column_width_control, 1, 3),
         ):
-            profile_layout.addWidget(QLabel(label), 0, column - 1)
-            profile_layout.addWidget(control, 0, column)
-        profile_layout.addWidget(self.pin_center_button, 1, 0, 1, 2)
+            profile_layout.addWidget(QLabel(label), row, column - 1)
+            profile_layout.addWidget(control, row, column)
+        profile_layout.addWidget(self.pin_center_button, 2, 0)
         self.profile_measure_control = QComboBox()
         self.profile_measure_control.addItem("Sum", "sum")
         self.profile_measure_control.addItem("Mean / valid px", "mean")
@@ -1209,9 +1211,9 @@ class DetectorPanel(QWidget):
         self.profile_scope_control.model().item(2).setEnabled(False)
         self.draw_roi_button = QPushButton("Draw ROI")
         self.draw_roi_button.setCheckable(True)
-        profile_layout.addWidget(self.profile_measure_control, 1, 2, 1, 2)
-        profile_layout.addWidget(self.profile_scope_control, 1, 4, 1, 2)
-        profile_layout.addWidget(self.draw_roi_button, 1, 6, 1, 2)
+        profile_layout.addWidget(self.profile_measure_control, 2, 1)
+        profile_layout.addWidget(self.profile_scope_control, 2, 2)
+        profile_layout.addWidget(self.draw_roi_button, 2, 3)
 
         scale_controls = QWidget(self)
         scale_layout = QHBoxLayout(scale_controls)
