@@ -50,7 +50,7 @@ from project_state import (
     ProjectViewState,
     project_to_document,
 )
-from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtCore import QItemSelectionModel, QPointF, Qt, QTimer
 from PySide6.QtGui import (
     QCloseEvent,
     QDragEnterEvent,
@@ -521,6 +521,16 @@ class ShellWindow(QMainWindow):
             detector,
         )
 
+    def _validate_project_admission(
+        self, candidate: Project, *, selected_id: UUID | None = None
+    ) -> None:
+        view = self._capture_view()
+        if selected_id is not None:
+            view = replace(view, selected_acquisition_id=selected_id, detector=None)
+        project_to_document(
+            ProjectDocument(candidate, view), self._project_path or self._recovery_path()
+        )
+
     def _update_save_status(self) -> None:
         if self._save_failure:
             label = f"Save failed · {self._save_failure}"
@@ -653,7 +663,9 @@ class ShellWindow(QMainWindow):
         name = name.strip()
         if not name:
             raise ValueError("A project needs a name")
-        self.project = replace(self.project, name=name)
+        candidate = replace(self.project, name=name)
+        self._validate_project_admission(candidate)
+        self.project = candidate
         self.refresh_project()
         self._mark_dirty()
 
@@ -670,7 +682,9 @@ class ShellWindow(QMainWindow):
     def rename_selected_acquisition(self, name: str) -> None:
         if self.selected_acquisition_id is None:
             raise ValueError("Select an acquisition to rename")
-        self.project = self.project.rename_acquisition(self.selected_acquisition_id, name)
+        candidate = self.project.rename_acquisition(self.selected_acquisition_id, name)
+        self._validate_project_admission(candidate)
+        self.project = candidate
         self.refresh_project()
         self._mark_dirty()
 
@@ -993,6 +1007,7 @@ class ShellWindow(QMainWindow):
                     provenance["material_id"] = f"validated {kind} reader"
                     changes["provenance"] = tuple(sorted(provenance.items()))
                 updated = updated.update_metadata(acquisition_id, **changes)
+            self._validate_project_admission(updated)
         except (ProjectFormatError, ValueError) as exc:
             self.statusBar().showMessage(f"Reference binding rejected: {exc}")
             return
@@ -1114,11 +1129,19 @@ class ShellWindow(QMainWindow):
 
     def _refresh_review_table(self) -> None:
         table = self.review_table
+        selected_ids = set(self._selected_review_ids())
+        current_item = table.item(table.currentRow(), 0) if table.currentRow() >= 0 else None
+        current_id = (
+            current_item.data(Qt.ItemDataRole.UserRole) if current_item is not None else None
+        )
+        if not selected_ids and self.selected_acquisition_id is not None:
+            selected_ids.add(self.selected_acquisition_id)
+        selected_values = {str(item) for item in selected_ids}
         table.blockSignals(True)
+        table.clearSelection()
         table.setSortingEnabled(False)
         candidate_rows = [item for item in self._candidates.values() if item.status != "imported"]
         table.setRowCount(len(self.project.acquisitions) + len(candidate_rows))
-        selected_row = None
         for row, acquisition in enumerate(self.project.acquisitions):
             metadata = acquisition.metadata
             check = self._source_checks.get(acquisition.acquisition_id)
@@ -1181,8 +1204,6 @@ class ShellWindow(QMainWindow):
                 if column == 0:
                     cell.setIcon(self._thumbnail_icon(acquisition.acquisition_id))
                 table.setItem(row, column, cell)
-            if acquisition.acquisition_id == self.selected_acquisition_id:
-                selected_row = row
         for offset, candidate in enumerate(candidate_rows):
             row = len(self.project.acquisitions) + offset
             cells = (
@@ -1203,14 +1224,19 @@ class ShellWindow(QMainWindow):
                 cell.setData(Qt.ItemDataRole.UserRole, str(candidate.acquisition_id))
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
-        if selected_row is not None:
-            for row in range(table.rowCount()):
-                cell = table.item(row, 0)
-                if cell is not None and cell.data(Qt.ItemDataRole.UserRole) == str(
-                    self.selected_acquisition_id
-                ):
-                    table.selectRow(row)
-                    break
+        for row in range(table.rowCount()):
+            cell = table.item(row, 0)
+            if cell is None:
+                continue
+            row_id = cell.data(Qt.ItemDataRole.UserRole)
+            if row_id in selected_values:
+                table.selectionModel().select(
+                    table.model().index(row, 0),
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+            if row_id == current_id:
+                table.setCurrentCell(row, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.filmstrip.blockSignals(True)
         self.filmstrip.clear()
         for acquisition in self.project.acquisitions:
@@ -1439,8 +1465,9 @@ class ShellWindow(QMainWindow):
 
     def _selected_project_ids(self) -> tuple[UUID, ...]:
         valid = {item.acquisition_id for item in self.project.acquisitions}
-        selected = tuple(item for item in self._selected_review_ids() if item in valid)
-        if not selected and self.selected_acquisition_id in valid:
+        review_ids = self._selected_review_ids()
+        selected = tuple(item for item in review_ids if item in valid)
+        if not review_ids and self.selected_acquisition_id in valid:
             return (self.selected_acquisition_id,)
         return selected
 
@@ -1520,6 +1547,7 @@ class ShellWindow(QMainWindow):
                 selected_ids=ids,
                 origin="manual review",
             )
+            self._validate_project_admission(updated)
         except (ProjectFormatError, ValueError) as exc:
             QMessageBox.warning(self, "Metadata rejected", str(exc))
             return
@@ -1531,28 +1559,30 @@ class ShellWindow(QMainWindow):
     def _confirm_selected_proposals(self) -> None:
         ids = self._selected_project_ids()
         updated = self.project
-        for acquisition_id in ids:
-            metadata = next(
-                item.metadata
-                for item in updated.acquisitions
-                if item.acquisition_id == acquisition_id
-            )
-            if not metadata.proposals:
-                continue
-            changes = {}
-            provenance = dict(metadata.provenance)
-            for field_name, supplied, origin in metadata.proposals:
-                if field_name != "incidence_rad":
+        try:
+            for acquisition_id in ids:
+                metadata = next(
+                    item.metadata
+                    for item in updated.acquisitions
+                    if item.acquisition_id == acquisition_id
+                )
+                if not metadata.proposals:
                     continue
-                changes[field_name] = float(supplied)
-                provenance[field_name] = f"confirmed {origin}"
-            if changes:
+                changes = {}
+                provenance = dict(metadata.provenance)
+                for field_name, supplied, origin in metadata.proposals:
+                    changes[field_name] = float(supplied)
+                    provenance[field_name] = f"confirmed {origin}"
                 updated = updated.update_metadata(
                     acquisition_id,
                     **changes,
                     provenance=tuple(sorted(provenance.items())),
                     proposals=(),
                 )
+            self._validate_project_admission(updated)
+        except (ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Suggestion rejected", str(exc))
+            return
         if updated != self.project:
             self.project = updated
             self.refresh_project()
@@ -1563,6 +1593,7 @@ class ShellWindow(QMainWindow):
 
     def _map_metadata_text(self, delimiter: str) -> None:
         origin = "spreadsheet paste"
+        target_ids = self._selected_project_ids()
         if delimiter == ",":
             filename, _ = QFileDialog.getOpenFileName(
                 self, "Choose metadata CSV", str(Path.home()), "CSV (*.csv)"
@@ -1639,9 +1670,10 @@ class ShellWindow(QMainWindow):
                 self.project,
                 rows,
                 tuple(picker.currentData() for picker in pickers),
-                selected_ids=self._selected_project_ids(),
+                selected_ids=target_ids,
                 origin=origin,
             )
+            self._validate_project_admission(updated)
         except (ProjectFormatError, ValueError) as exc:
             QMessageBox.warning(self, "Metadata mapping rejected", str(exc))
             return
@@ -1875,6 +1907,15 @@ class ShellWindow(QMainWindow):
         acquisition = replace(acquisition, metadata=metadata)
         next_project = replace(self.project, acquisitions=(*self.project.acquisitions, acquisition))
         select_on_admission = self._batch_auto_select and self.selected_acquisition_id is None
+        try:
+            self._validate_project_admission(
+                next_project,
+                selected_id=acquisition.acquisition_id if select_on_admission else None,
+            )
+        except (ProjectFormatError, ValueError) as exc:
+            candidate.status = "failed"
+            candidate.detail = f"Project admission rejected: {exc}"
+            return
         if select_on_admission:
             try:
                 self._publish_plane(acquisition.acquisition_id, value)
@@ -1981,6 +2022,20 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage("Source mismatch · No image applied")
             return
         acquisition = replace(existing, source_path=value.source_path) if relinking else existing
+        if relinking and acquisition.source_path != existing.source_path:
+            candidate_project = replace(
+                self.project,
+                acquisitions=tuple(
+                    acquisition if item.acquisition_id == acquisition.acquisition_id else item
+                    for item in self.project.acquisitions
+                ),
+            )
+            try:
+                self._validate_project_admission(candidate_project)
+            except (ProjectFormatError, ValueError) as exc:
+                self._show_state("error", "Relink rejected", str(exc))
+                self.statusBar().showMessage("Relink exceeds project document limit")
+                return
         try:
             self._publish_plane(identity.acquisition_id, value)
         except ValueError as exc:

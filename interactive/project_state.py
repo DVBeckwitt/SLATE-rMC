@@ -163,10 +163,16 @@ class AcquisitionMetadata:
                 raise ProjectFormatError("metadata provenance references an unset field")
             _name(origin, "metadata provenance")
         for field_name, value, origin in self.proposals:
-            if field_name not in METADATA_FIELDS or type(value) is not str or not value:
+            if field_name != "incidence_rad" or type(value) is not str or not value:
                 raise ProjectFormatError("invalid metadata proposal")
             if len(value) > MAX_NAME_LENGTH:
                 raise ProjectFormatError("metadata proposal is too long")
+            try:
+                proposed_angle = float(value)
+            except ValueError as exc:
+                raise ProjectFormatError("invalid incidence proposal") from exc
+            if not math.isfinite(proposed_angle):
+                raise ProjectFormatError("incidence proposal must be finite")
             _name(origin, "proposal provenance")
         if len(self.proposals) > len(METADATA_FIELDS):
             raise ProjectFormatError("too many metadata proposals")
