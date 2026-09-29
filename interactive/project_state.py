@@ -29,6 +29,7 @@ METADATA_FIELDS = (
     "dark_acquisition_id",
     "mask_acquisition_id",
 )
+HBN_CU_K_ALPHA_PRESET = "hbn_cu_ka_5rings"
 FLOAT32_DISPLAY_MAX = 3.4028234663852886e38
 FLOAT32_NORMAL_MIN = 1.1754943508222875e-38
 
@@ -112,11 +113,10 @@ class AcquisitionMetadata:
             value = getattr(self, name)
             if value is not None:
                 _name(value, name)
-        if (
-            self.incidence_rad is not None
-            and not 0 <= _float(self.incidence_rad, "incidence_rad") <= math.pi / 2
-        ):
-            raise ProjectFormatError("commanded incidence must be from 0 to pi/2 radians")
+        if self.calibrant_id is not None and self.calibrant_id != HBN_CU_K_ALPHA_PRESET:
+            raise ProjectFormatError("unsupported calibrant preset")
+        if self.incidence_rad is not None:
+            _float(self.incidence_rad, "incidence_rad")
         if self.exposure_s is not None and _float(self.exposure_s, "exposure_s") <= 0:
             raise ProjectFormatError("exposure must be positive seconds")
         if self.native_shape is not None and (
@@ -141,6 +141,20 @@ class AcquisitionMetadata:
                 _digest(digest)
         if type(self.revision) is not int or self.revision < 0:
             raise ProjectFormatError("metadata revision must be nonnegative")
+        if type(self.provenance) is not tuple or any(
+            type(entry) is not tuple
+            or len(entry) != 2
+            or any(type(value) is not str for value in entry)
+            for entry in self.provenance
+        ):
+            raise ProjectFormatError("metadata provenance must be immutable string pairs")
+        if type(self.proposals) is not tuple or any(
+            type(entry) is not tuple
+            or len(entry) != 3
+            or any(type(value) is not str for value in entry)
+            for entry in self.proposals
+        ):
+            raise ProjectFormatError("metadata proposals must be immutable string triples")
         sources = [field for field, _ in self.provenance]
         if len(sources) != len(set(sources)):
             raise ProjectFormatError("duplicate metadata provenance")
@@ -156,6 +170,8 @@ class AcquisitionMetadata:
             _name(origin, "proposal provenance")
         if len(self.proposals) > len(METADATA_FIELDS):
             raise ProjectFormatError("too many metadata proposals")
+        if len({field for field, _, _ in self.proposals}) != len(self.proposals):
+            raise ProjectFormatError("duplicate metadata proposals")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,8 +261,14 @@ class Project:
             "native_shape",
             "provenance",
             "proposals",
+            "cif_sha256",
+            "configuration_sha256",
         }:
             raise ValueError("unsupported metadata change")
+        for label in ("cif", "configuration"):
+            path_field, hash_field = f"{label}_path", f"{label}_sha256"
+            if (path_field in changes) != (hash_field in changes):
+                raise ValueError(f"{label} path and SHA-256 must change together")
         if acquisition_id not in {item.acquisition_id for item in self.acquisitions}:
             raise KeyError(acquisition_id)
         return replace(
