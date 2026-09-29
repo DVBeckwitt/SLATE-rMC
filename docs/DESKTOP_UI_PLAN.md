@@ -1612,12 +1612,15 @@ reporter, manifest, fixed input and original budget/receipt hashes, journey mapp
 rejects missing or altered release, duplicate/future outputs, a missing or
 failed prior receipt, changed prior evidence and exhausted reservations before
 launching a child. The external launcher starts its deadline before starting the
-reporter process, covering reporter import, admission, native child execution,
-analysis, hashes and its final receipt write. The reporter reserves the entire
-60 s in an exclusive durable receipt before the native child starts. If the
-launcher stops an attempt before reservation finishes, it writes a conservative
-failed 60 s receipt. On timeout or interruption it stops only that attempt's
-owned process tree; an exclusive fsynced child-start claim prevents a second
+reporter process and gives that process at most 57 s for import, admission,
+native child execution, analysis, hashes and its final receipt write. It reserves
+3 s of the 60 s attempt for owned-tree shutdown and its own receipt work. The
+reporter reserves the entire 60 s in an exclusive durable receipt before the
+native child starts. If a started reporter exits unsuccessfully before that
+reservation or the launcher stops it first, the launcher writes a conservative
+failed 60 s receipt. Missing release or duplicate receipt/claim refusal before
+process launch creates no charge. On timeout or interruption it stops only that
+attempt's owned process tree; an exclusive fsynced child-start claim prevents a second
 native child even if the first dies before project output. Timeout, incomplete
 evidence and budget failure cannot be replayed. A candidate success remains
 unqualified until the sole writer records the independent whole-command duration,
@@ -1636,9 +1639,12 @@ whole-command threshold, successful provisional receipt/confirmation,
 child failure and timeout stop. A focused repair check then used the actual
 launcher/reporter path with fake processes, exercised repeated and concurrent
 child-start claims before output, and verified timeout, interruption, expired
-clock and owned-tree termination paths. The temporary fixtures created no
-native application or OSC decode and were removed after use. The reporter's
-existing `--selfcheck` and source freeze are separate pure checks. Three fresh qualified windows are still needed;
+clock and owned-tree termination paths. A final launcher check verified failed
+nonzero exit before receipt, duplicate refusal, uncharged missing-release
+refusal and the 3 s cleanup reserve after launch overhead. The temporary fixtures
+created no native application or OSC decode and were removed after use. The reporter's
+existing `--selfcheck` and source freeze are separate pure checks. Three fresh
+qualified windows are still needed;
 U02a remains unaccepted and U14b remains outside this release.
 
 #### U01 shell and identity checkpoint (2026-09-28)
