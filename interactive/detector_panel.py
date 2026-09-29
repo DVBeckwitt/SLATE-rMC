@@ -18,7 +18,16 @@ from project_state import (
     validate_display_limits,
 )
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QPolygonF, QShortcut, QTransform
+from PySide6.QtGui import (
+    QColor,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPolygonF,
+    QShortcut,
+    QTransform,
+)
 from PySide6.QtOpenGL import (
     QOpenGLShader,
     QOpenGLShaderProgram,
@@ -1116,7 +1125,10 @@ class DetectorPanel(QWidget):
         self.box_button = QPushButton("Box zoom")
         self.box_button.setCheckable(True)
         self.box_button.setToolTip("Drag a detector rectangle to magnify it (Ctrl+B).")
-        for button in (self.fit_button, self.native_button, self.box_button):
+        self.export_button = QPushButton("Export figure + profiles")
+        self.export_button.setToolTip("Save the visible detector figure and exact native profiles.")
+        self.export_button.setEnabled(False)
+        for button in (self.fit_button, self.native_button, self.box_button, self.export_button):
             nav_layout.addWidget(button)
         nav_layout.addWidget(QLabel("Drag: pan · Wheel: zoom · Arrows: pan"), 1)
 
@@ -1717,6 +1729,7 @@ class DetectorPanel(QWidget):
             supplied, column_px=supplied.shape[1] // 2, row_px=supplied.shape[0] // 2
         )
         self.view.set_image(image)
+        self.export_button.setEnabled(True)
         self._reset_profile_state()
         self._profile_axis_rect = None
         self._sync_controls()
@@ -1747,11 +1760,60 @@ class DetectorPanel(QWidget):
         self.view.set_prepared_image(
             native_counts, display, low_value, high_value, max_value, min_positive
         )
+        self.export_button.setEnabled(True)
         self._reset_profile_state(acquisition_identity)
         self._profile_axis_rect = None
         self._sync_controls()
         self._full_profiles = full_profiles
         self._present_profiles(profiles, "band", self._query_key())
+
+    def capture_inspection_figure(self, title: str) -> QImage:
+        """Capture the current detector viewport and its two visible profile axes."""
+
+        if self.view.image is None or not self.view.isVisible():
+            raise ValueError("no visible detector image is ready for export")
+        dpr = self.view.devicePixelRatioF()
+        width = math.ceil((self.view.width() + self.vertical.width()) * dpr)
+        height = math.ceil((self.horizontal.height() + self.view.height() + 32) * dpr)
+        if width <= 0 or height <= 0 or width * height * 4 > 16 * 1024 * 1024:
+            raise ValueError("figure capture exceeds the 16 MiB display buffer limit")
+        detector = self.view.grabFramebuffer()
+        horizontal = self.horizontal.grab().toImage()
+        vertical = self.vertical.grab().toImage()
+        if any(image.isNull() for image in (detector, horizontal, vertical)):
+            raise ValueError("a detector or profile layer could not be captured")
+        figure_width = max(detector.width(), horizontal.width()) + vertical.width()
+        figure_height = horizontal.height() + max(detector.height(), vertical.height())
+        header = math.ceil(32 * dpr)
+        if figure_width * (figure_height + header) * 4 > 16 * 1024 * 1024:
+            raise ValueError("captured figure exceeds the 16 MiB display buffer limit")
+        figure = QImage(
+            figure_width, figure_height + header, QImage.Format.Format_ARGB32_Premultiplied
+        )
+        figure.fill(QColor(24, 28, 34))
+        painter = QPainter(figure)
+        painter.setPen(QColor(225, 237, 241))
+        font = painter.font()
+        font.setPixelSize(max(12, round(14 * dpr)))
+        painter.setFont(font)
+        painter.drawText(
+            QRectF(8 * dpr, 0, figure_width - 16 * dpr, header),
+            Qt.AlignmentFlag.AlignVCenter,
+            title,
+        )
+        for image, x, y in (
+            (horizontal, 0, header),
+            (detector, 0, header + horizontal.height()),
+            (vertical, max(detector.width(), horizontal.width()), header + horizontal.height()),
+        ):
+            painter.drawImage(
+                QRectF(x, y, image.width(), image.height()),
+                image,
+                QRectF(0, 0, image.width(), image.height()),
+            )
+        painter.end()
+        figure.setDevicePixelRatio(dpr)
+        return figure
 
     def _refresh_axes(self, _generation: int, _timestamp: float) -> None:
         if self.view.image is None:

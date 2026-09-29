@@ -1,6 +1,7 @@
 """Native desktop shell for SLATE-rMC; launch with ``python interactive/slate_app.py``."""
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -8,10 +9,18 @@ import sys
 from collections import OrderedDict, deque
 from dataclasses import dataclass, replace
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 from uuid import UUID, uuid4
 
 from detector_panel import DetectorPanel
+from inspection_export import (
+    InspectionExportReceipt,
+    external_export_destination,
+    inspection_export_request,
+    profile_csv,
+    publish_inspection_export,
+)
 from job_lifecycle import (
     MAX_RESULT_BYTES,
     JobIdentity,
@@ -54,7 +63,7 @@ from project_state import (
     ProjectViewState,
     project_to_document,
 )
-from PySide6.QtCore import QItemSelectionModel, QPointF, Qt, QTimer
+from PySide6.QtCore import QBuffer, QIODevice, QItemSelectionModel, QPointF, Qt, QTimer
 from PySide6.QtGui import (
     QCloseEvent,
     QDragEnterEvent,
@@ -124,6 +133,19 @@ class WriteTask:
     discard: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class InspectionExportTask:
+    project_id: UUID
+    acquisition_id: UUID
+    data_revision: int
+    acquisition_name: str
+    figure: Path
+    profiles: Path
+    figure_sha256: str
+    profiles_sha256: str
+    capture_ms: float
+
+
 @dataclass(slots=True)
 class ImportCandidate:
     acquisition_id: UUID
@@ -150,30 +172,6 @@ class NumericReviewItem(QTableWidgetItem):
 
 def _request_size(argument: bytes | Path) -> int:
     return len(argument) if isinstance(argument, bytes) else len(str(argument).encode("utf-8"))
-
-
-def metadata_export_destination(
-    destination: Path, project_path: Path | None, input_paths: tuple[Path, ...]
-) -> Path:
-    """Keep the explicit CSV outside Git checkouts and away from input aliases."""
-    path = Path(destination).absolute()
-    if path.suffix.lower() != ".csv":
-        path = path.with_suffix(".csv")
-    if len(str(path)) > 4096:
-        raise ProjectFormatError("metadata export path exceeds 4096 characters")
-    resolved = path.resolve(strict=False)
-    for candidate in (path, resolved):
-        if any((parent / ".git").exists() for parent in candidate.parents):
-            raise ProjectFormatError("choose a metadata export destination outside Git checkouts")
-    for protected in (project_path, *input_paths):
-        if protected is None:
-            continue
-        source = Path(protected).absolute()
-        if resolved == source.resolve(strict=False) or (
-            path.exists() and source.exists() and os.path.samefile(path, source)
-        ):
-            raise ProjectFormatError("metadata export would overwrite a project or input reference")
-    return path
 
 
 class StatusView(QFrame):
@@ -235,8 +233,10 @@ class ShellWindow(QMainWindow):
         self._reference_checks: dict[tuple[UUID, str], ReferenceCheck] = {}
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
+        self._active_export: InspectionExportTask | None = None
         self._active_kind: (
-            Literal["import", "relink", "batch", "reference", "open", "save", "discard"] | None
+            Literal["import", "relink", "batch", "reference", "open", "save", "discard", "export"]
+            | None
         ) = None
         self._active_generation: int | None = None
         self._active_load_id: UUID | None = None
@@ -294,6 +294,7 @@ class ShellWindow(QMainWindow):
         self.paste_button.clicked.connect(lambda: self._map_metadata_text("\t"))
         self.csv_button.clicked.connect(lambda: self._map_metadata_text(","))
         self.export_metadata_button.clicked.connect(self._choose_metadata_export)
+        self.detector_panel.export_button.clicked.connect(self._choose_inspection_export)
         self.relink_button.clicked.connect(self._choose_relink)
         self.open_button.clicked.connect(self._choose_open)
         self.save_button.clicked.connect(self.save_project)
@@ -1889,6 +1890,181 @@ class ShellWindow(QMainWindow):
             self.refresh_project()
             self._mark_dirty()
 
+    def _input_reference_paths(self) -> tuple[Path, ...]:
+        return tuple(
+            path
+            for item in self.project.acquisitions
+            for path in (
+                item.source_path,
+                item.metadata.cif_path,
+                item.metadata.configuration_path,
+                item.metadata.configuration_cif_path,
+            )
+            if path is not None
+        )
+
+    def _inspection_identity(self) -> tuple[Acquisition, tuple[object, ...]]:
+        panel = self.detector_panel
+        view = panel.view
+        selected = self.selected_acquisition_id
+        if (
+            selected is None
+            or selected != self._visible_acquisition_id
+            or view.image is None
+            or panel._current_profiles is None
+            or panel._profile_key != panel._query_key()
+            or panel.acquisition_identity != selected
+            or panel.horizontal.values is not panel._current_profiles.horizontal
+            or panel.vertical.values is not panel._current_profiles.vertical
+        ):
+            raise ProjectFormatError("wait for one current detector image and exact profiles")
+        acquisition = next(
+            (item for item in self.project.acquisitions if item.acquisition_id == selected), None
+        )
+        if acquisition is None:
+            raise ProjectFormatError("visible acquisition is no longer in the project")
+        token = (
+            self.project.project_id,
+            selected,
+            acquisition.source_sha256,
+            id(view.image),
+            view.data_revision,
+            view.request_generation,
+            panel._profile_key,
+            self._capture_view(),
+        )
+        return acquisition, token
+
+    def _choose_inspection_export(self) -> None:
+        if self.jobs.busy or self._active_kind is not None or self._close_intent:
+            QMessageBox.warning(
+                self, "Inspection export unavailable", "Wait for current work to finish."
+            )
+            return
+        try:
+            acquisition, token = self._inspection_identity()
+        except (ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Inspection export unavailable", str(exc))
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export detector figure and exact profiles",
+            str(Path.home() / "detector-inspection.png"),
+            "PNG figure (*.png)",
+        )
+        if not filename:
+            return
+        try:
+            current, current_token = self._inspection_identity()
+            if current_token != token or current != acquisition:
+                raise ProjectFormatError(
+                    "detector selection or profile changed during destination choice"
+                )
+            if self.jobs.busy or self._active_kind is not None or self._close_intent:
+                raise ProjectFormatError("another operation began during destination choice")
+            protected = self._input_reference_paths()
+            project_path = self._project_path or self._recovery_path()
+            figure_path = external_export_destination(
+                Path(filename), project_path, protected, suffix=".png"
+            )
+            profiles_path = external_export_destination(
+                figure_path.with_name(f"{figure_path.stem}.profiles.csv"),
+                project_path,
+                protected,
+                suffix=".csv",
+            )
+            if any(path.exists() or path.is_symlink() for path in (figure_path, profiles_path)):
+                raise FileExistsError("choose a new figure name; both export files must be new")
+            panel = self.detector_panel
+            view = panel.view
+            profiles = panel._current_profiles
+            assert profiles is not None
+            started = perf_counter()
+            figure = panel.capture_inspection_figure(
+                f"{acquisition.name} · native detector · {panel.profile_measure_control.currentData()}"
+                f" · data revision {view.data_revision}"
+            )
+            if (
+                view._uploaded_revision != view.data_revision
+                or self._inspection_identity()[1] != token
+            ):
+                raise ProjectFormatError("detector changed before the figure and profiles matched")
+            buffer = QBuffer()
+            if not buffer.open(QIODevice.OpenModeFlag.WriteOnly) or not figure.save(buffer, "PNG"):
+                raise OSError("PNG encoding failed")
+            figure_png = bytes(buffer.data())
+            metadata = {
+                "schema": "slate.inspection_profiles.v1",
+                "project_uuid": str(self.project.project_id),
+                "acquisition_uuid": str(acquisition.acquisition_id),
+                "acquisition_name": acquisition.name,
+                "decoded_source_sha256": acquisition.source_sha256,
+                "source_hash_scope": "decoded OSC header and payload",
+                "data_revision": f"decoded:{acquisition.source_sha256}/panel:{view.data_revision}",
+                "native_shape_rows_columns": json.dumps(view.image.shape),
+                "profile_measure": str(panel.profile_measure_control.currentData()),
+                "profile_scope": str(panel.profile_scope_control.currentData()),
+                "row_bounds_half_open": json.dumps(profiles.row_bounds),
+                "column_bounds_half_open": json.dumps(profiles.column_bounds),
+                "roi_column_row_bounds_half_open": json.dumps(panel._roi_bounds),
+                "crosshair_column_px": str(view.crosshair[0]),
+                "crosshair_row_px": str(view.crosshair[1]),
+                "row_width_px": str(panel.row_width_control.value()),
+                "column_width_px": str(panel.column_width_control.value()),
+                "coordinate_unit": "native detector pixel index",
+                "missing_semantics": "support=0 is missing; sum=0 or mean=nan is not measured zero",
+                "figure_file": figure_path.name,
+                "figure_sha256": hashlib.sha256(figure_png).hexdigest(),
+                "figure_device_pixel_ratio": format(figure.devicePixelRatio(), ".17g"),
+                "figure_width_height_physical_px": json.dumps((figure.width(), figure.height())),
+                "display_contrast_mode": view.contrast_mode,
+                "display_low_high_counts": json.dumps((view.low_value, view.high_value)),
+            }
+            profiles_csv = profile_csv(
+                profiles.horizontal,
+                profiles.vertical,
+                profiles.horizontal_support,
+                profiles.vertical_support,
+                metadata,
+            )
+            if self._inspection_identity()[1] != token:
+                raise ProjectFormatError("detector changed during figure and profile capture")
+            request = inspection_export_request(
+                figure_path, profiles_path, figure_png, profiles_csv, project_path, protected
+            )
+            task = InspectionExportTask(
+                self.project.project_id,
+                acquisition.acquisition_id,
+                view.data_revision,
+                acquisition.name,
+                figure_path,
+                profiles_path,
+                metadata["figure_sha256"],
+                hashlib.sha256(profiles_csv).hexdigest(),
+                (perf_counter() - started) * 1000,
+            )
+            self._active_export = task
+            self._active_kind = "export"
+            identity = self.jobs.submit(
+                JobRequest(
+                    task.project_id,
+                    task.acquisition_id,
+                    Revisions(data=task.data_revision),
+                    request,
+                    len(request),
+                    16 * 1024,
+                    publish_inspection_export,
+                )
+            )
+            self._active_generation = identity.generation
+            self.statusBar().showMessage(f"Exporting {acquisition.name} figure and exact profiles")
+        except (OSError, ProjectFormatError, RuntimeError, TypeError, ValueError) as exc:
+            self._active_export = None
+            if self._active_kind == "export":
+                self._active_kind = None
+                self._active_generation = None
+            QMessageBox.warning(self, "Inspection export rejected", str(exc))
+
     def _choose_metadata_export(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -1899,20 +2075,11 @@ class ShellWindow(QMainWindow):
         if not filename:
             return
         try:
-            path = metadata_export_destination(
+            path = external_export_destination(
                 Path(filename),
                 self._project_path or self._recovery_path(),
-                tuple(
-                    path
-                    for item in self.project.acquisitions
-                    for path in (
-                        item.source_path,
-                        item.metadata.cif_path,
-                        item.metadata.configuration_path,
-                        item.metadata.configuration_cif_path,
-                    )
-                    if path is not None
-                ),
+                self._input_reference_paths(),
+                suffix=".csv",
             )
             path.write_text(metadata_csv(self.project), encoding="utf-8", newline="")
         except (OSError, ProjectFormatError) as exc:
@@ -2368,8 +2535,13 @@ class ShellWindow(QMainWindow):
             item.setSelected(item.data(Qt.ItemDataRole.UserRole) == str(selected_id))
         self.filmstrip.blockSignals(False)
         self._update_selection_label()
-        had_work = self.jobs.busy and self._active_kind not in ("save", "discard", "batch")
-        if self._active_kind not in ("save", "discard", "batch"):
+        had_work = self.jobs.busy and self._active_kind not in (
+            "save",
+            "discard",
+            "batch",
+            "export",
+        )
+        if self._active_kind not in ("save", "discard", "batch", "export"):
             self.jobs.invalidate()
             self.cancel_button.setEnabled(False)
         self._obsolete_pending = had_work and self.jobs.busy
@@ -2481,6 +2653,20 @@ class ShellWindow(QMainWindow):
             self._update_save_status()
             self.statusBar().showMessage(f"Project write: {state.value}")
             return
+        if kind == "export":
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_export = None
+                self._active_kind = None
+                self._active_generation = None
+                self.statusBar().showMessage(f"Inspection export {state.value}: {summary.detail}")
+                if not self._close_intent:
+                    QMessageBox.warning(
+                        self,
+                        "Inspection export failed",
+                        summary.detail or "Export stopped before a completed write receipt.",
+                    )
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "open":
             if state in (JobState.QUEUED, JobState.RUNNING):
                 self._show_state(
@@ -2531,6 +2717,8 @@ class ShellWindow(QMainWindow):
         try:
             if kind in ("save", "discard"):
                 self._write_ready(identity, value)
+            elif kind == "export":
+                self._export_ready(identity, value)
             elif kind == "open":
                 self._open_ready(identity, value)
             elif kind == "batch":
@@ -2547,6 +2735,31 @@ class ShellWindow(QMainWindow):
             self._active_load_path = None
             self._active_load_hash = None
             QTimer.singleShot(0, self._dispatch_pending)
+
+    def _export_ready(self, identity: JobIdentity, value: object) -> None:
+        task = self._active_export
+        self._active_export = None
+        if (
+            task is None
+            or not isinstance(value, InspectionExportReceipt)
+            or identity.project_id != task.project_id
+            or identity.acquisition_id != task.acquisition_id
+            or identity.revisions != Revisions(data=task.data_revision)
+            or value.figure != task.figure
+            or value.profiles != task.profiles
+            or value.figure_sha256 != task.figure_sha256
+            or value.profiles_sha256 != task.profiles_sha256
+        ):
+            QMessageBox.warning(
+                self,
+                "Inspection export uncertain",
+                "Completed files did not match the captured inspection revision.",
+            )
+            return
+        self.statusBar().showMessage(
+            f"Exported {task.acquisition_name}: {task.figure.name} + {task.profiles.name}"
+            f" · capture/encode {task.capture_ms:.1f} ms"
+        )
 
     def _write_ready(self, identity: JobIdentity, value: object) -> None:
         task = self._active_write
@@ -2664,7 +2877,7 @@ class ShellWindow(QMainWindow):
 
     def _job_progress(self, identity: JobIdentity, message: str) -> None:
         if identity.generation == self.jobs.latest_generation:
-            if self._active_kind not in ("save", "discard"):
+            if self._active_kind not in ("save", "discard", "export"):
                 self.experiment_status.detail.setText(message)
                 if self.detector_notice.isVisible():
                     self.detector_notice.setText(message)

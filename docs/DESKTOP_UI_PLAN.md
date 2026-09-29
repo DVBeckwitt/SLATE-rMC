@@ -1069,7 +1069,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U01b: save, reopen and draft recovery | U01a | Own one versioned numeric project schema with file identities and atomic save/autosave. Verify an interrupted save, moved/missing source, relink identity and close/reopen; originals remain unchanged and solver resume is never implied. Accepted after focused review. |
 | [x] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. Accepted after sustained native-loop review at `4c921c1`. |
 | [x] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. Accepted after independent sustained native-shell review at `14c9799`; first/new ROI remains synchronous. |
-| [ ] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
+| [x] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
 | [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
 | [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
 | [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
@@ -1940,6 +1940,105 @@ match all retained raw streams and summaries. These are native UI
 qualification observations, not numerical fitting validation. U02a awaits
 independent supervisor evidence review and is not automatically accepted;
 U14b remains outside this work.
+
+#### U02a acceptance clarification (2026-09-29)
+
+U02a was accepted at `407716ee1c0bdec2b55ff574d87cfe03496701a7`
+after independent review of all three new raw streams, source identity,
+current G/H/V generations and buffers, saved documents, receipts and bounds.
+The checklist is now **9 of 46 accepted, 37 remaining**. Earlier failed
+windows retain their original verdicts; the new v3 series is closed with
+180 s conservatively charged. The table above labels the sustained-demand
+subset; the actual full fresh-frame gate retained all 1979/1986/1983
+intervals and measured p50/p95/p99/max respectively as
+13.291/14.834/18.836/27.854 ms, 13.296/14.554/17.845/27.065 ms, and
+13.286/14.589/18.372/31.231 ms. Its 41/31/40 intervals above 16.7 ms
+remain included, and none exceeded 33.3 ms. The accepted gate is the full
+fresh-frame p95 below 16.7 ms and p99 below 33.3 ms in every window.
+
+In output 9, the old-write receipt followed the newer edit by 220.084 ms
+and the observed active-write event by 244.520 ms. The final complete
+20-record disk document, SHA-256
+`405bfdc75d5e4e48f65e0327b774568b0698c2610fd7e2f7b3823c048a9d036e`,
+matched before and after reopen. Only the two intended rows retained
+`mount=reviewed-newer`; publication 29's latest G/H/V and exact native
+profile values were current at reopen. Memory had 129/129/130 samples,
+with maximum active sample gaps 0.289/0.289/0.291 s. Late-window RSS
+ranged 404.95-421.29, 404.32-420.09 and 406.10-420.95 MiB; drained
+RSS was 343.42, 342.14 and 356.95 MiB. These samples do not establish
+full memory reclamation or GPU driver allocation. U02a acceptance is for
+the declared detector UI workflow, not scientific fitting.
+
+#### U14b inspection export implementation (2026-09-29; review pending)
+
+The detector panel now offers **Export figure + profiles** for the current
+visible OSC acquisition. It captures the displayed OpenGL viewport and
+overlays with the two existing Qt profile plots and native-coordinate axes;
+the paired CSV serializes the canonical current `BandProfiles` vectors, not
+the framebuffer, plot decimation, contrast or clipped display values. The
+rectangular CSV has metadata records naming project/acquisition UUIDs,
+decoded-source SHA-256 and scope, native shape, source-bound panel data
+revision, effective band/ROI bounds, profile measure, units, viewport DPR
+and PNG hash. Its profile records include every horizontal native column
+and vertical native row, exact integer or round-trip float64 value, integer
+support and an explicit missing flag. Zero support is missing even when a
+sum is zero; means at zero support are `nan`.
+
+The chooser requires a new external PNG path and derives a distinct
+`.profiles.csv`. The existing Git/project/source/reference alias guard is
+shared with metadata CSV export; both destinations must be new. Figure
+capture is limited to 16 MiB raw, CSV to 3 MiB, and the immutable paired
+request to the existing 4 MiB `JobOwner` limit. A single worker writes and
+reopens both files, returns their hashes, and removes its newly created
+files on failure. Before and after the destination dialog and synchronous
+capture, the shell checks the selected/visible acquisition, native data
+revision, current query key, canonical profile buffers and viewport state.
+Later selection changes do not relabel or invalidate the immutable write
+request. Success is shown only after the completed write receipt; failure
+is visible. No new job pool, numeric reducer or physics path was added.
+
+Focused external pure `python -B -` checks wrote and reopened one PNG/CSV
+pair. Independent expected records covered signed integer sums, values
+above 2^53, float64 means, nonfinite input exclusion, zero support,
+unequal horizontal/vertical lengths, provenance and unit fields. An
+existing destination retained its original bytes; missing-directory, Git
+checkout and protected hardlink-alias destinations were rejected. The
+first checker used an
+`int64` input where the existing conservative full-band overflow bound
+correctly refused a two-row reduction; changing only the tiny fixture to
+`int32` let the unchanged reducer and export pass. This was a checker
+fixture error, not a product failure. Pure artifacts are external:
+`u14b_pure_export.png` and `u14b_pure_export.profiles.csv`.
+
+One focused native command ran an external temporary journey script under
+an independent `subprocess.run(..., timeout=55)` whole-command bracket;
+it returned 0 in **1.428 s**, within the new 60 s aggregate allowance.
+No second native launch or older U02/U03/U02a qualification run occurred.
+The real Windows Qt shell admitted tracked 3000x3000 hBN and Bi2Te3 OSCs.
+Before export, hBN used custom 1.6 zoom, mean per valid pixel and 7-row/
+5-column bands. Dialog cancellation wrote nothing. Changing acquisition
+during destination choice rejected the request; changing to Bi2Te3 while
+the worker wrote left the exported hBN snapshot unchanged. The result
+report's final `viewport_scale=fit` describes this later Bi2Te3 selection,
+not the asserted custom hBN capture.
+
+The exported 549x262 physical-pixel PNG reopened with sampled detector
+and both profile-plot pixels matching the captured Qt layers. The separate
+437,316-byte CSV reopened with all 6,000 native bins exactly matching the
+captured float64 means/support and the named hBN source hash
+`137cd964f156d66144aea7b1ae2905aa383aeca5c8bebc35a0a6b5ae2724474d`
+at panel data revision 3. The PNG was 15,589 bytes, SHA-256
+`e48c86ac195a8396a8f63a5e34a995de3bc61eb48839c74f8f0ed5c60a5be907`;
+CSV SHA-256 was
+`9b1b9c80f954abdd396910ee86285a357f417591c75a4da4922e8a8b14b6e0f8`.
+Capture/encoding took 26.935 ms on the GUI thread; dispatch through the
+completed write and receipt took 49.505 ms total. Process RSS was 379.0 MiB
+before and 384.7 MiB after; these endpoints are not a sampled peak or a proof of
+full reclamation. The shell closed normally. The external evidence is
+`u14b_native_export.png`, `u14b_native_export.profiles.csv` and
+`u14b_native_result.json`; the temporary journey code was removed.
+These checks establish this inspection export path, not scientific fitting
+or all future display sizes. U14b awaits independent supervisor review.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 

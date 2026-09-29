@@ -88,6 +88,18 @@ center. Missing bins are omitted from the plots. Horizontal and vertical intensi
 pinned separately with finite low/high values; otherwise each plot scales to its current data.
 Project save and recovery preserve these inspection settings. Full-detector projections are
 prepared with the OSC import and cached per selected native image.
+**Export figure + profiles** saves a PNG of the current detector viewport, overlays and visible
+horizontal/vertical plots, plus a separate `.profiles.csv` with every native profile bin. Choose a
+new external PNG filename; the paired CSV uses the same stem, and existing files are never replaced.
+The CSV begins with `metadata` records for the project/acquisition UUIDs, decoded OSC hash, named
+data revision, native shape, effective integration bounds, measure, units, display settings and PNG
+hash. Its `profile` records give native column/row index, exact value, valid-pixel support and an
+explicit missing flag. Integer sums remain decimal integers; float64 means use round-trip decimal
+text. A zero-support sum is marked missing even though its value is zero; a zero-support mean is
+`nan`. The PNG shows the selected viewport and display contrast; the CSV values come from the
+native detector data, not from plotted pixels or display scaling. A selection or profile change
+during destination choice rejects the export, while an already captured pair finishes from its
+immutable snapshot if the selection changes during writing.
 Image, crosshair and available
 marker layers can be shown independently; fitted-result overlays are unavailable without a fit.
 Contrast clipping is a display choice, while detector saturation remains unknown without a
