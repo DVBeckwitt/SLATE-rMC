@@ -1086,7 +1086,7 @@ implementation commits.
 
 #### U02a import and metadata implementation checkpoint (2026-09-28; review pending)
 
-Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5` and `3977f05` implement the
+Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5`, `3977f05` and `9adcf87` implement the
 U02a slices. The project document now retains acquisition role, specimen/mount,
 commanded incidence in radians, exposure in seconds, detector setup, material and
 calibrant identifiers, dark/mask associations, explicit unknowns, provenance and
@@ -1100,18 +1100,32 @@ same bounded bytes for the validated digest and parse, including its referenced
 CIF snapshot. No metadata entry starts a fit or qualifies a calibrant.
 
 Focused external checks used `PYTHONPATH=interactive;src`, native
-`QT_QPA_PLATFORM=windows` and `python -u -B`. A mixed three-candidate check
-observed one valid admission, a corrupt-file failure and a canceled candidate,
-with exact project JSON save. The reference/configuration checks compared the
+`QT_QPA_PLATFORM=windows` and `python -u -B`. A mixed candidate check observed
+three valid admissions, one missing source and one unsupported extension;
+retry admitted a fourth row. A separate four-row small-source journey saved,
+reopened exact project JSON and closed normally in 0.471 s. The
+reference/configuration checks compared the
 canonical physics and rendering revisions from default and bounded-snapshot
 readers; the nested CIF limit rejected an oversized reference. Transactional
 metadata checks exercised signed finite angles, paired reference path/hash
 updates, both CSV association row orders and exact export. A controlled cold
-selection/removal check passed in 0.215 s: removal invalidated the running load,
-and the other acquisition remained. Its harness then required forced process
-exit because the harness stopped its timer before asynchronous window shutdown;
-normal drained close and reopened JSON were covered by the separate import smoke.
-The temporary check code is not retained.
+selection/removal check reached `REMOVE_IN_FLIGHT_OK` in 0.215 s: removal
+invalidated the running load, and the other acquisition remained. Its harness
+stopped its timer before asynchronous window shutdown and needed forced process
+exit, so that command supplies no normal-close proof. The earlier queued
+cancel/retry and canceled-open checks passed before a separate cold-load setup
+assertion. A follow-up controlled check found a Qt item-API error in its own
+harness before reaching the product workflow. No such failure is counted as
+product evidence. The temporary check code is not retained.
+
+Read-only review then found two admission gaps: individually valid metadata
+could grow a project beyond the 1 MiB document limit, and malformed angle
+proposals could reach confirmation. Both are now checked before UI publication.
+A focused 128-acquisition check began from a valid document and confirmed that
+oversized mapped metadata is rejected while the prior project remains. A
+focused selection check confirmed candidate-only rows yield no admitted target
+and multi-selection survives table refresh. Malformed or nonfinite proposal
+values are rejected at metadata construction.
 
 Ruff format and lint passed for the touched Python files; an offline source and
 wheel build passed. Built artifacts and the temporary saved project were removed
@@ -1119,19 +1133,28 @@ from the external scratch location. These software checks establish packaging
 and interaction behavior only, not scientific fitting adequacy.
 
 The one permitted 20-record smoke used repeated explicit references to the
-small non-square OSC and completed in 2.094 s within 3.508 s command wall time.
+tracked 3000 x 3000 `hBN_calibrant_5m.osc.gz` and completed in 2.094 s within
+3.508 s command wall time.
 It confirmed 20 distinct UUIDs and identical decoded source hashes, a final
-matching selected ID, exact save/reopen JSON and drained close. Fourteen
+matching selected ID, exact saved JSON and normal drained close. It did not
+reopen this 20-record document. Fourteen
 selected-image publications comprised 12 cold and two resident selections;
 publication latency ranged from 13.008 to 231.959 ms. These timings exclude
-composition. Eight GL uploads were observed because paints coalesced. The cache
+composition; there is no evidence for ten presented switches or matching
+generation/hit-test evidence on each composition. Eight GL uploads were
+observed because paints coalesced. The cache
 held at most two prepared packs and thumbnails occupied 110,592 bytes; observed
 RSS was 369.7 MiB and Windows peak working set 484.9 MiB. The selected detector
 panel can retain a third plane after a selection or removal, and one worker
-result may coexist with these; count all four prepared packs, source/decode
-buffers, Qt table/icons, upload staging and GL textures in the combined resource
-ledger. This is a short smoke on a small repeated source, not the sustained
-twenty-image latency, memory or mixed-source qualification. The U02a checklist
+result may coexist with these. Four worst-case 96 MiB prepared packs total
+384 MiB before a 64 MiB source buffer, 32 MiB decoded buffer, approximately
+34.3 MiB for one 3000 x 3000 R32F texture, an equally sized upload copy,
+Qt table/icons, other driver allocations and the shell baseline. This is a
+conservative overlap count, not a measured peak. The short repeated-source
+smoke does not establish sustained twenty-image latency, memory or mixed-source
+qualification. Native command walls, including the two focused admission
+follow-ups, conservatively totaled about 40.7 s of the original 60 s allowance;
+the one permitted 20-record smoke is closed. The U02a checklist
 remains open for independent review and the declared responsiveness gate.
 
 #### U01 shell and identity checkpoint (2026-09-28)
