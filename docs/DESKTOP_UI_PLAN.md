@@ -1419,9 +1419,10 @@ reject historical paints. No GUI window ran in this follow-up either.
 
 One fixed window-2 continuation verified the immutable failed-window-1 ledger,
 then wrote its own one-use receipt before launch. The original ledger remains
-unchanged. The child process took 32.536 s, its controller 33.356 s, and the
-command is conservatively charged **36.000 s** because a yielded PTY did not
-expose exact whole-command wall time. With the prior 44.797 s charge, 80.797 s
+unchanged. The child process took 32.536 s, its controller 33.356 s, and later
+parent command metadata exposed 33.679 s of command execution. The command
+remains conservatively charged **36.000 s**; the yielded PTY did not expose
+exact whole-command wall time. With the prior 44.797 s charge, 80.797 s
 of the original 130 s is charged and 49.203 s remains suspended. Readiness was
 1.150 s, active browsing 29.992 s and drain 0.778 s. No preflight, retry or
 window 3 ran.
@@ -1451,9 +1452,46 @@ freeze was production `f527462` with pre-run docs HEAD `67ec8c4`. External
 raw, summary and continuation receipt SHA-256 are respectively
 `2feef12d26ba426b809f88b48dea13f37c749d9b0fca864b695e6eabda2e524d`,
 `82b9a8636a465e68b4a4f1126f0c24044ce3e4a3b145dfdf5be2777b37616b89`
-and `6b9a48b6814a820335edbcc6fe5ecb9ffe2ee9542b54a039c82be3361bafe8e6`.
+and `b16b81e39c502af17bc2732418649de3b5b42a3d6ade9826b29a3e7a49388ccf`
+after the accounting-only receipt annotation. The original receipt hash was
+`6b9a48b6814a820335edbcc6fe5ecb9ffe2ee9542b54a039c82be3361bafe8e6`.
 The failed window 1 and its five immutable files remain unchanged. U02a is
 unaccepted; the window-3 active-old-write/newer-edit gate remains unrun.
+
+#### U02a prospective rendering-demand measurement correction (2026-09-29; pure only)
+
+The frozen window-2 result above remains **FAILED** under its original
+delivered-input and ready-telemetry 16 ms rule. Its raw and summary files were
+not rewritten, and the correction does not infer a renderer bottleneck from the
+observed supply gaps. The external reporter and manifest now name a separate
+`rendering-demand-v2` rule for prospective measurements. The old delivered-input
+coverage and sustained-frame subset remain reported as diagnostics.
+
+The new rule derives ready spans from active boundaries and heartbeat state,
+requiring selected/visible, project, publication, decoded source, native and
+display identity to agree. An effective identity-bound cursor request starts
+pending time until its own first exact coherent G/H/V presented swap. A later
+request supersedes it and carries the pending interval forward; a late swap of
+the older request cannot close that interval. The report separates eligible,
+pending, undemanded, covered and excluded milliseconds, maximum undemanded and
+state gaps, maximum pending episode, request and composition coverage, and
+effective/composed/superseded/unresolved request counts. Each genuinely
+undemanded head, between-request and tail gap
+and each ready-state sample gap must be at most 16 ms. Every ready span needs a
+composition; pending demand censored at any boundary fails. A pending episode
+over 50 ms also fails. Existing cursor p95, fresh-frame p95/p99, heartbeat,
+resource, selection and persistence gates remain.
+
+Pure checks on the actual reducer and canonical matcher accepted continuous
+8 ms input and a 25 ms pending response; they rejected sparse 32 ms input,
+missing/initial/tail and 30 s one-input supply, a 200 ms response, never
+composed demand, wrong publication/native buffer or incoherent paint, old-only
+supersession, repeated-state ABA and a loading boundary without new coverage.
+The reporter's existing pure selfcheck, Ruff lint/format and AST checks passed.
+No GUI or native window, preflight, retry or window 3 ran. U02a remains
+unaccepted. The prospective reporter and manifest hashes are
+`7f96a03c9bca3136179e5d015594332ededa201d7781c8ce0aa55be7d8fa66e7`
+and `b3dac76c708c1606470b5c21e635d9c2790a6a3d05f321834910916794a526d2`.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
