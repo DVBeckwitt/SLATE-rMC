@@ -1872,6 +1872,75 @@ proposal awaits supervisor review before a single concrete runtime
 decision is put to the user; U02a remains unaccepted and U14b is outside
 the proposal.
 
+#### U02a v3 fresh-series native qualification (2026-09-29; supervisor review pending)
+
+The supervisor released the exact v3 packet above under a new, separate
+180 s whole-command allowance. The sole writer created
+`u02a_fresh_release_v3.json` from the reporter's actual
+`fresh_release_binding(source_freeze())` at clean documentation HEAD
+`e18897110dc1244091dac496696d399ba33e33df`. Its SHA-256 is
+`d9e0c407daf08cf07d0cabdae256ac50f68be23dc3a980699afb2e4cbf16ef3d`.
+The binding fixes the 7/8/9 outputs, 2/2/3 journeys, 180/60 s limits,
+source and input hashes, all three v3 file hashes, and the original and
+previously stopped budget evidence. The earlier failed verdicts and ledgers
+remain unchanged. Outputs 5 and 6 remain absent.
+
+For each ordinal 1, 2 and 3, a separate outer Python `perf_counter()`
+bracketed the complete command `python -B <external
+u02a_fresh_watchdog_v3.py> <ordinal>` through process exit, including
+launcher imports, startup, readiness, 30 s active work, post-active save,
+reopen, reporting, cleanup and final flush. After examining each provisional
+receipt and summary, `python -B <external u02a_mixed_reporter_v3.py>
+--confirm-fresh <ordinal> <whole-command-seconds>` wrote its confirmed
+whole-command duration. No preflight, decode replay, retry, replacement,
+extra GUI command or source/reporter/manifest edit ran during measurement.
+All three attempts returned 0 and were conservatively charged 60 s each;
+the new series is fully charged at 180 s, with no reclaim of unused time.
+
+| Output / journey | Whole command (s) | Ready / active / drain (s) | Warm select p95 / cold select p95 (ms) | Cursor p95 / sustained fresh frame p95 / p99 (ms) | Heartbeat max / visible ack max (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 7 / 2 | 34.198 | 1.148 / 29.997 / 0.796 | 22.463 / 189.894 | 14.472 / 14.616 / 16.043 | 28.720 / 44.294 |
+| 8 / 2 | 34.168 | 1.126 / 30.008 / 0.808 | 22.687 / 189.023 | 14.112 / 14.511 / 15.135 | 27.306 / 43.703 |
+| 9 / 3 | 34.236 | 1.160 / 30.000 / 0.807 | 23.479 / 189.879 | 14.134 / 14.467 / 15.280 | 26.361 / 45.612 |
+
+Each summary recorded 27/27 matched selections, coherent active swaps
+(2004, 2014, 2013), zero incoherent/loading/historical active swaps, no
+reporter failure or missing evidence, and a normal drained close. The
+prospective v3 demand classifier qualified all three: exact coherent
+composition coverage was 1.0, every ready span had composition and cursor
+progress, no unresolved boundary or invalid identity remained, and maximum
+genuinely undemanded ready gaps were 12.557, 10.867 and 11.328 ms under
+the frozen 16 ms limit. Sustained fresh-frame p95 stayed below 16.7 ms
+and p99 below 33.3 ms; cursor p95 stayed below 50 ms, heartbeat maximum
+below 100 ms and all visible acknowledgments below 100 ms. Cold selection
+timing is retained separately from the frozen warm-selection 150 ms gate.
+
+Every run retained a matching project, raw event stream, summary, child
+claim and confirmed budget receipt. Final reopened G/H/V matched the
+strict latest completed publication 29 for Bi2Te3, selected UUID
+`9028630f-acc4-581c-bb03-24063f4899be`, source SHA-256
+`6f00b27802e6419ad79d9ec38441f3cd051b0becaba399f351caeb9a0e451c26`,
+sample `(0,0)=14`, horizontal sum 77988 and vertical sum 73153, with
+20 source checks and a second full-document disk comparison after reopen.
+Output 9 additionally records the old revision 2828 write becoming active
+at event 9863, the newer revision 2835 edit at event 9872 during that
+write, and the old-write receipt at event 9988 about 220 ms later. Final
+Save persisted revision 3794 with a full current-document comparison;
+reopen produced the newer publication and current G/H/V before normal
+close. Both edited acquisition records retained `mount=reviewed-newer` on
+disk. The stale old write did not replace the final document.
+
+Peak cache entries were 2 each; thumbnails 184,320 bytes; write queue
+depth 1 and bytes at most 18,621; pending jobs 1; retained job summaries
+8. Sampled RSS maxima were 484.6, 502.5 and 473.8 MiB and Windows peak
+working sets 529.7, 524.3 and 531.0 MiB, within the frozen resource
+limits. GPU driver allocation was not measured; the existing source-derived
+display/upload planning bound is the applicable GPU check. Receipt hashes
+match all retained raw streams and summaries. These are native UI
+qualification observations, not numerical fitting validation. U02a awaits
+independent supervisor evidence review and is not automatically accepted;
+U14b remains outside this work.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
