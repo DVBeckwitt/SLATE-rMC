@@ -1599,30 +1599,46 @@ The external reporter and manifest now describe a prospective new 180 s allowanc
 reserved as three separate 60 s whole-command attempts. Ordinals 1 and 2 repeat
 the mixed browse, bulk metadata, final save and reopen journey into output indices
 4 and 5; ordinal 3 records the active old-write/newer-final-edit journey into
-output index 6. Each uses a fresh receipt, project, event log and summary. The
-original window-1/window-2 evidence and 80.797 s charged/49.203 s suspended
-ledger remain untouched. This proposal does not revive that allowance.
+output index 6. Each uses a fresh receipt, one-use child-start claim, project,
+event log and summary. The original window-1/window-2 evidence and its 80.797 s
+charged/49.203 s suspended ledger remain untouched. This proposal does not revive
+that allowance.
 
-Admission requires a separate root-written release file after explicit user
-approval of native time. The release binds the clean source freeze, reporter,
-manifest, fixed input and original budget/receipt hashes, journey mapping and
+Admission requires a separate release file written by the sole implementation
+writer only after an explicit supervisor release message following user approval
+of native time. The release binds the clean source freeze, external launcher,
+reporter, manifest, fixed input and original budget/receipt hashes, journey mapping and
 180/60 s limits. It does not exist in this preparation packet. The controller
 rejects missing or altered release, duplicate/future outputs, a missing or
 failed prior receipt, changed prior evidence and exhausted reservations before
-launching a child. It reserves the entire 60 s in an exclusive durable receipt
-at attempt start; timeout, incomplete evidence and budget failure cannot be
-replayed. A candidate success remains unqualified until the root records the
-supervisor's whole-command duration, including interpreter/import, admission,
-child and parent/reporting time. A duration over 60 s fails the attempt and
+launching a child. The external launcher starts its deadline before starting the
+reporter process, covering reporter import, admission, native child execution,
+analysis, hashes and its final receipt write. The reporter reserves the entire
+60 s in an exclusive durable receipt before the native child starts. If the
+launcher stops an attempt before reservation finishes, it writes a conservative
+failed 60 s receipt. On timeout or interruption it stops only that attempt's
+owned process tree; an exclusive fsynced child-start claim prevents a second
+native child even if the first dies before project output. Timeout, incomplete
+evidence and budget failure cannot be replayed. A candidate success remains
+unqualified until the sole writer records the independent whole-command duration,
+including launcher interpreter/import, admission, child and parent/reporting time.
+A duration over 60 s fails the attempt and
 stops the series. The internal child timeout is a second bound, not a substitute
-for whole-command supervision. No preflight or replacement attempt is included.
+for whole-command supervision. The watchdog starts after its own imports;
+the external duration check includes those imports and the launcher's final
+receipt flush/exit. The measured pre-finalization clocks in the receipt are lower bounds, not claims
+of full command duration or hard real-time OS termination. No preflight or
+replacement attempt is included.
 
 Pure synthetic admission/accounting checks exercised release mismatch,
 sequential and duplicate admission, prior failure, cumulative charge,
 whole-command threshold, successful provisional receipt/confirmation,
-child failure and timeout stop. They created no native application or OSC decode
-and were removed after use. The reporter's existing `--selfcheck` and source
-freeze are separate pure checks. Three fresh qualified windows are still needed;
+child failure and timeout stop. A focused repair check then used the actual
+launcher/reporter path with fake processes, exercised repeated and concurrent
+child-start claims before output, and verified timeout, interruption, expired
+clock and owned-tree termination paths. The temporary fixtures created no
+native application or OSC decode and were removed after use. The reporter's
+existing `--selfcheck` and source freeze are separate pure checks. Three fresh qualified windows are still needed;
 U02a remains unaccepted and U14b remains outside this release.
 
 #### U01 shell and identity checkpoint (2026-09-28)
