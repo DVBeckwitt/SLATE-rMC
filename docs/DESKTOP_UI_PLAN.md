@@ -1547,6 +1547,44 @@ or native window ran. Reporter and manifest SHA-256 are
 and `4b04be927d43c0dc3d65bdce0cd85ea5261ed5da11b35c34cfd890b78ce80937`.
 Window 2 remains failed under its frozen rule; U02a remains unaccepted.
 
+#### U02a window-3 admission assessment (2026-09-29; pure, blocked)
+
+The original 130 s allocation has 44.797 s charged to window 1 and the
+conservative 36.000 s window-2 charge. Its authoritative remainder is
+**49.203 s**, suspended. The later 33.679 s window-2 command-execution
+measurement does not reduce that charge or establish a worst-case bound.
+The original `remaining_native_budget` rejects the failed prior ledger and
+requires at least 50 s; its guard and the consumed one-use window-2 path stay
+unchanged. No window-3 receipt or output was created.
+
+The complete command would need to reserve interpreter/import and controller
+admission work, child import and project construction, up to 8 s readiness
+from `NativeReporter.started`, the full nominal 30 s active workload, the
+unchanged 12 s post-active final-query/save/reopen/close deadline, then raw
+and summary writing, analysis, parent validation and durable final receipt.
+The reporter starts its readiness clock *after* child imports, its source-freeze check
+and the input project copy. Its 12 s clock stops before report writing and
+parent validation. Let `O` be all other whole-command time. A guaranteed
+full-journey envelope would require `8 + 30 + 12 + O <= 49.203` seconds, or
+`O <= -0.797` seconds. Since `O` includes positive work and has no existing
+hard bound, this allowance cannot admit the unchanged journey. Faster prior
+readiness/drain measurements do not remove the protected phase allowances.
+A mere change to the original 50 s admission threshold would still give its
+child at most `49.203 - 1 = 48.203` s under the existing timeout expression,
+below the 50 s phase envelope before child startup or parent reporting.
+A timeout that makes an attempt fail cannot turn this inequality into a
+qualified observation.
+
+A pure call to the actual budget helper with the immutable ledger and index 3
+raised `prior native attempt failed; stop`; scalar accounting independently
+returned `130 - 44.797 - 36 = 49.203`. The manifest input hash still matches
+the immutable input. The internal `--child-window 3` route has no supervisory
+budget or one-use receipt and is not an authorized admission path. No new
+window-3 entry point, reservation or release values were prepared. There was
+no child, QApplication, preflight, retry or native time. Windows 1 and 2
+remain failed; the active-old-write/newer-final-edit window-3 journey and
+three-window U02a qualification remain unrun and unaccepted.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
