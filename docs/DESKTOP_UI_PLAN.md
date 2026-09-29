@@ -1326,6 +1326,22 @@ were present, and the worker raised
 I2 with H1. Temporary external files were removed. This pure check used no
 native GUI allowance and does not close the sustained U02a qualification gate.
 
+#### U02a mixed-source qualification preflight (2026-09-28; stopped)
+
+The separately frozen 20-acquisition, four-source reporter stopped during pure
+input preparation, before its state-machine preflight or any native GUI run.
+`python -B <external u02a_mixed_reporter.py> --prepare` wrote the deterministic
+20-UUID project and manifest, then failed an exact CSV text assertion for a
+mapped 7.25-degree value. The stored angle was
+`0.1265363707695889` radians and CSV serialized it as
+`7.2500000000000009` degrees; the mapped 360-second exposure stayed `360`.
+The export follows the documented floating-point degree/radian conversion;
+this checker expected the literal `7.25` string without allowing its numerical
+round trip. No native window, 20-record smoke, fit or performance measurement
+ran, and the new 130-second native allocation remains entirely unused. The
+external reporter/input/manifest are retained for independent review; U02a
+remains unaccepted and its sustained gates have no new evidence.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
