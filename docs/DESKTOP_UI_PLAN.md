@@ -1651,9 +1651,13 @@ U02a remains unaccepted and U14b remains outside this release.
 
 After user approval and explicit supervisor release, the sole writer created the
 exact source-bound external release and ran ordinal 1 once through the native
-watchdog. It used journey 2 and output index 4. The independently timed whole
-command took **34.633 s** and exited 1; the reporter exited 2 after completing
-its native journey and analysis. The durable receipt records
+watchdog. It used journey 2 and output index 4. The worker-reported tool-wall
+interval was **34.633 s** and the command exited 1; a separate root
+`read_thread` command-execution record reports **34.440 s**. The controller
+and launcher receipt clocks reported pre-finalization lower bounds of
+34.252 and 34.293 s. Their different boundaries are unresolved and do not
+change the charge. The reporter exited 2 after completing its native journey
+and analysis. The durable receipt records
 `controller_failed` with reason `child exited 2`. The entire **60.000 s**
 attempt is charged against the new 180 s allowance. Ordinals 2 and 3 were not
 started, and the failed ordinal was not confirmed or retried. The remaining
@@ -1675,8 +1679,9 @@ cursor and heartbeat distributions met their frozen percentile gates.
 
 The sole qualification miss was prospective `rendering-demand-v2`. Its 28
 ready spans contained 26.552 s eligible time, 25.209 s pending demand and
-1.343 s undemanded time. The longest genuinely undemanded gap was
-**19.215 ms**, over the frozen 16 ms ceiling; 19 effective requests remained
+1.343 s classified-undemanded time. The longest gap classified as undemanded
+by the frozen cursor-only method was **19.215 ms**, over its 16 ms ceiling;
+19 effective requests remained
 unresolved at ready-span boundaries. Of 2,182 effective requests, 180 were
 superseded and 1,983 composed, yielding 0.99051 request coverage. All spans
 had composition, and no identity-invalid request was recorded. The older
@@ -1702,6 +1707,66 @@ respectively `803035e421f00b819cd65775dc26c35e8de9791f3f7008a0c2ded005712c41b7`,
 and `58ce607407e812c1851e5107b34bdfea04aac0291fd07ad556d5b14ba07dccc6`.
 The failed evidence remains external and immutable. U02a remains unaccepted;
 U14b remains outside this series.
+
+#### U02a prospective demand-classifier candidate (2026-09-29; pure review packet)
+
+Independent read-only review of the failed output-4 trace found that all 19
+frozen unresolved requests ended at explicit selections of a *different*
+UUID, with post-dispatch `selected_after` confirming the target. Their pending
+ages were 0.410-1.366 ms; none had an exact subsequent G paint and matching
+swap before the cut. Five cuts were warm and 14 cold. Production intentionally
+hides the old panel on these selections. The one 19.215 ms gap was between
+publication 23 (event 7248) and its first cursor request (event 7256).
+The source's initial strict completed G/H/V presentation and coherent swap
+(event 7255) occurred inside that interval; the first cursor followed the
+swap by 0.375 ms. The frozen result remains **FAILED**: these findings explain
+why its cursor-only labels need prospective review, and do not retroactively
+qualify the old run or establish continuous rendering demand.
+
+One external `u02a_mixed_reporter_v3_candidate.py` copies the frozen reporter
+and changes only its prospective analyzer, pure selfcheck and command entry
+point. It is an **unreleased classifier candidate**, not a qualification
+runner. Its entry point accepts only `--selfcheck`; all preparation, native,
+release and confirmation command routes are disabled before calling their
+implementations. The candidate counts an admitted publication as pending
+initial-presentation demand through its first exact latest completed G/H/V
+composition, intersected with recorded ready spans. Source presentation and
+cursor responses stay separate. A later cursor request supersedes older
+outstanding demand. Only a recorded different-UUID selection with matching
+post-dispatch target can explicitly cancel the old request. The candidate
+retains canceled request identity and age as a censored lower bound; it does
+not count cancellation as composition or a fast response. Pending time, true
+idle heads/tails, actual frame and cursor distributions, and unresolved
+boundaries remain visible. A 50 ms p95 lower-bound failure is reported only
+when completed latencies plus nonduplicated censored ages prove that limit
+cannot pass. Every ready span with cursor requests needs cursor presentation
+progress, so repeated cancellation and source publication alone cannot
+qualify. The 16 ms true-idle limit and the unchanged frame, cursor, heartbeat,
+acknowledgment, workload, identity, resource and persistence gates remain.
+
+The candidate's one finite actual-`analyze()` synthetic matrix passed
+confirmed selection cancellation without composition credit; same-UUID,
+failed, unconfirmed, absent-selection and ordinary active-end pending
+rejection; exact publication presentation followed by cursor demand;
+post-presentation idle over 16 ms rejection; wrong buffer, publication,
+generation, query and historical paint rejection; supersession of a late
+initial paint by newer cursor demand; a 112 ms canceled pending age whose
+censored p95 lower bound and raw swap tail remain visible; repeated
+cancellation without cursor progress; and A-B-A stale-publication rejection.
+The existing pure reporter selfcheck also passed. One initial matrix assertion
+used an exact 112 ms floating-point comparison and failed at rounding; its
+tolerance was corrected to 111.9 ms without changing the classifier.
+Ruff lint/format and AST command-entry inspection passed. No candidate run
+used the historical raw output to relabel it, and no GUI, decode, preflight,
+native attempt or budget/release action occurred in this packet.
+
+The candidate is 156,077 bytes, SHA-256
+`ae2ebc67fb8cf0c73fce67a8d67109f540942c9a72aa11ed3c2a026f7c7935c4`.
+All 18 pre-existing external files, including the failed raw, summary,
+receipt and child claim and frozen reporter/manifest/watchdog/release, remain
+byte-for-byte unchanged. The candidate needs independent supervisor review
+before any release decision. U02a remains unaccepted, and the first-failure
+native series remains stopped.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
