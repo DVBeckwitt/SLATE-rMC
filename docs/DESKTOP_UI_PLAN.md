@@ -2455,8 +2455,8 @@ check rejects detector-only, one-profile, stale-token and changed-publication
 receipts. In the native launch, ten prepared A/B selections each had matching
 detector/H/V receipts and one image upload; their maximum post-paint latency
 was 24.914 ms. The rapid final A also had matching receipts, one upload and a
-canceled stale generation. These are one measured repeat window, not U07
-acceptance.
+canceled stale generation. These are measurements inside a failed packet, not
+a passing qualification repeat or U07 acceptance.
 
 The launch **failed** at `cancel_wait` on its 52 s internal deadline. No cancel
 button paint acknowledgment was recorded; the final reciprocal job reached
@@ -2470,6 +2470,44 @@ The original 7,177-byte fixture retained SHA-256
 only the disposable copy changed through ordinary autosave. U07 stays unchecked
 at 11/46 accepted. No fit, forward intensity image or scientific comparison
 was run.
+
+#### U07 early-cancel series stopped at first prepared switch (2026-09-29)
+
+A new finite three-launch allowance was frozen against commit `9124063` and
+the exact external native/runner bytes. Ordinal 1 opened its own exact-byte
+disposable project copy. The observer first scrolled the existing central
+Cancel control into full view and waited for a later completed paint. It was
+enabled and fully contained at x = 465..673, y = 528..563 in the 694 × 563 px
+central viewport immediately before the click. The Map action created a new
+reciprocal job, generation 3, for the selected acquisition and recorded request
+hash. Cancel emitted pressed/clicked, entered the production handler and
+dispatched `JobOwner.cancel` for that generation. The job signaled
+`cancel-requested`, the disabled Cancel button completed a matching paint in
+20.480 ms, and the job reached `canceled` after 81.014 ms. Request-to-paint
+and safe-stop are separate measurements.
+
+The same launch confirmed the 207 × 85 px inspector Q label fully visible and
+painted with zero horizontal scroll. Its 30.020 s mixed cursor/profile window
+had 2,253 matched frames, 19.883 ms head, 0.794 ms tail, frame p95 15.320 ms
+and p99 18.162 ms, cursor p95 16.028 ms, no image upload, and maximum
+heartbeat gap 52.166 ms. The first prepared selection's reciprocal coverage
+paint was acknowledged in 23.677 ms, then the launch **failed** at
+`switch_wait` on its 52 s internal deadline. No prepared switch was qualified;
+the retained failure snapshot omitted the detector/H/V receipt state, so the
+missing condition cannot be assigned to a specific surface. Earlier layout
+evidence with ten matching switches remains a separate failed packet.
+
+The Map-click observer timestamp was overwritten by a later Map click because
+that watcher stayed active; it does not prove the first click time. The new
+generation, request identity and early Cancel pressed/handler/dispatch/state
+transitions remain recorded. Failure handling drained the owner, but ordinary
+close/hide timing was not reached. The whole command took 53.313 s, below its
+60 s cap. Ordinals 2 and 3 were not launched and their allowance is suspended.
+The original fixture stayed at SHA-256
+`d99a9b13348315f3a6dfbba8ced61ef896fa3e2ef1e50df0a9e1280cab7ba271`;
+the autosaved disposable copy was retained. All 206 earlier external files
+match their protected hashes. U07 remains unchecked at 11/46 accepted. No fit,
+forward intensity image or scientific comparison was run.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
