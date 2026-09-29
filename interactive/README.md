@@ -22,18 +22,22 @@ If the visualization dependencies are already installed in the active Python env
 equivalent direct command is `python interactive/slate_app.py`.
 
 The shell has **Fit experiments** and **Simulator** workspaces. It starts with a local, unsaved
-project and an empty acquisition browser. Use **Import OSC** or drop exactly one local `.osc` or
-`.osc.gz` file onto the window. Import runs in a bounded worker; the detector shows native int32
-counts with exact linked profiles. A failed or canceled import leaves the previously selected image
-usable. Selecting an older acquisition reloads its source and checks its stored decoded hash before
-showing it. The OSC header supplies image dimensions and byte order, but angles and calibration remain
-unknown. No image is loaded or calculation started at launch. The `interactive/` directory is not
-part of the installed numerical wheel, so run this entry point from the checkout.
+project and an empty acquisition browser. Use **Import files**, drop local `.osc` or `.osc.gz`
+files, or **Review folder** to confirm a bounded candidate list. Each file has its own review
+status and acquisition UUID. Failed and canceled rows can be retried; removing a row leaves its
+source file untouched. Exact decoded-content duplicates are labeled but admitted separately, so
+repeated exposures keep separate identities. The first admitted image opens automatically. Select
+another from the browser, review table or filmstrip; only two prepared images are cached, and a
+cold selection reloads and verifies its decoded hash before display. The detector shows native
+int32 counts with exact linked profiles. No image is loaded or calculation started at launch.
+The `interactive/` directory is not part of the installed numerical wheel, so run this entry
+point from the checkout.
 
 Use **Save As** to name a `.slate.json` project, **Save** to write its current state, and **Open**
 to reopen one. The document records project and acquisition UUIDs, acquisition order and names,
-source paths and decoded OSC SHA-256 identities, selected workspace and detector view. It does not
-embed image pixels or claim a resumable solver. Edits autosave atomically to the named project;
+source paths and decoded OSC SHA-256 identities, reviewed metadata, selected workspace and
+detector view. It does not embed image pixels or claim a resumable solver. Edits autosave atomically
+to the named project;
 before a project is named, they autosave to one UUID-named draft in the local SLATE-rMC recovery
 location. **Recover Draft** opens the recovery chooser. Save status is shown beside the project
 controls. Closing or opening another project offers Save, Discard and Cancel for unsaved edits.
@@ -43,7 +47,17 @@ Reopening checks each referenced OSC source independently. A missing, unreadable
 remains in the browser with its original acquisition identity. Select it and use **Relink OSC**;
 the replacement must have the same decoded OSC hash. A moved source can therefore be restored
 without changing its acquisition UUID. Project save never modifies its OSC sources. Portable
-project archives, multi-file import and simulation controls arrive in later workflows.
+project archives and simulation controls arrive in later workflows.
+
+Select one or more admitted rows and use **Apply to selected** to enter role, specimen/mount,
+commanded incidence in degrees, exposure in seconds, detector setup and material label. Unknown
+values remain explicit. A filename such as `sample_5d.osc` offers an unconfirmed angle proposal;
+**Confirm suggestion** accepts it. **Map pasted table** and **Map CSV file** preview explicit
+column mappings before applying rows by acquisition UUID or selected-row order. The supported
+hBN calibrant preset is a declared identifier; it does not infer calibration from image pixels.
+**Bind CIF** and **Bind configuration** validate references through the package readers and retain
+their path and SHA-256. **Export metadata CSV** writes an explicitly chosen external file with
+units and provenance. These metadata inputs do not start fitting or qualify a calibration.
 
 The detector panel supports pointer-anchored wheel zoom, drag pan, **Box zoom**, **Fit** (Ctrl+0)
 and **1:1 px** (Ctrl+1). The latter means one detector pixel per physical display pixel at the
@@ -69,10 +83,12 @@ supported source threshold. Q and scattering angles remain unavailable until geo
 
 Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
 16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
-The 96 MiB worker result limit includes the native int32 plane, float32 display plane, exact
-center profiles and full-detector marginals. Imports outside those limits fail with a visible message. The acquisition SHA-256
-is over the decoded OSC byte stream; it identifies exactly the header and payload consumed by the
-reader, whether the file was plain or gzip compressed.
+The 96 MiB worker result limit includes the native int32 plane, float32 display plane, thumbnail,
+exact center profiles and full-detector marginals. A review holds at most 128 candidates and
+512 KiB of candidate paths; metadata table input is limited to 64 KiB and 128 rows. Imports
+outside those limits fail with a visible message. The acquisition SHA-256 is over the decoded OSC
+byte stream; it identifies exactly the header and payload consumed by the reader, whether the file
+was plain or gzip compressed.
 
 ## Monte Carlo detector viewer
 
