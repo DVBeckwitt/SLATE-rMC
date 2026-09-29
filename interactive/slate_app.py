@@ -1630,6 +1630,7 @@ class ShellWindow(QMainWindow):
         self._sync_reciprocal_button()
 
     def _invalidate_reciprocal_pointer(self) -> None:
+        self.reciprocal_cursor.setText("Pointer Q unavailable · geometry changed")
         previous_q = self._reciprocal_detector_q_text
         if previous_q is not None:
             label = self.detector_panel.cursor_label

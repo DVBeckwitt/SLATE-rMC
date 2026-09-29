@@ -2352,6 +2352,40 @@ prepared-switch, A-B-A, cancel or close performance gate was reached. U07
 remains unchecked. A new observer needs center-viewport intersection and
 hit-test evidence before dispatch, then exact handler and post-paint counters.
 
+#### U07 cached-preview correction and stopped finish packet (2026-09-29)
+
+A direct cached A-to-B preview change could still leave A's Q in the inspector
+pointer label. The shared invalidation helper now clears that label on every
+preview identity change. A focused external actual-method check covered cached
+A-to-B and preview-to-None transitions with a stationary pointer, retained
+native coordinates/counts and an unrelated save status. The accepted saved-only
+painting, canonical mapping and identity checks were not reopened.
+
+The revised external observer supplies a `QMouseEvent` to the production
+detector widget through `QApplication.sendEvent`, matching the accepted U02a
+input route. Its pure checks covered exact unavailable Q text, post-delivery
+paint generation and old-A paint callbacks after B and newer A. In the first
+native finish launch, the center viewport and window hit target contained the
+input point; the widget received one MouseMove, emitted native `(1200,1200)`,
+and the current acquisition/preview/epoch Q text matched an independent
+retained mapping at a completed status-bar paint. The compact status text
+measured 449 px within the status bar's 1280 px visible region. The full
+inspector pointer text was populated, but the observer's immediate
+`ensureWidgetVisible` check found its label rectangle not wholly inside the
+inspector viewport. It did not retain the two rectangles or test a later layout
+turn, so horizontal clipping, vertical clipping and layout timing remain
+unresolved. The possible full-readout visibility defect is not qualified away.
+
+That first launch failed at this readability gate and stopped the entire new
+series. Its child command took 3.069 s, with start paint 41.905 ms, cold A
+coverage paint 127.647 ms including worker preparation, maximum heartbeat gap
+81.456 ms and normal close/drain. Launches 2 and 3 were not used. No 30-second
+mixed cursor window, prepared switching, A-B-A, cancel or close performance
+gate was reached. U07 remains unchecked; the accepted checklist count is
+11/46. A later observer should capture label and viewport rectangles after a
+separate layout turn, then repair any demonstrated clipping before the
+sustained performance packet.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
