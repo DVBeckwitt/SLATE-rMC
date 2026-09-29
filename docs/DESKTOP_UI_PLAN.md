@@ -2410,10 +2410,11 @@ launch was authorized in this packet. U07 remains unchecked at 11/46 accepted.
 The external observer also now accounts for the entire 30-second demanded-frame
 window, including its head, tail and final detector-frame drain; a two-frame
 window with a 29.991 s empty tail is rejected. Changed selected-image
-publications expect their own texture upload. Prepared-switch timing waits for
-the selected detector paint and bound horizontal/vertical profile state as well
-as reciprocal coverage paint. Those sustained and switching paths were not
-reached in this failed launch. The child command took 3.908 s (4.406 s tool
+publications expect their own texture upload. The initial prepared-switch
+observer checked detector paint and bound horizontal/vertical profile state;
+that was insufficient because profile state changes before profile paint.
+Those sustained and switching paths were not reached in this failed launch.
+The child command took 3.908 s (4.406 s tool
 transcript), start paint 48.368 ms, cold A coverage paint 147.992 ms including
 worker preparation, maximum heartbeat gap 67.366 ms, and normal close/drain.
 No scientific fit or forward intensity image was run.
@@ -2425,6 +2426,50 @@ the protected fixture was reconstructed and restored byte for byte to its
 recorded SHA-256 `d99a9b13348315f3a6dfbba8ced61ef896fa3e2ef1e50df0a9e1280cab7ba271`.
 Any future native packet must open an exact-byte disposable copy of that fixture
 so autosave cannot change the protected original.
+
+#### U07 full-width and three-surface visibility packet (2026-09-29; native qualification failed)
+
+A complete focused inspector-control width check under the production
+Fusion/Segoe UI 10 font and button style found further horizontal minima:
+`Load numeric draft` 264 px, `Map selected geometry` 303 px and an unwrapped
+explanatory label 598 px. The numeric and reciprocal headings also exceeded
+the 209 px content budget. The controls retain their actions and full tooltip
+meaning with the captions `Load draft` and `Map geometry`; the three labels
+now wrap. The widest measured minimum of all inspector controls is the numeric
+selector at 206 px, or 242 px including 36 px margins.
+
+One separately authorized native production-main launch opened an exact-byte
+disposable project copy. The actual inspector Q label was 207 × 85 px, fully
+visible at x = 19..226 and y = 478..563 in the 245 × 563 px viewport after
+an independent layout turn and a completed later paint. The horizontal scroll
+range was zero. The native pointer, production handler, current canonical Q,
+and status-bar paint matched the same token. The 30.020 s mixed cursor/profile
+window had 2,253 matched detector frames, complete 19.465 ms head and 1.174 ms
+tail, frame p95 15.320 ms and p99 16.688 ms, cursor p95 16.112 ms, no image
+upload, and maximum heartbeat gap 51.756 ms.
+
+The observer was corrected to require completed queued paint receipts from the
+selected detector and both visible profile plots for the same publication,
+generation, value buffers and unique switch token. A focused actual-method
+check rejects detector-only, one-profile, stale-token and changed-publication
+receipts. In the native launch, ten prepared A/B selections each had matching
+detector/H/V receipts and one image upload; their maximum post-paint latency
+was 24.914 ms. The rapid final A also had matching receipts, one upload and a
+canceled stale generation. These are one measured repeat window, not U07
+acceptance.
+
+The launch **failed** at `cancel_wait` on its 52 s internal deadline. No cancel
+button paint acknowledgment was recorded; the final reciprocal job reached
+`completed` without a `cancel-requested` event. The retained observer did not
+record button enabled state at the attempted click, so the exact reason it did
+not cancel remains unresolved. Failure handling closed and drained the window,
+but ordinary close/hide timing was not reached or qualified. Whole child command
+was 53.275 s under the 60 s cap. No retry or substitute launch was made.
+The original 7,177-byte fixture retained SHA-256
+`d99a9b13348315f3a6dfbba8ced61ef896fa3e2ef1e50df0a9e1280cab7ba271`;
+only the disposable copy changed through ordinary autosave. U07 stays unchecked
+at 11/46 accepted. No fit, forward intensity image or scientific comparison
+was run.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
