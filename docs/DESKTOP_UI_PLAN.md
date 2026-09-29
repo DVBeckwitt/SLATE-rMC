@@ -2317,6 +2317,41 @@ The native series stopped at its first failure; no remaining launch allowance
 was used. U07 remains unchecked pending native qualification and independent
 review. No fit or forward intensity image was run.
 
+#### U07 correction and stopped native packet (2026-09-29)
+
+Independent review found that saved-only coverage raised from a strict zip of
+one map and two colors during Qt painting. The painter now pairs only available
+maps and colors. It also found that a stationary pointer could leave old Q in
+the detector readout when a numeric draft or reference invalidated the map.
+Preview identity changes now clear that Q while retaining native detector
+coordinates and counts; they replace the status-bar pointer message only when
+it still owns that message. The status bar uses a compact film/sample and
+air/sample Q line that fits the declared 1280-pixel window in a focused font
+check. The inspector retains the full frame and unit labels. External actual-
+method checks rendered saved-only, saved-plus-draft, unavailable and invalid
+coverage, and checked the invalidation method with a stationary pointer,
+current revision republishing and preservation of unrelated status text. Draft
+and reference changes use that method through the shared preview refresh. An
+observer preflight checked exact coordinate/revision/generation matching and failure
+counters. These checks do not qualify native paint latency.
+
+The first of a **new** three-launch correction packet ran the production
+`slate_app.main()` window and failed in its early exact-cursor preflight. One
+native point was dispatched, but the observer saw zero cursor handler events
+and zero completed matching status paints. It stopped after a 4.939 s whole
+child command; the start ACK painted in 39.746 ms, A coverage in 126.519 ms
+including worker preparation, maximum 10 ms heartbeat gap was 71.007 ms, and
+the window closed and drained normally. The checker recorded a visible region
+for the detector widget but did not establish that its input point intersected
+the enclosing center scroll viewport or was hit-testable at the window surface.
+A focused offscreen `DetectorTextureView` check did deliver the same QTest mouse
+move as a cursor event. These observations do not distinguish a clipped native
+input point from another native routing issue. The correction series stopped
+on the first failure; launches 2 and 3 were not used. No sustained cursor,
+prepared-switch, A-B-A, cancel or close performance gate was reached. U07
+remains unchecked. A new observer needs center-viewport intersection and
+hit-test evidence before dispatch, then exact handler and post-paint counters.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with

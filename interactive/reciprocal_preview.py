@@ -265,7 +265,7 @@ class ReciprocalCoverageView(QWidget):
 
         painter.setPen(QPen(QColor("#465d68"), 1))
         painter.drawRect(int(x0), int(y0), int(width), int(height))
-        for mapping, color in zip(mappings, ("#61d5bd", "#e9ae75"), strict=True):
+        for mapping, color in zip(mappings, ("#61d5bd", "#e9ae75")[: len(mappings)], strict=True):
             radius = np.hypot(mapping.q_sample_Ainv[..., 0], mapping.q_sample_Ainv[..., 1])
             x = x0 + (radius - left) / (right - left) * width
             y = y0 + (top - mapping.q_sample_Ainv[..., 2]) / (top - bottom) * height

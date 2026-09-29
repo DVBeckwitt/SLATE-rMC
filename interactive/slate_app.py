@@ -261,6 +261,8 @@ class ShellWindow(QMainWindow):
         )
         self._active_reciprocal: tuple[tuple[object, ...], int, str] | None = None
         self._reciprocal_epoch = 0
+        self._reciprocal_detector_q_text: str | None = None
+        self._reciprocal_pointer_status: str | None = None
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
         self._active_export: InspectionExportTask | None = None
@@ -1600,6 +1602,7 @@ class ShellWindow(QMainWindow):
     def _refresh_reciprocal_editor(self) -> None:
         preview = self._visible_reciprocal()
         if self.reciprocal_view.preview is not preview:
+            self._invalidate_reciprocal_pointer()
             self.reciprocal_view.set_preview(preview)
         if preview is None:
             self.reciprocal_status.setText(
@@ -1626,14 +1629,29 @@ class ShellWindow(QMainWindow):
             self._reciprocal_selection_changed()
         self._sync_reciprocal_button()
 
-    def _reciprocal_coordinate_text(self, column: float, row: float) -> tuple[str, object]:
+    def _invalidate_reciprocal_pointer(self) -> None:
+        previous_q = self._reciprocal_detector_q_text
+        if previous_q is not None:
+            label = self.detector_panel.cursor_label
+            if previous_q in label.text():
+                label.setText(label.text().replace(previous_q, "Q/angles unavailable", 1))
+            self._reciprocal_detector_q_text = None
+        previous_status = self._reciprocal_pointer_status
+        if previous_status is not None:
+            if self.statusBar().currentMessage() == previous_status:
+                self.statusBar().showMessage("Pointer Q unavailable · geometry changed")
+            self._reciprocal_pointer_status = None
+
+    def _reciprocal_coordinate_text(self, column: float, row: float) -> tuple[str, object, str]:
         preview = self._visible_reciprocal()
         if preview is None:
-            return "Q unavailable · no current geometry map", None
+            message = "Q unavailable · no current geometry map"
+            return message, None, message
         mapping = preview.draft or preview.saved
         status, internal, external = mapping.cursor(column, row)
         if internal is None or external is None:
-            return f"({column:g}, {row:g}) px · Q unavailable: {status}", None
+            message = f"({column:g}, {row:g}) px · Q unavailable: {status}"
+            return message, None, message
         label = (
             f"draft r{preview.draft_revision}" if preview.draft is not None else "saved baseline"
         )
@@ -1642,22 +1660,32 @@ class ShellWindow(QMainWindow):
             f"Q internal film/sample=({internal[0]:.4g}, {internal[1]:.4g}, {internal[2]:.4g}) Å⁻¹ · "
             f"Q external air/sample=({external[0]:.4g}, {external[1]:.4g}, {external[2]:.4g}) Å⁻¹"
         )
-        return text, internal
+        compact = (
+            f"({column:g},{row:g})px {label} "
+            f"Q film/sample ({internal[0]:.3g},{internal[1]:.3g},{internal[2]:.3g}) "
+            f"air/sample ({external[0]:.3g},{external[1]:.3g},{external[2]:.3g}) Å⁻¹"
+        )
+        return text, internal, compact
 
     def _reciprocal_cursor_changed(self, pixel: object) -> None:
         if pixel is None:
             self.reciprocal_cursor.setText("Pointer outside detector · Q unavailable")
+            self._reciprocal_detector_q_text = None
             if self._visible_reciprocal() is not None and self._active_kind is None:
-                self.statusBar().showMessage("Pointer outside detector · Q unavailable")
+                self._reciprocal_pointer_status = "Pointer outside detector · Q unavailable"
+                self.statusBar().showMessage(self._reciprocal_pointer_status)
             return
         column, row, _intensity = pixel
-        text, _q = self._reciprocal_coordinate_text(column, row)
+        text, _q, compact = self._reciprocal_coordinate_text(column, row)
         self.reciprocal_cursor.setText(f"Pointer {text}")
-        self.detector_panel.cursor_label.setText(
-            self.detector_panel.cursor_label.text().replace("Q/angles unavailable", text)
-        )
+        if self._visible_reciprocal() is not None:
+            self.detector_panel.cursor_label.setText(
+                self.detector_panel.cursor_label.text().replace("Q/angles unavailable", text)
+            )
+            self._reciprocal_detector_q_text = text
         if self._visible_reciprocal() is not None and self._active_kind is None:
-            self.statusBar().showMessage(f"Pointer {text}")
+            self._reciprocal_pointer_status = compact
+            self.statusBar().showMessage(self._reciprocal_pointer_status)
 
     def _reciprocal_selection_changed(self) -> None:
         if self._visible_acquisition_id != self.selected_acquisition_id:
@@ -1665,7 +1693,7 @@ class ShellWindow(QMainWindow):
             self.reciprocal_view.set_selected_q(None)
             return
         column, row = self.detector_panel.view.crosshair
-        text, q = self._reciprocal_coordinate_text(column, row)
+        text, q, _compact = self._reciprocal_coordinate_text(column, row)
         self.reciprocal_selection.setText(f"Selected {text}")
         self.reciprocal_view.set_selected_q(q)
 
