@@ -575,6 +575,10 @@ class ShellWindow(QMainWindow):
         self.numeric_field = QComboBox()
         for item in PARAMETERS:
             self.numeric_field.addItem(item.label, item.field)
+        self.numeric_field.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.numeric_field.setMinimumContentsLength(12)
         inspector_layout.addWidget(self.numeric_field)
         self.numeric_description = QLabel()
         self.numeric_description.setObjectName("mutedText")
@@ -588,7 +592,8 @@ class ShellWindow(QMainWindow):
         self.numeric_undo_button = QPushButton("Undo")
         self.numeric_redo_button = QPushButton("Redo")
         self.numeric_revert_button = QPushButton("Revert draft")
-        self.numeric_freeze_button = QPushButton("Freeze snapshot")
+        self.numeric_freeze_button = QPushButton("Freeze")
+        self.numeric_freeze_button.setToolTip("Freeze an immutable initial snapshot")
         for index, button in enumerate(
             (
                 self.numeric_apply_button,
@@ -598,7 +603,7 @@ class ShellWindow(QMainWindow):
                 self.numeric_freeze_button,
             )
         ):
-            numeric_buttons.addWidget(button, index // 2, index % 2)
+            numeric_buttons.addWidget(button, index, 0)
         inspector_layout.addLayout(numeric_buttons)
         inspector_layout.addWidget(QLabel("RECIPROCAL COVERAGE"))
         self.reciprocal_button = QPushButton("Map selected geometry")

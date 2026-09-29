@@ -2386,6 +2386,46 @@ gate was reached. U07 remains unchecked; the accepted checklist count is
 separate layout turn, then repair any demonstrated clipping before the
 sustained performance packet.
 
+#### U07 measured inspector overflow and stopped visibility packet (2026-09-29)
+
+One new, separately bounded production-main launch retained the inspector
+geometry after `ensureWidgetVisible` and a later event turn. The native pointer
+again arrived at `(1200,1200)` and produced the exact current Q at a token-
+matched completed status-bar paint. The full inspector label was **268 px wide
+in a 245 px viewport**, mapped from x = -11 through x = 257. The horizontal
+scrollbar was at 30 of 61; the label's 68 px text height fit its 68 px content
+rect, and its y = 495..563 exactly fit the viewport height. The later geometry
+was unchanged. This establishes horizontal clipping from an oversized inspector
+content minimum, not a delayed scroll or vertical wrapping failure. The
+label's post-exposure paint was not credited, so full-readout visibility failed.
+
+The existing inspector keeps its resizable scroll. Its numeric selector now
+uses a bounded contents-width hint; the five numeric actions occupy one column,
+and the final action is labeled `Freeze` with its full meaning in the tooltip.
+An external Fusion/Segoe UI 10 focused width check measured the widest revised
+control plus inspector margins at 242 px, below the 245 px native viewport.
+This is a layout repair, not native validation of its result. No second native
+launch was authorized in this packet. U07 remains unchecked at 11/46 accepted.
+
+The external observer also now accounts for the entire 30-second demanded-frame
+window, including its head, tail and final detector-frame drain; a two-frame
+window with a 29.991 s empty tail is rejected. Changed selected-image
+publications expect their own texture upload. Prepared-switch timing waits for
+the selected detector paint and bound horizontal/vertical profile state as well
+as reciprocal coverage paint. Those sustained and switching paths were not
+reached in this failed launch. The child command took 3.908 s (4.406 s tool
+transcript), start paint 48.368 ms, cold A coverage paint 147.992 ms including
+worker preparation, maximum heartbeat gap 67.366 ms, and normal close/drain.
+No scientific fit or forward intensity image was run.
+
+The observer's cursor move also triggered the application's ordinary project
+autosave, changing the protected two-acquisition fixture during this launch.
+Its autosaved bytes were retained as a distinct external visibility artifact;
+the protected fixture was reconstructed and restored byte for byte to its
+recorded SHA-256 `d99a9b13348315f3a6dfbba8ced61ef896fa3e2ef1e50df0a9e1280cab7ba271`.
+Any future native packet must open an exact-byte disposable copy of that fixture
+so autosave cannot change the protected original.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
