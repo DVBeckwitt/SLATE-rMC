@@ -2221,6 +2221,45 @@ selection details were scrollable in the first run. All 82 protected external
 files remained SHA-256 identical. No fit or forward calculation was run. U09a
 still awaits independent supervisor acceptance.
 
+#### U09a retained-draft completion check (2026-09-29; review pending)
+
+The subsequent review found that a saved numeric draft opened with missing
+references could become editable when the references were restored, although
+only a new empty baseline had entered the canonical configured reader. A
+field-valid positive wavelength can still violate the complete discrete-line
+centroid constraint. Project opening now reports whether that exact saved draft
+was fully validated. The editor admits only the validated project/draft pair;
+reference invalidation clears that receipt. Background Load validates the
+retained proposals and revision, and rejects a result if the captured draft
+changed before delivery. Editing and freezing require the receipt. Revert can
+remove unavailable proposals without silently replacing them. Idle dispatch
+also refreshes the Load button after failed or canceled Open.
+
+Focused external checks covered missing-reference admission, restored-reference
+rejection of a positive but centroid-inconsistent proposal, valid retained
+admission, the actual numeric worker, exact-draft stale receipt rejection, and
+the failed-Open handler followed by its idle dispatch. A first new native
+journey stopped at reference recovery because its external fixture rewrote YAML
+line endings and changed the bound SHA-256; the product correctly kept Revert
+unavailable for that mismatched identity. Its whole heartbeat maximum was
+119.8 ms during shell startup, before the cold import request. The corrected
+fixture copied the exact configuration bytes. The second production
+`slate_app.main()` journey used Fusion, Segoe UI 10 and 1280x800. It waited for
+the initial status paint to settle, recorded 206.7 ms startup separately,
+started its heartbeat before cold import, and kept it running through normal
+close and job drain. The longest gap was **43.3 ms**, at edit. Load, edit,
+undo, save, recovery Load and invalid-Open error painted in **16.6, 33.1,
+27.1, 11.8, 11.2 and 37.7 ms** respectively. It proved that invalid retained
+values stayed unavailable after reference recovery, failed validation, could
+be reverted and revalidated, and that failed Open preserved the current
+project/draft while re-enabling Load. The error observer was first checked
+with the active job kind already cleared, then bound to the exact Open
+generation in the live journey. Whole-command times were 4.3355 and 4.3682 s
+(8.7038 s aggregate) within the separate two-launch, 60 s allowance. All 97
+previously protected external files remained SHA-256 identical. This is UI and
+document-state evidence, not numerical fit qualification. U09a awaits
+independent supervisor acceptance.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with

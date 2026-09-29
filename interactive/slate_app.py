@@ -246,9 +246,10 @@ class ShellWindow(QMainWindow):
         self._source_checks: dict[UUID, SourceCheck] = {}
         self._reference_checks: dict[tuple[UUID, str], ReferenceCheck] = {}
         self._numeric_draft: NumericDraft | None = None
+        self._validated_numeric: tuple[UUID, NumericDraft] | None = None
         self._numeric_history = SessionHistory()
         self._launch_snapshot = None
-        self._active_numeric: tuple[UUID, int, str] | None = None
+        self._active_numeric: tuple[UUID, int, str, NumericDraft | None] | None = None
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
         self._active_export: InspectionExportTask | None = None
@@ -712,6 +713,7 @@ class ShellWindow(QMainWindow):
             for item in self.project.acquisitions
         ):
             self._numeric_draft = None
+            self._validated_numeric = None
             self._launch_snapshot = None
             self._numeric_history = SessionHistory()
             self._refresh_numeric_editor()
@@ -1001,6 +1003,7 @@ class ShellWindow(QMainWindow):
                 self._submit_import(source, acquisition_id, mode=mode)
             return
         self._start_next_candidate()
+        self._sync_numeric_load_button()
 
     def _start_next_candidate(self) -> None:
         if self.jobs.busy or self._active_kind is not None or self._close_intent:
@@ -1155,6 +1158,7 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _invalidate_reference_request(self, kind: str, path: Path, detail: str) -> None:
+        self._validated_numeric = None
         self._reference_checks = invalidate_reference_checks(
             self.project, self._reference_checks, kind, path, detail
         )
@@ -1438,7 +1442,8 @@ class ShellWindow(QMainWindow):
         unavailable_detail = ""
         if available:
             available = (
-                self._source_checks.get(acquisition.acquisition_id) is not None
+                self._validated_numeric == (self.project.project_id, self._numeric_draft)
+                and self._source_checks.get(acquisition.acquisition_id) is not None
                 and self._source_checks[acquisition.acquisition_id].state == "verified"
                 and all(
                     (check := self._reference_checks.get((acquisition.acquisition_id, kind)))
@@ -1468,7 +1473,7 @@ class ShellWindow(QMainWindow):
             self.numeric_value.clear()
             self.numeric_status.setText(
                 unavailable_detail
-                or "Saved draft needs its original verified source, configuration and CIF."
+                or "Saved draft needs verified references and full validation. Select Load to validate it."
                 if self._numeric_draft is not None
                 else "Load a validated configuration for one acquisition."
             )
@@ -1478,7 +1483,11 @@ class ShellWindow(QMainWindow):
         )
         self.numeric_value.setEnabled(available and item.editable)
         self.numeric_apply_button.setEnabled(available and item.editable)
-        self.numeric_revert_button.setEnabled(available and bool(self._numeric_draft.proposed))
+        self.numeric_revert_button.setEnabled(
+            acquisition is not None
+            and self._numeric_identity_matches(acquisition)
+            and bool(self._numeric_draft.proposed)
+        )
         self.numeric_freeze_button.setEnabled(available)
         self.numeric_undo_button.setEnabled(bool(self._numeric_history.undo_actions))
         self.numeric_redo_button.setEnabled(bool(self._numeric_history.redo_actions))
@@ -1505,6 +1514,8 @@ class ShellWindow(QMainWindow):
                 or metadata.configuration_cif_sha256 is None
             ):
                 raise ProjectFormatError("configuration reference is missing")
+            retained = self._numeric_draft
+            matching = self._numeric_identity_matches(acquisition)
             argument = json.dumps(
                 {
                     "acquisition_id": str(acquisition.acquisition_id),
@@ -1513,6 +1524,8 @@ class ShellWindow(QMainWindow):
                     "configuration_sha256": metadata.configuration_sha256,
                     "cif_path": str(metadata.configuration_cif_path),
                     "cif_sha256": metadata.configuration_cif_sha256,
+                    "proposed": retained.proposed if matching and retained is not None else (),
+                    "revision": retained.revision if matching and retained is not None else 0,
                 }
             ).encode("utf-8")
         except (OSError, UnicodeError, ProjectFormatError, ValueError) as exc:
@@ -1522,6 +1535,7 @@ class ShellWindow(QMainWindow):
             acquisition.acquisition_id,
             self._revision,
             metadata.configuration_sha256,
+            retained,
         )
         self._active_kind = "numeric"
         self._active_numeric = request_identity
@@ -1559,6 +1573,7 @@ class ShellWindow(QMainWindow):
             or identity.acquisition_id != active[0]
             or identity.revisions.data != self._revision
             or self._revision != active[1]
+            or self._numeric_draft is not active[3]
             or value.configuration_sha256 != active[2]
             or value.acquisition_id != acquisition.acquisition_id
         ):
@@ -1588,11 +1603,16 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage(f"Numeric draft cannot be admitted: {exc}")
             return
         if self._numeric_draft is not None and self._numeric_identity_matches(acquisition):
+            if value != self._numeric_draft:
+                self.statusBar().showMessage("Numeric draft changed; load it again")
+                return
+            self._validated_numeric = (self.project.project_id, self._numeric_draft)
             self._refresh_numeric_editor()
             self.statusBar().showMessage("Numeric draft already loaded; proposed edits retained")
             return
         self._numeric_history.discard_draft_actions()
         self._numeric_draft = value
+        self._validated_numeric = (self.project.project_id, value)
         self._launch_snapshot = None
         self._refresh_numeric_editor()
         self._mark_dirty()
@@ -1606,6 +1626,9 @@ class ShellWindow(QMainWindow):
             return
         if not self._numeric_identity_matches(acquisition):
             self.statusBar().showMessage("Load the selected configuration before editing")
+            return
+        if self._validated_numeric != (self.project.project_id, self._numeric_draft):
+            self.statusBar().showMessage("Validate the retained numeric draft before editing")
             return
         draft = self._numeric_draft
         assert draft is not None
@@ -1624,6 +1647,7 @@ class ShellWindow(QMainWindow):
             return
         if action is not None:
             self._numeric_draft = updated
+            self._validated_numeric = (self.project.project_id, updated)
             self._numeric_history.push(action)
             self._refresh_numeric_editor()
             self._mark_dirty()
@@ -1639,6 +1663,8 @@ class ShellWindow(QMainWindow):
         if action is None:
             return
         self._numeric_draft = updated
+        if self._validated_numeric == (self.project.project_id, draft):
+            self._validated_numeric = (self.project.project_id, updated)
         self._numeric_history.push(action)
         self._refresh_numeric_editor()
         self._mark_dirty()
@@ -1648,6 +1674,8 @@ class ShellWindow(QMainWindow):
             acquisition = self._numeric_validated_acquisition()
             if not self._numeric_identity_matches(acquisition):
                 raise ProjectFormatError("numeric draft identity is stale")
+            if self._validated_numeric != (self.project.project_id, self._numeric_draft):
+                raise ProjectFormatError("validate the retained numeric draft before freezing")
             assert self._numeric_draft is not None
             snapshot = freeze_draft(self.project, acquisition, self._numeric_draft)
         except (OSError, ProjectFormatError, ValueError) as exc:
@@ -1660,6 +1688,7 @@ class ShellWindow(QMainWindow):
         )
 
     def _numeric_undo_redo(self, *, undo: bool) -> None:
+        previous_draft = self._numeric_draft
         try:
             updated, draft, references, label = self._numeric_history.apply(
                 self.project,
@@ -1676,7 +1705,12 @@ class ShellWindow(QMainWindow):
             return
         self.project = updated
         self._numeric_draft = draft
+        if draft is not previous_draft and draft is not None:
+            self._validated_numeric = (updated.project_id, draft)
+        elif draft is None:
+            self._validated_numeric = None
         for acquisition_id, kind in references:
+            self._validated_numeric = None
             self._reference_checks[(acquisition_id, kind)] = ReferenceCheck(
                 acquisition_id, kind, "unverified", "Metadata undo/redo requires revalidation"
             )
@@ -3249,6 +3283,11 @@ class ShellWindow(QMainWindow):
         try:
             self.project = value.document.project
             self._numeric_draft = value.document.numeric_draft
+            self._validated_numeric = (
+                (self.project.project_id, self._numeric_draft)
+                if value.numeric_validated and self._numeric_draft is not None
+                else None
+            )
             self._numeric_history = SessionHistory()
             self._launch_snapshot = None
             self.selected_acquisition_id = value.document.view.selected_acquisition_id

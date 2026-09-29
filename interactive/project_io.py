@@ -149,6 +149,7 @@ class LoadedProject:
     path: Path
     sources: tuple[SourceCheck, ...]
     references: tuple[ReferenceCheck, ...]
+    numeric_validated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +258,7 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                 )
             )
     draft = document.numeric_draft
+    numeric_validated = False
     if draft is not None:
         acquisition = next(
             item
@@ -294,7 +296,10 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                 configured_draft(draft)
             except (OSError, ValueError) as exc:
                 raise ProjectFormatError(f"saved numeric draft is invalid: {exc}") from exc
-    loaded = LoadedProject(document, path, tuple(checks), tuple(reference_checks))
+            numeric_validated = True
+    loaded = LoadedProject(
+        document, path, tuple(checks), tuple(reference_checks), numeric_validated
+    )
     resident = path.stat().st_size + sum(
         len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks)
     )

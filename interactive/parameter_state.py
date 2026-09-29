@@ -93,6 +93,8 @@ def prepare_numeric_draft(argument: bytes, control: Any) -> Any:
         "configuration_sha256",
         "cif_path",
         "cif_sha256",
+        "proposed",
+        "revision",
     }:
         raise ProjectFormatError("invalid numeric draft request")
     path = Path(request["configuration_path"])
@@ -110,6 +112,8 @@ def prepare_numeric_draft(argument: bytes, control: Any) -> Any:
         Path(request["cif_path"]),
         request["cif_sha256"],
         encoded.decode("utf-8"),
+        tuple(tuple(entry) for entry in request["proposed"]),
+        request["revision"],
     )
     configured_draft(draft)
     return JobResult(draft, 4 * len(encoded) + 1024)
