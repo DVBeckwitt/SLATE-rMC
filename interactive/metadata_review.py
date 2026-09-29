@@ -294,6 +294,9 @@ def validate_reference(path: Path, kind: str) -> ValidatedReference:
     )
     if len(str(config.material.cif_path)) > 4096:
         raise ProjectFormatError("dependent CIF path exceeds 4096 characters")
+    dependent_bytes, dependent_identity = bounded_reference_snapshot(config.material.cif_path)
+    if hashlib.sha256(dependent_bytes).hexdigest() != config.cif_sha256:
+        raise ProjectFormatError("dependent CIF changed during configuration validation")
     return ValidatedReference(
         kind,
         source,
@@ -302,7 +305,7 @@ def validate_reference(path: Path, kind: str) -> ValidatedReference:
         config.material.cif_path,
         config.cif_sha256,
         identity,
-        reference_file_identity(config.material.cif_path),
+        dependent_identity,
     )
 
 

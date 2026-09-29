@@ -1311,6 +1311,21 @@ worker fixture supplied 385 bindings and was correctly rejected by the 384
 cap; the corrected fixture passed. No native GUI time or second twenty-record
 smoke was used. Sustained U02a interaction and resource gates remain open.
 
+A further snapshot review found that the canonical configuration reader's
+dependent-CIF hash could be paired with a later file identity after an atomic
+path replacement. The reference worker now takes one additional bounded
+dependent-CIF read with bytes and identity from the same open handle, then
+requires its SHA-256 to equal the canonical reader's hash. A mismatch rejects
+the binding before any alias matches reach the GUI; saved hashes remain
+unchanged. An external owned-copy check used the tracked Bi2Te3 YAML/CIF and a
+real hard-link alias. The unchanged read returned the exact dependent hash,
+same-handle identity and both dependent alias binding keys. In a controlled
+replacement after the canonical load, old hash H1 and new file identity I2
+were present, and the worker raised
+`dependent CIF changed during configuration validation` instead of publishing
+I2 with H1. Temporary external files were removed. This pure check used no
+native GUI allowance and does not close the sustained U02a qualification gate.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
