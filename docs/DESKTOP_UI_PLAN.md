@@ -1342,6 +1342,34 @@ ran, and the new 130-second native allocation remains entirely unused. The
 external reporter/input/manifest are retained for independent review; U02a
 remains unaccepted and its sustained gates have no new evidence.
 
+#### U02a mixed-source native qualification window 1 (2026-09-28; stopped)
+
+After pure reporter repair, the frozen first native window ran once and failed;
+windows 2 and 3 did not start. The aggregate native ledger charges **43.983 s of
+130 s**, including process setup and drain. The active interval was 29.988 s,
+readiness 1.169 s and drain 12.046 s, ending in a final-composition timeout.
+All 27 table/tree/filmstrip selection hits selected their intended UUID, but only
+the initial hBN UUID composed during active time (3 matched warm switches; no
+matched cold switch). There were 192 queued/running import jobs, 169 completed
+and 23 canceled. The first Bi2Te3 job completed and the same source was queued
+again about 2 ms later; its first actual publication was 0.146 s after active
+end. This is consistent with the live import guard comparing a load-start
+revision against a revision also changed by cursor/view activity. That
+mechanism is an inference from the trace and current code, not a proved repair.
+
+For the initial visible hBN state alone, 84 supplied fresh-frame intervals had
+p95 39.366 ms and p99 46.578 ms, missing both 16.7/33.3 ms gates. Ninety
+matched cursor/profile presentations had p95 14.595 ms; heartbeat maximum was
+22.961 ms. Process sampled RSS maximum was 447,082,496 bytes and Windows peak
+working set was 449,363,968 bytes; GPU driver allocation was unmeasured. The
+final query targeted Bi2Te3 while hBN remained visible; later Bi2Te3 paint did
+not satisfy the frozen final identity, so no final save, reopen or successful
+acknowledgment is claimed. The failure path achieved normal drained close.
+External raw events SHA-256 `e088890ea7d37fd36558b57bb86b73334133f4c7e4d6de468e4d5b80d71f7520`
+and summary SHA-256 `09ab1099021838798ad3caef54b1bd59496b941e2317258de8acde4a57c88f3f`
+are retained for audit. U02a remains unaccepted; no native retry is authorized
+by this checkpoint.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
