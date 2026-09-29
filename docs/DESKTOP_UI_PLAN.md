@@ -1647,6 +1647,62 @@ existing `--selfcheck` and source freeze are separate pure checks. Three fresh
 qualified windows are still needed;
 U02a remains unaccepted and U14b remains outside this release.
 
+#### U02a fresh-series ordinal 1 (2026-09-29; failed and stopped)
+
+After user approval and explicit supervisor release, the sole writer created the
+exact source-bound external release and ran ordinal 1 once through the native
+watchdog. It used journey 2 and output index 4. The independently timed whole
+command took **34.633 s** and exited 1; the reporter exited 2 after completing
+its native journey and analysis. The durable receipt records
+`controller_failed` with reason `child exited 2`. The entire **60.000 s**
+attempt is charged against the new 180 s allowance. Ordinals 2 and 3 were not
+started, and the failed ordinal was not confirmed or retried. The remaining
+120 s of the new allowance is unspent but the first-failure series is stopped.
+The original 80.797 s charged/49.203 s suspended ledger and all nine prior
+immutable evidence files remain unchanged.
+
+The application reached readiness in 1.305 s, browsed actively for 30.003 s,
+and drained in 0.798 s. All 20 UUIDs composed; 27/27 selections matched; 1,994
+active swaps were coherent, with zero incoherent or historical-display active
+swaps. Six warm selections had p95 24.685 ms and maximum 24.919 ms; 21 cold
+selections had p95 198.184 ms and maximum 212.824 ms. The 1,983 matched cursor
+responses had p95 14.255 ms, p99 19.081 ms and maximum 24.478 ms. The 1,963
+fresh-frame intervals had p95 14.686 ms, p99 21.449 ms and maximum 33.737 ms;
+the 1,925 sustained-frame intervals had p95 14.449 ms, p99 15.741 ms and
+maximum 24.930 ms. Raw swap intervals include loading: p99 169.194 ms and
+maximum 214.315 ms. Heartbeat maximum was 28.424 ms. These separate frame,
+cursor and heartbeat distributions met their frozen percentile gates.
+
+The sole qualification miss was prospective `rendering-demand-v2`. Its 28
+ready spans contained 26.552 s eligible time, 25.209 s pending demand and
+1.343 s undemanded time. The longest genuinely undemanded gap was
+**19.215 ms**, over the frozen 16 ms ceiling; 19 effective requests remained
+unresolved at ready-span boundaries. Of 2,182 effective requests, 180 were
+superseded and 1,983 composed, yielding 0.99051 request coverage. All spans
+had composition, and no identity-invalid request was recorded. The older
+delivered-input coverage remains diagnostic and showed zero covered time in
+22 sampled ready spans; it is not the prospective failure rule. This evidence
+shows a demand-coverage failure, not a proven renderer bottleneck.
+
+The two-UUID bulk edit, final exact native/profile values, ordinary Save,
+complete 20-record disk comparison, background reopen, new publication and
+matching G/H/V, and normal drained close were recorded. The bulk-edit, Save
+and close visible acknowledgments were 42.480, 3.851 and 1.042 ms. Resource
+maxima were two cache entries, 184,320 thumbnail bytes, one queued write of
+18,621 bytes, one pending job and eight job summaries. Sampled RSS reached
+526,958,592 bytes and Windows peak working set 558,047,232 bytes; GPU driver
+allocation was not measured. No reporter/product failure event or persistence
+acknowledgment miss was recorded.
+
+The frozen production source remains `f527462`; the pre-run docs HEAD was
+`615c25a`. External release, raw, summary and failed receipt SHA-256 are
+respectively `803035e421f00b819cd65775dc26c35e8de9791f3f7008a0c2ded005712c41b7`,
+`08131a59932f54527d409fb0a7dfe707f77bb9df824451f08502d322d162d35b`,
+`0db0ead71685f754b45da966fe8cafdc9d431ba7d1573925c895a053fdd08ab9`
+and `58ce607407e812c1851e5107b34bdfea04aac0291fd07ad556d5b14ba07dccc6`.
+The failed evidence remains external and immutable. U02a remains unaccepted;
+U14b remains outside this series.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
