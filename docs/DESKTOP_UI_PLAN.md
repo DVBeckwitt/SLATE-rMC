@@ -1415,6 +1415,46 @@ redraw after setting its fixed controls, including when those controls were
 already equal. Pure actual-helper stubs require new post-request paints and
 reject historical paints. No GUI window ran in this follow-up either.
 
+#### U02a authorized native window 2 (2026-09-28; failed and stopped)
+
+One fixed window-2 continuation verified the immutable failed-window-1 ledger,
+then wrote its own one-use receipt before launch. The original ledger remains
+unchanged. The child process took 32.536 s, its controller 33.356 s, and the
+command is conservatively charged **36.000 s** because a yielded PTY did not
+expose exact whole-command wall time. With the prior 44.797 s charge, 80.797 s
+of the original 130 s is charged and 49.203 s remains suspended. Readiness was
+1.150 s, active browsing 29.992 s and drain 0.778 s. No preflight, retry or
+window 3 ran.
+
+All 20 UUIDs composed, 27/27 selections matched, and 2,009 active swaps were
+coherent with no selected/visible historical swap. Six warm returns had p95
+23.268 ms; 21 cold selections had p95 188.963 ms. Matched cursor/profile p95
+was 14.228 ms. The 1,975 any-effective-input frame intervals had p95 14.666 ms
+and p99 18.353 ms; the 1,948 covered interval subset had p95 14.515 ms and
+p99 15.222 ms. These percentiles do not qualify sustained redraw: all 22
+sampled ready browsing spans failed the 16 ms continuous-supply rule, yielding
+0/26.501 s covered ready time and 3.491 s explicitly excluded. There were 60
+ready-span cursor gaps over 16 ms (maximum 23.014 ms) and 72 ready telemetry
+gaps over 16 ms (maximum 27.903 ms). The nominal 8 ms cursor timer delivered
+2,497 changed inputs with median spacing 13.044 ms. The first ready telemetry
+gap was 22.407 ms from active start. This is a demand-supply qualification
+failure, not evidence of a renderer bottleneck. Heartbeat maximum 27.903 ms
+remained below its separate 100 ms gate.
+
+The captured two-UUID bulk metadata edit, final exact native/profile values,
+ordinary Save, complete 20-record disk comparison, background reopen, new
+publication and matching G/H/V, and normal drained close were recorded. The
+bulk-edit, Save and close visible acknowledgments were 43.245, 4.702 and
+1.157 ms. Sampled RSS peaked at 509,186,048 bytes and Windows peak working set
+at 552,865,792 bytes; GPU driver allocation was not measured. The source
+freeze was production `f527462` with pre-run docs HEAD `67ec8c4`. External
+raw, summary and continuation receipt SHA-256 are respectively
+`2feef12d26ba426b809f88b48dea13f37c749d9b0fca864b695e6eabda2e524d`,
+`82b9a8636a465e68b4a4f1126f0c24044ce3e4a3b145dfdf5be2777b37616b89`
+and `6b9a48b6814a820335edbcc6fe5ecb9ffe2ee9542b54a039c82be3361bafe8e6`.
+The failed window 1 and its five immutable files remain unchanged. U02a is
+unaccepted; the window-3 active-old-write/newer-edit gate remains unrun.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
