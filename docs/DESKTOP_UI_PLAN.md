@@ -2062,6 +2062,29 @@ visible-ACK/heartbeat and extent checks remain unqualified; U14b is still
 pending review, and the prior native file/value proof retains its narrower
 scope.
 
+The next single native recheck used a corrected external checker with
+phase/error records, an explicit Discard choice only for its new project,
+and a normal asynchronous close observation. A source-extracted pure check
+of first-error and close decisions passed before launch. The production
+`main()` reached the settled 1280x800 Fusion/Segoe UI 10 shell at DPR 1,
+admitted tracked hBN, then stopped before pressing Export: the detector
+viewport was 526x180 logical pixels, while the vertical profile plot was
+50x50. The vertical `QSizePolicy.Expanding` request in `b7695d0` did not
+make this grid item fill the detector row. The checker preserved that first
+assertion, selected Discard for its own project, observed accepted close,
+hidden window and idle owner/queues, and exited nonzero. The child command
+took **1.307 s**; the full tool boundary took **1.470 s**. No new PNG/CSV,
+painted completion ACK, or active export heartbeat sample was produced.
+This is a concrete layout failure, not an export-latency measurement.
+
+New external evidence is `u14b_recheck_journey.py`,
+`u14b_recheck_launch.py`, `u14b_recheck_pure_check.py`,
+`u14b_recheck_pure_result.json`, `u14b_recheck_phases.jsonl`,
+`u14b_recheck_result.json` and `u14b_recheck_command.json`. The protected
+SHA-256 manifest/checker verified all 46 older U02a/U14b evidence files
+unchanged. No additional native launch or production edit followed this
+failed recheck. The source layout remains unqualified and U14b unaccepted.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
