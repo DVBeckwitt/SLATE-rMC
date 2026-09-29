@@ -51,7 +51,8 @@ project archives and simulation controls arrive in later workflows.
 
 Select one or more admitted rows and use **Apply to selected** to enter role, specimen/mount,
 commanded incidence in degrees, exposure in seconds, detector setup and material label. Unknown
-values remain explicit. A filename such as `sample_5d.osc` offers an unconfirmed angle proposal;
+values remain explicit. The review table is display only; changes go through these validated
+controls. A filename such as `sample_5d.osc` offers an unconfirmed angle proposal;
 **Confirm suggestion** accepts it. **Map pasted table** and **Map CSV file** preview explicit
 column mappings before applying rows by acquisition UUID or selected-row order. The supported
 hBN calibrant preset is a declared identifier; it does not infer calibration from image pixels.

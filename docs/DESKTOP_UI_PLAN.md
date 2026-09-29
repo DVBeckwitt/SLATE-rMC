@@ -1086,14 +1086,15 @@ implementation commits.
 
 #### U02a import and metadata implementation checkpoint (2026-09-28; review pending)
 
-Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5`, `3977f05` and `9adcf87` implement the
+Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5`, `3977f05`, `9adcf87` and
+`5d53f5e` implement the
 U02a slices. The project document now retains acquisition role, specimen/mount,
 commanded incidence in radians, exposure in seconds, detector setup, material and
 calibrant identifiers, dark/mask associations, explicit unknowns, provenance and
 reference path/hash pairs. Version-one documents retain strict defaults. A single
 global worker admits bounded OSC candidates independently, records exact decoded
 hash duplicates as distinct acquisitions and permits cancel, retry and removal.
-The review table, filmstrip, bounded bulk mapping, unconfirmed filename-angle
+The read-only review table, filmstrip, bounded bulk mapping, unconfirmed filename-angle
 suggestions, canonical CIF/configuration reference validation and external CSV
 export are connected to the native shell. The configuration reader uses the
 same bounded bytes for the validated digest and parse, including its referenced
@@ -1102,37 +1103,47 @@ CIF snapshot. No metadata entry starts a fit or qualifies a calibrant.
 Focused external checks used `PYTHONPATH=interactive;src`, native
 `QT_QPA_PLATFORM=windows` and `python -u -B`. A mixed candidate check observed
 three valid admissions, one missing source and one unsupported extension;
-retry admitted a fourth row. A separate four-row small-source journey saved,
-reopened exact project JSON and closed normally in 0.471 s. The
-reference/configuration checks compared the
+retry admitted a fourth row. A separate four-row small-source journey
+(`exec-45ea049c`) saved and reopened exact JSON and checked selected reopened
+fields before normal close in 0.471 s. The reference/configuration checks compared the
 canonical physics and rendering revisions from default and bounded-snapshot
 readers; the nested CIF limit rejected an oversized reference. Transactional
 metadata checks exercised signed finite angles, paired reference path/hash
-updates, both CSV association row orders and exact export. A controlled cold
-selection/removal check reached `REMOVE_IN_FLIGHT_OK` in 0.215 s: removal
+updates and both CSV association row orders. The CSV check (`exec-b7a84528`)
+checked UUID, hash-kind and degree headers plus selected values, not every
+field's exported value. A controlled cold selection/removal check
+(`exec-f37d5490`) reached `REMOVE_IN_FLIGHT_OK` in 0.215 s: removal
 invalidated the running load, and the other acquisition remained. Its harness
 stopped its timer before asynchronous window shutdown and needed forced process
 exit, so that command supplies no normal-close proof. The earlier queued
-cancel/retry and canceled-open checks passed before a separate cold-load setup
-assertion. A follow-up controlled check found a Qt item-API error in its own
+cancel/retry and canceled-open checks (`exec-bd6e848f`) passed before a
+cold-load setup assertion. A follow-up controlled check (`exec-76445537`)
+found a Qt item-API error in its own
 harness before reaching the product workflow. No such failure is counted as
 product evidence. The temporary check code is not retained.
 
 Read-only review then found two admission gaps: individually valid metadata
 could grow a project beyond the 1 MiB document limit, and malformed angle
 proposals could reach confirmation. Both are now checked before UI publication.
-A focused 128-acquisition check began from a valid document and confirmed that
-oversized mapped metadata is rejected while the prior project remains. A
-focused selection check confirmed candidate-only rows yield no admitted target
-and multi-selection survives table refresh. Malformed or nonfinite proposal
-values are rejected at metadata construction.
+A focused 128-acquisition check (`exec-d4d85fb3`) began from a valid document
+and confirmed oversized mapped metadata is rejected while the prior project
+remains. A focused selection check (`exec-e99f7288`, before its unrelated
+selected-context setup failure) confirmed candidate-only rows yield no admitted
+target and multi-selection survives table refresh. Malformed or nonfinite
+proposal values are rejected at metadata construction. A later pure near-cap
+check (`50f74d`) proved a 128-row document remained readable without an active
+view while new admissions reserve 4,096 bytes. A fully populated valid native
+view with ROI, both intensity limits, flags, native bounds and maximum finite
+double-precision encodings added 837 canonical JSON bytes (`642418`), below
+that margin. The table's `NoEditTriggers` setting was checked in a tiny native
+window (`80bbd1`). No per-cursor document serialization was added.
 
 Ruff format and lint passed for the touched Python files; an offline source and
 wheel build passed. Built artifacts and the temporary saved project were removed
 from the external scratch location. These software checks establish packaging
 and interaction behavior only, not scientific fitting adequacy.
 
-The one permitted 20-record smoke used repeated explicit references to the
+The one permitted 20-record smoke (`exec-c209cfdd`) used repeated explicit references to the
 tracked 3000 x 3000 `hBN_calibrant_5m.osc.gz` and completed in 2.094 s within
 3.508 s command wall time.
 It confirmed 20 distinct UUIDs and identical decoded source hashes, a final
@@ -1145,17 +1156,27 @@ generation/hit-test evidence on each composition. Eight GL uploads were
 observed because paints coalesced. The cache
 held at most two prepared packs and thumbnails occupied 110,592 bytes; observed
 RSS was 369.7 MiB and Windows peak working set 484.9 MiB. The selected detector
-panel can retain a third plane after a selection or removal, and one worker
-result may coexist with these. Four worst-case 96 MiB prepared packs total
-384 MiB before a 64 MiB source buffer, 32 MiB decoded buffer, approximately
-34.3 MiB for one 3000 x 3000 R32F texture, an equally sized upload copy,
-Qt table/icons, other driver allocations and the shell baseline. This is a
-conservative overlap count, not a measured peak. The short repeated-source
+panel can retain a third distinct old plane after a selection, removal or Open,
+and one worker result may coexist with these. Four worst-case 96 MiB prepared
+packs total 384 MiB. The bound must also count up to 64 MiB source bytes,
+32 MiB decoded bytes, worker decode/high-range/display/profile temporaries,
+U03 profile caches, up to 1,179,648 thumbnail bytes plus Qt icon copies,
+candidate and project-write queues, and the shell baseline. A maximum admitted
+12-million-pixel R32F texture is 48,000,000 bytes with an equally sized upload
+copy; the measured 3000 x 3000 hBN shape uses 36,000,000 bytes for each.
+Driver GPU allocation was not measured. This is a conservative overlap ledger,
+not a measured maximum. The short repeated-source
 smoke does not establish sustained twenty-image latency, memory or mixed-source
 qualification. Native command walls, including the two focused admission
-follow-ups, conservatively totaled about 40.7 s of the original 60 s allowance;
+follow-ups and the tiny table check, conservatively totaled about 41.9 s of the
+original 60 s allowance;
 the one permitted 20-record smoke is closed. The U02a checklist
 remains open for independent review and the declared responsiveness gate.
+Remaining exact-value checks include all-field JSON/CSV metadata round-trip,
+modal edit while a newer metadata save is in flight, A-B-A navigation,
+project-switch identity and final composition/hit-test matching. They require
+a separately scoped qualification decision; this implementation checkpoint
+does not claim them.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
