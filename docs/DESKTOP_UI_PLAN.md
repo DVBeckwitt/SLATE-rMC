@@ -2010,10 +2010,10 @@ correctly refused a two-row reduction; changing only the tiny fixture to
 fixture error, not a product failure. Pure artifacts are external:
 `u14b_pure_export.png` and `u14b_pure_export.profiles.csv`.
 
-One focused native command ran an external temporary journey script under
+The initial focused native command ran an external temporary journey script under
 an independent `subprocess.run(..., timeout=55)` whole-command bracket;
 it returned 0 in **1.428 s**, within the new 60 s aggregate allowance.
-No second native launch or older U02/U03/U02a qualification run occurred.
+No older U02/U03/U02a qualification run occurred.
 The real Windows Qt shell admitted tracked 3000x3000 hBN and Bi2Te3 OSCs.
 Before export, hBN used custom 1.6 zoom, mean per valid pixel and 7-row/
 5-column bands. Dialog cancellation wrote nothing. Changing acquisition
@@ -2039,6 +2039,28 @@ full reclamation. The shell closed normally. The external evidence is
 `u14b_native_result.json`; the temporary journey code was removed.
 These checks establish this inspection export path, not scientific fitting
 or all future display sizes. U14b awaits independent supervisor review.
+
+The follow-up review found that the initial journey pumped events manually,
+so its timings do not establish input-to-visible completion latency under
+`QApplication.exec()`. The retained image also shows the right-hand plot
+content only near the top of the detector. The plot now requests vertical
+expansion in the shared grid row and avoids drawing a tick label over
+`row_px`; its native-coordinate transform and reducer are unchanged. Ruff
+lint/format and import checks passed for this source change. Its settled
+layout has not been confirmed in a native run.
+
+One follow-up checker launched the production `main()` with the normal
+Fusion/Segoe UI stylesheet and an event-driven export action. The external
+`u14b_followup_launch.py` bounded the command to 25 s; it timed out after
+**25.058 s**, producing no checker result, PNG or CSV and no stdout/stderr.
+The external checker and command record are retained as
+`u14b_followup_journey.py` and `u14b_followup_command.json`. The checker
+has no phase log before `app.exec()` returns and its normal close path can
+enter the unsaved-project dialog, so this timeout does not identify the
+stage at which it stopped. No second follow-up launch was made. The
+visible-ACK/heartbeat and extent checks remain unqualified; U14b is still
+pending review, and the prior native file/value proof retains its narrower
+scope.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 

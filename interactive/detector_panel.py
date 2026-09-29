@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QWidget,
 )
@@ -953,6 +954,8 @@ class ProfilePlot(QWidget):
         self.generation = 0
         self.intensity_limits: tuple[float, float] | None = None
         self.setMinimumSize(50 if vertical else 180, 50)
+        if vertical:
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
     def set_intensity_limits(self, limits: tuple[float, float] | None) -> None:
         if self.intensity_limits != limits:
@@ -1090,6 +1093,8 @@ class ProfilePlot(QWidget):
                 if not 0 <= position < limit:
                     continue
                 if self.vertical:
+                    if position - 9 < 18:
+                        continue
                     painter.drawText(
                         QRectF(0, position - 9, self.width() - 3, 18),
                         Qt.AlignmentFlag.AlignRight,
