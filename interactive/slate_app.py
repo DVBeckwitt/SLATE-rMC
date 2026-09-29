@@ -128,6 +128,22 @@ class ImportCandidate:
     detail: str = ""
 
 
+class NumericReviewItem(QTableWidgetItem):
+    """Sort displayed angle/exposure values numerically, with unknowns last."""
+
+    def __init__(self, text: str, value: float | None) -> None:
+        super().__init__(text)
+        self.value = value
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        if isinstance(other, NumericReviewItem):
+            return (self.value is None, self.value if self.value is not None else 0.0) < (
+                other.value is None,
+                other.value if other.value is not None else 0.0,
+            )
+        return super().__lt__(other)
+
+
 def _request_size(argument: bytes | Path) -> int:
     return len(argument) if isinstance(argument, bytes) else len(str(argument).encode("utf-8"))
 
@@ -821,6 +837,15 @@ class ShellWindow(QMainWindow):
                 else:
                     self._active_generation = identity.generation
                     return
+            else:
+                self._show_state(
+                    "error",
+                    "Reference not bound",
+                    f"Project changed before {kind} validation. Choose {path.name} again.",
+                )
+                self.statusBar().showMessage(
+                    f"Stale {kind} request discarded · Choose {path.name} again"
+                )
         if self._deferred_import is not None:
             source, acquisition_id, mode, project_id = self._deferred_import
             self._deferred_import = None
@@ -1207,7 +1232,14 @@ class ShellWindow(QMainWindow):
                 status,
             )
             for column, value in enumerate(cells):
-                cell = QTableWidgetItem(value)
+                cell = (
+                    NumericReviewItem(
+                        value,
+                        metadata.incidence_rad if column == 4 else metadata.exposure_s,
+                    )
+                    if column in (4, 5)
+                    else QTableWidgetItem(value)
+                )
                 cell.setData(Qt.ItemDataRole.UserRole, str(acquisition.acquisition_id))
                 if column == 0:
                     cell.setIcon(self._thumbnail_icon(acquisition.acquisition_id))
@@ -1228,7 +1260,9 @@ class ShellWindow(QMainWindow):
                 f"{candidate.status}: {candidate.detail}",
             )
             for column, value in enumerate(cells):
-                cell = QTableWidgetItem(value)
+                cell = (
+                    NumericReviewItem(value, None) if column in (4, 5) else QTableWidgetItem(value)
+                )
                 cell.setData(Qt.ItemDataRole.UserRole, str(candidate.acquisition_id))
                 table.setItem(row, column, cell)
         table.setSortingEnabled(True)
@@ -1380,7 +1414,11 @@ class ShellWindow(QMainWindow):
             "OSC images (*.osc *.OSC *.osc.gz *.OSC.GZ)",
         )
         if filenames:
-            self.start_import_files(Path(filename) for filename in filenames)
+            try:
+                self.start_import_files(Path(filename) for filename in filenames)
+            except ValueError as exc:
+                self._show_state("error", "Import scope rejected", str(exc))
+                self.statusBar().showMessage(f"Import scope rejected: {exc}")
 
     def _choose_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Review one folder", str(Path.home()))
@@ -1652,7 +1690,9 @@ class ShellWindow(QMainWindow):
         mapping_dialog = QDialog(self)
         mapping_dialog.setWindowTitle("Map columns and preview metadata")
         layout = QFormLayout(mapping_dialog)
-        preview = QLabel("\n".join(" | ".join(row) for row in parsed[:6]))
+        preview = QLabel(
+            "\n".join(" | ".join(value[:80] for value in row)[:512] for row in parsed[:6])
+        )
         preview.setWordWrap(True)
         layout.addRow("First rows", preview)
         pickers = []

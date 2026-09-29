@@ -66,10 +66,8 @@ def parse_table_text(text: str, *, delimiter: str) -> tuple[tuple[str, ...], ...
         raise ValueError("metadata delimiter must be CSV or tab")
     rows = []
     for row in csv.reader(io.StringIO(text), delimiter=delimiter, strict=True):
-        if len(row) > MAX_METADATA_COLUMNS or any(
-            len(value) > MAX_METADATA_FIELD_LENGTH for value in row
-        ):
-            raise ProjectFormatError("metadata row has too many or overlong fields")
+        if len(row) > MAX_METADATA_COLUMNS:
+            raise ProjectFormatError("metadata row has too many columns")
         rows.append(tuple(row))
         if len(rows) > MAX_METADATA_ROWS + 1:
             raise ProjectFormatError("metadata text exceeds 128 data rows")
@@ -117,6 +115,8 @@ def apply_mapped_rows(
             for column, field in enumerate(mapping)
             if field is not None and column < len(row)
         }
+        if any(len(value) > MAX_METADATA_FIELD_LENGTH for value in fields.values()):
+            raise ProjectFormatError(f"row {index + 1} has an overlong mapped field")
         try:
             acquisition_id = (
                 UUID(fields.pop("acquisition_id"))
