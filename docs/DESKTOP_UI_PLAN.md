@@ -1419,7 +1419,8 @@ reject historical paints. No GUI window ran in this follow-up either.
 
 One fixed window-2 continuation verified the immutable failed-window-1 ledger,
 then wrote its own one-use receipt before launch. The original ledger remains
-unchanged. The child process took 32.536 s, its controller 33.356 s, and later
+unchanged. The reporter's internal interval from `NativeReporter.started`
+through report work was 32.536 s, its controller took 33.356 s, and later
 parent command metadata exposed 33.679 s of command execution. The command
 remains conservatively charged **36.000 s**; the yielded PTY did not expose
 exact whole-command wall time. With the prior 44.797 s charge, 80.797 s
@@ -1467,31 +1468,50 @@ observed supply gaps. The external reporter and manifest now name a separate
 `rendering-demand-v2` rule for prospective measurements. The old delivered-input
 coverage and sustained-frame subset remain reported as diagnostics.
 
-The new rule derives ready spans from active boundaries and heartbeat state,
-requiring selected/visible, project, publication, decoded source, native and
-display identity to agree. An effective identity-bound cursor request starts
-pending time until its own first exact coherent G/H/V presented swap. A later
-request supersedes it and carries the pending interval forward; a late swap of
-the older request cannot close that interval. The report separates eligible,
-pending, undemanded, covered and excluded milliseconds, maximum undemanded and
-state gaps, maximum pending episode, request and composition coverage, and
-effective/composed/superseded/unresolved request counts. Each genuinely
-undemanded head, between-request and tail gap
-and each ready-state sample gap must be at most 16 ms. Every ready span needs a
-composition; pending demand censored at any boundary fails. A pending episode
-over 50 ms also fails. Existing cursor p95, fresh-frame p95/p99, heartbeat,
-resource, selection and persistence gates remain.
+The first pure packet tested the reducer and canonical matcher directly, not
+their integration through `analyze()`. One matrix stopped at an incorrect
+supersession expectation before its cold case; a later focused check covered
+supersession and repeated-state ABA only. Its selfcheck/Ruff/AST pass did not
+establish a positive full-analyzer case. Audit then found that normalized
+swaps exposed `hash` while the reducer required `decoded_sha256`, so the
+actual analyzer could never discharge pending demand. The audit also found
+two extra hard limits: 50 ms on a continuous busy episode and 16 ms on ready
+state samples. Both limits have now been removed from prospective qualification.
 
-Pure checks on the actual reducer and canonical matcher accepted continuous
-8 ms input and a 25 ms pending response; they rejected sparse 32 ms input,
-missing/initial/tail and 30 s one-input supply, a 200 ms response, never
-composed demand, wrong publication/native buffer or incoherent paint, old-only
-supersession, repeated-state ABA and a loading boundary without new coverage.
-The reporter's existing pure selfcheck, Ruff lint/format and AST checks passed.
-No GUI or native window, preflight, retry or window 3 ran. U02a remains
-unaccepted. The prospective reporter and manifest hashes are
-`7f96a03c9bca3136179e5d015594332ededa201d7781c8ce0aa55be7d8fa66e7`
-and `b3dac76c708c1606470b5c21e635d9c2790a6a3d05f321834910916794a526d2`.
+The corrected rule derives ready spans from active boundaries, heartbeats and
+recorded selection, publication and loading transitions. Missing transition
+snapshots fail qualification. Selected/visible, project, publication, decoded
+source, native and display identity must agree. An effective cursor request
+starts pending time until its own first exact coherent G/H/V presented swap.
+Supersession carries outstanding demand; an older presentation still counts
+for its response/frame observations but cannot discharge newer demand. The
+report separates eligible, pending, undemanded, covered and excluded time,
+request and composition coverage, superseded/unresolved counts, and maximum
+idle, state and pending-episode durations. Only genuinely undemanded heads,
+between-request intervals and tails have the 16 ms coverage ceiling. Each
+ready span needs a composition and unresolved demand at a boundary fails.
+State-sample and pending-episode maxima remain diagnostics. The 100 ms
+heartbeat, cursor p95, fresh-frame p95/p99, resource, selection and
+persistence gates remain separate.
+
+A temporary external pure matrix constructed raw publication, input, completed
+G/H/V paint, swap and state events and called the actual `analyze()` function.
+Healthy 8 ms streams with 5 ms and 10 ms exact responses qualified demand,
+with cursor p95 5/10 ms and fresh-frame p95 8 ms, without those performance
+or heartbeat misses. The 10 ms case retained a 114 ms busy episode as a
+diagnostic. A 25 ms response qualified demand with both 10 ms and 25 ms state
+sampling; its 30 ms fresh-frame p95 failed the unchanged frame gate. A 200 ms
+response qualified demand coverage but failed the existing cursor p95 gate.
+Sparse 32 ms, no/head/tail and 30 s one-input supply, never-composed demand,
+wrong hash/publication/native/display/profile identity, historical paint,
+old-only supersession, selection ABA between heartbeats and missing transition
+state all failed coverage. A valid cold separation with new-source demand
+qualified each ready span. The temporary matrix was removed. The existing
+pure selfcheck, Ruff lint/format, AST and JSON checks passed. No GUI or native
+window, preflight, retry or window 3 ran; U02a remains unaccepted. Corrected
+reporter and manifest SHA-256 are
+`1ca5b9d1852529ae7a76cce569aad66ef95faf8c9ac41bb9b4a2f00e3c3c4925`
+and `e64218a0010a7e3df14e7e2ee709232d1b86a993659228d7cdd9ed3e577784f3`.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
