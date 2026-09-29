@@ -1,5 +1,6 @@
 """Qt-free project identity, strict JSON state and decoded-source references."""
 
+import hashlib
 import json
 import math
 import struct
@@ -9,12 +10,14 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
-PROJECT_SCHEMA_VERSION = 3
+PROJECT_SCHEMA_VERSION = 4
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
 MAX_NAME_LENGTH = 256
 MAX_SOURCE_PATH_LENGTH = 4096
+MAX_NUMERIC_BASELINE_BYTES = 64 * 1024
+MAX_NUMERIC_PROPOSALS = 32
 METADATA_FIELDS = (
     "role",
     "specimen",
@@ -440,9 +443,61 @@ class ProjectViewState:
 
 
 @dataclass(frozen=True, slots=True)
+class NumericDraft:
+    acquisition_id: UUID
+    source_sha256: str
+    configuration_path: Path
+    configuration_sha256: str
+    cif_path: Path
+    cif_sha256: str
+    baseline_yaml: str
+    proposed: tuple[tuple[str, float, str, str], ...] = ()
+    revision: int = 0
+
+    def __post_init__(self) -> None:
+        for digest in (self.source_sha256, self.configuration_sha256, self.cif_sha256):
+            _digest(digest)
+        for path in (self.configuration_path, self.cif_path):
+            if (
+                not isinstance(path, Path)
+                or not str(path)
+                or len(str(path)) > MAX_SOURCE_PATH_LENGTH
+            ):
+                raise ProjectFormatError("numeric draft reference path is invalid")
+        if type(self.baseline_yaml) is not str:
+            raise ProjectFormatError("numeric baseline must be UTF-8 text")
+        try:
+            encoded = self.baseline_yaml.encode("utf-8")
+        except UnicodeError as exc:
+            raise ProjectFormatError("numeric baseline must be UTF-8 text") from exc
+        if not encoded or len(encoded) > MAX_NUMERIC_BASELINE_BYTES:
+            raise ProjectFormatError("numeric baseline exceeds its 64 KiB limit")
+        if hashlib.sha256(encoded).hexdigest() != self.configuration_sha256:
+            raise ProjectFormatError("numeric baseline hash differs from configuration identity")
+        if type(self.revision) is not int or self.revision < 0:
+            raise ProjectFormatError("numeric draft revision must be nonnegative")
+        if type(self.proposed) is not tuple or len(self.proposed) > MAX_NUMERIC_PROPOSALS:
+            raise ProjectFormatError("too many numeric draft proposals")
+        names = []
+        for entry in self.proposed:
+            if type(entry) is not tuple or len(entry) != 4:
+                raise ProjectFormatError("numeric proposal needs field, value, unit and provenance")
+            name, value, unit, provenance = entry
+            if type(name) is not str or not name or len(name) > 128:
+                raise ProjectFormatError("numeric proposal field is invalid")
+            _float(value, name)
+            _name(unit, "numeric proposal unit")
+            _name(provenance, "numeric proposal provenance")
+            names.append(name)
+        if len(names) != len(set(names)):
+            raise ProjectFormatError("duplicate numeric proposal field")
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectDocument:
     project: Project
     view: ProjectViewState
+    numeric_draft: NumericDraft | None = None
 
     def __post_init__(self) -> None:
         selected = self.view.selected_acquisition_id
@@ -454,6 +509,11 @@ class ProjectDocument:
             raise ProjectFormatError("unsupported workspace view")
         if self.view.detector is not None and selected is None:
             raise ProjectFormatError("detector view needs a selected acquisition")
+        if self.numeric_draft is not None and not any(
+            item.acquisition_id == self.numeric_draft.acquisition_id
+            for item in self.project.acquisitions
+        ):
+            raise ProjectFormatError("numeric draft acquisition is absent from the project")
 
 
 def _object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
@@ -788,6 +848,23 @@ def project_to_document(
             "acquisitions": acquisitions,
         },
         "view": view,
+        "numeric_draft": (
+            None
+            if state.numeric_draft is None
+            else {
+                "acquisition_id": str(state.numeric_draft.acquisition_id),
+                "source_sha256": state.numeric_draft.source_sha256,
+                "configuration_path": _source_reference(
+                    state.numeric_draft.configuration_path, document_path
+                ),
+                "configuration_sha256": state.numeric_draft.configuration_sha256,
+                "cif_path": _source_reference(state.numeric_draft.cif_path, document_path),
+                "cif_sha256": state.numeric_draft.cif_sha256,
+                "baseline_yaml": state.numeric_draft.baseline_yaml,
+                "proposed": [list(entry) for entry in state.numeric_draft.proposed],
+                "revision": state.numeric_draft.revision,
+            }
+        ),
     }
     encoded = (json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n").encode(
         "utf-8"
@@ -799,10 +876,16 @@ def project_to_document(
 
 def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     """Validate a complete project before replacing the current shell state."""
-    top = _object(value, {"schema_version", "source_hash_kind", "project", "view"}, "document")
+    if type(value) is not dict:
+        raise ProjectFormatError("document must be an object")
+    draft_fields = {"numeric_draft"} if value.get("schema_version") == 4 else set()
+    top = _object(
+        value, {"schema_version", "source_hash_kind", "project", "view"} | draft_fields, "document"
+    )
     if type(top["schema_version"]) is not int or top["schema_version"] not in (
         1,
         2,
+        3,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -844,11 +927,44 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     view_data = _object(top["view"], {"selected_acquisition_id", "workspace", "detector"}, "view")
     selected = view_data["selected_acquisition_id"]
     selected_id = None if selected is None else _uuid(selected, "selected acquisition ID")
+    numeric = top.get("numeric_draft")
+    draft = None
+    if numeric is not None:
+        supplied = _object(
+            numeric,
+            {
+                "acquisition_id",
+                "source_sha256",
+                "configuration_path",
+                "configuration_sha256",
+                "cif_path",
+                "cif_sha256",
+                "baseline_yaml",
+                "proposed",
+                "revision",
+            },
+            "numeric draft",
+        )
+        proposals = supplied["proposed"]
+        if type(proposals) is not list or any(type(entry) is not list for entry in proposals):
+            raise ProjectFormatError("numeric proposals must be arrays")
+        draft = NumericDraft(
+            _uuid(supplied["acquisition_id"], "numeric acquisition ID"),
+            _digest(supplied["source_sha256"]),
+            _resolved_reference(supplied["configuration_path"], document_path, "configuration"),
+            _digest(supplied["configuration_sha256"]),
+            _resolved_reference(supplied["cif_path"], document_path, "configuration CIF"),
+            _digest(supplied["cif_sha256"]),
+            supplied["baseline_yaml"],
+            tuple(tuple(entry) for entry in proposals),
+            supplied["revision"],
+        )
     return ProjectDocument(
         project,
         ProjectViewState(
             selected_id, view_data["workspace"], _detector_view(view_data["detector"])
         ),
+        draft,
     )
 
 

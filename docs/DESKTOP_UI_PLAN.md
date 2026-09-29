@@ -1073,7 +1073,7 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
 | [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
 | [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
-| [ ] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+| [x] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
 
 U02a is split into sequential subchanges without adding task IDs: (1) strict acquisition
 metadata, provenance and backward-compatible project persistence; (2) bounded per-candidate
@@ -2136,6 +2136,49 @@ layout scope; it supplies no latency distribution or scientific-fit
 qualification. Handled write exceptions remove newly created pair files,
 but the pair is not claimed crash-atomic. U14b still awaits independent
 supervisor acceptance.
+
+U14b was accepted by the supervisor on 2026-09-29 at
+`6aabcc2f0b7100de57168d881faf114d21897190`. The accepted count is
+10/46; the historical pending statements above record their earlier review
+state.
+
+#### U09a numeric parameter implementation (2026-09-29; review pending)
+
+The project document now has schema 4 with one bounded numeric initial-value
+draft. It keeps the exact admitted configuration bytes, configuration and
+dependent CIF hashes, acquisition/source identity, field-level proposed values,
+units, provenance and a monotonic draft revision. Schema 1-3 projects still
+open. The shell loads an admitted configuration on the existing background job
+owner, then shows supported source, detector and first-axis initial values in
+explicit display units. Each edit re-enters the canonical configured reader;
+the beam direction, detector rotation and native shape explain why they remain
+read-only here. No fitter, reciprocal preview or result is launched.
+
+One bounded session history records metadata and numeric edits as changed
+fields, with 32 actions and a 256 KiB total cap. Undo/redo preserves unrelated
+acquisitions, increments metadata/draft revisions and marks altered reference
+identities unverified. A frozen launch snapshot retains the exact configured
+object and proposal revision even when later draft edits occur. Freezing checks
+current source/reference validation and on-disk configuration/CIF hashes;
+snapshots are transient and cannot be mistaken for a saved fit.
+
+Focused external checks passed for the nondefault Bi2Te3 configuration:
+canonical edit/round trip, invalid-domain and read-only rejection, immutable
+freeze, field-level metadata undo/redo with an unrelated edit, reference-status
+invalidation, worker cancellation and history cap. The first native event-loop
+journey completed edit, rejection, undo/redo, freeze, save and reopen, with a
+16.5 ms painted loading ACK, but its check script ran all clicks and an OpenGL
+capture in one callback, causing a 251.9 ms heartbeat gap. The second journey
+sent actions on separate timer turns and passed: 17.2 ms painted loading ACK,
+68.3 ms maximum heartbeat gap through normal close, and exact proposal
+round-trip after save/reopen. Whole-command times were 3.424 and 3.106 s,
+using both launches and 6.530 s of the distinct 60 s U09a allowance. All 72
+older external evidence files remained SHA-256 identical. These checks verify
+this UI/state boundary; they do not qualify a scientific fit or benchmark
+every display size. A final inspector-only scroll adjustment and bounded worker
+memory-accounting correction received static and focused pure checks after the
+second launch; the two-launch cap prevented another native check. U09a awaits
+independent supervisor acceptance.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 

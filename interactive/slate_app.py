@@ -40,6 +40,17 @@ from metadata_review import (
     prepare_reference,
 )
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
+from parameter_state import (
+    PARAMETERS,
+    SessionHistory,
+    description,
+    displayed_value,
+    draft_action,
+    edit_draft,
+    freeze_draft,
+    metadata_action,
+    prepare_numeric_draft,
+)
 from project_io import (
     LoadedProject,
     PublishedProject,
@@ -57,6 +68,7 @@ from project_state import (
     Acquisition,
     AcquisitionMetadata,
     DetectorViewState,
+    NumericDraft,
     Project,
     ProjectDocument,
     ProjectFormatError,
@@ -233,11 +245,25 @@ class ShellWindow(QMainWindow):
         self._pending_view_restore: ProjectViewState | None = None
         self._source_checks: dict[UUID, SourceCheck] = {}
         self._reference_checks: dict[tuple[UUID, str], ReferenceCheck] = {}
+        self._numeric_draft: NumericDraft | None = None
+        self._numeric_history = SessionHistory()
+        self._launch_snapshot = None
+        self._active_numeric: tuple[UUID, int, str] | None = None
         self._write_queue: deque[WriteTask] = deque()
         self._active_write: WriteTask | None = None
         self._active_export: InspectionExportTask | None = None
         self._active_kind: (
-            Literal["import", "relink", "batch", "reference", "open", "save", "discard", "export"]
+            Literal[
+                "import",
+                "relink",
+                "batch",
+                "reference",
+                "open",
+                "save",
+                "discard",
+                "export",
+                "numeric",
+            ]
             | None
         ) = None
         self._active_generation: int | None = None
@@ -306,6 +332,13 @@ class ShellWindow(QMainWindow):
         self.rename_acquisition_button.clicked.connect(self._choose_acquisition_name)
         self.move_up_button.clicked.connect(lambda: self.move_selected_acquisition(-1))
         self.move_down_button.clicked.connect(lambda: self.move_selected_acquisition(1))
+        self.numeric_load_button.clicked.connect(self._load_numeric_draft)
+        self.numeric_field.currentIndexChanged.connect(self._refresh_numeric_editor)
+        self.numeric_apply_button.clicked.connect(self._apply_numeric_value)
+        self.numeric_undo_button.clicked.connect(lambda: self._numeric_undo_redo(undo=True))
+        self.numeric_redo_button.clicked.connect(lambda: self._numeric_undo_redo(undo=False))
+        self.numeric_revert_button.clicked.connect(self._revert_numeric_draft)
+        self.numeric_freeze_button.clicked.connect(self._freeze_numeric_draft)
         self.previous_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
         self.next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
         self.previous_shortcut.activated.connect(lambda: self._step_acquisition(-1))
@@ -507,8 +540,48 @@ class ShellWindow(QMainWindow):
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
-        inspector_layout.addWidget(self.selection_label)
-        inspector_layout.addStretch()
+        self.selection_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        selection_scroll = QScrollArea()
+        selection_scroll.setWidgetResizable(True)
+        selection_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        selection_scroll.setMinimumHeight(140)
+        selection_scroll.setWidget(self.selection_label)
+        inspector_layout.addWidget(selection_scroll, 1)
+        inspector_layout.addWidget(QLabel("NUMERIC INITIAL VALUES"))
+        self.numeric_status = QLabel("Load a validated configuration for one acquisition.")
+        self.numeric_status.setObjectName("mutedText")
+        self.numeric_status.setWordWrap(True)
+        inspector_layout.addWidget(self.numeric_status)
+        self.numeric_load_button = QPushButton("Load numeric draft")
+        inspector_layout.addWidget(self.numeric_load_button)
+        self.numeric_field = QComboBox()
+        for item in PARAMETERS:
+            self.numeric_field.addItem(item.label, item.field)
+        inspector_layout.addWidget(self.numeric_field)
+        self.numeric_description = QLabel()
+        self.numeric_description.setObjectName("mutedText")
+        self.numeric_description.setWordWrap(True)
+        inspector_layout.addWidget(self.numeric_description)
+        self.numeric_value = QLineEdit()
+        self.numeric_value.setPlaceholderText("Initial value")
+        inspector_layout.addWidget(self.numeric_value)
+        numeric_buttons = QGridLayout()
+        self.numeric_apply_button = QPushButton("Apply initial")
+        self.numeric_undo_button = QPushButton("Undo")
+        self.numeric_redo_button = QPushButton("Redo")
+        self.numeric_revert_button = QPushButton("Revert draft")
+        self.numeric_freeze_button = QPushButton("Freeze snapshot")
+        for index, button in enumerate(
+            (
+                self.numeric_apply_button,
+                self.numeric_undo_button,
+                self.numeric_redo_button,
+                self.numeric_revert_button,
+                self.numeric_freeze_button,
+            )
+        ):
+            numeric_buttons.addWidget(button, index // 2, index % 2)
+        inspector_layout.addLayout(numeric_buttons)
         project_limit = QLabel(
             "Angles and calibration remain unknown. Saving a draft never resumes a solver."
         )
@@ -591,7 +664,17 @@ class ShellWindow(QMainWindow):
         if selected_id is not None:
             view = replace(view, selected_acquisition_id=selected_id, detector=None)
         project_to_document(
-            ProjectDocument(candidate, view),
+            ProjectDocument(
+                candidate,
+                view,
+                self._numeric_draft
+                if self._numeric_draft is not None
+                and any(
+                    item.acquisition_id == self._numeric_draft.acquisition_id
+                    for item in candidate.acquisitions
+                )
+                else None,
+            ),
             self._project_path or self._recovery_path(),
             reserved_bytes=MAX_FUTURE_VIEW_BYTES,
         )
@@ -624,6 +707,14 @@ class ShellWindow(QMainWindow):
     def _mark_dirty(self, _value: object = None) -> None:
         if self._restoring_view:
             return
+        if self._numeric_draft is not None and not any(
+            item.acquisition_id == self._numeric_draft.acquisition_id
+            for item in self.project.acquisitions
+        ):
+            self._numeric_draft = None
+            self._launch_snapshot = None
+            self._numeric_history = SessionHistory()
+            self._refresh_numeric_editor()
         self._revision += 1
         self._save_failure = ""
         self._autosave_timer.start()
@@ -651,7 +742,7 @@ class ShellWindow(QMainWindow):
         path = Path(destination).absolute()
         try:
             document = project_to_document(
-                ProjectDocument(self.project, self._capture_view()), path
+                ProjectDocument(self.project, self._capture_view(), self._numeric_draft), path
             )
             retire = (
                 str(self._recovery_path())
@@ -1069,6 +1160,7 @@ class ShellWindow(QMainWindow):
         )
         self._update_selection_label()
         self._refresh_review_table()
+        self._refresh_numeric_editor()
 
     def _reference_ready(self, identity: JobIdentity, value: object) -> None:
         task = self._active_reference
@@ -1122,6 +1214,7 @@ class ShellWindow(QMainWindow):
             self._invalidate_reference_request(kind, path, "Reference binding rejected")
             self.statusBar().showMessage(f"Reference binding rejected: {exc}")
             return
+        action = metadata_action(self.project, updated, f"Bind {kind} reference")
         changed = updated != self.project
         self.project = updated
         self._reference_checks = publish_reference_checks(
@@ -1151,9 +1244,11 @@ class ShellWindow(QMainWindow):
                         "No dependent CIF identity recorded",
                     )
         if changed:
+            self._numeric_history.push(action)
             self._mark_dirty()
         self._update_selection_label()
         self._refresh_review_table()
+        self._refresh_numeric_editor()
         self.statusBar().showMessage(
             f"Validated {kind} reference and SHA-256 for {len(ids)} acquisition(s)"
         )
@@ -1257,6 +1352,7 @@ class ShellWindow(QMainWindow):
             )
         self.project_tree.blockSignals(False)
         self._refresh_review_table()
+        self._refresh_numeric_editor()
 
     def _thumbnail_icon(self, acquisition_id: UUID) -> QIcon:
         item = self._thumbnails.get(acquisition_id)
@@ -1288,6 +1384,288 @@ class ShellWindow(QMainWindow):
                 )
             )
         return tuple(states)
+
+    def _numeric_acquisition(self) -> Acquisition | None:
+        return next(
+            (
+                item
+                for item in self.project.acquisitions
+                if item.acquisition_id == self.selected_acquisition_id
+            ),
+            None,
+        )
+
+    def _numeric_identity_matches(self, acquisition: Acquisition) -> bool:
+        draft = self._numeric_draft
+        metadata = acquisition.metadata
+        return draft is not None and (
+            draft.acquisition_id == acquisition.acquisition_id
+            and draft.source_sha256 == acquisition.source_sha256
+            and draft.configuration_path == metadata.configuration_path
+            and draft.configuration_sha256 == metadata.configuration_sha256
+            and draft.cif_path == metadata.configuration_cif_path
+            and draft.cif_sha256 == metadata.configuration_cif_sha256
+        )
+
+    def _numeric_validated_acquisition(self) -> Acquisition:
+        acquisition = self._numeric_acquisition()
+        if acquisition is None:
+            raise ProjectFormatError("select one admitted acquisition")
+        source = self._source_checks.get(acquisition.acquisition_id)
+        if source is None or source.state != "verified":
+            raise ProjectFormatError("source must be verified before editing or freezing")
+        for kind in ("configuration", "configuration_cif"):
+            check = self._reference_checks.get((acquisition.acquisition_id, kind))
+            if check is None or check.state != "verified":
+                raise ProjectFormatError(f"{kind} must be verified; choose the configuration again")
+        return acquisition
+
+    def _refresh_numeric_editor(self, _value: object = None) -> None:
+        acquisition = self._numeric_acquisition()
+        field = self.numeric_field.currentData()
+        item = description(field)
+        available = acquisition is not None and self._numeric_identity_matches(acquisition)
+        unavailable_detail = ""
+        if available:
+            available = (
+                self._source_checks.get(acquisition.acquisition_id) is not None
+                and self._source_checks[acquisition.acquisition_id].state == "verified"
+                and all(
+                    (check := self._reference_checks.get((acquisition.acquisition_id, kind)))
+                    is not None
+                    and check.state == "verified"
+                    for kind in ("configuration", "configuration_cif")
+                )
+            )
+        if available:
+            draft = self._numeric_draft
+            assert draft is not None
+            try:
+                self.numeric_value.setText(displayed_value(draft, field) if item.editable else "")
+            except ProjectFormatError as exc:
+                unavailable_detail = str(exc)
+                available = False
+            if available:
+                self.numeric_status.setText(
+                    f"Initial draft · revision {draft.revision} · {len(draft.proposed)} proposed value(s)"
+                    + (
+                        f" · frozen revision {self._launch_snapshot.draft_revision}"
+                        if self._launch_snapshot is not None
+                        else ""
+                    )
+                )
+        if not available:
+            self.numeric_value.clear()
+            self.numeric_status.setText(
+                unavailable_detail
+                or "Saved draft needs its original verified source, configuration and CIF."
+                if self._numeric_draft is not None
+                else "Load a validated configuration for one acquisition."
+            )
+        self.numeric_description.setText(
+            f"{item.scope} · {item.frame} · {item.display_unit} → {item.stored_unit} · {item.domain}"
+            + (f"\n{item.reason}" if item.reason else "")
+        )
+        self.numeric_value.setEnabled(available and item.editable)
+        self.numeric_apply_button.setEnabled(available and item.editable)
+        self.numeric_revert_button.setEnabled(available and bool(self._numeric_draft.proposed))
+        self.numeric_freeze_button.setEnabled(available)
+        self.numeric_undo_button.setEnabled(bool(self._numeric_history.undo_actions))
+        self.numeric_redo_button.setEnabled(bool(self._numeric_history.redo_actions))
+
+    def _load_numeric_draft(self) -> None:
+        try:
+            acquisition = self._numeric_validated_acquisition()
+            metadata = acquisition.metadata
+            if (
+                metadata.configuration_path is None
+                or metadata.configuration_sha256 is None
+                or metadata.configuration_cif_path is None
+                or metadata.configuration_cif_sha256 is None
+            ):
+                raise ProjectFormatError("configuration reference is missing")
+            if self.jobs.busy or self._pending_open is not None or self._close_intent:
+                raise ProjectFormatError(
+                    "finish the current operation before loading numeric values"
+                )
+            argument = json.dumps(
+                {
+                    "acquisition_id": str(acquisition.acquisition_id),
+                    "source_sha256": acquisition.source_sha256,
+                    "configuration_path": str(metadata.configuration_path),
+                    "configuration_sha256": metadata.configuration_sha256,
+                    "cif_path": str(metadata.configuration_cif_path),
+                    "cif_sha256": metadata.configuration_cif_sha256,
+                }
+            ).encode("utf-8")
+            self._active_kind = "numeric"
+            self._active_numeric = (
+                acquisition.acquisition_id,
+                self._revision,
+                metadata.configuration_sha256,
+            )
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    acquisition.acquisition_id,
+                    Revisions(data=self._revision),
+                    argument,
+                    len(argument),
+                    384 * 1024,
+                    prepare_numeric_draft,
+                )
+            )
+            self._active_generation = identity.generation
+        except (OSError, UnicodeError, ProjectFormatError, ValueError, RuntimeError) as exc:
+            self._active_kind = None
+            self._active_numeric = None
+            QMessageBox.warning(self, "Numeric draft unavailable", str(exc))
+            return
+        self.numeric_status.setText("Loading and validating numeric values…")
+        self.statusBar().showMessage("Loading numeric values on the background worker")
+
+    def _numeric_ready(self, identity: JobIdentity, value: object) -> None:
+        active = self._active_numeric
+        self._active_numeric = None
+        acquisition = self._numeric_acquisition()
+        if (
+            active is None
+            or not isinstance(value, NumericDraft)
+            or acquisition is None
+            or identity.project_id != self.project.project_id
+            or identity.acquisition_id != active[0]
+            or identity.revisions.data != self._revision
+            or self._revision != active[1]
+            or value.configuration_sha256 != active[2]
+            or value.acquisition_id != acquisition.acquisition_id
+        ):
+            self.statusBar().showMessage("Numeric draft result became stale; load it again")
+            return
+        metadata = acquisition.metadata
+        if (
+            value.source_sha256 != acquisition.source_sha256
+            or value.configuration_path != metadata.configuration_path
+            or value.cif_path != metadata.configuration_cif_path
+            or value.cif_sha256 != metadata.configuration_cif_sha256
+        ):
+            self.statusBar().showMessage("Numeric reference changed; validate it again")
+            return
+        try:
+            self._numeric_validated_acquisition()
+        except ProjectFormatError as exc:
+            self.statusBar().showMessage(f"Numeric reference changed: {exc}")
+            return
+        try:
+            project_to_document(
+                ProjectDocument(self.project, self._capture_view(), value),
+                self._project_path or self._recovery_path(),
+                reserved_bytes=MAX_FUTURE_VIEW_BYTES,
+            )
+        except (ProjectFormatError, ValueError) as exc:
+            self.statusBar().showMessage(f"Numeric draft cannot be admitted: {exc}")
+            return
+        self._numeric_draft = value
+        self._launch_snapshot = None
+        self._numeric_history = SessionHistory()
+        self._refresh_numeric_editor()
+        self._mark_dirty()
+        self.statusBar().showMessage("Loaded validated numeric initial values")
+
+    def _apply_numeric_value(self) -> None:
+        try:
+            acquisition = self._numeric_validated_acquisition()
+        except ProjectFormatError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        if not self._numeric_identity_matches(acquisition):
+            self.statusBar().showMessage("Load the selected configuration before editing")
+            return
+        draft = self._numeric_draft
+        assert draft is not None
+        field = self.numeric_field.currentData()
+        try:
+            updated = edit_draft(draft, field, self.numeric_value.text())
+            action = draft_action(draft, updated, f"Edit {description(field).label}")
+            project_to_document(
+                ProjectDocument(self.project, self._capture_view(), updated),
+                self._project_path or self._recovery_path(),
+                reserved_bytes=MAX_FUTURE_VIEW_BYTES,
+            )
+        except (ProjectFormatError, ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Initial value rejected", str(exc))
+            self._refresh_numeric_editor()
+            return
+        if action is not None:
+            self._numeric_draft = updated
+            self._numeric_history.push(action)
+            self._refresh_numeric_editor()
+            self._mark_dirty()
+            self.statusBar().showMessage(f"Proposed {description(field).label}; no fit was run")
+
+    def _revert_numeric_draft(self) -> None:
+        acquisition = self._numeric_acquisition()
+        draft = self._numeric_draft
+        if acquisition is None or draft is None or not self._numeric_identity_matches(acquisition):
+            return
+        updated = replace(draft, proposed=(), revision=draft.revision + 1)
+        action = draft_action(draft, updated, "Revert numeric initial values")
+        if action is None:
+            return
+        self._numeric_draft = updated
+        self._numeric_history.push(action)
+        self._refresh_numeric_editor()
+        self._mark_dirty()
+
+    def _freeze_numeric_draft(self) -> None:
+        try:
+            acquisition = self._numeric_validated_acquisition()
+            if not self._numeric_identity_matches(acquisition):
+                raise ProjectFormatError("numeric draft identity is stale")
+            assert self._numeric_draft is not None
+            snapshot = freeze_draft(self.project, acquisition, self._numeric_draft)
+        except (OSError, ProjectFormatError, ValueError) as exc:
+            QMessageBox.warning(self, "Snapshot unavailable", str(exc))
+            return
+        self._launch_snapshot = snapshot
+        self._refresh_numeric_editor()
+        self.statusBar().showMessage(
+            f"Frozen immutable initial draft revision {snapshot.draft_revision}; no solver launched"
+        )
+
+    def _numeric_undo_redo(self, *, undo: bool) -> None:
+        try:
+            updated, draft, references, label = self._numeric_history.apply(
+                self.project,
+                self._numeric_draft,
+                undo=undo,
+                validate=lambda project, draft: project_to_document(
+                    ProjectDocument(project, self._capture_view(), draft),
+                    self._project_path or self._recovery_path(),
+                    reserved_bytes=MAX_FUTURE_VIEW_BYTES,
+                ),
+            )
+        except (ProjectFormatError, ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Undo/redo unavailable", str(exc))
+            return
+        self.project = updated
+        self._numeric_draft = draft
+        for acquisition_id, kind in references:
+            self._reference_checks[(acquisition_id, kind)] = ReferenceCheck(
+                acquisition_id, kind, "unverified", "Metadata undo/redo requires revalidation"
+            )
+        self.refresh_project()
+        self._mark_dirty()
+        self.statusBar().showMessage(f"{'Undid' if undo else 'Redid'} {label}")
+
+    def _commit_metadata(self, updated: Project, label: str) -> bool:
+        action = metadata_action(self.project, updated, label)
+        if action is None:
+            return False
+        self.project = updated
+        self._numeric_history.push(action)
+        self.refresh_project()
+        self._mark_dirty()
+        return True
 
     def _refresh_review_table(self) -> None:
         table = self.review_table
@@ -1768,10 +2146,7 @@ class ShellWindow(QMainWindow):
         except (ProjectFormatError, ValueError) as exc:
             QMessageBox.warning(self, "Metadata rejected", str(exc))
             return
-        if updated != self.project:
-            self.project = updated
-            self.refresh_project()
-            self._mark_dirty()
+        self._commit_metadata(updated, "Apply acquisition metadata")
 
     def _confirm_selected_proposals(self) -> None:
         ids = self._selected_project_ids()
@@ -1800,10 +2175,7 @@ class ShellWindow(QMainWindow):
         except (ProjectFormatError, ValueError) as exc:
             QMessageBox.warning(self, "Suggestion rejected", str(exc))
             return
-        if updated != self.project:
-            self.project = updated
-            self.refresh_project()
-            self._mark_dirty()
+        if self._commit_metadata(updated, "Confirm filename suggestions"):
             self.statusBar().showMessage(
                 "Confirmed selected filename suggestions as commanded values"
             )
@@ -1896,10 +2268,7 @@ class ShellWindow(QMainWindow):
         except (ProjectFormatError, ValueError) as exc:
             QMessageBox.warning(self, "Metadata mapping rejected", str(exc))
             return
-        if updated != self.project:
-            self.project = updated
-            self.refresh_project()
-            self._mark_dirty()
+        self._commit_metadata(updated, "Map metadata table")
 
     def _input_reference_paths(self) -> tuple[Path, ...]:
         return tuple(
@@ -2546,6 +2915,7 @@ class ShellWindow(QMainWindow):
             item.setSelected(item.data(Qt.ItemDataRole.UserRole) == str(selected_id))
         self.filmstrip.blockSignals(False)
         self._update_selection_label()
+        self._refresh_numeric_editor()
         had_work = self.jobs.busy and self._active_kind not in (
             "save",
             "discard",
@@ -2604,6 +2974,7 @@ class ShellWindow(QMainWindow):
                 self._active_load_id = None
                 self._active_load_path = None
                 self._active_load_hash = None
+                self._active_numeric = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -2614,9 +2985,18 @@ class ShellWindow(QMainWindow):
         kind = self._active_kind
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
-            kind in ("import", "relink", "batch", "reference", "open")
+            kind in ("import", "relink", "batch", "reference", "open", "numeric")
             and state in (JobState.QUEUED, JobState.RUNNING)
         )
+        if kind == "numeric":
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_numeric = None
+                self._active_kind = None
+                self._active_generation = None
+                self._refresh_numeric_editor()
+                self.statusBar().showMessage(f"Numeric draft {state.value}: {summary.detail}")
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "batch":
             candidate = self._candidates.get(summary.identity.acquisition_id)
             if state in (JobState.FAILED, JobState.CANCELED):
@@ -2736,6 +3116,8 @@ class ShellWindow(QMainWindow):
                 self._batch_ready(identity, value)
             elif kind == "reference":
                 self._reference_ready(identity, value)
+            elif kind == "numeric":
+                self._numeric_ready(identity, value)
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
@@ -2837,6 +3219,9 @@ class ShellWindow(QMainWindow):
         self._restoring_view = True
         try:
             self.project = value.document.project
+            self._numeric_draft = value.document.numeric_draft
+            self._numeric_history = SessionHistory()
+            self._launch_snapshot = None
             self.selected_acquisition_id = value.document.view.selected_acquisition_id
             self._visible_acquisition_id = None
             self._visible_details = ""
