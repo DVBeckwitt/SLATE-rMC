@@ -37,9 +37,10 @@ from project_io import (
     ReferenceCheck,
     SourceCheck,
     discard_recovery,
+    invalidate_reference_checks,
     load_project,
-    reference_paths_match,
-    update_reference_checks,
+    publish_reference_checks,
+    reference_bindings,
     write_project,
 )
 from project_state import (
@@ -843,7 +844,18 @@ class ShellWindow(QMainWindow):
             kind, path, ids, project_id, revision = self._pending_reference
             self._pending_reference = None
             if project_id == self.project.project_id and revision == self._revision:
-                argument = json.dumps({"kind": kind, "path": str(path)}).encode("utf-8")
+                argument = json.dumps(
+                    {
+                        "kind": kind,
+                        "path": str(path),
+                        "bindings": [
+                            (str(acquisition_id), binding_kind, str(binding_path))
+                            for acquisition_id, binding_kind, binding_path, _ in reference_bindings(
+                                self.project
+                            )
+                        ],
+                    },
+                ).encode("utf-8")
                 self._active_kind = "reference"
                 self._active_reference = (kind, path, ids, project_id, revision)
                 try:
@@ -854,7 +866,7 @@ class ShellWindow(QMainWindow):
                             Revisions(data=revision),
                             argument,
                             len(argument),
-                            64 * 1024,
+                            128 * 1024,
                             prepare_reference,
                         )
                     )
@@ -1040,20 +1052,9 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _invalidate_reference_request(self, kind: str, path: Path, detail: str) -> None:
-        paths = [path]
-        if kind == "configuration":
-            for acquisition in self.project.acquisitions:
-                metadata = acquisition.metadata
-                if (
-                    metadata.configuration_path is not None
-                    and metadata.configuration_cif_path is not None
-                    and reference_paths_match(metadata.configuration_path, path)
-                ):
-                    paths.append(metadata.configuration_cif_path)
-        for reference_path in paths:
-            self._reference_checks = update_reference_checks(
-                self.project, self._reference_checks, reference_path, None, detail
-            )
+        self._reference_checks = invalidate_reference_checks(
+            self.project, self._reference_checks, kind, path, detail
+        )
         self._update_selection_label()
         self._refresh_review_table()
 
@@ -1111,21 +1112,23 @@ class ShellWindow(QMainWindow):
             return
         changed = updated != self.project
         self.project = updated
-        self._reference_checks = update_reference_checks(
+        self._reference_checks = publish_reference_checks(
             updated,
             self._reference_checks,
             path,
             value.sha256,
-            "SHA-256 checked against bound bytes",
+            value.file_identity,
+            value.matching_bindings,
         )
         if kind == "configuration":
             if value.dependent_cif_path is not None and value.dependent_cif_sha256 is not None:
-                self._reference_checks = update_reference_checks(
+                self._reference_checks = publish_reference_checks(
                     updated,
                     self._reference_checks,
                     value.dependent_cif_path,
                     value.dependent_cif_sha256,
-                    "SHA-256 checked against bound bytes",
+                    value.dependent_cif_file_identity,
+                    value.matching_dependent_bindings,
                 )
             else:
                 for acquisition_id in ids:

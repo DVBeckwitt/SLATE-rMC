@@ -1213,8 +1213,10 @@ observed 172 MiB shown-shell baseline, this accounted CPU subtotal is about
 1.19 GiB to the 2 GiB peak budget before allocator, driver and other
 unmeasured overhead. The queue and file-size caps are enforced; these extra
 Qt/serialization allowances are planning reserves, not measured hard bounds.
-A maximum admitted
-12-million-pixel R32F texture is 48,000,000 bytes with an equally sized upload
+Reference rechecks send at most 384 binding triples within the existing 4 MiB
+job-request cap and declare a 128 KiB result allowance inside the active-work
+reserve; these caps are admission limits, not additional measured RSS.
+A maximum admitted 12-million-pixel R32F texture is 48,000,000 bytes with an equally sized upload
 copy, about 91.6 MiB combined and about 420 MiB below the 512 MiB GPU display
 budget before driver allocation. The measured 3000 x 3000 hBN shape uses
 36,000,000 bytes for each. Driver GPU allocation was not measured. This is a conservative overlap ledger,
@@ -1287,6 +1289,27 @@ different saved hashes changed without mutation, and a canceled recheck
 cleared every shared status to unverified. It also checked alias path matching
 and shared-configuration status comparison. This proves the status transform,
 not the remaining native interaction and latency gates.
+
+The subsequent shared-reference source review found that the first status
+repair compared filesystem paths repeatedly on the GUI thread. With 128
+shared configurations, it could rescan 384 bindings for each duplicate
+dependent path. The follow-up moves alias identity checks to the existing
+reference worker: it captures the selected file identity from the open handle,
+stats each distinct saved path once, and returns bounded immutable matching
+acquisition/kind keys. GUI invalidation deduplicates path and prior file
+identities into sets, then makes one update pass over at most 384 bindings without
+filesystem access; publication compares each worker-matched binding against
+its own unchanged saved hash. A previously shared alias that now points to a
+different file remains unverified after the recheck. When the filesystem does
+not expose a usable file identity, only equal recorded path keys propagate.
+An external pure 128-acquisition check covered 384 bindings with 1,411
+in-memory key operations, prohibited GUI-path filesystem calls, compared
+verified/changed states and confirmed unchanged project metadata. Its bounded
+worker check used two distinct alias stats, and a separate external hard-link
+CIF check confirmed both paths matched one observed file identity. The first
+worker fixture supplied 385 bindings and was correctly rejected by the 384
+cap; the corrected fixture passed. No native GUI time or second twenty-record
+smoke was used. Sustained U02a interaction and resource gates remain open.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 

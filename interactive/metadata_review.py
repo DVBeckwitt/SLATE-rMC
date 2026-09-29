@@ -5,19 +5,27 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import UUID
 
 from job_lifecycle import JobControl, JobResult
-from project_state import SOURCE_HASH_KIND, AcquisitionMetadata, Project, ProjectFormatError
+from project_state import (
+    MAX_ACQUISITIONS,
+    SOURCE_HASH_KIND,
+    AcquisitionMetadata,
+    Project,
+    ProjectFormatError,
+)
 
 MAX_METADATA_TEXT_BYTES = 64 * 1024
 MAX_METADATA_ROWS = 128
 MAX_METADATA_COLUMNS = 26
 MAX_METADATA_FIELD_LENGTH = 256
 MAX_REFERENCE_BYTES = 1024 * 1024
+MAX_REFERENCE_BINDINGS = 3 * MAX_ACQUISITIONS
 MAX_METADATA_EXPORT_BYTES = 1024 * 1024
 MAPPED_FIELDS = (
     "acquisition_id",
@@ -42,23 +50,79 @@ class ValidatedReference:
     material_id: str | None
     dependent_cif_path: Path | None = None
     dependent_cif_sha256: str | None = None
+    file_identity: tuple[int, int] | None = None
+    dependent_cif_file_identity: tuple[int, int] | None = None
+    matching_bindings: tuple[tuple[UUID, str], ...] = ()
+    matching_dependent_bindings: tuple[tuple[UUID, str], ...] = ()
 
 
 def prepare_reference(argument: bytes, control: JobControl) -> JobResult:
     """Validate one explicit reference in the existing global background owner."""
     request = json.loads(argument.decode("utf-8"))
-    if type(request) is not dict or set(request) != {"kind", "path"}:
+    if type(request) is not dict or set(request) not in (
+        {"kind", "path"},
+        {"kind", "path", "bindings"},
+    ):
         raise ProjectFormatError("invalid reference request")
     kind, path = request["kind"], request["path"]
     if type(path) is not str or not path or len(path) > 4096:
         raise ProjectFormatError("invalid reference path")
+    bindings = request.get("bindings", [])
+    if type(bindings) is not list or len(bindings) > MAX_REFERENCE_BINDINGS:
+        raise ProjectFormatError("too many reference bindings")
+    parsed_bindings = []
+    for row in bindings:
+        if (
+            type(row) is not list
+            or len(row) != 3
+            or type(row[0]) is not str
+            or type(row[1]) is not str
+            or row[1] not in ("cif", "configuration", "configuration_cif")
+            or type(row[2]) is not str
+            or not row[2]
+            or len(row[2]) > 4096
+        ):
+            raise ProjectFormatError("invalid reference binding")
+        try:
+            acquisition_id = UUID(row[0])
+        except ValueError as exc:
+            raise ProjectFormatError("invalid reference binding UUID") from exc
+        parsed_bindings.append((acquisition_id, row[1], Path(row[2])))
     control.report(f"Checking {Path(path).name}")
     value = validate_reference(Path(path), kind)
     if control.canceled:
         raise RuntimeError("reference validation canceled")
+    if parsed_bindings:
+        identities = {reference_path_key(value.path): value.file_identity}
+        if value.dependent_cif_path is not None:
+            identities[reference_path_key(value.dependent_cif_path)] = (
+                value.dependent_cif_file_identity
+            )
+        main_matches = []
+        dependent_matches = []
+        for acquisition_id, binding_kind, binding_path in parsed_bindings:
+            if control.canceled:
+                raise RuntimeError("reference validation canceled")
+            key = reference_path_key(binding_path)
+            if key not in identities:
+                identities[key] = reference_file_identity(binding_path)
+            identity = identities[key]
+            if value.file_identity is not None and identity == value.file_identity:
+                main_matches.append((acquisition_id, binding_kind))
+            if (
+                value.dependent_cif_file_identity is not None
+                and identity == value.dependent_cif_file_identity
+            ):
+                dependent_matches.append((acquisition_id, binding_kind))
+        value = replace(
+            value,
+            matching_bindings=tuple(main_matches),
+            matching_dependent_bindings=tuple(dependent_matches),
+        )
     resident = len(path.encode("utf-8")) + 256
     if value.dependent_cif_path is not None:
         resident += len(str(value.dependent_cif_path).encode("utf-8")) + 128
+    resident += 64 * (len(value.matching_bindings) + len(value.matching_dependent_bindings))
     return JobResult(value, resident)
 
 
@@ -184,13 +248,31 @@ def apply_mapped_rows(
         raise ProjectFormatError(f"metadata associations after all rows: {exc}") from exc
 
 
-def bounded_reference_bytes(path: Path) -> bytes:
-    """Read one explicit reference under the same byte limit used at binding."""
+def reference_path_key(path: Path) -> str:
+    """Compare recorded path spelling without touching the filesystem."""
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def _stat_file_identity(stat_result: os.stat_result) -> tuple[int, int] | None:
+    return (stat_result.st_dev, stat_result.st_ino) if stat_result.st_ino else None
+
+
+def reference_file_identity(path: Path) -> tuple[int, int] | None:
+    """Read alias identity in a background worker only."""
+    try:
+        return _stat_file_identity(Path(path).stat())
+    except (OSError, ValueError):
+        return None
+
+
+def bounded_reference_snapshot(path: Path) -> tuple[bytes, tuple[int, int] | None]:
+    """Read bounded bytes and their file identity from the same open handle."""
     with Path(path).open("rb") as stream:
+        identity = _stat_file_identity(os.fstat(stream.fileno()))
         source_bytes = stream.read(MAX_REFERENCE_BYTES + 1)
     if len(source_bytes) > MAX_REFERENCE_BYTES:
         raise ProjectFormatError("reference exceeds 1 MiB picker limit")
-    return source_bytes
+    return source_bytes, identity
 
 
 def validate_reference(path: Path, kind: str) -> ValidatedReference:
@@ -198,13 +280,13 @@ def validate_reference(path: Path, kind: str) -> ValidatedReference:
     source = Path(path).absolute()
     if kind not in ("cif", "configuration"):
         raise ValueError("unsupported reference kind")
-    source_bytes = bounded_reference_bytes(source)
+    source_bytes, identity = bounded_reference_snapshot(source)
     digest = hashlib.sha256(source_bytes).hexdigest()
     if kind == "cif":
         from rasim_next.materials.crystal import read_crystal
 
         crystal = read_crystal(source, expected_sha256=digest, source_bytes=source_bytes)
-        return ValidatedReference(kind, source, digest, crystal.phase_id)
+        return ValidatedReference(kind, source, digest, crystal.phase_id, file_identity=identity)
     from rasim_next.pipeline.configured_simulation import load_simulation_config
 
     config = load_simulation_config(
@@ -219,6 +301,8 @@ def validate_reference(path: Path, kind: str) -> ValidatedReference:
         config.material.phase_id,
         config.material.cif_path,
         config.cif_sha256,
+        identity,
+        reference_file_identity(config.material.cif_path),
     )
 
 

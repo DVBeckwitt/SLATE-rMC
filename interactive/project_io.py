@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
@@ -11,7 +12,7 @@ from typing import Literal
 from uuid import UUID
 
 from job_lifecycle import JobControl, JobResult
-from metadata_review import bounded_reference_bytes
+from metadata_review import bounded_reference_snapshot, reference_path_key
 from osc_import import (
     DECODED_LIMIT_BYTES,
     PIXEL_LIMIT,
@@ -43,35 +44,14 @@ class ReferenceCheck:
     kind: Literal["cif", "configuration", "configuration_cif"]
     state: Literal["verified", "missing", "changed", "unreadable", "unverified"]
     detail: str = ""
+    file_identity: tuple[int, int] | None = None
 
 
-def reference_paths_match(left: Path, right: Path) -> bool:
-    """Recognize the same recorded path, including an existing file alias."""
-    try:
-        if os.path.normcase(str(left.resolve(strict=False))) == os.path.normcase(
-            str(right.resolve(strict=False))
-        ):
-            return True
-    except (OSError, RuntimeError):
-        pass
-    try:
-        return left.samefile(right)
-    except OSError:
-        return False
-
-
-def update_reference_checks(
-    project: Project,
-    checks: dict[tuple[UUID, str], ReferenceCheck],
-    path: Path,
-    observed_sha256: str | None,
-    detail: str,
-) -> dict[tuple[UUID, str], ReferenceCheck]:
-    """Apply one observation to every binding of the same reference bytes."""
-    updated = checks.copy()
+def reference_bindings(project: Project) -> Iterator[tuple[UUID, str, Path, str]]:
+    """Yield each saved identity without accessing its file."""
     for acquisition in project.acquisitions:
         metadata = acquisition.metadata
-        for kind, bound_path, expected in (
+        for kind, path, digest in (
             ("cif", metadata.cif_path, metadata.cif_sha256),
             ("configuration", metadata.configuration_path, metadata.configuration_sha256),
             (
@@ -80,18 +60,86 @@ def update_reference_checks(
                 metadata.configuration_cif_sha256,
             ),
         ):
-            if bound_path is None or not reference_paths_match(bound_path, path):
+            if path is not None and digest is not None:
+                yield acquisition.acquisition_id, kind, path, digest
+
+
+def invalidate_reference_checks(
+    project: Project,
+    checks: dict[tuple[UUID, str], ReferenceCheck],
+    kind: str,
+    path: Path,
+    detail: str,
+) -> dict[tuple[UUID, str], ReferenceCheck]:
+    """Clear one reference and its known aliases in one bounded in-memory pass."""
+    bindings = tuple(reference_bindings(project))
+    requested_key = reference_path_key(path)
+    file_identities = {
+        check.file_identity
+        for acquisition_id, binding_kind, bound_path, _ in bindings
+        if reference_path_key(bound_path) == requested_key
+        if (check := checks.get((acquisition_id, binding_kind))) is not None
+        and check.file_identity is not None
+    }
+    path_keys = {requested_key}
+    if kind == "configuration":
+        for acquisition in project.acquisitions:
+            metadata = acquisition.metadata
+            if metadata.configuration_path is None or metadata.configuration_cif_path is None:
                 continue
-            state = (
-                "unverified"
-                if observed_sha256 is None
-                else "verified"
-                if observed_sha256 == expected
-                else "changed"
+            check = checks.get((acquisition.acquisition_id, "configuration"))
+            if reference_path_key(metadata.configuration_path) == requested_key or (
+                check is not None and check.file_identity in file_identities
+            ):
+                path_keys.add(reference_path_key(metadata.configuration_cif_path))
+                dependent = checks.get((acquisition.acquisition_id, "configuration_cif"))
+                if dependent is not None and dependent.file_identity is not None:
+                    file_identities.add(dependent.file_identity)
+    updated = checks.copy()
+    for acquisition_id, binding_kind, bound_path, _ in bindings:
+        key = (acquisition_id, binding_kind)
+        old = checks.get(key)
+        if reference_path_key(bound_path) in path_keys or (
+            old is not None
+            and old.file_identity is not None
+            and old.file_identity in file_identities
+        ):
+            updated[key] = ReferenceCheck(
+                acquisition_id,
+                binding_kind,
+                "unverified",
+                detail,
+                None if old is None else old.file_identity,
             )
-            updated[(acquisition.acquisition_id, kind)] = ReferenceCheck(
-                acquisition.acquisition_id, kind, state, detail
-            )
+    return updated
+
+
+def publish_reference_checks(
+    project: Project,
+    checks: dict[tuple[UUID, str], ReferenceCheck],
+    path: Path,
+    observed_sha256: str,
+    file_identity: tuple[int, int] | None,
+    matching_bindings: tuple[tuple[UUID, str], ...],
+) -> dict[tuple[UUID, str], ReferenceCheck]:
+    """Compare a worker observation with each affected saved hash."""
+    observed_key = reference_path_key(path)
+    matched = set(matching_bindings)
+    updated = checks.copy()
+    for acquisition_id, kind, bound_path, expected in reference_bindings(project):
+        key = (acquisition_id, kind)
+        if key not in matched and reference_path_key(bound_path) != observed_key:
+            continue
+        state = "verified" if expected == observed_sha256 else "changed"
+        updated[key] = ReferenceCheck(
+            acquisition_id,
+            kind,
+            state,
+            "SHA-256 matches bound bytes"
+            if state == "verified"
+            else "SHA-256 differs from bound bytes",
+            file_identity,
+        )
     return updated
 
 
@@ -119,7 +167,7 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
     seen: dict[Path, tuple[str, str, tuple[int, int] | None]] = {}
     checks: list[SourceCheck] = []
     reference_checks: list[ReferenceCheck] = []
-    seen_references: dict[Path, tuple[str, str]] = {}
+    seen_references: dict[Path, tuple[str, str, tuple[int, int] | None]] = {}
     limits = OscReadLimits(SOURCE_LIMIT_BYTES, DECODED_LIMIT_BYTES, PIXEL_LIMIT, axis_limit)
     for acquisition in document.project.acquisitions:
         if control.canceled:
@@ -182,13 +230,14 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                 continue
             if reference_path not in seen_references:
                 try:
-                    actual = hashlib.sha256(bounded_reference_bytes(reference_path)).hexdigest()
-                    seen_references[reference_path] = ("readable", actual)
+                    source_bytes, file_identity = bounded_reference_snapshot(reference_path)
+                    actual = hashlib.sha256(source_bytes).hexdigest()
+                    seen_references[reference_path] = ("readable", actual, file_identity)
                 except FileNotFoundError:
-                    seen_references[reference_path] = ("missing", str(reference_path))
+                    seen_references[reference_path] = ("missing", str(reference_path), None)
                 except (OSError, ProjectFormatError) as exc:
-                    seen_references[reference_path] = ("unreadable", str(exc)[:120])
-            read_state, detail = seen_references[reference_path]
+                    seen_references[reference_path] = ("unreadable", str(exc)[:120], None)
+            read_state, detail, file_identity = seen_references[reference_path]
             state = (
                 ("verified" if detail == expected else "changed")
                 if read_state == "readable"
@@ -204,6 +253,7 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                     else "SHA-256 differs from recorded bytes"
                     if state == "changed"
                     else detail,
+                    file_identity,
                 )
             )
     loaded = LoadedProject(document, path, tuple(checks), tuple(reference_checks))
