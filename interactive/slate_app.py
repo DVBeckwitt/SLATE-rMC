@@ -240,7 +240,7 @@ class ShellWindow(QMainWindow):
         ) = None
         self._active_generation: int | None = None
         self._active_load_id: UUID | None = None
-        self._active_load_revision: int | None = None
+        self._active_load_path: Path | None = None
         self._active_load_hash: str | None = None
         self._deferred_import: tuple[Path, UUID, Literal["import", "relink"], UUID] | None = None
         self._candidates: dict[UUID, ImportCandidate] = {}
@@ -2042,12 +2042,12 @@ class ShellWindow(QMainWindow):
         previous_kind = self._active_kind
         previous_generation = self._active_generation
         previous_load = self._active_load_id
-        previous_revision = self._active_load_revision
+        previous_path = self._active_load_path
         previous_hash = self._active_load_hash
         self._active_kind = mode
         self._active_generation = None
         self._active_load_id = acquisition_id
-        self._active_load_revision = self._revision
+        self._active_load_path = acquisition.source_path
         self._active_load_hash = acquisition.source_sha256
         try:
             identity = self.jobs.submit(
@@ -2065,7 +2065,7 @@ class ShellWindow(QMainWindow):
             self._active_kind = previous_kind
             self._active_generation = previous_generation
             self._active_load_id = previous_load
-            self._active_load_revision = previous_revision
+            self._active_load_path = previous_path
             self._active_load_hash = previous_hash
             self._show_state("error", "Import could not start", str(exc))
             return
@@ -2210,7 +2210,8 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage("Removed acquisition ignored · No image applied")
             return
         if (
-            self._active_load_revision != self._revision
+            self._active_load_id != existing.acquisition_id
+            or self._active_load_path != existing.source_path
             or self._active_load_hash != existing.source_sha256
         ):
             self._deferred_import = (
@@ -2418,7 +2419,7 @@ class ShellWindow(QMainWindow):
                 self._active_kind = None
                 self._active_generation = None
                 self._active_load_id = None
-                self._active_load_revision = None
+                self._active_load_path = None
                 self._active_load_hash = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
@@ -2518,7 +2519,7 @@ class ShellWindow(QMainWindow):
             self._active_kind = None
             self._active_generation = None
             self._active_load_id = None
-            self._active_load_revision = None
+            self._active_load_path = None
             self._active_load_hash = None
             QTimer.singleShot(0, self._dispatch_pending)
         self.statusBar().showMessage(f"OSC operation: {state.value}")
@@ -2543,7 +2544,7 @@ class ShellWindow(QMainWindow):
             self._active_generation = None
             self._active_candidate_id = None
             self._active_load_id = None
-            self._active_load_revision = None
+            self._active_load_path = None
             self._active_load_hash = None
             QTimer.singleShot(0, self._dispatch_pending)
 

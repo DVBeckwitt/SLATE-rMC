@@ -1345,30 +1345,62 @@ remains unaccepted and its sustained gates have no new evidence.
 #### U02a mixed-source native qualification window 1 (2026-09-28; stopped)
 
 After pure reporter repair, the frozen first native window ran once and failed;
-windows 2 and 3 did not start. The aggregate native ledger charges **43.983 s of
-130 s**, including process setup and drain. The active interval was 29.988 s,
+windows 2 and 3 did not start. The child ledger charges **43.983 s of 130 s**;
+the supervisory command took 44.797 s, the conservative whole-command charge.
+The unused allocation is suspended. The active interval was 29.988 s,
 readiness 1.169 s and drain 12.046 s, ending in a final-composition timeout.
 All 27 table/tree/filmstrip selection hits selected their intended UUID, but only
-the initial hBN UUID composed during active time (3 matched warm switches; no
-matched cold switch). There were 192 queued/running import jobs, 169 completed
+the initial hBN UUID composed during active time (3 matched warm returns to that
+same image; no matched cold switch). There were 192 queued/running import jobs, 169 completed
 and 23 canceled. The first Bi2Te3 job completed and the same source was queued
 again about 2 ms later; its first actual publication was 0.146 s after active
 end. This is consistent with the live import guard comparing a load-start
 revision against a revision also changed by cursor/view activity. That
 mechanism is an inference from the trace and current code, not a proved repair.
 
-For the initial visible hBN state alone, 84 supplied fresh-frame intervals had
-p95 39.366 ms and p99 46.578 ms, missing both 16.7/33.3 ms gates. Ninety
-matched cursor/profile presentations had p95 14.595 ms; heartbeat maximum was
+For the initial visible hBN state alone, 84 intervals with at least one effective
+input had p95 39.366 ms and p99 46.578 ms, above both 16.7/33.3 ms gates.
+All 3,695 mouse requests left the native crosshair at (1500, 1500); 2,772
+were no-ops and 923 changed only band widths every fourth callback. Effective
+input spacing had median 32.110 ms, and each of the 84 intervals contained
+exactly one such input. These measurements do not qualify sustained redraw or
+establish a renderer bottleneck. Future classification requires the delivered
+mouse handler to change the intended native query and every interval counted
+for sustained redraw to have changed cursor requests with no gap over 16 ms
+from its first swap through the last, including the boundary gaps. The old
+intervals and misses remain recorded; insufficient coverage is an additional
+qualification failure, never a reason to discard slow frames or relax gates.
+Ninety matched cursor/profile presentations had p95 14.595 ms; heartbeat maximum was
 22.961 ms. Process sampled RSS maximum was 447,082,496 bytes and Windows peak
 working set was 449,363,968 bytes; GPU driver allocation was unmeasured. The
 final query targeted Bi2Te3 while hBN remained visible; later Bi2Te3 paint did
-not satisfy the frozen final identity, so no final save, reopen or successful
-acknowledgment is claimed. The failure path achieved normal drained close.
+not satisfy the prematurely captured final identity, so no final save, reopen
+or successful acknowledgment is claimed. The failure path observed a hidden,
+drained owner about 4.402 ms after close request; its first matching visible
+close acknowledgment was not recorded because the failure guard stopped paint
+observation. That upper bound does not replace the missing acknowledgment.
 External raw events SHA-256 `e088890ea7d37fd36558b57bb86b73334133f4c7e4d6de468e4d5b80d71f7520`
 and summary SHA-256 `09ab1099021838798ad3caef54b1bd59496b941e2317258de8acde4a57c88f3f`
 are retained for audit. U02a remains unaccepted; no native retry is authorized
 by this checkpoint.
+
+#### U02a source-binding and reporter correction (pure-only checkpoint)
+
+The import result now compares the captured original OSC path and SHA-256 with
+the current acquisition binding, while the existing project, selection,
+generation and decoded-byte checks remain. Cursor/view and metadata revisions
+no longer discard an unchanged-source plane; a relink keeps current metadata
+and changes only the admitted source path. A focused external call to the actual
+import methods covered unchanged binding after revision changes, changed path
+and hash, removed row, changed project/selection, obsolete generation, wrong
+decoded hash, same-byte relink and independent save revisions. The external
+reporter dispatches a no-button move through the delivered Qt mouse handler,
+checks the intended native query, requires continuous changed cursor supply,
+and waits for selected-source admission before fixing the final query. Pure
+stub checks covered sparse/missing and 8 ms supply, handler routing, delayed
+admission, and fresh matching G/H/V composition. These checks do not establish
+native delivery, twenty-image throughput, sustained frame latency, final
+save/reopen or U02a acceptance; no GUI window ran in this correction packet.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
