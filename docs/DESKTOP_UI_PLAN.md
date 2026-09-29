@@ -1087,7 +1087,7 @@ implementation commits.
 #### U02a import and metadata implementation checkpoint (2026-09-28; review pending)
 
 Commits `6aae90f`, `79bd9a3`, `a1e3980`, `d4d02b5`, `3977f05`, `9adcf87` and
-`5d53f5e` implement the
+`5d53f5e` and `3b58abb` implement the
 U02a slices. The project document now retains acquisition role, specimen/mount,
 commanded incidence in radians, exposure in seconds, detector setup, material and
 calibrant identifiers, dark/mask associations, explicit unknowns, provenance and
@@ -1096,9 +1096,11 @@ global worker admits bounded OSC candidates independently, records exact decoded
 hash duplicates as distinct acquisitions and permits cancel, retry and removal.
 The read-only review table, filmstrip, bounded bulk mapping, unconfirmed filename-angle
 suggestions, canonical CIF/configuration reference validation and external CSV
-export are connected to the native shell. The configuration reader uses the
-same bounded bytes for the validated digest and parse, including its referenced
-CIF snapshot. No metadata entry starts a fit or qualifies a calibrant.
+export are connected to the native shell. The configuration reader parses the
+same bounded YAML bytes used for its digest and bounds/hashes its referenced CIF
+snapshot for revision identity. It does not structurally parse that nested CIF;
+the standalone CIF picker uses the canonical crystal reader. No metadata entry
+starts a fit or qualifies a calibrant.
 
 Focused external checks used `PYTHONPATH=interactive;src`, native
 `QT_QPA_PLATFORM=windows` and `python -u -B`. A mixed candidate check observed
@@ -1143,6 +1145,35 @@ wheel build passed. Built artifacts and the temporary saved project were removed
 from the external scratch location. These software checks establish packaging
 and interaction behavior only, not scientific fitting adequacy.
 
+The final correctness closure made oversized multi-file picker choices report an
+actionable limit without admitting partial rows, displayed a stale reference
+retry notice when a queued batch changed the project, accepted long read-only
+CSV columns while enforcing 256-character mapped edits, and sorted angle and
+exposure cells numerically with unknowns explicit. Tiny native checks
+`c114d1` and `e2b21e` checked those UI paths, signed angles, 2/10 ordering,
+unknowns, selected/current UUID preservation and persistent acquisition
+reordering. `10c319` checked all introduced metadata CSV values, units,
+provenance, proposals, revisions, order, UUIDs, reference paths/hashes and
+decoded-source hash kind; a 2,990-character exported provenance cell was
+ignored during an allowed-column remap, while an oversized mapped edit failed
+atomically. `8140d1` wrote and reread a 3,759-byte canonical JSON document and
+compared the complete metadata and selected UUID. These value checks do not
+independently revalidate the referenced CIF/configuration files.
+
+Native `598248` kept the initially captured UUID target through a modal table
+refresh and changed review selection. `db2de7` saved an immutable older
+snapshot while a newer metadata edit remained in memory, compared disk and
+memory, then closed normally. An A-B-A/project-switch checker first failed on
+its own Python local-variable scope (`270a58`); corrected `f19412` verified the
+final selected UUID, native image and exact full profile for A, then opened a
+different project and verified its UUID, image and profile before normal close.
+`8d2535` closed normally during a gated batch decode, observed owner drain and
+no accepted acquisition or late image publication. These are tiny fixture
+checks, not composition-latency qualification.
+The final UI repair passed Ruff format/lint, Python imports and `git diff --check`;
+the previous offline source/wheel build covered unchanged package
+code, so it was not repeated for these two interactive files.
+
 The one permitted 20-record smoke (`exec-c209cfdd`) used repeated explicit references to the
 tracked 3000 x 3000 `hBN_calibrant_5m.osc.gz` and completed in 2.094 s within
 3.508 s command wall time.
@@ -1158,25 +1189,32 @@ held at most two prepared packs and thumbnails occupied 110,592 bytes; observed
 RSS was 369.7 MiB and Windows peak working set 484.9 MiB. The selected detector
 panel can retain a third distinct old plane after a selection, removal or Open,
 and one worker result may coexist with these. Four worst-case 96 MiB prepared
-packs total 384 MiB. The bound must also count up to 64 MiB source bytes,
-32 MiB decoded bytes, worker decode/high-range/display/profile temporaries,
-U03 profile caches, up to 1,179,648 thumbnail bytes plus Qt icon copies,
-candidate and project-write queues, and the shell baseline. A maximum admitted
+packs total 384 MiB. A conservative concurrent CPU allowance adds 64 MiB
+source bytes, 32 MiB decoded bytes, a 48,000,000-byte raw int32 plane, two
+12,000,000-byte Boolean high-range/positive masks and a 1 MiB read chunk;
+the worker result already counts native/display planes and exact profiles.
+Allow another 8 MiB for the one-entry U03 full/ROI profile state, 32 MiB for
+up to 1,179,648 thumbnail bytes and Qt icon copies, 8 MiB for the bounded
+3 MiB pending write queue plus active request, and 16 MiB for table/other Qt
+items. Against the previously observed 172 MiB shown-shell baseline, this
+accounted CPU subtotal is approximately 786 MiB, leaving about 750 MiB to the
+1.5 GiB resident budget and 1.2 GiB to the 2 GiB peak budget before allocator,
+driver and other unmeasured overhead. These allowances are resource accounting,
+not measured hard bounds for Qt or the driver. A maximum admitted
 12-million-pixel R32F texture is 48,000,000 bytes with an equally sized upload
-copy; the measured 3000 x 3000 hBN shape uses 36,000,000 bytes for each.
-Driver GPU allocation was not measured. This is a conservative overlap ledger,
+copy, about 91.6 MiB combined and about 420 MiB below the 512 MiB GPU display
+budget before driver allocation. The measured 3000 x 3000 hBN shape uses
+36,000,000 bytes for each. Driver GPU allocation was not measured. This is a conservative overlap ledger,
 not a measured maximum. The short repeated-source
 smoke does not establish sustained twenty-image latency, memory or mixed-source
 qualification. Native command walls, including the two focused admission
-follow-ups and the tiny table check, conservatively totaled about 41.9 s of the
-original 60 s allowance;
+follow-ups and the final tiny native checks, conservatively totaled about
+51.8 s of the original 60 s allowance;
 the one permitted 20-record smoke is closed. The U02a checklist
 remains open for independent review and the declared responsiveness gate.
-Remaining exact-value checks include all-field JSON/CSV metadata round-trip,
-modal edit while a newer metadata save is in flight, A-B-A navigation,
-project-switch identity and final composition/hit-test matching. They require
-a separately scoped qualification decision; this implementation checkpoint
-does not claim them.
+Remaining qualification includes sustained final composition/hit-test matching,
+mixed-source twenty-image behavior and presentation-latency distributions.
+The tiny checks do not claim those gates or scientific fitting adequacy.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
