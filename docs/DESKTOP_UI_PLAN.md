@@ -1508,10 +1508,44 @@ old-only supersession, selection ABA between heartbeats and missing transition
 state all failed coverage. A valid cold separation with new-source demand
 qualified each ready span. The temporary matrix was removed. The existing
 pure selfcheck, Ruff lint/format, AST and JSON checks passed. No GUI or native
-window, preflight, retry or window 3 ran; U02a remains unaccepted. Corrected
-reporter and manifest SHA-256 are
+window, preflight, retry or window 3 ran; U02a remains unaccepted. At this
+checkpoint, reporter and manifest SHA-256 were
 `1ca5b9d1852529ae7a76cce569aad66ef95faf8c9ac41bb9b4a2f00e3c3c4925`
 and `e64218a0010a7e3df14e7e2ee709232d1b86a993659228d7cdd9ed3e577784f3`.
+
+#### U02a prospective ready-boundary correction (2026-09-29; pure only)
+
+A further actual-analyzer audit found two boundary errors in that checkpoint.
+An unchanged eligible save QUEUED/RUNNING status split one ready span and
+censored pending demand. A genuine loading transition ended the old span at
+the preceding heartbeat, dropping an input and its unresolved demand before
+the known transition time. The earlier publish and COMPLETED callbacks still
+observe loading; ready re-entry occurs at the existing post-result callback.
+
+The external reporter now extends a ready span through observations with the
+same eligible identity, cuts explicit pre-selection boundaries, and closes a
+real departure at its recorded timestamp using the preceding ready binding.
+The existing post-result record carries the scalar ready-state snapshot and
+starts a new span when ready. Missing transition state fails qualification.
+The strict cursor/composition matcher and all response, frame, heartbeat,
+resource, final-state and persistence gates remain unchanged.
+
+Focused raw-record calls to `analyze()` compared healthy 8 ms input with 5 ms
+and 10 ms responses before and after unchanged save QUEUED/RUNNING/COMPLETED
+and post-result observations. Both retained 40 ms eligible time, the same
+cursor/frame distributions and zero unresolved requests. A request at 14 ms
+without composition failed at the true 15 ms loading cut; a genuinely
+undemanded 22 ms tail before a loading cut failed. A 12–18 ms ready interval
+between post-result and selection was measured without a heartbeat: absent
+demand failed, while a 2 ms exact response qualified that span. A valid cold
+gap followed by new-source demand qualified two ready spans. Hidden selection
+ABA and a missing post-result snapshot failed. The temporary matrix was
+removed. The reporter's pure selfcheck, Ruff lint/format, AST and JSON checks
+passed after updating its existing stub for the post-result snapshot. No GUI
+or native window ran. Reporter and manifest SHA-256 are
+`5ad38b470d2276912e8721390cdd15ccca689dc9edb1d88c96c6ee5baf4c17c8`
+and `4b04be927d43c0dc3d65bdce0cd85ea5261ed5da11b35c34cfd890b78ce80937`.
+Window 2 remains failed under its frozen rule; U02a remains unaccepted.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
