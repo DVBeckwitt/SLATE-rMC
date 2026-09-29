@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import InitVar, asdict, dataclass, field, replace
 from numbers import Real
 from pathlib import Path
 from typing import Any
@@ -467,11 +467,12 @@ class SimulationConfiguration:
     numerics: NumericalConfiguration
     output_directory: Path
     outputs: SimulationOutputConfiguration
+    cif_source_bytes: InitVar[bytes | None] = None
     cif_sha256: str = field(init=False)
     physics_revision: str = field(init=False)
     render_revision: str = field(init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, cif_source_bytes: bytes | None) -> None:
         detector_path_wavelengths = self.instrument.detector_path_wavelength_A
         if detector_path_wavelengths:
             if self.source.wavelength_model_id == "gaussian.v1":
@@ -494,7 +495,11 @@ class SimulationConfiguration:
                     "detector-path attenuation table must contain every source line and the "
                     "nominal mean wavelength"
                 )
-        cif_sha256 = hashlib.sha256(self.material.cif_path.read_bytes()).hexdigest()
+        if cif_source_bytes is not None and type(cif_source_bytes) is not bytes:
+            raise ValueError("cif_source_bytes must be immutable bytes")
+        cif_sha256 = hashlib.sha256(
+            self.material.cif_path.read_bytes() if cif_source_bytes is None else cif_source_bytes
+        ).hexdigest()
         payload = {
             "schema_version": self.schema_version,
             "cif_sha256": cif_sha256,
@@ -710,6 +715,7 @@ def load_simulation_config(
     *,
     repository_root: str | Path | None = None,
     source_bytes: bytes | None = None,
+    max_referenced_cif_bytes: int | None = None,
 ) -> SimulationConfiguration:
     """Load one strict, config-relative ``rasim-simulation-v2`` document."""
 
@@ -753,6 +759,14 @@ def load_simulation_config(
         cif_path=cif_path,
         phase_id=_string(material_data["phase_id"], "material.phase_id"),
     )
+    cif_source_bytes = None
+    if max_referenced_cif_bytes is not None:
+        if type(max_referenced_cif_bytes) is not int or max_referenced_cif_bytes <= 0:
+            raise ValueError("max_referenced_cif_bytes must be a positive integer")
+        with cif_path.open("rb") as stream:
+            cif_source_bytes = stream.read(max_referenced_cif_bytes + 1)
+        if len(cif_source_bytes) > max_referenced_cif_bytes:
+            raise ValueError("referenced CIF exceeds the declared byte limit")
 
     source_data = _mapping(
         document["source"],
@@ -1202,6 +1216,7 @@ def load_simulation_config(
         numerics=numerics,
         output_directory=output_directory,
         outputs=outputs,
+        cif_source_bytes=cif_source_bytes,
     )
 
 
