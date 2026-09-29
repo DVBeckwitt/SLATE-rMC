@@ -1760,13 +1760,53 @@ Ruff lint/format and AST command-entry inspection passed. No candidate run
 used the historical raw output to relabel it, and no GUI, decode, preflight,
 native attempt or budget/release action occurred in this packet.
 
-The candidate is 156,077 bytes, SHA-256
+The first candidate checkpoint was 156,077 bytes, SHA-256
 `ae2ebc67fb8cf0c73fce67a8d67109f540942c9a72aa11ed3c2a026f7c7935c4`.
 All 18 pre-existing external files, including the failed raw, summary,
 receipt and child claim and frozen reporter/manifest/watchdog/release, remain
 byte-for-byte unchanged. The candidate needs independent supervisor review
 before any release decision. U02a remains unaccepted, and the first-failure
 native series remains stopped.
+
+#### U02a delayed cursor-presentation correction (2026-09-29; pure only)
+
+Independent review found one prospective classifier error: an exact cursor
+presentation for an older request remained useful evidence even when a newer
+cursor request was still pending. The first candidate counted only
+presentations that cleared the current pending request, so a healthy delayed
+stream could have ten exact current-identity presentations yet report zero
+cursor progress. It correctly kept the newest request pending, but its
+per-span and global composition admission then failed.
+
+The same external candidate now counts distinct canonical exact cursor
+presentations by presented swap ID for useful per-span and global progress.
+`composed_requests` still counts only requests that clear current pending
+demand; `cursor_presentations` reports the independent observed count. An
+older presentation cannot discharge a newer request or acquire a second
+terminal disposition after supersession. The original request partition,
+source matching, censored ages, true-idle 16 ms ceiling and separate
+response, frame, heartbeat and persistence gates remain unchanged.
+
+One added actual-`analyze()` synthetic pair used a publication at 1 ms,
+initial presentation at 2 ms, eleven cursor requests at 8 ms intervals
+through 88 ms and ten exact presentations 10.5 ms after their requests.
+With confirmed different-UUID selection at 94 ms, it recorded ten cursor
+presentations, zero cleared-current requests, ten superseded requests, one
+explicit cancellation, zero unresolved boundaries and qualified demand
+coverage; cursor p95 stayed under 50 ms, frame p95/p99 under 16.7/33.3 ms,
+and maximum true idle gap under 16 ms. The paired ordinary active end left
+the newest request unresolved and failed despite those ten older
+presentations. Existing repeated cancellation with no actual cursor
+presentation still failed. The focused matrix, existing pure selfcheck,
+Ruff lint/format and AST pure-only command-entry check passed. No native
+or historical-real-window candidate execution occurred.
+
+The revised candidate is 158,004 bytes, SHA-256
+`a90e1dab2ecbe0e33f32956388b6b9f91f10515be50ee1d337279180fe86d5a4`.
+All 18 original external files remain unchanged. Failed window 4, its
+60 s charge and the 120 s unspent stopped allowance remain as recorded;
+the original 80.797 s charged/49.203 s suspended ledger is also unchanged.
+U02a remains unaccepted pending supervisor review.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
