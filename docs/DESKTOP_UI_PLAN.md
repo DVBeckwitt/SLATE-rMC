@@ -1074,8 +1074,72 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
 | [ ] U04: masks and regions | U03/U01b | Rectangle/polygon reasons, persistent revisions, bounded undo/redo and atomic mask/profile publication implemented in the worker. Task03 qualification is blocked; independent acceptance remains open. |
 | [ ] U04a: brush and imported masks | U04 | Brush and strict native Boolean import implemented with shape/orientation validation and compact history. Shares the blocked Task03 qualification gate. |
-| [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
+| [ ] U06: comparison and cuts | U03/U02a | Task04 implementation and focused functional checks complete; acceptance blocked by the mandatory opening heartbeat gate. Two native views, calibrated navigation, reversible raw limits, immutable reference, magnifier, explicit cuts and paired export are connected. |
 | [x] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+
+#### Task04 worker implementation and failed opening gate (U06)
+
+Task04 implements the complete comparison slice in the existing shell and global job owner.
+It remains **implemented, not accepted**. The frozen native gate stopped at its first failure:
+`u06_qual_gate01_result.json` recorded a **154.270400 ms** continuous shell heartbeat gap after
+Open, exceeding the unchanged **100 ms** limit. Cancellation, ordinary close, window hide and
+all job drains completed. No qualifying 30-second window began, and no repeat was launched.
+Three passing windows, sustained frame/response percentiles and full peak allocation/upload
+accounting therefore remain unestablished. This failure does not establish a GPU driver cause.
+
+This is a separately recorded ordinary-opening failure. Task03's forced Qt reparent/context
+recreation case remains the user's **deferred B001** in the external `slate-desktop-bugs.md`
+under supervisor chat `01a0e896-8754-7080-8c0d-230b3e10b46b`. It was neither resumed nor used as
+a prerequisite for Task04. U06 still depends on accepted U03/U02a; Task05 has not started.
+
+Implemented behavior:
+
+- Two separately identified native acquisitions share existing lazy admission and bounded
+  caches. Source hashes, exposure, raw-count units, mask revision and pending state are shown.
+- Linked navigation requires matching verified canonical detector geometry in LAB metres:
+  detector shape, pitches, reference coordinate and rigid transform. Equal array shape alone
+  cannot enable it. Raw-count limit locking restores both independent limits when unlocked.
+- A pinned reference copies only immutable horizontal/vertical values and support, recording
+  acquisition, decoded data identity, native shape, mask revision and exact query. Unchanged
+  references rebind on reopen; changed or missing bindings remain visibly unavailable/stale.
+- The magnifier copies at most a 41-by-41 native region and its display/reason planes. Original
+  native coordinates, masks and count precision are retained; cursor motion never scans the
+  complete image to prepare this region.
+- Lines use exact endpoints with uniform distance spacing no larger than the requested
+  spacing, nearest native pixel centers and ties toward the larger index. There is no strip
+  averaging or interpolation. Repeated pixels are display samples, not independent fitting
+  observations. Unsupported/nonfinite/outside samples have support zero and plots break there.
+  Integer samples retain their integer precision. Lines are limited to 8192 samples; requests
+  above 2048 samples use the same cancellable worker, with complete source/data/mask/line keys
+  rejecting superseded or ABA results.
+- Schema 7 persists the introduced numeric state through the existing bounded atomic writer.
+  The detector serializer has one implementation shared by ordinary and comparison views.
+  Exports use the existing protected, non-overwriting PNG/CSV pair publisher with exact
+  profile/cut/reference values, support, units, settings and source/mask provenance.
+- Measured/model/residual intensity comparison remains unavailable without an admitted
+  compatible intensity result. No fitting, exposure normalization or solid-angle correction is
+  implied by these display operations.
+
+Focused evidence is external to the repository in worker chat
+`01a0e91c-3efa-74a3-a0fc-6a8354d0ed72`: `u06_focus_final_result.json`,
+`u06_smoke09_result.json`, `u06_navigation10_result.json`, `u06_gate_freeze.json`,
+`u06_qual_gate01_result.json` and the compact `u06_completion_index.json`.
+Small asymmetric direct checks cover signed/fractional/nonfinite/excluded/outside samples,
+ties, endpoints, integer precision, immutable pins, schema round trips/backward reads and
+actual paired export readback. Complete production `slate_app.main()` / `app.exec()` checks
+exercise both views, frame admission, 11 prepared replacements, rapid ABA, large worker cuts,
+cancel/Escape, mask publication, stale pin retention, save/reopen and unavailable pin rebind.
+Actual posted wheel input and keyboard pan establish linked native centers/pixel scale and
+independent navigation; a direct native int64 reduction checks full mean support. These are
+functional checks, not sustained performance or scientific fitting qualification.
+
+The surface swap-interval candidate did not remove the opening failure and was reverted.
+Measured native Qt update-event costs locate the remaining delay outside the Python Open
+handler; its internal cause is unresolved. Observer screenshots also have measurable cost
+and are not treated as free work. All Task04 commands stayed within the fresh 900-second
+whole-command budget and 90-second command cap; raw launch/child/drain records are retained.
+No original input or pre-existing evidence was modified, and no checker is retained in the
+repository. No numerical package, dependency, fit qualification or physical tolerance changed.
 
 #### Task03 worker implementation and open qualification gate (U04/U04a)
 

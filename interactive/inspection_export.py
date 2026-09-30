@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from comparison_state import LineSamples, PinnedProfiles
 from job_lifecycle import MAX_REQUEST_BYTES, JobControl, JobResult
 from project_state import ProjectFormatError
 
@@ -145,6 +146,104 @@ def inspection_export_request(
     if len(request) > MAX_REQUEST_BYTES:
         raise ProjectFormatError("inspection export exceeds the 4 MiB background request limit")
     return request
+
+
+def comparison_csv(
+    profiles: tuple[object, object],
+    cuts: tuple[LineSamples | None, LineSamples | None],
+    pin: PinnedProfiles | None,
+    metadata: dict[str, str],
+) -> bytes:
+    """Exact native vectors and display samples with independent view identities."""
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        (
+            "record_type",
+            "view",
+            "axis",
+            "sample_index",
+            "distance_px",
+            "column_px",
+            "row_px",
+            "nearest_column",
+            "nearest_row",
+            "value",
+            "support",
+            "missing",
+            "unit",
+            "field",
+            "metadata_value",
+        )
+    )
+    for key, value in metadata.items():
+        writer.writerow(("metadata", *("",) * 12, key, value))
+    groups = [("A", profiles[0]), ("B", profiles[1])]
+    if pin is not None:
+        groups.append(("pin", pin))
+    for name, group in groups:
+        measure = pin.identity.query[6] if name == "pin" else metadata[f"{name}.measure"]
+        unit = "counts" if measure == "sum" else "counts_per_valid_pixel"
+        for axis, values, support in (
+            ("horizontal", group.horizontal, group.horizontal_support),
+            ("vertical", group.vertical, group.vertical_support),
+        ):
+            if values.ndim != 1 or values.shape != support.shape or support.dtype != np.int64:
+                raise ValueError("Comparison vectors and support are not aligned")
+            for index, (value, count) in enumerate(zip(values, support, strict=True)):
+                numeric = (
+                    str(int(value)) if values.dtype.kind in "iu" else format(float(value), ".17g")
+                )
+                writer.writerow(
+                    (
+                        "profile",
+                        name,
+                        axis,
+                        index,
+                        "",
+                        index if axis == "horizontal" else "",
+                        index if axis == "vertical" else "",
+                        "",
+                        "",
+                        numeric,
+                        int(count),
+                        int(count == 0),
+                        unit,
+                        "",
+                        "",
+                    )
+                )
+    for name, cut in zip(("A", "B"), cuts, strict=True):
+        if cut is None:
+            continue
+        for index in range(cut.values.size):
+            value = cut.values[index]
+            numeric = (
+                str(int(value)) if cut.values.dtype.kind in "iu" else format(float(value), ".17g")
+            )
+            writer.writerow(
+                (
+                    "line",
+                    name,
+                    "distance",
+                    index,
+                    format(float(cut.distance_px[index]), ".17g"),
+                    format(float(cut.column_px[index]), ".17g"),
+                    format(float(cut.row_px[index]), ".17g"),
+                    int(cut.nearest_column[index]),
+                    int(cut.nearest_row[index]),
+                    numeric,
+                    int(cut.support[index]),
+                    int(cut.support[index] == 0),
+                    "counts",
+                    "",
+                    "",
+                )
+            )
+    encoded = output.getvalue().encode("utf-8")
+    if len(encoded) > MAX_PROFILE_CSV_BYTES:
+        raise ProjectFormatError("comparison CSV exceeds 3 MiB")
+    return encoded
 
 
 def publish_inspection_export(argument: bytes, control: JobControl) -> JobResult:

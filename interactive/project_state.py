@@ -10,10 +10,11 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
+from comparison_state import LineDefinition, PinIdentity
 from mask_state import NativeMask, mask_document, mask_from_document
 from numeric_fields import validate_proposal
 
-PROJECT_SCHEMA_VERSION = 6
+PROJECT_SCHEMA_VERSION = 7
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -468,11 +469,58 @@ class SceneViewState:
 
 
 @dataclass(frozen=True, slots=True)
+class ComparisonState:
+    acquisition_ids: tuple[UUID | None, UUID | None] = (None, None)
+    views: tuple[DetectorViewState | None, DetectorViewState | None] = (None, None)
+    lines: tuple[LineDefinition | None, LineDefinition | None] = (None, None)
+    pin: PinIdentity | None = None
+    pin_axis: str = "horizontal"
+    active_slot: int = 0
+    linked_navigation: bool = False
+    shared_limits: tuple[float, float, str] | None = None
+    visible: bool = False
+
+    def __post_init__(self) -> None:
+        for name, kind in (
+            ("acquisition_ids", UUID),
+            ("views", DetectorViewState),
+            ("lines", LineDefinition),
+        ):
+            values = getattr(self, name)
+            if (
+                type(values) is not tuple
+                or len(values) != 2
+                or any(v is not None and not isinstance(v, kind) for v in values)
+            ):
+                raise ProjectFormatError(f"Comparison {name} needs two bounded entries")
+        if self.pin is not None and not isinstance(self.pin, PinIdentity):
+            raise ProjectFormatError("Comparison reference identity is invalid")
+        if (
+            self.pin_axis not in ("horizontal", "vertical")
+            or type(self.active_slot) is not int
+            or self.active_slot not in (0, 1)
+        ):
+            raise ProjectFormatError("Comparison axis or active image is invalid")
+        if type(self.linked_navigation) is not bool or type(self.visible) is not bool:
+            raise ProjectFormatError("Comparison visibility and navigation flags must be Boolean")
+        if self.shared_limits is not None:
+            limits = self.shared_limits
+            if (
+                type(limits) is not tuple
+                or len(limits) != 3
+                or limits[2] not in ("linear", "signed", "positive_log")
+            ):
+                raise ProjectFormatError("Shared comparison limits need low, high and display mode")
+            validate_display_limits(limits[0], limits[1], limits[2])
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectViewState:
     selected_acquisition_id: UUID | None = None
     workspace: str = "fit_experiments"
     detector: DetectorViewState | None = None
     scene: SceneViewState | None = None
+    comparison: ComparisonState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,6 +586,10 @@ class ProjectDocument:
 
     def __post_init__(self) -> None:
         selected = self.view.selected_acquisition_id
+        if self.view.comparison is not None and not isinstance(
+            self.view.comparison, ComparisonState
+        ):
+            raise ProjectFormatError("Comparison view state is invalid")
         if selected is not None and not any(
             item.acquisition_id == selected for item in self.project.acquisitions
         ):
@@ -821,6 +873,162 @@ def _metadata_from_document(
     )
 
 
+def _detector_document(detector: DetectorViewState | None) -> dict | None:
+    if detector is None:
+        return None
+    return {
+        "column_px": detector.column_px,
+        "row_px": detector.row_px,
+        "zoom": detector.zoom,
+        "pan_x_px": detector.pan_x_px,
+        "pan_y_px": detector.pan_y_px,
+        "low_value": detector.low_value,
+        "high_value": detector.high_value,
+        "contrast_mode": detector.contrast_mode,
+        "device_pixel_ratio": detector.device_pixel_ratio,
+        "scale_mode": detector.scale_mode,
+        "show_image": detector.show_image,
+        "show_crosshair": detector.show_crosshair,
+        "show_markers": detector.show_markers,
+        "show_mask": detector.show_mask,
+        "profile_follow": detector.profile_follow,
+        "profile_row_width": detector.profile_row_width,
+        "profile_column_width": detector.profile_column_width,
+        "profile_measure": detector.profile_measure,
+        "profile_scope": detector.profile_scope,
+        "profile_roi": (None if detector.profile_roi is None else list(detector.profile_roi)),
+        "horizontal_intensity_limits": (
+            None
+            if detector.horizontal_intensity_limits is None
+            else list(detector.horizontal_intensity_limits)
+        ),
+        "vertical_intensity_limits": (
+            None
+            if detector.vertical_intensity_limits is None
+            else list(detector.vertical_intensity_limits)
+        ),
+    }
+
+
+def _comparison_document(state: ComparisonState | None) -> dict | None:
+    if state is None:
+        return None
+    pin = state.pin
+    return {
+        "acquisition_ids": [str(v) if v is not None else None for v in state.acquisition_ids],
+        "views": [_detector_document(v) for v in state.views],
+        "lines": [
+            None
+            if v is None
+            else {
+                "start_column_row": list(v.start_column_row),
+                "end_column_row": list(v.end_column_row),
+                "spacing_px": v.spacing_px,
+                "revision": v.revision,
+            }
+            for v in state.lines
+        ],
+        "pin": None
+        if pin is None
+        else {
+            "acquisition_id": str(pin.acquisition_id),
+            "source_sha256": pin.source_sha256,
+            "native_shape_rc": list(pin.native_shape_rc),
+            "mask_revision": pin.mask_revision,
+            "query": [
+                *pin.query[:5],
+                None if pin.query[5] is None else list(pin.query[5]),
+                pin.query[6],
+            ],
+        },
+        "pin_axis": state.pin_axis,
+        "active_slot": state.active_slot,
+        "linked_navigation": state.linked_navigation,
+        "shared_limits": None if state.shared_limits is None else list(state.shared_limits),
+        "visible": state.visible,
+    }
+
+
+def _comparison_view(value: Any) -> ComparisonState | None:
+    if value is None:
+        return None
+    data = _object(
+        value,
+        {
+            "acquisition_ids",
+            "views",
+            "lines",
+            "pin",
+            "pin_axis",
+            "active_slot",
+            "linked_navigation",
+            "shared_limits",
+            "visible",
+        },
+        "comparison",
+    )
+    for name in ("acquisition_ids", "views", "lines"):
+        if type(data[name]) is not list or len(data[name]) != 2:
+            raise ProjectFormatError(f"Comparison {name} needs two entries")
+    lines = []
+    for value in data["lines"]:
+        if value is None:
+            lines.append(None)
+            continue
+        row = _object(
+            value, {"start_column_row", "end_column_row", "spacing_px", "revision"}, "line"
+        )
+        if any(type(row[n]) is not list for n in ("start_column_row", "end_column_row")):
+            raise ProjectFormatError("Line endpoints must be arrays")
+        lines.append(
+            LineDefinition(
+                tuple(row["start_column_row"]),
+                tuple(row["end_column_row"]),
+                row["spacing_px"],
+                row["revision"],
+            )
+        )
+    pin = None
+    if data["pin"] is not None:
+        row = _object(
+            data["pin"],
+            {"acquisition_id", "source_sha256", "native_shape_rc", "mask_revision", "query"},
+            "pinned reference",
+        )
+        query = row["query"]
+        if (
+            type(query) is not list
+            or len(query) != 7
+            or type(row["native_shape_rc"]) is not list
+            or (query[5] is not None and type(query[5]) is not list)
+        ):
+            raise ProjectFormatError("Pinned profile arrays are invalid")
+        pin = PinIdentity(
+            _uuid(row["acquisition_id"], "pinned acquisition"),
+            _digest(row["source_sha256"]),
+            tuple(row["native_shape_rc"]),
+            row["mask_revision"],
+            (*query[:5], None if query[5] is None else tuple(query[5]), query[6]),
+        )
+    limits = data["shared_limits"]
+    if limits is not None and type(limits) is not list:
+        raise ProjectFormatError("Shared comparison limits must be an array")
+    return ComparisonState(
+        tuple(
+            None if v is None else _uuid(v, "comparison acquisition")
+            for v in data["acquisition_ids"]
+        ),
+        tuple(_detector_view(v) for v in data["views"]),
+        tuple(lines),
+        pin,
+        data["pin_axis"],
+        data["active_slot"],
+        data["linked_navigation"],
+        None if limits is None else tuple(limits),
+        data["visible"],
+    )
+
+
 def project_to_document(
     state: ProjectDocument, document_path: Path, *, reserved_bytes: int = 0
 ) -> dict[str, Any]:
@@ -848,44 +1056,8 @@ def project_to_document(
             else None
         ),
         "workspace": state.view.workspace,
-        "detector": (
-            None
-            if detector is None
-            else {
-                "column_px": detector.column_px,
-                "row_px": detector.row_px,
-                "zoom": detector.zoom,
-                "pan_x_px": detector.pan_x_px,
-                "pan_y_px": detector.pan_y_px,
-                "low_value": detector.low_value,
-                "high_value": detector.high_value,
-                "contrast_mode": detector.contrast_mode,
-                "device_pixel_ratio": detector.device_pixel_ratio,
-                "scale_mode": detector.scale_mode,
-                "show_image": detector.show_image,
-                "show_crosshair": detector.show_crosshair,
-                "show_markers": detector.show_markers,
-                "show_mask": detector.show_mask,
-                "profile_follow": detector.profile_follow,
-                "profile_row_width": detector.profile_row_width,
-                "profile_column_width": detector.profile_column_width,
-                "profile_measure": detector.profile_measure,
-                "profile_scope": detector.profile_scope,
-                "profile_roi": (
-                    None if detector.profile_roi is None else list(detector.profile_roi)
-                ),
-                "horizontal_intensity_limits": (
-                    None
-                    if detector.horizontal_intensity_limits is None
-                    else list(detector.horizontal_intensity_limits)
-                ),
-                "vertical_intensity_limits": (
-                    None
-                    if detector.vertical_intensity_limits is None
-                    else list(detector.vertical_intensity_limits)
-                ),
-            }
-        ),
+        "comparison": _comparison_document(state.view.comparison),
+        "detector": _detector_document(detector),
         "scene": (
             None
             if state.view.scene is None
@@ -947,6 +1119,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         3,
         4,
         5,
+        6,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -989,7 +1162,11 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         raise ProjectFormatError(str(exc)) from exc
     view_fields = {"selected_acquisition_id", "workspace", "detector"}
     view_data = _object(
-        top["view"], view_fields | ({"scene"} if top["schema_version"] >= 5 else set()), "view"
+        top["view"],
+        view_fields
+        | ({"scene"} if top["schema_version"] >= 5 else set())
+        | ({"comparison"} if top["schema_version"] >= 7 else set()),
+        "view",
     )
     selected = view_data["selected_acquisition_id"]
     selected_id = None if selected is None else _uuid(selected, "selected acquisition ID")
@@ -1045,7 +1222,11 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     return ProjectDocument(
         project,
         ProjectViewState(
-            selected_id, view_data["workspace"], _detector_view(view_data["detector"]), scene
+            selected_id,
+            view_data["workspace"],
+            _detector_view(view_data["detector"]),
+            scene,
+            _comparison_view(view_data.get("comparison")),
         ),
         draft,
     )

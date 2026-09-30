@@ -13,10 +13,13 @@ from time import perf_counter
 from typing import Literal
 from uuid import UUID, uuid4
 
+from comparison_panel import ComparisonPanel
+from comparison_state import LineSamples, LineWork, detector_frame_key, prepare_line
 from detector_panel import DetectorPanel
 from experiment_scene import ExperimentScenePanel
 from inspection_export import (
     InspectionExportReceipt,
+    comparison_csv,
     external_export_destination,
     inspection_export_request,
     profile_csv,
@@ -77,6 +80,7 @@ from project_state import (
     MAX_ACQUISITIONS,
     Acquisition,
     AcquisitionMetadata,
+    ComparisonState,
     DetectorViewState,
     NumericDraft,
     Project,
@@ -86,7 +90,7 @@ from project_state import (
     SceneViewState,
     project_to_document,
 )
-from PySide6.QtCore import QBuffer, QIODevice, QItemSelectionModel, QPointF, Qt, QTimer
+from PySide6.QtCore import QBuffer, QIODevice, QItemSelectionModel, QPointF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QCloseEvent,
     QDragEnterEvent,
@@ -119,6 +123,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -149,7 +154,7 @@ MAX_THUMBNAIL_BYTES = 128 * 96 * 96
 # A fully populated detector view with native ROI bounds, both intensity ranges,
 # all flags and finite double-precision values is below this serialization margin.
 # Reserve it at project admission so later browsing cannot exhaust the document cap.
-MAX_FUTURE_VIEW_BYTES = 4096
+MAX_FUTURE_VIEW_BYTES = 16 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +246,20 @@ class StatusView(QFrame):
         self.style().polish(self)
 
 
+class InspectionTabs(QTabWidget):
+    """Use the visible inspection page's minimum, including its tab navigation."""
+
+    def minimumSizeHint(self) -> QSize:
+        page = self.currentWidget()
+        if page is None:
+            return super().minimumSizeHint()
+        content, tabs = page.minimumSizeHint(), self.tabBar().minimumSizeHint()
+        return QSize(max(content.width(), tabs.width()), content.height() + tabs.height() + 2)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSizeHint()
+
+
 class ShellWindow(QMainWindow):
     def __init__(
         self, project: Project | None = None, *, recovery_root: Path | None = None
@@ -271,6 +290,10 @@ class ShellWindow(QMainWindow):
         self._mask_cache: OrderedDict[UUID, PreparedMask] = OrderedDict()
         self._pending_masks: dict[UUID, tuple[MaskGesture, ...]] = {}
         self._active_mask: tuple[UUID, NativeMask, tuple[MaskGesture, ...]] | None = None
+        self._active_profile_target: int | str | None = None
+        self._active_profile_query: tuple | None = None
+        self._active_line: tuple[int, tuple[object, ...]] | None = None
+        self._comparison_frames_pending: deque[UUID] = deque()
         self._deferred_mask_write: tuple[Path, bool, bool, bool] | None = None
         self._launch_snapshot = None
         self._active_numeric: tuple[UUID, int, str, NumericDraft | None] | None = None
@@ -297,6 +320,7 @@ class ShellWindow(QMainWindow):
                 "numeric",
                 "reciprocal",
                 "mask",
+                "line",
             ]
             | None
         ) = None
@@ -395,9 +419,20 @@ class ShellWindow(QMainWindow):
             lambda: self._mask_undo_redo(undo=False)
         )
         self.detector_panel.profile_requested.connect(self._request_mask_profiles)
+        self.comparison_panel.selection_requested.connect(self._comparison_selection)
+        self.comparison_panel.profiles_requested.connect(self._request_mask_profiles)
+        self.comparison_panel.cut_requested.connect(self._request_line)
+        self.comparison_panel.state_changed.connect(self._mark_dirty)
+        self.comparison_panel.frames_requested.connect(self._request_comparison_frames)
+        self.comparison_panel.export_requested.connect(self._choose_comparison_export)
+        self.comparison_panel.cancel_button.clicked.connect(self._cancel_current)
         self.detector_panel.mask_cancel_button.clicked.connect(self._cancel_current)
         self.scene_panel.view.camera_changed.connect(self._remember_scene_camera)
         self.scene_tabs.currentChanged.connect(self._mark_dirty)
+        self.scene_tabs.currentChanged.connect(self._comparison_layout_changed)
+        self.scene_tabs.currentChanged.connect(
+            lambda _index: QTimer.singleShot(0, self._refresh_comparison)
+        )
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(750)
@@ -477,9 +512,11 @@ class ShellWindow(QMainWindow):
         center = QFrame()
         center.setObjectName("centerPanel")
         center_layout = QVBoxLayout(center)
+        self._center_layout = center_layout
         center_layout.setContentsMargins(20, 20, 20, 20)
         center_layout.setSpacing(14)
-        center_layout.addWidget(QLabel("Detector view"))
+        self.detector_heading = QLabel("Detector view")
+        center_layout.addWidget(self.detector_heading)
         self.experiment_status = StatusView()
         self.experiment_status.set_state(
             "empty",
@@ -493,10 +530,12 @@ class ShellWindow(QMainWindow):
         detector_layout = QVBoxLayout(detector_page)
         detector_layout.setContentsMargins(0, 0, 0, 0)
         detector_layout.addWidget(self.detector_notice)
-        self.scene_tabs = QTabWidget()
+        self.scene_tabs = InspectionTabs()
         self.scene_tabs.addTab(self.detector_panel, "Detector / profiles")
         self.scene_panel = ExperimentScenePanel()
         self.scene_tabs.addTab(self.scene_panel, "Experiment 3D")
+        self.comparison_panel = ComparisonPanel()
+        self.scene_tabs.addTab(self.comparison_panel, "Compare images")
         detector_layout.addWidget(self.scene_tabs, 1)
         self.detector_stack = QStackedWidget()
         self.detector_stack.addWidget(self.experiment_status)
@@ -680,8 +719,63 @@ class ShellWindow(QMainWindow):
         self.inspector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.inspector_scroll.setWidget(inspector)
         splitter.addWidget(self.inspector_scroll)
+        self._center_scroll = center_scroll
+        self._comparison_hidden_widgets = (
+            browser,
+            self.detector_heading,
+            self.cancel_button,
+            self.detector_notice,
+            self.filmstrip,
+            self.review_table,
+            storage_notice,
+            self.import_button,
+            self.folder_button,
+            self.retry_button,
+            self.cancel_row_button,
+            self.remove_button,
+            self.metadata_button,
+            self.confirm_button,
+            self.relink_button,
+            self.cif_button,
+            self.configuration_button,
+            self.paste_button,
+            self.csv_button,
+            self.export_metadata_button,
+        )
         splitter.setSizes([250, 680, 250])
         return page
+
+    def _comparison_layout_changed(self, index: int) -> None:
+        comparing = index == 2
+        vertical = QSizePolicy.Policy.Ignored if comparing else QSizePolicy.Policy.Preferred
+        self.detector_stack.setSizePolicy(QSizePolicy.Policy.Expanding, vertical)
+        self.scene_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, vertical)
+        for widget in self._comparison_hidden_widgets:
+            widget.setVisible(not comparing)
+        self.inspector_scroll.setVisible(not comparing)
+        margin, spacing = (8, 4) if comparing else (20, 14)
+        self._center_layout.setContentsMargins(margin, margin, margin, margin)
+        self._center_layout.setSpacing(spacing)
+        self._center_scroll.verticalScrollBar().setValue(0)
+        self._center_scroll.horizontalScrollBar().setValue(0)
+        QTimer.singleShot(0, self._sync_comparison_height)
+
+    def _sync_comparison_height(self) -> None:
+        available = self._center_scroll.viewport().height()
+        minimum = (
+            self.comparison_panel.minimumSizeHint().height()
+            + self.scene_tabs.tabBar().height()
+            + 20
+        )
+        maximum = (
+            available if self.scene_tabs.currentIndex() == 2 and available >= minimum else 16777215
+        )
+        self._center_scroll.widget().setMaximumHeight(maximum)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_center_scroll"):
+            QTimer.singleShot(0, self._sync_comparison_height)
 
     def _build_simulator(self) -> QWidget:
         page = QWidget()
@@ -752,6 +846,7 @@ class ShellWindow(QMainWindow):
             "fit_experiments" if self.workspaces.currentIndex() == 0 else "simulator",
             detector,
             scene,
+            self.comparison_panel.capture_state(self.scene_tabs.currentIndex() == 2),
         )
 
     def _validate_project_admission(
@@ -1109,6 +1204,8 @@ class ShellWindow(QMainWindow):
             if project_id == self.project.project_id:
                 self._submit_import(source, acquisition_id, mode=mode)
             return
+        if self._start_line_work() or self._start_comparison_preparation():
+            return
         self._start_next_candidate()
         self._sync_numeric_load_button()
 
@@ -1463,6 +1560,8 @@ class ShellWindow(QMainWindow):
             )
         self.project_tree.blockSignals(False)
         self._refresh_review_table()
+        self.comparison_panel.set_choices(self.project.acquisitions)
+        self._refresh_comparison()
         self._refresh_numeric_editor()
 
     def _thumbnail_icon(self, acquisition_id: UUID) -> QIcon:
@@ -1602,8 +1701,8 @@ class ShellWindow(QMainWindow):
         self._sync_numeric_load_button()
         self._refresh_reciprocal_editor()
 
-    def _reciprocal_key(self) -> tuple[object, ...] | None:
-        acquisition = self._numeric_acquisition()
+    def _reciprocal_key(self, acquisition: Acquisition | None = None) -> tuple[object, ...] | None:
+        acquisition = acquisition or self._numeric_acquisition()
         if acquisition is None:
             return None
         metadata = acquisition.metadata
@@ -1889,6 +1988,7 @@ class ShellWindow(QMainWindow):
         while len(self._reciprocal_cache) > 2:
             self._reciprocal_cache.popitem(last=False)
         self._refresh_reciprocal_editor()
+        self._refresh_comparison()
         self.statusBar().showMessage("Reciprocal coverage ready for selected geometry")
 
     def _load_numeric_draft(self) -> None:
@@ -2911,6 +3011,206 @@ class ShellWindow(QMainWindow):
                 self._active_generation = None
             QMessageBox.warning(self, "Inspection export rejected", str(exc))
 
+    def _comparison_identity(self) -> tuple[object, ...]:
+        comparison = self.comparison_panel
+        if not all(comparison.ready) or any(comparison.cut_pending) or comparison.pin_pending:
+            raise ProjectFormatError("Comparison preparation is incomplete")
+        bindings = []
+        for slot, panel in enumerate(comparison.panels):
+            acquisition = comparison.acquisitions[slot]
+            current = next(
+                (
+                    a
+                    for a in self.project.acquisitions
+                    if a.acquisition_id == comparison.desired[slot]
+                ),
+                None,
+            )
+            if current != acquisition or panel._mask_pending or panel._profile_pending:
+                raise ProjectFormatError("Comparison source, mask or profile is obsolete")
+            if panel._current_profiles is None or panel._profile_key != panel._query_key():
+                raise ProjectFormatError("Comparison profiles are not current")
+            if comparison.lines[slot] is not None and comparison.cut_keys[
+                slot
+            ] != comparison.line_key(slot):
+                raise ProjectFormatError("Comparison line samples are not current")
+            check = self._source_checks.get(acquisition.acquisition_id)
+            if check is None or check.state != "verified":
+                raise ProjectFormatError("Comparison source is not verified")
+            bindings.append(
+                (
+                    acquisition,
+                    id(panel.view.image),
+                    panel.view.data_revision,
+                    panel._query_key(),
+                    id(panel._current_profiles),
+                    comparison.cut_keys[slot],
+                    id(comparison.samples[slot]),
+                )
+            )
+        return (
+            self.project.project_id,
+            tuple(bindings),
+            comparison.pin_identity,
+            id(comparison.pin),
+            comparison.capture_state(True),
+        )
+
+    def _choose_comparison_export(self) -> None:
+        if self.jobs.busy or self._active_kind is not None or self._close_intent:
+            self.comparison_panel.message.setText("Finish current preparation before export")
+            return
+        try:
+            token = self._comparison_identity()
+        except (ValueError, ProjectFormatError) as exc:
+            self.comparison_panel.message.setText(str(exc))
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export comparison figure and exact samples",
+            str(Path.home() / "detector-comparison.png"),
+            "PNG figure (*.png)",
+        )
+        if not filename:
+            return
+        try:
+            if (
+                token != self._comparison_identity()
+                or self.jobs.busy
+                or self._active_kind is not None
+            ):
+                raise ProjectFormatError("Comparison changed during destination choice")
+            protected = self._input_reference_paths()
+            project_path = self._project_path or self._recovery_path()
+            figure_path = external_export_destination(
+                Path(filename), project_path, protected, suffix=".png"
+            )
+            profiles_path = external_export_destination(
+                figure_path.with_name(f"{figure_path.stem}.comparison.csv"),
+                project_path,
+                protected,
+                suffix=".csv",
+            )
+            if any(path.exists() or path.is_symlink() for path in (figure_path, profiles_path)):
+                raise FileExistsError("Choose a new figure name; both export files must be new")
+            comparison = self.comparison_panel
+            started = perf_counter()
+            figure = comparison.capture_figure()
+            buffer = QBuffer()
+            if not buffer.open(QIODevice.OpenModeFlag.WriteOnly) or not figure.save(buffer, "PNG"):
+                raise OSError("PNG encoding failed")
+            figure_png = bytes(buffer.data())
+            figure_hash = hashlib.sha256(figure_png).hexdigest()
+            metadata = {
+                "schema": "slate.comparison_samples.v1",
+                "project_uuid": str(self.project.project_id),
+                "figure_file": figure_path.name,
+                "figure_sha256": figure_hash,
+                "figure_device_pixel_ratio": format(figure.devicePixelRatio(), ".17g"),
+                "linked_navigation": str(comparison.link.isChecked()),
+                "locked_raw_count_limits": str(comparison.lock_limits.isChecked()),
+                "normalization": "none; raw native counts; no solid angle correction",
+                "line_policy": "nearest native pixel center; ties to larger index; exact endpoints; actual spacing <= requested; no averaging; repeated pixels are display samples",
+                "missing_semantics": "support=0 is missing; value is not a measured zero; plots break at missing support",
+                "pin_status": comparison.pin_status.text(),
+            }
+            for slot, name in enumerate(("A", "B")):
+                acquisition, panel = comparison.acquisitions[slot], comparison.panels[slot]
+                view = panel.view
+                line = comparison.lines[slot]
+                record = {
+                    "acquisition_uuid": str(acquisition.acquisition_id),
+                    "acquisition_name": acquisition.name,
+                    "source_path": str(acquisition.source_path),
+                    "decoded_source_sha256": acquisition.source_sha256,
+                    "source_hash_scope": "decoded OSC header and payload; verified at admission",
+                    "native_shape_rc": view.image.shape,
+                    "data_revision": view.data_revision,
+                    "mask_revision": view.mask_revision,
+                    "mask_provenance": acquisition.mask.provenance if acquisition.mask else (),
+                    "query": panel.profile_query(),
+                    "row_bounds_half_open": panel._current_profiles.row_bounds,
+                    "column_bounds_half_open": panel._current_profiles.column_bounds,
+                    "exposure_s": acquisition.metadata.exposure_s,
+                    "detector_frame_identity": comparison.frames[slot],
+                    "line": None
+                    if line is None
+                    else {
+                        "start_column_row": line.start_column_row,
+                        "end_column_row": line.end_column_row,
+                        "spacing_px": line.spacing_px,
+                        "revision": line.revision,
+                    },
+                    "display": {
+                        "mode": view.contrast_mode,
+                        "low_high": (view.low_value, view.high_value),
+                        "zoom": view.effective_zoom(),
+                        "pan_px": (view.pan.x(), view.pan.y()),
+                        "scale_mode": view.scale_mode,
+                    },
+                }
+                metadata[f"{name}.identity"] = json.dumps(record, allow_nan=False)
+                metadata[f"{name}.measure"] = panel.profile_query()[6]
+            if comparison.pin_identity is not None:
+                pin = comparison.pin_identity
+                metadata["pin.identity"] = json.dumps(
+                    {
+                        "acquisition_uuid": str(pin.acquisition_id),
+                        "decoded_source_sha256": pin.source_sha256,
+                        "native_shape_rc": pin.native_shape_rc,
+                        "mask_revision": pin.mask_revision,
+                        "query": pin.query,
+                    },
+                    allow_nan=False,
+                )
+            exact_csv = comparison_csv(
+                tuple(p._current_profiles for p in comparison.panels),
+                tuple(comparison.samples),
+                comparison.pin,
+                metadata,
+            )
+            if token != self._comparison_identity() or any(
+                p.view._uploaded_revision != p.view.data_revision for p in comparison.panels
+            ):
+                raise ProjectFormatError(
+                    "Comparison changed before figure and exact samples matched"
+                )
+            request = inspection_export_request(
+                figure_path, profiles_path, figure_png, exact_csv, project_path, protected
+            )
+            acquisition = comparison.acquisitions[comparison.active.currentIndex()]
+            data_revision = comparison.panels[comparison.active.currentIndex()].view.data_revision
+            task = InspectionExportTask(
+                self.project.project_id,
+                acquisition.acquisition_id,
+                data_revision,
+                "comparison",
+                figure_path,
+                profiles_path,
+                figure_hash,
+                hashlib.sha256(exact_csv).hexdigest(),
+                (perf_counter() - started) * 1000,
+            )
+            self._active_export, self._active_kind = task, "export"
+            identity = self.jobs.submit(
+                JobRequest(
+                    task.project_id,
+                    task.acquisition_id,
+                    Revisions(data=task.data_revision),
+                    request,
+                    len(request),
+                    16 * 1024,
+                    publish_inspection_export,
+                )
+            )
+            self._active_generation = identity.generation
+            self.statusBar().showMessage("Exporting comparison figure and exact samples")
+        except (OSError, ProjectFormatError, RuntimeError, TypeError, ValueError) as exc:
+            self._active_export = None
+            if self._active_kind == "export":
+                self._active_kind = self._active_generation = None
+            comparison.message.setText(f"Comparison export rejected: {exc}")
+
     def _choose_metadata_export(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -3047,6 +3347,7 @@ class ShellWindow(QMainWindow):
             "Preparing profiles; committed mask/profile revision remains visible"
         )
         self._refresh_mask_history()
+        self._refresh_comparison()
         if self._active_kind == "mask":
             self.jobs.cancel()
         QTimer.singleShot(0, self._dispatch_pending)
@@ -3074,8 +3375,184 @@ class ShellWindow(QMainWindow):
             and self._active_mask is not None
             and not self._active_mask[2]
         ):
-            self.jobs.cancel()
+            target = self._active_profile_target
+            query = (
+                self.comparison_panel.pin_identity.query
+                if target == "pin" and self.comparison_panel.pin_identity is not None
+                else self.comparison_panel.panels[target].profile_query()
+                if type(target) is int
+                else self.detector_panel.profile_query()
+            )
+            if query != self._active_profile_query:
+                self.jobs.cancel()
         QTimer.singleShot(0, self._dispatch_pending)
+
+    def _comparison_selection(self, slot: int, acquisition_id: UUID | None) -> None:
+        if acquisition_id is not None:
+            self._activate_acquisition(acquisition_id)
+        self._refresh_comparison()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _comparison_plane(self, acquisition_id: UUID) -> PreparedOsc | None:
+        plane = self._resident_planes.get(acquisition_id)
+        if plane is not None:
+            return plane
+        for acquisition, retained in zip(
+            self.comparison_panel.acquisitions, self.comparison_panel.planes, strict=True
+        ):
+            if acquisition is not None and acquisition.acquisition_id == acquisition_id:
+                return retained
+        return None
+
+    def _refresh_comparison(self) -> None:
+        comparison = self.comparison_panel
+        acquisitions = {a.acquisition_id: a for a in self.project.acquisitions}
+        for slot, wanted in enumerate(comparison.desired):
+            acquisition = acquisitions.get(wanted)
+            check = self._source_checks.get(wanted)
+            plane = self._comparison_plane(wanted) if wanted is not None else None
+            if acquisition is None or check is None or check.state != "verified":
+                comparison.unavailable(slot, check.state if check else "source not verified")
+                continue
+            if plane is None or plane.decoded_sha256 != acquisition.source_sha256:
+                comparison.unavailable(slot, "preparing native source")
+                continue
+            if self._pending_masks.get(wanted):
+                comparison._restored_link |= comparison.link.isChecked()
+                comparison.panels[slot].set_mask_pending(True)
+                comparison.unavailable(slot, "preparing mask edits; prior revision retained")
+                continue
+            if (
+                comparison.panels[slot].view.max_texture_axis is None
+                or comparison.magnifier.max_texture_axis is None
+            ):
+                comparison.acquisitions[slot], comparison.planes[slot] = acquisition, plane
+                comparison.unavailable(slot, "open Compare images to initialize the display")
+                continue
+            key = self._reciprocal_key(acquisition)
+            cached = self._reciprocal_cache.get(wanted)
+            frame = (
+                detector_frame_key(cached[1].saved.instrument)
+                if key is not None and cached is not None and cached[0][:10] == key[:10]
+                else None
+            )
+            restoring = self._restoring_view
+            self._restoring_view = (
+                restoring
+                or comparison._restore[slot] is not None
+                or (comparison._restored_link or comparison._restored_limits is not None)
+            )
+            try:
+                comparison.admit(slot, acquisition, plane, self._mask_cache.get(wanted), frame)
+            finally:
+                self._restoring_view = restoring
+        pin = comparison.pin_identity
+        if pin is not None:
+            acquisition = acquisitions.get(pin.acquisition_id)
+            check = self._source_checks.get(pin.acquisition_id)
+            valid = acquisition is not None and acquisition.source_sha256 == pin.source_sha256
+            valid = (
+                valid
+                and (acquisition.mask.revision if acquisition.mask else 0) == pin.mask_revision
+            )
+            valid = valid and check is not None and check.state == "verified"
+            comparison.pin_unavailable_reason = (
+                None if valid else "Source/acquisition/mask no longer matches the pinned identity"
+            )
+            if not valid:
+                comparison.pin_pending = False
+            comparison._show_pin()
+        comparison.update_frames()
+
+    def _request_comparison_frames(self) -> None:
+        self._comparison_frames_pending = deque(
+            dict.fromkeys(
+                acquisition_id
+                for acquisition_id in self.comparison_panel.desired
+                if acquisition_id is not None
+            )
+        )
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _start_comparison_preparation(self) -> bool:
+        comparison = self.comparison_panel
+        wanted = list(comparison.desired)
+        if comparison.pin_pending and comparison.pin_identity is not None:
+            wanted.append(comparison.pin_identity.acquisition_id)
+        for acquisition_id in dict.fromkeys(wanted):
+            acquisition = next(
+                (a for a in self.project.acquisitions if a.acquisition_id == acquisition_id), None
+            )
+            check = self._source_checks.get(acquisition_id)
+            if acquisition is None or check is None or check.state != "verified":
+                continue
+            if self._comparison_plane(acquisition_id) is None:
+                self._activate_acquisition(acquisition_id)
+                if self._active_kind is None and not self.jobs.busy:
+                    self._submit_import(acquisition.source_path, acquisition_id)
+                return True
+        while self._comparison_frames_pending:
+            acquisition_id = self._comparison_frames_pending.popleft()
+            acquisition = next(
+                (a for a in self.project.acquisitions if a.acquisition_id == acquisition_id), None
+            )
+            if acquisition is None or self._reciprocal_key(acquisition) is None:
+                continue
+            self._activate_acquisition(acquisition_id)
+            self._request_reciprocal_preview()
+            return self._active_kind is not None
+        return False
+
+    def _request_line(self, slot: int) -> None:
+        if self._active_kind == "line" and self._active_line is not None:
+            old_slot, old_key = self._active_line
+            if old_slot == slot and old_key != self.comparison_panel.line_key(slot):
+                self.jobs.cancel()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _start_line_work(self) -> bool:
+        comparison = self.comparison_panel
+        for slot in range(2):
+            panel = comparison.panels[slot]
+            key = comparison.line_key(slot)
+            if not comparison.cut_pending[slot] or not comparison.ready[slot] or key is None:
+                continue
+            work = LineWork(panel.view.image, panel._mask_inclusion, comparison.lines[slot])
+            self._active_kind = "line"
+            self._active_line = (slot, key)
+            try:
+                identity = self.jobs.submit(
+                    JobRequest(
+                        self.project.project_id,
+                        key[0],
+                        Revisions(data=key[3], mask=key[4], model=work.definition.revision),
+                        work,
+                        work.argument_bytes,
+                        512 * 1024,
+                        prepare_line,
+                    )
+                )
+            except (ValueError, RuntimeError, TypeError) as exc:
+                self._active_kind = self._active_line = None
+                comparison.cut_pending[slot] = False
+                comparison.message.setText(f"Line unavailable: {exc}")
+                return False
+            self._active_generation = identity.generation
+            return True
+        return False
+
+    def _line_ready(self, identity: JobIdentity, value: object) -> None:
+        active, self._active_line = self._active_line, None
+        if active is None or not isinstance(value, LineSamples):
+            return
+        slot, key = active
+        if identity.project_id != self.project.project_id or identity.acquisition_id != key[0]:
+            return
+        if identity.revisions != Revisions(
+            data=key[3], mask=key[4], model=value.definition.revision
+        ):
+            return
+        self.comparison_panel.publish_cut(slot, key, value)
 
     def _start_mask_work(self) -> bool:
         acquisition_id = self.selected_acquisition_id
@@ -3087,6 +3564,24 @@ class ShellWindow(QMainWindow):
             acquisition_id = next(
                 (key for key in self._pending_masks if key in self._resident_planes), None
             )
+        target: int | str | None = None
+        if acquisition_id is None:
+            for slot, wanted in enumerate(self.comparison_panel.desired):
+                p = self.comparison_panel.panels[slot]
+                retained = self._comparison_plane(wanted) if wanted is not None else None
+                check = self._source_checks.get(wanted)
+                if (
+                    retained is not None
+                    and check is not None
+                    and check.state == "verified"
+                    and p._profile_pending
+                ):
+                    acquisition_id, panel, target = wanted, p, slot
+                    break
+        if acquisition_id is None and self.comparison_panel.pin_pending:
+            pin = self.comparison_panel.pin_identity
+            if pin is not None and self._comparison_plane(pin.acquisition_id) is not None:
+                acquisition_id, target = pin.acquisition_id, "pin"
         if acquisition_id is None:
             return False
         acquisition = next(
@@ -3096,20 +3591,37 @@ class ShellWindow(QMainWindow):
         if acquisition is None:
             self._pending_masks.pop(acquisition_id, None)
             return False
-        plane = self._resident_planes[acquisition_id]
+        plane = self._comparison_plane(acquisition_id)
+        if plane is None:
+            return False
         state = acquisition.mask or NativeMask(acquisition.source_sha256, plane.native_counts.shape)
         gestures = self._pending_masks.get(acquisition_id, ())
-        visible = acquisition_id == self._visible_acquisition_id == self.selected_acquisition_id
+        visible = (
+            target is not None
+            or acquisition_id == self._visible_acquisition_id == self.selected_acquisition_id
+        )
         query = (
             panel.profile_query()
             if visible
             else (state.shape[1] // 2, state.shape[0] // 2, 1, 1, "band", None, "sum")
         )
+        if target == "pin":
+            pin = self.comparison_panel.pin_identity
+            if pin is None or (state.revision, state.source_sha256, state.shape) != (
+                pin.mask_revision,
+                pin.source_sha256,
+                pin.native_shape_rc,
+            ):
+                self.comparison_panel.pin_pending = False
+                return False
+            query = pin.query
         work = MaskWork(
             plane.native_counts, state, gestures, query, self._mask_cache.get(acquisition_id)
         )
         self._active_kind = "mask"
         self._active_mask = (acquisition_id, state, gestures)
+        self._active_profile_target = target
+        self._active_profile_query = query
         try:
             identity = self.jobs.submit(
                 JobRequest(
@@ -3134,6 +3646,8 @@ class ShellWindow(QMainWindow):
 
     def _mask_ready(self, identity: JobIdentity, value: object) -> None:
         active, self._active_mask = self._active_mask, None
+        target, self._active_profile_target = self._active_profile_target, None
+        self._active_profile_query = None
         if (
             active is None
             or not isinstance(value, PreparedMask)
@@ -3187,10 +3701,31 @@ class ShellWindow(QMainWindow):
         self._mask_cache.move_to_end(acquisition_id)
         while len(self._mask_cache) > MAX_CACHED_PLANES:
             self._mask_cache.popitem(last=False)
-        if acquisition_id == self.selected_acquisition_id == self._visible_acquisition_id:
+        if acquisition_id == self.selected_acquisition_id == self._visible_acquisition_id and (
+            gestures
+            or value.query == self.detector_panel.profile_query()
+            or self.detector_panel.view.mask_reasons is not value.reasons
+        ):
             self.detector_panel.publish_mask(value)
             self.detector_panel.set_mask_pending(bool(remainder))
             self.detector_panel.export_button.setEnabled(not remainder)
+        if type(target) is int:
+            p = self.comparison_panel.panels[target]
+            if (
+                self.comparison_panel.desired[target] == acquisition_id
+                and value.query == p.profile_query()
+            ):
+                p.publish_mask(value)
+        elif target == "pin":
+            pin = self.comparison_panel.pin_identity
+            if pin is not None and (
+                pin.acquisition_id,
+                pin.source_sha256,
+                pin.mask_revision,
+                pin.query,
+            ) == (acquisition_id, value.mask.source_sha256, value.mask.revision, value.query):
+                self.comparison_panel.publish_pin(pin, value.profiles)
+        self._refresh_comparison()
         self._refresh_mask_history()
         self.statusBar().showMessage(f"Mask revision {value.mask.revision}; profiles ready")
 
@@ -3474,6 +4009,8 @@ class ShellWindow(QMainWindow):
         self._reciprocal_selection_changed()
         self._sync_scene()
 
+        self._refresh_comparison()
+
     def _import_ready(self, identity: JobIdentity, value: object) -> None:
         if (
             identity.project_id != self.project.project_id
@@ -3575,6 +4112,8 @@ class ShellWindow(QMainWindow):
             self._pending_scene_restore = saved.scene
             self.scene_tabs.setCurrentIndex(1 if saved.scene.visible else 0)
             self._sync_scene()
+        if saved.comparison is not None and saved.comparison.visible:
+            self.scene_tabs.setCurrentIndex(2)
         if detector is None:
             return
         view = self.detector_panel.view
@@ -3728,6 +4267,8 @@ class ShellWindow(QMainWindow):
                 self._active_numeric = None
                 self._active_reciprocal = None
                 self._active_mask = None
+                self._active_line = None
+                self._active_profile_target = self._active_profile_query = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -3739,9 +4280,36 @@ class ShellWindow(QMainWindow):
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
             kind
-            in ("import", "relink", "batch", "reference", "open", "numeric", "reciprocal", "mask")
+            in (
+                "import",
+                "relink",
+                "batch",
+                "reference",
+                "open",
+                "numeric",
+                "reciprocal",
+                "mask",
+                "line",
+            )
             and state in (JobState.QUEUED, JobState.RUNNING)
         )
+        self.comparison_panel.cancel_button.setEnabled(self.cancel_button.isEnabled())
+        if kind == "line":
+            if state == JobState.CANCEL_REQUESTED:
+                self.statusBar().showMessage("Cancel requested; stopping line sampling")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                active, self._active_line = self._active_line, None
+                if active is not None:
+                    slot, key = active
+                    if key == self.comparison_panel.line_key(slot):
+                        self.comparison_panel.cut_pending[slot] = False
+                        self.comparison_panel.message.setText(
+                            f"Line {state.value}; prior samples retained: {summary.detail}"
+                        )
+                self._active_kind = None
+                self._active_generation = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "mask":
             self.detector_panel.mask_cancel_button.setEnabled(
                 state in (JobState.QUEUED, JobState.RUNNING)
@@ -3754,10 +4322,26 @@ class ShellWindow(QMainWindow):
                     self._pending_masks.pop(active[0], None)
                     self.detector_panel._profile_pending = False
                     self.detector_panel.set_mask_pending(False)
+                    target = self._active_profile_target
+                    if type(target) is int:
+                        p = self.comparison_panel.panels[target]
+                        p._profile_pending = False
+                        self.comparison_panel.unavailable(
+                            target, summary.detail or "profile failure"
+                        )
+                    elif target == "pin":
+                        self.comparison_panel.pin_pending = False
+                        self.comparison_panel.pin_status.setText(
+                            "Reference rebind failed; unavailable"
+                        )
                 self._active_mask = None
+                self._active_profile_target = None
+                self._active_profile_query = None
                 self._active_kind = None
                 self._active_generation = None
                 self.statusBar().showMessage(f"Mask preparation {state.value}: {summary.detail}")
+                if state == JobState.CANCELED:
+                    self._refresh_comparison()
                 QTimer.singleShot(0, self._dispatch_pending)
             return
         if kind == "numeric":
@@ -3906,6 +4490,8 @@ class ShellWindow(QMainWindow):
                 self._reciprocal_ready(identity, value)
             elif kind == "mask":
                 self._mask_ready(identity, value)
+            elif kind == "line":
+                self._line_ready(identity, value)
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
@@ -4024,6 +4610,9 @@ class ShellWindow(QMainWindow):
             self._mask_cache.clear()
             self._pending_masks.clear()
             self._active_mask = None
+            self._active_line = None
+            self._active_profile_target = None
+            self._comparison_frames_pending.clear()
             self._deferred_mask_write = None
             self._launch_snapshot = None
             self.selected_acquisition_id = value.document.view.selected_acquisition_id
@@ -4037,6 +4626,12 @@ class ShellWindow(QMainWindow):
             self._candidate_queue.clear()
             self._batch_auto_select = False
             self._resident_planes.clear()
+            self.comparison_panel.restore_state(value.document.view.comparison or ComparisonState())
+            if (
+                value.document.view.comparison is not None
+                and value.document.view.comparison.visible
+            ):
+                self.scene_tabs.setCurrentIndex(2)
             self._thumbnails.clear()
             self._pending_view_restore = value.document.view
             self._deferred_import = None
@@ -4094,6 +4689,7 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Close requested · Waiting for safe stop")
                 return
             self.scene_panel.view.release_resources()
+            self.comparison_panel.release_resources()
             super().closeEvent(event)
             return
         event.ignore()
@@ -4118,6 +4714,7 @@ class ShellWindow(QMainWindow):
                 "open",
                 "reciprocal",
                 "mask",
+                "line",
             ):
                 self.jobs.cancel()
             self._pending_masks.clear()

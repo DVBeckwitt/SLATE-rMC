@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import numpy as np
+from comparison_state import LineDefinition
 from mask_state import MAX_POINTS, REASONS, MaskGesture
 from numpy.typing import NDArray
 from project_state import (
@@ -291,6 +292,8 @@ class DetectorTextureView(QOpenGLWidget):
     mask_gesture_ready = Signal(object)
     mask_mode_changed = Signal(str)
     mask_input_error = Signal(str)
+    line_endpoints_ready = Signal(object)
+    line_mode_changed = Signal(bool)
 
     def __init__(self, *, plane: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -312,6 +315,10 @@ class DetectorTextureView(QOpenGLWidget):
         self.brush_radius_px = 8.0
         self._mask_points: list[tuple[float, float]] = []
         self._mask_hover: tuple[float, float] | None = None
+        self.line_mode = False
+        self.inspection_line: LineDefinition | None = None
+        self._line_start: tuple[float, float] | None = None
+        self._line_end: tuple[float, float] | None = None
         self._program: QOpenGLShaderProgram | None = None
         self._vao: QOpenGLVertexArrayObject | None = None
         self._uploaded_revision = -1
@@ -364,6 +371,10 @@ class DetectorTextureView(QOpenGLWidget):
         if mode not in ("inspect", "rectangle", "polygon", "brush"):
             raise ValueError("Unsupported detector mode")
         self._mask_points.clear()
+        if self.line_mode:
+            self.line_mode = False
+            self._line_start = self._line_end = None
+            self.line_mode_changed.emit(False)
         self._mask_hover = None
         self.mask_mode = mode
         if mode != "inspect":
@@ -371,6 +382,15 @@ class DetectorTextureView(QOpenGLWidget):
             self._band_drag = None
             self.box_zoom_enabled = self.roi_select_enabled = False
         self.mask_mode_changed.emit(mode)
+        self._request_paint()
+
+    def set_line_mode(self, enabled: bool) -> None:
+        self.set_mask_mode("inspect")
+        self.line_mode = enabled
+        self._line_start = self._line_end = None
+        self._box_start = self._box_end = self._roi_start = self._roi_end = None
+        self.box_zoom_enabled = self.roi_select_enabled = False
+        self.line_mode_changed.emit(enabled)
         self._request_paint()
 
     def set_mask_plane(
@@ -493,6 +513,7 @@ class DetectorTextureView(QOpenGLWidget):
         self.set_mask_plane(None, 0)
         self.set_mask_mode("inspect")
         self.data_min, self.data_max, self.min_positive = low_value, max_value, min_positive
+        self.inspection_line = None
         self.low_value, self.high_value, self.contrast_mode = low_value, high_value, "linear"
         self.zoom, self.pan, self.scale_mode = 1.0, QPointF(), "fit"
         self._pan_dpr = self.devicePixelRatioF()
@@ -969,6 +990,29 @@ class DetectorTextureView(QOpenGLWidget):
                 painter.drawEllipse(point, radius, radius)
                 if self.mask_mode == "polygon" and self._mask_points:
                     painter.drawLine(self.native_to_widget(*self._mask_points[-1]), point)
+            line_points = (
+                (self._line_start, self._line_end)
+                if self._line_start is not None and self._line_end is not None
+                else None
+                if self.inspection_line is None
+                else (self.inspection_line.start_column_row, self.inspection_line.end_column_row)
+            )
+            if line_points is not None:
+                painter.setClipRect(rect)
+                painter.setPen(
+                    QPen(
+                        QColor(255, 135, 235),
+                        2,
+                        Qt.PenStyle.DashLine
+                        if self._line_start is not None
+                        else Qt.PenStyle.SolidLine,
+                    )
+                )
+                first, last = (self.native_to_widget(*p) for p in line_points)
+                painter.drawLine(first, last)
+                painter.drawEllipse(first, 3, 3)
+                painter.drawEllipse(last, 3, 3)
+                painter.setClipping(False)
             painter.end()
         self.painted.emit(self.request_generation, perf_counter())
 
@@ -978,6 +1022,11 @@ class DetectorTextureView(QOpenGLWidget):
             event.accept()
 
     def mousePressEvent(self, event) -> None:
+        if self.line_mode and event.button() == Qt.MouseButton.LeftButton:
+            self._line_start = self._line_end = self._mask_position(event.position())
+            self._request_paint()
+            event.accept()
+            return
         if self.mask_mode != "inspect" and event.button() == Qt.MouseButton.LeftButton:
             point = self._mask_position(event.position())
             if point is not None:
@@ -1013,6 +1062,15 @@ class DetectorTextureView(QOpenGLWidget):
             self._band_drag = self._band_hit(event.position())
 
     def mouseMoveEvent(self, event) -> None:
+        if (
+            self.line_mode
+            and self._line_start is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self._line_end = self._mask_position(event.position())
+            self._request_paint()
+            event.accept()
+            return
         if self.mask_mode != "inspect":
             self._mask_hover = self._mask_position(event.position())
             self._request_paint()
@@ -1088,6 +1146,14 @@ class DetectorTextureView(QOpenGLWidget):
         self._last_pointer = event.position()
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.line_mode and event.button() == Qt.MouseButton.LeftButton:
+            start, end = self._line_start, self._mask_position(event.position())
+            self._line_start = self._line_end = None
+            if start is not None and end is not None and start != end:
+                self.line_endpoints_ready.emit((start, end))
+            self._request_paint()
+            event.accept()
+            return
         if self.mask_mode != "inspect":
             if (
                 event.button() == Qt.MouseButton.LeftButton
@@ -1395,7 +1461,7 @@ class DetectorPanel(QWidget):
     profile_requested = Signal()
     """A reusable native image with exact linked horizontal and vertical bands."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, compact: bool = False) -> None:
         super().__init__(parent)
         self.view = DetectorTextureView(parent=self)
         self.horizontal = ProfilePlot(vertical=False, source_view=self.view, parent=self)
@@ -1628,6 +1694,21 @@ class DetectorPanel(QWidget):
         mask_layout.addWidget(self.mask_hint, 2, 0, 1, 2)
         mask_layout.addWidget(self.mask_preparation_status, 3, 0, 1, 4)
         layout.addWidget(mask_controls, 2, 0, 1, 2)
+        if compact:
+            for widget in (
+                navigation,
+                contrast,
+                mask_controls,
+                profile_controls,
+                scale_controls,
+                self.contrast_note,
+                layers,
+            ):
+                widget.hide()
+            self.profile_status.setFixedHeight(2 * line_height)
+            self.view.setMinimumSize(140, 140)
+            self.vertical.setMinimumHeight(140)
+            self.horizontal.setMinimumHeight(40)
         self.mask_tool.currentIndexChanged.connect(
             lambda: self.view.set_mask_mode(self.mask_tool.currentData())
         )

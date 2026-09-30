@@ -16,6 +16,7 @@ from types import FunctionType
 from typing import Any
 from uuid import UUID
 
+from comparison_state import LineWork
 from mask_state import MaskWork
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -94,7 +95,7 @@ class JobRequest:
     project_id: UUID
     acquisition_id: UUID | None
     revisions: Revisions
-    argument: bytes | str | Path | memoryview | MaskWork
+    argument: bytes | str | Path | memoryview | MaskWork | LineWork
     argument_bytes: int
     expected_result_bytes: int
     run: Callable[[Any, JobControl], JobResult]
@@ -124,7 +125,7 @@ class _Active:
 
 
 def _known_bytes(value: Any) -> int:
-    if isinstance(value, MaskWork):
+    if isinstance(value, (MaskWork, LineWork)):
         return value.argument_bytes
     if isinstance(value, memoryview):
         return value.nbytes
@@ -169,11 +170,11 @@ class JobOwner(QObject):
     def submit(self, request: JobRequest) -> JobIdentity:
         if self._closing:
             raise RuntimeError("Application close has been requested")
-        if isinstance(request.argument, MaskWork):
+        if isinstance(request.argument, (MaskWork, LineWork)):
             request.argument.validate()
-        if not isinstance(request.argument, (bytes, str, Path, memoryview, MaskWork)):
+        if not isinstance(request.argument, (bytes, str, Path, memoryview, MaskWork, LineWork)):
             raise TypeError(
-                "Request argument must be immutable bytes, text, path, byte view or mask work"
+                "Request argument must be immutable bytes, text, path, byte view, mask or line work"
             )
         if not isinstance(request.run, FunctionType) or request.run.__closure__ is not None:
             raise TypeError("Worker must be a plain function without captured state")

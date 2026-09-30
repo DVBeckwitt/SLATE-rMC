@@ -12,6 +12,9 @@ uv sync --frozen --group dev --extra visualization
 
 ## SLATE desktop shell
 
+**Task04 comparison is implemented but not accepted:** its ordinary-opening responsiveness
+gate exceeded the 100 ms limit. See the current Task04 disposition in `docs/DESKTOP_UI_PLAN.md`.
+
 Launch the native application from the repository root:
 
 ```powershell
@@ -33,6 +36,37 @@ cold selection reloads and verifies its decoded hash before display. The detecto
 int32 counts with exact linked profiles. No image is loaded or calculation started at launch.
 The `interactive/` directory is not part of the installed numerical wheel, so run this entry
 point from the checkout.
+
+### Comparison and display cuts
+
+Open **Compare images** and choose acquisitions A and B. Each keeps its source identity,
+exposure, raw-count units, native profiles and mask revision. **Check detector frames** uses
+the existing canonical geometry preparation; linked navigation is available only when both
+verified detector lattices match in LAB. Shape alone is insufficient. **Lock raw-count limits**
+shares the active limits; unlocking restores the two independent settings. No exposure or
+solid-angle normalization is performed.
+
+**Pin / replace active profiles** freezes only the exact vectors and their support. Selection,
+query changes and mask edits cannot mutate that reference. A stale or missing binding is
+identified explicitly; reopening rebinds only an unchanged acquisition/source/mask/query.
+The magnifier retains native values and exclusion reasons in at most a 41-by-41 pixel region.
+
+Choose **Draw line**, drag its endpoints, or enter native `(column,row)` endpoints and spacing
+then **Apply line**. Escape cancels unfinished drawing; **Clear line** removes the defined cut.
+Sampling selects nearest native pixel centers, with ties toward the larger index. Both exact
+endpoints are retained and actual uniform spacing is no larger than requested. There is no
+averaging or interpolation; repeated pixels are display samples. Zero support identifies
+excluded, nonfinite or outside samples, and curves do not join across gaps. The 8192-sample
+limit is explicit. **Cancel preparation** uses the application's existing job owner.
+
+**Export comparison + cuts** writes a new external PNG and matching exact CSV with both
+profiles, cuts, available reference values, support, units and complete identities/settings.
+Both destinations must be new and cannot overwrite project or source files. Schema 7 saves
+comparison state through the ordinary project writer and reads previous project versions.
+Measured/model/residual intensity comparison is unavailable until a compatible intensity
+result is admitted; these controls do not start a fit.
+
+### Project and detector controls
 
 Use **Save As** to name a `.slate.json` project, **Save** to write its current state, and **Open**
 to reopen one. The document records project and acquisition UUIDs, acquisition order and names,
