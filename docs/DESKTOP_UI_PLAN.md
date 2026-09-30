@@ -1,7 +1,9 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; staged implementation in progress.
-Updated: 2026-09-28. Delivery breakdown incorporates the audited plan at `a80e995`.
+Updated: 2026-09-29. Delivery breakdown incorporates the audited plan at `a80e995`.
+Current accepted checklist: 12/46; 34 items remain. U07 was independently accepted at
+`dd278b63bd2454e5cd1b17ee48733faebb7bea7b`. U08 remains in progress.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -2541,10 +2543,15 @@ label was fully exposed and painted. All runs closed normally, with hide in
 1.146–9.001 ms and owner drain in 2.934–10.796 ms. The external actual-method
 observer check also passed the late-generation/buffer-replacement cases that
 caused the earlier false switch latch. This packet changes documentation only;
-production source and the main checkout are untouched. U07 acceptance remains
-unchecked at 11/46 pending independent review of the sealed packet. These UI
+production source and the main checkout are untouched. At this packet's handoff,
+U07 acceptance remained unchecked at 11/46 pending independent review. These UI
 timing checks do not establish scientific adequacy; no fit or forward intensity
 image was run.
+
+The subsequent independent review accepted U07 at `dd278b6` after checking the
+frozen runner, native receipts, all 27 new indexed files and clean checkouts.
+The current accepted checklist count is 12/46. The failed earlier packets above
+remain historical evidence.
 
 #### U01 shell and identity checkpoint (2026-09-28)
 
@@ -3453,7 +3460,7 @@ controller. These are new presentations of the same model, not new geometry impl
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. |
+| [x] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. Accepted after independent review at `dd278b6`. |
 | [ ] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
 | [ ] U09: synchronized physical handles | U07/U08/U09a | Connect callouts, numeric fields and constrained arcs/arrows to existing parameter state without requiring a fit. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. Simulator edits match canonical configuration. Enable each fit-specific mapping only after its execution boundary verifies the launched vector; handles cannot enable an unsupported scope. |
 | [ ] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
