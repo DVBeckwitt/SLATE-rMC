@@ -8,12 +8,14 @@ import os
 import sys
 from collections import OrderedDict, deque
 from dataclasses import dataclass, replace
+from importlib import import_module
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
 from uuid import UUID, uuid4
 
-from comparison_panel import ComparisonPanel
+import numpy as np
+from comparison_panel import ComparisonPanel, panel_view_state
 from comparison_state import LineSamples, LineWork, detector_frame_key, prepare_line
 from detector_panel import DetectorPanel
 from experiment_scene import ExperimentScenePanel
@@ -143,6 +145,15 @@ from reciprocal_preview import (
 )
 from setup_io import SetupApplication, prepare_setup
 from setup_panel import SetupDialog
+from simulation_io import (
+    SimulationFrame,
+    export_simulation,
+    prepare_simulation_draft,
+    prepare_simulation_profiles,
+    reopen_simulation_result,
+    run_simulation,
+)
+from simulation_panel import SimulatorPanel
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -332,9 +343,13 @@ class ShellWindow(QMainWindow):
                 "mask",
                 "line",
                 "setup",
+                "simulation",
             ]
             | None
         ) = None
+        self._pending_simulation = None
+        self._simulation_operation = None
+        self._simulation_context = None
         self._active_generation: int | None = None
         self._active_load_id: UUID | None = None
         self._active_load_path: Path | None = None
@@ -375,6 +390,8 @@ class ShellWindow(QMainWindow):
         self.jobs.state_changed.connect(self._job_state_changed)
         self.jobs.progress_changed.connect(self._job_progress)
         self.jobs.result_ready.connect(self._job_result_ready)
+        self.jobs.publication_ready.connect(self._simulation_publication)
+        tabs.currentChanged.connect(self._simulation_workspace_changed)
         self.jobs.drained.connect(self.close)
         self.cancel_button.clicked.connect(self._cancel_current)
         self.import_button.clicked.connect(self._choose_import)
@@ -792,24 +809,121 @@ class ShellWindow(QMainWindow):
             QTimer.singleShot(0, self._sync_comparison_height)
 
     def _build_simulator(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
-        heading = QLabel("Simulator")
-        heading.setObjectName("workspaceTitle")
-        layout.addWidget(heading)
-        subtitle = QLabel("An independent workspace for supported model configurations.")
-        subtitle.setObjectName("mutedText")
-        layout.addWidget(subtitle)
-        status = StatusView()
-        status.set_state(
-            "empty",
-            "No simulation draft",
-            "Configuration editing and simulation runs are unavailable in this version.",
+        self.simulator = SimulatorPanel(self)
+        return self.simulator
+
+    def _simulation_workspace_changed(self, index: int) -> None:
+        if index != 1:
+            self._supersede_simulation()
+
+    def _simulation_resource_charge(self) -> dict:
+        arrays = {}
+        for plane in self._resident_planes.values():
+            for name in ("native_counts", "display", "thumbnail"):
+                value = getattr(plane, name, None)
+                if isinstance(value, np.ndarray):
+                    arrays[id(value)] = value
+        views = (
+            self.detector_panel.view,
+            *[p.view for p in self.comparison_panel.panels],
+            self.comparison_panel.magnifier,
         )
-        layout.addWidget(status, 1)
-        return page
+        for view in views:
+            for value in (view.image, view._display, view.mask_reasons):
+                if isinstance(value, np.ndarray):
+                    arrays[id(value)] = value
+        for mask in self._mask_cache.values():
+            for name in ("reasons", "inclusion"):
+                value = getattr(mask, name, None)
+                if isinstance(value, np.ndarray):
+                    arrays[id(value)] = value
+        scene = self.scene_panel.view
+        if scene._image is not None:
+            arrays[id(scene._image)] = scene._image
+        gpu = sum(view._display.nbytes for view in views if view._display is not None)
+        gpu += sum(view.mask_reasons.nbytes for view in views if view.mask_reasons is not None)
+        # The scene's retained owner admits at most two native R32F detector textures.
+        gpu += len(scene._textures) * 12_000_000 * 4
+        return {
+            "other_cpu_bytes": sum(a.nbytes for a in arrays.values())
+            + self._numeric_history.bytes_used
+            + self.simulator.history.bytes_used
+            + sum(history.storage_bytes for history in self._mask_history.values()),
+            "other_gpu_bytes": gpu,
+        }
+
+    def _supersede_simulation(self) -> None:
+        self._pending_simulation = None
+        if self._active_kind == "simulation":
+            self.jobs.invalidate()
+            self.simulator.status.setText(
+                "Simulation superseded; obsolete publications rejected immediately. Waiting for canonical safe stop."
+            )
+        self.simulator.refresh()
+
+    def _request_simulation(self, operation: str, argument) -> None:
+        if self._close_intent or self._pending_open is not None:
+            return
+        context = (self.project.project_id, self.simulator.epoch)
+        self._pending_simulation = (operation, argument, context)
+        if self._active_kind == "simulation" and operation != "profiles":
+            self.jobs.invalidate()
+        self.simulator.status.setText(
+            f"{operation.replace('_', ' ').title()} requested; waiting for the global worker"
+        )
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_simulation(self, operation: str, argument, context) -> None:
+        if context != (self.project.project_id, self.simulator.epoch):
+            return
+        if operation in ("load", "validate", "save_configuration"):
+            run, budget = prepare_simulation_draft, 96 * 1024
+        elif operation == "run":
+            run, budget = run_simulation, 160 * 1024**2
+        elif operation == "profiles":
+            run, budget = prepare_simulation_profiles, 512 * 1024
+        elif operation == "export":
+            run, budget = export_simulation, 8192
+        elif operation == "reopen":
+            run, budget = reopen_simulation_result, 160 * 1024**2
+        else:
+            raise ValueError("unknown simulation operation")
+        self._simulation_operation, self._simulation_context = operation, context
+        self._active_kind = "simulation"
+        try:
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(model=self.simulator.epoch),
+                    argument,
+                    getattr(argument, "argument_bytes", None) or _request_size(argument),
+                    budget,
+                    run,
+                )
+            )
+        except (ValueError, RuntimeError, TypeError) as exc:
+            self._active_kind = self._simulation_operation = self._simulation_context = None
+            self.simulator.status.setText(f"Simulation could not start: {exc}")
+        else:
+            self._active_generation = identity.generation
+        self.simulator.refresh()
+
+    def _simulation_current(self, identity: JobIdentity) -> bool:
+        return (
+            identity.generation == self.jobs.latest_generation == self._active_generation
+            and self._simulation_context == (self.project.project_id, self.simulator.epoch)
+            and not self._close_intent
+            and self._pending_open is None
+        )
+
+    def _simulation_publication(self, identity: JobIdentity, value: object) -> None:
+        if (
+            self._active_kind == "simulation"
+            and self._simulation_current(identity)
+            and isinstance(value, SimulationFrame)
+        ):
+            self.simulator.admit(value)
 
     def _recovery_path(self) -> Path:
         return self.recovery_root / f"{self.project.project_id}.slate.json"
@@ -861,6 +975,9 @@ class ShellWindow(QMainWindow):
             detector,
             scene,
             self.comparison_panel.capture_state(self.scene_tabs.currentIndex() == 2),
+            self.simulator.draft,
+            self.simulator.result_reference,
+            panel_view_state(self.simulator.detector) or self.simulator._pending_detector_state,
         )
 
     def _validate_project_admission(
@@ -1161,6 +1278,20 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_simulation is not None:
+            operation, argument, context = self._pending_simulation
+            self._pending_simulation = None
+            self._submit_simulation(operation, argument, context)
+            return
+        if (
+            self.simulator.detector._profile_pending
+            and self.simulator.frame is not None
+            and self.simulator.frame.quantitative
+        ):
+            self.simulator.request_profiles()
+            if self._pending_simulation is not None:
+                QTimer.singleShot(0, self._dispatch_pending)
+                return
         if self._pending_setup_copy is not None:
             plan, self._pending_setup_copy = self._pending_setup_copy, None
             self._start_setup("copy", {"plan": plan})
@@ -1315,7 +1446,16 @@ class ShellWindow(QMainWindow):
         self._pending_reference = None
         self._pending_setup_request = None
         self._pending_setup_copy = None
-        if self._active_kind in ("import", "relink", "batch", "reference", "reciprocal", "setup"):
+        if self._active_kind in (
+            "import",
+            "relink",
+            "batch",
+            "reference",
+            "reciprocal",
+            "setup",
+            "simulation",
+        ):
+            self._pending_simulation = None
             self.jobs.cancel()
         self._candidate_queue.clear()
         self._refresh_review_table()
@@ -4436,7 +4576,13 @@ class ShellWindow(QMainWindow):
                         "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
                     )
                     self._setup_dialog.cancel_button.setEnabled(False)
+                if self._active_kind == "simulation":
+                    self.simulator.status.setText(
+                        f"Superseded simulation {state.value}; safe stop {summary.safe_stop_ms} ms. No obsolete frame admitted."
+                    )
+                    self._simulation_operation = self._simulation_context = None
                 self._active_kind = None
+                self.simulator.refresh()
                 self._active_generation = None
                 self._active_load_id = None
                 self._active_load_path = None
@@ -4456,6 +4602,21 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Prior operation discarded · Ready")
             return
         kind = self._active_kind
+        if kind == "simulation":
+            self.simulator.status.setText(
+                f"Simulation {state.value}: {summary.detail or 'working on its owning worker'}"
+            )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                if state == JobState.CANCELED and self._simulation_operation == "export":
+                    self.simulator.status.setText(
+                        "Export canceled safely. Completed configured figures may remain; existing files are never overwritten. Choose a new output directory before retrying figures."
+                    )
+                self._active_kind = self._active_generation = None
+                self._simulation_operation = self._simulation_context = None
+                self.simulator.detector._profile_pending = False
+                QTimer.singleShot(0, self._dispatch_pending)
+            self.simulator.refresh()
+            return
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
             kind
@@ -4690,6 +4851,12 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "simulation":
+                if self._simulation_current(identity):
+                    if self._simulation_operation in ("load", "validate", "save_configuration"):
+                        self.simulator.ready(*value)
+                    else:
+                        self.simulator.ready(self._simulation_operation, value)
             elif kind == "setup":
                 if (
                     self._setup_context_current()
@@ -4706,6 +4873,9 @@ class ShellWindow(QMainWindow):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
+            if kind == "simulation":
+                self._simulation_operation = self._simulation_context = None
+                self.simulator.refresh()
             self._active_generation = None
             self._active_candidate_id = None
             self._active_load_id = None
@@ -4808,6 +4978,8 @@ class ShellWindow(QMainWindow):
         self._restoring_view = True
         try:
             self.project = value.document.project
+            self.simulator.restore(value.document.view, value.simulation_detail)
+            self._pending_simulation = None
             self._scene_cameras.clear()
             self._reciprocal_epoch += 1
             self._reciprocal_cache.clear()
@@ -4889,6 +5061,8 @@ class ShellWindow(QMainWindow):
                 if self.detector_notice.isVisible():
                     self.detector_notice.setText(message)
             self.statusBar().showMessage(message)
+        if self._active_kind == "simulation" and self._simulation_current(identity):
+            self.simulator.status.setText(message)
         if self._active_kind == "setup" and self._setup_dialog is not None:
             self._setup_dialog.message.setText(message)
 
@@ -4904,12 +5078,14 @@ class ShellWindow(QMainWindow):
                 return
             self.scene_panel.view.release_resources()
             self.comparison_panel.release_resources()
+            self.simulator.detector.view.release_resources()
             super().closeEvent(event)
             return
         event.ignore()
         if not self._close_intent:
             self._close_intent = True
             self._pending_open = None
+            self._pending_simulation = None
             self._deferred_import = None
             self._pending_reference = None
             self._pending_setup_request = None
@@ -4931,6 +5107,7 @@ class ShellWindow(QMainWindow):
                 "reciprocal",
                 "mask",
                 "line",
+                "simulation",
             ):
                 self.jobs.cancel()
             self._pending_masks.clear()
@@ -4940,6 +5117,15 @@ class ShellWindow(QMainWindow):
 
 
 def main() -> int:
+    # Resolve the declared figure dependency before the interactive event loop.
+    # Its first Python import otherwise holds the GIL during a requested export.
+    figure_dependency_error = None
+    try:
+        import_module("matplotlib.backends.backend_agg")
+        import_module("matplotlib.figure")
+    except ImportError as exc:
+        figure_dependency_error = str(exc)
+    import_module("rasim_next.pipeline.configured_simulation")
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
@@ -4968,6 +5154,12 @@ def main() -> int:
         """
     )
     window = ShellWindow()
+    if figure_dependency_error is not None:
+        window.simulator.figures.setChecked(False)
+        window.simulator.figures.setEnabled(False)
+        window.simulator.figures.setText(
+            f"Configured figures unavailable: {figure_dependency_error}; numeric export remains available"
+        )
     window.show()
     return app.exec()
 

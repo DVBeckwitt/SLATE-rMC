@@ -329,3 +329,19 @@ through `native_accuracy`, reusing the existing covariance and validation equati
 `fiber_detector` also owns the declared angular-support policy. Its optional fixed union
 prevents individual observation Q boundaries from remeshing angular integration. Native
 projection retains the same observation memberships, covariance and physical factors.
+
+## Independent desktop simulation binding
+
+`interactive/simulation_state` owns immutable full configured drafts and external exact-result
+references; schema 9 project view state persists them independently of acquisition metadata.
+`simulation_fields` contains explicit UI descriptors, `simulation_panel` owns the controls and
+inspection bindings, and `simulation_io` delegates equations to existing configured/detector
+owners. One global `job_lifecycle` worker owns construction, sampler advance/reset/release,
+profile reductions and file publication. Its one replaceable publication slot carries owned
+immutable frames. No new physics or fitting owner is introduced.
+
+The visualization extra uses `threadpoolctl` to bound nested BLAS threads during worker execution.
+Display preparation uses worker-owned float32 copies; quantitative inspection uses immutable
+float64 snapshots. CPU/GPU reservations include retained application data. Reservations and
+software binding fidelity do not establish numerical convergence or responsiveness acceptance;
+see the current Task06 disposition in `DESKTOP_UI_PLAN.md`.

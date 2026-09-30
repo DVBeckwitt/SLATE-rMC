@@ -19,7 +19,7 @@ from project_state import (
     linear_display_limits,
     validate_display_limits,
 )
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QImage,
@@ -300,6 +300,8 @@ class DetectorTextureView(QOpenGLWidget):
         self.plane = plane
         self.image: NDArray[np.generic] | None = None
         self._display: NDArray[np.float32] | None = None
+        self.column_axis_label = "column_px"
+        self.row_axis_label = "row_px"
         self._texture: QOpenGLTexture | None = None
         self._mask_texture: QOpenGLTexture | None = None
         self.mask_reasons = None
@@ -489,7 +491,8 @@ class DetectorTextureView(QOpenGLWidget):
         if (
             native_counts.ndim != 2
             or not native_counts.size
-            or native_counts.dtype != np.int32
+            or native_counts.dtype
+            not in (np.dtype(np.int32), np.dtype(np.float32), np.dtype(np.float64))
             or not native_counts.flags.c_contiguous
             or native_counts.flags.writeable
             or display.shape != native_counts.shape
@@ -1433,7 +1436,13 @@ class ProfilePlot(QWidget):
                 10 * magnitude,
             )
             painter.setPen(QColor(215, 225, 231))
-            painter.drawText(4, 12, "row_px" if self.vertical else "column_px")
+            painter.drawText(
+                4,
+                12,
+                self.source_view.row_axis_label
+                if self.vertical
+                else self.source_view.column_axis_label,
+            )
             for index in range((first_visible + step - 1) // step * step, last_visible + 1, step):
                 position = self.source_view.axis_position(index, vertical=self.vertical)
                 if not 0 <= position < limit:
@@ -1543,7 +1552,12 @@ class DetectorPanel(QWidget):
             ("row width", self.row_width_control, 1, 1),
             ("column width", self.column_width_control, 1, 3),
         ):
-            profile_layout.addWidget(QLabel(label), row, column - 1)
+            coordinate_label = QLabel(label)
+            if label == "column_px":
+                self.column_coordinate_label = coordinate_label
+            elif label == "row_px":
+                self.row_coordinate_label = coordinate_label
+            profile_layout.addWidget(coordinate_label, row, column - 1)
             profile_layout.addWidget(control, row, column)
         profile_layout.addWidget(self.pin_center_button, 2, 0)
         self.profile_measure_control = QComboBox()
@@ -1775,6 +1789,11 @@ class DetectorPanel(QWidget):
         self.mask_redo_button.setEnabled(False)
         self._roi_bounds: tuple[int, int, int, int] | None = None
         self.acquisition_identity: object = None
+        self.observable_unit = "counts"
+        self.quantitative_ready = True
+        self.profile_work_required = False
+        self.coalesce_profile_updates = False
+        self._profile_refresh_queued = False
         self._profile_axis_rect: QRectF | None = None
         self._sync_controls()
         self._marker_count_changed(0)
@@ -2071,13 +2090,18 @@ class DetectorPanel(QWidget):
             self.cursor_label.setText(
                 "Pointer outside detector · Q/angles unavailable · saturation unknown"
             )
+        elif not self.quantitative_ready:
+            column, row, _ = pixel
+            self.cursor_label.setText(
+                f"{self.view.column_axis_label}={column}, {self.view.row_axis_label}={row}: Awaiting quantitative snapshot"
+            )
         else:
             column, row, intensity = pixel
             reason = (
                 0 if self.view.mask_reasons is None else int(self.view.mask_reasons[row, column])
             )
             self.cursor_label.setText(
-                f"column_px={column}, row_px={row}, intensity={intensity!r} counts"
+                f"{self.view.column_axis_label}={column}, {self.view.row_axis_label}={row}, intensity={intensity!r} {self.observable_unit}"
                 f" · {REASONS[reason]} · Q/angles unavailable"
             )
 
@@ -2360,8 +2384,26 @@ class DetectorPanel(QWidget):
         self.horizontal.update()
         self.vertical.update()
 
-    def _refresh_profile_if_needed(self) -> None:
+    def _flush_profile_update(self) -> None:
+        self._profile_refresh_queued = False
+        self._profile_pending = False
+        self._refresh_profile_if_needed(immediate=True)
+
+    def _refresh_profile_if_needed(self, *, immediate: bool = False) -> None:
+        if self.coalesce_profile_updates and not immediate:
+            if not self._profile_refresh_queued:
+                self._profile_refresh_queued = True
+                self._profile_pending = True
+                if self._current_profiles is not None:
+                    self._update_profile_status(self._current_profiles)
+                QTimer.singleShot(0, self._flush_profile_update)
+            return
         if self.view.image is None:
+            return
+        if not self.quantitative_ready:
+            self.profile_status.setText(
+                "Awaiting quantitative snapshot; retained profiles are historical"
+            )
             return
         key = self._query_key()
         if self._profile_key == key and self._current_profiles is not None:
@@ -2380,7 +2422,7 @@ class DetectorPanel(QWidget):
             self._update_profile_status(self._current_profiles)
             return
         if (
-            self._mask_inclusion is not None
+            (self._mask_inclusion is not None or self.profile_work_required)
             and direct_pixels > 131072
             and scope != "full"
             and not (scope == "band" and bounds == ((0, rows), (0, columns)))

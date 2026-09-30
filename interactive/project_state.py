@@ -13,8 +13,16 @@ from uuid import UUID, uuid4
 from comparison_state import LineDefinition, PinIdentity
 from mask_state import NativeMask, mask_document, mask_from_document
 from numeric_fields import validate_proposal
+from simulation_state import (
+    SimulationDraft,
+    SimulationReference,
+    simulation_draft_document,
+    simulation_draft_from_document,
+    simulation_reference_document,
+    simulation_reference_from_document,
+)
 
-PROJECT_SCHEMA_VERSION = 8
+PROJECT_SCHEMA_VERSION = 9
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -586,6 +594,9 @@ class ProjectViewState:
     detector: DetectorViewState | None = None
     scene: SceneViewState | None = None
     comparison: ComparisonState | None = None
+    simulation_draft: SimulationDraft | None = None
+    simulation_result: SimulationReference | None = None
+    simulation_detector: DetectorViewState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +661,13 @@ class ProjectDocument:
     numeric_draft: NumericDraft | None = None
 
     def __post_init__(self) -> None:
+        for value, kind in (
+            (self.view.simulation_draft, SimulationDraft),
+            (self.view.simulation_result, SimulationReference),
+            (self.view.simulation_detector, DetectorViewState),
+        ):
+            if value is not None and not isinstance(value, kind):
+                raise ProjectFormatError("invalid independent simulation state")
         selected = self.view.selected_acquisition_id
         if self.view.comparison is not None and not isinstance(
             self.view.comparison, ComparisonState
@@ -1140,6 +1158,9 @@ def project_to_document(
         ),
         "workspace": state.view.workspace,
         "comparison": _comparison_document(state.view.comparison),
+        "simulation_draft": simulation_draft_document(state.view.simulation_draft),
+        "simulation_result": simulation_reference_document(state.view.simulation_result),
+        "simulation_detector": _detector_document(state.view.simulation_detector),
         "detector": _detector_document(detector),
         "scene": (
             None
@@ -1243,6 +1264,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         5,
         6,
         7,
+        8,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1298,7 +1320,12 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         top["view"],
         view_fields
         | ({"scene"} if top["schema_version"] >= 5 else set())
-        | ({"comparison"} if top["schema_version"] >= 7 else set()),
+        | ({"comparison"} if top["schema_version"] >= 7 else set())
+        | (
+            {"simulation_draft", "simulation_result", "simulation_detector"}
+            if top["schema_version"] >= 9
+            else set()
+        ),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1360,6 +1387,9 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             _detector_view(view_data["detector"]),
             scene,
             _comparison_view(view_data.get("comparison")),
+            simulation_draft_from_document(view_data.get("simulation_draft")),
+            simulation_reference_from_document(view_data.get("simulation_result")),
+            _detector_view(view_data.get("simulation_detector")),
         ),
         draft,
     )

@@ -19,9 +19,10 @@ from uuid import UUID
 from comparison_state import LineWork
 from mask_state import MaskWork
 from PySide6.QtCore import QObject, QTimer, Signal
+from simulation_state import SimulationExportWork
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
-MAX_RESULT_BYTES = 96 * 1024 * 1024
+MAX_RESULT_BYTES = 160 * 1024 * 1024
 MAX_SUMMARIES = 8
 
 
@@ -67,6 +68,9 @@ class JobControl:
         self._cancel = threading.Event()
         self._lock = threading.Lock()
         self._progress: str | None = None
+        self._publication: JobResult | None = None
+        self._inspect = False
+        self._publication_limit = MAX_RESULT_BYTES
 
     @property
     def canceled(self) -> bool:
@@ -76,6 +80,8 @@ class JobControl:
         self._cancel.set()
         with self._lock:
             self._progress = None
+            self._publication = None
+            self._inspect = False
 
     def report(self, message: str) -> None:
         if self.canceled:
@@ -89,13 +95,40 @@ class JobControl:
             message, self._progress = self._progress, None
         return message
 
+    def publish(self, result: JobResult) -> None:
+        """Replace one owned immutable frame; never retain an unconsumed lease."""
+        if (
+            not isinstance(result, JobResult)
+            or not 0 <= result.resident_bytes <= self._publication_limit
+            or _known_bytes(result.value) > result.resident_bytes
+        ):
+            raise ValueError("publication exceeds its declared worker budget")
+        with self._lock:
+            if not self.canceled:
+                self._publication = result
+
+    def take_publication(self) -> JobResult | None:
+        with self._lock:
+            result, self._publication = self._publication, None
+        return result
+
+    def request_inspection(self) -> None:
+        with self._lock:
+            if not self.canceled:
+                self._inspect = True
+
+    def take_inspection(self) -> bool:
+        with self._lock:
+            value, self._inspect = self._inspect, False
+        return value
+
 
 @dataclass(frozen=True, slots=True)
 class JobRequest:
     project_id: UUID
     acquisition_id: UUID | None
     revisions: Revisions
-    argument: bytes | str | Path | memoryview | MaskWork | LineWork
+    argument: bytes | str | Path | memoryview | MaskWork | LineWork | SimulationExportWork
     argument_bytes: int
     expected_result_bytes: int
     run: Callable[[Any, JobControl], JobResult]
@@ -125,7 +158,7 @@ class _Active:
 
 
 def _known_bytes(value: Any) -> int:
-    if isinstance(value, (MaskWork, LineWork)):
+    if isinstance(value, (MaskWork, LineWork, SimulationExportWork)):
         return value.argument_bytes
     if isinstance(value, memoryview):
         return value.nbytes
@@ -143,6 +176,7 @@ class JobOwner(QObject):
     state_changed = Signal(object)
     progress_changed = Signal(object, str)
     result_ready = Signal(object, object)
+    publication_ready = Signal(object, object)
     drained = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -170,9 +204,12 @@ class JobOwner(QObject):
     def submit(self, request: JobRequest) -> JobIdentity:
         if self._closing:
             raise RuntimeError("Application close has been requested")
-        if isinstance(request.argument, (MaskWork, LineWork)):
+        if isinstance(request.argument, (MaskWork, LineWork, SimulationExportWork)):
             request.argument.validate()
-        if not isinstance(request.argument, (bytes, str, Path, memoryview, MaskWork, LineWork)):
+        if not isinstance(
+            request.argument,
+            (bytes, str, Path, memoryview, MaskWork, LineWork, SimulationExportWork),
+        ):
             raise TypeError(
                 "Request argument must be immutable bytes, text, path, byte view, mask or line work"
             )
@@ -183,7 +220,7 @@ class JobOwner(QObject):
         if _known_bytes(request.argument) > request.argument_bytes:
             raise ValueError("Request byte count understates its payload")
         if not 0 <= request.expected_result_bytes <= MAX_RESULT_BYTES:
-            raise ValueError("Expected result exceeds the 96 MiB application limit")
+            raise ValueError("Expected result exceeds the 160 MiB application limit")
         if isinstance(request.argument, memoryview):
             owned_bytes = request.argument.tobytes()
             request = replace(request, argument=owned_bytes, argument_bytes=len(owned_bytes))
@@ -230,6 +267,18 @@ class JobOwner(QObject):
         self._generation += 1
         self.cancel()
 
+    def inspect_active(self, generation: int) -> bool:
+        active = self._active
+        if (
+            active is None
+            or active.control.canceled
+            or generation != self._generation
+            or active.scheduled.identity.generation != generation
+        ):
+            return False
+        active.control.request_inspection()
+        return True
+
     def request_close(self) -> bool:
         self._closing = True
         self.cancel()
@@ -250,6 +299,7 @@ class JobOwner(QObject):
         if scheduled is None:
             return
         active = _Active(scheduled, JobControl())
+        active.control._publication_limit = scheduled.request.expected_result_bytes
         self._active = active
 
         def work() -> None:
@@ -258,7 +308,7 @@ class JobOwner(QObject):
                 if not isinstance(result, JobResult):
                     raise TypeError("Worker must return a JobResult")
                 if not 0 <= result.resident_bytes <= MAX_RESULT_BYTES:
-                    raise ValueError("Result exceeds the 96 MiB application limit")
+                    raise ValueError("Result exceeds the 160 MiB application limit")
                 if result.resident_bytes > scheduled.request.expected_result_bytes:
                     raise ValueError("Result exceeds its declared request budget")
                 if _known_bytes(result.value) > result.resident_bytes:
@@ -292,6 +342,14 @@ class JobOwner(QObject):
             progress = active.control.take_progress()
             if progress is not None and active.scheduled.identity.generation == self._generation:
                 self.progress_changed.emit(active.scheduled.identity, progress)
+        publication = active.control.take_publication()
+        if (
+            publication is not None
+            and not active.control.canceled
+            and active.scheduled.identity.generation == self._generation
+            and not self._closing
+        ):
+            self.publication_ready.emit(active.scheduled.identity, publication.value)
         if active.thread.is_alive():
             return
         active.thread.join(timeout=0)

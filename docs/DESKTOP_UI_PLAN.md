@@ -3821,3 +3821,66 @@ records every whole-command native receipt and its fresh 900-second / 90-second 
 focused/native results and limitations, prior-evidence preservation and checker cleanup. Software
 lint/format/import/AST/diff checks establish implementation compatibility only. Consolidated root
 review and shared/full performance acceptance remain open.
+
+### Task06 / U12, U12a, U12b disposition (2026-09-30)
+
+**Implemented; acceptance blocked by new measured responsiveness failures.** Rows remain unchecked
+for consolidated root review. Main and prior Task05 evidence are unchanged. No Task07, fitting,
+sweep or scientific-model change was started. Known B001-B007 remain assigned to the root bug list.
+
+Delivery covers independent full strict-loader forms, immutable drafts and session history, complete
+canonical validation, source-versus-detector seeds/counts, explicit routes/backends/unsupported
+reasons, progressive MC lease copying, held float64 inspection, exact profiles, selected configured
+figures, exact NPZ export/readback, saved result identity and schema 9 project persistence. One global
+worker owns all sampler operations and asynchronous cancellation/drain. Resource admission counts
+retained views/history, simulation buffers, auxiliary arrays and staging. Above-cap declarations
+remain editable; there is no support reduction or silent backend fallback. The interactive README
+describes workflow, caps, optional-dependency recovery and observable limitations.
+
+Evidence and scope:
+
+- Final focused checks: 44 passed, including every strict-loader required/optional section, invalid
+  complete admission, no-op/undo/redo identity, immutable snapshots, signed/nonfinite float64
+  reductions, ROI means/support, coalesced current-query profiles, old-image completion rejection,
+  macrobin labels, density colors, stale auxiliary clearing, export destination-time query rejection,
+  source-cap preservation, disabled/incompatible output reasons,
+  schema compatibility, result/display persistence and exact export readback.
+- Both sampled and conditional-position MC adapters exactly matched their identical-mode canonical
+  CPU owners at prefixes 1, 4 and 8 on the frozen native 3000x3000 derivative: eight source states,
+  source/detector seeds 1729, unchanged geometry/finite-2H/rods/root support and CIF. Earlier retained
+  images stayed immutable; owned float32 previews matched exact casts; exports reopened equal.
+  This establishes binding fidelity only, with no convergence or fitting qualification.
+- Final production-main smoke 08 passed ten functional steps: independent load, ordinary cancel/drain,
+  edit supersession, actual progressive native publication, explicit quantitative inspection/current
+  bands, selected figure/exact export, result readback, project save/Open, historical saved result
+  reopening and ordinary close. The screenshot was visually inspected. Its sampled peak RSS was
+  948,539,392 bytes and cursor/profile p95 was 8.091 ms. Whole-journey heartbeat reached 167.242 ms;
+  screenshot capture itself and cold/Open/runtime phases remain in the trace. The last reopened publication has an image paint receipt but lacks its demanded H/V paint
+  receipts before close, so that boundary is unverified. This is a functional smoke, not a
+  performance pass or a 30-second window.
+- The qualification series stopped on window 07's first new 112.397 ms heartbeat miss. A coincident
+  generation-2 GC collected 108,787 objects in 98.177 ms; canonical JIT garbage origin is inferred,
+  while the collection duration is directly observed. Cold load also reached 133.099 ms without a
+  proven component cause. Thread-limit setup did not explain the long pause. No interpreter-wide
+  GC policy or hidden process mechanism was introduced. Three passing windows are unestablished.
+- Earlier failed ordinals remain separate. Repairs covered no-op YAML identity, restore ordering,
+  profile keyword/image identity, first figure import and bounded reciprocal/Ewald display work.
+  Corrected window 03 completed genuine changed demand with 5.461 s observed concurrent work and
+  frame p95/p99 15.679/19.064 ms, but cold admission still failed the heartbeat gate. Window 05
+  completed 30 seconds and exact final H/V checks but failed frame p95 17.221 ms and heartbeat
+  113.439 ms. Window 06 had frame p95 16.518 ms but heartbeat 132.607 ms and a checker export-gating
+  failure. None is merged into a passing series.
+- Cancel/active-close safe stop on failed window 07 was 2,184.142 ms. The checker measured hidden
+  plus drained completion, not a completed visible close-ack paint: the <=100 ms visible-ack
+  boundary remains unverified. Completed Qt event/paint receipts do not establish OS input,
+  compositor or scanout. GPU memory is reserved/estimated, not allocator-measured.
+- Every numerical/native command is charged to the original finite ledger, including cold/JIT and
+  failed checkers. Native command 10 timed out at 90.0596 whole-command seconds, exceeding the 90 s
+  command cap by 0.0596 s after report serialization failed; the application had already closed.
+  It is a failed observer run, not passing evidence. Later timeout enforcement reserves overhead.
+
+The external [completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12_completion_index.json)
+contains exact command charges, hashes, protected-evidence verification, archived checker bytes,
+cleanup and the [Task06 bug delta](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12_bugs.md).
+Lint/format/AST/import and build establish software compatibility only. Runtime pause resolution
+and complete paint-ack/performance qualification remain open; no task acceptance is claimed.

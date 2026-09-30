@@ -150,6 +150,7 @@ class LoadedProject:
     sources: tuple[SourceCheck, ...]
     references: tuple[ReferenceCheck, ...]
     numeric_validated: bool
+    simulation_detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,8 +298,16 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
             except (OSError, ValueError) as exc:
                 raise ProjectFormatError(f"saved numeric draft is invalid: {exc}") from exc
             numeric_validated = True
+    simulation_detail = ""
+    if document.view.simulation_draft is not None:
+        from simulation_io import canonical_configuration
+
+        try:
+            canonical_configuration(document.view.simulation_draft)
+        except (OSError, ValueError) as exc:
+            simulation_detail = f"Saved independent draft requires input review: {exc}"
     loaded = LoadedProject(
-        document, path, tuple(checks), tuple(reference_checks), numeric_validated
+        document, path, tuple(checks), tuple(reference_checks), numeric_validated, simulation_detail
     )
     resident = path.stat().st_size + sum(
         len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks)
@@ -348,6 +357,19 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
             destination.exists() and source.exists() and os.path.samefile(destination, source)
         ):
             raise ProjectFormatError("project destination would overwrite an OSC source")
+    independent = document.view.simulation_draft
+    if independent is not None:
+        for source in (independent.configuration_path, independent.cif_path):
+            if destination.resolve(strict=False) == source.resolve(strict=False) or (
+                destination.exists() and source.exists() and os.path.samefile(destination, source)
+            ):
+                raise ProjectFormatError(
+                    "project destination would overwrite an independent simulation input"
+                )
+    if document.view.simulation_result is not None and destination.resolve(
+        strict=False
+    ) == document.view.simulation_result.path.resolve(strict=False):
+        raise ProjectFormatError("project destination would overwrite a simulation result")
     if recovery:
         if destination.name != f"{document.project.project_id}.slate.json":
             raise ProjectFormatError("recovery destination must use the project UUID")

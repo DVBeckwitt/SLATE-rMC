@@ -129,7 +129,7 @@ Reopening checks each referenced OSC source independently. A missing, unreadable
 remains in the browser with its original acquisition identity. Select it and use **Relink OSC**;
 the replacement must have the same decoded OSC hash. A moved source can therefore be restored
 without changing its acquisition UUID. Project save never modifies its OSC sources. Portable
-project archives and simulation controls arrive in later workflows.
+project archives arrive in a later workflow; the independent Simulator is described below.
 
 Reopening also checks the saved byte identities of standalone CIFs, configurations and recorded
 configuration-dependent CIFs in the background. The review and inspector show current verified,
@@ -190,12 +190,73 @@ supported source threshold. Q and scattering angles remain unavailable until geo
 
 Interactive admission limits are 64 MiB source bytes, 32 MiB decoded bytes, 12 million pixels and
 16,384 pixels per axis, further capped by the active OpenGL context's texture-size limit.
-The 96 MiB worker result limit includes the native int32 plane, float32 display plane, thumbnail,
+The 160 MiB shared worker result limit includes the native int32 plane, float32 display plane, thumbnail,
 exact center profiles and full-detector marginals. A review holds at most 128 candidates and
 512 KiB of candidate paths; metadata table input is limited to 64 KiB and 128 rows. Imports
 outside those limits fail with a visible message. The acquisition SHA-256 is over the decoded OSC
 byte stream; it identifies exactly the header and payload consumed by the reader, whether the file
 was plain or gzip compressed.
+
+### Independent configured simulator
+
+**Task06 is implemented; responsiveness acceptance remains blocked.** A canonical-run garbage
+collection pause produced a 112.397 ms heartbeat gap against the 100 ms limit. Three passing
+30-second windows have not been established. See the Task06 disposition in `docs/DESKTOP_UI_PLAN.md`.
+
+Open **Simulator**, then **Load configuration** with a supported `rasim-simulation-v2` YAML.
+No acquisition, observation pack, fit or scene edit is required. Search and grouped forms expose
+all strict-loader fields, including optional values, with units, domains, defaults and applicability.
+Values are preserved across unopened groups. Edit a field, then **Validate complete draft**;
+validation uses the complete canonical configuration and geometry/source builder. Invalid values
+remain visible for correction. Undo/redo restores draft content with fresh revisions. Field edits
+supersede active work and never start a simulation automatically.
+
+Source count/seed define the configured source ensemble. **MC draws per source state** and
+**Detector seed** are separate. Select sampled source position or conditional-position integration
+explicitly. The latter applies only to MC and retains the canonical model's support requirements.
+Choose native MC pixel mass, pixel-center display density, macrobin display quadrature, reciprocal
+density or nominal Ewald coating. Detector execution requires the supported finite Bi2X3 stack;
+generic-CIF admission alone does not provide that renderer. Output enablement, CPU/CUDA selection
+and route compatibility are enforced with visible reasons. Backend failures do not select another
+backend. Auxiliary-only routes require detector output to be deselected explicitly.
+
+**Run selected outputs** uses the existing numerical owners and publishes progressive prefixes.
+Float32 presentation copies are owned separately from sampler leases. Exact cursor and linked
+bands use an immutable float64 quantitative snapshot; previews say **Awaiting quantitative
+snapshot**. **Inspect this snapshot** holds matching image/profiles at the next available boundary;
+**Follow progression** resumes adoption. Large profile queries wait for the global worker after
+active MC drains. Pixel-center density and macrobin quadrature remain display approximations;
+macrobin indices are labeled, with native center arrays retained in exports. Reciprocal/Ewald
+panels draw at most 512 sampled Qx/Qz points with linear canonical-density colors, while full
+numeric arrays remain retained. No convergence or fit qualification is implied by completion.
+
+**Export exact snapshot** writes a new external NPZ with arrays and a UTF-8 numeric manifest,
+including draft/run identities, configuration/CIF hashes, seeds, prefix, route, measure, units,
+backend and qualification limitations. It reopens and compares every written array before
+publication. **Reopen saved snapshot** verifies and parses the same hashed bytes. Optional configured
+PNGs use the selected names and output directory and encode reciprocal/Ewald density colors.
+Detector PNGs label their display sampling stride; exact full arrays are in the NPZ. Existing
+files and source/project files cannot be overwritten. Cancellation can retain completed figures;
+choose a new output directory before retrying. Missing Matplotlib disables configured figures
+with a reason; exact numeric export remains available.
+
+**Export configuration YAML** writes a validated derived configuration with absolute CIF binding
+and verifies its physics revision on readback. Schema 9 projects save the independent draft,
+result reference and detector inspection settings; schemas 1-8 remain readable. Reopening keeps
+saved results historical and requires explicit canonical validation before execution. Input
+changes cannot mutate launched drafts, held snapshots or exported results.
+
+Desktop execution caps are 12 million detector pixels, 16,384 per axis, 256 source states, 2,048
+complete rods, 32 MiB auxiliary arrays and 160 MiB per publication. Declarations above the source
+cap load for editing without constructing their ensemble; validation/execution require an explicit
+supported count. Physical support is never pruned. CPU reservation is capped at 2 GiB and GPU
+reservation at 512 MiB, including existing retained views/history and simulation buffers; these
+are conservative reservations, not GPU allocator measurements. CPU workers are explicit in [1,4],
+and `threadpoolctl` bounds nested BLAS to one thread while the sole worker runs. This visualization
+extra avoids process-wide environment configuration and leaves core dependencies unchanged.
+Canonical setup/JIT, auxiliary sampling, snapshot reductions and file publication have declared
+noninterruptible phases. Cancel rejects obsolete publication immediately; safe stop and full drain
+can take longer. Ordinary close waits asynchronously for ownership to drain.
 
 ### Native exclusion editing
 
