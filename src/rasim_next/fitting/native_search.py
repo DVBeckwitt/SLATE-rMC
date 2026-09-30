@@ -1,7 +1,10 @@
 """Common bounded multistart, nuisance-refitted profiles and correlated validation."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 from packaging.version import Version
@@ -11,6 +14,9 @@ from scipy.optimize import OptimizeResult, least_squares, minimize
 
 from rasim_next.core.contracts import canonical_revision_sha256
 from rasim_next.fitting.native_observations import NativeFitObservations
+
+if TYPE_CHECKING:
+    from rasim_next.fitting.native_background import NativeBackgroundProblem
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +106,15 @@ class GaussianCalibration:
 
 
 def score_native_prediction(
-    observations, parameters, values, raw, calibration=(), *, guarded=False, literal_scale=None
+    observations,
+    parameters,
+    values,
+    raw,
+    calibration=(),
+    *,
+    guarded=False,
+    literal_scale=None,
+    background_problem: NativeBackgroundProblem | None = None,
 ):
     """Score one physical vector, with literal or profiled scale and calibration once."""
     values, raw = np.asarray(values, dtype=float), np.asarray(raw)
@@ -110,7 +124,17 @@ def score_native_prediction(
     root_count = np.sqrt(int(observations.valid.sum()))
     if guarded and not observations.allow_guard_constraints:
         raise ValueError("historical guards may only be diagnostic on a training split")
-    if literal_scale is None:
+    background_fit = None
+    if background_problem is not None:
+        if guarded or literal_scale is not None:
+            raise ValueError("background profiling cannot use guards or literal exposure")
+        background_fit = background_problem.profile(observations, raw)
+        if not background_fit.success:
+            from rasim_next.fitting.native_background import BackgroundProfileError
+
+            raise BackgroundProfileError(background_fit)
+        scale, residual = background_fit.scale, background_fit.residual
+    elif literal_scale is None:
         scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
     else:
         scalar = np.asarray(literal_scale)
@@ -123,7 +147,11 @@ def score_native_prediction(
         ):
             raise ValueError("literal scale must be a finite nonnegative scalar without exposures")
         scale = float(scalar)
-    prediction = observations.apply_scale(raw, scale)
+    prediction = (
+        observations.apply_scale(raw, scale)
+        if background_fit is None
+        else background_fit.prediction_count
+    )
     if literal_scale is not None:
         residual = observations.objective_residual(prediction)
     scores = observations.scores(prediction)
@@ -152,6 +180,12 @@ def score_native_prediction(
         start_index=-1,
         optimizer_converged=False,
     )
+    if background_fit is not None:
+        point.background_fit = background_fit
+        point.signal_prediction_count = background_fit.signal_prediction_count
+        point.background_prediction_count = background_fit.background_prediction_count
+        point.data_objective = background_fit.data_objective
+        point.background_penalty_objective = background_fit.penalty_objective
     for kind, attribute in (
         ("search", "search_bound_parameters"),
         ("physical", "physical_boundary_parameters"),
@@ -254,6 +288,7 @@ def fit_native_parameters(
     finite_difference_step: float = 1e-4,
     enforce_historical_guards: bool = False,
     callback=None,
+    background_problem: NativeBackgroundProblem | None = None,
 ):
     """Refit every unfixed coordinate and scale from each supplied start.
 
@@ -268,6 +303,14 @@ def fit_native_parameters(
     Its function budget excludes derivative probes, which evaluation_count includes.
     Callbacks must not change the predictor state within a precomputed batch.
     """
+    if background_problem is not None and (
+        observations.objective_kind != "gls"
+        or observations.exposure_index is not None
+        or observations.allow_guard_constraints
+        or enforce_historical_guards
+        or background_problem.ownership.shape[0] != len(observations.net_count)
+    ):
+        raise ValueError("background profiling requires single-exposure raw GLS without guards")
     if predict_many is not None and not callable(predict_many):
         raise TypeError("predict_many must be callable")
     validate_native_search_request(
@@ -323,6 +366,7 @@ def fit_native_parameters(
                 raw,
                 calibration,
                 guarded=enforce_historical_guards,
+                background_problem=background_problem,
             )
             if best is None or point.objective < best.objective:
                 best = point
@@ -440,6 +484,7 @@ def fit_native_parameters(
                 raw,
                 calibration,
                 guarded=enforce_historical_guards,
+                background_problem=background_problem,
                 literal_scale=scale_reference * x[-1] if enforce_historical_guards else None,
             )
             point.start_index = start_index
@@ -496,7 +541,13 @@ def fit_native_parameters(
             initial = np.append(initial, initial_scale / scale_reference)
         if len(active) and method == "trf":
             literal = score_native_prediction(
-                observations, parameters, base, predict(base), calibration, guarded=False
+                observations,
+                parameters,
+                base,
+                predict(base),
+                calibration,
+                guarded=False,
+                background_problem=background_problem,
             )
             literal.start_index = start_index
             if best is None or literal.objective < best.objective:

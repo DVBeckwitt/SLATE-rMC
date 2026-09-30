@@ -5,6 +5,32 @@ optical transport, spherical mosaic and native-pixel integration used by the
 renderer. A fit predicts the frozen native observations; moving geometry or a
 lattice never moves measured pixels into another fitting region.
 
+## Optional positive background profiling
+
+`NativeBackgroundProblem` is an explicit opt-in to `score_native_prediction` and
+`fit_native_parameters`. Supply raw measured counts in `NativeFitObservations.net_count`,
+one acquisition, GLS, no historical guards, and the joint native count/discrepancy covariance.
+The problem binds actual pixel design X, sparse ownership W, immutable beta0 and absolute
+quadratic penalty R. Background mass is W exp(X beta); the 44-column broad empirical design
+in `native_background_design` preserves the existing 3000-pixel acquisition conventions.
+It is not an instrument-independent background calibration.
+
+Each physical prediction profiles one nonnegative exposure and runs bounded linear-loss
+TRF from beta0. The physical optimizer consumes the same data-plus-R-beta residual,
+divided throughout by the square root of the fixed valid data-row count, so its squared
+norm is divided by that count. Results retain unscaled physical
+prediction, exposure-scaled signal, background, total, coefficients, residual blocks,
+objective components and inner termination/work. An unsuccessful inner solve raises
+`BackgroundProfileError` with its result; it cannot become an outer optimization point.
+The default `None` path preserves the frozen-background behavior.
+
+The caller owns geometric support, count covariance including overlaps, discrepancy-mode
+projection and held-out diagnostics. Fitting beta explicitly excludes its old jackknife
+modes; a shared residual-discrepancy field must enter the joint covariance only once.
+Controls must use current physical predictions whenever physical parameters change.
+Conditional background improvement does not qualify the physical integration or identify
+signal/background contributions under protected peaks.
+
 ## Shared material boundary
 
 `NativeRefinementModel` supplies ordered parameter names/units, `bind(values, N)`
