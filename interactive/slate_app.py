@@ -14,6 +14,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from detector_panel import DetectorPanel
+from experiment_scene import ExperimentScenePanel
 from inspection_export import (
     InspectionExportReceipt,
     external_export_destination,
@@ -73,6 +74,7 @@ from project_state import (
     ProjectDocument,
     ProjectFormatError,
     ProjectViewState,
+    SceneViewState,
     project_to_document,
 )
 from PySide6.QtCore import QBuffer, QIODevice, QItemSelectionModel, QPointF, Qt, QTimer
@@ -249,6 +251,8 @@ class ShellWindow(QMainWindow):
         self._save_failure = ""
         self._restoring_view = False
         self._pending_view_restore: ProjectViewState | None = None
+        self._pending_scene_restore: SceneViewState | None = None
+        self._scene_cameras: dict[UUID, tuple[float, float, float, tuple[float, float, float]]] = {}
         self._source_checks: dict[UUID, SourceCheck] = {}
         self._reference_checks: dict[tuple[UUID, str], ReferenceCheck] = {}
         self._numeric_draft: NumericDraft | None = None
@@ -364,6 +368,10 @@ class ShellWindow(QMainWindow):
         self.detector_panel.view.crosshair_changed.connect(self._reciprocal_selection_changed)
         self.detector_panel.view.cursor_changed.connect(self._reciprocal_cursor_changed)
         self.detector_panel.view.view_state_changed.connect(self._mark_dirty)
+        self.detector_panel.view.view_state_changed.connect(self._sync_scene)
+        self.detector_panel.view.overlays_changed.connect(self._sync_scene)
+        self.scene_panel.view.camera_changed.connect(self._remember_scene_camera)
+        self.scene_tabs.currentChanged.connect(self._mark_dirty)
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(750)
@@ -459,7 +467,11 @@ class ShellWindow(QMainWindow):
         detector_layout = QVBoxLayout(detector_page)
         detector_layout.setContentsMargins(0, 0, 0, 0)
         detector_layout.addWidget(self.detector_notice)
-        detector_layout.addWidget(self.detector_panel, 1)
+        self.scene_tabs = QTabWidget()
+        self.scene_tabs.addTab(self.detector_panel, "Detector / profiles")
+        self.scene_panel = ExperimentScenePanel()
+        self.scene_tabs.addTab(self.scene_panel, "Experiment 3D")
+        detector_layout.addWidget(self.scene_tabs, 1)
         self.detector_stack = QStackedWidget()
         self.detector_stack.addWidget(self.experiment_status)
         self.detector_stack.addWidget(detector_page)
@@ -704,10 +716,15 @@ class ShellWindow(QMainWindow):
             and self._pending_view_restore.selected_acquisition_id == self.selected_acquisition_id
         ):
             detector = self._pending_view_restore.detector
+        scene = None
+        if self.selected_acquisition_id is not None:
+            yaw, pitch, zoom, target = self.scene_panel.view.camera_state()
+            scene = SceneViewState(yaw, pitch, zoom, target, self.scene_tabs.currentIndex() == 1)
         return ProjectViewState(
             self.selected_acquisition_id,
             "fit_experiments" if self.workspaces.currentIndex() == 0 else "simulator",
             detector,
+            scene,
         )
 
     def _validate_project_admission(
@@ -715,7 +732,7 @@ class ShellWindow(QMainWindow):
     ) -> None:
         view = self._capture_view()
         if selected_id is not None:
-            view = replace(view, selected_acquisition_id=selected_id, detector=None)
+            view = replace(view, selected_acquisition_id=selected_id, detector=None, scene=None)
         project_to_document(
             ProjectDocument(
                 candidate,
@@ -1641,6 +1658,46 @@ class ShellWindow(QMainWindow):
             )
             self._reciprocal_selection_changed()
         self._sync_reciprocal_button()
+        self._sync_scene()
+
+    def _sync_scene(self) -> None:
+        preview = self._visible_reciprocal()
+        acquisition_id = self.selected_acquisition_id
+        prepared = (
+            self._resident_planes.get(acquisition_id)
+            if (acquisition_id is not None and acquisition_id == self._visible_acquisition_id)
+            else None
+        )
+        mapping = (
+            (preview.draft or preview.saved)
+            if preview is not None and prepared is not None
+            else None
+        )
+        identity = (preview.request_sha256, preview.draft_revision) if mapping is not None else None
+        scene = self.scene_panel.view
+        previous_acquisition = scene._image_identity[0] if scene._image_identity else None
+        scene.set_scene(acquisition_id, prepared, mapping, identity)
+        self.scene_panel.view.set_overlays(self.detector_panel.view.overlays, mapping)
+        if mapping is not None and self._pending_scene_restore is not None:
+            saved = self._pending_scene_restore
+            scene.restore_camera((saved.yaw_rad, saved.pitch_rad, saved.zoom, saved.target_lab_m))
+            self._pending_scene_restore = None
+            if acquisition_id is not None:
+                self._scene_cameras[acquisition_id] = scene.camera_state()
+        elif mapping is not None and acquisition_id != previous_acquisition:
+            saved_camera = self._scene_cameras.get(acquisition_id)
+            if saved_camera is not None:
+                scene.restore_camera(saved_camera)
+        detector = self.detector_panel.view
+        self.scene_panel.view.set_levels(
+            detector.low_value, detector.high_value, detector.contrast_mode
+        )
+
+    def _remember_scene_camera(self) -> None:
+        identity = self.scene_panel.view._image_identity
+        if identity is not None and identity[0] == self.selected_acquisition_id:
+            self._scene_cameras[identity[0]] = self.scene_panel.view.camera_state()
+        self._mark_dirty()
 
     def _invalidate_reciprocal_pointer(self) -> None:
         self.reciprocal_cursor.setText("Pointer Q unavailable · geometry changed")
@@ -3098,6 +3155,7 @@ class ShellWindow(QMainWindow):
             f"OSC header: version {value.version}, {value.byte_order} endian"
         )
         self._reciprocal_selection_changed()
+        self._sync_scene()
 
     def _import_ready(self, identity: JobIdentity, value: object) -> None:
         if (
@@ -3196,6 +3254,10 @@ class ShellWindow(QMainWindow):
             return
         detector = saved.detector
         self._pending_view_restore = None
+        if saved.scene is not None:
+            self._pending_scene_restore = saved.scene
+            self.scene_tabs.setCurrentIndex(1 if saved.scene.visible else 0)
+            self._sync_scene()
         if detector is None:
             return
         view = self.detector_panel.view
@@ -3260,6 +3322,10 @@ class ShellWindow(QMainWindow):
         selected_id = UUID(value) if value else None
         if selected_id == self.selected_acquisition_id:
             return
+        identity = self.scene_panel.view._image_identity
+        if identity is not None and identity[0] == self.selected_acquisition_id:
+            self._scene_cameras[identity[0]] = self.scene_panel.view.camera_state()
+        self._pending_scene_restore = None
         self._reciprocal_epoch += 1
         self.selected_acquisition_id = selected_id
         self._batch_auto_select = False
@@ -3282,6 +3348,7 @@ class ShellWindow(QMainWindow):
         self.filmstrip.blockSignals(False)
         self._update_selection_label()
         self._refresh_numeric_editor()
+        self._sync_scene()
         had_work = self.jobs.busy and self._active_kind not in (
             "save",
             "discard",
@@ -3602,6 +3669,7 @@ class ShellWindow(QMainWindow):
         self._restoring_view = True
         try:
             self.project = value.document.project
+            self._scene_cameras.clear()
             self._reciprocal_epoch += 1
             self._reciprocal_cache.clear()
             self._numeric_draft = value.document.numeric_draft
@@ -3679,6 +3747,7 @@ class ShellWindow(QMainWindow):
                 )
                 self.statusBar().showMessage("Close requested · Waiting for safe stop")
                 return
+            self.scene_panel.view.release_resources()
             super().closeEvent(event)
             return
         event.ignore()

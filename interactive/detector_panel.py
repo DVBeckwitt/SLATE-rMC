@@ -213,7 +213,7 @@ void main() {
     gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
 }
 """
-_FRAGMENT = """#version 330 core
+DETECTOR_FRAGMENT_SHADER = """#version 330 core
 in vec2 uv;
 out vec4 color;
 uniform sampler2D detector;
@@ -603,7 +603,7 @@ class DetectorTextureView(QOpenGLWidget):
         program = QOpenGLShaderProgram(self)
         for kind, source in (
             (QOpenGLShader.ShaderTypeBit.Vertex, _VERTEX),
-            (QOpenGLShader.ShaderTypeBit.Fragment, _FRAGMENT),
+            (QOpenGLShader.ShaderTypeBit.Fragment, DETECTOR_FRAGMENT_SHADER),
         ):
             if not program.addShaderFromSourceCode(kind, source):
                 raise RuntimeError(program.log())

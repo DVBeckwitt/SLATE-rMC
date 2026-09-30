@@ -16,7 +16,10 @@ from project_state import MAX_NUMERIC_BASELINE_BYTES, NumericDraft, ProjectForma
 
 if TYPE_CHECKING:
     from rasim_next.geometry import CompiledInstrument, IncidentTransportResult
-    from rasim_next.pipeline.configured_simulation import SimulationConfiguration
+    from rasim_next.pipeline.configured_simulation import (
+        AxisRotationConfiguration,
+        SimulationConfiguration,
+    )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
@@ -39,6 +42,7 @@ class ReciprocalMapping:
     valid: np.ndarray
     status: np.ndarray
     wavelength_A: float
+    axis_rotations: tuple[AxisRotationConfiguration, ...]
 
     def cursor(
         self, column_px: float, row_px: float
@@ -107,6 +111,7 @@ def _mapping(
         geometry.valid,
         geometry.status,
         float(config.source.mean_wavelength_A),
+        tuple(config.instrument.axis_rotations),
     )
 
 

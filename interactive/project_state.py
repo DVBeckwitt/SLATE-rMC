@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from numeric_fields import validate_proposal
 
-PROJECT_SCHEMA_VERSION = 4
+PROJECT_SCHEMA_VERSION = 5
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -438,10 +438,32 @@ class DetectorViewState:
 
 
 @dataclass(frozen=True, slots=True)
+class SceneViewState:
+    yaw_rad: float
+    pitch_rad: float
+    zoom: float
+    target_lab_m: tuple[float, float, float]
+    visible: bool
+
+    def __post_init__(self) -> None:
+        for name in ("yaw_rad", "pitch_rad", "zoom"):
+            _float(getattr(self, name), name)
+        if not -math.pi / 2 <= self.pitch_rad <= math.pi / 2 or not 0.2 <= self.zoom <= 12.0:
+            raise ProjectFormatError("scene camera is outside its supported range")
+        if type(self.target_lab_m) is not tuple or len(self.target_lab_m) != 3:
+            raise ProjectFormatError("scene target must be one lab-frame metre point")
+        for value in self.target_lab_m:
+            _float(value, "scene target")
+        if type(self.visible) is not bool:
+            raise ProjectFormatError("scene visibility must be Boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectViewState:
     selected_acquisition_id: UUID | None = None
     workspace: str = "fit_experiments"
     detector: DetectorViewState | None = None
+    scene: SceneViewState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,6 +537,8 @@ class ProjectDocument:
             raise ProjectFormatError("unsupported workspace view")
         if self.view.detector is not None and selected is None:
             raise ProjectFormatError("detector view needs a selected acquisition")
+        if self.view.scene is not None and selected is None:
+            raise ProjectFormatError("scene view needs a selected acquisition")
         if self.numeric_draft is not None and not any(
             item.acquisition_id == self.numeric_draft.acquisition_id
             for item in self.project.acquisitions
@@ -844,6 +868,17 @@ def project_to_document(
                 ),
             }
         ),
+        "scene": (
+            None
+            if state.view.scene is None
+            else {
+                "yaw_rad": state.view.scene.yaw_rad,
+                "pitch_rad": state.view.scene.pitch_rad,
+                "zoom": state.view.scene.zoom,
+                "target_lab_m": list(state.view.scene.target_lab_m),
+                "visible": state.view.scene.visible,
+            }
+        ),
     }
     document = {
         "schema_version": PROJECT_SCHEMA_VERSION,
@@ -884,7 +919,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     """Validate a complete project before replacing the current shell state."""
     if type(value) is not dict:
         raise ProjectFormatError("document must be an object")
-    draft_fields = {"numeric_draft"} if value.get("schema_version") == 4 else set()
+    draft_fields = {"numeric_draft"} if value.get("schema_version", 0) >= 4 else set()
     top = _object(
         value, {"schema_version", "source_hash_kind", "project", "view"} | draft_fields, "document"
     )
@@ -892,6 +927,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         1,
         2,
         3,
+        4,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -930,9 +966,29 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         )
     except ValueError as exc:
         raise ProjectFormatError(str(exc)) from exc
-    view_data = _object(top["view"], {"selected_acquisition_id", "workspace", "detector"}, "view")
+    view_fields = {"selected_acquisition_id", "workspace", "detector"}
+    view_data = _object(
+        top["view"], view_fields | ({"scene"} if top["schema_version"] >= 5 else set()), "view"
+    )
     selected = view_data["selected_acquisition_id"]
     selected_id = None if selected is None else _uuid(selected, "selected acquisition ID")
+    scene = None
+    if view_data.get("scene") is not None:
+        scene_data = _object(
+            view_data["scene"],
+            {"yaw_rad", "pitch_rad", "zoom", "target_lab_m", "visible"},
+            "scene view",
+        )
+        target = scene_data["target_lab_m"]
+        if type(target) is not list or len(target) != 3:
+            raise ProjectFormatError("scene target must have three metre coordinates")
+        scene = SceneViewState(
+            scene_data["yaw_rad"],
+            scene_data["pitch_rad"],
+            scene_data["zoom"],
+            tuple(target),
+            scene_data["visible"],
+        )
     numeric = top.get("numeric_draft")
     draft = None
     if numeric is not None:
@@ -968,7 +1024,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     return ProjectDocument(
         project,
         ProjectViewState(
-            selected_id, view_data["workspace"], _detector_view(view_data["detector"])
+            selected_id, view_data["workspace"], _detector_view(view_data["detector"]), scene
         ),
         draft,
     )

@@ -3465,6 +3465,23 @@ controller. These are new presentations of the same model, not new geometry impl
 | [ ] U09: synchronized physical handles | U07/U08/U09a | Connect callouts, numeric fields and constrained arcs/arrows to existing parameter state without requiring a fit. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. Simulator edits match canonical configuration. Enable each fit-specific mapping only after its execution boundary verifies the launched vector; handles cannot enable an unsupported scope. |
 | [ ] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
 
+U08 is implemented in the isolated checkout and awaits root acceptance. Its retained scene shows
+the actual detector texture, canonical beam/sample/detector landmarks, configured axes and pivots,
+and available detector overlays. Selection, camera presets, context return and schema-5 camera
+save/reopen use the same image and geometry revision as the reciprocal preview. External
+`u08_finish_geometry_check_result.json` compares non-square native OSC corners and a two-axis,
+displaced-pivot configuration with canonical geometry. The completed journey is indexed by
+`u08_finish_completion_index.json`; `u08_finish_qual14_native_result.json`,
+`u08_finish_qual15_native_result.json` and `u08_finish_qual16_native_result.json` each record a
+passing 30-second changed-camera orbit during a real background import, ten resident A/B switches,
+rapid A-B-A, context recreation and ordinary close. Full orbit frame p95 was 13.607–13.794 ms,
+p99 13.817–14.317 ms, input p95 13.558–13.944 ms, with zero orbit uploads and no interval or
+heartbeat over 100 ms. Head and tail remain in the interval distribution; the scene gate applies
+the declared p95/p99 and 100 ms stall limits without an extra individual head/tail deadline.
+These measurements end at Qt completed paint/deferred receipts, not physical display scanout.
+The short 2D check verifies compatibility and exact final receipts; unchanged U07 evidence owns
+the sustained detector/profile performance claim. U08 adds no fit handles or physical fit result.
+
 ### M5 — existing prepared native fitting
 
 Likely ownership: application stage/result bindings, `native_input.py`, `native_observations.py`,
