@@ -2509,6 +2509,43 @@ the autosaved disposable copy was retained. All 206 earlier external files
 match their protected hashes. U07 remains unchecked at 11/46 accepted. No fit,
 forward intensity image or scientific comparison was run.
 
+#### U07 reciprocal preview qualification packet (2026-09-29; review pending)
+
+The finite follow-up packet is sealed in external `u07_switch_index.json`. Its
+first smoke launch stopped at a 3 s cold project-open observer deadline; the
+worker was still opening the project. One observer correction raised that stage
+deadline to 15 s without changing production code. A corrected short smoke
+then passed. The corrected native/runner bytes and original fixture hash were
+frozen before qualification. Three consecutive 30 s native windows (ordinals
+3–5) passed from the same frozen packet. Five launches used 117.709 s total
+whole-command time; every launch was under 60 s. All 225 prior external files
+retained their protected hashes; each run opened an exact-byte disposable copy,
+the original fixture stayed unchanged, and no recovery file was produced.
+
+Each qualification run captured an enabled, fully exposed early Cancel control,
+the first Map click and matching job generation, a disabled-button paint in
+19.194–20.244 ms, and job safe stop in 79.999–100.601 ms. After cancellation,
+detector/H/V geometry was fully visible immediately and after layout settling.
+The prepared A selection painted matching detector, horizontal-profile and
+vertical-profile generation, revision, value-buffer and support receipts in
+25.124–28.185 ms with one image upload. Each run then presented ten prepared
+A/B switches (maximum 23.251–25.016 ms), each with current three-surface
+receipts and exactly one image upload, and a rapid A-B-A ending on the selected
+A identity with one final upload. Stale generation cancellation was observed.
+
+Each 30.019–30.021 s mixed cursor/profile window presented 2,249–2,255
+matched frames without a texture upload. Frame p95 was 14.885–15.167 ms;
+cursor p95 was 15.645–15.848 ms. Every sent pointer event was accounted for
+as presented or superseded, with no unresolved/rejected event. The inspector Q
+label was fully exposed and painted. All runs closed normally, with hide in
+1.146–9.001 ms and owner drain in 2.934–10.796 ms. The external actual-method
+observer check also passed the late-generation/buffer-replacement cases that
+caused the earlier false switch latch. This packet changes documentation only;
+production source and the main checkout are untouched. U07 acceptance remains
+unchecked at 11/46 pending independent review of the sealed packet. These UI
+timing checks do not establish scientific adequacy; no fit or forward intensity
+image was run.
+
 #### U01 shell and identity checkpoint (2026-09-28)
 
 Launch from the repository root with
