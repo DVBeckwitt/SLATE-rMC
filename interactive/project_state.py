@@ -14,7 +14,7 @@ from comparison_state import LineDefinition, PinIdentity
 from mask_state import NativeMask, mask_document, mask_from_document
 from numeric_fields import validate_proposal
 
-PROJECT_SCHEMA_VERSION = 7
+PROJECT_SCHEMA_VERSION = 8
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -193,6 +193,59 @@ class AcquisitionMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class SetupReceipt:
+    template_id: UUID
+    name: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.template_id, UUID):
+            raise ProjectFormatError("invalid template UUID")
+        _name(self.name, "template name")
+        _digest(self.sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class StorageOrigin:
+    kind: str
+    mode: str
+    original_path: Path
+    observed_path: Path
+    raw_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("osc", "cif", "configuration", "configuration_cif"):
+            raise ProjectFormatError("unsupported storage reference")
+        if self.mode not in ("copy", "relink"):
+            raise ProjectFormatError("unsupported storage choice")
+        if not isinstance(self.original_path, Path) or not 0 < len(str(self.original_path)) <= 4096:
+            raise ProjectFormatError("invalid original storage path")
+        if not isinstance(self.observed_path, Path) or not 0 < len(str(self.observed_path)) <= 4096:
+            raise ProjectFormatError("invalid observed storage path")
+        _digest(self.raw_sha256)
+
+
+def validate_initial_values(values: tuple) -> None:
+    if type(values) is not tuple or len(values) > MAX_NUMERIC_PROPOSALS:
+        raise ProjectFormatError("initial values must be at most 32 immutable entries")
+    names = []
+    for row in values:
+        if type(row) is not tuple or len(row) != 4:
+            raise ProjectFormatError("invalid initial value")
+        name, value, unit, origin = row
+        if type(name) is not str or type(value) not in (int, float) or type(unit) is not str:
+            raise ProjectFormatError("invalid initial value types")
+        try:
+            validate_proposal(name, value, unit)
+        except ValueError as exc:
+            raise ProjectFormatError(str(exc)) from exc
+        _name(origin, "initial value provenance")
+        names.append(name)
+    if len(names) != len(set(names)):
+        raise ProjectFormatError("duplicate initial value")
+
+
+@dataclass(frozen=True, slots=True)
 class Acquisition:
     acquisition_id: UUID
     name: str
@@ -200,8 +253,20 @@ class Acquisition:
     source_sha256: str
     metadata: AcquisitionMetadata = field(default_factory=AcquisitionMetadata)
     mask: NativeMask | None = None
+    initial_values: tuple[tuple[str, float, str, str], ...] = ()
+    setup_receipt: SetupReceipt | None = None
+    storage: tuple[StorageOrigin, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_initial_values(self.initial_values)
+        if self.setup_receipt is not None and not isinstance(self.setup_receipt, SetupReceipt):
+            raise ProjectFormatError("invalid applied template receipt")
+        if type(self.storage) is not tuple or any(
+            not isinstance(v, StorageOrigin) for v in self.storage
+        ):
+            raise ProjectFormatError("invalid storage provenance")
+        if len(self.storage) > 4 or len({v.kind for v in self.storage}) != len(self.storage):
+            raise ProjectFormatError("duplicate storage provenance")
         if self.mask is not None and (
             not isinstance(self.mask, NativeMask) or self.mask.source_sha256 != self.source_sha256
         ):
@@ -1045,6 +1110,24 @@ def project_to_document(
             "source_sha256": _digest(item.source_sha256),
             "metadata": _metadata_document(item.metadata, document_path),
             "mask": mask_document(item.mask),
+            "initial_values": [list(row) for row in item.initial_values],
+            "setup_receipt": None
+            if item.setup_receipt is None
+            else {
+                "id": str(item.setup_receipt.template_id),
+                "name": item.setup_receipt.name,
+                "sha256": item.setup_receipt.sha256,
+            },
+            "storage": [
+                {
+                    "kind": v.kind,
+                    "mode": v.mode,
+                    "original_path": _source_reference(v.original_path, document_path),
+                    "observed_path": _source_reference(v.observed_path, document_path),
+                    "raw_sha256": v.raw_sha256,
+                }
+                for v in item.storage
+            ],
         }
         for item in state.project.acquisitions
     ]
@@ -1105,6 +1188,45 @@ def project_to_document(
     return document
 
 
+def _initial_from_document(value: Any) -> tuple:
+    if (
+        type(value) is not list
+        or len(value) > MAX_NUMERIC_PROPOSALS
+        or any(type(r) is not list for r in value)
+    ):
+        raise ProjectFormatError("invalid initial values list")
+    result = tuple(tuple(r) for r in value)
+    validate_initial_values(result)
+    return result
+
+
+def _setup_from_document(value: Any) -> SetupReceipt | None:
+    if value is None:
+        return None
+    row = _object(value, {"id", "name", "sha256"}, "setup receipt")
+    return SetupReceipt(_uuid(row["id"], "template ID"), row["name"], row["sha256"])
+
+
+def _storage_from_document(value: Any, document_path: Path) -> tuple[StorageOrigin, ...]:
+    if type(value) is not list or len(value) > 4:
+        raise ProjectFormatError("invalid storage list")
+    result = []
+    for v in value:
+        row = _object(
+            v, {"kind", "mode", "original_path", "observed_path", "raw_sha256"}, "storage origin"
+        )
+        result.append(
+            StorageOrigin(
+                row["kind"],
+                row["mode"],
+                _resolved_reference(row["original_path"], document_path, "original storage"),
+                _resolved_reference(row["observed_path"], document_path, "observed storage"),
+                row["raw_sha256"],
+            )
+        )
+    return tuple(result)
+
+
 def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
     """Validate a complete project before replacing the current shell state."""
     if type(value) is not dict:
@@ -1120,6 +1242,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         4,
         5,
         6,
+        7,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1135,7 +1258,12 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         row = _object(
             item,
             (fields if top["schema_version"] == 1 else fields | {"metadata"})
-            | ({"mask"} if top["schema_version"] >= 6 else set()),
+            | ({"mask"} if top["schema_version"] >= 6 else set())
+            | (
+                {"initial_values", "setup_receipt", "storage"}
+                if top["schema_version"] >= 8
+                else set()
+            ),
             f"acquisition {index}",
         )
         source = _resolved_reference(row["source_path"], document_path, f"acquisition {index}")
@@ -1149,6 +1277,11 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
                 if top["schema_version"] == 1
                 else _metadata_from_document(row["metadata"], document_path, top["schema_version"]),
                 mask_from_document(row["mask"]) if top["schema_version"] >= 6 else None,
+                _initial_from_document(row["initial_values"]) if top["schema_version"] >= 8 else (),
+                _setup_from_document(row["setup_receipt"]) if top["schema_version"] >= 8 else None,
+                _storage_from_document(row["storage"], document_path)
+                if top["schema_version"] >= 8
+                else (),
             )
         )
     try:

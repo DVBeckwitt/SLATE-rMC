@@ -3651,7 +3651,7 @@ Likely ownership: existing application inspector, project I/O and runtime result
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
 | [ ] U13: sensitivity and supported uncertainty | U05/U09/U10 | Request bounded canonical parameter perturbations with declared held-fixed assumptions. Show covariance-based bands only with defensible evidence; retain rank/branch/invalid states and distinguish sensitivity from posterior confidence. |
-| [ ] U02b: reusable import/setup | U02a/U09a | Add templates, source/reference/copy storage review and guided relink. Defaults carry provenance; template edits cannot mutate projects and matching filenames cannot substitute different bytes. |
+| [ ] U02b: reusable import/setup | U02a/U09a | Implemented with focused/native functional checks; pending consolidated root review. Named immutable templates, reviewed atomic apply/history, bounded verified copy with YAML/CIF dependencies, and guided identity-preserving relink. Full responsiveness remains open with inherited B002; see Task05 disposition below. |
 | [ ] U14: complete exports and portable archive | U06/U10b/U11g/U12b/U14b | Extend earlier per-slice exports to selected cross-workflow products and a self-contained archive with size/identity review. Verify reopened inputs, parameters, observations/results and qualified/nominal statuses; retain exact underlying values for figures. |
 | [ ] U14a: repeat-use and recovery integration | U02b/U14 | Integrate named attempts, duplicate experiments, selected result history and bounded recovery across all delivered stages. Verify interrupted saves, missing files and independence; no executable checkpoint or false solver resume. |
 | [ ] U15: integrated release check | All prior tasks | Complete section 10's simultaneous inspection/3D/job and twenty-image journeys on declared hardware. Review optional imports, launch, keyboard/DPI behavior, cold/warm latency distributions, memory, cancel/close and failure recovery. Record actual limitations and remove temporary checks. |
@@ -3749,3 +3749,75 @@ No evidence justified another optimizer, backend framework, general serializer o
 rewrite. U12c fills a missing application binding; new-acquisition native preparation remains its
 own explicitly qualified scientific integration task. No runtime work or numerical/performance
 validation was performed by these document audits; targets still require implementation evidence.
+
+
+### Task05 / U02b disposition (2026-09-30)
+
+**Implemented; pending consolidated root review.** This assignment is independently ready through
+accepted U02a/U09a. Task02 root acceptance is pending; Tasks03/04 remain implemented/not accepted.
+The existing [open bug list](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e896-8754-7080-8c0d-230b3e10b46b/slate-desktop-bugs.md)
+retains B001 (forced context recreation), B002 (ordinary Open) and B003 (comparison replacement
+limits). Their campaigns/repairs were not resumed. No Task06 or scientific calculation was started.
+
+Delivery:
+
+- `setup_state` owns immutable named version-1 templates with UUID/revision, explicit units and
+  field origins. Capture/edit/save/load omit fixed/derived and unexposed configuration fields.
+  Metadata material/mount defaults remain labels; canonical numeric defaults validate the complete
+  target configuration and detector shape. Unconfirmed angle proposals remain unconfirmed.
+- `setup_io` uses the existing one global worker and canonical OSC/CIF/configuration readers.
+  Atomic reviewed application copies values into acquisitions, retaining original identities,
+  masks, unrelated state and comparison bindings. Template edits cannot mutate applied snapshots.
+  Metadata plus numeric changes are one bounded history action; source paths/storage also have
+  explicit history. Undo/redo advances revisions and invalidates stale receipts.
+- Reference-in-place is the default. Copy review shows paths, current identities and per-file/total
+  sizes. A 512-file/512-MiB action cap and 1-MiB read chunks bound transfers; originals/colliding
+  destinations/project files cannot be overwritten. Each file is read back before no-overwrite
+  publication. No project binding is committed until all canonical destination checks succeed.
+  Cancel/failure/stale completion can retain completed byte-verified files, with explicit status.
+- Configuration/CIF bundles preserve relative layouts. Absolute dependent paths produce an
+  explicitly derived YAML copy with a new hash and provenance, never a byte-identity claim.
+  Guided relocation verifies decoded OSC identity or actual CIF/configuration byte identity;
+  a valid differently hashed file is rejected. Dependent-CIF relocation reviews the matching bundle.
+- Schema 8 persists applied values, canonical template-snapshot receipts, storage provenance and
+  relocated bindings through the existing bounded atomic writer, with backward reads 1-7.
+  Missing-source restoration uses the existing image loader. Project open/selection/close and
+  edits supersede publication through captured project/reference/revision/job identities.
+
+Checks and measurements:
+
+- 37 focused checks passed: independence and immutable snapshots, units/domains/fixed fields,
+  no-op/atomic history/unrelated edits, exact schema roundtrip/backward reads, real template disk
+  edit/readback and stale-file rejection, valid same-name content rejection, raw-versus-decoded
+  OSC semantics, coherent relative/derived YAML-CIF copying, aliases/collisions, cancellation,
+  failed verification and actual missing-source reopening. Original disposable inputs were preserved.
+- Native production-main journey 08 passed functional capture/save/load/apply/edit, actual reviewed
+  copying, live background navigation/cancel, moved-source detection, valid same-name/different
+  content rejection, matched relink, actual save/reopen and ordinary close/full drains.
+- Targeted native journey 09 passed real Undo/Redo without receipt revival, saving an edited named
+  template without changing its applied snapshot, and acquisition switching during an actual copy
+  job with cancellation and no new binding. No partial file was bound after supersession.
+- Journey 08 recorded B002 at 152.215300 ms; journey 09 at 142.025800 ms, against the unchanged
+  100-ms limit. Startup samples and every Open outlier remain in the raw packets. No later heartbeat
+  gap exceeded 100 ms in those journeys. The complete journey therefore is **not a performance pass**.
+  Available completed Qt paint/event-turn acknowledgments for new actions reached 99.142200 ms;
+  acknowledgment coverage is explicit in the packets, not inferred where absent. Physical scanout
+  and GPU driver timing/allocation were not measured.
+- Cancel safe stop was 6.843600 ms in journey 08 and selection-superseded copy safe stop 11.287000 ms
+  in journey 09. Canonical reference reads, fsync and atomic publication have noninterruptible
+  phases; these stop measurements cover the declared inputs, not worst-case device latency.
+  Ordinary close-to-hide was 4.780100 / 91.009700 ms respectively. Both hid and drained
+  every active/write/newest-pending operation. GUI process peak RSS was 607,043,584 / 586,186,752 bytes;
+  these are process measurements, not a complete GPU resource qualification. Unchanged renderer and
+  profile evidence is reused. No new sustained interaction scenario or continuous campaign was added.
+- Earlier native observer attempts and timeouts are retained. They exposed observer modal/control
+  sequencing errors; none is reclassified as a product/performance pass. The final observers post
+  real control events and use ordinary Qt turns, independent heartbeat/modal/step timers, disposable
+  input/project copies and ordinary autosave/close. No handler bypass, forced-enable, artificial
+  copy delay, manual event pumping or scientific solve was used.
+
+The compact external [completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u02b_completion_index.json)
+records every whole-command native receipt and its fresh 900-second / 90-second caps, source hashes,
+focused/native results and limitations, prior-evidence preservation and checker cleanup. Software
+lint/format/import/AST/diff checks establish implementation compatibility only. Consolidated root
+review and shared/full performance acceptance remain open.

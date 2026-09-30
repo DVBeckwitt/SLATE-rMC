@@ -225,7 +225,8 @@ def metadata_action(before: Project, after: Project, label: str) -> HistoryActio
         item.acquisition_id for item in before.acquisitions
     } != {item.acquisition_id for item in after.acquisitions}:
         raise ProjectFormatError("metadata transaction changed project or acquisition membership")
-    old = {item.acquisition_id: item.metadata for item in before.acquisitions}
+    old_items = {item.acquisition_id: item for item in before.acquisitions}
+    old = {key: item.metadata for key, item in old_items.items()}
     changes = []
     for item in after.acquisitions:
         prior = old[item.acquisition_id]
@@ -250,6 +251,42 @@ def metadata_action(before: Project, after: Project, label: str) -> HistoryActio
                         )
             elif before_value != after_value:
                 changes.append(FieldChange(item.acquisition_id, name, before_value, after_value))
+        prior_item = old_items[item.acquisition_id]
+        for name in ("source_path", "initial_values", "setup_receipt", "storage"):
+            if getattr(prior_item, name) != getattr(item, name):
+                changes.append(
+                    FieldChange(
+                        item.acquisition_id,
+                        f"acquisition.{name}",
+                        getattr(prior_item, name),
+                        getattr(item, name),
+                    )
+                )
+    return _action(label, changes)
+
+
+def combined_action(
+    before: Project,
+    after: Project,
+    old_draft: NumericDraft | None,
+    new_draft: NumericDraft | None,
+    label: str,
+) -> HistoryAction | None:
+    action = metadata_action(before, after, label)
+    changes = list(action.changes) if action is not None else []
+    if old_draft is not None and new_draft is not None and old_draft != new_draft:
+        if (old_draft.configuration_sha256, old_draft.configuration_path, old_draft.cif_path) != (
+            new_draft.configuration_sha256,
+            new_draft.configuration_path,
+            new_draft.cif_path,
+        ):
+            changes.append(
+                FieldChange(old_draft.acquisition_id, "draft_snapshot", old_draft, new_draft)
+            )
+        else:
+            numeric = draft_action(old_draft, new_draft, label)
+            if numeric is not None:
+                changes.extend(numeric.changes)
     return _action(label, changes)
 
 
@@ -293,6 +330,7 @@ def _apply_action(
             raise ProjectFormatError("undo target acquisition was removed")
         item = by_id[acquisition_id]
         direct = {}
+        acquisition_changes = {}
         provenance = {key: (value,) for key, value in item.metadata.provenance}
         proposals = {key: (value, origin) for key, value, origin in item.metadata.proposals}
         draft_values = (
@@ -304,7 +342,27 @@ def _apply_action(
             expected, restored = (
                 (change.after, change.before) if undo else (change.before, change.after)
             )
-            if change.field.startswith("draft."):
+            if change.field == "draft_snapshot":
+                if (
+                    next_draft is None
+                    or replace(next_draft, revision=expected.revision) != expected
+                ):
+                    raise ProjectFormatError("reference draft undo conflicts with current draft")
+                next_draft = replace(restored, revision=next_draft.revision + 1)
+                reference_changes.append((acquisition_id, "configuration"))
+            elif change.field.startswith("acquisition."):
+                name = change.field.split(".", 1)[1]
+                if (
+                    name not in ("source_path", "initial_values", "setup_receipt", "storage")
+                    or getattr(item, name) != expected
+                ):
+                    raise ProjectFormatError("acquisition undo conflicts with current field")
+                acquisition_changes[name] = restored
+                if name == "source_path":
+                    reference_changes.append((acquisition_id, "osc"))
+                if name == "initial_values":
+                    reference_changes.append((acquisition_id, "initial_values"))
+            elif change.field.startswith("draft."):
                 if draft_values is None or draft_values.get(change.field[6:]) != expected:
                     raise ProjectFormatError("numeric undo conflicts with current draft")
                 if restored is None:
@@ -343,6 +401,7 @@ def _apply_action(
         if any(not change.field.startswith("draft.") for change in changes):
             replacement[acquisition_id] = replace(
                 item,
+                **acquisition_changes,
                 metadata=replace(
                     item.metadata,
                     **direct,
@@ -382,7 +441,9 @@ class SessionHistory:
             retained = []
             for action in stack:
                 changes = [
-                    change for change in action.changes if not change.field.startswith("draft.")
+                    change
+                    for change in action.changes
+                    if not change.field.startswith("draft.") and change.field != "draft_snapshot"
                 ]
                 if len(changes) == len(action.changes):
                     retained.append(action)

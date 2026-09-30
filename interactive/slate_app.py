@@ -56,6 +56,7 @@ from numeric_fields import PARAMETERS
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
 from parameter_state import (
     SessionHistory,
+    combined_action,
     description,
     displayed_value,
     draft_action,
@@ -140,6 +141,8 @@ from reciprocal_preview import (
     ReciprocalPreview,
     prepare_reciprocal_preview,
 )
+from setup_io import SetupApplication, prepare_setup
+from setup_panel import SetupDialog
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -272,6 +275,13 @@ class ShellWindow(QMainWindow):
             if recovery_root is not None
             else local_data / "SLATE-rMC" / "recovery"
         )
+        self._setup_template = None
+        self._setup_template_path: Path | None = None
+        self._setup_template_hash: str | None = None
+        self._setup_dialog: SetupDialog | None = None
+        self._setup_context = None
+        self._pending_setup_request = None
+        self._pending_setup_copy = None
         self._project_path: Path | None = None
         self._revision = 0
         self._saved_revision = -1
@@ -321,6 +331,7 @@ class ShellWindow(QMainWindow):
                 "reciprocal",
                 "mask",
                 "line",
+                "setup",
             ]
             | None
         ) = None
@@ -382,6 +393,7 @@ class ShellWindow(QMainWindow):
         self.export_metadata_button.clicked.connect(self._choose_metadata_export)
         self.detector_panel.export_button.clicked.connect(self._choose_inspection_export)
         self.relink_button.clicked.connect(self._choose_relink)
+        self.setup_button.clicked.connect(self._show_setup)
         self.open_button.clicked.connect(self._choose_open)
         self.save_button.clicked.connect(self.save_project)
         self.save_as_button.clicked.connect(self.save_project_as)
@@ -599,8 +611,8 @@ class ShellWindow(QMainWindow):
             controls.addWidget(button, index // 3, index % 3)
         center_layout.addLayout(controls)
         metadata_controls = QGridLayout()
-        self.cif_button = QPushButton("Choose CIF")
-        self.configuration_button = QPushButton("Choose configuration")
+        self.cif_button = QPushButton("Replace CIF")
+        self.configuration_button = QPushButton("Replace configuration")
         self.paste_button = QPushButton("Paste table")
         self.csv_button = QPushButton("Map CSV")
         self.export_metadata_button = QPushButton("Export metadata CSV")
@@ -614,9 +626,11 @@ class ShellWindow(QMainWindow):
             )
         ):
             metadata_controls.addWidget(button, index // 3, index % 3)
+        self.setup_button = QPushButton("Setup / sources")
+        metadata_controls.addWidget(self.setup_button, 1, 2)
         center_layout.addLayout(metadata_controls)
         storage_notice = QLabel(
-            "Storage: reference OSC files in place. Originals are never copied or modified; copy-storage review is a later task."
+            "Storage: reference inputs in place by default. Setup / sources reviews reusable defaults, verified copies and identity-preserving relocation."
         )
         storage_notice.setWordWrap(True)
         storage_notice.setObjectName("mutedText")
@@ -1147,6 +1161,23 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_setup_copy is not None:
+            plan, self._pending_setup_copy = self._pending_setup_copy, None
+            self._start_setup("copy", {"plan": plan})
+            return
+        if self._pending_setup_request is not None:
+            request, context = self._pending_setup_request
+            self._pending_setup_request = None
+            if context == (
+                self.project.project_id,
+                self._revision,
+                self.selected_acquisition_id,
+                self._selected_project_ids(),
+            ):
+                self._submit_setup(request, context)
+            elif self._setup_dialog is not None:
+                self._setup_dialog.message.setText("Pending setup became stale; review again")
+            return
         if self._pending_reference is not None:
             kind, path, ids, project_id, revision = self._pending_reference
             self._pending_reference = None
@@ -1282,7 +1313,9 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_reference = None
-        if self._active_kind in ("import", "relink", "batch", "reference", "reciprocal"):
+        self._pending_setup_request = None
+        self._pending_setup_copy = None
+        if self._active_kind in ("import", "relink", "batch", "reference", "reciprocal", "setup"):
             self.jobs.cancel()
         self._candidate_queue.clear()
         self._refresh_review_table()
@@ -1327,17 +1360,151 @@ class ShellWindow(QMainWindow):
         self._opening_recovery = recovery
         self._opening_path = path
 
-    def _choose_relink(self) -> None:
-        if self.selected_acquisition_id is None:
-            return
-        filename, _ = QFileDialog.getOpenFileName(
-            self,
-            "Relink the selected OSC source",
-            str(Path.home()),
-            "OSC images (*.osc *.OSC *.osc.gz *.OSC.GZ)",
+    def _show_setup(self) -> None:
+        if self._setup_dialog is None:
+            self._setup_dialog = SetupDialog(self)
+        self._setup_dialog.refresh()
+        self._setup_dialog.show()
+        self._setup_dialog.raise_()
+
+    def _setup_context_current(self) -> bool:
+        return (
+            not self._close_intent
+            and self._pending_open is None
+            and self._setup_context
+            == (
+                self.project.project_id,
+                self._revision,
+                self.selected_acquisition_id,
+                self._selected_project_ids(),
+            )
         )
-        if filename:
-            self.relink_selected(Path(filename))
+
+    def _start_setup(self, operation: str, payload: dict) -> None:
+        if self._close_intent or self._pending_open is not None:
+            return
+        ids = self._selected_project_ids()
+        if operation not in ("load_template", "save_template") and not ids:
+            self.statusBar().showMessage("Select acquisitions before setup/source review")
+            return
+        path = self._project_path or self._recovery_path()
+        try:
+            document = project_to_document(
+                ProjectDocument(self.project, self._capture_view(), self._numeric_draft), path
+            )
+            argument = json.dumps(
+                {
+                    "operation": operation,
+                    "project_path": str(path),
+                    "document": document,
+                    "ids": [str(v) for v in ids],
+                    "payload": payload,
+                },
+                allow_nan=False,
+            ).encode()
+        except (ValueError, ProjectFormatError) as exc:
+            self.statusBar().showMessage(f"Setup not started: {exc}")
+            return
+        context = (self.project.project_id, self._revision, self.selected_acquisition_id, ids)
+        if self.jobs.busy or self._active_kind is not None or self._write_queue:
+            self._pending_setup_request = (argument, context)
+            if self._setup_dialog is not None:
+                self._setup_dialog.message.setText("Setup queued after the current operation")
+            QTimer.singleShot(0, self._dispatch_pending)
+            return
+        self._submit_setup(argument, context)
+
+    def _submit_setup(self, argument: bytes, context: tuple) -> None:
+        self._setup_context = context
+        self._active_kind = "setup"
+        try:
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    self.selected_acquisition_id,
+                    Revisions(data=self._revision),
+                    argument,
+                    len(argument),
+                    min(96 * 1024 * 1024, 2 * len(argument) + 128 * 1024),
+                    prepare_setup,
+                )
+            )
+            self._active_generation = identity.generation
+        except (ValueError, RuntimeError, TypeError) as exc:
+            self._active_kind = None
+            self.statusBar().showMessage(f"Setup not started: {exc}")
+        if self._setup_dialog is not None:
+            self._setup_dialog.refresh()
+
+    def _commit_setup(self, application: SetupApplication) -> None:
+        if not self._setup_context_current():
+            if self._setup_dialog is not None:
+                self._setup_dialog.message.setText("Review became stale; no binding committed")
+            return
+        updated, draft = application.document.project, application.document.numeric_draft
+        try:
+            project_to_document(
+                ProjectDocument(updated, self._capture_view(), draft),
+                self._project_path or self._recovery_path(),
+                reserved_bytes=MAX_FUTURE_VIEW_BYTES,
+            )
+            action = combined_action(
+                self.project, updated, self._numeric_draft, draft, "Apply reviewed setup / storage"
+            )
+        except (ValueError, ProjectFormatError) as exc:
+            if self._setup_dialog is not None:
+                self._setup_dialog.message.setText(f"Setup not committed: {exc}")
+            return
+        if action is None:
+            if self._setup_dialog is not None:
+                self._setup_dialog.message.setText(
+                    "No changed values or bindings; no history action"
+                )
+            return
+        self._numeric_history.push(action)
+        self.project, self._numeric_draft = updated, draft
+        self._validated_numeric = None
+        self._launch_snapshot = None
+        for acquisition_id, kind in application.verified_kinds:
+            if kind == "osc":
+                self._source_checks[acquisition_id] = SourceCheck(
+                    acquisition_id, "verified", "Decoded identity checked by storage worker"
+                )
+                cached = self._resident_planes.get(acquisition_id)
+                acquisition = next(
+                    v for v in updated.acquisitions if v.acquisition_id == acquisition_id
+                )
+                if cached is not None:
+                    self._resident_planes[acquisition_id] = replace(
+                        cached, source_path=acquisition.source_path
+                    )
+                elif acquisition_id == self.selected_acquisition_id:
+                    self._deferred_import = (
+                        acquisition.source_path,
+                        acquisition_id,
+                        "import",
+                        updated.project_id,
+                    )
+            else:
+                self._reference_checks[(acquisition_id, kind)] = ReferenceCheck(
+                    acquisition_id,
+                    kind,
+                    "verified",
+                    "Exact reference identity checked by storage worker",
+                )
+        self.refresh_project()
+        self._mark_dirty()
+        if self._setup_dialog is not None:
+            self._setup_dialog.message.setText(
+                "Reviewed snapshot committed as one undoable action; numeric receipts invalidated. Source files retained."
+            )
+        self.statusBar().showMessage("Reviewed setup/source snapshot committed")
+
+    def _choose_relink(self) -> None:
+        self._show_setup()
+        if self._setup_dialog is not None:
+            self._setup_dialog.kind.setCurrentIndex(0)
+            self._setup_dialog.relink()
 
     def _choose_reference(self, kind: str) -> None:
         ids = self._selected_project_ids()
@@ -1462,16 +1629,8 @@ class ShellWindow(QMainWindow):
         )
 
     def relink_selected(self, path: Path) -> None:
-        if self.selected_acquisition_id is None:
-            self._show_state(
-                "error", "No acquisition selected", "Select an acquisition before relinking."
-            )
-            return
-        source = Path(path).absolute()
-        if not source.name.lower().endswith((".osc", ".osc.gz")):
-            self._show_state("error", "Unsupported file", "Choose one .osc or .osc.gz file.")
-            return
-        self._submit_import(source, self.selected_acquisition_id, mode="relink")
+        self._show_setup()
+        self._start_setup("relink", {"kind": "osc", "path": str(Path(path).absolute())})
 
     def _advance_close(self) -> None:
         if self._discard_confirmed:
@@ -2022,7 +2181,9 @@ class ShellWindow(QMainWindow):
                     "configuration_sha256": metadata.configuration_sha256,
                     "cif_path": str(metadata.configuration_cif_path),
                     "cif_sha256": metadata.configuration_cif_sha256,
-                    "proposed": retained.proposed if matching and retained is not None else (),
+                    "proposed": retained.proposed
+                    if matching and retained is not None
+                    else acquisition.initial_values,
                     "revision": retained.revision if matching and retained is not None else 0,
                 }
             ).encode("utf-8")
@@ -2207,8 +2368,17 @@ class ShellWindow(QMainWindow):
             self._validated_numeric = (updated.project_id, draft)
         elif draft is None:
             self._validated_numeric = None
+        self._launch_snapshot = None
         for acquisition_id, kind in references:
             self._validated_numeric = None
+            if kind == "osc":
+                self._source_checks[acquisition_id] = SourceCheck(
+                    acquisition_id, "unreadable", "Source-path undo/redo requires revalidation"
+                )
+                self._resident_planes.pop(acquisition_id, None)
+                continue
+            if kind == "initial_values":
+                continue
             self._reference_checks[(acquisition_id, kind)] = ReferenceCheck(
                 acquisition_id, kind, "unverified", "Metadata undo/redo requires revalidation"
             )
@@ -3807,6 +3977,8 @@ class ShellWindow(QMainWindow):
                     candidate.detail = "Batch canceled"
             self._candidate_queue.clear()
             self._refresh_review_table()
+        self._pending_setup_request = None
+        self._pending_setup_copy = None
         self.jobs.cancel()
 
     def _submit_import(
@@ -4259,6 +4431,11 @@ class ShellWindow(QMainWindow):
                             task[0], task[1], "Reference result discarded"
                         )
                     self._active_reference = None
+                if self._active_kind == "setup" and self._setup_dialog is not None:
+                    self._setup_dialog.message.setText(
+                        "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
+                    )
+                    self._setup_dialog.cancel_button.setEnabled(False)
                 self._active_kind = None
                 self._active_generation = None
                 self._active_load_id = None
@@ -4269,6 +4446,8 @@ class ShellWindow(QMainWindow):
                 self._active_mask = None
                 self._active_line = None
                 self._active_profile_target = self._active_profile_query = None
+                if self._setup_dialog is not None:
+                    self._setup_dialog.refresh()
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -4290,10 +4469,29 @@ class ShellWindow(QMainWindow):
                 "reciprocal",
                 "mask",
                 "line",
+                "setup",
             )
             and state in (JobState.QUEUED, JobState.RUNNING)
         )
         self.comparison_panel.cancel_button.setEnabled(self.cancel_button.isEnabled())
+        if kind == "setup":
+            if self._setup_dialog is not None:
+                self._setup_dialog.cancel_button.setEnabled(
+                    state in (JobState.QUEUED, JobState.RUNNING)
+                )
+                self._setup_dialog.message.setText(
+                    f"Setup {state.value}: {summary.detail or 'working on the background worker'}"
+                )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = None
+                self._active_generation = None
+                if self._setup_dialog is not None:
+                    self._setup_dialog.message.setText(
+                        f"Setup {state.value}: {summary.detail}. No new binding; completed byte-verified copies may remain in the reviewed data folder."
+                    )
+                    self._setup_dialog.refresh()
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "line":
             if state == JobState.CANCEL_REQUESTED:
                 self.statusBar().showMessage("Cancel requested; stopping line sampling")
@@ -4492,6 +4690,18 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "setup":
+                if (
+                    self._setup_context_current()
+                    and isinstance(value, tuple)
+                    and len(value) == 2
+                    and self._setup_dialog is not None
+                ):
+                    self._setup_dialog.ready(*value)
+                elif self._setup_dialog is not None:
+                    self._setup_dialog.message.setText(
+                        "Stale setup completion rejected; no binding. Verified copies may remain in the reviewed folder."
+                    )
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
@@ -4504,6 +4714,8 @@ class ShellWindow(QMainWindow):
             self._sync_numeric_load_button()
             self.detector_panel.mask_cancel_button.setEnabled(False)
             self._refresh_mask_history()
+            if self._setup_dialog is not None:
+                self._setup_dialog.refresh()
             QTimer.singleShot(0, self._dispatch_pending)
 
     def _export_ready(self, identity: JobIdentity, value: object) -> None:
@@ -4677,6 +4889,8 @@ class ShellWindow(QMainWindow):
                 if self.detector_notice.isVisible():
                     self.detector_notice.setText(message)
             self.statusBar().showMessage(message)
+        if self._active_kind == "setup" and self._setup_dialog is not None:
+            self._setup_dialog.message.setText(message)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close:
@@ -4698,6 +4912,8 @@ class ShellWindow(QMainWindow):
             self._pending_open = None
             self._deferred_import = None
             self._pending_reference = None
+            self._pending_setup_request = None
+            self._pending_setup_copy = None
             for candidate_id in self._candidate_queue:
                 candidate = self._candidates.get(candidate_id)
                 if candidate is not None and candidate.status == "queued":

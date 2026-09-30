@@ -61,10 +61,57 @@ limit is explicit. **Cancel preparation** uses the application's existing job ow
 
 **Export comparison + cuts** writes a new external PNG and matching exact CSV with both
 profiles, cuts, available reference values, support, units and complete identities/settings.
-Both destinations must be new and cannot overwrite project or source files. Schema 7 saves
+Both destinations must be new and cannot overwrite project or source files. Schema 8 saves
 comparison state through the ordinary project writer and reads previous project versions.
 Measured/model/residual intensity comparison is unavailable until a compatible intensity
 result is admitted; these controls do not start a fit.
+
+### Reusable setup and source storage
+
+**Setup / sources** opens a modeless review for the selected acquisitions. **Capture setup**
+uses declared metadata and a currently validated numeric draft. Name and edit the captured
+values in their stored units; blank values omit a reusable default. Fixed/derived fields are
+listed with their existing editor restrictions. Material and mount defaults are metadata labels;
+unexposed material, coupled rotations, source laws and other configuration fields stay with the
+target's canonical configuration. Capture does not confirm filename/header angle proposals.
+
+Save/load a named external `.slate-template.json` (versioned, UUID-bound, at most 64 KiB).
+**Review / apply to selected** validates complete target configurations for numeric defaults and
+shows each acquisition, previous/proposed value, unit and origin before Apply. Templates contain
+no acquisition IDs, masks, source-specific reference paths or fit qualification. Applied values
+and a canonical template-snapshot hash are copied into each project acquisition. Editing or saving
+a template later cannot mutate those copies. **Load draft** uses its acquisition's saved initial
+values. The existing bounded Undo/Redo owns each committed setup or storage action; no-op,
+invalid and canceled reviews add no action. Numeric/reference receipts are invalidated as needed.
+
+Inputs are referenced in place by default. **Review copy to data folder** checks current identities
+and shows all resolved sources/destinations, per-file/total byte sizes, hashes and derived paths.
+Copying is limited to 512 files / 512 MiB per action, with 1 MiB streaming chunks and cooperative
+cancellation on the existing global worker. Destinations must be new, external to Git checkouts,
+and cannot alias any input or project. Verified repeated exposures retain independent UUIDs even
+when they share immutable copied bytes. Originals are never changed; removing references never
+deletes any file. Failed/canceled/stale work publishes no partial project binding. Already completed
+byte-verified files may remain in the reviewed folder; the message states this explicitly.
+
+Configuration copying includes its recorded dependent CIF. Relative layouts are preserved within
+a deterministic bundle. An absolute CIF path is rewritten only in a derived configuration whose
+new bytes/hash and provenance are recorded and canonically revalidated. Destination readback and
+the exact resolved dependent CIF are checked before any binding is committed. The storage record
+keeps the original path and separately identifies the path whose raw bytes were observed; a
+matched decoded OSC relocation does not assert that historical compressed bytes matched.
+
+**Locate / review relocation** shows missing/moved/unreadable references and affected acquisitions.
+OSC relocation must match the saved decoded header/payload SHA-256; CIF/configuration relocation
+must match actual saved reference bytes. Same filename/shape and a valid different file do not
+match. To relocate a dependent CIF, choose the matching configuration/CIF bundle so its declared
+path remains valid. **Replace CIF / configuration** is the separately labeled existing new-input
+action. Project schema 8 saves applied defaults/receipts, original-storage provenance and current
+bindings atomically, and reads schemas 1-7. A restored missing OSC is loaded through the original
+bounded image owner. A selection/edit/open/close change rejects obsolete worker publication.
+
+U02b is implemented with focused and native functional checks, pending consolidated root review.
+The inherited ordinary Open delay B002 remains open; this is not a full responsiveness acceptance.
+See `docs/DESKTOP_UI_PLAN.md` and the linked open-bug list there.
 
 ### Project and detector controls
 
@@ -99,7 +146,7 @@ controls. A filename such as `sample_5d.osc` offers an unconfirmed angle proposa
 **Confirm suggestion** accepts it. **Map pasted table** and **Map CSV file** preview explicit
 column mappings before applying rows by acquisition UUID or selected-row order. The supported
 hBN calibrant preset is a declared identifier; it does not infer calibration from image pixels.
-**Bind CIF** and **Bind configuration** validate references through the package readers and retain
+**Replace CIF** and **Replace configuration** validate references through the package readers and retain
 their path and SHA-256. A configuration also retains the bounded hash and resolved path of its
 dependent CIF; configuration loading does not structurally parse that CIF. **Export metadata CSV**
 writes an explicitly chosen file outside Git checkouts with
