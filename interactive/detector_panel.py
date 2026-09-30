@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import numpy as np
+from mask_state import MAX_POINTS, REASONS, MaskGesture
 from numpy.typing import NDArray
 from project_state import (
     FLOAT32_DISPLAY_MAX,
@@ -29,6 +30,7 @@ from PySide6.QtGui import (
     QTransform,
 )
 from PySide6.QtOpenGL import (
+    QOpenGLPixelTransferOptions,
     QOpenGLShader,
     QOpenGLShaderProgram,
     QOpenGLTexture,
@@ -180,6 +182,18 @@ def exact_band_profiles(
         vertical_support = np.zeros(rows, dtype=np.int64)
         horizontal[c0:c1], horizontal_support[c0:c1] = h_values, h_support
         vertical[r0:r1], vertical_support[r0:r1] = v_values, v_support
+    elif (r0, r1, c0, c1) == (0, rows, 0, columns) and (mask is not None or not integer):
+        valid = np.isfinite(image)
+        if mask is not None:
+            valid &= mask
+        safe = np.where(valid, image, 0)
+        horizontal = np.sum(safe, axis=0, dtype=accumulator)
+        vertical = np.sum(safe, axis=1, dtype=accumulator)
+        horizontal_support = np.sum(valid, axis=0, dtype=np.int64)
+        vertical_support = np.sum(valid, axis=1, dtype=np.int64)
+        if measure == "mean":
+            horizontal = _mean_per_valid(horizontal, horizontal_support)
+            vertical = _mean_per_valid(vertical, vertical_support)
     else:
         horizontal_values = image[r0:r1]
         vertical_values = image[:, c0:c1]
@@ -220,7 +234,9 @@ uniform sampler2D detector;
 uniform float low_value;
 uniform float high_value;
 uniform int contrast_mode;
-void main() {
+uniform sampler2D exclusion;
+uniform int show_exclusion;
+void detector_color() {
     float value = texture(detector, uv).r;
     if (isnan(value) || isinf(value) || (contrast_mode == 2 && value <= 0.0)) {
         float check = mod(floor(gl_FragCoord.x / 6.0) + floor(gl_FragCoord.y / 6.0), 2.0);
@@ -245,6 +261,18 @@ void main() {
     level = clamp(level, 0.0, 1.0);
     color = vec4(level, level * 0.82 + 0.08, 0.12 + level * 0.68, 1.0);
 }
+void main() {
+    detector_color();
+    if (show_exclusion == 1) {
+        int reason = int(round(texture(exclusion, uv).r * 255.0));
+        if (reason > 0) {
+            vec3 tint = reason == 1 ? vec3(1.0,0.25,0.35)
+                : reason == 2 ? vec3(0.85,0.35,1.0)
+                : reason == 3 ? vec3(0.2,0.75,1.0) : vec3(1.0,0.8,0.1);
+            color.rgb = mix(color.rgb, tint, 0.55);
+        }
+    }
+}
 """
 _GL_MAX_TEXTURE_SIZE = 0x0D33
 
@@ -260,6 +288,9 @@ class DetectorTextureView(QOpenGLWidget):
     overlays_changed = Signal(int)
     band_edge_dragged = Signal(str, int)
     roi_selected = Signal(object)
+    mask_gesture_ready = Signal(object)
+    mask_mode_changed = Signal(str)
+    mask_input_error = Signal(str)
 
     def __init__(self, *, plane: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -267,6 +298,20 @@ class DetectorTextureView(QOpenGLWidget):
         self.image: NDArray[np.generic] | None = None
         self._display: NDArray[np.float32] | None = None
         self._texture: QOpenGLTexture | None = None
+        self._mask_texture: QOpenGLTexture | None = None
+        self.mask_reasons = None
+        self.mask_revision = 0
+        self.mask_upload_count = 0
+        self.mask_uploaded_bytes = 0
+        self._mask_epoch = 0
+        self._mask_uploaded_epoch = -1
+        self._mask_update_bounds = None
+        self.show_mask = True
+        self.mask_mode = "inspect"
+        self.mask_reason = 1
+        self.brush_radius_px = 8.0
+        self._mask_points: list[tuple[float, float]] = []
+        self._mask_hover: tuple[float, float] | None = None
         self._program: QOpenGLShaderProgram | None = None
         self._vao: QOpenGLVertexArrayObject | None = None
         self._uploaded_revision = -1
@@ -315,6 +360,66 @@ class DetectorTextureView(QOpenGLWidget):
         self.request_generation += 1
         self.update()
 
+    def set_mask_mode(self, mode: str) -> None:
+        if mode not in ("inspect", "rectangle", "polygon", "brush"):
+            raise ValueError("Unsupported detector mode")
+        self._mask_points.clear()
+        self._mask_hover = None
+        self.mask_mode = mode
+        if mode != "inspect":
+            self._box_start = self._box_end = self._roi_start = self._roi_end = None
+            self._band_drag = None
+            self.box_zoom_enabled = self.roi_select_enabled = False
+        self.mask_mode_changed.emit(mode)
+        self._request_paint()
+
+    def set_mask_plane(
+        self, reasons, revision: int, *, base_reasons_id=None, changed_bounds=None
+    ) -> None:
+        if reasons is not None and (
+            self.image is None
+            or reasons.shape != self.image.shape
+            or reasons.dtype != np.uint8
+            or reasons.flags.writeable
+            or not reasons.flags.c_contiguous
+        ):
+            raise ValueError("Mask overlay needs an immutable aligned native reason plane")
+        self._mask_update_bounds = (
+            changed_bounds
+            if self.mask_reasons is not None
+            and base_reasons_id == id(self.mask_reasons)
+            and self._mask_uploaded_epoch == self._mask_epoch
+            else None
+        )
+        self.mask_reasons, self.mask_revision = reasons, revision
+        self._mask_epoch += 1
+        self._request_paint()
+
+    def _mask_position(self, position: QPointF) -> tuple[float, float] | None:
+        if self.image is None:
+            return None
+        rect = self._rect()
+        rows, columns = self.image.shape
+        return (
+            max(
+                -0.5,
+                min(columns - 0.5, (position.x() - rect.left()) * columns / rect.width() - 0.5),
+            ),
+            max(-0.5, min(rows - 0.5, (position.y() - rect.top()) * rows / rect.height() - 0.5)),
+        )
+
+    def _finish_mask_gesture(self) -> None:
+        try:
+            gesture = MaskGesture(
+                self.mask_mode, self.mask_reason, tuple(self._mask_points), self.brush_radius_px
+            )
+        except ValueError:
+            gesture = None
+        self._mask_points.clear()
+        self._request_paint()
+        if gesture is not None:
+            self.mask_gesture_ready.emit(gesture)
+
     def set_image(self, image: NDArray[np.generic]) -> None:
         supplied = np.asarray(image)
         if supplied.ndim != 2 or supplied.dtype.kind not in "iuf" or not supplied.size:
@@ -332,6 +437,8 @@ class DetectorTextureView(QOpenGLWidget):
         native.setflags(write=False)
         display = np.ascontiguousarray(native, dtype=np.float32)
         self.image, self._display = native, display
+        self.set_mask_plane(None, 0)
+        self.set_mask_mode("inspect")
         self.data_min, self.data_max, self.min_positive = data_min, data_max, min_positive
         self.low_value, self.high_value = low, high
         self.contrast_mode = "linear"
@@ -383,6 +490,8 @@ class DetectorTextureView(QOpenGLWidget):
         if not math.isfinite(max_value) or not low_value <= max_value <= high_value:
             raise ValueError("prepared maximum is inconsistent with display levels")
         self.image, self._display = native_counts, display
+        self.set_mask_plane(None, 0)
+        self.set_mask_mode("inspect")
         self.data_min, self.data_max, self.min_positive = low_value, max_value, min_positive
         self.low_value, self.high_value, self.contrast_mode = low_value, high_value, "linear"
         self.zoom, self.pan, self.scale_mode = 1.0, QPointF(), "fit"
@@ -600,20 +709,21 @@ class DetectorTextureView(QOpenGLWidget):
         self.max_texture_axis = int(self.context().functions().glGetIntegerv(_GL_MAX_TEXTURE_SIZE))
         if self.max_texture_axis <= 0:
             raise RuntimeError("OpenGL did not report a usable detector texture size")
-        program = QOpenGLShaderProgram(self)
+        program = QOpenGLShaderProgram()
         for kind, source in (
             (QOpenGLShader.ShaderTypeBit.Vertex, _VERTEX),
             (QOpenGLShader.ShaderTypeBit.Fragment, DETECTOR_FRAGMENT_SHADER),
         ):
-            if not program.addShaderFromSourceCode(kind, source):
+            if not program.addCacheableShaderFromSourceCode(kind, source):
                 raise RuntimeError(program.log())
         if not program.link():
             raise RuntimeError(program.log())
-        vao = QOpenGLVertexArrayObject(self)
+        vao = QOpenGLVertexArrayObject()
         if not vao.create():
             raise RuntimeError("OpenGL vertex array creation failed")
         self._program, self._vao = program, vao
         self._uploaded_revision = -1
+        self._mask_uploaded_epoch = -1
         self.context().aboutToBeDestroyed.connect(self.release_resources)
 
     def release_resources(self) -> None:
@@ -623,10 +733,14 @@ class DetectorTextureView(QOpenGLWidget):
         try:
             if self._texture is not None:
                 self._texture.destroy()
+            if self._mask_texture is not None:
+                self._mask_texture.destroy()
             if self._vao is not None:
                 self._vao.destroy()
         finally:
             self._texture = None
+            self._mask_texture = None
+            self._mask_uploaded_epoch = -1
             self._vao = None
             self._program = None
             self._uploaded_revision = -1
@@ -653,6 +767,68 @@ class DetectorTextureView(QOpenGLWidget):
         self._uploaded_revision = self.data_revision
         self.upload_count += 1
 
+    def _upload_mask_if_needed(self) -> None:
+        if self._mask_uploaded_epoch == self._mask_epoch:
+            return
+        if self._mask_texture is not None and self.mask_reasons is None:
+            self._mask_texture.destroy()
+            self._mask_texture = None
+        if self.mask_reasons is not None:
+            rows, columns = self.mask_reasons.shape
+            if self._mask_texture is not None and (
+                self._mask_texture.width() != columns or self._mask_texture.height() != rows
+            ):
+                self._mask_texture.destroy()
+                self._mask_texture = None
+            if self._mask_texture is None:
+                texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+                texture.setFormat(QOpenGLTexture.TextureFormat.R8_UNorm)
+                texture.setSize(columns, rows)
+                texture.allocateStorage(
+                    QOpenGLTexture.PixelFormat.Red, QOpenGLTexture.PixelType.UInt8
+                )
+                texture.setMinMagFilters(
+                    QOpenGLTexture.Filter.Nearest, QOpenGLTexture.Filter.Nearest
+                )
+                self._mask_texture = texture
+                self._mask_update_bounds = None
+            if self._mask_update_bounds is None:
+                options = QOpenGLPixelTransferOptions()
+                options.setAlignment(1)
+                self._mask_texture.setData(
+                    QOpenGLTexture.PixelFormat.Red,
+                    QOpenGLTexture.PixelType.UInt8,
+                    VoidPtr(self.mask_reasons.ctypes.data, self.mask_reasons.nbytes, False),
+                    options,
+                )
+                uploaded_bytes = self.mask_reasons.nbytes
+            else:
+                c0, c1, r0, r1 = self._mask_update_bounds
+                block = np.ascontiguousarray(self.mask_reasons[r0:r1, c0:c1])
+                functions = self.context().functions()
+                alignment = int(functions.glGetIntegerv(0x0CF5))
+                self._mask_texture.bind(1)
+                try:
+                    functions.glPixelStorei(0x0CF5, 1)
+                    functions.glTexSubImage2D(
+                        0x0DE1,
+                        0,
+                        c0,
+                        r0,
+                        c1 - c0,
+                        r1 - r0,
+                        0x1903,
+                        0x1401,
+                        VoidPtr(block.ctypes.data, block.nbytes, False),
+                    )
+                finally:
+                    functions.glPixelStorei(0x0CF5, alignment)
+                    self._mask_texture.release(1)
+                uploaded_bytes = block.nbytes
+            self.mask_upload_count += 1
+            self.mask_uploaded_bytes += uploaded_bytes
+        self._mask_uploaded_epoch = self._mask_epoch
+
     def paintGL(self) -> None:
         functions = self.context().functions()
         functions.glClearColor(0.08, 0.09, 0.11, 1.0)
@@ -661,12 +837,20 @@ class DetectorTextureView(QOpenGLWidget):
             self.painted.emit(self.request_generation, perf_counter())
             return
         self._upload_if_needed()
+        self._upload_mask_if_needed()
         rect = self._rect() if not self.plane else QRectF(0.1, 0.1, 0.8, 0.8)
         if self.show_image:
             self._program.bind()
             self._vao.bind()
             assert self._texture is not None
             self._texture.bind(0)
+            if self._mask_texture is not None:
+                self._mask_texture.bind(1)
+            functions.glUniform1i(self._program.uniformLocation("exclusion"), 1)
+            functions.glUniform1i(
+                self._program.uniformLocation("show_exclusion"),
+                int(self.show_mask and self._mask_texture is not None),
+            )
             functions.glUniform1i(self._program.uniformLocation("detector"), 0)
             functions.glUniform4f(
                 self._program.uniformLocation("rect"),
@@ -688,6 +872,8 @@ class DetectorTextureView(QOpenGLWidget):
             )
             functions.glDrawArrays(0x0004, 0, 6)
             self._texture.release()
+            if self._mask_texture is not None:
+                self._mask_texture.release(1)
             self._vao.release()
             self._program.release()
         if not self.plane:
@@ -766,6 +952,23 @@ class DetectorTextureView(QOpenGLWidget):
             if self._roi_start is not None and self._roi_end is not None:
                 painter.setPen(QPen(QColor(175, 235, 175), 1, Qt.PenStyle.DashLine))
                 painter.drawRect(QRectF(self._roi_start, self._roi_end).normalized())
+            if self._mask_points:
+                painter.setPen(QPen(QColor(255, 100, 145), 2, Qt.PenStyle.DashLine))
+                points = QPolygonF([self.native_to_widget(*p) for p in self._mask_points])
+                if self.mask_mode == "rectangle" and len(points) == 2:
+                    painter.drawRect(QRectF(points[0], points[1]).normalized())
+                else:
+                    painter.drawPolyline(points)
+                    if self.mask_mode == "brush":
+                        radius = self.brush_radius_px * column_scale
+                        painter.drawEllipse(points[-1], radius, radius)
+            if self.mask_mode != "inspect" and self._mask_hover is not None:
+                point = self.native_to_widget(*self._mask_hover)
+                painter.setPen(QPen(QColor(255, 100, 145), 1))
+                radius = self.brush_radius_px * column_scale if self.mask_mode == "brush" else 3.0
+                painter.drawEllipse(point, radius, radius)
+                if self.mask_mode == "polygon" and self._mask_points:
+                    painter.drawLine(self.native_to_widget(*self._mask_points[-1]), point)
             painter.end()
         self.painted.emit(self.request_generation, perf_counter())
 
@@ -775,6 +978,23 @@ class DetectorTextureView(QOpenGLWidget):
             event.accept()
 
     def mousePressEvent(self, event) -> None:
+        if self.mask_mode != "inspect" and event.button() == Qt.MouseButton.LeftButton:
+            point = self._mask_position(event.position())
+            if point is not None:
+                if len(self._mask_points) >= MAX_POINTS:
+                    self.set_mask_mode("inspect")
+                    self.mask_input_error.emit(
+                        f"Gesture canceled: maximum {MAX_POINTS} native vertices"
+                    )
+                    event.accept()
+                    return
+                if self.mask_mode != "polygon":
+                    self._mask_points = [point]
+                else:
+                    self._mask_points.append(point)
+                self._request_paint()
+            event.accept()
+            return
         self._last_pointer = event.position()
         self._press_position = (
             event.position() if event.button() == Qt.MouseButton.LeftButton else None
@@ -793,6 +1013,34 @@ class DetectorTextureView(QOpenGLWidget):
             self._band_drag = self._band_hit(event.position())
 
     def mouseMoveEvent(self, event) -> None:
+        if self.mask_mode != "inspect":
+            self._mask_hover = self._mask_position(event.position())
+            self._request_paint()
+            if event.buttons() & Qt.MouseButton.LeftButton and self._mask_points:
+                point = self._mask_position(event.position())
+                if self.mask_mode == "rectangle":
+                    self._mask_points = [self._mask_points[0], point]
+                elif self.mask_mode == "brush" and point != self._mask_points[-1]:
+                    if len(self._mask_points) >= MAX_POINTS:
+                        self.set_mask_mode("inspect")
+                        self.mask_input_error.emit(
+                            f"Gesture canceled: maximum {MAX_POINTS} native vertices"
+                        )
+                        event.accept()
+                        return
+                    self._mask_points.append(point)
+                self._request_paint()
+            elif event.buttons() & Qt.MouseButton.MiddleButton and self._last_pointer is not None:
+                self.pan += event.position() - self._last_pointer
+                self._request_paint()
+                self.view_state_changed.emit()
+            self._last_pointer = event.position()
+            native = self.widget_to_native(event.position())
+            if native is not None:
+                c, r = native
+                self.cursor_changed.emit((c, r, self.image[r, c].item()))
+            event.accept()
+            return
         if self._roi_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
             self._roi_end = event.position()
             self._request_paint()
@@ -840,6 +1088,28 @@ class DetectorTextureView(QOpenGLWidget):
         self._last_pointer = event.position()
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.mask_mode != "inspect":
+            if (
+                event.button() == Qt.MouseButton.LeftButton
+                and self._mask_points
+                and self.mask_mode != "polygon"
+            ):
+                point = self._mask_position(event.position())
+                if self.mask_mode == "rectangle":
+                    self._mask_points = [self._mask_points[0], point]
+                elif len(self._mask_points) < MAX_POINTS:
+                    self._mask_points.append(point)
+                elif point != self._mask_points[-1]:
+                    self.set_mask_mode("inspect")
+                    self.mask_input_error.emit(
+                        f"Gesture canceled: maximum {MAX_POINTS} native vertices"
+                    )
+                    event.accept()
+                    return
+                self._finish_mask_gesture()
+            self._last_pointer = None
+            event.accept()
+            return
         if self._roi_start is not None and self.image is not None:
             box = QRectF(self._roi_start, event.position()).normalized().intersected(self._rect())
             self._roi_start = self._roi_end = None
@@ -922,6 +1192,16 @@ class DetectorTextureView(QOpenGLWidget):
         return result
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.set_mask_mode("inspect")
+            self._box_start = self._box_end = self._roi_start = self._roi_end = None
+            self.box_zoom_enabled = self.roi_select_enabled = False
+            event.accept()
+            return
+        if self.mask_mode == "polygon" and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._finish_mask_gesture()
+            event.accept()
+            return
         if self.image is not None and event.key() in (
             Qt.Key.Key_Left,
             Qt.Key.Key_Right,
@@ -1107,10 +1387,12 @@ class ProfilePlot(QWidget):
                         str(index),
                     )
         painter.end()
+        self.generation = self.source_view.request_generation
         self.painted.emit(self.generation, perf_counter())
 
 
 class DetectorPanel(QWidget):
+    profile_requested = Signal()
     """A reusable native image with exact linked horizontal and vertical bands."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1276,16 +1558,88 @@ class DetectorPanel(QWidget):
         layout.setSpacing(2)
         layout.addWidget(navigation, 0, 0, 1, 2)
         layout.addWidget(contrast, 1, 0, 1, 2)
-        layout.addWidget(profile_controls, 2, 0, 1, 2)
-        layout.addWidget(scale_controls, 3, 0, 1, 2)
-        layout.addWidget(self.horizontal, 4, 0)
-        layout.addWidget(self.view, 5, 0)
-        layout.addWidget(self.vertical, 5, 1)
-        layout.addWidget(self.profile_status, 6, 0, 1, 2)
-        layout.addWidget(self.cursor_label, 7, 0, 1, 2)
-        layout.addWidget(self.contrast_note, 8, 0, 1, 2)
-        layout.addWidget(layers, 9, 0, 1, 2)
-        layout.setRowStretch(5, 1)
+        layout.addWidget(profile_controls, 3, 0, 1, 2)
+        layout.addWidget(scale_controls, 4, 0, 1, 2)
+        layout.addWidget(self.horizontal, 5, 0)
+        layout.addWidget(self.view, 6, 0)
+        layout.addWidget(self.vertical, 6, 1)
+        layout.addWidget(self.profile_status, 7, 0, 1, 2)
+        layout.addWidget(self.cursor_label, 8, 0, 1, 2)
+        layout.addWidget(self.contrast_note, 9, 0, 1, 2)
+        layout.addWidget(layers, 10, 0, 1, 2)
+        mask_controls = QWidget(self)
+        mask_layout = QGridLayout(mask_controls)
+        mask_layout.setContentsMargins(0, 0, 0, 0)
+        self.mask_tool = QComboBox()
+        for label, mode in (
+            ("Inspect", "inspect"),
+            ("Rectangle", "rectangle"),
+            ("Polygon", "polygon"),
+            ("Brush", "brush"),
+        ):
+            self.mask_tool.addItem(label, mode)
+        self.mask_reason = QComboBox()
+        for reason in (1, 2, 3, 4, 0):
+            self.mask_reason.addItem(REASONS[reason] if reason else "Reinclude", reason)
+        self.brush_radius = QSpinBox()
+        self.brush_radius.setRange(1, 256)
+        self.brush_radius.setValue(8)
+        self.brush_radius.setSuffix(" px radius")
+        self.mask_import_button = QPushButton("Import .npy")
+        self.mask_undo_button = QPushButton("Undo mask")
+        self.mask_redo_button = QPushButton("Redo mask")
+        self.mask_cancel_button = QPushButton("Cancel prep")
+        self.mask_cancel_button.setEnabled(False)
+        self.mask_layer = QCheckBox("Exclusions visible")
+        self.mask_layer.setChecked(True)
+        self.mask_history_label = QLabel("Undo limit: 32 actions / 512 KiB; session only")
+        self.mask_history_label.setWordWrap(True)
+        self.mask_hint = QLabel(
+            "Inspect: pointer profiles; masking preserves the integration center"
+        )
+        self.mask_hint.setWordWrap(False)
+        self.mask_preparation_status = QLabel(
+            "No exclusions; native masks bind this acquisition/source"
+        )
+        self.mask_preparation_status.setWordWrap(False)
+        line_height = self.fontMetrics().lineSpacing()
+        self.profile_status.setFixedHeight(4 * line_height)
+        self.mask_hint.setFixedHeight(line_height)
+        self.mask_history_label.setFixedHeight(line_height)
+        self.cursor_label.setFixedHeight(2 * line_height)
+        self.mask_preparation_status.setFixedHeight(line_height)
+        for label in (
+            self.mask_hint,
+            self.mask_history_label,
+            self.mask_preparation_status,
+            self.cursor_label,
+        ):
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        for column, widget in enumerate(
+            (self.mask_tool, self.mask_reason, self.brush_radius, self.mask_import_button)
+        ):
+            mask_layout.addWidget(widget, 0, column)
+        for column, widget in enumerate(
+            (self.mask_undo_button, self.mask_redo_button, self.mask_layer)
+        ):
+            mask_layout.addWidget(widget, 1, column)
+        mask_layout.addWidget(self.mask_cancel_button, 1, 3)
+        mask_layout.addWidget(self.mask_history_label, 2, 2, 1, 2)
+        mask_layout.addWidget(self.mask_hint, 2, 0, 1, 2)
+        mask_layout.addWidget(self.mask_preparation_status, 3, 0, 1, 4)
+        layout.addWidget(mask_controls, 2, 0, 1, 2)
+        self.mask_tool.currentIndexChanged.connect(
+            lambda: self.view.set_mask_mode(self.mask_tool.currentData())
+        )
+        self.view.mask_mode_changed.connect(self._mask_mode_changed)
+        self.mask_reason.currentIndexChanged.connect(
+            lambda: setattr(self.view, "mask_reason", self.mask_reason.currentData())
+        )
+        self.brush_radius.valueChanged.connect(
+            lambda radius: setattr(self.view, "brush_radius_px", float(radius))
+        )
+        self.mask_layer.toggled.connect(self._mask_visibility_changed)
+        layout.setRowStretch(6, 1)
         layout.setColumnStretch(0, 1)
         self.view.crosshair_changed.connect(self._refresh_profile_if_needed)
         self.view.crosshair_changed.connect(self._sync_profile_position)
@@ -1332,19 +1686,97 @@ class DetectorPanel(QWidget):
         self._roi_sum_profiles: BandProfiles | None = None
         self._roi_mean_profiles: BandProfiles | None = None
         self._current_profiles: BandProfiles | None = None
+        self._mask_inclusion = None
+        self._mask_pending = False
+        self._profile_pending = False
+        self._mask_description = "No exclusions; native masks bind this acquisition/source"
+        self.mask_undo_button.setEnabled(False)
+        self.mask_redo_button.setEnabled(False)
         self._roi_bounds: tuple[int, int, int, int] | None = None
         self.acquisition_identity: object = None
         self._profile_axis_rect: QRectF | None = None
         self._sync_controls()
         self._marker_count_changed(0)
 
+    def _mask_mode_changed(self, mode: str) -> None:
+        self.mask_tool.blockSignals(True)
+        self.mask_tool.setCurrentIndex(self.mask_tool.findData(mode))
+        self.mask_tool.blockSignals(False)
+        self.mask_hint.setText(
+            {
+                "inspect": "Inspect: pointer profiles",
+                "rectangle": "Drag rectangle; Esc cancels",
+                "polygon": "Click vertices; Enter commits; Esc cancels",
+                "brush": "Drag brush; Esc cancels",
+            }[mode]
+        )
+
+    def _mask_visibility_changed(self, visible: bool) -> None:
+        self.view.show_mask = visible
+        self.view._request_paint()
+        self.view.view_state_changed.emit()
+
+    def profile_query(self) -> tuple:
+        return (
+            *self.view.crosshair,
+            self.row_width_control.value(),
+            self.column_width_control.value(),
+            self.profile_scope_control.currentData(),
+            self._roi_bounds,
+            self.profile_measure_control.currentData(),
+        )
+
+    def set_mask_pending(self, pending: bool) -> None:
+        self._mask_pending = pending
+        self.mask_preparation_status.setText(
+            f"Preparing profiles · showing prior mask revision {self.view.mask_revision}"
+            if pending
+            else self._mask_description
+        )
+        self.export_button.setEnabled(
+            self.view.image is not None and not pending and not self._profile_pending
+        )
+        if self._current_profiles is not None:
+            self._update_profile_status(self._current_profiles)
+
+    def publish_mask(self, prepared) -> None:
+        self._mask_inclusion = prepared.inclusion
+        if (
+            self.view.mask_reasons is not prepared.reasons
+            or self.view.mask_revision != prepared.mask.revision
+        ):
+            self.view.set_mask_plane(
+                prepared.reasons,
+                prepared.mask.revision,
+                base_reasons_id=prepared.base_reasons_id,
+                changed_bounds=prepared.changed_bounds,
+            )
+        self._mask_pending = self._profile_pending = False
+        self._full_profiles = prepared.full_profiles
+        provenance = prepared.mask.provenance[-1] if prepared.mask.provenance else "No exclusions"
+        self._mask_description = (
+            f"Mask revision {prepared.mask.revision} · {provenance.split(';')[0][:70]}"
+        )
+        self.mask_preparation_status.setText(self._mask_description)
+        self.mask_preparation_status.setToolTip("\n".join(prepared.mask.provenance))
+        self._full_mean_profiles = self._roi_sum_profiles = self._roi_mean_profiles = None
+        self._roi_cache_key = self._profile_key = None
+        if prepared.query == self.profile_query():
+            self._present_profiles(prepared.profiles, prepared.query[4], self._query_key())
+        else:
+            self._refresh_profile_if_needed()
+
     def _set_box_zoom(self, enabled: bool) -> None:
+        if enabled:
+            self.view.set_mask_mode("inspect")
         if enabled and self.draw_roi_button.isChecked():
             self.draw_roi_button.setChecked(False)
         self.view.box_zoom_enabled = enabled
         self.view.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
 
     def _set_roi_selection(self, enabled: bool) -> None:
+        if enabled:
+            self.view.set_mask_mode("inspect")
         if enabled and self.box_button.isChecked():
             self.box_button.setChecked(False)
         self.view.roi_select_enabled = enabled
@@ -1560,12 +1992,20 @@ class DetectorPanel(QWidget):
             )
         else:
             column, row, intensity = pixel
+            reason = (
+                0 if self.view.mask_reasons is None else int(self.view.mask_reasons[row, column])
+            )
             self.cursor_label.setText(
                 f"column_px={column}, row_px={row}, intensity={intensity!r} counts"
-                " · Q/angles unavailable · saturation unknown"
+                f" · {REASONS[reason]} · Q/angles unavailable"
             )
 
     def _reset_profile_state(self, acquisition_identity: object = None) -> None:
+        self._mask_description = "No exclusions; native masks bind this acquisition/source"
+        self.mask_preparation_status.setText(self._mask_description)
+        self.mask_preparation_status.setToolTip("")
+        self._mask_inclusion = None
+        self._mask_pending = self._profile_pending = False
         self.acquisition_identity = acquisition_identity
         self._profile_key = None
         self._full_profiles = None
@@ -1614,6 +2054,7 @@ class DetectorPanel(QWidget):
     def restore_profile_state(self, state: DetectorViewState) -> None:
         """Apply a validated saved inspection query before publishing its profiles."""
 
+        self.mask_layer.setChecked(state.show_mask)
         if self.view.image is None:
             raise ValueError("cannot restore profiles before the native image")
         rows, columns = self.view.image.shape
@@ -1694,6 +2135,7 @@ class DetectorPanel(QWidget):
             self.profile_measure_control.currentData(),
             band_bounds,
             self._roi_bounds if scope == "roi" else None,
+            self.view.mask_revision,
         )
 
     def _update_profile_status(self, profiles: BandProfiles) -> None:
@@ -1708,6 +2150,11 @@ class DetectorPanel(QWidget):
             f"{scope} · {measure} · rows [{r0},{r1}) · columns [{c0},{c1})"
             f" · valid support H@column={h_support}, V@row={v_support}"
             " · zero support is missing"
+            + (
+                " · Preparing profiles; displayed revision is old"
+                if self._mask_pending or self._profile_pending
+                else f" · mask revision {self.view.mask_revision}"
+            )
         )
 
     def _present_profiles(
@@ -1842,6 +2289,38 @@ class DetectorPanel(QWidget):
         scope = self.profile_scope_control.currentData()
         measure = self.profile_measure_control.currentData()
         rows, columns = self.view.image.shape
+        bounds = key[5]
+        direct_pixels = (
+            rows * columns
+            if scope != "band"
+            else (bounds[0][1] - bounds[0][0]) * columns + (bounds[1][1] - bounds[1][0]) * rows
+        )
+        if self._mask_pending and direct_pixels > 131072:
+            self._update_profile_status(self._current_profiles)
+            return
+        if (
+            self._mask_inclusion is not None
+            and direct_pixels > 131072
+            and scope != "full"
+            and not (scope == "band" and bounds == ((0, rows), (0, columns)))
+            and not (
+                scope == "roi"
+                and self._roi_cache_key
+                == (
+                    self.acquisition_identity,
+                    id(self.view.image),
+                    self.view.data_revision,
+                    self._roi_bounds,
+                )
+            )
+        ):
+            self._profile_pending = True
+            self.mask_preparation_status.setText(
+                f"Preparing profiles · mask revision {self.view.mask_revision}; prior bands shown"
+            )
+            self._update_profile_status(self._current_profiles)
+            self.profile_requested.emit()
+            return
         covers_full_detector = scope == "full" or (
             scope == "band" and key[5] == ((0, rows), (0, columns))
         )
@@ -1852,6 +2331,7 @@ class DetectorPanel(QWidget):
                     column_px=self.view.crosshair[0],
                     row_px=self.view.crosshair[1],
                     scope="full",
+                    mask=self._mask_inclusion,
                 )
             if measure == "mean":
                 if self._full_mean_profiles is None:
@@ -1881,6 +2361,7 @@ class DetectorPanel(QWidget):
                     row_px=self.view.crosshair[1],
                     scope="roi",
                     roi_column_row_bounds=self._roi_bounds,
+                    mask=self._mask_inclusion,
                 )
                 self._roi_cache_key = roi_key
                 self._roi_sum_profiles = sums
@@ -1909,5 +2390,6 @@ class DetectorPanel(QWidget):
                 scope=scope,
                 roi_column_row_bounds=self._roi_bounds if scope == "roi" else None,
                 measure=measure,
+                mask=self._mask_inclusion,
             )
         self._present_profiles(profiles, scope, key)

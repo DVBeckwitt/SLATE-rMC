@@ -31,6 +31,15 @@ from job_lifecycle import (
     JobSummary,
     Revisions,
 )
+from mask_state import (
+    MAX_ACTIONS,
+    MaskGesture,
+    MaskHistory,
+    MaskWork,
+    NativeMask,
+    PreparedMask,
+    prepare_mask,
+)
 from metadata_review import (
     MAPPED_FIELDS,
     ValidatedReference,
@@ -258,6 +267,11 @@ class ShellWindow(QMainWindow):
         self._numeric_draft: NumericDraft | None = None
         self._validated_numeric: tuple[UUID, NumericDraft] | None = None
         self._numeric_history = SessionHistory()
+        self._mask_history: OrderedDict[UUID, MaskHistory] = OrderedDict()
+        self._mask_cache: OrderedDict[UUID, PreparedMask] = OrderedDict()
+        self._pending_masks: dict[UUID, tuple[MaskGesture, ...]] = {}
+        self._active_mask: tuple[UUID, NativeMask, tuple[MaskGesture, ...]] | None = None
+        self._deferred_mask_write: tuple[Path, bool, bool, bool] | None = None
         self._launch_snapshot = None
         self._active_numeric: tuple[UUID, int, str, NumericDraft | None] | None = None
         self._reciprocal_cache: OrderedDict[UUID, tuple[tuple[object, ...], ReciprocalPreview]] = (
@@ -282,6 +296,7 @@ class ShellWindow(QMainWindow):
                 "export",
                 "numeric",
                 "reciprocal",
+                "mask",
             ]
             | None
         ) = None
@@ -370,6 +385,17 @@ class ShellWindow(QMainWindow):
         self.detector_panel.view.view_state_changed.connect(self._mark_dirty)
         self.detector_panel.view.view_state_changed.connect(self._sync_scene)
         self.detector_panel.view.overlays_changed.connect(self._sync_scene)
+        self.detector_panel.view.mask_gesture_ready.connect(self._mask_gesture)
+        self.detector_panel.view.mask_input_error.connect(self.statusBar().showMessage)
+        self.detector_panel.mask_import_button.clicked.connect(self._choose_mask)
+        self.detector_panel.mask_undo_button.clicked.connect(
+            lambda: self._mask_undo_redo(undo=True)
+        )
+        self.detector_panel.mask_redo_button.clicked.connect(
+            lambda: self._mask_undo_redo(undo=False)
+        )
+        self.detector_panel.profile_requested.connect(self._request_mask_profiles)
+        self.detector_panel.mask_cancel_button.clicked.connect(self._cancel_current)
         self.scene_panel.view.camera_changed.connect(self._remember_scene_camera)
         self.scene_tabs.currentChanged.connect(self._mark_dirty)
         self._autosave_timer = QTimer(self)
@@ -710,6 +736,7 @@ class ShellWindow(QMainWindow):
                 self.detector_panel._roi_bounds,
                 self.detector_panel.horizontal.intensity_limits,
                 self.detector_panel.vertical.intensity_limits,
+                view.show_mask,
             )
         elif (
             self._pending_view_restore is not None
@@ -810,6 +837,11 @@ class ShellWindow(QMainWindow):
     def _queue_write(
         self, destination: Path, *, recovery: bool, explicit: bool, adopt_destination: bool = False
     ) -> bool:
+        if self._pending_masks:
+            self._deferred_mask_write = (Path(destination), recovery, explicit, adopt_destination)
+            QTimer.singleShot(0, self._dispatch_pending)
+            self.statusBar().showMessage("Saving after mask preparation")
+            return True
         path = Path(destination).absolute()
         try:
             document = project_to_document(
@@ -983,6 +1015,12 @@ class ShellWindow(QMainWindow):
     def _dispatch_pending(self) -> None:
         if self.jobs.busy or self._active_kind is not None:
             return
+        if not self._close_intent and self._pending_open is None and self._start_mask_work():
+            return
+        if self._deferred_mask_write is not None:
+            path, recovery, explicit, adopt = self._deferred_mask_write
+            self._deferred_mask_write = None
+            self._queue_write(path, recovery=recovery, explicit=explicit, adopt_destination=adopt)
         if self._write_queue:
             task = self._write_queue.popleft()
             self._active_write = task
@@ -2713,6 +2751,8 @@ class ShellWindow(QMainWindow):
             or selected != self._visible_acquisition_id
             or view.image is None
             or panel._current_profiles is None
+            or panel._mask_pending
+            or panel._profile_pending
             or panel._profile_key != panel._query_key()
             or panel.acquisition_identity != selected
             or panel.horizontal.values is not panel._current_profiles.horizontal
@@ -2802,6 +2842,11 @@ class ShellWindow(QMainWindow):
                 "decoded_source_sha256": acquisition.source_sha256,
                 "source_hash_scope": "decoded OSC header and payload",
                 "data_revision": f"decoded:{acquisition.source_sha256}/panel:{view.data_revision}",
+                "mask_revision": str(view.mask_revision),
+                "mask_visible": str(view.show_mask),
+                "mask_provenance": json.dumps(
+                    acquisition.mask.provenance if acquisition.mask else ()
+                ),
                 "native_shape_rows_columns": json.dumps(view.image.shape),
                 "profile_measure": str(panel.profile_measure_control.currentData()),
                 "profile_scope": str(panel.profile_scope_control.currentData()),
@@ -2942,6 +2987,11 @@ class ShellWindow(QMainWindow):
                 ):
                     self.jobs.invalidate()
                 self.project = self.project.remove_acquisition(acquisition_id)
+                if self._active_mask is not None and self._active_mask[0] == acquisition_id:
+                    self.jobs.invalidate()
+                self._pending_masks.pop(acquisition_id, None)
+                self._mask_history.pop(acquisition_id, None)
+                self._mask_cache.pop(acquisition_id, None)
                 self._resident_planes.pop(acquisition_id, None)
                 self._thumbnails.pop(acquisition_id, None)
                 self._source_checks.pop(acquisition_id, None)
@@ -2968,7 +3018,252 @@ class ShellWindow(QMainWindow):
             self.jobs.cancel()
         self._refresh_review_table()
 
+    def _mask_gesture(self, gesture: MaskGesture) -> None:
+        acquisition_id = self.selected_acquisition_id
+        if (
+            self._close_intent
+            or acquisition_id is None
+            or acquisition_id != self._visible_acquisition_id
+            or acquisition_id not in self._resident_planes
+        ):
+            return
+        pending = self._pending_masks.get(acquisition_id, ())
+        pending_bytes = sum(
+            256 + 128 * len(g.points) + len(str(g.import_path or ""))
+            for batch in self._pending_masks.values()
+            for g in batch
+        )
+        if (
+            len(pending) >= MAX_ACTIONS
+            or pending_bytes + 256 + 128 * len(gesture.points) + len(str(gesture.import_path or ""))
+            > 2 * 1024 * 1024
+        ):
+            self.statusBar().showMessage("Mask queue is full; wait for preparation")
+            return
+        self._pending_masks[acquisition_id] = (*pending, gesture)
+        self.detector_panel.set_mask_pending(True)
+        self.detector_panel.export_button.setEnabled(False)
+        self.statusBar().showMessage(
+            "Preparing profiles; committed mask/profile revision remains visible"
+        )
+        self._refresh_mask_history()
+        if self._active_kind == "mask":
+            self.jobs.cancel()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _choose_mask(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import native Boolean inclusion mask (True includes)",
+            str(Path.home()),
+            "Native Boolean masks (*.npy)",
+        )
+        if filename:
+            self.import_mask(Path(filename))
+
+    def import_mask(self, path: Path) -> None:
+        reason = self.detector_panel.mask_reason.currentData()
+        if reason == 0:
+            self.statusBar().showMessage("Choose an exclusion reason for additive mask import")
+            return
+        self._mask_gesture(MaskGesture("import", reason, import_path=Path(path).absolute()))
+
+    def _request_mask_profiles(self) -> None:
+        if (
+            self._active_kind == "mask"
+            and self._active_mask is not None
+            and not self._active_mask[2]
+        ):
+            self.jobs.cancel()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _start_mask_work(self) -> bool:
+        acquisition_id = self.selected_acquisition_id
+        panel = self.detector_panel
+        if not (
+            acquisition_id in self._resident_planes
+            and (self._pending_masks.get(acquisition_id) or panel._profile_pending)
+        ):
+            acquisition_id = next(
+                (key for key in self._pending_masks if key in self._resident_planes), None
+            )
+        if acquisition_id is None:
+            return False
+        acquisition = next(
+            (item for item in self.project.acquisitions if item.acquisition_id == acquisition_id),
+            None,
+        )
+        if acquisition is None:
+            self._pending_masks.pop(acquisition_id, None)
+            return False
+        plane = self._resident_planes[acquisition_id]
+        state = acquisition.mask or NativeMask(acquisition.source_sha256, plane.native_counts.shape)
+        gestures = self._pending_masks.get(acquisition_id, ())
+        visible = acquisition_id == self._visible_acquisition_id == self.selected_acquisition_id
+        query = (
+            panel.profile_query()
+            if visible
+            else (state.shape[1] // 2, state.shape[0] // 2, 1, 1, "band", None, "sum")
+        )
+        work = MaskWork(
+            plane.native_counts, state, gestures, query, self._mask_cache.get(acquisition_id)
+        )
+        self._active_kind = "mask"
+        self._active_mask = (acquisition_id, state, gestures)
+        try:
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    acquisition_id,
+                    Revisions(data=1, mask=state.revision),
+                    work,
+                    work.argument_bytes,
+                    MAX_RESULT_BYTES,
+                    prepare_mask,
+                )
+            )
+        except (ValueError, RuntimeError, TypeError) as exc:
+            self._pending_masks.pop(acquisition_id, None)
+            self._active_kind = self._active_mask = None
+            panel.set_mask_pending(False)
+            panel._profile_pending = False
+            self.statusBar().showMessage(str(exc))
+            return False
+        self._active_generation = identity.generation
+        return True
+
+    def _mask_ready(self, identity: JobIdentity, value: object) -> None:
+        active, self._active_mask = self._active_mask, None
+        if (
+            active is None
+            or not isinstance(value, PreparedMask)
+            or identity.project_id != self.project.project_id
+        ):
+            return
+        acquisition_id, base, gestures = active
+        acquisition = next(
+            (item for item in self.project.acquisitions if item.acquisition_id == acquisition_id),
+            None,
+        )
+        if (
+            acquisition is None
+            or identity.acquisition_id != acquisition_id
+            or identity.revisions != Revisions(data=1, mask=base.revision)
+            or acquisition.source_sha256 != value.mask.source_sha256
+            or (acquisition.mask is not None and acquisition.mask != base)
+            or self._pending_masks.get(acquisition_id, ())[: len(gestures)] != gestures
+        ):
+            return
+        candidate = replace(
+            self.project,
+            acquisitions=tuple(
+                replace(item, mask=value.mask) if item.acquisition_id == acquisition_id else item
+                for item in self.project.acquisitions
+            ),
+        )
+        try:
+            self._validate_project_admission(candidate)
+        except ValueError as exc:
+            self._pending_masks.pop(acquisition_id, None)
+            self.detector_panel.set_mask_pending(False)
+            self.detector_panel._profile_pending = False
+            self.statusBar().showMessage(f"Mask was not committed: {exc}")
+            return
+        remainder = self._pending_masks.get(acquisition_id, ())[len(gestures) :]
+        if remainder:
+            self._pending_masks[acquisition_id] = remainder
+        else:
+            self._pending_masks.pop(acquisition_id, None)
+        if value.edits:
+            self.project = candidate
+            history = self._mask_history.setdefault(acquisition_id, MaskHistory())
+            for before, after in value.edits:
+                history.push(before, after)
+            self._mask_history.move_to_end(acquisition_id)
+            while sum(h.storage_bytes for h in self._mask_history.values()) > 8 * 1024 * 1024:
+                self._mask_history.popitem(last=False)
+            self._mark_dirty()
+        self._mask_cache[acquisition_id] = replace(value, edits=())
+        self._mask_cache.move_to_end(acquisition_id)
+        while len(self._mask_cache) > MAX_CACHED_PLANES:
+            self._mask_cache.popitem(last=False)
+        if acquisition_id == self.selected_acquisition_id == self._visible_acquisition_id:
+            self.detector_panel.publish_mask(value)
+            self.detector_panel.set_mask_pending(bool(remainder))
+            self.detector_panel.export_button.setEnabled(not remainder)
+        self._refresh_mask_history()
+        self.statusBar().showMessage(f"Mask revision {value.mask.revision}; profiles ready")
+
+    def _refresh_mask_history(self) -> None:
+        history = self._mask_history.get(self.selected_acquisition_id)
+        busy = (
+            bool(self._pending_masks.get(self.selected_acquisition_id))
+            or self._active_kind == "mask"
+        )
+        self.detector_panel.mask_undo_button.setEnabled(bool(history and history.undo and not busy))
+        self.detector_panel.mask_redo_button.setEnabled(bool(history and history.redo and not busy))
+        self.detector_panel.mask_history_label.setText(
+            f"Undo {len(history.undo) if history else 0}; redo {len(history.redo) if history else 0} · max 32 / 512 KiB"
+        )
+        self.detector_panel.mask_history_label.setToolTip(
+            "Session history: 32 actions / 512 KiB per image; 8 MiB total. Save persists exclusions, not undo history."
+        )
+
+    def _mask_undo_redo(self, *, undo: bool) -> None:
+        acquisition_id = self.selected_acquisition_id
+        history = self._mask_history.get(acquisition_id)
+        if not history or self._pending_masks.get(acquisition_id) or self._active_kind == "mask":
+            return
+        acquisition = next(
+            item for item in self.project.acquisitions if item.acquisition_id == acquisition_id
+        )
+        if acquisition.mask is None:
+            return
+        try:
+            updated = history.move(acquisition.mask, undo=undo)
+        except ValueError as exc:
+            self.statusBar().showMessage(f"Mask history change rejected: {exc}")
+            return
+        if updated is acquisition.mask:
+            return
+        candidate = replace(
+            self.project,
+            acquisitions=tuple(
+                replace(item, mask=updated) if item.acquisition_id == acquisition_id else item
+                for item in self.project.acquisitions
+            ),
+        )
+        try:
+            self._validate_project_admission(candidate)
+        except ValueError as exc:
+            source, destination = (
+                (history.undo, history.redo) if undo else (history.redo, history.undo)
+            )
+            source.append(destination.pop())
+            self.statusBar().showMessage(f"Mask history change rejected: {exc}")
+            return
+        self.project = candidate
+        self._mark_dirty()
+        self.detector_panel.set_mask_pending(True)
+        self.detector_panel._profile_pending = True
+        self.detector_panel.export_button.setEnabled(False)
+        self._refresh_mask_history()
+        QTimer.singleShot(0, self._dispatch_pending)
+
     def _cancel_current(self) -> None:
+        if self._active_kind == "mask" and self._active_mask is not None:
+            acquisition_id = self._active_mask[0]
+            self._pending_masks.pop(acquisition_id, None)
+            acquisition = next(
+                item for item in self.project.acquisitions if item.acquisition_id == acquisition_id
+            )
+            if acquisition_id == self.selected_acquisition_id == self._visible_acquisition_id:
+                rebuild = (
+                    acquisition.mask is not None
+                    and acquisition.mask.revision != self.detector_panel.view.mask_revision
+                )
+                self.detector_panel._profile_pending = rebuild
+                self.detector_panel.set_mask_pending(rebuild)
         if self._active_kind == "batch":
             for candidate_id in self._candidate_queue:
                 candidate = self._candidates.get(candidate_id)
@@ -2988,6 +3283,7 @@ class ShellWindow(QMainWindow):
             or self._active_kind is not None
             or self._write_queue
             or self._pending_open
+            or self._pending_masks
         ):
             self._deferred_import = (source, acquisition_id, mode, self.project.project_id)
             self.statusBar().showMessage("Import queued behind project I/O")
@@ -3149,6 +3445,27 @@ class ShellWindow(QMainWindow):
             acquisition_id,
         )
         self._visible_acquisition_id = acquisition_id
+        acquisition = next(
+            item for item in self.project.acquisitions if item.acquisition_id == acquisition_id
+        )
+        mask = acquisition.mask
+        cached = self._mask_cache.get(acquisition_id)
+        if mask is not None:
+            if (
+                mask.shape != value.native_counts.shape
+                or mask.source_sha256 != value.decoded_sha256
+            ):
+                raise ValueError("Saved mask is incompatible with the admitted native source")
+            if cached is not None and cached.mask == mask:
+                self.detector_panel.publish_mask(cached)
+            else:
+                self.detector_panel.set_mask_pending(True)
+                self.detector_panel._profile_pending = True
+                QTimer.singleShot(0, self._dispatch_pending)
+        if self._pending_masks.get(acquisition_id):
+            self.detector_panel.set_mask_pending(True)
+            QTimer.singleShot(0, self._dispatch_pending)
+        self._refresh_mask_history()
         self._visible_details = (
             f"Native detector: {value.native_counts.shape[0]} rows x "
             f"{value.native_counts.shape[1]} columns\n"
@@ -3410,6 +3727,7 @@ class ShellWindow(QMainWindow):
                 self._active_load_hash = None
                 self._active_numeric = None
                 self._active_reciprocal = None
+                self._active_mask = None
                 QTimer.singleShot(0, self._dispatch_pending)
             if self._obsolete_pending and not self.jobs.busy:
                 self._obsolete_pending = False
@@ -3420,9 +3738,28 @@ class ShellWindow(QMainWindow):
         kind = self._active_kind
         self._obsolete_pending = False
         self.cancel_button.setEnabled(
-            kind in ("import", "relink", "batch", "reference", "open", "numeric", "reciprocal")
+            kind
+            in ("import", "relink", "batch", "reference", "open", "numeric", "reciprocal", "mask")
             and state in (JobState.QUEUED, JobState.RUNNING)
         )
+        if kind == "mask":
+            self.detector_panel.mask_cancel_button.setEnabled(
+                state in (JobState.QUEUED, JobState.RUNNING)
+            )
+            if state == JobState.CANCEL_REQUESTED:
+                self.statusBar().showMessage("Cancel requested; stopping mask preparation")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                active = self._active_mask
+                if state == JobState.FAILED and active is not None:
+                    self._pending_masks.pop(active[0], None)
+                    self.detector_panel._profile_pending = False
+                    self.detector_panel.set_mask_pending(False)
+                self._active_mask = None
+                self._active_kind = None
+                self._active_generation = None
+                self.statusBar().showMessage(f"Mask preparation {state.value}: {summary.detail}")
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "numeric":
             if state in (JobState.FAILED, JobState.CANCELED):
                 self._active_numeric = None
@@ -3567,6 +3904,8 @@ class ShellWindow(QMainWindow):
                 self._numeric_ready(identity, value)
             elif kind == "reciprocal":
                 self._reciprocal_ready(identity, value)
+            elif kind == "mask":
+                self._mask_ready(identity, value)
             elif kind in ("import", "relink"):
                 self._import_ready(identity, value)
         finally:
@@ -3577,6 +3916,8 @@ class ShellWindow(QMainWindow):
             self._active_load_path = None
             self._active_load_hash = None
             self._sync_numeric_load_button()
+            self.detector_panel.mask_cancel_button.setEnabled(False)
+            self._refresh_mask_history()
             QTimer.singleShot(0, self._dispatch_pending)
 
     def _export_ready(self, identity: JobIdentity, value: object) -> None:
@@ -3679,6 +4020,11 @@ class ShellWindow(QMainWindow):
                 else None
             )
             self._numeric_history = SessionHistory()
+            self._mask_history.clear()
+            self._mask_cache.clear()
+            self._pending_masks.clear()
+            self._active_mask = None
+            self._deferred_mask_write = None
             self._launch_snapshot = None
             self.selected_acquisition_id = value.document.view.selected_acquisition_id
             self._visible_acquisition_id = None
@@ -3771,8 +4117,11 @@ class ShellWindow(QMainWindow):
                 "reference",
                 "open",
                 "reciprocal",
+                "mask",
             ):
                 self.jobs.cancel()
+            self._pending_masks.clear()
+            self._active_mask = None
             self.statusBar().showMessage("Close requested · Preserving accepted state")
         QTimer.singleShot(0, self._dispatch_pending)
 

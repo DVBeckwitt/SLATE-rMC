@@ -16,6 +16,7 @@ from types import FunctionType
 from typing import Any
 from uuid import UUID
 
+from mask_state import MaskWork
 from PySide6.QtCore import QObject, QTimer, Signal
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -93,7 +94,7 @@ class JobRequest:
     project_id: UUID
     acquisition_id: UUID | None
     revisions: Revisions
-    argument: bytes | str | Path | memoryview
+    argument: bytes | str | Path | memoryview | MaskWork
     argument_bytes: int
     expected_result_bytes: int
     run: Callable[[Any, JobControl], JobResult]
@@ -123,6 +124,8 @@ class _Active:
 
 
 def _known_bytes(value: Any) -> int:
+    if isinstance(value, MaskWork):
+        return value.argument_bytes
     if isinstance(value, memoryview):
         return value.nbytes
     if isinstance(value, bytes):
@@ -166,8 +169,12 @@ class JobOwner(QObject):
     def submit(self, request: JobRequest) -> JobIdentity:
         if self._closing:
             raise RuntimeError("Application close has been requested")
-        if not isinstance(request.argument, (bytes, str, Path, memoryview)):
-            raise TypeError("Request argument must be immutable bytes, text, path or byte view")
+        if isinstance(request.argument, MaskWork):
+            request.argument.validate()
+        if not isinstance(request.argument, (bytes, str, Path, memoryview, MaskWork)):
+            raise TypeError(
+                "Request argument must be immutable bytes, text, path, byte view or mask work"
+            )
         if not isinstance(request.run, FunctionType) or request.run.__closure__ is not None:
             raise TypeError("Worker must be a plain function without captured state")
         if not 0 <= request.argument_bytes <= MAX_REQUEST_BYTES:

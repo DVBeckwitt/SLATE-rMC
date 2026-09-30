@@ -10,9 +10,10 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import UUID, uuid4
 
+from mask_state import NativeMask, mask_document, mask_from_document
 from numeric_fields import validate_proposal
 
-PROJECT_SCHEMA_VERSION = 5
+PROJECT_SCHEMA_VERSION = 6
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -197,6 +198,13 @@ class Acquisition:
     source_path: Path
     source_sha256: str
     metadata: AcquisitionMetadata = field(default_factory=AcquisitionMetadata)
+    mask: NativeMask | None = None
+
+    def __post_init__(self) -> None:
+        if self.mask is not None and (
+            not isinstance(self.mask, NativeMask) or self.mask.source_sha256 != self.source_sha256
+        ):
+            raise ProjectFormatError("Mask must bind the acquisition's decoded source identity")
 
     @classmethod
     def create(
@@ -367,6 +375,7 @@ class DetectorViewState:
     profile_roi: tuple[int, int, int, int] | None = None
     horizontal_intensity_limits: tuple[float, float] | None = None
     vertical_intensity_limits: tuple[float, float] | None = None
+    show_mask: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -394,7 +403,7 @@ class DetectorViewState:
             raise ProjectFormatError("unsupported detector scale mode")
         if any(
             type(value) is not bool
-            for value in (self.show_image, self.show_crosshair, self.show_markers)
+            for value in (self.show_image, self.show_crosshair, self.show_markers, self.show_mask)
         ):
             raise ProjectFormatError("detector layer visibility must be Boolean")
         if type(self.profile_follow) is not bool:
@@ -648,7 +657,13 @@ def _detector_view(value: Any) -> DetectorViewState | None:
             mode,
         )
     data = _object(
-        value, profile_fields if set(value) == profile_fields else current_fields, "detector view"
+        value,
+        profile_fields | {"show_mask"}
+        if set(value) == profile_fields | {"show_mask"}
+        else profile_fields
+        if set(value) == profile_fields
+        else current_fields,
+        "detector view",
     )
     earlier = set(data) == current_fields
 
@@ -682,6 +697,7 @@ def _detector_view(value: Any) -> DetectorViewState | None:
         None if earlier else optional_tuple("profile_roi", 4),
         None if earlier else optional_tuple("horizontal_intensity_limits", 2),
         None if earlier else optional_tuple("vertical_intensity_limits", 2),
+        data.get("show_mask", True),
     )
 
 
@@ -820,6 +836,7 @@ def project_to_document(
             "source_path": _source_reference(item.source_path, document_path),
             "source_sha256": _digest(item.source_sha256),
             "metadata": _metadata_document(item.metadata, document_path),
+            "mask": mask_document(item.mask),
         }
         for item in state.project.acquisitions
     ]
@@ -848,6 +865,7 @@ def project_to_document(
                 "show_image": detector.show_image,
                 "show_crosshair": detector.show_crosshair,
                 "show_markers": detector.show_markers,
+                "show_mask": detector.show_mask,
                 "profile_follow": detector.profile_follow,
                 "profile_row_width": detector.profile_row_width,
                 "profile_column_width": detector.profile_column_width,
@@ -928,6 +946,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         2,
         3,
         4,
+        5,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -942,7 +961,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         fields = {"id", "name", "source_path", "source_sha256"}
         row = _object(
             item,
-            fields if top["schema_version"] == 1 else fields | {"metadata"},
+            (fields if top["schema_version"] == 1 else fields | {"metadata"})
+            | ({"mask"} if top["schema_version"] >= 6 else set()),
             f"acquisition {index}",
         )
         source = _resolved_reference(row["source_path"], document_path, f"acquisition {index}")
@@ -955,6 +975,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
                 AcquisitionMetadata()
                 if top["schema_version"] == 1
                 else _metadata_from_document(row["metadata"], document_path, top["schema_version"]),
+                mask_from_document(row["mask"]) if top["schema_version"] >= 6 else None,
             )
         )
     try:
