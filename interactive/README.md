@@ -116,6 +116,41 @@ outside those limits fail with a visible message. The acquisition SHA-256 is ove
 byte stream; it identifies exactly the header and payload consumed by the reader, whether the file
 was plain or gzip compressed.
 
+### Native exclusion editing
+
+Choose **Rectangle**, **Polygon** or **Brush** above the profiles, then choose user exclusion,
+beamstop, detector gap or saturation. Rectangle and brush commit on release; polygon commits
+with Enter. Escape cancels the unfinished gesture and returns to Inspect. **Reinclude** clears
+the selected pixels. Masking preserves the integration center; middle drag, wheel and keyboard
+navigation remain available. These reasons are explicit user annotations, with no automatic
+threshold or residual filtering.
+
+**Import .npy** accepts a C-order Boolean detector-native `[row,column]` array of exactly the
+admitted image shape, at most 16 MiB. True retains existing membership; False adds exclusions
+with the selected reason. Import never rotates, transposes, resizes or reinterprets OSC raw
+indices. Use an exclusion reason for import. File name and SHA-256 are retained in provenance.
+**Exclusions visible** controls the colored overlay independently of profile inclusion.
+
+Each completed gesture or import is atomic. Undo/redo uses fresh persistent mask revisions;
+invalid, canceled and no-op edits consume no action. Session history is limited to 32 actions
+and 512 KiB per acquisition, with an 8 MiB total cap. New edits clear redo; oldest history is
+evicted when a cap is reached. At most 64 completed gestures per image and 2 MiB of gesture
+metadata can wait for preparation. A gesture has at most 2,048 vertices, brush radius at most
+256 native pixels, and the committed mask at most 8,192 canonical row spans. Exceeding a limit
+is reported instead of silently simplifying membership. The project retains its 1 MiB cap.
+
+Rasterization and expensive masked profiles use the existing cancellable job owner. During
+preparation, the previous committed mask/profiles remain labeled with their revision; narrow
+bands may update against that prior mask. Export waits for current profiles. Mask visibility,
+contrast and navigation do not change inclusion or upload a new reason plane. A real edit
+uploads its changed reason rectangle; acquisition/context changes restore the complete texture.
+
+Schema 6 saves the source-bound native shape, reasons, revision, provenance and overlay visibility
+through the existing atomic project writer. Schemas 1–5 remain readable with no exclusions.
+Undo history is session-only. Inspection export includes the mask revision, visibility and
+provenance together with exact masked values and support. This slice introduces no observation
+preparation, fit result or calibration qualification.
+
 ## Monte Carlo detector viewer
 
 Render the complete native detector while changing source, mosaic, sample, and detector parameters:

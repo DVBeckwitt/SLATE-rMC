@@ -226,6 +226,14 @@ module-global or import-time side effects.
 
 ## Invalidation boundaries
 
+The desktop shell's exclusion editor uses `interactive/mask_state.py` for source-bound immutable
+native spans, compact session history and worker preparation. `project_state.py` persists the
+mask in schema 6; `slate_app.py` owns acquisition/revision admission through the existing job and
+atomic-write owners. `detector_panel.py` owns one exact profile reducer and a retained R8 reason
+texture alongside the unchanged counts texture. Visibility is presentation state. A real edit
+invalidates dependent profile caches; cursor and display changes reuse committed immutable state.
+No numerical package import depends on these optional Qt modules.
+
 - Source line, probability, correlation, or phase-space changes rebuild source rows and incident
   transport. Detector-path medium, scalar coefficient, or exact-wavelength table changes rebuild
   every detector evaluator while leaving sample geometry unchanged.

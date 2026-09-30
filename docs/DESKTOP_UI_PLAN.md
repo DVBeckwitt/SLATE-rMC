@@ -1072,10 +1072,76 @@ Likely ownership: `interactive/slate_app.py`, narrow optional project/I/O/presen
 | [x] U02: detector viewport | U01a | Add pan/zoom, native pixels, signed/linear/log contrast and retained layers. Corner/interior fiducials, pointer and marginal axes remain aligned through resize/DPI changes; cursor/camera/contrast cause zero image uploads. Accepted after sustained native-loop review at `4c921c1`. |
 | [x] U03: exact marginal profiles | U02 | Add follow/pin crosshair, independent bands, sum/mean/full-image/ROI modes and support labels. Compare small direct reductions at edges, gaps and signed/nonfinite values; measure preparation and warm latency. Add prefix caching only for a measured need and verify its subtraction error. Accepted after independent sustained native-shell review at `14c9799`; first/new ROI remains synchronous. |
 | [x] U02a: multi-file import and metadata | U01b/U02 | Add lazy filmstrip, folder candidate review, roles, angle/exposure/material/CIF inputs and bulk metadata mapping. Mixed valid/corrupt files preserve successes; duplicates differ from repeated exposures; incomplete metadata does not block inspection. |
-| [ ] U04: masks and regions | U03/U01b | Add rectangle/polygon masks with reasons, a persistent revision and bounded undo. Publish mask/profile generations atomically; mask display visibility and fit inclusion stay separate. |
-| [ ] U04a: brush and imported masks | U04 | Add brush gestures and supported mask import with native orientation/shape validation. One gesture is one compact undo item; repeated strokes and rebuilds stay within the resource budget. |
+| [ ] U04: masks and regions | U03/U01b | Rectangle/polygon reasons, persistent revisions, bounded undo/redo and atomic mask/profile publication implemented in the worker. Task03 qualification is blocked; independent acceptance remains open. |
+| [ ] U04a: brush and imported masks | U04 | Brush and strict native Boolean import implemented with shape/orientation validation and compact history. Shares the blocked Task03 qualification gate. |
 | [ ] U06: comparison and cuts | U03/U02a | Display two images with compatible linked pan/limits, pinning, magnifier and explicit straight-line sampling. Keep exposure/units visible and masks/support matched; later result bindings reuse this view. |
 | [x] U14b: inspection export | U03/U01b | Export the current detector figure and exact profile values/support/units to an external destination. Reopen exported values and compare to the named data revision; unrelated fitting stages are not prerequisites. |
+
+#### Task03 worker implementation and open qualification gate (U04/U04a)
+
+Worker implementation commit `efb5c28` implements rectangle, polygon, brush, reinclude and explicit Boolean import;
+reason/provenance overlays; source/acquisition-bound immutable mask state; compact bounded undo
+and redo; schema 6 persistence through the existing writer; and exact masked profiles through
+the existing reducer. Runtime limits and controls are in
+[interactive/README.md](../interactive/README.md#native-exclusion-editing). One mask module joins
+the existing project, job, panel and shell owners. No fitting/observation preparation is added.
+Completed intents are coalesced without dropping earlier atomic actions. Mask visibility is
+independent of inclusion. Narrow direct reductions are limited to 131,072 band pixels; larger
+masked queries and rasterization use the existing cancellable worker. Prepared reasons/inclusion
+are cached for at most two images, with fresh revisions and stale-publication checks.
+
+External evidence is under
+`C:\Users\Kenpo\.codex\visualizations\2026\09\28\01a0e91c-3efa-74a3-a0fc-6a8354d0ed72`.
+`u04_completion_index.json` records final source, commands, results, budgets, protected hashes
+and removed temporary checker code. `u04_focused_r7_result.json` passes eight changed-behavior
+groups: asymmetric pixel membership/import; invalid/cancel/no-op behavior; immutable and bounded
+history with revision exhaustion; 48 independent horizontal/vertical signed/nonfinite/all-excluded
+value/support comparisons; actual schema 6 JSON save/read and schemas 2–5; strict source/revision/span
+rejection. Twenty 120,000-pixel direct-band reductions had p95 0.432 ms (first call included).
+Core imports remain Qt-independent; final optional imports and Ruff formatting/lint pass.
+The numerical wheel is unchanged; its build was not run because Hatchling is unavailable.
+
+Native runs use the production `slate_app.main()` / `app.exec()`, normal Qt controls and posted
+mouse/key events, two native 3000x3000 Bi2Te3 acquisitions, 1280x900 Fusion/Segoe UI 10 on the
+previously declared i9-13900K/RTX 3060, 74.99 Hz machine. The observer checks exact painted values
+and support with current acquisition/data/mask/buffer/context binding, includes head/tail and
+slow intervals, records supersession, and requires a final drain. Shown-shell heartbeat covers
+cold Open through close/drains; initial shell warmup is separate. Full paths cover Escape,
+all tools, history/import/no-op, immutable prior snapshots, save/reopen, ten prepared switches,
+rapid A-B-A, actual active-worker cancellation and actual context recreation. No source reread
+or full reason upload is caused by cursor, contrast or visibility.
+
+| Frozen/diagnostic run | Window / frame p95 / p99 (ms) | Disposition |
+| --- | --- | --- |
+| `u04_r12_qual13_result.json` | 30.250 s / 16.152 / 19.064 | Passed; cursor/profile p95 14.830 ms. |
+| `u04_r12_qual14_result.json` | 31.025 s / 15.356 / 18.754 | Passed; cursor/profile p95 13.986 ms. |
+| `u04_r12_qual15_result.json` | Final drain incomplete | Failed at the whole-journey deadline with one unresolved cursor receipt; the frozen series stopped. |
+| `u04_r15_qual19_result.json` | 30.807 s / 15.617 / 19.308 | Failed: native context detach 108.027 ms, continuous heartbeat gap 111.166 ms. The new series stopped. |
+| `u04_r16_diag20_result.json` | 30.836 s / 15.186 / 18.631 | Instrumented diagnostic passed; it is not a frozen qualification-series member. |
+| `u04_r17_smoke21_result.json` | 3.395 s / 15.248 / 17.987 | Explicit hide before detach still failed: detach 109.479 ms, heartbeat 110.162 ms. |
+
+Earlier failed smoke/observer results remain failed. Repairs included chunked span extraction,
+shared full-reduction validity work, retained dirty-rectangle reason uploads, truthful profile
+paint generations and stable label size hints. The final layout checks keep detector dimensions
+stable during repeated edits. Context resource wrappers have one explicit Python owner; Qt's
+built-in immutable shader cache is used. A targeted instrumented diagnostic measured resource
+release at 0.174 ms and context initialization at 19.641 ms; the intermittent native reparent
+delay remains unresolved. Splitting detach/return and adding a separate hide callback did not
+establish the 100 ms limit. Thresholds were not relaxed and unchanged failed qualifications were
+not retried. The final revision-exhaustion repair was checked separately after the native runs.
+
+Selected complete runs stayed below 0.65 GiB resident RSS and 0.67 GiB OS peak; available memory
+exceeded 32 GiB. The conservative display/staging ledger is 211,824,000 bytes, below 512 MiB;
+actual GPU driver allocations and physical scanout were not measured. Qt paint/post-event receipts
+are the presentation boundary. Task03 used 560.648 s of the 900 s native allowance including a
+five-second outer reserve per whole command. Every wrapper was below 90 s, including failed runs.
+All prior evidence and `u08_finish_*` artifacts are protected and unchanged. No U08 campaign,
+scientific fit, retired suite or twenty-image journey was run. Temporary Task03 check code was
+removed after recording hashes and outcomes.
+
+**Task03 remains BLOCKED:** three individually passing full 30-second windows under one final
+freeze are not available. Main was left clean and untouched by this worker; the worker branch
+was not merged. This record cannot be used to mark U04/U04a or the already-pending U08 accepted.
 
 U02a is split into sequential subchanges without adding task IDs: (1) strict acquisition
 metadata, provenance and backward-compatible project persistence; (2) bounded per-candidate

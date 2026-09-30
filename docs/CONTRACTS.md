@@ -52,6 +52,41 @@ whose lifetime ends at the sampler's next operation and which is never retained 
 - Invalid rows have explicit status and cannot carry fabricated nonzero intensity.
 - IDs prove alignment and provenance; they are not numerical weights or sorting keys.
 
+## Desktop native exclusions (U04/U04a)
+
+`interactive/mask_state.py` owns immutable `NativeMask` state: decoded OSC SHA-256, native
+`(rows, columns)` shape, monotonic signed-64-bit revision, sorted disjoint half-open row spans
+and bounded provenance. Reason zero includes; reasons 1–4 annotate user exclusion, beamstop,
+detector gap and saturation. Adjacent equal-reason spans are canonicalized. Acquisition UUID
+ownership is supplied by the project; an identical source in another acquisition has independent
+mask/history state. Original counts and source bytes are never edited.
+
+Rectangle membership includes native pixel centers inside its bounds; polygon uses even-odd
+crossings with half-open edges; brush is the union of closed native-radius capsules. Boolean
+C-order `.npy` import requires exact native shape, uses True to retain existing membership and
+False to assign the chosen nonzero reason, and records the imported bytes' SHA-256. No OSC
+orientation conversion or inferred saturation rule is applied by this boundary.
+
+The existing `exact_band_profiles` reducer owns masked sums, means and valid-pixel support.
+Exclusions and nonfinite samples contribute neither signal nor support. Signed counts remain
+signed; zero support is missing (sum zero, mean NaN). Display visibility cannot change these
+values. Full-image reductions share one valid/safe plane; narrow reductions keep their declared
+band/ROI bounds. Published native arrays, reason planes, inclusion and profile snapshots are
+read-only. History checkpoints are compact immutable span arrays; undo/redo advances revision.
+
+The desktop job identity binds project/acquisition UUID, data and mask revisions plus the global
+generation. Publication also checks the current source, base mask and pending edit prefix.
+Mask changes invalidate the panel's full/ROI/query caches; reasons, inclusion and exact profiles
+are published together for the matching acquisition. Prior arrays survive unchanged. Preparation
+keeps prior values explicitly labeled; exported inspection metadata names the mask revision and
+provenance. Future observation/result binding must consume a frozen mask identity; this UI slice
+does not create or modify those scientific products.
+
+Mask state is persisted in desktop schema 6 through the existing bounded atomic writer. Schema
+1–5 reads default to no exclusions. Runtime limits and user interaction are documented in
+[interactive/README.md](../interactive/README.md#native-exclusion-editing); these desktop contracts
+do not change the numerical package API version or qualify a physical fit.
+
 ## Stable core data contracts
 
 | Contract | Owner | Essential payload |
