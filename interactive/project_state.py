@@ -14,6 +14,11 @@ from comparison_state import LineDefinition, PinIdentity
 from hbn_state import HbnSession, hbn_session_document, hbn_session_from_document
 from joint_state import JointSession, joint_session_document, joint_session_from_document
 from mask_state import NativeMask, mask_document, mask_from_document
+from native_fit_state import (
+    NativeFitSession,
+    native_fit_session_document,
+    native_fit_session_from_document,
+)
 from native_simulation_state import (
     NativeSimulationDraft,
     NativeSimulationReference,
@@ -33,7 +38,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 14
+PROJECT_SCHEMA_VERSION = 15
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -645,9 +650,14 @@ class ProjectViewState:
     sample_session: SampleSession | None = None
     joint_session: JointSession | None = None
     physical_settings_json: str = "{}"
+    native_fit_session: NativeFitSession | None = None
 
     def __post_init__(self):
         _physical_settings(self.physical_settings_json)
+        if self.native_fit_session is not None and not isinstance(
+            self.native_fit_session, NativeFitSession
+        ):
+            raise ProjectFormatError("Invalid prepared-data session")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1238,6 +1248,7 @@ def project_to_document(
         "hbn_sessions": [hbn_session_document(v) for v in state.view.hbn_sessions],
         "sample_session": sample_session_document(state.view.sample_session),
         "joint_session": joint_session_document(state.view.joint_session),
+        "native_fit_session": native_fit_session_document(state.view.native_fit_session),
         "physical_settings_json": _physical_settings(state.view.physical_settings_json),
         "detector": _detector_document(detector),
         "scene": (
@@ -1348,6 +1359,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         11,
         12,
         13,
+        14,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1417,7 +1429,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         | ({"hbn_sessions"} if top["schema_version"] >= 11 else set())
         | ({"sample_session"} if top["schema_version"] >= 12 else set())
         | ({"joint_session"} if top["schema_version"] >= 13 else set())
-        | ({"physical_settings_json"} if top["schema_version"] >= 14 else set()),
+        | ({"physical_settings_json"} if top["schema_version"] >= 14 else set())
+        | ({"native_fit_session"} if top["schema_version"] >= 15 else set()),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1489,6 +1502,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             sample_session_from_document(view_data.get("sample_session")),
             joint_session_from_document(view_data.get("joint_session")),
             _physical_settings(view_data.get("physical_settings_json", "{}")),
+            native_fit_session_from_document(view_data.get("native_fit_session")),
         ),
         draft,
     )

@@ -58,6 +58,8 @@ from metadata_review import (
     parse_table_text,
     prepare_reference,
 )
+from native_fit_io import PreparedWorkResult, prepared_budget, prepared_work
+from native_fit_panel import NativeFitPanel
 from native_simulation_io import prepare_native_draft, run_native_simulation
 from numeric_fields import PARAMETERS
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
@@ -357,13 +359,16 @@ class ShellWindow(QMainWindow):
                 "hbn",
                 "sample",
                 "joint",
+                "prepared",
                 "physical",
             ]
             | None
         ) = None
         self._pending_hbn = None
         self._hbn_context = None
+        self._pending_prepared = None
         self._pending_joint = None
+        self._prepared_context = None
         self._joint_context = None
         self._pending_physical = None
         self._physical_context = None
@@ -697,6 +702,10 @@ class ShellWindow(QMainWindow):
         self.sample_button = QPushButton("Sample geometry series")
         self.sample_button.clicked.connect(self._show_sample)
         inspector_layout.addWidget(self.sample_button)
+        self.prepared = NativeFitPanel(self)
+        self.prepared_button = QPushButton("Prepared inputs / draft plan")
+        self.prepared_button.clicked.connect(lambda: self.prepared.show())
+        inspector_layout.addWidget(self.prepared_button)
         self.joint = JointPanel(self)
         self.joint_button = QPushButton("Joint geometry")
         self.joint_button.clicked.connect(self._show_joint)
@@ -925,6 +934,9 @@ class ShellWindow(QMainWindow):
                 for identity, detail in self.sample.input_checks.items()
             )
             + (0 if self.joint.session is None else 3 * self.joint.session.nbytes)
+            + (0 if self.prepared.session is None else 3 * self.prepared.session.nbytes)
+            + (0 if self.prepared.profiles is None else self.prepared.profiles.nbytes)
+            + self.prepared.history.bytes_used
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
@@ -983,6 +995,58 @@ class ShellWindow(QMainWindow):
         return (
             identity.generation == self._active_generation == self.jobs.latest_generation
             and self._physical_context == self.physical.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
+
+    def _supersede_prepared(self):
+        self._pending_prepared = None
+        if self._active_kind == "prepared":
+            self.jobs.invalidate()
+            self.prepared.status.setText("Prepared request superseded; prior description retained")
+
+    def _request_prepared(self, operation, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 1024 * 1024:
+            raise ValueError("Prepared request exceeds 1 MiB")
+        self._pending_prepared = (operation, argument, context)
+        if self._active_kind == "prepared":
+            self.jobs.invalidate()
+        self.prepared.status.setText(operation.title() + " queued on the shared worker")
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_prepared(self, operation, argument, context):
+        if context != self.prepared.context():
+            self.prepared.status.setText("Stale prepared request rejected before file work")
+            return
+        self._active_kind = "prepared"
+        self._prepared_context = context
+        try:
+            request = json.loads(argument)
+            request["resources"] = prepared_budget(**self._simulation_resource_charge())
+            payload = json.dumps(request, allow_nan=False).encode()
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.prepared.epoch),
+                    payload,
+                    len(payload),
+                    MAX_RESULT_BYTES,
+                    prepared_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._prepared_context = None
+            self.prepared.status.setText("Prepared operation could not start: " + str(exc))
+        else:
+            self._active_generation = identity.generation
+
+    def _prepared_current(self, identity):
+        return (
+            identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._prepared_context == self.prepared.context()
             and not self._close_intent
             and self._pending_open is None
         )
@@ -1324,6 +1388,7 @@ class ShellWindow(QMainWindow):
             self.sample.session,
             self.joint.session,
             self.physical.settings_json,
+            self.prepared.session,
         )
 
     def _validate_project_admission(
@@ -1647,6 +1712,11 @@ class ShellWindow(QMainWindow):
             self._pending_physical = None
             self._submit_physical(argument, context)
             return
+        if self._pending_prepared is not None:
+            operation, argument, context = self._pending_prepared
+            self._pending_prepared = None
+            self._submit_prepared(operation, argument, context)
+            return
         if self._pending_joint is not None:
             operation, argument, context = self._pending_joint
             self._pending_joint = None
@@ -1838,6 +1908,7 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_hbn = None
+        self._pending_prepared = None
         self._pending_joint = None
         self._pending_sample = None
         self._pending_reference = None
@@ -1853,9 +1924,11 @@ class ShellWindow(QMainWindow):
             "simulation",
             "hbn",
             "joint",
+            "prepared",
             "sample",
         ):
             self._pending_hbn = None
+            self._pending_prepared = None
             self._pending_joint = None
             self._pending_sample = None
             self._pending_simulation = None
@@ -4507,9 +4580,13 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        if self._active_kind == "prepared" or self._pending_prepared is not None:
+            self._pending_prepared = None
+            self.prepared.status.setText("Cancel acknowledged; prior prepared state retained")
         if self._active_kind == "physical" or self._pending_physical is not None:
             self.physical.cancel(clear=True)
         joint_requested = self._active_kind == "joint" or self._pending_joint is not None
+        self._pending_prepared = None
         self._pending_joint = None
         if joint_requested:
             self.joint.status.setText("Cancel acknowledged; pending work cleared; draining safely")
@@ -5035,6 +5112,11 @@ class ShellWindow(QMainWindow):
                         "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
                     )
                     self._setup_dialog.cancel_button.setEnabled(False)
+                if self._active_kind == "prepared":
+                    self._prepared_context = None
+                    self.prepared.status.setText(
+                        "Superseded prepared operation; prior state retained"
+                    )
                 if self._active_kind == "joint":
                     self.joint.status.setText(
                         f"Superseded joint {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
@@ -5086,6 +5168,12 @@ class ShellWindow(QMainWindow):
             )
             if state in (JobState.FAILED, JobState.CANCELED):
                 self._active_kind = self._active_generation = self._physical_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
+        if kind == "prepared":
+            self.prepared.status.setText(f"Prepared {state.value}: {summary.detail or 'working'}")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._prepared_context = None
                 QTimer.singleShot(0, self._dispatch_pending)
             return
         if kind == "joint":
@@ -5372,6 +5460,13 @@ class ShellWindow(QMainWindow):
                     self.physical.status.setText(
                         "Late/stale physical completion rejected; initial values unchanged"
                     )
+            elif kind == "prepared":
+                if self._prepared_current(identity) and isinstance(value, PreparedWorkResult):
+                    self.prepared.guard(lambda: self.prepared.ready(value))
+                else:
+                    self.prepared.status.setText(
+                        "Stale prepared completion rejected; prior description retained"
+                    )
             elif kind == "joint":
                 if self._joint_current(identity) and isinstance(value, JointWorkResult):
                     self.joint.guard(lambda: self.joint.ready(value))
@@ -5424,6 +5519,8 @@ class ShellWindow(QMainWindow):
             self._active_kind = None
             if kind == "physical":
                 self._physical_context = None
+            if kind == "prepared":
+                self._prepared_context = None
             if kind == "joint":
                 self._joint_context = None
                 self.joint.refresh()
@@ -5540,6 +5637,8 @@ class ShellWindow(QMainWindow):
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
             self.physical.restore(value.document.view.physical_settings_json)
+            self.prepared.restore(value.document.view.native_fit_session)
+            self._pending_prepared = self._prepared_context = None
             self.joint.restore(value.document.view.joint_session)
             self._pending_joint = self._joint_context = None
             self.sample.restore(value.document.view.sample_session, value.sample_input_checks)
@@ -5665,6 +5764,7 @@ class ShellWindow(QMainWindow):
             self._close_intent = True
             self._pending_open = None
             self._pending_hbn = None
+            self._pending_prepared = None
             self._pending_joint = None
             self._pending_sample = None
             self._pending_simulation = None
@@ -5692,6 +5792,7 @@ class ShellWindow(QMainWindow):
                 "simulation",
                 "hbn",
                 "joint",
+                "prepared",
                 "sample",
             ):
                 self.jobs.cancel()

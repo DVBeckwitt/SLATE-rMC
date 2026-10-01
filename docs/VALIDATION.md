@@ -181,3 +181,34 @@ The external r2c index retains failed checks, exact disposable methods, source h
 evidence and command budgets. No fit, fresh observation preparation, scientific prediction or
 Jacobian, full scientific image, sweep or performance campaign ran. Software checks establish
 compatibility only. Task12 stays parked, main is unchanged and root owns B021 closure and acceptance.
+
+
+## R3 prepared inspection/editor checks (2026-10-01)
+
+The actual worker and panel load the existing Bi2Te3 prepared set: 1322 frozen rows, 1268 valid,
+242 signed negative corrected rows, full 1322x1322 covariance and 39 owner-defined parameters.
+Exact row counts/covariance/identities, owner names/units/starts and supported staged budgets are
+checked without prediction. Actual edit/commit/undo/redo, pending-text Save/Open, dirty state and
+exact external plan export preserve definitions, unknown settings and unrelated genuine joint
+history. Schema14 and older genuine projects remain readable.
+
+Two explicitly hypothetical metadata revisions establish identity mapping on reorder and blocked
+reuse for added/removed/unit/scope/domain/engine changes; they grant no new science support. Real
+non-solving commit checks reject invalid ranges/fixed starts/final stage order/method choices.
+Actual UI loading of future coordinate/method declarations retains inert rows and original history.
+Wrong array hashes and malformed plans reject before state publication. Missing disposable copies
+of genuine original inputs survive Save/Open as unavailable history. Controlled queued/active
+cancel, stale load/commit and ordinary close/drain preserve previous valid state and newer edits.
+
+All failed receipts and repairs remain external, including corrected worker payload/result bounds
+and undo accounting. One fixture opened a protected prior project directly and ordinary autosave
+rewrote it; the changed snapshot was retained, original bytes restored only after matching the
+pre-task SHA256/size exactly, and later fixtures use disposable copies. Final preservation audits
+verify all pre-task artifacts. Original parked sources are retained exactly outside the repository;
+the useful profile component and bounded session idea are revised into the independent editor.
+The unused tentative Run/result-reference scaffolding was not integrated.
+
+The r3 index records final sources, exact disposable methods, budgets, capability limits and
+protection hashes. No fit, fresh observation preparation, scientific prediction/Jacobian, full
+scientific image, sweep or performance campaign ran. Full coupled model/gauge/stage launch
+admission remains R4. Draft support does not imply numerical qualification or original acceptance.

@@ -1227,3 +1227,29 @@ silently: reload rejects serialized identity mismatch. There is no filesystem-wi
 two-file rename guarantee. Historical launch=None records retain exact inspection/export and
 existing handoff verification. The latter proves serialized byte bindings and the owner geometry
 contract, not reconstructed original fit ancestry.
+
+
+## Prepared draft descriptions (schema 15)
+
+Prepared inspection binds physics JSON, observations JSON, original plan JSON, numeric NPZ and
+raw-acquisition bytes. The typed owners verify projection revision, frozen corrected counts and
+full covariance. Profiles retain raw/background/signed corrected counts, validity and frozen
+`observation SHA256:row index` IDs in original order. The full count-plus-background covariance
+is retained externally in memory; displayed marginal standard errors never replace it. Arrays
+are bounded readonly copies and are not persisted in the project. Missing/changed original files
+leave descriptions inspectable and reload unavailable; wrong bindings reject before publication.
+
+Every current/history description has a digest over exact input identities, full ordered plan and
+parameter/model definition. Definitions record actual model names, canonical units/owners, source
+revision and loaded FitParameter declarations, including physical/search bound kinds. Displayed
+units equal canonical units. Added/removed coordinates, changed units/owners/domains/bounds/scales,
+fixed-state changes or engine/model revisions block old-start reuse. Pure reordering aligns by
+owner/name, never index. Authoritative loaded starts require explicit new-plan review; historical
+fields remain exact. At most eight old descriptions and sixteen export references are admitted.
+
+Pending edits retain stable identities and selected start index, including invalid text until
+commit/discard. Commit uses FitParameter and the existing non-solving search validator, preserving
+fixed values and final stage order. Physical bounds and active/fixed scopes cannot be silently
+released. Unavailable parameter/method metadata remains inert. This is structural draft checking,
+not full scientific domain/gauge/qualification or full engine launch admission. Run and indexed
+adoption remain unavailable pending R4; no equivalent route around the parked script patch exists.

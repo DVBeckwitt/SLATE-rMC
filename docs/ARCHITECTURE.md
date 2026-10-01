@@ -468,3 +468,26 @@ Historical reports without a launch remain inspectable and exactly exportable; n
 handoff creation is unavailable. Existing handoff verification retains its serialized byte-binding
 guarantee and cannot reconstruct missing original fit lineage. Qualification and geometry rebasing
 still belong to the existing core; no joint handoff becomes an indexed result implicitly.
+
+
+### Prepared native inspection and draft editing (R3)
+
+`native_fit_io.py` reads existing physics/observation/plan inputs through the typed native owners
+and validates original physical/raw-acquisition/projection/NPZ bindings. JSON size, NPZ expansion,
+4096 profile rows, the existing 160 MiB result cap and shared CPU/GPU admission bound file work.
+One global worker performs reads and structural search checks with one BLAS thread. No observation
+preparation, prediction, optimizer, indexed adoption or protected-script integration is connected.
+
+`native_fit_state.py` retains bounded immutable draft descriptions, original file identities,
+full plans and engine/model/parameter-definition digests. `native_fit_panel.py` derives parameter
+rows from the current plan and actual model names/units/owners. It edits starts, declared search
+bounds and present supported method/budget/difference-step fields. Physical bounds, units, owners,
+fixed/released scopes, stage order and unknown settings stay explicit declarations. Fixed starts
+remain equal in every start. Unsupported rows and methods are inert and visibly unavailable.
+
+Schema 15 preserves schemas 1-14 and stores descriptions/history/pending text edits/export
+references, never large count/covariance arrays. Prospective admission, ordinary autosave and
+Save/Open remain the shell's responsibility. The existing SessionHistory holds immutable snapshots
+and charges changed descriptions; unchanged historical strings are reused. Compatible historical
+starts transfer only through explicit review by owner/name identity. Incompatible definitions stay
+readable and require an authoritative new plan; no migration/default/parameter registry is added.

@@ -531,3 +531,20 @@ Export exact named results, or save/reload a qualified hash-bound joint geometry
 matching specimen manifest and detector base configuration. Reload verifies every predecessor.
 These operations do not adopt experiment geometry or qualify mosaic/intensity. The original project
 size and shared resource limits still apply; remove unselected history if a bounded limit is reached.
+
+
+### Prepared inputs / draft plan
+
+Open **Prepared inputs / draft plan**, choose existing native physics, observations and refinement
+plan JSON, then **Load prepared set**. Profiles show frozen raw/background/signed corrected counts;
+select a row to inspect exact values and its full covariance row. Marginal sigma is labeled separately.
+The inputs tab shows original hashes and material/source/geometry provenance.
+
+Edit the current start, declared search bounds or supported present stage method/budget fields,
+then **Commit displayed draft**. Canonical units, physical bounds and declared fixed/active scopes
+are retained. Pending text is autosaved and restored by Save/Open. Undo/redo restores exact
+descriptions; reload original sources to restore arrays. Historical definitions are readonly.
+**Reuse compatible historical starts** aligns by owner/name and explains incompatible changes.
+Load an authoritative current plan to review new/removed definitions; unknown fields stay inert.
+**Export committed plan** writes the exact committed plan outside the repository.
+Run and indexed adoption are unavailable pending R4. Structural draft checks do not qualify a fit.

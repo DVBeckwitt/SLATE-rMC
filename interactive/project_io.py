@@ -420,6 +420,10 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         from joint_io import joint_protected_paths
 
         protected.extend(joint_protected_paths(document.view.joint_session))
+    if document.view.native_fit_session is not None:
+        from native_fit_io import prepared_paths
+
+        protected.extend(prepared_paths(document.view.native_fit_session))
     for source in protected:
         if destination.resolve(strict=False) == source.resolve(strict=False) or (
             destination.exists() and source.exists() and os.path.samefile(destination, source)
