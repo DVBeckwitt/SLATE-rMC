@@ -155,12 +155,14 @@ class OscGeometrySeriesConfiguration:
 
 def load_osc_geometry_series(
     path: str | Path,
+    *,
+    source_bytes: bytes | None = None,
 ) -> OscGeometrySeriesConfiguration:
     """Load one strict, manifest-relative OSC geometry series."""
 
     manifest_path = Path(path).resolve()
     document = _mapping(
-        load_strict_yaml_mapping(manifest_path),
+        load_strict_yaml_mapping(manifest_path, source_bytes=source_bytes),
         "OSC geometry series",
         required={"schema_version", "simulation_config", "incidence_axis_index", "images"},
         optional={"qualification_profile"},

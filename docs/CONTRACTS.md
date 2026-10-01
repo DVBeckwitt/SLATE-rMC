@@ -1208,3 +1208,22 @@ target roster from review. Deferred dispatch compares that captured context befo
 launch or destination write. A mismatch discards the confirmation and requires review again. An
 unchanged context uses the existing no-overwrite, byte-verified copy and atomic binding path, with
 its original identity, dependent-CIF, cancellation and stale-publication checks.
+
+
+## Desktop joint handoff original predecessors
+
+Save handoff requires a retained immutable qualified result with an original captured launch.
+Requested Bi2Se3/Bi2Te3 manifest and detector-base paths must equal that result's paths. All
+captured manifest/configuration/CIF/OSC and hBN source/dark identities must still match. Ordered
+image IDs and commanded angles must equal the chosen result's capture; current captures never
+substitute for historical predecessors. Admission failure writes neither output and changes no
+export references. Paired publication collision/cancel removes only unchanged files created by
+that operation, preserving preexisting or changed destination bytes.
+
+The canonical document builder accepts immutable report bytes and optional expected predecessor
+hashes; configuration and manifest parsing use the bytes that supplied their hashes. The format
+and GEOMETRY_ONLY status are unchanged. Later file changes cannot become bound predecessors
+silently: reload rejects serialized identity mismatch. There is no filesystem-wide lock or atomic
+two-file rename guarantee. Historical launch=None records retain exact inspection/export and
+existing handoff verification. The latter proves serialized byte bindings and the owner geometry
+contract, not reconstructed original fit ancestry.

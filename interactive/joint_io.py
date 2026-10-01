@@ -1,6 +1,8 @@
 """Joint geometry worker: bind frozen inputs, call the owner, publish exact records."""
 
+import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
@@ -10,7 +12,7 @@ from hbn_io import _geometry, _hash_file, _inputs_current, _json_finite, _observ
 from hbn_state import hbn_session_from_document
 from job_lifecycle import JobResult
 from joint_state import joint_session_from_document, validate_joint_record
-from sample_io import _images, observation_id
+from sample_io import _current, _images, _validate_input_bindings, observation_id
 from sample_state import encoded, payload_hash, sample_session_from_document
 from simulation_io import (
     MAX_SIMULATION_CPU_BYTES,
@@ -198,12 +200,57 @@ def _fit(session, control, name):
     return record
 
 
+def _handoff_predecessors(record, request, control):
+    launch = record["launch"]
+    if launch is None:
+        raise ValueError(
+            "New handoff unavailable: original predecessor provenance is missing; export the exact result or verify an existing handoff"
+        )
+    specimen = request["specimen_id"]
+    if specimen not in ("bi2se3", "bi2te3"):
+        raise ValueError("joint handoff specimen must be a captured Bi2Se3 or Bi2Te3 group")
+    captures = launch["captures"]
+    inputs = {
+        group: json.loads(capture["session"]["inputs_json"]) for group, capture in captures.items()
+    }
+    selected = inputs[specimen]
+    if Path(request["manifest_path"]).resolve(strict=True) != Path(
+        selected["manifest_path"]
+    ) or Path(request["detector_base_config_path"]).resolve(strict=True) != Path(
+        inputs["bi2se3"]["configuration_path"]
+    ):
+        raise ValueError("handoff paths differ from the chosen result's original predecessors")
+    expected = {}
+    for group, values in inputs.items():
+        if group == "hbn":
+            _inputs_current(values, control)
+            files = [
+                {"path": values[path], "sha256": values[sha]}
+                for path, sha in (
+                    ("source_path", "source_file_sha256"),
+                    ("dark_path", "dark_file_sha256"),
+                    ("configuration_path", "configuration_sha256"),
+                    ("cif_path", "cif_sha256"),
+                )
+            ]
+        else:
+            _validate_input_bindings(values)
+            _current(values, control)
+            files = values["files"]
+        for row in files:
+            path = str(Path(row["path"]).resolve(strict=True))
+            if path in expected and expected[path] != row["sha256"]:
+                raise ValueError("joint captured predecessors disagree on a file identity")
+            expected[path] = row["sha256"]
+    return expected, selected
+
+
 def joint_work(argument, control):
     from threadpoolctl import threadpool_limits
 
     from rasim_next.fitting.joint_geometry_handoff import (
+        joint_geometry_handoff_document,
         load_joint_geometry_handoff,
-        save_joint_geometry_handoff,
     )
     from rasim_next.fitting.joint_geometry_report import validate_joint_geometry_report
 
@@ -278,21 +325,43 @@ def joint_work(argument, control):
                     raise ValueError("joint handoff requires a qualified report")
                 report_path = path.with_suffix(".joint-report.json")
                 _external(report_path, protected=joint_protected_paths(session))
-                _publish_bytes(report_path, encoded(record["report"]).encode(), control)
-                _stop(control)
-                save_joint_geometry_handoff(
-                    path,
+                expected, inputs = _handoff_predecessors(record, request, control)
+                report_bytes = encoded(record["report"]).encode()
+                document = joint_geometry_handoff_document(
                     report_path=report_path,
+                    report_bytes=report_bytes,
                     geometry_manifest_path=Path(request["manifest_path"]),
                     detector_base_config_path=Path(request["detector_base_config_path"]),
                     specimen_id=request["specimen_id"],
+                    expected_file_hashes=expected,
                 )
-                outputs = [(report_path, b""), (path, b"")]
+                if tuple(document["image_ids"]) != tuple(
+                    v["image_id"] for v in inputs["images"]
+                ) or tuple(document["commanded_incidence_angles_rad"]) != tuple(
+                    math.radians(v["axis_rotation_angles_deg"][inputs["incidence_axis_index"]])
+                    for v in inputs["images"]
+                ):
+                    raise ValueError(
+                        "handoff image order or commanded angles differ from the chosen result"
+                    )
+                _handoff_predecessors(record, request, control)
+                outputs = [(report_path, report_bytes), (path, encoded(document).encode())]
+                written = []
+                try:
+                    for output, raw in outputs:
+                        _publish_bytes(output, raw, control)
+                        written.append((output, raw))
+                    _stop(control)
+                except BaseException:
+                    for output, raw in written:
+                        if output.is_file() and output.read_bytes() == raw:
+                            output.unlink()
+                    raise
             session = replace(
                 session,
                 exports=(
                     *session.exports,
-                    *tuple((str(p), _hash_file(p, control)) for p, _ in outputs),
+                    *tuple((str(p), hashlib.sha256(raw).hexdigest()) for p, raw in outputs),
                 ),
             )
             detail = (
@@ -312,7 +381,7 @@ def joint_work(argument, control):
             detail = (
                 "Verified joint handoff "
                 + handoff.position.artifact_revision
-                + "; no experiment adoption"
+                + "; serialized predecessor bytes verified; missing original fit lineage is not reconstructed; no experiment adoption"
             )
         else:
             raise ValueError("unsupported joint operation")

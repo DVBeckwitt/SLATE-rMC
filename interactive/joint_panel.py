@@ -143,7 +143,7 @@ class JointPanel(QDialog):
         results.addWidget(self.canvas)
         handoff = self.page("3 Qualified handoff")
         hint = QLabel(
-            "Save or reload the owner's hash-bound GEOMETRY_ONLY handoff. All predecessors must still match. Historical report inspection works without the source files. Joint handoffs are separate from indexed results and are not adopted into an experiment here."
+            "Save or reload the owner's hash-bound GEOMETRY_ONLY handoff. All predecessors must still match. Historical report inspection/export works without source files; creating a new handoff requires the chosen result's original captured predecessors. Existing handoff verification checks its serialized bindings. Joint handoffs are separate from indexed results and are not adopted into an experiment here."
         )
         hint.setWordWrap(True)
         handoff.addWidget(hint)
@@ -159,7 +159,7 @@ class JointPanel(QDialog):
         self.button(
             handoff, "Use displayed result's captured predecessor paths", self.handoff_paths
         )
-        self.button(
+        self.handoff_button = self.button(
             handoff, "Save qualified handoff", lambda: self.file_request("save_handoff", save=True)
         )
         self.button(handoff, "Reload / verify handoff", lambda: self.file_request("reload_handoff"))
@@ -393,6 +393,10 @@ class JointPanel(QDialog):
         record = self._presentation_record
         if operation in ("export_result", "save_handoff") and record is None:
             raise ValueError("Display a retained joint result first")
+        if operation == "save_handoff" and record["launch"] is None:
+            raise ValueError(
+                "New handoff unavailable: original predecessor provenance is missing; exact result export and existing handoff verification remain available"
+            )
         chooser = QFileDialog.getSaveFileName if save else QFileDialog.getOpenFileName
         path, _ = chooser(self, operation.replace("_", " "), "", "JSON (*.json)")
         if not path:
@@ -419,7 +423,7 @@ class JointPanel(QDialog):
         record = self._presentation_record
         if record is None or record["launch"] is None:
             raise ValueError(
-                "Historical report has no desktop captures; supply its actual matching predecessor paths"
+                "New handoff unavailable: original predecessor provenance is missing; export the exact result or verify an existing handoff"
             )
         captures = record["launch"]["captures"]
         self.manifest.setText(
@@ -493,6 +497,14 @@ class JointPanel(QDialog):
             self.refresh()
 
     def refresh(self):
+        record = self._presentation_record
+        lineage = record is not None and record["launch"] is not None
+        self.handoff_button.setEnabled(lineage and record["report"]["confidence_qualified"])
+        self.handoff_button.setToolTip(
+            "Verify this result's original frozen predecessors before saving"
+            if lineage
+            else "Original predecessor provenance is missing; export the exact result or verify an existing handoff"
+        )
         reason = self.readiness()
         self.fit_button.setEnabled(
             reason is None
@@ -644,7 +656,7 @@ class JointPanel(QDialog):
             )
             if record["launch"] is None:
                 lines.append(
-                    "Historical report: original desktop frozen coordinates and starting values are unavailable. Source files are required only for a new fit or handoff verification."
+                    "Historical report: original frozen predecessors, coordinates and starting values are unavailable. New handoff creation is unavailable; exact result export and existing handoff verification remain supported."
                 )
             self.summary.setPlainText("\n".join(lines))
             initial = (
@@ -701,6 +713,7 @@ class JointPanel(QDialog):
         self.images.blockSignals(False)
         self.comparison.resizeColumnsToContents()
         self.present_points()
+        self.refresh()
 
     def present_points(self, *_):
         record = self._presentation_record

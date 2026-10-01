@@ -156,3 +156,28 @@ The external r2b index retains failed checks, exact disposable methods, protecte
 hashes and whole-command allowance. Software checks do not establish numerical or performance
 qualification. B002/B007/B009/B010/B021 and other root gaps remain outside this card; root owns bug
 closure and original-condition acceptance. Task12 remains parked and main remains unchanged.
+
+
+## R2c joint handoff integrity checks (2026-10-01)
+
+The pre-fix desktop worker accepted a genuine historical report with no launch against a copied
+same-ID manifest with changed angles, wrote both outputs and reloaded successfully. That reproduced
+reassignment; reload alone did not establish original fitting ancestry. Repaired worker checks
+reject changed OSC/manifest/configuration/CIF/hBN bytes, wrong specimen/base/manifest paths, chosen
+old hashes despite matching current fixture facts, ordered image/angle mismatch and a controlled
+late configuration change before either output. Sentinels survive. A late destination collision
+and cancellation roll back the operation's own sidecar. Positive publication/reload preserves
+the genuine report exactly; the original core save API reproduces its existing genuine document.
+
+No genuine complete three-group desktop launch is available. Positive provenance routing uses
+an explicitly hypothetical capture injected only after genuine historical record validation.
+Tiny OSC fixtures and opaque hBN facts are not that report's scientific ancestors. This does not
+prove full captured-launch scientific admission or grant qualification. Native UI checks use the
+genuine historical record: missing-lineage handoff is disabled before the dialog, exact export
+and genuine existing handoff verification work, stale/pending-canceled dispatch writes nothing,
+and Save/Open preserves history/export references. Path presentation uses a labeled capture fixture.
+
+The external r2c index retains failed checks, exact disposable methods, source hashes, protected
+evidence and command budgets. No fit, fresh observation preparation, scientific prediction or
+Jacobian, full scientific image, sweep or performance campaign ran. Software checks establish
+compatibility only. Task12 stays parked, main is unchanged and root owns B021 closure and acceptance.

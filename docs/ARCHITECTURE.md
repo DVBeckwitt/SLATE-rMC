@@ -453,3 +453,18 @@ retained views; export requires current settled inputs. Persistence stores each 
 view plus the shared tuple, so unlock after Open restores the correct occupants' limits.
 Confirmed source-copy plans retain the setup context through deferred dispatch. The existing
 pending-request/context gate rejects obsolete confirmation before starting the copy worker.
+
+
+### Joint handoff predecessor ownership
+
+New desktop handoffs use the displayed immutable result's frozen launch captures. The worker
+checks all original hBN/crystal file identities, specimen/base paths and ordered image/command
+angles before publishing either sidecar. The existing owner builds the same v1 document from
+immutable report/configuration/manifest reads and checks captured hashes. The desktop rechecks
+live predecessors before no-overwrite publication, removes only its own unchanged new files
+on paired publication failure, and hashes serialized bytes for export references.
+
+Historical reports without a launch remain inspectable and exactly exportable; new desktop
+handoff creation is unavailable. Existing handoff verification retains its serialized byte-binding
+guarantee and cannot reconstruct missing original fit lineage. Qualification and geometry rebasing
+still belong to the existing core; no joint handoff becomes an indexed result implicitly.
