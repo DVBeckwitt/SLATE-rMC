@@ -282,3 +282,39 @@ loader/archive evidence remains relevant where source is unchanged. No numerical
 or new background truth is qualified by these checks. B014 and B024 remain later closure
 items; their campaigns were not repeated. Exact disposable methods and final evidence/
 source hashes are retained externally and temporary check code is removed at handoff.
+
+
+## R5 independent stage editor checks (2026-10-01)
+
+Temporary external Qt actions used copies of genuine Bi frozen inputs and genuine
+hBN/joint records. An explicitly labeled earlier-stage metadata fixture cloned
+existing mosaic declarations; it is neither a scientific template nor a fitted
+result. Named stage selection, active JSON/guard drafts, autosave/Open, existing
+commit/export and Undo/Redo passed. A recording wrapper called the real non-solving
+native_search validator and retained exact owner/name/unit/order, starts, held
+coordinates, numerical settings and calibration counts. No evaluator or optimizer
+was called. Frozen input identity and extra stage declarations remained exact.
+
+Focused typed rejection checks covered fixed-active inconsistency, unsupported Bi
+disorder, TRF/historical guards, final free order, duplicate stage identities,
+nonboolean guards, changed engine definition, physics/observation binding and raw
+acquisition ownership. Malformed pending active-list text remained bounded inert
+data. One actual archive export/import/Open retained stage selection/pending text,
+immutable description/history and genuine diagnostics; explicit relocation read
+signed corrected counts and full 1322-row covariance without numerical preparation.
+
+Original failed receipts remain external: the first desktop Undo assertion undid
+the export history record rather than the preceding stage commit; the corrected
+check covers both. The first archive fixture omitted required pending start_index
+and was rejected before any archive operation. Adding that field enabled the one
+representative archive roundtrip; production checks were not weakened.
+
+Five changed-module syntax/import checks, schema18 read/schema19 exact roundtrip,
+named canonical indexing, configured Ruff formatting/lint, whitespace and offline
+package construction establish software compatibility only. R3/R6/R7 evidence is
+reused for unchanged controls, typed diagnostic ownership and lifecycle/archive
+mechanisms. No fit, prediction/Jacobian, observation preparation, new scientific
+image, sweep or performance campaign ran. Native stage-result import lacks an
+independent typed read-only owner, and Run/indexed adoption remains disconnected.
+No new stage numerical qualification or U11a/b/c execution acceptance is claimed.
+Task12 scripts/parked patch and all prior external evidence remain protected.

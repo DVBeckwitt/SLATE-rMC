@@ -673,3 +673,43 @@ original receipt paths remain historical provenance. Missing historical dependen
 block a self-contained export until that review is removed or views are deselected.
 Review generates no external scientific files. Cancel/Open/Close use the one shared
 worker and existing drain; previous reviews and drafts remain intact.
+
+
+## Declared native stage review and editing (R5)
+
+In the prepared draft editor, select a declared stage by its saved name/order. The
+review shows canonical owner/name/unit identities, declared and canonical indices,
+active/held/fixed roles, preceding stage, frozen input hashes, source/integration
+choices and exact numerical declarations. Stage names do not establish scientific
+capability. Derived thickness, phase/parent fractions and candidate-dependent inactive
+directions remain with the existing material owner; no candidate values are inferred.
+
+For supported definitions, edit an earlier stage's **Active canonical names** as a
+JSON list and its declared historical-guard boolean. These are unvalidated draft
+proposals. Existing method/budget, finite-difference and parameter controls remain.
+**Commit displayed draft** uses existing non-solving validation; it does not admit
+a launch. Global fixed/gauge definitions and the final stage's free-coordinate
+ordering stay read-only. Unknown settings/coordinates retain their original data
+and explicit incompatibility. No stage template, bound, prior or gauge is invented.
+
+The native owner profiles nonnegative acquisition scale; guarded historical SLSQP
+owns its literal scale coordinate. Frozen background/full covariance remain exact;
+there is no fitted-background control or new transfer recipe. Bi native disorder
+is unavailable. Pb coordinates are limited to the actual loaded phase/parent roster;
+source support is not measured stage qualification.
+
+Schema 19 retains schemas 1-18 and stores selected stage in NativeFitSession. Old
+sessions default to no saved stage selection. Pending text, immutable descriptions
+and history use existing Save/Open, autosave, Undo/Redo, independent copy, recovery
+and portable archive owners. Invalid pending active-list text stays inert until
+explicitly corrected and committed. Stage/upstream changes invalidate pending owner
+work through the existing lifecycle; historical records are not upgraded.
+
+Native stage-result import is unavailable: refinement writes its result in the
+script; rendering that result constructs an evaluator. There is no independent
+typed read-only native stage-result owner. Initial/candidate/selected outcomes,
+rank/covariance, weak directions and qualification cannot be manufactured from
+stage declarations. Existing genuine hBN/joint geometric diagnostics remain exact
+in their inspectors, distinct from native mosaic/ordered/disorder results. Run and
+indexed adoption remain unavailable pending R4. U11a/b/c execution is not accepted
+by this independent editor delivery.

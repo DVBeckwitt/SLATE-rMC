@@ -580,3 +580,38 @@ Large observation arrays remain external and load only for explicit typed inspec
 U11e/U11f numerical preparation and U11g end-to-end stage readiness remain unsupported;
 R6 delivers independent review/inspection/draft mechanisms. Acceptance belongs to the
 roadmap owner and is not inferred from these software checks.
+
+
+### Declared native stages and independent controls (R5)
+
+The existing NativeFitSession and native_fit_panel own stage selection and bounded
+pending active-list/guard proposals. native_fit_state.stage_review presents named
+canonical identities, upstream declarations and frozen inputs without creating
+candidates. native_fit_io reuses native_search.validate_native_search_request for
+non-solving commit validation, including unique stage names, actual boolean guards,
+fixed-active consistency and final free-coordinate order. Unsupported definitions
+stay inert/read-only. No execution/adoption responsibilities move out of protected
+scripts. Schema 19 adds optional selected_stage within the existing session; schemas
+1-18 remain readable. The shell accounts for stage-review text in existing resource
+admission and reuses its one worker/generation/history/persistence lifecycle.
+
+| Scientific scope | Authoritative coordinates/owner | Independent UI coverage and limit |
+| --- | --- | --- |
+| Bi ordered cell/site | BiJointModel: first 13 cell/site/occupancy/ADP coordinates | Existing R3 canonical parameter controls plus R5 role/identity review; original units/bounds/scales only. |
+| Bi mosaic | BiJointModel: gaussian_sigma_rad, lorentzian_half_width_rad, lorentzian_probability | Existing method/budget controls plus earlier-stage active JSON proposals and declared guard choices; no stage template or solve. |
+| Bi morphology | BiJointModel: two conditional surface fractions, extra thickness and two roughness coordinates | Same editor; thickness derives from N*c plus extra thickness, fractions from existing conditional shares. No derived values recomputed. |
+| Bi native disorder | No native Bi disorder coordinates; fault_parameters is empty | Unavailable; a named stage cannot create this capability. |
+| Pb ordered/mosaic/morphology/disorder | PbJointModel: first nine cell/site/ADP, three mosaic, two surface shares, extra thickness, initial plus probability and actual phase-share/epsilon/parent-share roster | Actual loaded definition only. Derived conditional fractions and inactive directions remain owner calculations. Inventory is source-supported; no new measured Pb native stage qualification. |
+| Native instrument | NativeInstrumentBinding: optional 18 named canonical coordinates, acquisition SHA owner | Existing canonical unit/order/domain controls; no fabricated parameter roster. |
+| Scale/background | native_search profiles nonnegative acquisition scale; guarded SLSQP owns its literal scale; native observations own background/full covariance | No separate editable nuisance definitions or background recipe exist. Exact declarations displayed. |
+| Native stage outcomes | scripts/refine_native.py writes result; scripts/render_native.py consumes it while constructing/evaluating a predictor | Independent typed read-only result boundary missing. No relocated importer/hooks or numerical diagnostic reconstruction. |
+
+Declared parameter index and actual canonical index are distinct and mapped by
+(owner, name, unit). Final stage order and global fixed/gauge definitions stay
+read-only; earlier active lists are structurally checked proposals. Script stage
+warm-start selection remains script-only and is shown as a policy, not a generated
+upstream candidate. Exact declarations and unknown fields survive existing immutable
+history and archive storage relocation. Genuine hBN/joint diagnostics retain their
+original typed owners and qualification; they are upstream geometric results, not
+native mosaic/ordered/disorder stage outcomes. Full U11a/b/c dispatch depends on R4
+and original-condition acceptance remains with the roadmap owner.
