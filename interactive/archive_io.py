@@ -90,6 +90,12 @@ def _selected(state, selection):
     view = state.view
     if "hbn" in selection and any(s.acquisition_id not in ids for s in view.hbn_sessions):
         raise ValueError("Select the hBN acquisitions with their session dependencies")
+    if "views" in selection and view.preparation_json != "{}":
+        dependencies = {k for k, _ in product_choices(state)} - {"views", "configured", "native"}
+        if dependencies - set(selection):
+            raise ValueError(
+                "Select all acquisition/geometry/prepared dependencies with retained preparation reviews"
+            )
     selected = view.selected_acquisition_id if view.selected_acquisition_id in ids else None
     view = replace(
         view,
@@ -110,6 +116,7 @@ def _selected(state, selection):
         joint_session=view.joint_session if "joint" in selection else None,
         native_fit_session=view.native_fit_session if "prepared" in selection else None,
         attempts_json=selected_history(view.attempts_json, selection),
+        preparation_json=view.preparation_json if "views" in selection else "{}",
     )
     numeric = (
         state.numeric_draft
@@ -206,6 +213,12 @@ def _references(state, storage=()):
                     raise ValueError("Archive requires an exact identity for " + k)
                 add(key, path, digest)
     v = state.view
+    from preparation_state import read_preparation
+
+    for review in read_preparation(v.preparation_json)["reviews"]:
+        for file in review["files"]:
+            if file["state"] == "verified":
+                add("views", file["path"], file["sha256"])
     if state.numeric_draft is not None:
         d = state.numeric_draft
         add("views", d.configuration_path, d.configuration_sha256)

@@ -468,6 +468,13 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
     history = read_history(document.view.attempts_json)
     protected = [ref.path for ref in (*history.configured, *history.native)]
     protected.extend(path for _, _, path, _ in reference_bindings(document.project))
+    from preparation_state import read_preparation
+
+    protected.extend(
+        Path(file["path"])
+        for review in read_preparation(document.view.preparation_json)["reviews"]
+        for file in review["files"]
+    )
     if document.view.native_simulation_draft is not None:
         protected.append(document.view.native_simulation_draft.physics_path)
     if document.view.native_simulation_result is not None:

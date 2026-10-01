@@ -79,6 +79,8 @@ from parameter_state import (
 )
 from physical_io import PhysicalResult, physical_work
 from physical_panel import PhysicalPanel
+from preparation_io import PreparationReview, preparation_work
+from preparation_panel import PreparationPanel
 from project_io import (
     LoadedProject,
     PublishedProject,
@@ -367,6 +369,7 @@ class ShellWindow(QMainWindow):
                 "prepared",
                 "archive",
                 "project-tools",
+                "preparation",
                 "physical",
             ]
             | None
@@ -382,6 +385,10 @@ class ShellWindow(QMainWindow):
         self.project_tools = None
         self._pending_project_tools = None
         self._project_tools_context = None
+        self.preparation_json = "{}"
+        self.preparation = None
+        self._pending_preparation = None
+        self._preparation_context = None
         self._pending_open_sha = None
         self._owned_recovery_sha = None
         self._pending_joint = None
@@ -736,6 +743,9 @@ class ShellWindow(QMainWindow):
         self.project_tools_button = QPushButton("Attempts / independent copy / recovery")
         self.project_tools_button.clicked.connect(self._show_project_tools)
         inspector_layout.addWidget(self.project_tools_button)
+        self.preparation_button = QPushButton("Acquisition preparation / frozen outputs")
+        self.preparation_button.clicked.connect(self._show_preparation)
+        inspector_layout.addWidget(self.preparation_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -962,6 +972,9 @@ class ShellWindow(QMainWindow):
             + self.prepared.history.bytes_used
             + len(self.archive_storage_json.encode())
             + len(self.attempts_json.encode())
+            + len(self.preparation_json.encode())
+            + len(self.prepared.observation_metadata.toPlainText().encode())
+            + (0 if self.preparation is None else self.preparation.resident_bytes())
             + (0 if self.project_tools is None else self.project_tools.resident_bytes())
             + (0 if self.archive is None else len((self.archive.review or "").encode()))
             + self.simulator.history.bytes_used
@@ -1087,6 +1100,65 @@ class ShellWindow(QMainWindow):
             self.project_tools is not None
             and identity.generation == self._active_generation == self.jobs.latest_generation
             and self._project_tools_context == self.project_tools.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
+
+    def _show_preparation(self):
+        if self.preparation is None:
+            self.preparation = PreparationPanel(self)
+        self.preparation.refresh()
+        self.preparation.show()
+
+    def _supersede_preparation(self):
+        self._pending_preparation = None
+        if self._active_kind == "preparation":
+            self.jobs.invalidate()
+
+    def _request_preparation(self, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 128 * 1024:
+            raise ValueError("Acquisition review exceeds 128 KiB")
+        self._pending_preparation = (argument, context)
+        if self._active_kind == "preparation":
+            self.jobs.invalidate()
+        self.preparation.status.setText("Acquisition review queued on the shared worker")
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_preparation(self, argument, context):
+        if self.preparation is None or context != self.preparation.context():
+            if self.preparation is not None:
+                self.preparation.status.setText(
+                    "Stale acquisition review rejected before file work"
+                )
+            return
+        self._active_kind = "preparation"
+        self._preparation_context = context
+        try:
+            prepared_budget(**self._simulation_resource_charge())
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.preparation.epoch),
+                    argument,
+                    len(argument),
+                    64 * 1024,
+                    preparation_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._preparation_context = None
+            self.preparation.status.setText("Acquisition review could not start: " + str(exc))
+        else:
+            self._active_generation = identity.generation
+
+    def _preparation_current(self, identity):
+        return (
+            self.preparation is not None
+            and identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._preparation_context == self.preparation.context()
             and not self._close_intent
             and self._pending_open is None
         )
@@ -1552,6 +1624,7 @@ class ShellWindow(QMainWindow):
                 self.simulator.result_reference,
                 self.simulator.native.result_reference,
             ),
+            self.preparation_json,
         )
 
     def _validate_project_admission(
@@ -1629,6 +1702,8 @@ class ShellWindow(QMainWindow):
         )
         if self.project_tools is not None:
             self.project_tools.invalidate()
+        if self.preparation is not None:
+            self.preparation.invalidate()
         if self._numeric_draft is not None and not any(
             item.acquisition_id == self._numeric_draft.acquisition_id
             for item in self.project.acquisitions
@@ -1904,6 +1979,11 @@ class ShellWindow(QMainWindow):
             self._pending_project_tools = None
             self._submit_project_tools(argument, context)
             return
+        if self._pending_preparation is not None:
+            argument, context = self._pending_preparation
+            self._pending_preparation = None
+            self._submit_preparation(argument, context)
+            return
         if self._pending_archive is not None:
             operation, argument, context = self._pending_archive
             self._pending_archive = None
@@ -2104,6 +2184,7 @@ class ShellWindow(QMainWindow):
         self._pending_hbn = None
         self._pending_archive = None
         self._pending_project_tools = None
+        self._pending_preparation = None
         self._pending_prepared = None
         self._pending_joint = None
         self._pending_sample = None
@@ -2123,11 +2204,13 @@ class ShellWindow(QMainWindow):
             "prepared",
             "archive",
             "project-tools",
+            "preparation",
             "sample",
         ):
             self._pending_hbn = None
             self._pending_archive = None
             self._pending_project_tools = None
+            self._pending_preparation = None
             self._pending_prepared = None
             self._pending_joint = None
             self._pending_sample = None
@@ -4790,14 +4873,21 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        if self._active_kind == "preparation" or self._pending_preparation is not None:
+            self._pending_preparation = None
+            self.preparation.status.setText(
+                "Cancel acknowledged; retained reviews unchanged while draining"
+            )
         if self._active_kind == "project-tools" or self._pending_project_tools is not None:
             self._pending_project_tools = None
+            self._pending_preparation = None
             self.project_tools.status.setText(
                 "Cancel acknowledged; prior project retained while draining"
             )
         archive_requested = self._active_kind == "archive" or self._pending_archive is not None
         self._pending_archive = None
         self._pending_project_tools = None
+        self._pending_preparation = None
         if archive_requested and self.archive is not None:
             self.archive.status.setText(
                 "Cancel acknowledged; prior project retained while draining"
@@ -5392,6 +5482,14 @@ class ShellWindow(QMainWindow):
                 self._active_kind = self._active_generation = self._physical_context = None
                 QTimer.singleShot(0, self._dispatch_pending)
             return
+        if kind == "preparation":
+            self.preparation.status.setText(
+                f"Acquisition review {state.value}: {summary.detail or 'working'}"
+            )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._preparation_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "project-tools":
             self.project_tools.status.setText(
                 f"Project tools {state.value}: {summary.detail or 'working'}"
@@ -5696,6 +5794,13 @@ class ShellWindow(QMainWindow):
                     self.physical.status.setText(
                         "Late/stale physical completion rejected; initial values unchanged"
                     )
+            elif kind == "preparation":
+                if self._preparation_current(identity) and isinstance(value, PreparationReview):
+                    self.preparation.guard(lambda: self.preparation.ready(value))
+                else:
+                    self.preparation.status.setText(
+                        "Stale acquisition review rejected; prior reviews retained"
+                    )
             elif kind == "project-tools":
                 if self._project_tools_current(identity) and isinstance(value, ProjectToolsResult):
                     self.project_tools.guard(lambda: self.project_tools.ready(value))
@@ -5769,6 +5874,8 @@ class ShellWindow(QMainWindow):
             self._active_kind = None
             if kind == "physical":
                 self._physical_context = None
+            if kind == "preparation":
+                self._preparation_context = None
             if kind == "project-tools":
                 self._project_tools_context = None
             if kind == "archive":
@@ -5897,6 +6004,11 @@ class ShellWindow(QMainWindow):
             self.simulator.restore(value.document.view, value.simulation_detail)
             self.physical.restore(value.document.view.physical_settings_json)
             self.archive_storage_json = value.document.view.archive_storage_json
+            self.preparation_json = value.document.view.preparation_json
+            self._pending_preparation = self._preparation_context = None
+            if self.preparation is not None:
+                self.preparation.invalidate()
+                QTimer.singleShot(0, self.preparation.refresh)
             self.attempts_json = retain_results(
                 value.document.view.attempts_json,
                 value.document.view.simulation_result,
@@ -6038,6 +6150,7 @@ class ShellWindow(QMainWindow):
             self._pending_open = None
             self._pending_archive = None
             self._pending_project_tools = None
+            self._pending_preparation = None
             self._pending_hbn = None
             self._pending_prepared = None
             self._pending_joint = None
@@ -6070,6 +6183,7 @@ class ShellWindow(QMainWindow):
                 "prepared",
                 "archive",
                 "project-tools",
+                "preparation",
                 "sample",
             ):
                 self.jobs.cancel()
