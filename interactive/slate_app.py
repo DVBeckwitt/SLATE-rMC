@@ -19,6 +19,8 @@ from comparison_panel import ComparisonPanel, panel_view_state
 from comparison_state import LineSamples, LineWork, detector_frame_key, prepare_line
 from detector_panel import DetectorPanel
 from experiment_scene import ExperimentScenePanel
+from hbn_io import HbnWorkResult, hbn_work, hbn_work_budget
+from hbn_panel import HbnPanel
 from inspection_export import (
     InspectionExportReceipt,
     comparison_csv,
@@ -346,9 +348,12 @@ class ShellWindow(QMainWindow):
                 "line",
                 "setup",
                 "simulation",
+                "hbn",
             ]
             | None
         ) = None
+        self._pending_hbn = None
+        self._hbn_context = None
         self._pending_simulation = None
         self._simulation_operation = None
         self._simulation_context = None
@@ -548,6 +553,9 @@ class ShellWindow(QMainWindow):
         center_layout.setSpacing(14)
         self.detector_heading = QLabel("Detector view")
         center_layout.addWidget(self.detector_heading)
+        self.choose_center_button = QPushButton("Choose beam center")
+        self.choose_center_button.clicked.connect(lambda: self._show_hbn(1))
+        center_layout.addWidget(self.choose_center_button)
         self.experiment_status = StatusView()
         self.experiment_status.set_state(
             "empty",
@@ -665,6 +673,10 @@ class ShellWindow(QMainWindow):
         inspector_layout.setContentsMargins(18, 18, 18, 18)
         inspector_layout.setSpacing(12)
         inspector_layout.addWidget(QLabel("INSPECTOR"))
+        self.hbn = HbnPanel(self)
+        self.hbn_button = QPushButton("hBN calibration")
+        self.hbn_button.clicked.connect(lambda: self._show_hbn(0))
+        inspector_layout.addWidget(self.hbn_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -866,11 +878,84 @@ class ShellWindow(QMainWindow):
         return {
             "other_cpu_bytes": sum(a.nbytes for a in arrays.values())
             + self._numeric_history.bytes_used
+            + self.hbn.history.bytes_used
+            + sum(a.nbytes for a in self.hbn._spot_arrays)
+            + sum(v.nbytes for v in self.hbn.sessions)
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
             "other_gpu_bytes": gpu,
         }
+
+    def _show_hbn(self, tab=0):
+        self.hbn.refresh()
+        self.hbn.tabs.setCurrentIndex(tab)
+        self.hbn.show()
+        self.hbn.raise_()
+
+    def _supersede_hbn(self):
+        self._pending_hbn = None
+        if self._active_kind == "hbn":
+            self.jobs.invalidate()
+            self.hbn.status.setText(
+                "hBN request superseded; obsolete result rejected. Waiting for cooperative safe stop."
+            )
+        self.hbn.refresh()
+
+    def _request_hbn(self, operation, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 4 * 1024**2:
+            raise ValueError("hBN request exceeds 4 MiB")
+        self._pending_hbn = (operation, argument, context)
+        if self._active_kind == "hbn":
+            self.jobs.invalidate()
+        self.hbn.status.setText(operation.title() + " requested; waiting for the shared worker")
+        self.hbn.refresh()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_hbn(self, operation, argument, context):
+        if context != self.hbn.context():
+            self.hbn.status.setText("Queued hBN request is stale; no work launched")
+            return
+        self._active_kind = "hbn"
+        self._hbn_context = context
+        try:
+            request = json.loads(argument)
+            shape = (
+                tuple(self.detector_panel.view.image.shape)
+                if operation == "load"
+                else tuple(json.loads(request["session"]["inputs_json"])["shape_rc"])
+            )
+            request["resources"] = hbn_work_budget(
+                operation, shape, **self._simulation_resource_charge()
+            )
+            argument = json.dumps(request, allow_nan=False).encode()
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    self.selected_acquisition_id,
+                    Revisions(calibration=self.hbn.epoch),
+                    argument,
+                    len(argument),
+                    4 * 1024**2,
+                    hbn_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._hbn_context = None
+            self.hbn.status.setText(f"hBN could not start: {exc}")
+        else:
+            self._active_generation = identity.generation
+        self.hbn.refresh()
+
+    def _hbn_current(self, identity):
+        return (
+            identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._hbn_context == self.hbn.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
 
     def _supersede_simulation(self) -> None:
         self._pending_simulation = None
@@ -1013,6 +1098,11 @@ class ShellWindow(QMainWindow):
             self.simulator.native.draft,
             self.simulator.native.result_reference,
             self.simulator.draft_kind.currentData(),
+            tuple(
+                v
+                for v in self.hbn.sessions
+                if any(a.acquisition_id == v.acquisition_id for a in self.project.acquisitions)
+            ),
         )
 
     def _validate_project_admission(
@@ -1026,6 +1116,14 @@ class ShellWindow(QMainWindow):
             view = self._capture_view()
         if selected_id is not None:
             view = replace(view, selected_acquisition_id=selected_id, detector=None, scene=None)
+        view = replace(
+            view,
+            hbn_sessions=tuple(
+                v
+                for v in view.hbn_sessions
+                if any(a.acquisition_id == v.acquisition_id for a in candidate.acquisitions)
+            ),
+        )
         project_to_document(
             ProjectDocument(
                 candidate,
@@ -1318,6 +1416,11 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_hbn is not None:
+            operation, argument, context = self._pending_hbn
+            self._pending_hbn = None
+            self._submit_hbn(operation, argument, context)
+            return
         if self._pending_simulation is not None:
             operation, argument, context = self._pending_simulation
             self._pending_simulation = None
@@ -1483,6 +1586,7 @@ class ShellWindow(QMainWindow):
             if queued is not None and queued.status == "queued":
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
+        self._pending_hbn = None
         self._pending_reference = None
         self._pending_setup_request = None
         self._pending_setup_copy = None
@@ -1494,7 +1598,9 @@ class ShellWindow(QMainWindow):
             "reciprocal",
             "setup",
             "simulation",
+            "hbn",
         ):
+            self._pending_hbn = None
             self._pending_simulation = None
             self.jobs.cancel()
         self._candidate_queue.clear()
@@ -1867,6 +1973,12 @@ class ShellWindow(QMainWindow):
                 self.close()
 
     def refresh_project(self) -> None:
+        self.hbn.sessions = tuple(
+            v
+            for v in self.hbn.sessions
+            if any(a.acquisition_id == v.acquisition_id for a in self.project.acquisitions)
+        )
+        self.hbn.refresh()
         selected_id = self.selected_acquisition_id
         self.project_tree.blockSignals(True)
         self.project_tree.clear()
@@ -4136,6 +4248,14 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        hbn_requested = self._active_kind == "hbn" or self._pending_hbn is not None
+        self._pending_hbn = None
+        if hbn_requested:
+            self.hbn.status.setText(
+                "Cancel acknowledged; pending hBN requests cleared. Waiting for active cooperative drain."
+            )
+            self.hbn.cancel_button.setEnabled(False)
+            self.hbn.status.repaint()
         if self._active_kind == "mask" and self._active_mask is not None:
             acquisition_id = self._active_mask[0]
             self._pending_masks.pop(acquisition_id, None)
@@ -4297,7 +4417,7 @@ class ShellWindow(QMainWindow):
             return
         if select_on_admission:
             try:
-                self._publish_plane(acquisition.acquisition_id, value)
+                self._publish_plane(acquisition.acquisition_id, value, acquisition=acquisition)
             except ValueError as exc:
                 candidate.status = "failed"
                 candidate.detail = f"Detector publication rejected: {exc}"
@@ -4335,7 +4455,19 @@ class ShellWindow(QMainWindow):
             )
             del self._resident_planes[victim]
 
-    def _publish_plane(self, acquisition_id: UUID, value: PreparedOsc) -> None:
+    def _publish_plane(
+        self, acquisition_id: UUID, value: PreparedOsc, *, acquisition: Acquisition | None = None
+    ) -> None:
+        if acquisition is None:
+            acquisition = next(
+                (a for a in self.project.acquisitions if a.acquisition_id == acquisition_id), None
+            )
+        if (
+            acquisition is None
+            or acquisition.acquisition_id != acquisition_id
+            or acquisition.source_sha256 != value.decoded_sha256
+        ):
+            raise ValueError("detector publication requires the admitted acquisition identity")
         self.detector_panel.set_prepared_image(
             value.native_counts,
             value.display,
@@ -4348,9 +4480,6 @@ class ShellWindow(QMainWindow):
             acquisition_id,
         )
         self._visible_acquisition_id = acquisition_id
-        acquisition = next(
-            item for item in self.project.acquisitions if item.acquisition_id == acquisition_id
-        )
         mask = acquisition.mask
         cached = self._mask_cache.get(acquisition_id)
         if mask is not None:
@@ -4552,6 +4681,7 @@ class ShellWindow(QMainWindow):
         self._pending_scene_restore = None
         self._reciprocal_epoch += 1
         self.selected_acquisition_id = selected_id
+        self._supersede_hbn()
         self._batch_auto_select = False
         self._deferred_import = None
         self._mark_dirty()
@@ -4632,12 +4762,18 @@ class ShellWindow(QMainWindow):
                         "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
                     )
                     self._setup_dialog.cancel_button.setEnabled(False)
+                if self._active_kind == "hbn":
+                    self.hbn.status.setText(
+                        f"Superseded hBN {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
+                    )
+                    self._hbn_context = None
                 if self._active_kind == "simulation":
                     self.simulator.status.setText(
                         f"Superseded simulation {state.value}; safe stop {summary.safe_stop_ms} ms. No obsolete frame admitted."
                     )
                     self._simulation_operation = self._simulation_context = None
                 self._active_kind = None
+                self.hbn.refresh()
                 self.simulator.refresh()
                 self._active_generation = None
                 self._active_load_id = None
@@ -4658,6 +4794,13 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Prior operation discarded · Ready")
             return
         kind = self._active_kind
+        if kind == "hbn":
+            self.hbn.status.setText(f"hBN {state.value}: {summary.detail or 'working'}")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._hbn_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            self.hbn.refresh()
+            return
         if kind == "simulation":
             self.simulator.status.setText(
                 f"Simulation {state.value}: {summary.detail or 'working on its owning worker'}"
@@ -4907,6 +5050,13 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "hbn":
+                if self._hbn_current(identity) and isinstance(value, HbnWorkResult):
+                    self.hbn.guard(lambda: self.hbn.ready(value))
+                else:
+                    self.hbn.status.setText(
+                        "Late/stale hBN completion rejected; prior state retained"
+                    )
             elif kind == "simulation":
                 if self._simulation_current(identity):
                     if self._simulation_operation in (
@@ -4936,6 +5086,9 @@ class ShellWindow(QMainWindow):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
+            if kind == "hbn":
+                self._hbn_context = None
+                self.hbn.refresh()
             if kind == "simulation":
                 self._simulation_operation = self._simulation_context = None
                 self.simulator.refresh()
@@ -5042,6 +5195,8 @@ class ShellWindow(QMainWindow):
         try:
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
+            self.hbn.restore(value.document.view.hbn_sessions)
+            self._pending_hbn = None
             self._pending_simulation = None
             self._scene_cameras.clear()
             self._reciprocal_epoch += 1
@@ -5126,6 +5281,8 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage(message)
         if self._active_kind == "simulation" and self._simulation_current(identity):
             self.simulator.status.setText(message)
+        if self._active_kind == "hbn" and self._hbn_current(identity):
+            self.hbn.status.setText(message)
         if self._active_kind == "setup" and self._setup_dialog is not None:
             self._setup_dialog.message.setText(message)
 
@@ -5148,6 +5305,7 @@ class ShellWindow(QMainWindow):
         if not self._close_intent:
             self._close_intent = True
             self._pending_open = None
+            self._pending_hbn = None
             self._pending_simulation = None
             self._deferred_import = None
             self._pending_reference = None
@@ -5171,6 +5329,7 @@ class ShellWindow(QMainWindow):
                 "mask",
                 "line",
                 "simulation",
+                "hbn",
             ):
                 self.jobs.cancel()
             self._pending_masks.clear()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -102,6 +103,11 @@ class HbnDetectorCalibration:
     jacobian_rank: int
     scaled_jacobian_condition: float
     success: bool
+    solver_success: bool = False
+    solver_status: int = 0
+    solver_message: str = "unavailable in historical calibration"
+    function_evaluations: int = 0
+    active_bounds: tuple[bool, ...] = ()
 
     @property
     def values(self) -> FloatArray:
@@ -212,14 +218,46 @@ def _fit_observations(
     detector_column_pitch_m: float,
     detector_row_pitch_m: float,
     detector_shape_rc: tuple[int, int],
+    lower_bounds: ArrayLike | None = None,
+    upper_bounds: ArrayLike | None = None,
+    f_scale: float = 1.0,
+    max_nfev: int = 1000,
+    canceled: Callable[[], bool] | None = None,
 ) -> HbnDetectorCalibration:
     rows, columns = detector_shape_rc
     mean_pitch = math.sqrt(detector_column_pitch_m * detector_row_pitch_m)
     lower = np.asarray((-0.15, -0.15, 0.0, 0.0, 0.04), dtype=np.float64)
     upper = np.asarray((0.15, 0.15, columns - 1.0, rows - 1.0, 0.12), dtype=np.float64)
+    admitted_lower, admitted_upper = lower.copy(), upper.copy()
+    lower = admitted_lower if lower_bounds is None else np.asarray(lower_bounds, dtype=np.float64)
+    upper = admitted_upper if upper_bounds is None else np.asarray(upper_bounds, dtype=np.float64)
+    initial = np.asarray(initial, dtype=np.float64)
+    if (
+        lower.shape != (5,)
+        or upper.shape != (5,)
+        or initial.shape != (5,)
+        or not np.all(np.isfinite(np.r_[initial, lower, upper]))
+        or np.any(lower < admitted_lower)
+        or np.any(upper > admitted_upper)
+        or np.any(lower >= upper)
+        or np.any(initial < lower)
+        or np.any(initial > upper)
+    ):
+        raise ValueError(
+            "hBN initial values and bounds must be finite and inside the five admitted domains"
+        )
+    if (
+        not math.isfinite(f_scale)
+        or f_scale <= 0
+        or type(max_nfev) is not int
+        or not 1 <= max_nfev <= 1000
+    ):
+        raise ValueError("hBN soft_l1 scale must be positive and max_nfev must be in [1,1000]")
     scale = np.asarray((0.03, 0.03, 10.0, 10.0, 100.0 * mean_pitch), dtype=np.float64)
 
     def residual(values: FloatArray) -> FloatArray:
+        if canceled is not None and canceled():
+            raise RuntimeError("hBN calculation canceled")
         return _ring_residual_px(
             values,
             observations,
@@ -235,8 +273,8 @@ def _fit_observations(
         bounds=(lower, upper),
         x_scale=scale,
         loss="soft_l1",
-        f_scale=1.0,
-        max_nfev=1000,
+        f_scale=f_scale,
+        max_nfev=max_nfev,
     )
     raw = residual(fit.x)
     scaled_jacobian = fit.jac * scale
@@ -292,7 +330,120 @@ def _fit_observations(
         jacobian_rank=rank,
         scaled_jacobian_condition=condition,
         success=success,
+        solver_success=bool(fit.success),
+        solver_status=int(fit.status),
+        solver_message=str(fit.message),
+        function_evaluations=int(fit.nfev),
+        active_bounds=tuple(bool(v) for v in active),
     )
+
+
+def _check_canceled(canceled: Callable[[], bool] | None) -> None:
+    if canceled is not None and canceled():
+        raise RuntimeError("hBN calculation canceled")
+
+
+def fit_hbn_ring_observations(
+    observations: HbnRingObservations,
+    initial_values: ArrayLike,
+    *,
+    base_detector_rotation: ArrayLike,
+    beam_direction_lab: ArrayLike,
+    detector_column_pitch_m: float,
+    detector_row_pitch_m: float,
+    detector_shape_rc: tuple[int, int],
+    lower_bounds: ArrayLike | None = None,
+    upper_bounds: ArrayLike | None = None,
+    f_scale: float = 1.0,
+    max_nfev: int = 1000,
+    canceled: Callable[[], bool] | None = None,
+) -> HbnDetectorCalibration:
+    """Fit exactly this reviewed pack; no discovery, reindexing or observation mutation."""
+    rotation = np.asarray(base_detector_rotation, dtype=np.float64)
+    if (
+        not isinstance(observations, HbnRingObservations)
+        or rotation.shape != (3, 3)
+        or not np.all(np.isfinite(rotation))
+        or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-12, rtol=0.0)
+        or not np.isclose(np.linalg.det(rotation), 1, atol=1e-12, rtol=0.0)
+        or len(detector_shape_rc) != 2
+        or any(type(v) is not int or v <= 0 for v in detector_shape_rc)
+        or not all(
+            math.isfinite(v) and v > 0 for v in (detector_column_pitch_m, detector_row_pitch_m)
+        )
+    ):
+        raise ValueError("invalid hBN fixed detector geometry or observation owner")
+    beam = _unit_vector(beam_direction_lab, "beam_direction_lab")
+    _check_canceled(canceled)
+    return _fit_observations(
+        observations,
+        np.asarray(initial_values, dtype=np.float64),
+        base_detector_rotation=rotation,
+        beam_direction_lab=beam,
+        detector_column_pitch_m=detector_column_pitch_m,
+        detector_row_pitch_m=detector_row_pitch_m,
+        detector_shape_rc=detector_shape_rc,
+        lower_bounds=lower_bounds,
+        upper_bounds=upper_bounds,
+        f_scale=f_scale,
+        max_nfev=max_nfev,
+        canceled=canceled,
+    )
+
+
+def hbn_ring_curves_px(
+    values: ArrayLike,
+    two_theta_rad: ArrayLike,
+    *,
+    base_detector_rotation: ArrayLike,
+    beam_direction_lab: ArrayLike,
+    detector_column_pitch_m: float,
+    detector_row_pitch_m: float,
+    azimuth_count: int = 360,
+) -> tuple[FloatArray, ...]:
+    """Canonical predicted curves for native overlays and exact result exports."""
+    parameters = np.asarray(values, dtype=np.float64)
+    if parameters.shape != (5,) or not np.all(np.isfinite(parameters)) or parameters[4] <= 0:
+        raise ValueError("ring curves require five finite physical geometry values")
+    if type(azimuth_count) is not int or not 36 <= azimuth_count <= 4096:
+        raise ValueError("ring curve azimuth count must be in [36,4096]")
+    curves = _ring_curves_px(
+        parameters,
+        np.asarray(two_theta_rad, dtype=np.float64),
+        np.linspace(0, 2 * np.pi, azimuth_count, endpoint=False),
+        base_detector_rotation=np.asarray(base_detector_rotation, dtype=np.float64),
+        beam_direction_lab=_unit_vector(beam_direction_lab, "beam_direction_lab"),
+        detector_column_pitch_m=detector_column_pitch_m,
+        detector_row_pitch_m=detector_row_pitch_m,
+    )
+    for curve in curves:
+        curve.setflags(write=False)
+    return curves
+
+
+def _profile_contrast(values, support, narrow, broad):
+    if support is None or bool(np.all(support >= 1 - 1e-12)):
+        return gaussian_filter1d(values, narrow, axis=1) - gaussian_filter1d(values, broad, axis=1)
+    valid = support >= 1 - 1e-12
+
+    def filtered(sigma):
+        weight = gaussian_filter1d(valid.astype(np.float64), sigma, axis=1)
+        numerator = gaussian_filter1d(np.where(valid, values, 0), sigma, axis=1)
+        return np.divide(numerator, weight, out=np.zeros_like(numerator), where=weight > 0)
+
+    result = filtered(narrow) - filtered(broad)
+    result[~valid] = np.nan
+    return result
+
+
+def _profile_peaks(block):
+    finite = np.isfinite(block)
+    masked = np.ma.array(block, mask=~finite)
+    peak_index = np.argmax(np.where(finite, block, -np.inf), axis=1)
+    score = block[np.arange(block.shape[0]), peak_index]
+    median = np.ma.median(masked, axis=1).filled(np.nan)
+    mad = (1.4826 * np.ma.median(np.ma.abs(masked - median[:, None]), axis=1)).filled(np.nan) + 1e-6
+    return peak_index, score, (score - median) / mad
 
 
 def _sector_balanced_observations(
@@ -326,7 +477,7 @@ def _sector_balanced_observations(
     )
 
 
-def fit_hbn_detector_calibration(
+def prepare_hbn_ring_observations(
     counts: ArrayLike,
     dark_counts: ArrayLike,
     *,
@@ -336,8 +487,18 @@ def fit_hbn_detector_calibration(
     detector_row_pitch_m: float,
     initial_beam_center_px: tuple[float, float],
     initial_calibrant_distance_m: float = 0.074,
+    initial_tilts_rad: tuple[float, float] = (0.0, 0.0),
+    inclusion_mask: ArrayLike | None = None,
+    lattice_a_A: float = HBN_LATTICE_A_A,
+    lattice_c_A: float = HBN_LATTICE_C_A,
+    wavelength_A: float = CU_K_ALPHA_WAVELENGTH_A,
+    lower_bounds: ArrayLike | None = None,
+    upper_bounds: ArrayLike | None = None,
+    f_scale: float = 1.0,
+    max_nfev: int = 1000,
+    canceled: Callable[[], bool] | None = None,
 ) -> tuple[HbnRingObservations, HbnDetectorCalibration]:
-    """Trace the five hBN rings without clicks and fit center, tilts, and private distance."""
+    """Discover/refine ring candidates for review; does not freeze a final fit pack."""
 
     image = np.asarray(counts, dtype=np.float64)
     dark = np.asarray(dark_counts, dtype=np.float64)
@@ -358,8 +519,17 @@ def fit_hbn_detector_calibration(
     if not math.isfinite(distance) or distance <= 0.0:
         raise ValueError("initial_calibrant_distance_m must be finite and positive")
 
+    _check_canceled(canceled)
+    mask = None if inclusion_mask is None else np.asarray(inclusion_mask)
+    if mask is not None and (mask.dtype != np.bool_ or mask.shape != image.shape):
+        raise ValueError("hBN fitting mask must be Boolean and match native counts")
     log_signal = np.log1p(np.maximum(image - dark, 0.0))
-    two_theta = hbn_two_theta_rad()
+    support_image = None if mask is None else mask.astype(np.float64)
+    if mask is not None:
+        log_signal = np.where(mask, log_signal, 0)
+    two_theta = hbn_two_theta_rad(
+        lattice_a_A=lattice_a_A, lattice_c_A=lattice_c_A, wavelength_A=wavelength_A
+    )
     azimuth = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
     mean_pitch = math.sqrt(column_pitch * row_pitch)
     radii_px = distance * np.tan(two_theta) / mean_pitch
@@ -374,11 +544,21 @@ def fit_hbn_detector_calibration(
         mode="constant",
         cval=0.0,
     )
-    radial_score = gaussian_filter1d(sampled, 2.0, axis=1) - gaussian_filter1d(
-        sampled,
-        24.0,
-        axis=1,
+    sample_support = (
+        None
+        if mask is None
+        else map_coordinates(
+            support_image,
+            [
+                center[1] + np.sin(azimuth)[:, None] * radial,
+                center[0] + np.cos(azimuth)[:, None] * radial,
+            ],
+            order=1,
+            mode="constant",
+            cval=0,
+        )
     )
+    radial_score = _profile_contrast(sampled, sample_support, 2.0, 24.0)
     coarse_coordinates = []
     coarse_scores = []
     coarse_azimuths = []
@@ -387,11 +567,15 @@ def fit_hbn_detector_calibration(
         lower_index = int(np.searchsorted(radial, expected - half_window))
         upper_index = int(np.searchsorted(radial, expected + half_window))
         block = radial_score[:, lower_index:upper_index]
-        peak_index = np.argmax(block, axis=1)
-        peak_score = block[np.arange(azimuth.size), peak_index]
-        median = np.median(block, axis=1)
-        mad = 1.4826 * np.median(np.abs(block - median[:, None]), axis=1) + 1.0e-6
-        snr = (peak_score - median) / mad
+        _check_canceled(canceled)
+        if mask is None:
+            peak_index = np.argmax(block, axis=1)
+            peak_score = block[np.arange(azimuth.size), peak_index]
+            median = np.median(block, axis=1)
+            mad = 1.4826 * np.median(np.abs(block - median[:, None]), axis=1) + 1.0e-6
+            snr = (peak_score - median) / mad
+        else:
+            peak_index, peak_score, snr = _profile_peaks(block)
         radius = radial[lower_index + peak_index]
         keep = (snr >= 3.0) & (peak_score > 0.04)
         coarse_coordinates.append(
@@ -417,7 +601,7 @@ def fit_hbn_detector_calibration(
         two_theta_rad=coarse.two_theta_rad,
         angular_sector=coarse.angular_sector[seed_mask],
     )
-    initial = np.asarray((0.0, 0.0, center[0], center[1], distance), dtype=np.float64)
+    initial = np.asarray((*initial_tilts_rad, center[0], center[1], distance), dtype=np.float64)
     calibration = _fit_observations(
         seed_observations,
         initial,
@@ -426,10 +610,16 @@ def fit_hbn_detector_calibration(
         detector_column_pitch_m=column_pitch,
         detector_row_pitch_m=row_pitch,
         detector_shape_rc=image.shape,
+        lower_bounds=lower_bounds,
+        upper_bounds=upper_bounds,
+        f_scale=f_scale,
+        max_nfev=max_nfev,
+        canceled=canceled,
     )
 
     observations = coarse
     for _ in range(4):
+        _check_canceled(canceled)
         curves = _ring_curves_px(
             calibration.values,
             two_theta,
@@ -455,20 +645,39 @@ def fit_hbn_detector_calibration(
                 mode="constant",
                 cval=0.0,
             )
-            local_score = gaussian_filter1d(profiles, 2.0, axis=1) - gaussian_filter1d(
-                profiles,
-                10.0,
-                axis=1,
+            _check_canceled(canceled)
+            local_support = (
+                None
+                if mask is None
+                else map_coordinates(
+                    support_image,
+                    [sample_coordinates[:, :, 1], sample_coordinates[:, :, 0]],
+                    order=1,
+                    mode="constant",
+                    cval=0,
+                )
             )
-            peak_index = np.argmax(local_score, axis=1)
-            peak_score = local_score[np.arange(azimuth.size), peak_index]
-            median = np.median(local_score, axis=1)
-            mad = 1.4826 * np.median(np.abs(local_score - median[:, None]), axis=1) + 1.0e-6
-            snr = (peak_score - median) / mad
+            local_score = _profile_contrast(profiles, local_support, 2.0, 10.0)
+            if mask is None:
+                peak_index = np.argmax(local_score, axis=1)
+                peak_score = local_score[np.arange(azimuth.size), peak_index]
+                median = np.median(local_score, axis=1)
+                mad = 1.4826 * np.median(np.abs(local_score - median[:, None]), axis=1) + 1.0e-6
+                snr = (peak_score - median) / mad
+            else:
+                peak_index, peak_score, snr = _profile_peaks(local_score)
             chosen = sample_coordinates[np.arange(azimuth.size), peak_index]
             keep = (
                 (snr >= 3.0)
-                & (peak_score > max(0.04, float(np.quantile(peak_score, 0.15))))
+                & (
+                    peak_score
+                    > max(
+                        0.04,
+                        float(np.quantile(peak_score[np.isfinite(peak_score)], 0.15))
+                        if np.any(np.isfinite(peak_score))
+                        else math.inf,
+                    )
+                )
                 & (np.abs(offsets[peak_index]) < 11.5)
             )
             if np.count_nonzero(keep) < 12:
@@ -493,8 +702,37 @@ def fit_hbn_detector_calibration(
             detector_column_pitch_m=column_pitch,
             detector_row_pitch_m=row_pitch,
             detector_shape_rc=image.shape,
+            lower_bounds=lower_bounds,
+            upper_bounds=upper_bounds,
+            f_scale=f_scale,
+            max_nfev=max_nfev,
+            canceled=canceled,
         )
     return observations, calibration
+
+
+def fit_hbn_detector_calibration(
+    counts: ArrayLike,
+    dark_counts: ArrayLike,
+    *,
+    base_detector_rotation: ArrayLike,
+    beam_direction_lab: ArrayLike,
+    detector_column_pitch_m: float,
+    detector_row_pitch_m: float,
+    initial_beam_center_px: tuple[float, float],
+    initial_calibrant_distance_m: float = 0.074,
+) -> tuple[HbnRingObservations, HbnDetectorCalibration]:
+    """Automatic convenience path, with its historical defaults and final preliminary fit."""
+    return prepare_hbn_ring_observations(
+        counts,
+        dark_counts,
+        base_detector_rotation=base_detector_rotation,
+        beam_direction_lab=beam_direction_lab,
+        detector_column_pitch_m=detector_column_pitch_m,
+        detector_row_pitch_m=detector_row_pitch_m,
+        initial_beam_center_px=initial_beam_center_px,
+        initial_calibrant_distance_m=initial_calibrant_distance_m,
+    )
 
 
 def evaluate_hbn_residual_px(

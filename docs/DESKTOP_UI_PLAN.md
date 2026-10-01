@@ -3983,3 +3983,58 @@ compatibility remain unverified; no further timing windows started after the sco
 The external [Task07 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12c_completion_index.json)
 records exact commands, hashes, finite-budget charges, final source relevance, retained failures,
 cleanup, line counts and limitations. B008-B010 and B014 retain their prior open dispositions.
+
+
+### Task08 / U05a, U08b, U05b, U05 and U10 implementation (2026-09-30)
+
+**Implemented; awaiting root review.** Accepted count remains 12/46 and the five rows remain
+unchecked. The user's nominal-proof policy governs this delivery. Existing engine qualification,
+physical domains and rank/covariance checks are retained; no fit-quality/convergence campaign or
+sustained timing qualification was run.
+
+The complete hBN-only workflow now admits image/dark/configuration, proposes and explicitly adopts
+a manual or worker-owned Gaussian center, edits actual seeds/bounds, prepares/reviews canonical
+rings, freezes exact observations and explicitly fits/cancels. It presents bound named candidates,
+selection/staleness, initial/current/fitted parameters with units, canonical curves/points/residuals,
+per-ring and aggregate diagnostics, optimizer termination and actual qualification. Schema 11
+persists the journey and retains schemas 1–10. Exact result/observation JSON and PNG/value exports
+use protected external destinations. Private calibrant distance is never copied into sample geometry.
+
+Representative evidence used the assigned tracked 3000x3000 hBN/dark inputs and base detector YAML.
+Preparation found 118 points with counts 36/30/17/19/16. One explicit exclusion froze 117 original
+coordinates/assignments/sector IDs. A single final fit consumed exactly that pack with actual
+five-coordinate seeds/bounds, `soft_l1`, scale and evaluation limit; a guarded preparation owner
+proved no hidden retrace. Its retained engine verdict was qualified. Selection, exact exports,
+Save/Open, explicit native click/Gaussian adoption, stale ROI rejection, Cancel/pending-clear/drain,
+result import and destination guards passed. These establish implementation wiring and preserve
+an engine verdict; they do not independently requalify the fit. The historical report was not
+relabeled as an identity-bound standalone result or used as a tuning target.
+
+The declared non-square Gaussian nominal case recovered center [29.3,11.7] px within the frozen
+1e-5 px tolerance and rejected all-invalid support. Actual-image ROI proposal data/model/residual
+plots use original valid raw-dark counts. Masked profile checks exclude invalid sampled values,
+make unsupported sectors unavailable and preserve the all-valid contrast exactly. No masked
+full-fit qualification is claimed. Core residual/curve/angle owner ASTs match the Task07 parent.
+
+Observed defects repaired within scope: first import looked up the acquisition before project
+admission (StopIteration); publication now receives the prospectively admitted identity. Reopened
+center controls lacked an initialized ROI; saved/default controls now restore explicitly. Editing
+one seed previously roundtripped unchanged degree bounds; unchanged fields now retain exact stored
+values. All-valid weighted contrast had rounding drift; it now uses the unchanged path. Gaussian
+plots needed scroll/minimum sizing to avoid collapsed axes. The earlier failed checks and checker
+errors (wrong Python dependency environment, tuple/list assertion, nonexistent import, unbounded
+OSC read omitting a decoded hash) remain recorded, with specific corrections. No unchanged
+numerical campaign was repeated.
+
+B015's concrete native-input/native-result Save As omission is corrected, with rejection and
+unchanged exact-byte readback for both existing `*.slate.json` aliases. hBN input/export aliases
+are similarly protected. Root determines closure/acceptance. B001–B010 and B014 retain their
+prior open dispositions; B011–B013 retain their prior closed dispositions. Timing thresholds
+(frame p95 16.7 ms/p99 33.3 ms, cursor/profile p95 50 ms, prepared selection p95 150 ms,
+visible acknowledgment/heartbeat 100 ms), GPU allocator peak and sustained measurements remain
+unverified. The observed Cancel call and safe stop are nominal receipts, not timing qualification.
+
+The external [Task08 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u10_hbn_task08_completion_index.json)
+records exact input/source/evidence hashes, resource charges, retained outcomes, final-source
+relevance, software checks, cleanup and production/documentation/retired line counts. Task09
+was not started and main was not merged or changed.

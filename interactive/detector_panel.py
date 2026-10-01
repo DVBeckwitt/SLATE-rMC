@@ -289,6 +289,7 @@ class DetectorTextureView(QOpenGLWidget):
     overlays_changed = Signal(int)
     band_edge_dragged = Signal(str, int)
     roi_selected = Signal(object)
+    center_picked = Signal(float, float)
     mask_gesture_ready = Signal(object)
     mask_mode_changed = Signal(str)
     mask_input_error = Signal(str)
@@ -298,6 +299,8 @@ class DetectorTextureView(QOpenGLWidget):
     def __init__(self, *, plane: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.plane = plane
+        self.center_pick_enabled = False
+        self._ring_polylines = ()
         self.image: NDArray[np.generic] | None = None
         self._display: NDArray[np.float32] | None = None
         self.column_axis_label = "column_px"
@@ -382,7 +385,7 @@ class DetectorTextureView(QOpenGLWidget):
         if mode != "inspect":
             self._box_start = self._box_end = self._roi_start = self._roi_end = None
             self._band_drag = None
-            self.box_zoom_enabled = self.roi_select_enabled = False
+            self.box_zoom_enabled = self.roi_select_enabled = self.center_pick_enabled = False
         self.mask_mode_changed.emit(mode)
         self._request_paint()
 
@@ -529,6 +532,25 @@ class DetectorTextureView(QOpenGLWidget):
         self._clear_overlays()
         self.cursor_changed.emit(None)
         self.data_revision += 1
+        self._request_paint()
+
+    def set_ring_curves(self, curves=()):
+        if len(curves) > 5:
+            raise ValueError("at most five hBN ring curves")
+        polylines = []
+        for curve in curves:
+            values = np.asarray(curve, dtype=np.float64)
+            if values.ndim != 2 or values.shape[1] != 2 or values.shape[0] > 4096:
+                raise ValueError("invalid native ring curve")
+            valid = np.all(np.isfinite(values), axis=1)
+            starts = np.flatnonzero(valid & ~np.r_[False, valid[:-1]])
+            stops = np.flatnonzero(valid & ~np.r_[valid[1:], False]) + 1
+            polylines.extend(
+                QPolygonF([QPointF(float(c) + 0.5, float(r) + 0.5) for c, r in values[a:b]])
+                for a, b in zip(starts, stops, strict=True)
+                if b - a > 1
+            )
+        self._ring_polylines = tuple(polylines)
         self._request_paint()
 
     def set_overlays(self, column_row_px: NDArray[np.float64]) -> None:
@@ -947,7 +969,7 @@ class DetectorTextureView(QOpenGLWidget):
                 painter.setPen(QPen(QColor(175, 235, 175, 230), 1))
                 painter.drawRect(bounds)
             painter.setClipping(False)
-            if self.show_markers and self.overlays.size:
+            if self.show_markers and (self.overlays.size or self._ring_polylines):
                 pen = QPen(QColor(100, 245, 235), 1)
                 pen.setCosmetic(True)
                 painter.setPen(pen)
@@ -963,6 +985,9 @@ class DetectorTextureView(QOpenGLWidget):
                     )
                 )
                 painter.drawPoints(self._overlay_points)
+                painter.setPen(QPen(QColor(255, 180, 90), 0))
+                for curve in self._ring_polylines:
+                    painter.drawPolyline(curve)
                 painter.resetTransform()
                 painter.setClipping(False)
             if self.show_crosshair:
@@ -1223,7 +1248,10 @@ class DetectorTextureView(QOpenGLWidget):
             and not self._dragging
         ):
             native = self.widget_to_native(event.position())
-            if native is not None:
+            if native is not None and self.center_pick_enabled:
+                self.center_pick_enabled = False
+                self.center_picked.emit(float(native[0]), float(native[1]))
+            elif native is not None:
                 self.pin_requested.emit()
                 if native != self.crosshair:
                     self.crosshair = native
@@ -1264,7 +1292,7 @@ class DetectorTextureView(QOpenGLWidget):
         if event.key() == Qt.Key.Key_Escape:
             self.set_mask_mode("inspect")
             self._box_start = self._box_end = self._roi_start = self._roi_end = None
-            self.box_zoom_enabled = self.roi_select_enabled = False
+            self.box_zoom_enabled = self.roi_select_enabled = self.center_pick_enabled = False
             event.accept()
             return
         if self.mask_mode == "polygon" and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):

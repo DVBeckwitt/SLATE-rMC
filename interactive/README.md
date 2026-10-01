@@ -386,3 +386,57 @@ uv run --extra visualization python interactive/ewald_sphere_viewer.py `
 Dragging focuses a lightweight preview of the selected panel; releasing synchronizes all six
 panels. Use the radio buttons or `I`/`C` to switch between intensity and cylinder sections, and
 `X`, `Y`, or `Z` for axis-aligned views. Press `R` to reset or `Q` to close.
+
+
+## hBN calibration and center proposals
+
+Open one native OSC acquisition, then choose **hBN calibration** in the inspector or
+**Choose beam center** above the detector/experiment views. This workflow works with hBN alone.
+It uses the application-wide worker; preparation and optimizer termination are separate from
+scientific qualification.
+
+1. Choose the raw dark OSC and base detector YAML, and admit the selected image. The dialog shows
+   exact source/dark/configuration/CIF hashes, metadata/mask revision, native shape, separate
+   pitches, base rotation, beam direction, wavelength and hBN lattice/ring declarations. Dark
+   counts are subtracted without exposure normalization. Identify the image as hBN powder before
+   preparing rings or fitting; center proposals also work without that powder declaration.
+2. Propose a center with a detector click or native `(column_px,row_px)` values, then explicitly
+   adopt it as an initial estimate. Inspection crosshairs have no geometry authority. For a spot,
+   drag or enter an ROI anywhere, optionally declare a raw saturation threshold, and fit a
+   constant-background elliptical Gaussian. Review its named parameters/units, valid support,
+   original-data/model/residual maps and profiles, model-dependent uncertainty and limitations.
+   Gaussian adoption requires a current, reliable proposal. The observed spot center is not a
+   determination of the geometric beam intercept.
+3. Edit the actual five seeds and narrower admitted bounds, then **Apply seeds and bounds**.
+   Display tilts are degrees; stored/optimizer tilts are radians. Centers are native pixels and
+   distance is calibrant-private metres. Unchanged fields retain their exact stored values.
+   `soft_l1`, positive `f_scale` and `max_nfev` (1–1000) are actual launch controls.
+4. **Prepare ring observations for review** uses the canonical discovery/preliminary-refinement
+   owner and active fitting mask. Coordinates, ring assignments and 10-degree sector IDs are
+   immutable. Exclude a discovered point only with a reason, commit the review, and **Freeze
+   reviewed observations**. At least 20 points in two rings are required. A changed input/review
+   creates a new revision; an old result keeps its original relationship and is shown as stale.
+5. Name the next result and explicitly **Fit the frozen observation pack**. Fit consumes those
+   exact observations without retracing. Cancel immediately clears pending hBN work and requests
+   cooperative stop; terminal drain is reported separately. Stale/canceled completions are rejected.
+6. Inspect the result to show canonical predicted curves, frozen points and per-point residuals.
+   Click an observation row for detector/profile inspection. Review launch/current/fitted values,
+   errors or unavailable uncertainty, per-ring count/coverage/RMS, total/max residual, rank,
+   conditioning, bound contacts and solver termination. Select a current candidate explicitly;
+   its qualification label remains the existing owner's actual verdict. Private distance never
+   becomes shared sample geometry. **Show draft review** returns to editable exclusions.
+7. Save/autosave/Open retains named results, exact packs, proposals/adoption provenance, seeds,
+   bounds, review decisions and selection. Reopened Gaussian proposals need a fresh explicit ROI
+   fit before adoption. Export exact result or observation JSON, or a PNG with its exact
+   `.png.values.json` companion. The values file is published first. Canceled exports may leave
+   completed files; choose a new destination. Import requires matching acquisition, inputs and
+   the current frozen pack. Existing files and input/result destinations are protected.
+
+Desktop caps are eight acquisition drafts, four results per draft, 180 canonical observations,
+16 export references per draft, a 65,536-pixel Gaussian ROI, existing bounded undo history and
+prospective 1 MiB project admission. hBN source decoding uses the existing OSC admission limits;
+launches account for retained views/history against 2 GiB CPU and 512 MiB GPU limits. There is
+one CPU worker and one nested BLAS thread. Missing/changed references, insufficient observations,
+unreliable proposals, mismatched imports and unsupported bounds remain unavailable with reasons.
+Schema 11 adds hBN state; schemas 1–10 remain readable. These nominal workflow checks do not
+establish sustained interaction timing, independent convergence or new engine qualification.

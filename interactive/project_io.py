@@ -313,6 +313,14 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
             canonical_native(document.view.native_simulation_draft)
         except (OSError, ValueError) as exc:
             simulation_detail += f" Native draft requires input review: {exc}"
+    if document.view.hbn_sessions:
+        from hbn_io import validate_hbn_result
+
+        for session in document.view.hbn_sessions:
+            for text in session.results_json:
+                if control.canceled:
+                    raise RuntimeError("hBN project opening canceled")
+                validate_hbn_result(json.loads(text), session)
     loaded = LoadedProject(
         document, path, tuple(checks), tuple(reference_checks), numeric_validated, simulation_detail
     )
@@ -377,6 +385,24 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         strict=False
     ) == document.view.simulation_result.path.resolve(strict=False):
         raise ProjectFormatError("project destination would overwrite a simulation result")
+    protected = []
+    if document.view.native_simulation_draft is not None:
+        protected.append(document.view.native_simulation_draft.physics_path)
+    if document.view.native_simulation_result is not None:
+        protected.append(document.view.native_simulation_result.path)
+    for session in document.view.hbn_sessions:
+        inputs = json.loads(session.inputs_json)
+        protected.extend(
+            Path(inputs[k]) for k in ("source_path", "dark_path", "configuration_path", "cif_path")
+        )
+        protected.extend(Path(p) for p, _sha in session.exports)
+    for source in protected:
+        if destination.resolve(strict=False) == source.resolve(strict=False) or (
+            destination.exists() and source.exists() and os.path.samefile(destination, source)
+        ):
+            raise ProjectFormatError(
+                "project destination would overwrite a native simulation or hBN input/result"
+            )
     if recovery:
         if destination.name != f"{document.project.project_id}.slate.json":
             raise ProjectFormatError("recovery destination must use the project UUID")

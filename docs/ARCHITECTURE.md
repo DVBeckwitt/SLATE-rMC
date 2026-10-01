@@ -345,3 +345,21 @@ Display preparation uses worker-owned float32 copies; quantitative inspection us
 float64 snapshots. CPU/GPU reservations include retained application data. Reservations and
 software binding fidelity do not establish numerical convergence or responsiveness acceptance;
 see the current Task06 disposition in `DESKTOP_UI_PLAN.md`.
+
+
+### Desktop hBN owner boundary
+
+`fitting.hbn.prepare_hbn_ring_observations` owns existing discovery and preliminary refinement;
+`fit_hbn_ring_observations` fits an already reviewed immutable observation owner. The automatic
+convenience function keeps its previous defaults and composes preparation as before. The residual,
+curve, angle and qualification equations remain authoritative in this module. Admitted five-coordinate
+seeds/bounds and cooperative residual/boundary cancellation are explicit. Solver termination fields
+are separate from the retained qualification verdict and covariance/rank checks.
+
+`interactive/hbn_state.py` bounds immutable JSON input snapshots, review decisions, frozen packs and
+result records. `hbn_io.py` verifies exact source bytes and performs worker-owned OSC admission,
+preparation, Gaussian proposals, frozen fitting, canonical result validation and external export.
+`hbn_panel.py` presents these states and records bounded draft edits; `ShellWindow` routes requests
+through the existing single latest-only worker. No widget implements scattering/geometry equations.
+The optional narrow `fitting.spot` owner fits only the declared local elliptical Gaussian; it does
+not qualify a geometric beam intercept. Selected hBN distance remains calibrant-private.
