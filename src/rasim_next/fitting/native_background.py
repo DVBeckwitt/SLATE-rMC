@@ -48,9 +48,10 @@ class BackgroundProfileError(RuntimeError):
 class NativeBackgroundProblem:
     """One fixed pixel design, ownership W, absolute penalty R and immutable start.
 
-    Observations supplied to this path contain RAW measured counts and the joint
-    count/discrepancy covariance. Pixel ownership may overlap; its full covariance
-    must already be propagated by the caller. No background uncertainty is added here.
+    Observations supplied to this path contain RAW measured counts and the declared
+    count covariance, including any explicitly justified discrepancy covariance.
+    Pixel ownership may overlap; its full covariance must already be propagated
+    by the caller. No background uncertainty is added here.
     """
 
     pixel_design: np.ndarray
@@ -142,19 +143,22 @@ class NativeBackgroundProblem:
         if exposure > 0:
             data_jacobian -= u[:, None] * ((u @ data_jacobian) / denominator)
         penalty_residual = self.regularization @ beta
+        signal = exposure * np.asarray(raw)
+        data_objective = float(data_residual @ data_residual)
+        penalty_objective = float(penalty_residual @ penalty_residual)
         return OptimizeResult(
             beta=np.array(beta, copy=True),
             scale=exposure,
-            signal_prediction_count=exposure * np.asarray(raw),
+            signal_prediction_count=signal,
             background_prediction_count=background,
-            prediction_count=exposure * np.asarray(raw) + background,
+            prediction_count=signal + background,
             data_residual=data_residual,
             penalty_residual=penalty_residual,
             residual=np.r_[data_residual, penalty_residual],
             jacobian=np.vstack([data_jacobian, self.regularization]),
-            data_objective=float(data_residual @ data_residual),
-            penalty_objective=float(penalty_residual @ penalty_residual),
-            objective=float(data_residual @ data_residual + penalty_residual @ penalty_residual),
+            data_objective=data_objective,
+            penalty_objective=penalty_objective,
+            objective=data_objective + penalty_objective,
         )
 
     def profile(self, observations, raw, *, callback=None):

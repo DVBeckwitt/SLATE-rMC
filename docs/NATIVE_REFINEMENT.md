@@ -9,7 +9,9 @@ lattice never moves measured pixels into another fitting region.
 
 `NativeBackgroundProblem` is an explicit opt-in to `score_native_prediction` and
 `fit_native_parameters`. Supply raw measured counts in `NativeFitObservations.net_count`,
-one acquisition, GLS, no historical guards, and the joint native count/discrepancy covariance.
+one acquisition, GLS, no historical guards, and the declared native count covariance.
+Any discrepancy covariance needs a separately justified measurement model; it is not
+required by the profiler.
 The problem binds actual pixel design X, sparse ownership W, immutable beta0 and absolute
 quadratic penalty R. Background mass is W exp(X beta); the 44-column broad empirical design
 in `native_background_design` preserves the existing 3000-pixel acquisition conventions.
@@ -29,7 +31,9 @@ projection and held-out diagnostics. Fitting beta explicitly excludes its old ja
 modes; a shared residual-discrepancy field must enter the joint covariance only once.
 Controls must use current physical predictions whenever physical parameters change.
 Conditional background improvement does not qualify the physical integration or identify
-signal/background contributions under protected peaks.
+signal/background contributions under protected peaks. The expanded-support Bi2Se3
+procedure and comparison limits are recorded in
+[STAGED_FITTING.md](STAGED_FITTING.md#expanded-support-bi2se3-background-fit).
 
 ## Shared material boundary
 
