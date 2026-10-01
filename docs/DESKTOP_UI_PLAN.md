@@ -4193,3 +4193,49 @@ in source. The old immutable prerequisite index/results and dated reports have n
 The external Task10 completion index records exact disposable method bytes, results, command
 charges, source/evidence hashes and preservation checks. Main remains clean and unchanged; no
 merge/push, second writer, new chat or schedule was introduced.
+
+
+### Task11 / U09, U05d and U13 implementation (2026-10-01)
+
+**Implemented; awaiting root review.** Accepted count remains 19/46. No Task12 work, new fit,
+scientific qualification, optimizer/Jacobian campaign, merge or handoff adoption was undertaken.
+
+| Route | Start/preview owner | Scope and restrictions |
+| --- | --- | --- |
+| Acquisition configuration | NumericDraft/edit_draft/configured compiler and reciprocal mapping | Selected admitted acquisition; stored configuration degrees/metres/pixels |
+| Independent simulator | SimulationDraft/canonical_configuration | Its own configured YAML; native model coordinates use existing inspector |
+| hBN | HbnSession, hbn_ring_curves_px, hbn_detector_transform | Five canonical starts; private calibrant distance; genuine saved center independent of sample fit |
+| Indexed sample | SampleSession/_fit_arguments, corrected_instrument/predict_integer_l_tags | Canonical active corrections/calibration/delta/Helmert scope; frozen IDs retained |
+| Joint | JointSession/joint_controls, existing joint geometry predictors | 21 canonical coordinates; fixed pitch/pivot pitch, absent PbI2 and missing scopes readonly; Bi2Se3 x reference fixed zero |
+
+The existing experiment scene supplies constrained translation arrows/right-hand rotation arcs
+with units, pivots, positive direction and affected images. Numeric/table, native features,
+reciprocal mapping and scene share a request identity. One final validated change becomes one
+SessionHistory transaction; camera motion, canceled gestures and stale completions change no starts.
+Nonmechanical coupled corrections receive an explanation and owner controls instead of an invented
+independent mechanical handle. Schema 14 retains exact starts and requested sensitivity settings.
+
+The center tool compares genuine matching hBN or supported sample records, shows actual quality
+and marginal-error evidence, and uses an explicit initial-estimate action. Shared hBN adoption
+lists compatible acquisitions before applying, preserves private distances/immutable results,
+invalidates downstream readiness/selection and records input/result/observation hashes. A second
+matching hBN draft in the nominal sharing check is explicitly a presentation fixture over the same
+genuine bytes; no result is invented. Sample calibration is inactive in the retained genuine record
+and stays unavailable. Its supported mechanism remains implemented without manufacturing a fit.
+
+Sensitivity is an explicit selected-coordinate baseline/plus/minus request on the existing worker.
+It shows native feature motion or Q deltas with exact held-fixed values, scope and provenance.
+Domain/branch/topology changes remain invalid. Missing qualified full covariance gives no prediction
+bands; bounds, local motion and marginal errors do not become confidence.
+
+Focused checks found and repaired hBN undo revision/frozen-pack mismatch, detector edits incorrectly
+routed through angle-only reuse, and a project-admission constant imported from the wrong owner.
+The native and boundary checks now pass. Separate failed disposable check attempts are preserved:
+Open event timing, an inadmissible historical YAML acquisition fixture, freeze-return misuse and
+deque slicing. The complete genuine three-pack joint receipt remains missing; opaque dispatch is
+only call-wiring evidence. B019/B020 history defects, B021 disputed handoff integrity, B010 environment
+and sustained-performance gaps remain open.
+
+[Task11 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/physical_task11_completion_index.json)
+records finite command charges, original failures, exact disposable methods, preserved prior
+evidence and final source hashes. The worktree receives one coherent commit; main stays unchanged.

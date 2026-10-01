@@ -380,24 +380,15 @@ def apply_detector_calibration_corrections(
     )
 
 
-def apply_shared_geometry_corrections(
-    instrument: CompiledInstrument,
-    configured_axis_rotations: tuple[AxisRotationConfiguration, ...],
+def corrected_goniometer_axis(
+    rotation: AxisRotationConfiguration,
     corrections: SharedGeometryCorrections,
-) -> CompiledInstrument:
-    """Apply the canonical axis, pivoted end-pose, and signed-plane corrections."""
-
-    if not isinstance(instrument, CompiledInstrument):
-        raise TypeError("instrument must be CompiledInstrument")
-    if not isinstance(corrections, SharedGeometryCorrections):
-        raise TypeError("corrections must be SharedGeometryCorrections")
-    configured = tuple(configured_axis_rotations)
-    if len(configured) != 1 or not isinstance(configured[0], AxisRotationConfiguration):
-        raise ValueError("shared geometry fitting requires exactly one configured goniometer axis")
-    if instrument.sample_support_model_id != "unbounded_plane.v1":
-        raise ValueError("shared geometry fitting currently requires unbounded_plane.v1 support")
-
-    rotation = configured[0]
+) -> AxisRotationConfiguration:
+    """Return the same constrained axis/pivot used by shared geometry transport."""
+    if not isinstance(rotation, AxisRotationConfiguration) or not isinstance(
+        corrections, SharedGeometryCorrections
+    ):
+        raise TypeError("canonical axis configuration and shared corrections are required")
     base_pitch, base_yaw = _axis_pitch_yaw(rotation.axis_lab)
     pitch = base_pitch + corrections.goniometer_axis_pitch_rad
     yaw = base_yaw + corrections.goniometer_axis_yaw_rad
@@ -428,6 +419,35 @@ def apply_shared_geometry_corrections(
         + corrections.goniometer_pivot_pitch_offset_m * pivot_pitch_tangent
         + corrections.goniometer_pivot_yaw_offset_m * pivot_yaw_tangent
     )
+    return replace(
+        rotation,
+        axis_lab=tuple(float(v) for v in corrected_axis),
+        pivot_lab_m=tuple(float(v) for v in corrected_pivot),
+    )
+
+
+def apply_shared_geometry_corrections(
+    instrument: CompiledInstrument,
+    configured_axis_rotations: tuple[AxisRotationConfiguration, ...],
+    corrections: SharedGeometryCorrections,
+) -> CompiledInstrument:
+    """Apply the canonical axis, pivoted end-pose, and signed-plane corrections."""
+
+    if not isinstance(instrument, CompiledInstrument):
+        raise TypeError("instrument must be CompiledInstrument")
+    if not isinstance(corrections, SharedGeometryCorrections):
+        raise TypeError("corrections must be SharedGeometryCorrections")
+    configured = tuple(configured_axis_rotations)
+    if len(configured) != 1 or not isinstance(configured[0], AxisRotationConfiguration):
+        raise ValueError("shared geometry fitting requires exactly one configured goniometer axis")
+    if instrument.sample_support_model_id != "unbounded_plane.v1":
+        raise ValueError("shared geometry fitting currently requires unbounded_plane.v1 support")
+
+    rotation = configured[0]
+    corrected = corrected_goniometer_axis(rotation, corrections)
+    corrected_axis = np.asarray(corrected.axis_lab, dtype=np.float64)
+    corrected_pivot = np.asarray(corrected.pivot_lab_m, dtype=np.float64)
+    base_pivot = np.asarray(rotation.pivot_lab_m, dtype=np.float64)
     base_motion = axis_rotation_transform(_axis_rotation(rotation, rotation.axis_lab, base_pivot))
     corrected_motion = axis_rotation_transform(
         _axis_rotation(rotation, corrected_axis, corrected_pivot)

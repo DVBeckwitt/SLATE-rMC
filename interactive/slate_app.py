@@ -72,6 +72,8 @@ from parameter_state import (
     metadata_action,
     prepare_numeric_draft,
 )
+from physical_io import PhysicalResult, physical_work
+from physical_panel import PhysicalPanel
 from project_io import (
     LoadedProject,
     PublishedProject,
@@ -354,6 +356,8 @@ class ShellWindow(QMainWindow):
                 "simulation",
                 "hbn",
                 "sample",
+                "joint",
+                "physical",
             ]
             | None
         ) = None
@@ -361,6 +365,8 @@ class ShellWindow(QMainWindow):
         self._hbn_context = None
         self._pending_joint = None
         self._joint_context = None
+        self._pending_physical = None
+        self._physical_context = None
         self._pending_sample = None
         self._sample_context = None
         self._pending_simulation = None
@@ -402,6 +408,7 @@ class ShellWindow(QMainWindow):
         tabs.addTab(self._build_simulator(), "Simulator")
         self.setCentralWidget(tabs)
         self.workspaces = tabs
+        self.physical = PhysicalPanel(self)
         self.jobs = JobOwner(self)
         self.jobs.state_changed.connect(self._job_state_changed)
         self.jobs.progress_changed.connect(self._job_progress)
@@ -694,6 +701,9 @@ class ShellWindow(QMainWindow):
         self.joint_button = QPushButton("Joint geometry")
         self.joint_button.clicked.connect(self._show_joint)
         inspector_layout.addWidget(self.joint_button)
+        self.physical_button = QPushButton("Physical geometry / centers / sensitivity")
+        self.physical_button.clicked.connect(self._show_physical)
+        inspector_layout.addWidget(self.physical_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -892,9 +902,20 @@ class ShellWindow(QMainWindow):
             gpu += self.simulator.detector.view._display.nbytes
         # The scene's retained owner admits at most two native R32F detector textures.
         gpu += len(scene._textures) * 12_000_000 * 4
+        if hasattr(self, "physical"):
+            physical_scene = self.physical.scene.view
+            gpu += (
+                max(2 if self.physical.isVisible() else 0, len(physical_scene._textures))
+                * 12_000_000
+                * 4
+            )
+            if physical_scene._image is not None:
+                arrays[id(physical_scene._image)] = physical_scene._image
         return {
             "other_cpu_bytes": sum(a.nbytes for a in arrays.values())
             + self._numeric_history.bytes_used
+            + self.physical.history.bytes_used
+            + self.physical.resident_bytes()
             + self.hbn.history.bytes_used
             + sum(a.nbytes for a in self.hbn._spot_arrays)
             + sum(v.nbytes for v in self.hbn.sessions)
@@ -905,6 +926,62 @@ class ShellWindow(QMainWindow):
             + sum(history.storage_bytes for history in self._mask_history.values()),
             "other_gpu_bytes": gpu,
         }
+
+    def _show_physical(self):
+        self.physical.show()
+        self.physical.raise_()
+        self.physical.guard(self.physical.load)
+
+    def _supersede_physical(self):
+        self._pending_physical = None
+        if self._active_kind == "physical":
+            self.jobs.invalidate()
+
+    def _request_physical(self, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 4 * 1024**2:
+            raise ValueError("Physical request exceeds 4 MiB")
+        self._pending_physical = (argument, context)
+        if self._active_kind == "physical":
+            self.jobs.invalidate()
+        self.physical.status.setText("Canonical preview requested; waiting for the shared worker")
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_physical(self, argument, context):
+        if context != self.physical.context():
+            self.physical.status.setText("Queued physical request is stale; no work launched")
+            return
+        self._active_kind = "physical"
+        self._physical_context = context
+        try:
+            request = json.loads(argument)
+            request["resources"] = sample_work_budget(**self._simulation_resource_charge())
+            argument = json.dumps(request, allow_nan=False).encode()
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.physical.epoch),
+                    argument,
+                    len(argument),
+                    2 * 1024**2,
+                    physical_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._physical_context = None
+            self.physical.status.setText(f"Physical calculation could not start: {exc}")
+        else:
+            self._active_generation = identity.generation
+
+    def _physical_current(self, identity):
+        return (
+            identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._physical_context == self.physical.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
 
     def _show_joint(self):
         self.joint.refresh()
@@ -1242,6 +1319,7 @@ class ShellWindow(QMainWindow):
             ),
             self.sample.session,
             self.joint.session,
+            self.physical.settings_json,
         )
 
     def _validate_project_admission(
@@ -1250,6 +1328,7 @@ class ShellWindow(QMainWindow):
         *,
         selected_id: UUID | None = None,
         view: ProjectViewState | None = None,
+        numeric_draft: NumericDraft | None = None,
     ) -> None:
         if view is None:
             view = self._capture_view()
@@ -1267,7 +1346,9 @@ class ShellWindow(QMainWindow):
             ProjectDocument(
                 candidate,
                 view,
-                self._numeric_draft
+                numeric_draft
+                if numeric_draft is not None
+                else self._numeric_draft
                 if self._numeric_draft is not None
                 and any(
                     item.acquisition_id == self._numeric_draft.acquisition_id
@@ -1317,6 +1398,7 @@ class ShellWindow(QMainWindow):
             self._numeric_history = SessionHistory()
             self._refresh_numeric_editor()
         self.joint.invalidate_inputs()
+        self.physical.owner_changed()
         self._revision += 1
         self._save_failure = ""
         self._autosave_timer.start()
@@ -1556,6 +1638,11 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_physical is not None:
+            argument, context = self._pending_physical
+            self._pending_physical = None
+            self._submit_physical(argument, context)
+            return
         if self._pending_joint is not None:
             operation, argument, context = self._pending_joint
             self._pending_joint = None
@@ -1729,6 +1816,7 @@ class ShellWindow(QMainWindow):
                 "Choose a draft in the configured recovery location.",
             )
             return
+        self.physical.cancel(clear=True)
         self._pending_open = (candidate, recovery)
         self._discard_confirmed = False
         for candidate_id in self._candidate_queue:
@@ -4405,6 +4493,8 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        if self._active_kind == "physical" or self._pending_physical is not None:
+            self.physical.cancel(clear=True)
         joint_requested = self._active_kind == "joint" or self._pending_joint is not None
         self._pending_joint = None
         if joint_requested:
@@ -4976,6 +5066,14 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Prior operation discarded · Ready")
             return
         kind = self._active_kind
+        if kind == "physical":
+            self.physical.status.setText(
+                f"Physical {state.value}: {summary.detail or 'canonical forward geometry'}"
+            )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._physical_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "joint":
             self.joint.status.setText(
                 f"Joint {state.value}: "
@@ -5253,6 +5351,13 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "physical":
+                if self._physical_current(identity) and isinstance(value, PhysicalResult):
+                    self.physical.guard(lambda: self.physical.ready(value))
+                else:
+                    self.physical.status.setText(
+                        "Late/stale physical completion rejected; initial values unchanged"
+                    )
             elif kind == "joint":
                 if self._joint_current(identity) and isinstance(value, JointWorkResult):
                     self.joint.guard(lambda: self.joint.ready(value))
@@ -5303,6 +5408,8 @@ class ShellWindow(QMainWindow):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
+            if kind == "physical":
+                self._physical_context = None
             if kind == "joint":
                 self._joint_context = None
                 self.joint.refresh()
@@ -5418,6 +5525,7 @@ class ShellWindow(QMainWindow):
         try:
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
+            self.physical.restore(value.document.view.physical_settings_json)
             self.joint.restore(value.document.view.joint_session)
             self._pending_joint = self._joint_context = None
             self.sample.restore(value.document.view.sample_session)
@@ -5506,6 +5614,8 @@ class ShellWindow(QMainWindow):
                 if self.detector_notice.isVisible():
                     self.detector_notice.setText(message)
             self.statusBar().showMessage(message)
+        if self._active_kind == "physical" and self._physical_current(identity):
+            self.physical.status.setText(message)
         if self._active_kind == "simulation" and self._simulation_current(identity):
             self.simulator.status.setText(message)
         if self._active_kind == "joint" and self._joint_current(identity):
@@ -5528,6 +5638,8 @@ class ShellWindow(QMainWindow):
                 )
                 self.statusBar().showMessage("Close requested · Waiting for safe stop")
                 return
+            self.physical.cancel(clear=True)
+            self.physical.scene.view.release_resources()
             self.scene_panel.view.release_resources()
             self.comparison_panel.release_resources()
             self.simulator.detector.view.release_resources()
@@ -5535,6 +5647,7 @@ class ShellWindow(QMainWindow):
             return
         event.ignore()
         if not self._close_intent:
+            self.physical.cancel(clear=True)
             self._close_intent = True
             self._pending_open = None
             self._pending_hbn = None

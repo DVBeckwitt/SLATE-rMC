@@ -51,9 +51,17 @@ def _set_at(mapping: dict[str, Any], path: tuple[str | int, ...], value: float) 
 def _source_mapping(draft: NumericDraft) -> dict[str, Any]:
     from rasim_next.pipeline.configured_simulation import load_strict_yaml_mapping
 
-    return load_strict_yaml_mapping(
+    mapping = load_strict_yaml_mapping(
         draft.configuration_path, source_bytes=draft.baseline_yaml.encode("utf-8")
     )
+    mapping["instrument"].setdefault(
+        "detector_tilt",
+        {
+            "about_column_axis_deg": 0.0,
+            "about_row_axis_deg": 0.0,
+        },
+    )
+    return mapping
 
 
 def configured_draft(draft: NumericDraft) -> SimulationConfiguration:

@@ -33,7 +33,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 13
+PROJECT_SCHEMA_VERSION = 14
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -598,6 +598,36 @@ class ComparisonState:
             validate_display_limits(limits[0], limits[1], limits[2])
 
 
+def _physical_settings(text):
+    if type(text) is not str or len(text.encode("utf-8")) > 16384:
+        raise ProjectFormatError("physical sensitivity settings exceed 16 KiB")
+    value = json.loads(text)
+    if value == {}:
+        return text
+    if type(value) is not dict or set(value) != {
+        "route",
+        "parameter",
+        "unit",
+        "step",
+        "baseline_sha256",
+        "affected_images",
+        "observable",
+    }:
+        raise ProjectFormatError("invalid physical request settings")
+    if value["route"] not in ("configuration", "simulator", "hbn", "sample", "joint"):
+        raise ProjectFormatError("unsupported physical route")
+    for name in ("parameter", "unit", "observable"):
+        _name(value[name], "physical " + name)
+    _digest(value["baseline_sha256"])
+    if _float(value["step"], "sensitivity step") <= 0:
+        raise ProjectFormatError("sensitivity step must be positive")
+    if type(value["affected_images"]) is not list or len(value["affected_images"]) > 32:
+        raise ProjectFormatError("invalid affected images")
+    for image in value["affected_images"]:
+        _name(image, "affected image")
+    return text
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectViewState:
     selected_acquisition_id: UUID | None = None
@@ -614,6 +644,10 @@ class ProjectViewState:
     hbn_sessions: tuple[HbnSession, ...] = ()
     sample_session: SampleSession | None = None
     joint_session: JointSession | None = None
+    physical_settings_json: str = "{}"
+
+    def __post_init__(self):
+        _physical_settings(self.physical_settings_json)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1204,6 +1238,7 @@ def project_to_document(
         "hbn_sessions": [hbn_session_document(v) for v in state.view.hbn_sessions],
         "sample_session": sample_session_document(state.view.sample_session),
         "joint_session": joint_session_document(state.view.joint_session),
+        "physical_settings_json": _physical_settings(state.view.physical_settings_json),
         "detector": _detector_document(detector),
         "scene": (
             None
@@ -1312,6 +1347,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         10,
         11,
         12,
+        13,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1380,7 +1416,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         )
         | ({"hbn_sessions"} if top["schema_version"] >= 11 else set())
         | ({"sample_session"} if top["schema_version"] >= 12 else set())
-        | ({"joint_session"} if top["schema_version"] >= 13 else set()),
+        | ({"joint_session"} if top["schema_version"] >= 13 else set())
+        | ({"physical_settings_json"} if top["schema_version"] >= 14 else set()),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1451,6 +1488,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             tuple(hbn_session_from_document(v) for v in view_data.get("hbn_sessions", [])),
             sample_session_from_document(view_data.get("sample_session")),
             joint_session_from_document(view_data.get("joint_session")),
+            _physical_settings(view_data.get("physical_settings_json", "{}")),
         ),
         draft,
     )

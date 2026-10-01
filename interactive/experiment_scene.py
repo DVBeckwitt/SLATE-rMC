@@ -98,6 +98,7 @@ class SceneGeometry:
             corners.append(_point(instrument.lab_from_detector.apply_point(detector_local)))
         sample = instrument.lab_from_sample.translation_m
         beam = np.array(mapping.incident.states.k_air_sample_Ainv[0], dtype=np.float64, copy=True)
+        beam = instrument.lab_from_sample.rotation @ beam
         beam /= np.linalg.norm(beam)
         extent = max(np.linalg.norm(np.asarray(corner) - sample) for corner in corners)
         axes = tuple(_point(instrument.lab_from_sample.rotation[:, index]) for index in range(3))
@@ -112,7 +113,11 @@ class SceneGeometry:
         return cls(
             tuple(corners),
             _point(sample),
-            _point(sample - beam * extent),
+            _point(
+                mapping.source_origin_lab_m
+                if mapping.source_origin_lab_m is not None
+                else sample - beam * extent
+            ),
             _point(beam),
             _point(instrument.lab_from_detector.rotation[:, 2]),
             axes,
@@ -122,15 +127,39 @@ class SceneGeometry:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalHandle:
+    name: str
+    pivot_lab_m: tuple[float, float, float]
+    axis_lab: tuple[float, float, float]
+    kind: str
+    value: float
+    unit: str
+    metres_per_unit: float = 1.0
+    label: str = ""
+
+
 class ExperimentSceneView(QOpenGLWidget):
     """Camera-only redraws reuse geometry and the current context's display texture."""
 
     painted = Signal(int, float, object)
     camera_changed = Signal()
+    physical_started = Signal()
+    physical_preview = Signal(float)
+    physical_committed = Signal(float)
+    physical_canceled = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.geometry: SceneGeometry | None = None
+        self.physical_handle: PhysicalHandle | None = None
+        self._handle_path: list[QPointF] = []
+        self._physical_drag = False
+        self._gesture_handle: PhysicalHandle | None = None
+        self._gesture_path: list[QPointF] = []
+        self._gesture_value = 0.0
+        self._gesture_radius = 1.0
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.overlay_points_lab_m: tuple[tuple[float, float, float], ...] = ()
         self._image: NDArray[np.float32] | None = None
         self._image_identity: tuple[UUID, str, int] | None = None
@@ -186,6 +215,7 @@ class ExperimentSceneView(QOpenGLWidget):
         if image_identity == self._image_identity and geometry_identity == self._geometry_identity:
             return
         image_changed = image_identity != self._image_identity
+        first_geometry = self.geometry is None and mapping is not None
         self._image_identity = image_identity
         self._image = prepared.display if image_identity is not None else None
         if geometry_identity != self._geometry_identity or (mapping is None) != (
@@ -207,7 +237,7 @@ class ExperimentSceneView(QOpenGLWidget):
                 )
             else:
                 self._scene_radius_m = 1.0
-            if self.geometry is not None and image_changed:
+            if self.geometry is not None and (image_changed or first_geometry):
                 self.target_lab_m = self.geometry.sample_lab_m
         self.request_generation += 1
         self.update()
@@ -524,7 +554,7 @@ class ExperimentSceneView(QOpenGLWidget):
         self._picks = []
         self._pick_lines = []
         self._pick_polygons = []
-        if geometry is None or self._image is None:
+        if geometry is None:
             painter.setPen(QColor("#b7c5cf"))
             painter.drawText(
                 self.rect(),
@@ -532,6 +562,11 @@ class ExperimentSceneView(QOpenGLWidget):
                 "Select an image and map verified geometry to view the experiment",
             )
         else:
+            if self._image is None:
+                painter.setPen(QColor("#b7c5cf"))
+                painter.drawText(
+                    10, 20, "Configured geometry; matching detector texture unavailable"
+                )
             corners = [self._project(point) for point in geometry.detector_corners_lab_m]
             detector_center = _point(np.mean(np.asarray(geometry.detector_corners_lab_m), axis=0))
             self._pick_polygons.append(
@@ -626,8 +661,79 @@ class ExperimentSceneView(QOpenGLWidget):
             )
             if self.focus_name is not None:
                 painter.drawText(10, 20, f"Focused: {self.focus_name} · Back to experiment")
+        self._draw_physical_handle(painter)
         painter.end()
         self.painted.emit(self.request_generation, perf_counter(), self._image_identity)
+
+    def set_physical_handle(self, handle: PhysicalHandle | None) -> None:
+        if handle is not None:
+            axis = np.asarray(handle.axis_lab)
+            if handle.kind not in ("translation", "rotation") or not np.isclose(
+                np.linalg.norm(axis), 1.0
+            ):
+                raise ValueError("Physical handle needs one constrained unit axis")
+        self.physical_handle = handle
+        self._handle_path = []
+        self.update()
+
+    def _draw_physical_handle(self, painter) -> None:
+        handle = self.physical_handle
+        self._handle_path = []
+        if handle is None or self.geometry is None:
+            return
+        pivot, axis = np.asarray(handle.pivot_lab_m), np.asarray(handle.axis_lab)
+        size = self._radius() * 0.28
+        if handle.kind == "translation":
+            self._handle_path = [
+                self._project(_point(pivot)),
+                self._project(_point(pivot + size * axis)),
+            ]
+        else:
+            seed = np.eye(3)[np.argmin(np.abs(axis))]
+            first = np.cross(axis, seed)
+            first /= np.linalg.norm(first)
+            second = np.cross(axis, first)
+            self._handle_path = [
+                self._project(_point(pivot + size * (first * math.cos(a) + second * math.sin(a))))
+                for a in np.linspace(-0.5, 2.4, 40)
+            ]
+        painter.setPen(QPen(QColor("#ffcd70"), 3))
+        for start, end in zip(self._handle_path[:-1], self._handle_path[1:], strict=True):
+            painter.drawLine(start, end)
+        end, prior = self._handle_path[-1], self._handle_path[-2]
+        d = end - prior
+        norm = math.hypot(d.x(), d.y())
+        if norm > 1e-8:
+            tangent = QPointF(d.x() / norm, d.y() / norm)
+            normal = QPointF(-tangent.y(), tangent.x())
+            painter.drawLine(end, end - tangent * 12 + normal * 6)
+            painter.drawLine(end, end - tangent * 12 - normal * 6)
+        painter.setPen(QColor("#ffcd70"))
+        painter.drawText(
+            QRectF(10, 30, max(1, self.width() - 20), 80),
+            Qt.TextFlag.TextWordWrap,
+            handle.label
+            or f"{handle.name}: {handle.value:.17g} {handle.unit}; positive arrow; Escape cancels",
+        )
+
+    def _handle_hit(self, position) -> bool:
+        return any(
+            math.hypot(p.x() - position.x(), p.y() - position.y()) <= 12 for p in self._handle_path
+        )
+
+    def cancel_physical_gesture(self) -> None:
+        if self._physical_drag:
+            self._physical_drag = False
+            self._press = self._last = None
+            self._gesture_handle = None
+            self.physical_canceled.emit()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._physical_drag:
+            self.cancel_physical_gesture()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def set_levels(self, low: float, high: float, mode: str = "linear") -> None:
         if mode not in ("linear", "signed", "positive_log"):
@@ -639,14 +745,59 @@ class ExperimentSceneView(QOpenGLWidget):
         self.update()
 
     def mousePressEvent(self, event) -> None:
+        if self._physical_drag:
+            self.cancel_physical_gesture()
         self._animate.stop()
         self._animation = None
         self._press = event.position()
         self._last = event.position()
         self._dragged = False
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.physical_handle is not None
+            and self._handle_hit(event.position())
+        ):
+            self.setFocus()
+            self._physical_drag = True
+            self._gesture_handle = self.physical_handle
+            self._gesture_path = list(self._handle_path)
+            self._gesture_radius = self._radius()
+            self._gesture_value = self.physical_handle.value
+            self.physical_started.emit()
 
     def mouseMoveEvent(self, event) -> None:
         if self._last is None or not event.buttons():
+            return
+        if self._physical_drag:
+            handle = self._gesture_handle
+            path = self._gesture_path
+            delta = event.position() - self._press
+            if handle.kind == "translation":
+                vector = path[-1] - path[0]
+                norm2 = vector.x() ** 2 + vector.y() ** 2
+                if norm2 <= 4:
+                    return
+                amount = (delta.x() * vector.x() + delta.y() * vector.y()) / norm2
+                value = handle.value + amount * self._gesture_radius * 0.28 / handle.metres_per_unit
+            else:
+                nearest = min(
+                    range(len(path)), key=lambda i: (path[i] - self._press).manhattanLength()
+                )
+                lo, hi = max(0, nearest - 1), min(len(path) - 1, nearest + 1)
+                tangent = path[hi] - path[lo]
+                norm2 = tangent.x() ** 2 + tangent.y() ** 2
+                if norm2 <= 4:
+                    return
+                angle = (
+                    (delta.x() * tangent.x() + delta.y() * tangent.y())
+                    / norm2
+                    * (hi - lo)
+                    * 2.9
+                    / 39
+                )
+                value = handle.value + (math.degrees(angle) if handle.unit == "deg" else angle)
+            self._gesture_value = value
+            self.physical_preview.emit(value)
             return
         delta = event.position() - self._last
         if (event.position() - self._press).manhattanLength() > 3:
@@ -664,6 +815,14 @@ class ExperimentSceneView(QOpenGLWidget):
         self._request_camera()
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._physical_drag:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return
+            self._physical_drag = False
+            self._press = self._last = None
+            self._gesture_handle = None
+            self.physical_committed.emit(self._gesture_value)
+            return
         if (
             not self._dragged
             and self.geometry is not None
@@ -717,6 +876,8 @@ class ExperimentSceneView(QOpenGLWidget):
         self._press = self._last = None
 
     def wheelEvent(self, event) -> None:
+        if self._physical_drag:
+            return
         self.zoom = min(max(self.zoom * (1.12 ** (event.angleDelta().y() / 120)), 0.2), 12.0)
         self._request_camera()
 

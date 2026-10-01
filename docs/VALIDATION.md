@@ -53,3 +53,28 @@ and evidence at the requested observable; nominal output remains explicitly nomi
 The selected fitting workflow and current empirical Gaussian/Lorentzian baseline are described
 in [ARCHITECTURE.md](ARCHITECTURE.md#selected-fitting-workflow). Historical success does not
 waive current data/physics limitations. Report unsupported parameters and unqualified results.
+
+
+## Task11 physical editor checks (2026-10-01)
+
+The current authorization is to wire fit mechanisms without running or proving fits. Task11 used
+small external native event checks and canonical geometry forwards, plus argument interception
+before hBN/sample solvers. One selected sensitivity per changed owner was checked: hBN private
+distance, configured column tilt and indexed sample column tilt. Joint baseline/plus/minus dispatch
+was intercepted with an explicitly opaque partial-group fixture before any scientific predictor.
+It does not establish full joint admission. No fits, Jacobians, full images, reindexing or sweeps ran.
+
+Native checks covered constrained drag/Escape/one-action undo-redo, equivalent typed edits, camera
+isolation, exact Save/Open, shared hBN adoption, immutable records, invalid-domain rejection,
+queued stale rejection and actual active-worker stale/cancel paths. Rendering was checked with
+the OpenGL framebuffer, because dialog grab omits painter overlays. A geometry-only rendering
+check covers the missing-texture case. Delayed worker fixtures are presentation checks, not fits.
+
+The extracted shared-axis arithmetic matched parent transform arrays exactly for one nonzero
+nine-coordinate correction. Three hBN private-plane points matched their analytic embedding
+within 3e-16 metres (observed maximum 2.78e-17); this checks the new visualization embedding only.
+The saved sample has inactive center calibration, so its proposal correctly stays unavailable.
+No supported positive sample proposal, complete genuine three-group joint receipt, qualified full
+covariance bands, sustained timing or locked-environment closure is claimed. B010/B019/B020/B021
+remain deferred. Original failures, exact disposable method bytes and final source/evidence hashes
+are retained in the external physical_task11 completion index; earlier evidence is unchanged.

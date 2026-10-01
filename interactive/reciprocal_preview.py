@@ -43,6 +43,7 @@ class ReciprocalMapping:
     status: np.ndarray
     wavelength_A: float
     axis_rotations: tuple[AxisRotationConfiguration, ...]
+    source_origin_lab_m: tuple[float, float, float] | None = None
 
     def cursor(
         self, column_px: float, row_px: float
@@ -112,6 +113,7 @@ def _mapping(
         geometry.status,
         float(config.source.mean_wavelength_A),
         tuple(config.instrument.axis_rotations),
+        tuple(config.source.mean_origin_lab_m),
     )
 
 

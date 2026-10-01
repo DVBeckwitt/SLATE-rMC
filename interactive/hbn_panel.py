@@ -455,6 +455,9 @@ class HbnPanel(QDialog):
         updated = replace(
             session,
             initial=columns[0],
+            initial_provenance_json=session.initial_provenance_json
+            if columns[0] == session.initial
+            else "",
             lower=columns[1],
             upper=columns[2],
             f_scale=float(self.f_scale.text()),

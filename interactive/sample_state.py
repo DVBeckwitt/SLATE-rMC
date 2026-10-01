@@ -28,6 +28,7 @@ class SampleSession:
     results_json: tuple[str, ...] = ()
     selected_result_id: str | None = None
     exports: tuple[tuple[str, str], ...] = ()
+    initial_provenance_json: str = ""
 
     def __post_init__(self):
         if (
@@ -51,6 +52,16 @@ class SampleSession:
                 or type(json.loads(value)) is not dict
             ):
                 raise ValueError("sample " + name + " exceeds its document admission")
+        if (
+            type(self.initial_provenance_json) is not str
+            or len(self.initial_provenance_json.encode()) > 16384
+        ):
+            raise ValueError("sample initial provenance exceeds 16 KiB")
+        if (
+            self.initial_provenance_json
+            and type(json.loads(self.initial_provenance_json)) is not dict
+        ):
+            raise ValueError("sample initial provenance needs an object")
         inputs = json.loads(self.inputs_json)
         if not 2 <= len(inputs["images"]) <= 8 or len(
             {v["image_id"] for v in inputs["images"]}
@@ -126,6 +137,8 @@ def sample_session_document(session):
 def sample_session_from_document(value):
     if value is None:
         return None
+    if type(value) is dict:
+        value = {"initial_provenance_json": "", **value}
     if type(value) is not dict or set(value) != set(SampleSession.__dataclass_fields__):
         raise ValueError("invalid sample session document fields")
     data = dict(value)

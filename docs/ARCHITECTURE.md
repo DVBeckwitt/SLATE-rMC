@@ -419,3 +419,24 @@ requires recorded structure; live file hashes and frozen provenance are checked 
 or verifying a handoff. A selected candidate is tied to the current committed launch; changed
 source/metadata/masks revoke that selection. Joint handoffs remain separate from indexed result
 adoption and grant GEOMETRY_ONLY, not downstream mosaic/intensity qualification.
+
+
+## Desktop physical editing (U09/U05d/U13)
+
+`physical_panel.py` connects constrained scene gestures, exact typed starts and fine adjustment
+to the existing configured simulator, acquisition NumericDraft, hBN, indexed sample and joint
+controls. It uses SessionHistory, explicit route adapters in `physical_io.py`, and the shell's
+single admitted worker. No physical gesture starts an optimizer. Nonspatial/unsupported values
+remain in their existing inspectors; absent and reduced-gauge coordinates remain readonly.
+
+Configured detector edits compile the instrument through the configured owner; the angle-only
+reuse function cannot admit them. Canonical indexed transport and the scene share
+`corrected_goniometer_axis`. `hbn_detector_transform` embeds the existing private hBN ring plane
+for visualization. The crystal detector distance and hBN private distance remain distinct.
+The scene converts incident vectors from sample to LAB and retains actual configured source origin.
+Geometry without a matching image draws a labeled schematic rather than requiring a texture.
+
+Geometry-derived centers read matching genuine saved hBN or supported sample results, preserve
+qualification, and record result/observation/input hashes. Explicit adoption updates initial values
+and provenance with one history transaction. It never adds observations. Physical preview and
+sensitivity jobs are bounded geometry calculations and do not consume joint handoff exports.

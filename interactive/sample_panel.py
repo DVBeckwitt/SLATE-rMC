@@ -374,6 +374,9 @@ class SamplePanel(QDialog):
             replace(
                 self.session,
                 controls_json=encoded(controls),
+                initial_provenance_json=self.session.initial_provenance_json
+                if controls["initial"] == json.loads(self.session.controls_json)["initial"]
+                else "",
                 exclusions=exclusions,
                 frozen_json=None if changed else self.session.frozen_json,
                 revision=self.session.revision + 1,

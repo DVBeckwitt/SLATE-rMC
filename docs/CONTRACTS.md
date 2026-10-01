@@ -1127,3 +1127,41 @@ file references. Strict bounded lossless expansion supplements the unchanged 1 M
 project limit. Expanded data participates in shared memory admission. Qualified joint handoff
 save/reload uses the existing owner, verifies actual predecessor bytes and rebases once; it remains
 GEOMETRY_ONLY. Import/export/selection never reinterpret it as an indexed fit or adopt it implicitly.
+
+
+## Desktop physical editing and sensitivity (schema 14)
+
+Schema 14 accepts earlier project schemas and adds at most 16 KiB of sensitivity request settings:
+route, canonical parameter, stored unit, positive finite step, baseline hash, affected images and
+observable. Transient previews are not persisted or selected as fits. Sample initial-estimate
+provenance is a bounded optional JSON object; earlier sessions default to empty provenance.
+Provenance does not change frozen observations, fit equations or the launch objective.
+
+Detector intrinsic column/row tilts in configured drafts use configuration degrees and the
+canonical compiler's radians internally. An absent optional detector_tilt pair defaults to zero
+without rewriting baseline YAML/hash. All fit starts retain the owner's radians/metres/native
+pixels, bounds, canonical order and active/fixed scope. Drag previews validate a complete rigid
+change; release commits one history action. Escape cancels. Camera navigation changes no starts.
+A hBN undo restores its original review revision with its corresponding frozen pack.
+
+Explicit sensitivity uses one selected coordinate and baseline/plus/minus, at most 4096 feature
+coordinates per view and 2 MiB per result, on the existing CPU worker with BLAS limited to one.
+Configured Q maps use the existing 13 by 13 native grid. Frozen site/ring identities and held-fixed
+values are exact; domain or branch/topology changes remain invalid and provide no derivative.
+Source spread is unobserved by nominal geometry and has no sensitivity control. Request/context
+identity guards reject obsolete queued work and late completions. Display textures and retained
+thumbnail memory participate in existing resource admission.
+
+Saved hBN proposals require genuine matching qualified calibration/input lineage. Sample proposals
+require a successful recorded geometry result with active detector-reference column/row calibration;
+standalone sample estimates remain explicitly unqualified. The direct-beam intercept, ellipse
+center and detector reference pixel are different quantities. Off-panel estimates are not clipped.
+Shared hBN adoption lists compatible targets and checks configuration/CIF, detector/beam settings
+and acquisition source/revision before prospective project admission and one transaction. It leaves
+each private distance and immutable result intact, clears affected readiness/selection and records
+source result/observation hashes. Sample adoption applies the actual coupled pose/calibration starts
+through their owner. Manual/direct-spot tooling remains available in its existing panel.
+
+Sensitivity is local feature motion, not confidence. Marginal standard errors, measurement covariance
+and parameter propagation remain distinct. No prediction bands are shown without a genuine qualified
+full covariance and supported observable mapping; hard bounds never supply uncertainty.

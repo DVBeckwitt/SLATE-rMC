@@ -135,6 +135,45 @@ def _unit_vector(value: ArrayLike, name: str) -> FloatArray:
     return vector / norm
 
 
+def hbn_detector_transform(
+    values: ArrayLike,
+    *,
+    base_detector_rotation: ArrayLike,
+    beam_direction_lab: ArrayLike,
+    calibrant_origin_lab_m: ArrayLike,
+    detector_reference_coordinate_px: tuple[float, float],
+    detector_column_pitch_m: float,
+    detector_row_pitch_m: float,
+):
+    """Embed the ring owner's private plane in LAB about its beam intercept.
+
+    The origin is a declared visualization reference, not a crystal distance.
+    Native offsets reproduce ``distance * beam_detector + offset_detector``.
+    """
+    from rasim_next.core.frames import FrameId
+    from rasim_next.core.transforms import RigidTransform
+
+    values = np.asarray(values, dtype=np.float64)
+    if values.shape != (5,) or not np.all(np.isfinite(values)) or values[4] <= 0:
+        raise ValueError("hBN plane requires five finite values and positive private distance")
+    rotation = compose_intrinsic_xy_rotation(base_detector_rotation, *values[:2])
+    beam = _unit_vector(beam_direction_lab, "beam_direction_lab")
+    origin = np.asarray(calibrant_origin_lab_m, dtype=np.float64)
+    if origin.shape != (3,) or not np.all(np.isfinite(origin)):
+        raise ValueError("calibrant origin must be a finite LAB point")
+    reference_column, reference_row = detector_reference_coordinate_px
+    local = np.asarray(
+        (
+            (reference_column - values[2]) * detector_column_pitch_m,
+            (reference_row - values[3]) * detector_row_pitch_m,
+            0.0,
+        )
+    )
+    return RigidTransform(
+        rotation, origin + values[4] * beam + rotation @ local, FrameId.DETECTOR, FrameId.LAB
+    )
+
+
 def _ring_residual_px(
     values: FloatArray,
     observations: HbnRingObservations,
