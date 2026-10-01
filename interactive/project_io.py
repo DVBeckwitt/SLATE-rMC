@@ -151,6 +151,7 @@ class LoadedProject:
     references: tuple[ReferenceCheck, ...]
     numeric_validated: bool
     simulation_detail: str = ""
+    sample_input_checks: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,18 +322,26 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                 if control.canceled:
                     raise RuntimeError("hBN project opening canceled")
                 validate_hbn_result(json.loads(text), session)
+    sample_checks = ()
     if document.view.sample_session is not None:
-        from sample_io import validate_sample_result
+        from sample_io import sample_input_checks
         from threadpoolctl import threadpool_limits
 
         with threadpool_limits(limits=1):
-            for text in document.view.sample_session.results_json:
-                validate_sample_result(json.loads(text), document.view.sample_session, control)
+            sample_checks = sample_input_checks(document.view.sample_session, control)
     loaded = LoadedProject(
-        document, path, tuple(checks), tuple(reference_checks), numeric_validated, simulation_detail
+        document,
+        path,
+        tuple(checks),
+        tuple(reference_checks),
+        numeric_validated,
+        simulation_detail,
+        sample_checks,
     )
-    resident = path.stat().st_size + sum(
-        len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks)
+    resident = (
+        path.stat().st_size
+        + sum(len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks))
+        + sum(len(identity) + len(detail.encode()) + 128 for identity, detail in sample_checks)
     )
     control.report("Project and source references checked")
     return JobResult(loaded, resident)

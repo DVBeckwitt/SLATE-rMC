@@ -243,7 +243,13 @@ def _bind(document: ProjectDocument, rows: list[dict], mode: str) -> SetupApplic
         changed = False
         for kind, row in rows_by_kind.items():
             destination = Path(row["destination"])
-            digest = row["destination_raw_sha256"] if kind != "osc" else item.source_sha256
+            digest = (
+                row["expected_identity"]
+                if mode == "relink"
+                else row["destination_raw_sha256"]
+                if kind != "osc"
+                else item.source_sha256
+            )
             old_path = item.source_path if kind == "osc" else getattr(item.metadata, f"{kind}_path")
             if destination == old_path:
                 continue
@@ -479,6 +485,13 @@ def relink_references(
         _size, raw = _hash_file(
             path, SOURCE_LIMIT_BYTES if kind == "osc" else MAX_REFERENCE_BYTES, control
         )
+        if kind == "osc":
+            # Raw compression bytes and decoded OSC identity are different contracts.
+            _verify(path, kind, expected, control)
+            if _hash_file(path, SOURCE_LIMIT_BYTES, control)[1] != raw:
+                raise ProjectFormatError("OSC bytes changed during Relink verification")
+        elif raw != expected:
+            raise ProjectFormatError("reference bytes changed after Relink verification")
         rows.append(
             {
                 "acquisition_id": str(acquisition_id),
@@ -498,6 +511,11 @@ def relink_references(
                 raise ProjectFormatError(
                     "dependent CIF identity differs; relocate the matching configuration/CIF bundle"
                 )
+            if (
+                _hash_file(value.dependent_cif_path, MAX_REFERENCE_BYTES, control)[1]
+                != item.metadata.configuration_cif_sha256
+            ):
+                raise ProjectFormatError("dependent CIF changed after Relink verification")
             rows.append(
                 {
                     "acquisition_id": str(acquisition_id),
@@ -511,6 +529,7 @@ def relink_references(
             )
     if not rows:
         raise ProjectFormatError("no saved identity exists for selected reference kind")
+    _stop(control)
     return _bind(document, rows, "relink")
 
 

@@ -1165,3 +1165,28 @@ through their owner. Manual/direct-spot tooling remains available in its existin
 Sensitivity is local feature motion, not confidence. Marginal standard errors, measurement covariance
 and parameter propagation remain distinct. No prediction bands are shown without a genuine qualified
 full covariance and supported observable mapping; hard bounds never supply uncertainty.
+
+
+## Desktop source relocation and historical sample recovery
+
+Relink preserves the saved reference-byte identity, including a configuration's dependent CIF.
+Any later reference hash must still match that identity. OSC raw/compression bytes remain distinct
+from the decoded OSC identity: decoded identity and raw-byte stability are checked before binding.
+A same-path successful revalidation refreshes source/reference readiness and selected-image
+admission without manufacturing a persistent edit or undo action. The original worker/review
+context still gates publication; changed bytes and stale receipts cannot mutate bindings.
+
+Sample saved-record admission checks the record/launch hashes, exact canonical review pack,
+typed discovery and result structure, recorded qualification flags, named scopes/bounds/trims,
+frozen observed points and finite residual shape/consistency. It does not claim live numerical
+validation when original files are unavailable. Missing/unreadable/different source bytes alone
+produce explicit transient unavailable readiness; malformed records or scientific/model validator
+failures still reject Open atomically. Qualified/unqualified states and historical values remain
+unchanged. No availability label grants downstream qualification.
+
+Current and historical input identities have separate bounded transient checks. Missing-live
+history stays inspectable; active selection/Fit is blocked until the matching current launch and
+live readiness are available. Full geometry/provenance/prediction/residual/metric checks remain
+mandatory on restored live record validation, import, export and supported active use. Explicit
+Revalidate saved source identities uses the existing admitted worker and context checks, without
+preparing observations or solving. Revalidation does not rewrite recorded inputs or fit outcomes.

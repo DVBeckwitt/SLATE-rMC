@@ -920,6 +920,10 @@ class ShellWindow(QMainWindow):
             + sum(a.nbytes for a in self.hbn._spot_arrays)
             + sum(v.nbytes for v in self.hbn.sessions)
             + (0 if self.sample.session is None else 3 * self.sample.session.nbytes)
+            + sum(
+                len(identity) + len(detail.encode()) + 128
+                for identity, detail in self.sample.input_checks.items()
+            )
             + (0 if self.joint.session is None else 3 * self.joint.session.nbytes)
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
@@ -1985,13 +1989,8 @@ class ShellWindow(QMainWindow):
             if self._setup_dialog is not None:
                 self._setup_dialog.message.setText(f"Setup not committed: {exc}")
             return
-        if action is None:
-            if self._setup_dialog is not None:
-                self._setup_dialog.message.setText(
-                    "No changed values or bindings; no history action"
-                )
-            return
-        self._numeric_history.push(action)
+        if action is not None:
+            self._numeric_history.push(action)
         self.project, self._numeric_draft = updated, draft
         self._validated_numeric = None
         self._launch_snapshot = None
@@ -2004,11 +2003,13 @@ class ShellWindow(QMainWindow):
                 acquisition = next(
                     v for v in updated.acquisitions if v.acquisition_id == acquisition_id
                 )
-                if cached is not None:
+                if cached is not None and cached.decoded_sha256 == acquisition.source_sha256:
                     self._resident_planes[acquisition_id] = replace(
                         cached, source_path=acquisition.source_path
                     )
-                elif acquisition_id == self.selected_acquisition_id:
+                else:
+                    self._resident_planes.pop(acquisition_id, None)
+                if acquisition_id == self.selected_acquisition_id:
                     self._deferred_import = (
                         acquisition.source_path,
                         acquisition_id,
@@ -2023,12 +2024,16 @@ class ShellWindow(QMainWindow):
                     "Exact reference identity checked by storage worker",
                 )
         self.refresh_project()
-        self._mark_dirty()
+        if action is not None:
+            self._mark_dirty()
+        message = (
+            "Reviewed snapshot committed as one undoable action; numeric receipts invalidated. Source files retained."
+            if action is not None
+            else "Saved identities revalidated; readiness refreshed without a history action."
+        )
         if self._setup_dialog is not None:
-            self._setup_dialog.message.setText(
-                "Reviewed snapshot committed as one undoable action; numeric receipts invalidated. Source files retained."
-            )
-        self.statusBar().showMessage("Reviewed setup/source snapshot committed")
+            self._setup_dialog.message.setText(message)
+        self.statusBar().showMessage(message)
 
     def _choose_relink(self) -> None:
         self._show_setup()
@@ -5528,7 +5533,7 @@ class ShellWindow(QMainWindow):
             self.physical.restore(value.document.view.physical_settings_json)
             self.joint.restore(value.document.view.joint_session)
             self._pending_joint = self._joint_context = None
-            self.sample.restore(value.document.view.sample_session)
+            self.sample.restore(value.document.view.sample_session, value.sample_input_checks)
             self._pending_sample = self._sample_context = None
             self.hbn.restore(value.document.view.hbn_sessions)
             self._pending_hbn = None

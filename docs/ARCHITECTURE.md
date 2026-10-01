@@ -382,7 +382,10 @@ CLI indexing/multistart/audit orchestration.
 and result history. `sample_io.py` binds canonical geometry/material, owner calls, record validation
 and external exports on the global worker; `sample_panel.py` owns explicit draft/selection and
 result-ID presentation. Schema 12 persists exact losslessly packed JSON; expanded bytes participate
-in memory admission. Project Open verifies records against canonical owners without solving. All
+in memory admission. Project Open admits saved structure and recorded qualification through canonical validators,
+then checks live source readiness separately. Missing or changed historical sample files retain
+inert inspectable history; matching live files still undergo the full prediction/residual validator
+without solving. Explicit revalidation restores readiness after exact original bytes return. All
 current/historical inputs and exported paths participate in project destination protection. The
 widgets contain no physical equations, and sample-only operation needs no hBN state. Selection
 never changes experiment geometry or supplies absent downstream qualification.

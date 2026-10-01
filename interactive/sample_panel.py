@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from sample_io import observation_id
-from sample_state import encoded, sample_session_document
+from sample_state import encoded, payload_hash, sample_session_document
 
 
 class SamplePanel(QDialog):
@@ -35,6 +35,7 @@ class SamplePanel(QDialog):
         super().__init__(shell)
         self.shell = shell
         self.session = None
+        self.input_checks = {}
         self.epoch = 0
         self._rendering = False
         self._draft_dirty = False
@@ -158,6 +159,9 @@ class SamplePanel(QDialog):
         self.name = QLineEdit("Sample geometry candidate")
         self.name.setMaxLength(256)
         form.addRow("New result name", self.name)
+        self.revalidate_button = self._button(
+            layout, "Revalidate saved source identities", lambda: self.request("revalidate")
+        )
         self.fit_button = self._button(layout, "Fit exact frozen observations", self.fit)
         self.results = QComboBox()
         self.results.currentIndexChanged.connect(self.present)
@@ -310,8 +314,10 @@ class SamplePanel(QDialog):
         )
 
     def request(self, operation, **extra):
-        if self.session is None or not self.inputs_match():
+        if self.session is None or (operation != "revalidate" and not self.inputs_match()):
             raise ValueError("Admit the current series and fitting masks first")
+        if operation not in ("revalidate", "export", "export_figure") and self.live_input_reason():
+            raise ValueError(self.live_input_reason())
         if self._draft_dirty:
             raise ValueError(
                 "Pending visible edits block work; commit the displayed controls/review first"
@@ -324,9 +330,16 @@ class SamplePanel(QDialog):
             self.context(),
         )
 
-    def store(self, session):
+    def store(self, session, input_checks=()):
         view = replace(self.shell._capture_view(), sample_session=session)
         self.shell._validate_project_admission(self.shell.project, view=view)
+        identities = {payload_hash(json.loads(session.inputs_json))} | {
+            payload_hash(json.loads(v)["launch"]["inputs"]) for v in session.results_json
+        }
+        checks = {**self.input_checks, **dict(input_checks)}
+        self.input_checks = {
+            identity: detail for identity, detail in checks.items() if identity in identities
+        }
         self.session = session
         self.epoch += 1
         self._draft_dirty = False
@@ -399,7 +412,7 @@ class SamplePanel(QDialog):
 
     def ready(self, value):
         previous_id = self.results.currentData()
-        self.store(value.session)
+        self.store(value.session, value.input_checks)
         if value.presented_result_id:
             self.results.setCurrentIndex(self.results.findData(value.presented_result_id))
         elif previous_id:
@@ -408,7 +421,16 @@ class SamplePanel(QDialog):
             value.operation.title() + " completed; qualification and selection remain explicit"
         )
 
-    def restore(self, session):
+    def live_input_reason(self, inputs=None):
+        if self.session is None:
+            return "No admitted sample inputs"
+        inputs = json.loads(self.session.inputs_json) if inputs is None else inputs
+        return self.input_checks.get(
+            payload_hash(inputs), "Live validation unavailable; revalidate saved source identities"
+        )
+
+    def restore(self, session, input_checks=()):
+        self.input_checks = dict(input_checks)
         self.session = session
         self.epoch += 1
         self._draft_dirty = False
@@ -420,7 +442,8 @@ class SamplePanel(QDialog):
         )
 
     def refresh(self):
-        valid = self.session is not None and self.inputs_match()
+        valid = self.session is not None and self.inputs_match() and not self.live_input_reason()
+        self.revalidate_button.setEnabled(self.session is not None and not self._draft_dirty)
         pending = self.shell._active_kind == "sample" or self.shell._pending_sample is not None
         self.cancel_button.setEnabled(pending)
         self.prepare_button.setEnabled(valid and not self._draft_dirty)
@@ -439,11 +462,14 @@ class SamplePanel(QDialog):
             self._presentation_record is not None
             and not self._draft_dirty
             and self._presentation_record["launch_sha256"] == self.session.launch_sha256
+            and not self.live_input_reason(self._presentation_record["launch"]["inputs"])
         )
         if self.session is not None:
             self.readiness.setText(
                 "Pending visible edits; Fit blocked"
                 if self._draft_dirty
+                else "Live validation unavailable: " + self.live_input_reason()
+                if self.live_input_reason()
                 else "Inputs/mask assignment changed; re-admit and prepare"
                 if not valid
                 else "Frozen exact reviewed pack: " + json.loads(self.session.frozen_json)["sha256"]
@@ -659,6 +685,10 @@ class SamplePanel(QDialog):
         status_lines = [
             record["name"],
             "Result ID: " + record["result_id"],
+            "Live source validation: unavailable / historical only - "
+            + self.live_input_reason(record["launch"]["inputs"])
+            if self.live_input_reason(record["launch"]["inputs"])
+            else "Live source identities: verified; saved qualification remains as recorded",
             "Dataset / parameter precision: UNQUALIFIED; downstream adoption unavailable.",
             "Solver: unavailable — " + record["unavailable_reason"]
             if fit is None
@@ -829,8 +859,11 @@ class SamplePanel(QDialog):
             or self._draft_dirty
             or not self.inputs_match()
             or record["launch_sha256"] != self.session.launch_sha256
+            or self.live_input_reason(record["launch"]["inputs"])
         ):
-            raise ValueError("Only a result of the current committed frozen launch can be selected")
+            raise ValueError(
+                "Only a live-validated result of the current committed frozen launch can be selected"
+            )
         self.store(replace(self.session, selected_result_id=record["result_id"]))
         self.status.setText(
             "Selected for inspection only. Dataset/precision qualification and downstream geometry adoption remain unavailable."

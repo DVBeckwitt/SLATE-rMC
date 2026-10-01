@@ -25,10 +25,17 @@ class SampleWorkResult:
     operation: str
     session: SampleSession
     presented_result_id: str | None = None
+    input_checks: tuple[tuple[str, str], ...] = ()
 
     @property
     def nbytes(self):
-        return self.session.nbytes + 8192
+        return (
+            self.session.nbytes
+            + 8192
+            + sum(
+                len(identity) + len(detail.encode()) + 128 for identity, detail in self.input_checks
+            )
+        )
 
 
 def sample_work_budget(other_cpu_bytes=0, other_gpu_bytes=0):
@@ -55,10 +62,21 @@ def observation_id(image_id, key):
     return payload_hash([image_id, key])
 
 
+class SampleInputsUnavailable(ValueError):
+    """A recorded live input is missing, unreadable or has different bytes."""
+
+
 def _current(inputs, control):
     for row in inputs["files"]:
-        if _hash_file(row["path"], control) != row["sha256"]:
-            raise ValueError("sample input changed since admission: " + row["path"])
+        _stop(control)
+        try:
+            digest = _hash_file(row["path"], control)
+        except OSError as exc:
+            raise SampleInputsUnavailable(
+                "sample input unavailable: " + row["path"] + ": " + str(exc)
+            ) from exc
+        if digest != row["sha256"]:
+            raise SampleInputsUnavailable("sample input changed since admission: " + row["path"])
 
 
 def _controls(image_count):
@@ -273,6 +291,27 @@ def freeze_sample(session):
     return replace(session, frozen_json=encoded(pack))
 
 
+def _saved_discovery(document):
+    """Read the canonical bounded discovery representation without a live geometry context."""
+    from rasim_next.selection.blind import (
+        BlindIndexingPolicy,
+        DiscoveredCakePeak,
+        MeasuredPeakDiscovery,
+    )
+    from rasim_next.selection.indexing import PeakIndexingPolicy
+
+    data = {k: v for k, v in document.items() if k != "discovery_hash"}
+    data["detector_shape_rc"] = tuple(data["detector_shape_rc"])
+    data["peaks"] = tuple(DiscoveredCakePeak(**v) for v in data["peaks"])
+    policy = dict(data["policy"])
+    policy["track_policy"] = PeakIndexingPolicy(**policy["track_policy"])
+    data["policy"] = BlindIndexingPolicy(**policy)
+    discovery = MeasuredPeakDiscovery(**data)
+    if discovery.discovery_hash != document["discovery_hash"]:
+        raise ValueError("saved sample discovery hash mismatch")
+    return discovery
+
+
 def _images(session, control):
     from rasim_next.fitting.geometry import (
         ExactTagGeometryModel,
@@ -287,13 +326,9 @@ def _images(session, control):
         rebind_configured_geometry_instrument,
     )
     from rasim_next.selection.blind import (
-        BlindIndexingPolicy,
-        DiscoveredCakePeak,
-        MeasuredPeakDiscovery,
         _discovery_geometry_hash,
         _indexing_context_hash,
     )
-    from rasim_next.selection.indexing import PeakIndexingPolicy
     from rasim_next.selection.osc_series import (
         build_osc_angle_frame,
         load_osc_geometry_series,
@@ -337,13 +372,7 @@ def _images(session, control):
             revision=f"osc-geometry-angle-frame.{declared.image_id}.v1",
         )
         d = next(v for v in prepared["discoveries"] if v["image_id"] == declared.image_id)
-        data = {k: v for k, v in d.items() if k != "discovery_hash"}
-        data["detector_shape_rc"] = tuple(data["detector_shape_rc"])
-        data["peaks"] = tuple(DiscoveredCakePeak(**v) for v in data["peaks"])
-        policy = dict(data["policy"])
-        policy["track_policy"] = PeakIndexingPolicy(**policy["track_policy"])
-        data["policy"] = BlindIndexingPolicy(**policy)
-        discovery = MeasuredPeakDiscovery(**data)
+        discovery = _saved_discovery(d)
         selected = next(
             v for v in original_selection.image_results if v.image_id == declared.image_id
         )
@@ -447,11 +476,8 @@ def _json_value(value):
     return value
 
 
-def validate_sample_result(record, session, control):
-    from rasim_next.fitting.indexed_series import (
-        evaluate_indexed_geometry_series_metrics,
-        evaluate_indexed_geometry_series_residual,
-    )
+def validate_sample_record(record, session):
+    """Admit saved integrity and recorded scope; live predictions remain a separate gate."""
 
     if (
         record["schema"] != "slate.sample-result.v1"
@@ -480,10 +506,24 @@ def validate_sample_result(record, session, control):
     )
     if record["launch_sha256"] != snapshot.launch_sha256:
         raise ValueError("sample result launch hash mismatch")
-    images = _images(snapshot, control)
-    args = _fit_arguments(launch["controls"], len(images))
+    if freeze_sample(snapshot).frozen_json != snapshot.frozen_json:
+        raise ValueError("sample historical launch differs from its canonical reviewed pack")
+    inputs = launch["inputs"]
+    _validate_input_bindings(inputs)
+    discoveries = launch["prepared"]["discoveries"]
+    if [v["image_id"] for v in discoveries] != [v["image_id"] for v in inputs["images"]]:
+        raise ValueError("saved sample discoveries differ from the launch image roster")
+    for document in discoveries:
+        _saved_discovery(document)
+    image_ids = tuple(sorted(v["image_id"] for v in inputs["images"]))
+    args = _fit_arguments(launch["controls"], len(image_ids))
     if record["outcome"] == "unavailable":
-        if record["fit"] is not None or not record["unavailable_reason"] or record["points"]:
+        if (
+            record["fit"] is not None
+            or not record["unavailable_reason"]
+            or record["points"]
+            or record["objective_residual"]
+        ):
             raise ValueError("unavailable sample record cannot carry a fitted outcome")
         return record
     if record["outcome"] != "candidate" or record["unavailable_reason"] is not None:
@@ -493,7 +533,7 @@ def validate_sample_result(record, session, control):
         raise ValueError("sample fit record is not the canonical owner result representation")
     # This uses the core result's existing structural/rank/condition predicate.
     if (
-        fit.image_ids != tuple(sorted(v.image_id for v in images))
+        fit.image_ids != image_ids
         or fit.fitted_parameter_names != args["fitted_parameter_names"]
         or fit.fitted_detector_calibration_parameter_names
         != args["fitted_detector_calibration_parameter_names"]
@@ -510,7 +550,7 @@ def validate_sample_result(record, session, control):
         + list(
             fit.incidence_angle_trim_contrast_rad
             if fit.incidence_angle_trim_fitted
-            else np.zeros(len(images) - 1)
+            else np.zeros(len(image_ids) - 1)
         )
     )
     for i, name in enumerate(controls["names"]):
@@ -518,13 +558,12 @@ def validate_sample_result(record, session, control):
             name not in controls["fitted"] and fitted_values[i] != controls["initial"][i]
         ):
             raise ValueError("sample fitted values violate recorded bounds/fixed references")
-    trims = dict(zip(fit.image_ids, fit.incidence_angle_trim_by_image_id_rad, strict=True))
     if fit.incidence_angle_trim_fitted:
         from rasim_next.fitting.indexed_series import zero_sum_helmert_basis
 
         if (
             not np.array_equal(
-                zero_sum_helmert_basis(len(images)) @ fit.incidence_angle_trim_contrast_rad,
+                zero_sum_helmert_basis(len(image_ids)) @ fit.incidence_angle_trim_contrast_rad,
                 fit.incidence_angle_trim_by_image_id_rad,
             )
             or fit.incidence_angle_trim_prior_sigma_rad
@@ -533,6 +572,90 @@ def validate_sample_result(record, session, control):
             != args["incidence_angle_trim_contrast_half_span_rad"]
         ):
             raise ValueError("sample trims disagree with the Helmert basis/launch")
+    expected_points = [
+        (obs["image_id"], identity, key, xy)
+        for obs in launch["pack"]["observations"]
+        for identity, key, xy in zip(
+            obs["observation_ids"], obs["keys"], obs["coordinates_px"], strict=True
+        )
+    ]
+    actual_points = [
+        (p["image_id"], p["observation_id"], p["key"], p["observed_px"]) for p in record["points"]
+    ]
+    if actual_points != expected_points:
+        raise ValueError("sample historical points disagree with frozen observations")
+    for point in record["points"]:
+        values = np.asarray(
+            [point[n] for n in ("observed_px", "predicted_px", "residual_px")], dtype=np.float64
+        )
+        if (
+            values.shape != (3, 2)
+            or not np.all(np.isfinite(values))
+            or not np.array_equal(values[1] - values[0], values[2])
+        ):
+            raise ValueError("sample historical point coordinates/residuals are inconsistent")
+    counts = {obs["image_id"]: len(obs["keys"]) for obs in launch["pack"]["observations"]}
+    if any(metric.site_count != counts[metric.image_id] for metric in fit.per_image):
+        raise ValueError("sample historical metric counts disagree with frozen observations")
+    residual = np.asarray(record["objective_residual"], dtype=np.float64)
+    expected_count = sum(2 * v.site_count + v.chord_count for v in fit.per_image)
+    if residual.shape != (expected_count,) or not np.all(np.isfinite(residual)):
+        raise ValueError("sample historical objective residual shape/values are invalid")
+    return record
+
+
+def _validate_input_bindings(inputs):
+    if inputs["schema"] != "slate.sample-inputs.v1":
+        raise ValueError("unsupported saved sample input schema")
+    files = inputs["files"]
+    paths = [v["path"] for v in files]
+    required = {inputs[k] for k in ("manifest_path", "configuration_path", "cif_path")} | {
+        v["path"] for v in inputs["images"]
+    }
+    if len(paths) != len(set(paths)) or set(paths) != required:
+        raise ValueError("saved sample input file bindings are incomplete or duplicated")
+    for row in files:
+        if (
+            not isinstance(row["path"], str)
+            or not 0 < len(row["path"]) <= 4096
+            or not Path(row["path"]).is_absolute()
+        ):
+            raise ValueError("saved sample inputs need bounded absolute paths")
+        digest = row["sha256"]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
+            raise ValueError("saved sample inputs need SHA-256 identities")
+    for image in inputs["images"]:
+        mask = mask_from_document(image["mask"])
+        if mask.source_sha256 != image["decoded_sha256"] or list(mask.shape) != image["shape_rc"]:
+            raise ValueError("saved sample source/native mask binding is inconsistent")
+
+
+def validate_sample_result(record, session, control):
+    """Require full original live geometry and prediction checks before active use/export."""
+    from rasim_next.fitting.indexed_series import (
+        evaluate_indexed_geometry_series_metrics,
+        evaluate_indexed_geometry_series_residual,
+    )
+
+    validate_sample_record(record, session)
+    launch = record["launch"]
+    snapshot = SampleSession(
+        session.session_id,
+        encoded(launch["inputs"]),
+        encoded(launch["controls"]),
+        prepared_json=encoded(launch["prepared"]),
+        exclusions=tuple(tuple(v) for v in launch["pack"]["review"]),
+        frozen_json=encoded(launch["pack"]),
+    )
+    images = _images(snapshot, control)
+    if record["outcome"] == "unavailable":
+        return record
+    fit = _fit_from_document(record["fit"])
+    trims = dict(zip(fit.image_ids, fit.incidence_angle_trim_by_image_id_rad, strict=True))
     kwargs = dict(
         detector_calibration_corrections=fit.detector_calibration_corrections,
         incidence_angle_delta_rad=fit.incidence_angle_delta_rad,
@@ -561,6 +684,33 @@ def validate_sample_result(record, session, control):
             "sample record coordinates/residuals/metrics disagree with the canonical owner"
         )
     return record
+
+
+def sample_input_checks(session, control):
+    """Keep unavailable live files distinct from malformed saved records and model failures."""
+    _validate_input_bindings(json.loads(session.inputs_json))
+    records = [json.loads(text) for text in session.results_json]
+    for record in records:
+        validate_sample_record(record, session)
+    inputs_by_hash = {
+        payload_hash(json.loads(session.inputs_json)): json.loads(session.inputs_json)
+    }
+    inputs_by_hash.update(
+        (payload_hash(v["launch"]["inputs"]), v["launch"]["inputs"]) for v in records
+    )
+    checks = []
+    for identity, inputs in inputs_by_hash.items():
+        _stop(control)
+        try:
+            _current(inputs, control)
+            for record in records:
+                if payload_hash(record["launch"]["inputs"]) == identity:
+                    validate_sample_result(record, session, control)
+        except SampleInputsUnavailable as exc:
+            checks.append((identity, str(exc)))
+        else:
+            checks.append((identity, ""))
+    return tuple(checks)
 
 
 def sample_protected_paths(session):
@@ -692,7 +842,11 @@ def sample_work(argument, control):
     with threadpool_limits(limits=1):
         _stop(control)
         presented = None
-        if operation == "load":
+        checks = ()
+        if operation == "revalidate":
+            session = sample_session_from_document(request["session"])
+            checks = sample_input_checks(session, control)
+        elif operation == "load":
             manifest = Path(request["manifest_path"]).resolve(strict=True)
             manifest_hash = _hash_file(manifest, control)
             series = load_osc_geometry_series(manifest)
@@ -909,7 +1063,9 @@ def sample_work(argument, control):
                 session = _export(request, session, control)
             else:
                 raise ValueError("unknown sample operation")
-        _current(json.loads(session.inputs_json), control)
+        if operation != "revalidate":
+            _current(json.loads(session.inputs_json), control)
+            checks = ((payload_hash(json.loads(session.inputs_json)), ""),)
         _stop(control)
-        result = SampleWorkResult(operation, session, presented)
+        result = SampleWorkResult(operation, session, presented, checks)
         return JobResult(result, result.nbytes)

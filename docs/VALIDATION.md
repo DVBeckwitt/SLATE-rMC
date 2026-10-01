@@ -108,3 +108,29 @@ new qualification, Jacobian, full image, sweep or performance campaign ran. Miss
 handoff provenance (B021), genuine Se/full-joint admission and other existing gaps remain open.
 The closure01 external index retains original failures, exact disposable methods, command budget,
 protected evidence and final source hashes. Task12 partial files and its rejected patch stay parked.
+
+## R2a source identity and history recovery checks (2026-10-01)
+
+The original Relink reference race was reproduced with actual verification/hash methods: changed
+CIF bytes were adopted before repair. Focused repaired checks reject CIF/configuration races,
+wrong same-path restoration and stale publication without changing binding/history/verified state.
+Exact reference relocation and same-path OSC/CIF/configuration restoration work through the
+actual worker, review and publication paths. Restored selected OSC becomes usable without an undo
+edit. Different gzip bytes with the same decoded OSC identity relocate correctly; a changed decoded
+payload or canceled verification is rejected.
+
+Actual Open with disposable missing OSC, changed configuration and missing CIF restores unrelated
+state and unchanged genuine sample history, showing unavailable live readiness and blocking Fit
+and selection. Explicit matching-byte revalidation restores readiness without rewriting history.
+A missing historical-only image under a different current roster does not block Open; restoring it
+does not make that historical launch current. Hash-recomputed qualification/rank/point tampering
+still rejects Open atomically. Typed discovery/hash, frozen pack, finite residual and input binding
+checks remain active even when live reconstruction is unavailable.
+
+Fixtures relocate copies of genuine retained inputs and recompute only path/binding hashes;
+fitted values, points and qualification are unchanged. Ordinary matching-live validation recomputes
+existing saved predictions/residuals/metrics, with no solver, fresh preparation, Jacobian or new
+numerical qualification. Exact transient readiness publication/resource accounting, stale/cancel
+and software compatibility checks are recorded in the external r2a completion index. Prior R1
+fixes/evidence, parked Task12 files/patch and main remain unchanged. R2b/R2c and other existing gaps
+are outside this assignment; root decides bug closure and original-condition acceptance.
