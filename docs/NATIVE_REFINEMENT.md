@@ -35,6 +35,39 @@ signal/background contributions under protected peaks. The expanded-support Bi2S
 procedure and comparison limits are recorded in
 [STAGED_FITTING.md](STAGED_FITTING.md#expanded-support-bi2se3-background-fit).
 
+## Declared spatial count discrepancy
+
+`SpatialCountDiscrepancy` is an opt-in zero-mean Gaussian residual field. The caller
+freezes native `(column,row)` centers, `basis_width_px` and `sigma_count_per_pixel`.
+For native pixel p and center c_j, define g_j(p) = exp(-||p-c_j||^2/(2w^2)) and
+Phi_j(p) = sigma g_j(p)/sqrt(sum_k g_k(p)^2). Thus each pixel has variance sigma^2;
+the induced covariance is Phi(p) dot Phi(q). The finite normalized grid gives a
+nonstationary cosine kernel. The basis width is not its correlation length.
+
+`project_modes` returns U = W Phi through the literal fractional or signed native
+pixel memberships. Shared pixels share one field; no footprint-area normalization
+is applied. Form C = C_working_count + U U^T once and use the existing full SPD
+`NativeFitObservations` Cholesky and quadratic GLS. No diagonal jitter, extra
+whitening path, residual variance rescaling or robust loss is introduced.
+
+For joint exponential-background profiling, supply raw counts and the working count
+covariance. Do not use the historical loader's background-subtracted counts or add
+its beta jackknife modes: beta is already profiled in the mean. Bind raw counts,
+validity/order, working covariance, mode arrays, construction and scenario to
+`input_revision`. Keep C fixed during physical optimization. Its Gaussian log determinant
+is constant within that scenario; record it, and never compare unlike scenario
+quadratic scores as a physical improvement. Estimating C jointly would require the
+Gaussian determinant and conditioning terms as well as independent identification.
+
+Use the same field to propagate covariance into protected signed contrasts and
+continuous profiles through their actual overlaps. They remain diagnostics rather
+than duplicate likelihood rows. Control-derived amplitudes can contain diffraction
+and counting fluctuations; explicit assumptions support conditional sensitivity,
+not calibrated coverage or identification of detector noise. A second scenario with
+larger amplitude and identical modes/basis width has a positive-semidefinite covariance
+increment. Qualification must still bound absolute count/feature numerical error and
+the error under the scenario covariance; a larger C cannot qualify unchanged quadrature.
+
 ## Shared material boundary
 
 `NativeRefinementModel` supplies ordered parameter names/units, `bind(values, N)`
