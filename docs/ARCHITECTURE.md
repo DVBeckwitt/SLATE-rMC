@@ -443,3 +443,13 @@ Geometry-derived centers read matching genuine saved hBN or supported sample res
 qualification, and record result/observation/input hashes. Explicit adoption updates initial values
 and provenance with one history transaction. It never adds observations. Physical preview and
 sensitivity jobs are bounded geometry calculations and do not consume joint handoff exports.
+
+
+### Desktop comparison and reviewed copy dispatch
+
+Comparison presenters retain one authoritative shared raw-count contrast tuple and acquisition/
+source-bound independent tuples. Replacement admission reapplies shared limits, including pending
+retained views; export requires current settled inputs. Persistence stores each current independent
+view plus the shared tuple, so unlock after Open restores the correct occupants' limits.
+Confirmed source-copy plans retain the setup context through deferred dispatch. The existing
+pending-request/context gate rejects obsolete confirmation before starting the copy worker.

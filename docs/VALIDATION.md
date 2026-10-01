@@ -134,3 +134,25 @@ numerical qualification. Exact transient readiness publication/resource accounti
 and software compatibility checks are recorded in the external r2a completion index. Prior R1
 fixes/evidence, parked Task12 files/patch and main remain unchanged. R2b/R2c and other existing gaps
 are outside this assignment; root decides bug closure and original-condition acceptance.
+
+
+## R2b comparison and copy checks (2026-10-01)
+
+Actual pre-fix panel admission reproduced divergent locked limits and old-occupant limits on unlock.
+A confirmed-plan routing fixture reproduced stale dispatch. Final checks use three explicitly
+synthetic 16x24 raw OSC display fixtures, with no generated scientific image or prediction. Actual
+panel admission covers linear/signed/positive-log contrast, replacement of either slot, pending,
+failed and stale input, cached return and pending unlock. Actual shell export metadata agrees with
+displayed shared limits; locked/unlocked Save/Open preserves exact independent and shared state.
+
+Actual review worker/confirmation/deferred dispatch rejects changed project/revision/selection/
+target contexts before copying, with unchanged binding/history and empty fixture destinations.
+An unchanged confirmation copies a display OSC and genuine standalone CIF, verifies exact bytes,
+publishes one history action and survives Save/Open. Changed source bytes and pending cancellation
+write nothing. Existing copy owners separately retain genuine configuration/dependent-CIF identity
+and relative-path rewriting. Only timing/context or destination choice is controlled by fixtures.
+
+The external r2b index retains failed checks, exact disposable methods, protected evidence, source
+hashes and whole-command allowance. Software checks do not establish numerical or performance
+qualification. B002/B007/B009/B010/B021 and other root gaps remain outside this card; root owns bug
+closure and original-condition acceptance. Task12 remains parked and main remains unchanged.

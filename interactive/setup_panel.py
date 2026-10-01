@@ -327,7 +327,7 @@ class SetupDialog(QDialog):
                 for r in rows
             )
             if self.confirm("Review source storage", lines) and shell._setup_context_current():
-                shell._pending_setup_copy = value
+                shell._pending_setup_copy = (value, shell._setup_context)
             else:
                 self.message.setText("Copy review canceled or stale; no files copied")
         elif isinstance(value, SetupApplication):

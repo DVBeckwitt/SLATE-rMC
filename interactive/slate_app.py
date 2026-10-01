@@ -1677,8 +1677,17 @@ class ShellWindow(QMainWindow):
                 QTimer.singleShot(0, self._dispatch_pending)
                 return
         if self._pending_setup_copy is not None:
-            plan, self._pending_setup_copy = self._pending_setup_copy, None
-            self._start_setup("copy", {"plan": plan})
+            plan, context = self._pending_setup_copy
+            self._pending_setup_copy = None
+            if context == (
+                self.project.project_id,
+                self._revision,
+                self.selected_acquisition_id,
+                self._selected_project_ids(),
+            ):
+                self._start_setup("copy", {"plan": plan})
+            elif self._setup_dialog is not None:
+                self._setup_dialog.message.setText("Confirmed copy became stale; review again")
             return
         if self._pending_setup_request is not None:
             request, context = self._pending_setup_request

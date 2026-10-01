@@ -1190,3 +1190,21 @@ live readiness are available. Full geometry/provenance/prediction/residual/metri
 mandatory on restored live record validation, import, export and supported active use. Explicit
 Revalidate saved source identities uses the existing admitted worker and context checks, without
 preparing observations or solving. Revalidation does not rewrite recorded inputs or fit outcomes.
+
+
+## Desktop comparison replacement and copy confirmation
+
+A locked comparison has one shared `(low, high, contrast mode)` in raw native counts. Independent
+limits bind both acquisition UUID and decoded source identity. Replacing either slot admits that
+image's own independent limits and reapplies the shared tuple. Pending/failed replacement retains
+the prior visible snapshot under shared limits and disables export; stale admission changes nothing.
+Changing contrast during incomplete replacement retains the authoritative shared tuple. Returning
+to the previous cached image preserves its independent limits, including unlock while pending.
+Save/Open preserves shared intent and current independent views; no units, normalization, mask,
+support or detector-coordinate transformation changes. Compatible navigation retains its own gate.
+
+A confirmed immutable copy plan carries the project UUID, revision, selected acquisition and exact
+target roster from review. Deferred dispatch compares that captured context before any worker
+launch or destination write. A mismatch discards the confirmation and requires review again. An
+unchanged context uses the existing no-overwrite, byte-verified copy and atomic binding path, with
+its original identity, dependent-CIF, cancellation and stale-publication checks.

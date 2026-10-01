@@ -152,6 +152,7 @@ class ComparisonPanel(QWidget):
         self.pin_unavailable_reason = None
         self._restore = [None, None]
         self._independent_levels = [None, None]
+        self._shared_limits = None
         self._link_guard = False
         self._magnifier_key = None
         self._pin_plot_key = None
@@ -350,6 +351,7 @@ class ComparisonPanel(QWidget):
         if chosen == self.desired[slot]:
             return
         self.desired[slot] = chosen
+        self._restore[slot] = None
         self.ready[slot] = False
         old = self.acquisitions[slot]
         self.labels[slot].setText(
@@ -360,6 +362,7 @@ class ComparisonPanel(QWidget):
         self.cut_keys[slot] = None
         self.cut_pending[slot] = False
         self.cut_plots[slot].set_samples(None, None, None, "Preparing current image")
+        self.update_frames()
         self.selection_requested.emit(slot, chosen)
         self.state_changed.emit()
 
@@ -403,6 +406,7 @@ class ComparisonPanel(QWidget):
         self.planes[slot] = plane
         self.frames[slot] = frame
         if changed:
+            self.ready[slot] = False
             panel.set_prepared_image(
                 plane.native_counts,
                 plane.display,
@@ -424,7 +428,26 @@ class ComparisonPanel(QWidget):
                 v.crosshair = (restore.column_px, restore.row_px)
                 panel.restore_profile_state(restore)
                 v.set_levels(restore.low_value, restore.high_value, mode=restore.contrast_mode)
+            owner = (acquisition.acquisition_id, acquisition.source_sha256)
+            independent = self._independent_levels[slot]
+            if independent is not None and independent[0] == owner:
+                low, high, mode = independent[1]
+                panel.view.set_levels(low, high, mode=mode)
+            else:
+                v = panel.view
+                self._independent_levels[slot] = (
+                    owner,
+                    (v.low_value, v.high_value, v.contrast_mode),
+                )
             panel.view.inspection_line = self.lines[slot]
+        elif not self.ready[slot] and not self.lock_limits.isChecked():
+            independent = self._independent_levels[slot]
+            if independent is not None and independent[0] == (
+                acquisition.acquisition_id,
+                acquisition.source_sha256,
+            ):
+                low, high, mode = independent[1]
+                panel.view.set_levels(low, high, mode=mode)
         expected = acquisition.mask.revision if acquisition.mask else 0
         matched = (
             mask is not None
@@ -469,6 +492,24 @@ class ComparisonPanel(QWidget):
             else "Independent native pixel frames; link unavailable: missing or incompatible verified detector calibration"
         )
         self.lock_limits.setEnabled(all(self.ready))
+        if all(self.ready) and self._restored_limits is not None:
+            self._shared_limits, self._restored_limits = self._restored_limits, None
+            self.lock_limits.blockSignals(True)
+            self.lock_limits.setChecked(True)
+            self.lock_limits.blockSignals(False)
+        if self.lock_limits.isChecked() and self._shared_limits is not None:
+            low, high, mode = self._shared_limits
+            self._link_guard = True
+            try:
+                for panel in self.panels:
+                    if (
+                        panel.view.image is not None
+                        and (panel.view.low_value, panel.view.high_value, panel.view.contrast_mode)
+                        != self._shared_limits
+                    ):
+                        panel.view.set_levels(low, high, mode=mode)
+            finally:
+                self._link_guard = False
         settled = (
             all(self.ready)
             and not any(self.cut_pending)
@@ -481,12 +522,6 @@ class ComparisonPanel(QWidget):
             )
         )
         self.export_button.setEnabled(settled)
-        if all(self.ready) and self._restored_limits is not None:
-            limits, self._restored_limits = self._restored_limits, None
-            self.lock_limits.setChecked(True)
-            self.panels[self.active.currentIndex()].view.set_levels(
-                limits[0], limits[1], mode=limits[2]
-            )
         if compatible and self._restored_link:
             self._restored_link = False
             self.link.setChecked(True)
@@ -515,8 +550,18 @@ class ComparisonPanel(QWidget):
                 target._request_paint()
                 target.view_state_changed.emit()
             if self.lock_limits.isChecked() and all(self.ready):
+                self._shared_limits = (source.low_value, source.high_value, source.contrast_mode)
                 other = self.panels[1 - slot].view
                 other.set_levels(source.low_value, source.high_value, mode=source.contrast_mode)
+            elif self.lock_limits.isChecked() and self._shared_limits is not None:
+                low, high, mode = self._shared_limits
+                source.set_levels(low, high, mode=mode)
+            elif self.ready[slot]:
+                acquisition = self.acquisitions[slot]
+                self._independent_levels[slot] = (
+                    (acquisition.acquisition_id, acquisition.source_sha256),
+                    (source.low_value, source.high_value, source.contrast_mode),
+                )
             self.refresh_magnifier()
             self.state_changed.emit()
         finally:
@@ -527,15 +572,31 @@ class ComparisonPanel(QWidget):
             return
         if enabled:
             self._independent_levels = [
-                (p.view.low_value, p.view.high_value, p.view.contrast_mode) for p in self.panels
+                (
+                    (a.acquisition_id, a.source_sha256),
+                    (p.view.low_value, p.view.high_value, p.view.contrast_mode),
+                )
+                if a is not None and self.ready[slot]
+                else None
+                for slot, (a, p) in enumerate(zip(self.acquisitions, self.panels, strict=True))
             ]
             self._navigate(self.active.currentIndex())
         else:
+            self._shared_limits = None
             self._link_guard = True
             try:
-                for panel, levels in zip(self.panels, self._independent_levels, strict=True):
-                    if panel.view.image is not None and levels is not None:
-                        panel.view.set_levels(levels[0], levels[1], mode=levels[2])
+                for slot, (panel, independent) in enumerate(
+                    zip(self.panels, self._independent_levels, strict=True)
+                ):
+                    acquisition = self.acquisitions[slot]
+                    if (
+                        self.ready[slot]
+                        and independent is not None
+                        and independent[0]
+                        == (acquisition.acquisition_id, acquisition.source_sha256)
+                    ):
+                        low, high, mode = independent[1]
+                        panel.view.set_levels(low, high, mode=mode)
             finally:
                 self._link_guard = False
         self._sync_active()
@@ -873,17 +934,19 @@ class ComparisonPanel(QWidget):
             panel_view_state(p) if self.ready[slot] else self._restore[slot]
             for slot, p in enumerate(self.panels)
         ]
-        shared = None
-        if self.lock_limits.isChecked() and all(self.ready):
-            v = self.panels[self.active.currentIndex()].view
-            shared = (v.low_value, v.high_value, v.contrast_mode)
-            for slot, levels in enumerate(self._independent_levels):
-                if views[slot] is not None and levels is not None:
+        shared = self._shared_limits if self.lock_limits.isChecked() else self._restored_limits
+        if shared is not None:
+            for slot, independent in enumerate(self._independent_levels):
+                acquisition = self.acquisitions[slot]
+                if (
+                    views[slot] is not None
+                    and independent is not None
+                    and acquisition is not None
+                    and independent[0] == (self.desired[slot], acquisition.source_sha256)
+                ):
+                    low, high, mode = independent[1]
                     views[slot] = replace(
-                        views[slot],
-                        low_value=levels[0],
-                        high_value=levels[1],
-                        contrast_mode=levels[2],
+                        views[slot], low_value=low, high_value=high, contrast_mode=mode
                     )
         return ComparisonState(
             tuple(self.desired),
@@ -898,6 +961,8 @@ class ComparisonPanel(QWidget):
         )
 
     def restore_state(self, state: ComparisonState) -> None:
+        self._independent_levels = [None, None]
+        self._shared_limits = None
         self.acquisitions = [None, None]
         self.planes = [None, None]
         self.ready = [False, False]
