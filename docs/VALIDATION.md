@@ -252,3 +252,33 @@ Formatting/lint/import/build establish software compatibility only. No fit, pred
 observation preparation, new full scientific image, sweep or performance campaign runs. The external
 R7a index records methods, sources/artifacts, protected evidence, failures and whole-command budgets.
 Main/Task12 remain untouched; root owns original U14 acceptance. R4 Run/adoption and R7b are separate.
+
+
+## R6 acquisition-review implementation checks (2026-10-01)
+
+Temporary external Qt actions used a new copied project derived from genuine compressed
+OSC/hBN state and separately genuine prepared/joint records. The OSC and frozen decoded
+NPZ intentionally retain independent original identities. Actual source review, typed
+current/historical observation inspection, signed negative counts, full 1322-row covariance,
+complete observation metadata, unchanged original definitions/history/pending edits,
+explicit draft routing and ordinary autosave/Open passed. One real archive export/import
+preserved review metadata, predecessor bytes and scientific records; a new copy of its
+imported project supported typed frozen inspection after explicit storage relocation.
+
+Labeled non-solving worker fixtures intercepted real dispatch and covered exact input
+arguments, source/mask/calibration changes before queueing, source/mask/calibration/recipe
+changes during work, stale receipts, active/queued cancellation and native Close/drain.
+Exact Relink to a new copy of genuine OSC, changed bytes after worker review, malformed and
+missing source handling, missing immutable output identity and bounded malformed pending
+state also passed. Fixtures were never scientific/qualified results. Original temporary
+check failures included an Open/automatic-import settling race, an incorrect assumption
+that a synthetic display fixture had a mask, and a tuple/list comparison error in archive
+inspection. Their outputs are retained; correcting them did not weaken production gates.
+
+Formatting/lint, import/syntax and offline package construction establish software
+compatibility only. Numerical observation preparation, prediction/Jacobian evaluation,
+fitting, new scientific images and performance campaigns were not run. Existing R3/R7
+loader/archive evidence remains relevant where source is unchanged. No numerical recipe
+or new background truth is qualified by these checks. B014 and B024 remain later closure
+items; their campaigns were not repeated. Exact disposable methods and final evidence/
+source hashes are retained externally and temporary check code is removed at handoff.

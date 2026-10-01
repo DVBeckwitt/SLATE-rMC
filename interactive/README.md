@@ -622,3 +622,54 @@ fit, prediction, observation preparation or scientific/performance campaign was 
 adoption, R5 execution and R6 preparation remain unavailable. B014's equivalent 64-source
 long-reference trigger met the original 12-second autosave and 8-second drain limits; the
 original timeout remains unexplained and root-owned, rather than a claimed deadlock/data-loss fix.
+
+
+## Acquisition review and frozen-output handoff (R6)
+
+Open **Acquisition preparation / frozen outputs**. Select a current imported OSC and one
+of the explicitly listed preparation scopes. **Review current inputs** reads exact source
+bytes and decoded OSC identity, native shape and recorded reference hashes on the shared
+worker. The receipt retains the native mask, metadata revision, setup receipt, initial
+proposals, current geometry-owner digests and original qualification labels. Pending notes
+are proposals only. Dark/mask acquisition links are reviewed as identities; no subtraction,
+background transfer or numerical membership is created by this panel.
+
+**Numerical Prepare unavailable** shows the concrete missing recipe or execution boundary.
+There is no currently admitted complete new raw-acquisition recipe in this workflow.
+The existing frozen-adoption script verifies frozen measurements; it does not specify a
+new background or signal/control layout. Its execution/publication integration remains
+outside this delivery. Future parameter rosters are not prerequisites for input review.
+
+Choose a retained prepared description and **Inspect frozen counts / full covariance**.
+The existing typed owner reads original physics, observation, plan and array identities,
+including explicitly relocated archive bytes. Original raw/background/signed corrected
+counts, validity and frozen row IDs remain ordered; the full covariance is retained.
+Marginal uncertainty is displayed separately and never replaces cross-row covariance.
+The complete observation JSON, including extra provenance and background/control metadata,
+is displayed without discarding unknown fields. Selecting another description clears
+previous displayed arrays until that description is inspected. Inspection does not replace
+the current description, original parameter definition, pending text or result history.
+
+Frozen-output selection is independent of imported OSC selection. A saved decoded NPZ
+cannot be silently identified with another OSC by matching sample names. The original raw
+kind/hash, physical binding and frozen geometry remain authoritative; current geometry is
+not adopted or reprojected. **Open prepared draft / stage editor** opens the existing editor
+with the selected immutable description. Historical starts require explicit compatible
+reuse through that owner. Current engine capabilities are displayed separately from
+original definitions. Fitting Run and indexed adoption remain unavailable.
+
+Schema 18 stores pending selections/notes, selected description SHA256 and at most eight
+immutable input review receipts, within 128 KiB and the existing project admission.
+Each receipt is at most 32 KiB; notes are at most 8 KiB. Remove an old review explicitly
+at the limit. Scientific output/history stays with NativeFitSession and existing named
+attempts. Save/Open, autosave, independent copies and recovery use existing project state.
+Changes to source, mask, calibration, geometry or controls cancel stale review work;
+historical receipts remain inspectable and never assert current scientific readiness.
+
+Archive **views** includes acquisition reviews and their exact verified predecessor bytes.
+Select all acquisition/geometry/prepared dependencies when retaining those reviews.
+Import preserves receipt/owner identities and uses the existing explicit storage map;
+original receipt paths remain historical provenance. Missing historical dependencies
+block a self-contained export until that review is removed or views are deselected.
+Review generates no external scientific files. Cancel/Open/Close use the one shared
+worker and existing drain; previous reviews and drafts remain intact.

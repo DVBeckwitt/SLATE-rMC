@@ -546,3 +546,37 @@ to the newest preceding owned receipt at dispatch. Unknown/changed recovery file
 These checks preserve a previous valid file before commit, without claiming cross-process
 locking, filesystem-wide atomicity or power-loss durability. Existing physical/qualification
 validators and explicit definition-compatibility gates remain authoritative.
+
+
+### Acquisition review and historical frozen inspection (R6)
+
+`preparation_state.py` owns bounded review metadata; `preparation_io.py` performs read-only
+OSC/reference identity checks; `preparation_panel.py` routes immutable output identities
+to the existing prepared inspector/editor. Schema 18 reads schemas 1-17 with empty review
+state. The shell uses its existing worker, resource admission, queued cancellation,
+generation/context checks and Close/Open drain. No numerical preparation owner or second
+worker is added. Receipts preserve explicit native masks/calibration revisions and hashes
+of delivered geometry owners, rather than silently adopting their values.
+
+| Scope | Existing authoritative owner | Available evidence and current limit |
+| --- | --- | --- |
+| New raw acquisition | No complete recipe in the current native workflow | Requires a declared fixed signal/control membership, calibrated background transfer and full shared covariance with independent qualification. Projectors alone do not supply these decisions. Numerical Prepare unavailable. |
+| Frozen observation adoption | `scripts/prepare_native.py:prepare` | Existing frozen projection integrates declared raw/variance; measured rows require exact equality, covariance rtol 1e-12/atol 1e-8, signed net atol 1e-8. Background already owns any dark subtraction. These are verification tolerances, not evidence of new background truth. The unchanged script has no independently admitted cooperative desktop execution/publication boundary. |
+| Frozen catalog selection | `prepare_native.py:prepare_catalog`, `configs/native_experiments.json` | b4, bi2se3, bi2te3, clean1, gd1, sid1 reference exact existing observation/physics bytes. The historical Bi2Te3 baseline is nominal and numerically unqualified. Selection supplies no new-acquisition recipe or desktop execution boundary. |
+| Fixed native pixel membership | `measurement/continuous_regions.py`, `region_observations.py`, `angle_space.py` | Explicit projector primitives preserve native membership and shared count covariance; their caller must supply calibrated observables, fields/variance and background transfer. No new numerical evaluation performed for R6. |
+| Geometric ring observations | `fitting/hbn.py:prepare_hbn_ring_observations` / existing hBN desktop owner | Narrow geometric calibrant route. Its genuine retained qualification remains with hBN; it does not define native ordered-intensity background preparation. |
+| Frozen typed inspection and plan editing | `fitting/native_observations.py`, existing `native_fit_io.py` / `native_fit_panel.py` | Reads exact genuine frozen rows, signed counts and full count covariance plus background-modes covariance. R6 extends historical inspection without replacing definitions or pending edits. Current geometry is not reprojected. Draft routing does not connect fitting execution. |
+
+The optional geometry-bound adoption script path replays exact-tag geometry predictions;
+it is not exercised here. Protected preparation/refinement scripts and the parked Task12
+integration remain untouched. Review notes, stored manifests and unknown metadata are
+inert evidence, never executable requests. No parameter defaults, background assumptions,
+row reordering, normalization, diagonal covariance substitution or new qualification is
+introduced. Immutable observation bytes bind the complete metadata displayed by inspection.
+
+Review receipts participate in existing archive inventory and destination protection.
+Original paths remain immutable evidence while explicit storage relocation supplies bytes.
+Large observation arrays remain external and load only for explicit typed inspection.
+U11e/U11f numerical preparation and U11g end-to-end stage readiness remain unsupported;
+R6 delivers independent review/inspection/draft mechanisms. Acceptance belongs to the
+roadmap owner and is not inferred from these software checks.
