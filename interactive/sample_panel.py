@@ -684,36 +684,89 @@ class SamplePanel(QDialog):
         launch = record["launch"]["controls"]
         current = json.loads(self.session.controls_json)
         fit = record["fit"]
-        fitted = (
-            launch["initial"]
-            if fit is None
-            else [fit["corrections"][n] for n in launch["names"][:9]]
-            + [fit["detector_calibration_corrections"][n] for n in launch["names"][9:12]]
-            + [fit["incidence_angle_delta_rad"]]
-            + (fit["incidence_angle_trim_contrast_rad"] or [0.0] * (len(launch["names"]) - 13))
+        historical_inputs = record["launch"]["inputs"]
+        current_inputs = json.loads(self.session.inputs_json)
+
+        def setup_identity(inputs):
+            keys = (
+                "phase_id",
+                "fixed_instrument",
+                "nominal_mean_direction_lab",
+                "nominal_mean_wavelength_A",
+                "source_policy",
+                "incidence_axis_index",
+                "configuration_path",
+                "cif_path",
+            )
+            paths = {inputs["configuration_path"], inputs["cif_path"]}
+            return [
+                {k: inputs[k] for k in keys},
+                sorted((v["path"], v["sha256"]) for v in inputs["files"] if v["path"] in paths),
+            ]
+
+        def ordered_images(inputs):
+            # The canonical fit constructs its Helmert basis in sorted image-ID order.
+            return sorted(
+                (v["image_id"], v["decoded_sha256"], v["axis_rotation_angles_deg"])
+                for v in inputs["images"]
+            )
+
+        compatible_setup = setup_identity(historical_inputs) == setup_identity(current_inputs)
+        compatible_trims = compatible_setup and ordered_images(historical_inputs) == ordered_images(
+            current_inputs
         )
+        current_values = dict(zip(current["names"], current["initial"], strict=True))
+        fitted = (
+            {}
+            if fit is None
+            else {
+                **fit["corrections"],
+                **fit["detector_calibration_corrections"],
+                "incidence_angle_delta_rad": fit["incidence_angle_delta_rad"],
+            }
+        )
+        trim_names = [n for n in launch["names"] if n.startswith("incidence_angle_trim_helmert_")]
+        if fit is not None:
+            contrasts = fit["incidence_angle_trim_contrast_rad"]
+            if contrasts:
+                fitted.update(zip(trim_names, contrasts, strict=True))
+            else:
+                fitted.update(
+                    (n, v)
+                    for n, v in zip(launch["names"], launch["initial"], strict=True)
+                    if n in trim_names and n not in launch["fitted"]
+                )
         self.comparison.setRowCount(len(launch["names"]))
         for i, name in enumerate(launch["names"]):
             angular = name.endswith("_rad")
+            trim = name in trim_names
+            compatible = compatible_trims if trim else compatible_setup
             self._item(
                 self.comparison,
                 i,
                 0,
                 name.removesuffix("_rad") + " (degrees; stored rad)" if angular else name,
             )
-            for j, value in enumerate((launch["initial"][i], current["initial"][i], fitted[i]), 1):
+            values = (
+                launch["initial"][i],
+                current_values.get(name) if compatible else None,
+                fitted.get(name),
+            )
+            for j, value in enumerate(values, 1):
                 text = (
-                    "unavailable"
-                    if j == 3 and fit is None
+                    "unavailable / not comparable"
+                    if j == 2 and value is None
+                    else "unavailable"
+                    if value is None
                     else format(math.degrees(value) if angular else value, ".17g")
                 )
                 self._item(self.comparison, i, j, text)
-            self._item(
-                self.comparison,
-                i,
-                4,
-                "shared fitted" if name in launch["fitted"] else "fixed reference",
-            )
+            scope = "shared fitted" if name in launch["fitted"] else "fixed reference"
+            if trim:
+                scope += "; ordered images: " + ", ".join(
+                    v[0] for v in ordered_images(historical_inputs)
+                )
+            self._item(self.comparison, i, 4, scope)
         self.points.setRowCount(len(record["points"]))
         for i, point in enumerate(record["points"]):
             self._item(

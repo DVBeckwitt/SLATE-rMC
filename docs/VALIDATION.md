@@ -78,3 +78,33 @@ No supported positive sample proposal, complete genuine three-group joint receip
 covariance bands, sustained timing or locked-environment closure is claimed. B010/B019/B020/B021
 remain deferred. Original failures, exact disposable method bytes and final source/evidence hashes
 are retained in the external physical_task11 completion index; earlier evidence is unchanged.
+
+## Closure01 UI identity checks (2026-10-01)
+
+Historical sample comparisons now match canonical parameter names. Shared coordinates require
+matching configuration/CIF and fixed geometry/source identity; Helmert contrasts additionally
+require the canonical sorted image roster, decoded source identities and commanded angles.
+Absent or incompatible current values are unavailable. Saved initial/fitted values and native
+points remain attached to their immutable historical launch. Fixed contrasts use their saved
+initial values; an unavailable solver contributes no fitted values.
+
+Physical history binds the acquisition, independent draft or fitting session and its captured
+input/review identity before checking the edited fields. A replaced owner cannot inherit an old
+action just because its values match. Explicit shared hBN actions retain their acquisition scopes,
+review revision restoration, private distances and unrelated result history.
+
+Joint physical preview scopes, requests, feature IDs and source/texture lookup carry a specimen
+namespace with the image ID. An absent selected image is rejected instead of selecting another
+specimen's first match. Existing canonical parameter and predictor implementations remain owners.
+
+External nominal receipts cover genuine three-image sample history with changed-roster fixtures,
+historical inspection/export/removal and exact Save/Open; configuration/simulator/sample undo and
+redo, stale/replaced-owner rejection, and two-target shared hBN history. Opaque two-specimen
+fixtures with colliding IDs cover local/shared predictor-entry vectors, feature namespaces and
+texture selection. Reverse-size unavailable-result and joint fixtures are presentation/routing
+evidence, not new scientific results. Ordinary Open/export rechecked retained sample predictions
+through the existing saved-result validator. No fit, fresh preparation, joint scientific prediction,
+new qualification, Jacobian, full image, sweep or performance campaign ran. Missing historical sources (B020), joint
+handoff provenance (B021), genuine Se/full-joint admission and other existing gaps remain open.
+The closure01 external index retains original failures, exact disposable methods, command budget,
+protected evidence and final source hashes. Task12 partial files and its rejected patch stay parked.

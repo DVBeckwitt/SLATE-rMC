@@ -10,7 +10,14 @@ from experiment_scene import ExperimentScenePanel, PhysicalHandle
 from hbn_state import hbn_session_document, hbn_session_from_document
 from joint_state import joint_session_from_document
 from parameter_state import FieldChange, SessionHistory, _action
-from physical_io import changed_snapshot, fields, numeric_from_document, snapshot
+from physical_io import (
+    changed_snapshot,
+    fields,
+    joint_image_identity,
+    numeric_from_document,
+    snapshot,
+    split_joint_image_identity,
+)
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -288,7 +295,10 @@ class PhysicalPanel(QDialog):
         )
         for identity in scopes:
             self.images.addItem(identity, identity)
-        index = self.images.findData(str(self.shell.selected_acquisition_id))
+        selected_identity = str(self.shell.selected_acquisition_id)
+        if self.route.currentData() == "joint":
+            selected_identity = joint_image_identity("hbn", selected_identity)
+        index = self.images.findData(selected_identity)
         if index >= 0:
             self.images.setCurrentIndex(index)
         self._rendering = False
@@ -606,27 +616,53 @@ class PhysicalPanel(QDialog):
 
     def _editable_state(self, route, data):
         if route == "configuration":
-            return {k: data[k] for k in ("proposed",)}
-        if route == "simulator":
-            return {k: data[k] for k in ("yaml_text",)}
-        if route == "hbn":
-            return {
-                k: data[k]
-                for k in (
-                    "initial",
-                    "revision",
-                    "frozen_json",
-                    "center_proposal_json",
-                    "selected_result_id",
-                    "initial_provenance_json",
-                )
-            }
-        keys = (
-            ("controls_json", "selected_result_id", "initial_provenance_json")
-            if route == "sample"
-            else ("controls_json", "selected_result_id")
-        )
-        return {k: data[k] for k in keys}
+            owner_keys = (
+                "acquisition_id",
+                "source_sha256",
+                "configuration_path",
+                "configuration_sha256",
+                "cif_path",
+                "cif_sha256",
+                "baseline_yaml",
+            )
+            keys = ("proposed",)
+        elif route == "simulator":
+            owner_keys = (
+                "draft_id",
+                "configuration_path",
+                "imported_sha256",
+                "cif_path",
+                "cif_sha256",
+            )
+            keys = ("yaml_text",)
+        elif route == "hbn":
+            owner_keys = (
+                "session_id",
+                "acquisition_id",
+                "inputs_json",
+                "candidates",
+                "exclusions",
+                "lower",
+                "upper",
+            )
+            keys = (
+                "initial",
+                "revision",
+                "frozen_json",
+                "center_proposal_json",
+                "selected_result_id",
+                "initial_provenance_json",
+            )
+        elif route == "sample":
+            owner_keys = ("session_id", "inputs_json", "prepared_json", "frozen_json", "exclusions")
+            keys = ("controls_json", "selected_result_id", "initial_provenance_json")
+        else:
+            owner_keys = ("session_id", "captures_json")
+            keys = ("controls_json", "selected_result_id")
+        return {
+            "owner": payload_hash({k: data[k] for k in owner_keys}),
+            "values": {k: data[k] for k in keys},
+        }
 
     def install(self, route, data):
         shell = self.shell
@@ -704,7 +740,11 @@ class PhysicalPanel(QDialog):
             route = change.field
             if route.startswith("hbn:"):
                 acq = UUID(route[4:])
-                session = next(s for s in self.shell.hbn.sessions if s.acquisition_id == acq)
+                session = next(
+                    (s for s in self.shell.hbn.sessions if s.acquisition_id == acq), None
+                )
+                if session is None:
+                    raise ValueError("Physical history owner is no longer available")
                 current = hbn_session_document(session)
                 key = "hbn"
             else:
@@ -713,9 +753,14 @@ class PhysicalPanel(QDialog):
             expected, restored = (
                 (change.after, change.before) if undo else (change.before, change.after)
             )
-            if self._editable_state(key, current) != expected:
+            current_state = self._editable_state(key, current)
+            if current_state["owner"] != expected["owner"]:
+                raise ValueError(
+                    "Physical history belongs to another or replaced owner/input scope"
+                )
+            if current_state["values"] != expected["values"]:
                 raise ValueError("Physical undo conflicts with newer route edits")
-            current.update(restored)
+            current.update(restored["values"])
             if key != "hbn":
                 current["revision"] += 1
             updates.append((key, current))
@@ -1008,7 +1053,10 @@ class PhysicalPanel(QDialog):
             session = joint_session_from_document(data)
             captures = json.loads(session.captures_json)
             hbn = hbn_session_from_document(captures["hbn"]["session"])
-            if self.images.currentData() == str(hbn.acquisition_id):
+            group, selected_image_id = split_joint_image_identity(self.images.currentData())
+            if group == "hbn":
+                if selected_image_id != str(hbn.acquisition_id):
+                    return None
                 return next(
                     (
                         a
@@ -1017,14 +1065,13 @@ class PhysicalPanel(QDialog):
                     ),
                     None,
                 )
-            sessions = tuple(
-                sample_session_from_document(v["session"])
-                for k, v in captures.items()
-                if k != "hbn"
-            )
+            if group not in captures:
+                return None
+            sessions = (sample_session_from_document(captures[group]["session"]),)
         for session in sessions:
             for row in json.loads(session.inputs_json)["images"]:
-                if row["image_id"] == self.images.currentData():
+                selected = self.images.currentData() if route == "sample" else selected_image_id
+                if row["image_id"] == selected:
                     return next(
                         (
                             a

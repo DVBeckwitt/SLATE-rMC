@@ -149,6 +149,26 @@ def snapshot(shell, route):
     return joint_session_document(p.session)
 
 
+def joint_image_identity(specimen_id, image_id):
+    """Qualify a human image ID without losing its specimen namespace."""
+    if (
+        specimen_id not in ("hbn", "bi2se3", "bi2te3")
+        or not isinstance(image_id, str)
+        or not image_id
+    ):
+        raise ValueError("Joint preview needs a supported specimen and nonempty image ID")
+    return specimen_id + "/" + image_id
+
+
+def split_joint_image_identity(identity):
+    if not isinstance(identity, str):
+        raise ValueError("Joint preview needs specimen/image identity")
+    specimen_id, separator, image_id = identity.partition("/")
+    if not separator or joint_image_identity(specimen_id, image_id) != identity:
+        raise ValueError("Joint preview needs specimen/image identity")
+    return specimen_id, image_id
+
+
 def fields(route, data):
     if route in ("configuration", "simulator"):
         if route == "configuration":
@@ -221,7 +241,7 @@ def fields(route, data):
                 groups = [g for g in groups if g != "hbn"]
             scopes.append(
                 tuple(
-                    identity
+                    joint_image_identity(g, identity)
                     for g in groups
                     for identity in (
                         (captures[g]["session"]["acquisition_id"],)
@@ -510,7 +530,10 @@ def _preview(route, data, image_id, control, prepared=None, parameter=""):
     args["initial"] = JointGeometryState.from_array(json.loads(s.controls_json)["initial"])
     captures = json.loads(s.captures_json)
     hbn = hbn_session_from_document(captures["hbn"]["session"])
-    if image_id == str(hbn.acquisition_id) or parameter == "hbn_calibrant_distance_m":
+    group, selected_image_id = split_joint_image_identity(image_id)
+    if group == "hbn":
+        if selected_image_id != str(hbn.acquisition_id):
+            raise ValueError("Joint hBN preview image is absent from this capture")
         state = args["initial"]
         hbn = replace(
             hbn,
@@ -525,11 +548,13 @@ def _preview(route, data, image_id, control, prepared=None, parameter=""):
             selected_result_id=None,
         )
         view, inputs = _preview(
-            "hbn", hbn_session_document(hbn), image_id, control, cached.get("hbn")
+            "hbn", hbn_session_document(hbn), selected_image_id, control, cached.get("hbn")
         )
+        view = replace(view, feature_ids=tuple(image_id + "/" + n for n in view.feature_ids))
         return view, {"arguments": args, "hbn": inputs}
-    choices = [(g, im) for g in ("bi2se3", "bi2te3") for im in args[g + "_images"]]
-    group, image = next(((g, im) for g, im in choices if im.image_id == image_id), choices[0])
+    image = next((im for im in args[group + "_images"] if im.image_id == selected_image_id), None)
+    if image is None:
+        raise ValueError("Joint preview image is absent from the selected specimen capture")
     _raw, errors, _origin = _predict_image(
         group, image, args["initial"], base_detector_rotation=args["base_detector_rotation"]
     )
@@ -538,7 +563,7 @@ def _preview(route, data, image_id, control, prepared=None, parameter=""):
     )
     from sample_io import observation_id
 
-    ids = tuple(observation_id(image.image_id, asdict(k)) for k in image.observations.keys)
+    ids = tuple(observation_id(image_id, asdict(k)) for k in image.observations.keys)
     from rasim_next.fitting.indexed_series import (
         SharedGeometryCorrections,
         corrected_goniometer_axis,
