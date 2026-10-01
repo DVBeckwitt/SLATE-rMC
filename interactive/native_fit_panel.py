@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -67,7 +68,10 @@ class NativeFitPanel(QDialog):
         )
         self.summary = QTextBrowser()
         form.addRow(self.summary)
-        self.tabs.addTab(page, "Inputs / provenance")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        self.tabs.addTab(scroll, "Inputs / provenance")
         page = QWidget()
         body = QVBoxLayout(page)
         self.profile_view = NativeProfilesView()
@@ -85,7 +89,10 @@ class NativeFitPanel(QDialog):
         body.addWidget(self.covariance)
         self.observation_metadata = QTextBrowser()
         body.addWidget(self.observation_metadata)
-        self.tabs.addTab(page, "Measured profiles / covariance")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        self.tabs.addTab(scroll, "Measured profiles / covariance")
         page = QWidget()
         body = QVBoxLayout(page)
         self.descriptions = QComboBox()
@@ -126,11 +133,11 @@ class NativeFitPanel(QDialog):
         )
         self.stages.itemChanged.connect(self.changed)
         body.addWidget(self.stages)
-        body.addWidget(
-            QLabel(
-                "Active lists and historical guards are draft proposals; global fixed/gauge definitions and final stage order are read-only. No execution or native stage-result import."
-            )
+        declaration_notice = QLabel(
+            "Active lists and historical guards are draft proposals; global fixed/gauge definitions and final stage order are read-only. No execution or native stage-result import."
         )
+        declaration_notice.setWordWrap(True)
+        body.addWidget(declaration_notice)
         self.selected_stage = QComboBox()
         self.selected_stage.currentIndexChanged.connect(self.select_stage)
         body.addWidget(self.selected_stage)
@@ -139,23 +146,31 @@ class NativeFitPanel(QDialog):
         self.step = QLineEdit()
         self.step.editingFinished.connect(self.changed)
         body.addWidget(self.step)
-        row = QHBoxLayout()
-        body.addLayout(row)
-        self.button(row, "Commit displayed draft", self.commit)
-        self.button(row, "Discard pending edits", self.discard)
-        self.button(row, "Undo", lambda: self.undo(True))
-        self.button(row, "Redo", lambda: self.undo(False))
-        self.button(row, "Reuse compatible historical starts", self.reuse)
-        self.button(row, "Remove displayed historical description", self.remove_history)
-        self.button(row, "Export committed plan", self.export)
-        self.button(row, "Export exact measured data", self.export_profiles)
+        actions = (
+            ("Commit displayed draft", self.commit),
+            ("Discard pending edits", self.discard),
+            ("Undo", lambda: self.undo(True)),
+            ("Redo", lambda: self.undo(False)),
+            ("Reuse compatible historical starts", self.reuse),
+            ("Remove displayed historical description", self.remove_history),
+            ("Export committed plan", self.export),
+            ("Export exact measured data", self.export_profiles),
+        )
+        for index, (text, action) in enumerate(actions):
+            if index % 2 == 0:
+                row = QHBoxLayout()
+                body.addLayout(row)
+            self.button(row, text, action)
         run = QPushButton("Run unavailable - pending R4 engine integration")
         run.setEnabled(False)
         run.setToolTip(
             "Draft parsing is not full engine launch admission; indexed adoption is unavailable"
         )
         body.addWidget(run)
-        self.tabs.addTab(page, "Parameters / staged declarations")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        self.tabs.addTab(scroll, "Parameters / staged declarations")
         self.button(layout, "Cancel file operation", shell._cancel_current)
         self.render()
 

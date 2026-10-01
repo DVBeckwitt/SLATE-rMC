@@ -351,3 +351,39 @@ autosave. No simulation, fit, prediction/Jacobian, observation preparation, scie
 image, sweep or numerical recomputation ran. R7 archive/ownership evidence is reused;
 no archive campaign was repeated. B014 and R4 remain parked; root owns final B024
 closure and the original-condition count remains 19/46.
+
+
+## R8 final bounded implementation audit (2026-10-01)
+
+The external 46-row audit preserves all original identifiers/dependencies and the standing root
+acceptance of 19/46. It links exact existing receipts/current owner hashes and distinguishes actual
+workflows, source review, metadata/routing fixtures, unqualified scientific results, disconnected
+integration and deferred release evidence. Historical failures and method archives remain intact.
+
+Four B007 setup action acknowledgments and B009 retained-image/H/V publication plus ordinary visible
+Close were checked through actual Qt handlers. Relevant completed Paint/event turns carry action,
+project/revision/generation and current image/query identity. Close used a labeled non-solving
+active-worker fixture; visible acknowledgment, cooperative stop and final drain are separate.
+The reopen command subsequently failed an external byte-count assertion before Close; its named
+reopen receipts are retained as partial evidence. The corrected close-only command passed, with an
+ignored external observer atexit teardown error retained. No sustained/scanout qualification follows.
+
+The actual repository main launched at 100% and 150% scaling with representative shortcuts, Tab and
+Escape. Missing Matplotlib reproduced a real constructor crash after the earlier startup handler;
+final preflight reports an actionable error/exit2 before QApplication. The prepared editor exceeded
+available logical screen width; a first width repair exposed excess height. Final scrollable pages,
+wrapped notice and two-column existing actions passed in a 1050×650 window at 150% scaling with the
+genuine copied session and original bytes exact. Failed receipts are preserved, not rewritten.
+
+The offline frozen environment attempt failed a threadpoolctl3.7.0 cache miss. Existing global
+versions were inventoried; threadpoolctl3.5.0 entry/exit and exact baseline restoration were checked
+on both canonical worker routes by stopping at the first inside-context boundary before numerical
+construction. Baseline BLAS threads were already one, so this does not demonstrate restoration
+from a higher baseline. Optional threadpoolctl failure reaches the real worker failed state;
+fresh numerical imports with GUI modules denied succeed. Exact locked qualification remains open.
+
+Changed startup and editor constructors alone were assessed; scientific/worker/persistence methods
+remain unchanged. Relevant Ruff format/lint, syntax/import and diff checks are recorded externally;
+the unchanged numerical wheel reuses the prior offline build evidence. No type checker is configured.
+New temporary methods are archived exactly outside the repository and removed after use. No new
+fits/simulations/predictors/Jacobians/observation preparation or scientific/performance campaigns ran.

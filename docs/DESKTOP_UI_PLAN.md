@@ -1,10 +1,12 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; staged implementation in progress.
-Updated: 2026-09-30. Delivery breakdown incorporates the audited plan at `a80e995`.
+Updated: 2026-10-01. Delivery breakdown incorporates the audited plan at `a80e995`.
 Current accepted checklist: 19/46; 27 items remain. Root nominally accepted Task08 after B016-B018 closure on 2026-10-01.
-Task09 is implemented but not accepted (B019/B020 remain open); its three rows remain unchecked.
-Task10 joint geometry mechanisms are implemented; U08d/U10b remain unchecked pending root review.
+Task09 is implemented; B019/B020 are closed by the R1/R2 identity and inert-history repairs.
+Its three rows remain unchecked pending consolidated root acceptance. Task10 mechanisms are
+implemented with B021 closed; a genuine complete three-group desktop launch is still unverified.
+The R8 audit below distinguishes delivered mechanisms from integration and qualification gaps.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -716,7 +718,7 @@ checks only its new risk against this contract; U15 integrates the results, not 
 
 ## 11. Delivery plan and acceptance checklist
 
-This is the implementation plan and sole task checklist. Eight tasks are accepted; 38 remain. Existing
+This is the implementation plan and sole task checklist. Nineteen tasks are accepted; 27 remain. Existing
 U identifiers are retained, with smaller lettered slices where the previous task was too broad.
 Dependencies govern execution; milestones group completion criteria and are not serial barriers.
 Use the delivery order below instead of waiting for every row in the preceding milestone.
@@ -4239,3 +4241,72 @@ and sustained-performance gaps remain open.
 [Task11 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/physical_task11_completion_index.json)
 records finite command charges, original failures, exact disposable methods, preserved prior
 evidence and final source hashes. The worktree receives one coherent commit; main stays unchanged.
+
+## R8 consolidated implementation audit (2026-10-01)
+
+This checkpoint supersedes earlier current-status wording, while historical failures and receipts
+retain their original verdicts. The original 46 identifiers and dependency meanings are unchanged.
+The standing root acceptance is **19/46**; this audit does not check additional boxes.
+
+The full external audit records all 46 rows exactly once, original requirements/dependencies,
+implementation commits, current source hashes and later edits, exact receipt/check names, actual
+versus inferred coverage, and nominal/integration/scientific/performance limitations. Root owns
+acceptance. Seven rows are recommended for nominal implementation review: U08, U02b, U05c, U08c,
+U10a, U11 and U13. Accepting all seven would give 26/46, with 20 remaining; this is proposed
+arithmetic only. Their capability restrictions and remaining performance evidence stay explicit.
+
+### Researcher-facing disposition by original delivery step
+
+| Step | Current use and remaining boundary |
+| --- | --- |
+| 01 | Canonical reciprocal preview is accepted; saved/draft/cursor identities remain explicit. |
+| 02 | Textured scene, camera/context return and overlays have actual retained evidence; later physical rendering supplements it. Context-detach stalls remain a separate measured gap. |
+| 03 | Masks/reasons/brush/native Boolean import and exact worker profile publication work. Original sustained/context qualification remains incomplete. |
+| 04 | Two-view comparison, calibrated navigation, immutable references, native cuts and paired exports work; the ordinary Open stall remains. |
+| 05 | Reusable templates, reviewed apply, verified dependent copies and identity-preserving relink work. Four missing nominal setup acknowledgments now have relevant completed paints. |
+| 06 | Configured simulation/forms/immutable quantitative snapshots work for admitted CPU models. Existing nominal prefixes are not convergence; runtime/cold admission and locked-environment qualification remain open. |
+| 07 | Accepted independent native simulation and reviewed transfers retain their explicit model/measure/numerical settings. |
+| 08 | Accepted manual/Gaussian/hBN review, frozen observations, fit, result binding and export preserve genuine saved qualification. |
+| 09 | Supported indexed sample preparation/freeze and a genuine existing fit have nominal workflow evidence. Historical input loss permits inspection; live validation and downstream qualification can remain unavailable. |
+| 10 | Joint seed/scope/private-distance mapping and genuine historical report/handoff inspection/export work. A genuine complete hBN/Bi2Se3/Bi2Te3 captured desktop launch/outcome is absent; routing fixtures do not establish ancestry. |
+| 11 | Physical editing/undo and supported hBN center/sensitivity routes work. Positive supported sample centers, complete joint live sensitivity and qualified covariance bands remain unavailable where evidence is absent. |
+| 12 | Existing prepared physics/observations/plan inspection preserves signed values/full covariance/definitions. Desktop indexed adoption and native fitting execution remain disconnected. |
+| 13 | Stage selection and structural draft validation work. U11a is mosaic, U11b ordered intensity, U11c supported disorder. No stage execution/result import; native Bi disorder is unsupported and Pb roster support is not measured qualification. |
+| 14 | Acquisition/source/mask/geometry review and frozen-output inspection work. A complete new raw-acquisition scientific recipe, numerical Prepare and end-to-end fitting-stage handoff are absent. |
+| 15 | Current-route exact exports/archives, named inspection, independent copies and reviewed recovery work. This does not extend unavailable stages or imply executable solver resume. |
+| 16 | Bounded launch/optional-import/keyboard/focus/layout/DPI and thread-limit checks plus this audit are complete. Full simultaneous/20-image release, distributions, GPU/memory and exact-lock qualification remain deferred. |
+
+### Ordinary R8 checks and repairs
+
+B007 has four new nominal setup receipts: manager Open, template commit, reviewed apply and copied
+selected-state Save acknowledged in about 6.6–19.7 ms at completed relevant Qt Paint/event turns.
+B009 has a genuine retained prefix-8 reopen with detector/H/V publication in about
+20.1/21.8/22.7 ms. A separate non-solving active-worker fixture acknowledged ordinary Close in
+2.854 ms, stopped in 219.789 ms and drained/hidden in 290.006 ms. These are distinct quantities.
+Root may close the missing nominal-receipt gaps; earlier failures and canonical runtime limits
+remain. Completed Qt paints do not establish physical monitor scanout.
+
+Actual missing-Matplotlib startup previously passed its first handler then crashed in a sample
+panel constructor. Desktop startup now preflights both plotting backends and reports the missing
+visualization dependency plus the installation command, returning exit status 2 before constructing
+an application. Normal startup passed. Numerical imports remain independent of optional GUI imports.
+
+The prepared editor exceeded the 1280-logical-pixel available screen at 150% scaling. Existing pages
+now scroll, the declaration notice wraps and existing actions use two columns. A copied genuine R5
+session remained exact and every action was accessible in a 1050×650 window; Tab traversed controls.
+Representative Ctrl+0/Ctrl+1/Ctrl+B, acquisition Alt navigation and dialog Escape checks passed at
+100% and 150% scaling. These nominal checks do not qualify every display or layout combination.
+
+### Remaining defects and qualification
+
+B001/B002/B008/B014 retain their original measured failures and closed campaign limits. B010 is
+unverified: frozen offline setup failed because cached threadpoolctl 3.7.0 was unavailable. The
+existing global Python 3.13.13 environment uses threadpoolctl 3.5.0 and differs from other locked
+versions too. Actual entry/exit/restoration of its canonical worker thread limits passed at a
+non-solving boundary, but cannot qualify the locked environment. No dependency/lock upgrade ran.
+B003–B006/B011–B013/B015–B024 are closed by root; repairs do not automatically accept parent rows.
+
+No new simulations, fits, numerical prediction/Jacobian, raw observation preparation, scientific
+full images, sweeps or numerical/performance campaigns ran in R8. Runtime validators and frozen
+tolerances remain authoritative. Exact native engine integration and scientific preparation
+require their own identified scope; this audit adds neither.

@@ -6202,12 +6202,18 @@ class ShellWindow(QMainWindow):
 def main() -> int:
     # Resolve the declared figure dependency before the interactive event loop.
     # Its first Python import otherwise holds the GIL during a requested export.
-    figure_dependency_error = None
     try:
         import_module("matplotlib.backends.backend_agg")
+        import_module("matplotlib.backends.backend_qtagg")
         import_module("matplotlib.figure")
     except ImportError as exc:
-        figure_dependency_error = str(exc)
+        print(
+            f"SLATE desktop visualization dependencies are unavailable: {exc}. "
+            "Install the visualization extra with "
+            "uv sync --frozen --group dev --extra visualization.",
+            file=sys.stderr,
+        )
+        return 2
     import_module("rasim_next.pipeline.configured_simulation")
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -6237,12 +6243,6 @@ def main() -> int:
         """
     )
     window = ShellWindow()
-    if figure_dependency_error is not None:
-        window.simulator.figures.setChecked(False)
-        window.simulator.figures.setEnabled(False)
-        window.simulator.figures.setText(
-            f"Configured figures unavailable: {figure_dependency_error}; numeric export remains available"
-        )
     window.show()
     return app.exec()
 

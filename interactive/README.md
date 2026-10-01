@@ -24,6 +24,13 @@ uv run --extra visualization python interactive/slate_app.py
 If the visualization dependencies are already installed in the active Python environment, the
 equivalent direct command is `python interactive/slate_app.py`.
 
+The desktop requires the declared visualization extra, including both Matplotlib plotting backends.
+If a backend is unavailable, startup prints the dependency error and installation command and exits
+with status 2 before opening a window. Numerical package imports remain independent of the desktop.
+The prepared-input editor has scrollable pages and two-column actions for smaller logical screens;
+Tab traverses controls, and Escape closes the dialog. Detector shortcuts are Ctrl+0 (fit), Ctrl+1
+(native pixels) and Ctrl+B (rectangle zoom); Alt+Left/Right changes the selected acquisition.
+
 The shell has **Fit experiments** and **Simulator** workspaces. It starts with a local, unsaved
 project and an empty acquisition browser. Use **Import files**, drop local `.osc` or `.osc.gz`
 files, or **Review folder** to scroll the complete bounded list of direct files before confirming;
