@@ -757,12 +757,12 @@ class SimulatorPanel(QWidget):
     def _can_persist(
         self, draft: SimulationDraft | None, reference: SimulationReference | None
     ) -> bool:
-        view = replace(
-            self.shell._capture_view(), simulation_draft=draft, simulation_result=reference
-        )
         try:
+            view = replace(
+                self.shell._capture_view(), simulation_draft=draft, simulation_result=reference
+            )
             self.shell._validate_project_admission(self.shell.project, view=view)
-        except ProjectFormatError as exc:
+        except ValueError as exc:
             self.status.setText(f"Simulation change rejected; prior savable state retained: {exc}")
             return False
         return True
@@ -1285,6 +1285,10 @@ class SimulatorPanel(QWidget):
             )
         elif isinstance(value, NativeSimulationReference):
             if not self.native.can_persist(self.native.draft, value):
+                self.status.setText(
+                    self.status.text()
+                    + f" Exported snapshot remains at {value.path}; it was not added to this project."
+                )
                 return
             self.native.result_reference = value
             self.status.setText(
@@ -1323,6 +1327,10 @@ class SimulatorPanel(QWidget):
             )
         elif isinstance(value, SimulationReference):
             if not self._can_persist(self.draft, value):
+                self.status.setText(
+                    self.status.text()
+                    + f" Exported snapshot remains at {value.path}; it was not added to this project."
+                )
                 return
             self.result_reference = value
             self.status.setText(

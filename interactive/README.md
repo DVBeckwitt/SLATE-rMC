@@ -713,3 +713,17 @@ stage declarations. Existing genuine hBN/joint geometric diagnostics remain exac
 in their inspectors, distinct from native mosaic/ordered/disorder results. Run and
 indexed adoption remain unavailable pending R4. U11a/b/c execution is not accepted
 by this independent editor delivery.
+
+
+### Full simulation output history (B024)
+
+Configured and native routes retain at most eight distinct exact output references.
+If an export completes while that route is full, the panel refuses project admission
+and explains that an old reference must be removed explicitly. The exported snapshot
+remains at the reported external path; the current draft, selected output, histories
+and prior savable project state stay intact. There is no silent eviction.
+
+Open **Attempts / independent copy / recovery**, select an older simulation output
+that is not the current selected output, and choose **Remove old simulation reference**.
+This removes the project reference and leaves its external file untouched. A subsequent
+export can then be admitted and saved through the ordinary workflow.

@@ -318,3 +318,36 @@ image, sweep or performance campaign ran. Native stage-result import lacks an
 independent typed read-only owner, and Run/indexed adoption remains disconnected.
 No new stage numerical qualification or U11a/b/c execution acceptance is claimed.
 Task12 scripts/parked patch and all prior external evidence remain protected.
+
+
+## B024 simulation history refusal repair (2026-10-01)
+
+The source-inferred ninth-reference failure was reproduced in both configured and
+native actual Qt completion callbacks through the existing one-worker JobOwner.
+Prospective ProjectViewState construction occurred before the admission try block
+and raised ValueError for a full eight-reference catalog. Completion cleanup drained,
+and prior state/bytes stayed intact, but the exception escaped and status gave no
+remedy. The original failed before-fix receipt is retained externally.
+
+Both panel guards now construct and validate prospective views within their narrow
+ValueError handling. Export-reference refusals report the external snapshot path
+and that it was not added to the project. The eight-reference cap, retention owner,
+scientific contracts, selection and saved-result qualification are unchanged.
+
+Focused after-fix Qt checks passed for both routes: ninth-reference refusal without
+an escaping callback exception, explicit-removal status, unchanged prior state, dirty
+revision/history/selection and saved project bytes, external output preservation,
+worker cleanup, explicit old-reference removal, subsequent admission, autosave and
+ordinary Open. Separate synchronous boundary checks covered already-dirty state with
+autosave enabled and propagation of unrelated TypeError/RuntimeError from construction
+and admission. Two changed-module imports/syntax and configured Ruff lint/format and
+whitespace checks passed. The unchanged package uses the prior R5 offline build evidence.
+
+Completion fixtures reused genuine saved arrays and manifests. Only a labeled ZIP
+comment distinguished raw-byte container identities; every archive member retained
+its original SHA256. These are reused-output lifecycle fixtures, not new scientific
+outcomes. Projects were copied before Open with fresh recovery paths and ordinary
+autosave. No simulation, fit, prediction/Jacobian, observation preparation, scientific
+image, sweep or numerical recomputation ran. R7 archive/ownership evidence is reused;
+no archive campaign was repeated. B014 and R4 remain parked; root owns final B024
+closure and the original-condition count remains 19/46.

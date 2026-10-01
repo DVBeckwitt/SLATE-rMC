@@ -315,16 +315,16 @@ class NativeDraftPanel(QWidget):
             return False
 
     def can_persist(self, draft, reference):
-        view = replace(
-            self.simulator.shell._capture_view(),
-            native_simulation_draft=draft,
-            native_simulation_result=reference,
-        )
         try:
+            view = replace(
+                self.simulator.shell._capture_view(),
+                native_simulation_draft=draft,
+                native_simulation_result=reference,
+            )
             self.simulator.shell._validate_project_admission(
                 self.simulator.shell.project, view=view
             )
-        except ProjectFormatError as exc:
+        except ValueError as exc:
             self.simulator.status.setText(
                 f"Native change rejected; prior savable state retained: {exc}"
             )
