@@ -169,8 +169,15 @@ def _validate_plan(plan, observations, definition):
     if any(np.any(starts[:, names.index(k)] != v) for k, v in fixed.items()):
         raise ValueError("Fixed controls must equal every start")
     stages = plan.get("stages", ())
+    stage_names = [stage["name"] for stage in stages]
+    if any(type(name) is not str or not name or len(name) > 256 for name in stage_names) or len(
+        set(stage_names)
+    ) != len(stage_names):
+        raise ValueError("Stage declarations require unique bounded nonempty names")
     for stage in stages:
         active = stage["active_parameters"]
+        if type(stage.get("enforce_historical_guards")) is not bool:
+            raise ValueError("Stage historical guard declaration must be boolean")
         if (
             not active
             or len(set(active)) != len(active)
@@ -557,6 +564,12 @@ def prepared_work(argument, control):
                     history,
                     revision=0 if session is None else session.revision + 1,
                     exports=() if session is None else session.exports,
+                    selected_stage=(
+                        session.selected_stage
+                        if session is not None
+                        and session.selected_stage in {s["name"] for s in plan.get("stages", ())}
+                        else None
+                    ),
                 )
         _stop(control)
         value = PreparedWorkResult(session, profiles, detail)

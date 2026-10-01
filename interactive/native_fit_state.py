@@ -135,6 +135,7 @@ class NativeFitSession:
     draft_json: str | None = None
     revision: int = 0
     exports: tuple[tuple[str, str], ...] = ()
+    selected_stage: str | None = None
 
     def __post_init__(self):
         if (
@@ -148,6 +149,12 @@ class NativeFitSession:
             raise ValueError("Prepared history is full; explicitly remove a historical description")
         for text in self.history_json:
             validate_description(document(text, 192 * 1024))
+        stages = json.loads(self.current_json)["plan"].get("stages", ())
+        if self.selected_stage is not None and (
+            type(self.selected_stage) is not str
+            or self.selected_stage not in {s["name"] for s in stages}
+        ):
+            raise ValueError("Selected stage must name a current declared stage")
         if self.draft_json is not None:
             pending = document(self.draft_json, 96 * 1024)
             current = json.loads(self.current_json)["plan"]
@@ -162,7 +169,14 @@ class NativeFitSession:
             ):
                 raise ValueError("Pending edit identities differ from the current definitions")
             if any(set(v) - {"3", "4", "6"} for v in pending["parameters"].values()) or any(
-                set(v) - {"method", "maximum_iterations", "maximum_function_evaluations"}
+                set(v)
+                - {
+                    "method",
+                    "maximum_iterations",
+                    "maximum_function_evaluations",
+                    "active_parameters",
+                    "enforce_historical_guards",
+                }
                 for v in pending["stages"].values()
             ):
                 raise ValueError("Unsupported pending edit fields")
@@ -184,10 +198,114 @@ def native_fit_session_document(session):
 def native_fit_session_from_document(value):
     if value is None:
         return None
-    if type(value) is not dict or set(value) != set(NativeFitSession.__dataclass_fields__):
+    if type(value) is not dict or set(value) not in (
+        set(NativeFitSession.__dataclass_fields__),
+        set(NativeFitSession.__dataclass_fields__) - {"selected_stage"},
+    ):
         raise ValueError("Invalid prepared session fields")
     data = dict(value)
+    data.setdefault("selected_stage", None)
     data["session_id"] = UUID(data["session_id"])
     data["history_json"] = tuple(data["history_json"])
     data["exports"] = tuple(tuple(v) for v in data["exports"])
     return NativeFitSession(**data)
+
+
+def stage_review(value, name, pending=None):
+    """Present declared stage ownership; never infer capability from a stage label."""
+    plan = value["plan"]
+    stages = plan.get("stages", ())
+    stage = next((s for s in stages if s["name"] == name), None)
+    if stage is None:
+        return {"readiness": "No declared stage selected; no template or default is invented"}
+    index = next(i for i, s in enumerate(stages) if s["name"] == name)
+    pending = {} if pending is None else pending
+    declarations = {**stage, **pending.get("stages", {}).get(name, {})}
+    try:
+        active = declarations["active_parameters"]
+        active = json.loads(active) if isinstance(active, str) else active
+        if type(active) is not list or any(type(v) is not str for v in active):
+            raise ValueError("Active coordinates require a JSON list of canonical names")
+        pending_error = None
+    except (ValueError, TypeError) as exc:
+        active, pending_error = stage["active_parameters"], str(exc)
+    fixed = plan.get("fixed_parameters", {})
+    parameters = plan["parameters"]
+    capabilities = {(p["owner"], p["name"]): p for p in value["definition"]["capabilities"]}
+    canonical = {
+        tuple(key): i for i, key in enumerate(value["definition"].get("canonical_order", ()))
+    }
+    rows = []
+    for i, p in enumerate(parameters):
+        rows.append(
+            dict(
+                owner=p["owner"],
+                name=p["name"],
+                unit=p["unit"],
+                declared_index=i,
+                canonical_index=canonical.get((p["owner"], p["name"], p["unit"])),
+                role="declared fixed"
+                if p["name"] in fixed
+                else "stage active"
+                if p["name"] in active
+                else "held at upstream stage start",
+                declared_fixed_value=fixed.get(p["name"]),
+                support=capabilities[(p["owner"], p["name"])]["reason"]
+                or "Current owner coordinate; coupled/gauge launch admission unavailable",
+            )
+        )
+    return dict(
+        stage_name=name,
+        declared_order=index,
+        upstream="Declared initial starts"
+        if index == 0
+        else dict(
+            previous_stage=stages[index - 1]["name"],
+            policy="Script execution warms from its chosen candidate; no candidate or warm start generated here",
+        ),
+        description_sha256=value["sha256"],
+        definition_sha256=value["definition"]["sha256"],
+        engine_revision=value["definition"]["engine_revision"],
+        model_id=value["definition"]["model_id"],
+        frozen_inputs=value["inputs"],
+        upstream_declarations={
+            k: plan[k]
+            for k in (
+                "experiment_binding",
+                "source_override",
+                "integration_override",
+                "repeat_choices",
+                "proposal_mosaic",
+                "controls",
+            )
+            if k in plan
+        },
+        derived_state="Thickness/phase-parent fractions and candidate-dependent inactive directions belong to the material owner. No result-derived values or inactive statuses are inferred from a stage name.",
+        parameter_roles=rows,
+        declared_active_order=active,
+        pending_error=pending_error,
+        numerical_declarations=declarations,
+        inherited_plan_numerical_declarations={
+            k: plan[k]
+            for k in (
+                "method",
+                "maximum_iterations",
+                "maximum_function_evaluations",
+                "finite_difference_step",
+                "numerical_tolerances",
+                "numerical_checks",
+            )
+            if k in plan
+        },
+        nuisance=dict(
+            scale="Existing native_search profiles one nonnegative acquisition scale; historical guarded SLSQP owns its literal scale coordinate. No new nuisance controls.",
+            background="Frozen observation background and full covariance; no fitted background parameter or new transfer recipe.",
+            calibration=plan.get("calibration", []),
+        ),
+        fixed_and_final_policy="Global fixed/gauge controls remain read-only. Final active order must equal every declared free coordinate. Earlier stage active lists are structurally checked draft proposals.",
+        unsupported_disorder="Native Bi disorder is unavailable"
+        if value["definition"]["model_id"].endswith("BiJointModel")
+        else "Only coordinates in this actual material definition are available; no additional disorder template",
+        diagnostic_status="Native stage-result import unavailable: no independent typed read-only result owner outside refine_native/render_native script execution. Rank, covariance, weak directions, initial/candidate/selected and qualification cannot be fabricated or recomputed. Existing geometric diagnostics remain with their original owners.",
+        readiness="Draft declaration only; no full engine admission, execution or current-run outcome",
+    )

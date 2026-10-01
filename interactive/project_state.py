@@ -38,7 +38,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 18
+PROJECT_SCHEMA_VERSION = 19
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -1377,6 +1377,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         15,
         16,
         17,
+        18,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")

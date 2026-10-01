@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 
 from native_fit_profiles import NativeProfilesView
-from native_fit_state import native_fit_session_document, reuse_plan
+from native_fit_state import native_fit_session_document, reuse_plan, stage_review
 from parameter_state import MAX_HISTORY_BYTES, FieldChange, HistoryAction, SessionHistory
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -117,7 +117,7 @@ class NativeFitPanel(QDialog):
         self.stages.setHorizontalHeaderLabels(
             [
                 "Stage name / order",
-                "Active canonical names",
+                "Active canonical names (JSON list; draft)",
                 "Method",
                 "Iterations",
                 "Function budget",
@@ -126,6 +126,16 @@ class NativeFitPanel(QDialog):
         )
         self.stages.itemChanged.connect(self.changed)
         body.addWidget(self.stages)
+        body.addWidget(
+            QLabel(
+                "Active lists and historical guards are draft proposals; global fixed/gauge definitions and final stage order are read-only. No execution or native stage-result import."
+            )
+        )
+        self.selected_stage = QComboBox()
+        self.selected_stage.currentIndexChanged.connect(self.select_stage)
+        body.addWidget(self.selected_stage)
+        self.stage_details = QTextBrowser()
+        body.addWidget(self.stage_details)
         self.step = QLineEdit()
         self.step.editingFinished.connect(self.changed)
         body.addWidget(self.step)
@@ -314,6 +324,8 @@ class NativeFitPanel(QDialog):
                 self.observation_metadata.clear()
                 self.inspect_row()
             if value is None:
+                self.selected_stage.clear()
+                self.stage_details.clear()
                 self.summary.clear()
                 return
             self.summary.setPlainText(
@@ -396,6 +408,16 @@ class NativeFitPanel(QDialog):
                         identity,
                     )
             stages = plan.get("stages", ())
+            selected = self.session.selected_stage
+            self.selected_stage.blockSignals(True)
+            self.selected_stage.clear()
+            for i, stage in enumerate(stages):
+                self.selected_stage.addItem(f"{i + 1}: {stage['name']}", stage["name"])
+            self.selected_stage.setCurrentIndex(max(0, self.selected_stage.findData(selected)))
+            self.selected_stage.blockSignals(False)
+            self.stage_details.setPlainText(
+                encoded(stage_review(value, self.selected_stage.currentData(), edits))
+            )
             self.stages.setRowCount(len(stages))
             for i, s in enumerate(stages):
                 for col, k in enumerate(
@@ -412,7 +434,8 @@ class NativeFitPanel(QDialog):
                         current
                         and "settings_reasons" in value["definition"]
                         and not value["definition"]["settings_reasons"]
-                        and col in (2, 3, 4)
+                        and not any(p["reason"] for p in value["definition"]["capabilities"])
+                        and (col in (2, 3, 4, 5) or (col == 1 and i < len(stages) - 1))
                         and k in s
                     )
                     self.item(
@@ -421,7 +444,12 @@ class NativeFitPanel(QDialog):
                         col,
                         edits.get("stages", {})
                         .get(s["name"], {})
-                        .get(k, s.get(k, "owner launch default; unavailable here")),
+                        .get(
+                            k,
+                            encoded(s[k])
+                            if k == "active_parameters"
+                            else s.get(k, "owner launch default; unavailable here"),
+                        ),
                         editable,
                         s["name"],
                     )
@@ -432,6 +460,24 @@ class NativeFitPanel(QDialog):
             self.parameters.resizeColumnsToContents()
         finally:
             self._rendering = rendering
+
+    def select_stage(self, *_):
+        if self._rendering or self.session is None:
+            return
+        name = self.selected_stage.currentData()
+        if self.descriptions.currentData() == 0 and name != self.session.selected_stage:
+            self.guard(lambda: self.store(replace(self.session, selected_stage=name)))
+        else:
+            edits = {} if self.session.draft_json is None else json.loads(self.session.draft_json)
+            self.stage_details.setPlainText(
+                encoded(
+                    stage_review(
+                        self.displayed(),
+                        name,
+                        edits if self.descriptions.currentData() == 0 else None,
+                    )
+                )
+            )
 
     def changed(self, *_):
         if self._rendering or self.session is None or self.descriptions.currentData() != 0:
@@ -454,15 +500,27 @@ class NativeFitPanel(QDialog):
             edits["stages"][name] = {
                 k: self.stages.item(i, c).text()
                 for c, k in (
+                    (1, "active_parameters"),
                     (2, "method"),
                     (3, "maximum_iterations"),
                     (4, "maximum_function_evaluations"),
+                    (5, "enforce_historical_guards"),
                 )
                 if self.stages.item(i, c).flags() & Qt.ItemIsEditable
             }
         self.guard(
             lambda: self.store(replace(self.session, draft_json=encoded(edits)), render=False)
         )
+        if self.session.draft_json is not None:
+            self.stage_details.setPlainText(
+                encoded(
+                    stage_review(
+                        self.displayed(),
+                        self.selected_stage.currentData(),
+                        json.loads(self.session.draft_json),
+                    )
+                )
+            )
 
     def plan_from_edits(self):
         plan = json.loads(self.session.current_json)["plan"]
@@ -485,7 +543,21 @@ class NativeFitPanel(QDialog):
                     p[name] = float(row[col])
         for s in plan.get("stages", ()):
             for k, text in edits["stages"].get(s["name"], {}).items():
-                s[k] = text if k == "method" else int(text)
+                if k == "method":
+                    s[k] = text
+                elif k == "active_parameters":
+                    active = json.loads(text)
+                    if type(active) is not list or any(type(v) is not str for v in active):
+                        raise ValueError(
+                            "Active coordinates require a JSON list of canonical names"
+                        )
+                    s[k] = active
+                elif k == "enforce_historical_guards":
+                    if text.lower() not in ("true", "false"):
+                        raise ValueError("Historical guard proposal must be true or false")
+                    s[k] = text.lower() == "true"
+                else:
+                    s[k] = int(text)
         if "finite_difference_step" in plan:
             plan["finite_difference_step"] = float(edits["step"])
         return plan

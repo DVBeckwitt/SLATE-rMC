@@ -974,6 +974,7 @@ class ShellWindow(QMainWindow):
             + len(self.attempts_json.encode())
             + len(self.preparation_json.encode())
             + len(self.prepared.observation_metadata.toPlainText().encode())
+            + len(self.prepared.stage_details.toPlainText().encode())
             + (0 if self.preparation is None else self.preparation.resident_bytes())
             + (0 if self.project_tools is None else self.project_tools.resident_bytes())
             + (0 if self.archive is None else len((self.archive.review or "").encode()))
