@@ -209,6 +209,64 @@ def _ring_curves_px(
     return tuple(curves)
 
 
+def hbn_ring_residual_statistics(
+    observations: HbnRingObservations, residual_px: ArrayLike
+) -> tuple[tuple[float, ...], tuple[int, ...], tuple[float, ...]]:
+    """Derive ring RMS, counts and sector coverage without solving."""
+
+    raw = np.asarray(residual_px, dtype=np.float64)
+    if raw.shape != observations.ring_index.shape or not np.all(np.isfinite(raw)):
+        raise ValueError("hBN residuals must be finite and match the observation ordering")
+    ring_rms = []
+    ring_count = []
+    ring_coverage = []
+    sector_count = int(np.max(observations.angular_sector)) + 1
+    for ring_index in range(len(observations.two_theta_rad)):
+        selected = observations.ring_index == ring_index
+        ring_count.append(int(np.count_nonzero(selected)))
+        ring_rms.append(
+            float(np.sqrt(np.mean(raw[selected] ** 2))) if np.any(selected) else math.inf
+        )
+        ring_coverage.append(
+            len(set(int(value) for value in observations.angular_sector[selected])) / sector_count
+            if np.any(selected)
+            else 0.0
+        )
+    return tuple(ring_rms), tuple(ring_count), tuple(ring_coverage)
+
+
+def hbn_calibration_is_qualified(
+    *,
+    solver_success: bool,
+    jacobian_rank: int,
+    scaled_jacobian_condition: float,
+    active_bounds: ArrayLike,
+    ring_point_count: tuple[int, ...],
+    ring_angular_coverage_fraction: tuple[float, ...],
+    ring_rms_px: tuple[float, ...],
+) -> bool:
+    """Apply the existing five-coordinate hBN qualification rule."""
+
+    return bool(
+        solver_success
+        and jacobian_rank == 5
+        and scaled_jacobian_condition < 1.0e8
+        and not np.any(active_bounds)
+        and all(count >= 8 for count in ring_point_count)
+        and all(coverage >= 0.15 for coverage in ring_angular_coverage_fraction)
+        and max(ring_rms_px) <= 2.5
+    )
+
+
+def hbn_active_bounds(values: ArrayLike, lower: ArrayLike, upper: ArrayLike) -> NDArray[np.bool_]:
+    """Use the solver's existing relative bound-contact tolerance."""
+
+    values, lower, upper = (np.asarray(v, dtype=np.float64) for v in (values, lower, upper))
+    return np.isclose(values, lower, rtol=0.0, atol=1.0e-8 * (upper - lower)) | np.isclose(
+        values, upper, rtol=0.0, atol=1.0e-8 * (upper - lower)
+    )
+
+
 def _fit_observations(
     observations: HbnRingObservations,
     initial: FloatArray,
@@ -285,35 +343,16 @@ def _fit_observations(
     degrees_of_freedom = max(raw.size - fit.x.size, 1)
     covariance = np.linalg.pinv(fit.jac.T @ fit.jac) * float(raw @ raw) / degrees_of_freedom
     standard_error = tuple(float(value) for value in np.sqrt(np.maximum(np.diag(covariance), 0.0)))
-    ring_rms = []
-    ring_count = []
-    ring_coverage = []
-    sector_count = int(np.max(observations.angular_sector)) + 1
-    for ring_index in range(len(observations.two_theta_rad)):
-        selected = observations.ring_index == ring_index
-        ring_count.append(int(np.count_nonzero(selected)))
-        ring_rms.append(
-            float(np.sqrt(np.mean(raw[selected] ** 2))) if np.any(selected) else math.inf
-        )
-        ring_coverage.append(
-            len(set(int(value) for value in observations.angular_sector[selected])) / sector_count
-            if np.any(selected)
-            else 0.0
-        )
-    active = np.isclose(fit.x, lower, rtol=0.0, atol=1.0e-8 * (upper - lower)) | np.isclose(
-        fit.x,
-        upper,
-        rtol=0.0,
-        atol=1.0e-8 * (upper - lower),
-    )
-    success = bool(
-        fit.success
-        and rank == fit.x.size
-        and condition < 1.0e8
-        and not np.any(active)
-        and all(count >= 8 for count in ring_count)
-        and all(coverage >= 0.15 for coverage in ring_coverage)
-        and max(ring_rms) <= 2.5
+    ring_rms, ring_count, ring_coverage = hbn_ring_residual_statistics(observations, raw)
+    active = hbn_active_bounds(fit.x, lower, upper)
+    success = hbn_calibration_is_qualified(
+        solver_success=bool(fit.success),
+        jacobian_rank=rank,
+        scaled_jacobian_condition=condition,
+        active_bounds=active,
+        ring_point_count=ring_count,
+        ring_angular_coverage_fraction=ring_coverage,
+        ring_rms_px=ring_rms,
     )
     return HbnDetectorCalibration(
         detector_column_tilt_rad=float(fit.x[0]),

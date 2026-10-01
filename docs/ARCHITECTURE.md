@@ -386,3 +386,13 @@ in memory admission. Project Open verifies records against canonical owners with
 current/historical inputs and exported paths participate in project destination protection. The
 widgets contain no physical equations, and sample-only operation needs no hBN state. Selection
 never changes experiment geometry or supplies absent downstream qualification.
+
+
+The hBN solver and desktop record admission share `hbn_calibration_is_qualified`,
+`hbn_ring_residual_statistics` and `hbn_active_bounds` in `fitting.hbn`. These extract existing
+rules without changing physical equations, thresholds, solver defaults or covariance/rank work.
+Saved-record admission recomputes derivable diagnostics without optimizing. The hBN panel compares
+visible review with committed decisions before launch; only explicit commit/freeze changes the
+observation authority. Displayed point rows retain one result UUID and immutable record snapshot;
+choice changes clear prior curves/points before explicit worker presentation. Inspection and
+selection remain separate. No new controller, dependency or physical implementation is added.

@@ -58,6 +58,7 @@ class HbnPanel(QDialog):
         self._spot_arrays = ()
         self._canvas = None
         self._showing_result_points = False
+        self._presentation_record = None
         self.setWindowTitle("hBN calibration / Choose beam center")
         self.resize(850, 740)
         layout = QVBoxLayout(self)
@@ -225,11 +226,11 @@ class HbnPanel(QDialog):
         self.review.setHorizontalHeaderLabels(
             ["Use", "Column_px", "Row_px", "Ring hkl", "Sector", "Exclusion reason", "Residual px"]
         )
-        self.review.cellChanged.connect(self.changed)
+        self.review.cellChanged.connect(self.review_changed)
         self.review.cellClicked.connect(self.inspect_point)
         self.review.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.review, 1)
-        self._button(layout, "Show draft review", self.render)
+        self._button(layout, "Show draft review", self.show_draft_review)
         self._button(layout, "Commit review decisions", self.commit_review)
         self.freeze_button = self._button(layout, "Freeze reviewed observations", self.freeze)
         self._button(
@@ -303,6 +304,35 @@ class HbnPanel(QDialog):
         self.shell._supersede_hbn()
         self.adopt_button.setEnabled(False)
 
+    def review_pending(self):
+        session = self.session
+        if session is None or self._showing_result_points:
+            return False
+        if self.review.rowCount() != len(session.candidates):
+            return True
+        excluded = dict(session.exclusions)
+        return any(
+            (self.review.item(i, 0).checkState() != Qt.CheckState.Checked) != (i in excluded)
+            or self.review.item(i, 5).text() != excluded.get(i, "")
+            for i in range(self.review.rowCount())
+        )
+
+    def review_changed(self, *_args):
+        if self._rendering:
+            return
+        self.changed()
+        self.refresh()
+        self.status.setText(
+            "Pending visible review edits; commit and refreeze before Fit."
+            if self.review_pending()
+            else "Displayed review matches committed decisions; frozen readiness restored."
+        )
+
+    def show_draft_review(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review edits before changing the view")
+        self.render()
+
     def guard(self, action):
         try:
             action()
@@ -374,6 +404,8 @@ class HbnPanel(QDialog):
         self.render()
 
     def load(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before changing controls/inputs")
         a = self.acquisition()
         if a is None or self.shell._visible_acquisition_id != a.acquisition_id:
             raise ValueError("select and open the native image first")
@@ -400,6 +432,8 @@ class HbnPanel(QDialog):
             control.setText(path)
 
     def apply_parameters(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before editing controls")
         session = self.current_inputs()
         columns = []
         for j in range(1, 4):
@@ -435,6 +469,10 @@ class HbnPanel(QDialog):
 
     def request(self, operation, **extra):
         session = self.current_inputs()
+        if self.review_pending():
+            raise ValueError(
+                "Pending visible review edits; commit and refreeze before launching work"
+            )
         for j, values in enumerate((session.initial, session.lower, session.upper), 1):
             for i, v in enumerate(values):
                 if self.parameters.item(i, j).text() != format(
@@ -506,6 +544,8 @@ class HbnPanel(QDialog):
             control.setText(str(value))
 
     def adopt_manual(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before changing controls/inputs")
         session = self.current_inputs()
         center = (float(self.manual_column.text()), float(self.manual_row.text()))
         proposal = encoded(
@@ -534,6 +574,8 @@ class HbnPanel(QDialog):
         )
 
     def adopt_spot(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before changing controls/inputs")
         session = self.current_inputs()
         proposal = json.loads(session.center_proposal_json)
         if (
@@ -566,6 +608,9 @@ class HbnPanel(QDialog):
             )
         exclusions = []
         for i in range(self.review.rowCount()):
+            reason = self.review.item(i, 5).text().strip()
+            if self.review.item(i, 0).checkState() == Qt.CheckState.Checked and reason:
+                raise ValueError(f"included candidate {i} needs an empty exclusion reason")
             if self.review.item(i, 0).checkState() != Qt.CheckState.Checked:
                 reason = self.review.item(i, 5).text().strip()
                 if not reason:
@@ -582,6 +627,8 @@ class HbnPanel(QDialog):
                 ),
                 "Review hBN exclusions",
             )
+        elif self.review_pending():
+            self.render()
 
     def freeze(self):
         self.commit_review()
@@ -609,6 +656,8 @@ class HbnPanel(QDialog):
         )
 
     def select_result(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before result selection")
         session = self.current_inputs()
         record = self.record()
         if record is None:
@@ -621,6 +670,8 @@ class HbnPanel(QDialog):
         )
 
     def remove_result(self):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before changing history")
         session = self.session
         record = self.record()
         if record is None:
@@ -639,7 +690,6 @@ class HbnPanel(QDialog):
         )
         self.history = SessionHistory()
         self.render()
-        self.shell.detector_panel.view.set_ring_curves()
 
     def export(self, operation):
         pattern = "PNG (*.png)" if operation == "export_figure" else "JSON (*.json)"
@@ -656,7 +706,7 @@ class HbnPanel(QDialog):
 
     def inspect_point(self, row, _column):
         session = self.session
-        record = self.record()
+        record = self._presentation_record
         points = (
             record["launch"]["pack"]["coordinates_px"]
             if record is not None and self._showing_result_points
@@ -665,6 +715,14 @@ class HbnPanel(QDialog):
         if (
             0 <= row < len(points)
             and self.shell._visible_acquisition_id == self.shell.selected_acquisition_id
+            and (
+                not self._showing_result_points
+                or (
+                    record is not None
+                    and self.review.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                    == (record["result_id"], row)
+                )
+            )
         ):
             c, r = points[row][:2]
             view = self.shell.detector_panel.view
@@ -673,6 +731,8 @@ class HbnPanel(QDialog):
             view.crosshair_changed.emit()
 
     def undo_redo(self, undo):
+        if self.review_pending():
+            raise ValueError("Commit or restore pending review before undo/redo")
         source = self.history.undo_actions if undo else self.history.redo_actions
         if not source:
             raise ValueError("nothing to undo/redo")
@@ -747,6 +807,25 @@ class HbnPanel(QDialog):
                 self.restore_proposal_controls(session)
             self._rendering = False
             self.render()
+        session = self.session
+        pending_review = self.review_pending()
+        self.fit_button.setEnabled(
+            session is not None and bool(session.frozen_json) and not pending_review
+        )
+        self.freeze_button.setEnabled(session is not None and not self._showing_result_points)
+        if pending_review:
+            self.review_summary.setText(
+                "Pending visible review edits; Fit blocked until committed/refrozen."
+            )
+        elif self.review_summary.text().startswith("Pending visible review edits"):
+            self.review_summary.setText(
+                "Review matches committed decisions; "
+                + (
+                    "frozen pack ready."
+                    if session is not None and session.frozen_json
+                    else "refreeze before Fit."
+                )
+            )
         self.cancel_button.setEnabled(
             self.shell._active_kind == "hbn" or self.shell._pending_hbn is not None
         )
@@ -766,6 +845,14 @@ class HbnPanel(QDialog):
                 button.setEnabled(session is not None)
             self.adopt_button.setEnabled(False)
             self._showing_result_points = False
+            self._presentation_record = None
+            if self.shell._visible_acquisition_id == self.shell.selected_acquisition_id:
+                self.shell.detector_panel.view.set_ring_curves()
+                self.shell.detector_panel.view.set_overlays(
+                    np.asarray(
+                        [] if session is None else [p[:2] for p in session.candidates]
+                    ).reshape(-1, 2)
+                )
             self.review.setRowCount(0)
             self.results.clear()
             if session is None:
@@ -850,6 +937,17 @@ class HbnPanel(QDialog):
         if self._rendering:
             return
         record = self.record()
+        if self._presentation_record is not None and (
+            record is None or record["result_id"] != self._presentation_record["result_id"]
+        ):
+            self._presentation_record = None
+            self.review.setRowCount(0)
+            self.review_summary.setText(
+                "Result choice changed; inspect it to bind its points and curves."
+            )
+            if self.shell._visible_acquisition_id == self.shell.selected_acquisition_id:
+                self.shell.detector_panel.view.set_overlays(np.empty((0, 2)))
+                self.shell.detector_panel.view.set_ring_curves()
         if record is None:
             self.result_summary.setPlainText(
                 "No fit. Preparation/preliminary refinement does not qualify a result."
@@ -906,6 +1004,7 @@ class HbnPanel(QDialog):
         self.result_summary.setPlainText("\n".join(lines))
 
     def show_result_points(self, record):
+        self._presentation_record = record
         pack = record["launch"]["pack"]
         self._rendering = True
         try:
@@ -932,6 +1031,7 @@ class HbnPanel(QDialog):
                 ):
                     item = QTableWidgetItem(text)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    item.setData(Qt.ItemDataRole.UserRole, (record["result_id"], i))
                     self.review.setItem(i, j, item)
         finally:
             self._rendering = False

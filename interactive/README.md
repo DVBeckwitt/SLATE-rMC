@@ -488,3 +488,20 @@ Preparation can drain only after its current canonical phase completes. Missing 
 require resolution before record validation; automatic relinking/recovery is not provided here.
 The latest implementation policy uses fitting mechanisms and saved-result checks without further
 fits. Nominal wiring/persistence checks do not qualify physics or sustained interaction timing.
+
+
+### hBN review and result consistency
+
+Pending inclusion or exclusion-reason edits block Fit and worker requests. Commit and refreeze
+before launch, or restore the exact committed checkboxes/reasons to restore frozen readiness.
+Included candidates require an empty exclusion reason. Show draft/control/history actions cannot
+silently discard pending review; committed undo/redo restores its exact pack/readiness. Save/Open
+retains committed decisions and historical results, with preparation still separate from Fit.
+
+Choosing another hBN result clears the previous point table, curves and overlays. Use **Inspect
+result / show ring curves** to display the new record. Each readonly row and its crosshair inspection
+uses that immutable result ID; explicit selection remains separate. Imported/project records must
+match the shared existing qualification predicate and exact derived residual/support/contact
+statistics, not just a recomputed hash or success label. Unknown uncertainty stays unavailable.
+These mechanisms are checked with saved results and no new fitting/preparation; scientific and
+sustained performance acceptance remain separate.

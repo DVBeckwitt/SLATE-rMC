@@ -3,8 +3,8 @@
 Status: accepted feature scope; staged implementation in progress.
 Updated: 2026-09-30. Delivery breakdown incorporates the audited plan at `a80e995`.
 Current accepted checklist: 14/46; 32 items remain. Root accepted Task07 after B015 closure.
-Task08 is implemented but not accepted (B016-B018 remain open). Task09 is implemented and
-awaiting root review; its three rows remain unchecked.
+Task08 is implemented but not accepted; B016-B018 corrections await root review. Task09 is
+implemented but not accepted (B019/B020 remain open); its three rows remain unchecked.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -4096,3 +4096,45 @@ their open dispositions; B011-B013/B015 are closed by root. Original timing thre
 peak measurements remain unverified. Missing/changed historical sources can explicitly prevent
 record validation on Open; general recovery is deferred to Task15. Task10 was not started; main
 remains unchanged and no merge/push is performed.
+
+
+### Joint geometry prerequisite / hBN bindings B016-B018 (2026-10-01)
+
+**Corrections implemented; awaiting root closure review.** Accepted count remains 14/46. Task08
+and Task09 remain implemented/not accepted; no original checklist row is self-accepted. This bounded
+prerequisite does not implement joint Task10. The latest human instruction requires mechanisms
+without doing/proving fits; all new checks used genuine saved Task08 observations/results and
+explicitly labeled disposable routing/admission variants, with zero fitting or preparation calls.
+
+B016: the solver and saved-record admission now share the existing hBN qualification predicate,
+ring residual/support statistics and bound-contact rule. No thresholds, residual/curve equations,
+solver defaults, covariance or rank calculation changed. Import/project Open verifies actual
+recorded prerequisites, exact canonical residuals/per-ring RMS/count/coverage, active contacts,
+parameter domains and ring/native support. A recomputed content hash cannot authorize contradictory
+qualification. The original genuine qualified result still reads/exports/imports/reopens unchanged.
+Recorded-check variants with inconsistent solver/rank/condition/bounds/support/residual claims are
+rejected; consistent unqualified and unavailable-uncertainty fixtures remain explicitly identified
+as non-solving admission checks, not new scientific results.
+
+B017: visible review checkboxes/reasons are compared with committed decisions. Pending review blocks
+Fit and other worker requests before dispatch, prevents silent reset via Show draft/control/history
+changes, and reports truthful readiness. Commit invalidates the old frozen pack and selection;
+explicit freeze preserves exact discovered values/IDs. Restoring the original visible decisions or
+undo/redo of committed edits restores the corresponding frozen readiness. A captured Fit request
+uses the newly reviewed 116-point pack without entering the fitter or discovery owner; the immutable
+117-point prior result remains unchanged. Save/Open/autosave retains coherent committed review.
+
+B018: displayed observations carry immutable result UUID/row metadata and an owned record snapshot.
+Changing the result choice clears the old observation table/curves/overlays before another explicit
+worker presentation. Point inspection reads the displayed snapshot and row identity. Switching,
+removal and reopen were checked through real UI handlers. The B alias is metadata-only over the
+same genuine fitted values and was removed before handoff persistence; it proves routing identity,
+not numerical distinctions. Explicit inspection remains separate from result selection/adoption.
+
+[Prerequisite completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/geometry_binding_prereq10_completion_index.json)
+contains baseline reproductions, exact disposable methods/results, final source/evidence hashes,
+command charges, preservation and line counts. Root decides bug closure and full joint dispatch.
+B019 historical sample-roster comparison and B020 unavailable historical sources blocking Open
+remain separate known defects for bounded history/recovery work; broader scientific/performance
+qualification and the other recorded open bugs remain deferred. Main and all earlier evidence
+remain unchanged; no merge/push, new writer, chat, schedule or numerical campaign is introduced.

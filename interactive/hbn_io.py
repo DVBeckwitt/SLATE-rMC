@@ -157,7 +157,13 @@ def _json_finite(value):
 
 
 def validate_hbn_result(record, session):
-    from rasim_next.fitting.hbn import evaluate_hbn_residual_px
+    from rasim_next.fitting.hbn import (
+        evaluate_hbn_residual_px,
+        hbn_active_bounds,
+        hbn_calibration_is_qualified,
+        hbn_ring_residual_statistics,
+        hbn_two_theta_rad,
+    )
 
     if record.get("schema") != "slate.hbn-result.v1" or record["acquisition_id"] != str(
         session.acquisition_id
@@ -172,15 +178,51 @@ def validate_hbn_result(record, session):
         raise ValueError("hBN result needs a bounded nonempty name")
     launch = record["launch"]
     pack = launch["pack"]
+    if any(type(v) is not int for v in pack["ring_index"] + pack["angular_sector"]):
+        raise ValueError("hBN ring/sector identities must be integers")
     obs = _observations(pack)
     if (
         launch["inputs"] != pack["inputs"]
         or payload_hash(launch["inputs"]) != pack["inputs_sha256"]
     ):
         raise ValueError("hBN result launch/observation input mismatch")
+    # Reuse the bounded desktop control contract for the original launch, not current edits.
+    HbnSession(
+        session_id=session.session_id,
+        acquisition_id=session.acquisition_id,
+        revision=0,
+        inputs_json=encoded(launch["inputs"]),
+        initial=tuple(launch["initial"]),
+        lower=tuple(launch["lower"]),
+        upper=tuple(launch["upper"]),
+        f_scale=launch["f_scale"],
+        max_nfev=launch["max_nfev"],
+    )
+    if launch["loss"] != "soft_l1":
+        raise ValueError("unsupported hBN launch loss")
+    rows, columns = launch["inputs"]["shape_rc"]
+    if (
+        len(obs.ring_index) > 180
+        or np.any(obs.coordinates_px < 0)
+        or np.any(obs.coordinates_px[:, 0] > columns - 1)
+        or np.any(obs.coordinates_px[:, 1] > rows - 1)
+        or np.any(obs.angular_sector >= 36)
+        or len(set(zip(obs.ring_index.tolist(), obs.angular_sector.tolist(), strict=True)))
+        != len(obs.ring_index)
+        or pack["units"] != "native (column_px,row_px); radian angles"
+    ):
+        raise ValueError("hBN frozen support exceeds native coordinate/ring/sector admission")
+    expected_angles = hbn_two_theta_rad(
+        lattice_a_A=launch["inputs"]["lattice_a_A"],
+        lattice_c_A=launch["inputs"]["lattice_c_A"],
+        wavelength_A=launch["inputs"]["wavelength_A"],
+    )
+    if not np.array_equal(obs.two_theta_rad, expected_angles):
+        raise ValueError("hBN ring angles disagree with the admitted lattice/wavelength")
     values = np.asarray(record["fitted_values"], dtype=float)
     if (
-        values.shape != (5,)
+        any(type(v) not in (int, float) for v in record["fitted_values"])
+        or values.shape != (5,)
         or not np.all(np.isfinite(values))
         or np.any(values < launch["lower"])
         or np.any(values > launch["upper"])
@@ -193,7 +235,17 @@ def validate_hbn_result(record, session):
 
     calibration = HbnDetectorCalibration(**record["calibration"])
     if (
-        not np.array_equal(calibration.values, values)
+        any(
+            type(v) not in (int, float)
+            for v in (
+                calibration.detector_column_tilt_rad,
+                calibration.detector_row_tilt_rad,
+                calibration.beam_center_column_px,
+                calibration.beam_center_row_px,
+                calibration.calibrant_distance_m,
+            )
+        )
+        or not np.array_equal(calibration.values, values)
         or type(calibration.success) is not bool
         or type(calibration.solver_success) is not bool
     ):
@@ -204,16 +256,73 @@ def validate_hbn_result(record, session):
         or len(calibration.ring_angular_coverage_fraction) != 5
         or len(calibration.standard_error) != 5
         or len(calibration.active_bounds) != 5
+        or any(type(v) is not bool for v in calibration.active_bounds)
+        or type(calibration.jacobian_rank) is not int
         or not 0 <= calibration.jacobian_rank <= 5
+        or type(calibration.function_evaluations) is not int
         or not 1 <= calibration.function_evaluations <= launch["max_nfev"]
+        or type(calibration.solver_status) is not int
+        or not -1 <= calibration.solver_status <= 4
+        or calibration.solver_success != (calibration.solver_status > 0)
+        or type(calibration.solver_message) is not str
+        or any(type(v) is not int or v < 0 for v in calibration.ring_point_count)
+        or any(
+            type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1
+            for v in calibration.ring_angular_coverage_fraction
+        )
+        or any(
+            type(v) not in (int, float) or not math.isfinite(v) or v < 0
+            for v in (calibration.residual_rms_px, calibration.residual_max_px)
+        )
     ):
         raise ValueError("invalid hBN statistics dimensions/solver state")
+    for name, values in (
+        ("condition", [calibration.scaled_jacobian_condition]),
+        ("standard errors", calibration.standard_error),
+        ("ring RMS", calibration.ring_rms_px),
+    ):
+        if any(
+            v is not None and (type(v) not in (int, float) or not math.isfinite(v) or v < 0)
+            for v in values
+        ):
+            raise ValueError("invalid hBN " + name)
+    if (
+        calibration.scaled_jacobian_condition is not None
+        and calibration.scaled_jacobian_condition < 1
+    ):
+        raise ValueError("invalid hBN scaled condition")
     if calibration.residual_rms_px != float(
         np.sqrt(np.mean(raw**2))
     ) or calibration.residual_max_px != float(np.max(np.abs(raw))):
         raise ValueError("hBN summary disagrees with exact residuals")
-    if list(calibration.ring_point_count) != np.bincount(obs.ring_index, minlength=5).tolist():
-        raise ValueError("hBN per-ring counts disagree with the frozen pack")
+    ring_rms, ring_count, ring_coverage = hbn_ring_residual_statistics(obs, raw)
+    if (
+        list(calibration.ring_point_count) != list(ring_count)
+        or list(calibration.ring_rms_px) != _json_finite(ring_rms)
+        or list(calibration.ring_angular_coverage_fraction) != list(ring_coverage)
+    ):
+        raise ValueError("hBN per-ring support/residual statistics disagree with the frozen pack")
+    expected_active = hbn_active_bounds(calibration.values, launch["lower"], launch["upper"])
+    if not np.array_equal(expected_active, calibration.active_bounds):
+        raise ValueError("hBN active bounds disagree with fitted values and launch bounds")
+    qualified = hbn_calibration_is_qualified(
+        solver_success=calibration.solver_success,
+        jacobian_rank=calibration.jacobian_rank,
+        scaled_jacobian_condition=calibration.scaled_jacobian_condition
+        if calibration.scaled_jacobian_condition is not None
+        else math.inf,
+        active_bounds=calibration.active_bounds,
+        ring_point_count=ring_count,
+        ring_angular_coverage_fraction=ring_coverage,
+        ring_rms_px=ring_rms,
+    )
+    qualification = (
+        "qualified by existing hBN owner"
+        if qualified
+        else "unqualified candidate; existing hBN checks did not qualify"
+    )
+    if calibration.success != qualified or record["qualification"] != qualification:
+        raise ValueError("hBN claimed qualification contradicts its recorded canonical checks")
     return record
 
 

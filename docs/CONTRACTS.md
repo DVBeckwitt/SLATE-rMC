@@ -87,6 +87,27 @@ Mask state is persisted in desktop schema 6 through the existing bounded atomic 
 [interactive/README.md](../interactive/README.md#native-exclusion-editing); these desktop contracts
 do not change the numerical package API version or qualify a physical fit.
 
+## Desktop hBN qualification, review and inspection consistency
+
+Saved hBN records must agree with the existing `fitting.hbn` qualification predicate: solver
+success, rank five, scaled condition below 1e8, no active bounds, each of five ring counts at least
+eight, each angular coverage at least 0.15, and maximum ring RMS at most 2.5 px. These are existing
+thresholds. The solver and admission use one shared rule and shared residual/support/contact
+statistics. Recorded values must obey original admitted seeds/bounds/units and native ring/sector
+support. Import/Open checks derivable counts, coverage, ring/aggregate residuals and contacts against
+the exact pack and canonical residual owner without refitting or calculating a new Jacobian.
+Contradictory flags/statistics fail before publication; genuine unqualified records and unavailable
+uncertainty stay honest. Unknown condition cannot support a qualified claim.
+
+Pending visible hBN inclusion/reason edits block Fit before dispatch. Commit invalidates dependent
+frozen readiness/selection, and explicit freeze retains discovered coordinates and identities.
+Restore/undo-to-committed decisions restores corresponding readiness; displayed edits cannot be
+silently reset by Show draft/control/history actions. Save/autosave/Open persists committed state.
+Readonly result points carry `(result_id,row)` and use one immutable displayed record for inspection.
+Changing the combo choice clears previous table/curves/overlays until explicit worker presentation;
+result removal/reopen respects the same identity. Inspection never implies selection or geometry
+adoption. These desktop corrections supply no new scientific/performance qualification.
+
 ## Desktop reviewed sample geometry (U05c/U08c/U10a)
 
 A bounded sample session admits the complete 2-8-image manifest with hash-bound configuration/CIF,
