@@ -823,9 +823,13 @@ limits of 300 iterations and 600 distinct evaluations. Objective scaling is fixe
 from the initial residual. The default tolerance `1e-8` applies to simplex feasibility
 and the objective-gap bound divided by that scale; it is a solver criterion, not a
 physical acceptance threshold. Coefficients are never clipped or normalized after
-solving. Unsuccessful convergence or failed gap checks return `success=False`;
+solving. A feasible accepted SLSQP iterate can terminate on the unchanged gap
+certificate with `termination_kind="convex_certificate"`; its optimizer success/status
+are `None`, because SLSQP did not return. Otherwise success requires optimizer
+convergence and the same feasibility/gap gates. Failed checks return `success=False`;
 evaluation-budget exhaustion raises `BackgroundProfileError` with the last point.
-Callbacks receive every distinct evaluation for caller-owned accounting.
+Callbacks receive every distinct evaluation for caller-owned accounting. Objective,
+gradient and accepted-iteration counts remain separate from distinct evaluations.
 
 
 ## Bounded cone-law reuse

@@ -329,6 +329,14 @@ class NativeBackgroundProblem:
         return point
 
 
+class _HullCertificateConverged(Exception):
+    """Internal termination at an accepted, feasible, certified optimizer iterate."""
+
+    def __init__(self, point):
+        super().__init__("convex objective-gap certificate satisfied")
+        self.point = point
+
+
 @dataclass(frozen=True, slots=True)
 class NativeBackgroundHull:
     """Fixed count columns with one global simplex vector and no penalty.
@@ -370,9 +378,10 @@ class NativeBackgroundHull:
     def profile(self, observations, raw, *, callback=None):
         """Profile exposure and solve the convex simplex problem from weights0.
 
-        No returned coefficients are clipped or normalized. Success requires
-        optimizer convergence, primal feasibility and a normalized convex
-        objective-gap bound within tolerance. A distinct-evaluation cap raises
+        No returned coefficients are clipped or normalized. An accepted iterate
+        can terminate on primal feasibility and the normalized convex objective-gap
+        certificate. Otherwise optimizer convergence and the same gates are required.
+        A distinct-evaluation cap raises
         BackgroundProfileError with the last evaluated point. Rank diagnostics
         concern this fixed shape only; deficient rank does not prove nonuniqueness
         under the active inequalities.
@@ -463,7 +472,31 @@ class NativeBackgroundHull:
                     callback(last)
             return last
 
+        objective_calls = gradient_calls = accepted_iterations = 0
+
+        def objective(weights):
+            nonlocal objective_calls
+            objective_calls += 1
+            return evaluate(weights).objective / objective_scale
+
+        def jacobian(weights):
+            nonlocal gradient_calls
+            gradient_calls += 1
+            return evaluate(weights).gradient / objective_scale
+
+        def accepted_iterate(weights):
+            nonlocal accepted_iterations
+            accepted_iterations += 1
+            point = evaluate(weights)
+            if (
+                point.simplex_feasibility_error <= self.tolerance
+                and point.normalized_objective_gap <= self.tolerance
+            ):
+                raise _HullCertificateConverged(OptimizeResult(point))
+
+        termination_kind = "optimizer"
         if len(self.weights0) == 1:
+            termination_kind = "fixed_single_column"
             result = OptimizeResult(
                 x=self.weights0,
                 success=True,
@@ -474,22 +507,35 @@ class NativeBackgroundHull:
                 nit=0,
             )
         else:
-            result = minimize(
-                lambda weights: evaluate(weights).objective / objective_scale,
-                self.weights0,
-                jac=lambda weights: evaluate(weights).gradient / objective_scale,
-                method="SLSQP",
-                bounds=[(0.0, 1.0)] * len(self.weights0),
-                constraints={
-                    "type": "eq",
-                    "fun": lambda weights: weights.sum() - 1,
-                    "jac": lambda weights: np.ones_like(weights),
-                },
-                options={
-                    "maxiter": self.maximum_iterations,
-                    "ftol": max(np.finfo(float).eps, self.tolerance**2),
-                },
-            )
+            try:
+                result = minimize(
+                    objective,
+                    self.weights0,
+                    jac=jacobian,
+                    callback=accepted_iterate,
+                    method="SLSQP",
+                    bounds=[(0.0, 1.0)] * len(self.weights0),
+                    constraints={
+                        "type": "eq",
+                        "fun": lambda weights: weights.sum() - 1,
+                        "jac": lambda weights: np.ones_like(weights),
+                    },
+                    options={
+                        "maxiter": self.maximum_iterations,
+                        "ftol": max(np.finfo(float).eps, self.tolerance**2),
+                    },
+                )
+            except _HullCertificateConverged as converged:
+                termination_kind = "convex_certificate"
+                result = OptimizeResult(
+                    x=converged.point.weights,
+                    success=True,
+                    status=0,
+                    message="convex objective-gap certificate at accepted SLSQP iterate",
+                    nfev=objective_calls,
+                    njev=gradient_calls,
+                    nit=accepted_iterations,
+                )
         point = OptimizeResult(evaluate(result.x))
         point.success = bool(
             result.success
@@ -497,6 +543,9 @@ class NativeBackgroundHull:
             and point.normalized_objective_gap <= self.tolerance
         )
         point.status, point.message = int(result.status), str(result.message)
+        point.termination_kind = termination_kind
+        point.optimizer_success = bool(result.success) if termination_kind == "optimizer" else None
+        point.optimizer_status = int(result.status) if termination_kind == "optimizer" else None
         if result.success and not point.success:
             point.message = "background hull feasibility or convex objective-gap check failed"
         point.nfev, point.njev, point.nit = result.nfev, result.njev, result.nit
