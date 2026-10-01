@@ -22,6 +22,18 @@ and atomic result/recovery integrity. Immutable reference evidence and measured 
   parameter sweeps or a replacement permanent suite.
 - Report production and development-infrastructure line changes separately.
 
+## Desktop implementation verification
+
+The user's 2026-09-30 direction is to use representative nominal proofs for implementation
+and trust the existing fitting engine's validation while that engine is scheduled to change.
+For desktop delivery, check complete ordinary workflows, UI-to-owner values/units/identities,
+run/cancel, save/reopen and result presentation. Reuse relevant passing evidence after reviewing
+its relationship to the final source. Do not extend implementation handoffs with new engine
+convergence/fit-quality campaigns or timing-observer qualification. Record remaining performance
+and qualification gaps explicitly. This does not weaken runtime physical constraints, numerical
+validators, rank/covariance checks, or qualified/unqualified/unavailable status distinctions.
+Nominal workflow checks establish implementation behavior, not fresh scientific qualification.
+
 ## Scientific evidence
 
 Software checks do not establish a physical fit or numerical convergence. A scientific change

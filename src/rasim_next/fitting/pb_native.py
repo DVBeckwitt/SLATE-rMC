@@ -286,11 +286,19 @@ class PbJointModel:
         offset, rebound = 15 + 2 * count, []
         for i, phase in enumerate(phases):
             size = len(phase.parents) - 1
+            shares = values[offset : offset + size]
+            # Keep an unchanged declared closed simplex exactly. Its inverse shares
+            # can lose a final bit (or a tiny nonzero remainder) on reconstruction.
+            weights = (
+                phase.weights
+                if np.array_equal(shares, simplex_shares(phase.weights))
+                else simplex_fractions(shares)
+            )
             rebound.append(
                 replace(
                     phase,
                     fault_parameter=f"phase_{i}",
-                    weights=simplex_fractions(values[offset : offset + size]),
+                    weights=weights,
                 )
             )
             offset += size

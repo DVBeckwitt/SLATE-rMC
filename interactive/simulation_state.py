@@ -44,6 +44,7 @@ class SimulationDraft:
     position_mode: str = "sampled"
     draw_count: int = 8
     detector_seed: int = 1729
+    transfer_provenance: str = ""
 
     def __post_init__(self) -> None:
         if (
@@ -70,6 +71,12 @@ class SimulationDraft:
             raise ValueError("detector draws must be an integer in [1, 1000000]")
         if type(self.detector_seed) is not int or not 0 <= self.detector_seed < 2**64:
             raise ValueError("detector seed must be an unsigned 64-bit integer")
+
+        if (
+            type(self.transfer_provenance) is not str
+            or len(self.transfer_provenance.encode()) > 16384
+        ):
+            raise ValueError("configured transfer provenance exceeds 16 KiB")
 
     @property
     def configuration_sha256(self) -> str:
@@ -103,7 +110,7 @@ def simulation_draft_from_document(value: object) -> SimulationDraft | None:
         "draw_count",
         "detector_seed",
     }
-    if type(value) is not dict or set(value) != fields:
+    if type(value) is not dict or set(value) not in (fields, fields | {"transfer_provenance"}):
         raise ValueError("invalid simulation draft document")
     row = value.copy()
     row["draft_id"] = UUID(row["draft_id"])

@@ -54,6 +54,7 @@ from metadata_review import (
     parse_table_text,
     prepare_reference,
 )
+from native_simulation_io import prepare_native_draft, run_native_simulation
 from numeric_fields import PARAMETERS
 from osc_import import AXIS_LIMIT, PreparedOsc, encode_bounded_path, prepare_osc
 from parameter_state import (
@@ -154,6 +155,7 @@ from simulation_io import (
     run_simulation,
 )
 from simulation_panel import SimulatorPanel
+from simulation_transfer import prepare_simulation_transfer
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
@@ -837,17 +839,35 @@ class ShellWindow(QMainWindow):
                 value = getattr(mask, name, None)
                 if isinstance(value, np.ndarray):
                     arrays[id(value)] = value
+        for frame in (self.simulator.frame, self.simulator.latest_frame):
+            if frame is None:
+                continue
+            for value in (frame.image, frame.display, *[a for _, a in frame.arrays]):
+                if isinstance(value, np.ndarray):
+                    arrays[id(value)] = value
+            for profile in (frame.profiles, frame.full_profiles):
+                if profile is not None:
+                    for value in (
+                        profile.horizontal,
+                        profile.vertical,
+                        profile.horizontal_support,
+                        profile.vertical_support,
+                    ):
+                        arrays[id(value)] = value
         scene = self.scene_panel.view
         if scene._image is not None:
             arrays[id(scene._image)] = scene._image
         gpu = sum(view._display.nbytes for view in views if view._display is not None)
         gpu += sum(view.mask_reasons.nbytes for view in views if view.mask_reasons is not None)
+        if self.simulator.detector.view._display is not None:
+            gpu += self.simulator.detector.view._display.nbytes
         # The scene's retained owner admits at most two native R32F detector textures.
         gpu += len(scene._textures) * 12_000_000 * 4
         return {
             "other_cpu_bytes": sum(a.nbytes for a in arrays.values())
             + self._numeric_history.bytes_used
             + self.simulator.history.bytes_used
+            + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
             "other_gpu_bytes": gpu,
         }
@@ -877,7 +897,18 @@ class ShellWindow(QMainWindow):
     def _submit_simulation(self, operation: str, argument, context) -> None:
         if context != (self.project.project_id, self.simulator.epoch):
             return
-        if operation in ("load", "validate", "save_configuration"):
+        if operation in ("transfer_review", "transfer_apply"):
+            if not self.simulator.transfer_context_current(json.loads(argument)["token"]):
+                self.simulator.status.setText(
+                    "Queued transfer review/confirmation is stale; prior draft retained"
+                )
+                return
+            run, budget = prepare_simulation_transfer, 256 * 1024
+        elif operation in ("native_load", "native_validate", "native_save"):
+            run, budget = prepare_native_draft, 192 * 1024
+        elif operation == "native_run":
+            run, budget = run_native_simulation, 160 * 1024**2
+        elif operation in ("load", "validate", "save_configuration"):
             run, budget = prepare_simulation_draft, 96 * 1024
         elif operation == "run":
             run, budget = run_simulation, 160 * 1024**2
@@ -979,6 +1010,9 @@ class ShellWindow(QMainWindow):
             self.simulator.draft,
             self.simulator.result_reference,
             panel_view_state(self.simulator.detector) or self.simulator._pending_detector_state,
+            self.simulator.native.draft,
+            self.simulator.native.result_reference,
+            self.simulator.draft_kind.currentData(),
         )
 
     def _validate_project_admission(
@@ -4139,6 +4173,9 @@ class ShellWindow(QMainWindow):
                 else "Simulation requests canceled; no queued work remains"
             )
             self.simulator.refresh()
+            if self.simulator.draft_kind.currentData() == "native":
+                self.simulator.cancel_button.setEnabled(False)
+                self.simulator.status.repaint()
 
     def _submit_import(
         self, source: Path, acquisition_id: UUID, *, mode: Literal["import", "relink"] = "import"
@@ -4872,7 +4909,14 @@ class ShellWindow(QMainWindow):
                 self._line_ready(identity, value)
             elif kind == "simulation":
                 if self._simulation_current(identity):
-                    if self._simulation_operation in ("load", "validate", "save_configuration"):
+                    if self._simulation_operation in (
+                        "load",
+                        "validate",
+                        "save_configuration",
+                        "native_load",
+                        "native_validate",
+                        "native_save",
+                    ):
                         self.simulator.ready(*value)
                     else:
                         self.simulator.ready(self._simulation_operation, value)
@@ -5132,6 +5176,11 @@ class ShellWindow(QMainWindow):
             self._pending_masks.clear()
             self._active_mask = None
             self.statusBar().showMessage("Close requested · Preserving accepted state")
+            if (
+                self.workspaces.currentIndex() == 1
+                and self.simulator.draft_kind.currentData() == "native"
+            ):
+                self.statusBar().repaint()
         QTimer.singleShot(0, self._dispatch_pending)
 
 

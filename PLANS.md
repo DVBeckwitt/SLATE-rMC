@@ -24,6 +24,8 @@ fitting, new-acquisition preparation and daily use, each with dependencies and a
 Milestones group capabilities without blocking independent tasks. Simulator completion covers both
 configured and native physical-input routes; new-acquisition preparation has a separate scientific
 decision point before its implementation can be estimated.
-It is the current plan for this UI work; implementation has not started. Its checklist is kept in that
-same document. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
+Implementation is in progress; the current accepted checklist is 12/46. The checklist remains in
+that same document. Delivery verification follows the user's nominal-proof policy in
+[VALIDATION.md](docs/VALIDATION.md#desktop-implementation-verification); existing fitting validation
+and qualification states remain authoritative. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
 their original evidence and do not schedule additional scientific work.

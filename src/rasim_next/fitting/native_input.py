@@ -380,7 +380,7 @@ class NativeFitPhysics:
         )
 
 
-def load_native_fit_physics(path: Path) -> NativeFitPhysics:
+def load_native_fit_physics(path: Path, *, source_bytes: bytes | None = None) -> NativeFitPhysics:
     """Load versioned JSON values into the same typed owners used by fitting and images.
 
     Expanded crystal sites are retained exactly; CIF paths are provenance, never
@@ -388,7 +388,9 @@ def load_native_fit_physics(path: Path) -> NativeFitPhysics:
     imaginary pairs. Source nodes are rebuilt from the declared divergence rule;
     both rules integrate the conditional beam-position distribution continuously.
     """
-    payload = Path(path).read_bytes()
+    payload = Path(path).read_bytes() if source_bytes is None else source_bytes
+    if not isinstance(payload, bytes):
+        raise TypeError("native physical source must be immutable bytes")
     record = json.loads(payload)
     if record.get("schema") != "rasim-native-fit-physics-v1":
         raise ValueError("unsupported native fit physical schema")

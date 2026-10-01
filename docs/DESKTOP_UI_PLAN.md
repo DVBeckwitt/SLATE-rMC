@@ -1,7 +1,7 @@
 # Native desktop UI grand plan
 
 Status: accepted feature scope; staged implementation in progress.
-Updated: 2026-09-29. Delivery breakdown incorporates the audited plan at `a80e995`.
+Updated: 2026-09-30. Delivery breakdown incorporates the audited plan at `a80e995`.
 Current accepted checklist: 12/46; 34 items remain. U07 was independently accepted at
 `dd278b63bd2454e5cd1b17ee48733faebb7bea7b`. U08 remains in progress.
 
@@ -2394,7 +2394,8 @@ independent supervisor acceptance.
 
 The independent review accepted U09a at
 `4d609dff32a903a425b36f810599f7d264bf4826`. The accepted checklist count
-is 11/46; the review-pending notes above preserve the earlier evidence state.
+was 11/46 at that acceptance. The current aggregate is 12/46 after U07 acceptance;
+the review-pending notes above preserve the earlier evidence state.
 
 #### U07 reciprocal preview candidate (2026-09-29; native qualification failed)
 
@@ -3924,3 +3925,61 @@ The [supplementary completion index](C:/Users/Kenpo/.codex/visualizations/2026/0
 records the original plus supplementary native charges, source/evidence identities, exact checker
 archive/cleanup and preserved failures. Software checks establish compatibility only. B008-B010,
 the original command-10 limit violation and earlier root bugs remain open.
+
+
+### Task07 / U12c and U09b implementation (2026-09-30)
+
+**Implemented; awaiting root review.** The accepted count remains 12/46 and both rows remain
+unchecked. Under the user's current nominal-proof direction, implementation handoff uses ordinary
+workflow/binding checks and relevant saved evidence. New fitting/convergence campaigns and three
+sustained timing windows are outside this handoff. Existing engine validators and qualification
+states remain intact. Historical timing failures below and in Task06 are preserved.
+
+- Simulator has distinct configured and independent native drafts. Native physical JSON or its
+  independent saved envelope loads without observations or a fit record. Bi2Se3/Bi2Te3 use their
+  actual Bi joint model; GD1/SiD1/Clean1/B4 use their actual Pb joint model, including distinct B4
+  phase epsilons. Searchable grouped controls expose actual coordinate names/units, complete
+  baseline declarations and frozen source/integration/proposal settings. Native Bi disorder and
+  Pb reflectivity remain explicitly unsupported.
+- Canonical binding uses the same immutable input bytes, model bind, independent integration
+  parts and detector batch iterator as the numerical owners. Bound Bi thickness/roughness stack
+  is applied before partitioning. Independent part intensities sum once. Positive integer repeats
+  and `N*c + extra` remain explicit. Exact closed simplex declarations preserve tiny fractions;
+  canonical shares must agree, and editing shares clears the exact declaration. An unchanged Pb
+  parent simplex now retains its declared weights exactly rather than reconstructing their last
+  bit. The first divergent stage was parent-weight binding, before detector integration.
+- One latest-only worker owns construction, iteration and release; nested BLAS is one thread.
+  Cancellation acts between additive batches and rejects obsolete publication. Partial snapshots
+  have evaluated every declared rectangle for completed batches, with an incomplete-integral flag.
+  Full integration completion is separate from convergence/fit qualification. The native route is
+  CPU deterministic integration; no native CUDA, Philox prefix or auxiliary output is claimed.
+- Exact immutable float64 images/profiles and float32 display buffers share existing presentation
+  and export/reopen owners. Macrobin centers/edges retain native-pixel coordinates. Schema 10
+  persists both independent drafts, transfer provenance and result identities; schemas 1-9 remain
+  readable. Prospective project admission, history and retained buffers preserve existing caps.
+- Experiment transfer has separate configured and explicitly selected native destinations. A
+  modeless review lists included, retained, omitted and incompatible fields with units/provenance.
+  Apply rechecks complete source/destination context and fresh configuration/CIF bytes through the
+  shared worker before adoption. Canonical instrument compilation preserves complete compound
+  rigid transforms and pivots. A configured Gaussian spectrum retains the native line declaration
+  with an incompatible mapping row. Acquisition arrays, masks, fits and qualification do not become
+  simulation inputs. The source project/numeric state remains unchanged.
+
+Evidence: six recipe field/binding inventories, two fixed-rule GD1/Bi2Te3 comparisons with exact
+whole-panel float64 images, coordinates, batch counts and profile/export readback, and 43 functional
+assertions covering actual reviewed queued Apply, stale context, changed source bytes, cap rollback,
+native cancellation/history, save and ordinary close. The final native smoke also exercised actual
+load/edit/undo/validate/run/cancel, exact saved result reopen/export and ordinary save/close on the
+final owner implementation. This is nominal adapter/workflow evidence, not independent convergence
+or fit qualification. The typed transfer acquisition fixture does not qualify OSC decoding.
+
+The native smoke's completed Qt paint acknowledgments were 16.681 ms load, 4.736 ms edit,
+9.701/9.030 ms Start, 11.313 ms Cancel and 2.214 ms Close; safe stop was separately 62.996 ms.
+Process peak working set was 572,866,560 bytes. These are one smoke's observations, not sustained
+frame/profile/selection qualification or physical display scanout. Earlier missing receipts and
+observer failures remain archived. GPU allocator peaks, sustained timing and locked-environment
+compatibility remain unverified; no further timing windows started after the scope update.
+
+The external [Task07 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12c_completion_index.json)
+records exact commands, hashes, finite-budget charges, final source relevance, retained failures,
+cleanup, line counts and limitations. B008-B010 and B014 retain their prior open dispositions.

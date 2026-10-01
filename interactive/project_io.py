@@ -306,6 +306,13 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
             canonical_configuration(document.view.simulation_draft)
         except (OSError, ValueError) as exc:
             simulation_detail = f"Saved independent draft requires input review: {exc}"
+    if document.view.native_simulation_draft is not None:
+        from native_simulation_io import canonical_native
+
+        try:
+            canonical_native(document.view.native_simulation_draft)
+        except (OSError, ValueError) as exc:
+            simulation_detail += f" Native draft requires input review: {exc}"
     loaded = LoadedProject(
         document, path, tuple(checks), tuple(reference_checks), numeric_validated, simulation_detail
     )

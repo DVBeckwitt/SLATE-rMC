@@ -12,6 +12,14 @@ from uuid import UUID, uuid4
 
 from comparison_state import LineDefinition, PinIdentity
 from mask_state import NativeMask, mask_document, mask_from_document
+from native_simulation_state import (
+    NativeSimulationDraft,
+    NativeSimulationReference,
+    native_draft_document,
+    native_draft_from_document,
+    native_reference_document,
+    native_reference_from_document,
+)
 from numeric_fields import validate_proposal
 from simulation_state import (
     SimulationDraft,
@@ -22,7 +30,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 9
+PROJECT_SCHEMA_VERSION = 10
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -597,6 +605,9 @@ class ProjectViewState:
     simulation_draft: SimulationDraft | None = None
     simulation_result: SimulationReference | None = None
     simulation_detector: DetectorViewState | None = None
+    native_simulation_draft: NativeSimulationDraft | None = None
+    native_simulation_result: NativeSimulationReference | None = None
+    simulator_kind: str = "configured"
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,9 +676,13 @@ class ProjectDocument:
             (self.view.simulation_draft, SimulationDraft),
             (self.view.simulation_result, SimulationReference),
             (self.view.simulation_detector, DetectorViewState),
+            (self.view.native_simulation_draft, NativeSimulationDraft),
+            (self.view.native_simulation_result, NativeSimulationReference),
         ):
             if value is not None and not isinstance(value, kind):
                 raise ProjectFormatError("invalid independent simulation state")
+        if self.view.simulator_kind not in ("configured", "native"):
+            raise ProjectFormatError("unsupported independent simulator draft kind")
         selected = self.view.selected_acquisition_id
         if self.view.comparison is not None and not isinstance(
             self.view.comparison, ComparisonState
@@ -1161,6 +1176,9 @@ def project_to_document(
         "simulation_draft": simulation_draft_document(state.view.simulation_draft),
         "simulation_result": simulation_reference_document(state.view.simulation_result),
         "simulation_detector": _detector_document(state.view.simulation_detector),
+        "native_simulation_draft": native_draft_document(state.view.native_simulation_draft),
+        "native_simulation_result": native_reference_document(state.view.native_simulation_result),
+        "simulator_kind": state.view.simulator_kind,
         "detector": _detector_document(detector),
         "scene": (
             None
@@ -1265,6 +1283,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         6,
         7,
         8,
+        9,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1324,6 +1343,11 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         | (
             {"simulation_draft", "simulation_result", "simulation_detector"}
             if top["schema_version"] >= 9
+            else set()
+        )
+        | (
+            {"native_simulation_draft", "native_simulation_result", "simulator_kind"}
+            if top["schema_version"] >= 10
             else set()
         ),
         "view",
@@ -1390,6 +1414,9 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             simulation_draft_from_document(view_data.get("simulation_draft")),
             simulation_reference_from_document(view_data.get("simulation_result")),
             _detector_view(view_data.get("simulation_detector")),
+            native_draft_from_document(view_data.get("native_simulation_draft")),
+            native_reference_from_document(view_data.get("native_simulation_result")),
+            view_data.get("simulator_kind", "configured"),
         ),
         draft,
     )

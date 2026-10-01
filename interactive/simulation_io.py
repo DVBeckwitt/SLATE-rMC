@@ -14,6 +14,13 @@ import yaml
 from detector_panel import BandProfiles, exact_band_profiles
 from job_lifecycle import MAX_RESULT_BYTES, JobControl, JobResult
 from metadata_review import MAX_REFERENCE_BYTES, bounded_reference_snapshot
+from native_simulation_state import (
+    NativeSimulationDraft,
+    NativeSimulationReference,
+    native_draft_document,
+    native_draft_from_document,
+    native_reference_from_document,
+)
 from project_state import linear_display_limits
 from simulation_state import (
     MAX_SIMULATION_YAML_BYTES,
@@ -88,6 +95,13 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
         )
         mapping["material"]["cif_path"] = str(config.material.cif_path)
         text = yaml.safe_dump(mapping, sort_keys=False)
+        if old.transfer_provenance:
+            text = (
+                "# Experiment transfer provenance: "
+                + json.dumps(old.transfer_provenance)
+                + "\n"
+                + text
+            )
         _publish_bytes(path, text.encode(), control)
         observed, _ = bounded_reference_snapshot(path)
         loaded = load_simulation_config(
@@ -124,6 +138,7 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
         settings.get("position_mode", old.position_mode if old else "sampled"),
         settings.get("draw_count", old.draw_count if old else 8),
         settings.get("detector_seed", old.detector_seed if old else 1729),
+        transfer_provenance=old.transfer_provenance if old else "",
     )
     return JobResult((operation, result), len(text.encode()) + 8192)
 
@@ -183,7 +198,7 @@ def simulation_budget(
 
 @dataclass(frozen=True, slots=True)
 class SimulationFrame:
-    draft: SimulationDraft
+    draft: SimulationDraft | NativeSimulationDraft
     run_id: str
     draw_prefix: int
     measure: str
@@ -218,7 +233,13 @@ class SimulationFrame:
         return (
             sum(v.nbytes for v in unique.values())
             + len(self.manifest)
-            + len(self.draft.yaml_text.encode())
+            + len(
+                (
+                    self.draft.yaml_text
+                    if isinstance(self.draft, SimulationDraft)
+                    else self.draft.physics_json
+                ).encode()
+            )
             + 4096
         )
 
@@ -260,8 +281,12 @@ def _prepared_frame(
         low, high = linear_display_limits(minimum, maximum)
     metadata = {
         **metadata,
-        "schema": "slate.configured-snapshot.v1",
-        "draft": simulation_draft_document(draft),
+        "schema": "slate.configured-snapshot.v1"
+        if isinstance(draft, SimulationDraft)
+        else "slate.native-snapshot.v1",
+        "draft": simulation_draft_document(draft)
+        if isinstance(draft, SimulationDraft)
+        else native_draft_document(draft),
         "run_id": run_id,
         "draw_prefix": prefix,
         "measure": measure,
@@ -269,9 +294,10 @@ def _prepared_frame(
         "quantitative": quantitative,
         "units": (
             "angstrom^2/rad^2"
-            if draft.route in ("reciprocal_space", "ewald_surface")
+            if isinstance(draft, SimulationDraft)
+            and draft.route in ("reciprocal_space", "ewald_surface")
             else "angstrom^2/pixel^2"
-            if draft.route == "pixel_centers"
+            if isinstance(draft, SimulationDraft) and draft.route == "pixel_centers"
             else "angstrom^2"
         ),
         "qualification": "nominal; binding fidelity only, no convergence or fitting qualification",
@@ -715,9 +741,15 @@ def export_simulation(work: SimulationExportWork, control: JobControl) -> JobRes
         raise ValueError(
             "Awaiting quantitative snapshot; preview leases cannot be exported as exact values"
         )
-    draft = simulation_draft_from_document(manifest["draft"])
-    _external(work.destination, (draft.configuration_path, draft.cif_path))
-    if manifest.get("write_configured_figures", False):
+    native = manifest["schema"] == "slate.native-snapshot.v1"
+    draft = (
+        native_draft_from_document(manifest["draft"])
+        if native
+        else simulation_draft_from_document(manifest["draft"])
+    )
+    protected = (draft.physics_path,) if native else (draft.configuration_path, draft.cif_path)
+    _external(work.destination, protected)
+    if not native and manifest.get("write_configured_figures", False):
         _write_configured_figures(draft, arrays=dict(work.arrays), control=control)
     temporary = work.destination.with_name(work.destination.name + "." + uuid4().hex + ".part")
     arrays = dict(work.arrays)
@@ -747,18 +779,32 @@ def export_simulation(work: SimulationExportWork, control: JobControl) -> JobRes
     finally:
         temporary.unlink(missing_ok=True)
     digest = _file_hash(work.destination, control)
-    reference = SimulationReference(
-        work.destination,
-        digest,
-        draft.draft_id,
-        draft.revision,
-        draft.configuration_sha256,
-        draft.cif_sha256,
-        draft.route,
-        manifest["measure"],
-        manifest["draw_prefix"],
-        draft.detector_seed,
-    )
+    if native:
+        reference = NativeSimulationReference(
+            work.destination,
+            digest,
+            draft.draft_id,
+            draft.revision,
+            draft.recipe,
+            draft.physics_sha256,
+            draft.parameter_sha256,
+            manifest["numerical_sha256"],
+            manifest["measure"],
+            manifest["draw_prefix"],
+        )
+    else:
+        reference = SimulationReference(
+            work.destination,
+            digest,
+            draft.draft_id,
+            draft.revision,
+            draft.configuration_sha256,
+            draft.cif_sha256,
+            draft.route,
+            manifest["measure"],
+            manifest["draw_prefix"],
+            draft.detector_seed,
+        )
     return JobResult(reference, 4096)
 
 
@@ -772,7 +818,13 @@ def _file_hash(path: Path, control: JobControl) -> str:
 
 
 def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
-    reference = simulation_reference_from_document(json.loads(argument))
+    document = json.loads(argument)
+    native = "recipe" in document
+    reference = (
+        native_reference_from_document(document)
+        if native
+        else simulation_reference_from_document(document)
+    )
     if reference.path.stat().st_size > 192 * 1024**2:
         raise ValueError("saved result exceeds the external snapshot byte cap")
     # Hash and parse the same bounded open-file bytes; never reopen mutable pathname authority.
@@ -791,21 +843,34 @@ def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
         if raw.dtype != np.uint8 or raw.ndim != 1 or raw.nbytes > 512 * 1024:
             raise ValueError("invalid simulation result manifest")
         metadata = json.loads(raw.tobytes())
-        draft = simulation_draft_from_document(metadata["draft"])
-        if (
-            metadata["schema"] != "slate.configured-snapshot.v1"
-            or not metadata["quantitative"]
-            or (
+        draft = (
+            native_draft_from_document(metadata["draft"])
+            if native
+            else simulation_draft_from_document(metadata["draft"])
+        )
+        if native:
+            expected = (
+                reference.draft_id,
+                reference.draft_revision,
+                reference.recipe,
+                reference.physics_sha256,
+                reference.parameter_sha256,
+                reference.numerical_sha256,
+                reference.measure,
+                reference.completed_batches,
+            )
+            actual = (
                 draft.draft_id,
                 draft.revision,
-                draft.configuration_sha256,
-                draft.cif_sha256,
-                draft.route,
-                draft.detector_seed,
+                draft.recipe,
+                draft.physics_sha256,
+                draft.parameter_sha256,
+                metadata["numerical_sha256"],
                 metadata["measure"],
                 metadata["draw_prefix"],
             )
-            != (
+        else:
+            expected = (
                 reference.draft_id,
                 reference.draft_revision,
                 reference.configuration_sha256,
@@ -815,6 +880,21 @@ def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
                 reference.measure,
                 reference.draw_prefix,
             )
+            actual = (
+                draft.draft_id,
+                draft.revision,
+                draft.configuration_sha256,
+                draft.cif_sha256,
+                draft.route,
+                draft.detector_seed,
+                metadata["measure"],
+                metadata["draw_prefix"],
+            )
+        if (
+            metadata["schema"]
+            != ("slate.native-snapshot.v1" if native else "slate.configured-snapshot.v1")
+            or not metadata["quantitative"]
+            or expected != actual
         ):
             raise ValueError("saved simulation manifest/reference mismatch")
         arrays = []
@@ -841,7 +921,7 @@ def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
         draft,
         metadata["run_id"],
         image,
-        reference.draw_prefix,
+        reference.completed_batches if native else reference.draw_prefix,
         reference.measure,
         metadata["backend"],
         True,

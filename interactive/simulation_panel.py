@@ -3,12 +3,20 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 import yaml
 from comparison_panel import panel_view_state
 from detector_panel import DetectorPanel
 from mask_state import MaskWork, NativeMask
+from native_simulation_panel import NativeDraftPanel
+from native_simulation_state import (
+    NativeSimulationDraft,
+    NativeSimulationReference,
+    native_draft_document,
+    native_reference_document,
+)
 from parameter_state import FieldChange, SessionHistory, _action
 from project_state import ProjectFormatError
 from PySide6.QtCore import QPointF, Qt, Signal
@@ -16,6 +24,8 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -24,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -285,6 +296,10 @@ class SimulatorPanel(QWidget):
         self.editors = {}
         self._restoring = False
         self._pending_detector_state = None
+        self._transfer_context = None
+        self._transfer_request = None
+        self._transfer_review = None
+        self._transfer_dialog = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         controls = QHBoxLayout()
@@ -319,12 +334,26 @@ class SimulatorPanel(QWidget):
         ):
             actions.addWidget(button)
         layout.addLayout(actions)
+        transfer_actions = QHBoxLayout()
+        self.transfer_target = QComboBox()
+        self.transfer_target.addItem("Experiment -> configured draft", "configured")
+        for recipe in ("bi2se3", "bi2te3", "gd1", "sid1", "clean1", "b4"):
+            self.transfer_target.addItem("Experiment -> native " + recipe, recipe)
+        self.transfer_button = QPushButton("Review experiment transfer")
+        self.transfer_button.clicked.connect(self.review_transfer)
+        transfer_actions.addWidget(self.transfer_target)
+        transfer_actions.addWidget(self.transfer_button)
+        layout.addLayout(transfer_actions)
         self.status = QLabel(
             "Load a supported rasim-simulation-v2 configuration. No acquisition or fit is required."
         )
         self.status.setWordWrap(True)
         self.status.setMinimumHeight(42)
         layout.addWidget(self.status)
+        self.draft_kind = QComboBox()
+        self.draft_kind.addItem("Independent configured YAML", "configured")
+        self.draft_kind.addItem("Independent native recipe", "native")
+        layout.addWidget(self.draft_kind)
         splitter = QSplitter()
         forms = QWidget()
         forms_layout = QVBoxLayout(forms)
@@ -360,7 +389,11 @@ class SimulatorPanel(QWidget):
         self.groups.currentChanged.connect(self._show_group)
         forms_layout.addWidget(self.groups, 1)
         forms.setMinimumWidth(300)
-        splitter.addWidget(forms)
+        self.form_stack = QStackedWidget()
+        self.form_stack.addWidget(forms)
+        self.native = NativeDraftPanel(self)
+        self.form_stack.addWidget(self.native)
+        splitter.addWidget(self.form_stack)
         self.outputs = QTabWidget()
         self.detector = DetectorPanel(compact=True)
         for control in (
@@ -402,6 +435,7 @@ class SimulatorPanel(QWidget):
         self.identity.setWordWrap(True)
         self.identity.setMinimumHeight(46)
         layout.addWidget(self.identity)
+        self.draft_kind.currentIndexChanged.connect(self._kind_changed)
         self.load_button.clicked.connect(self.load)
         self.validate_button.clicked.connect(self.validate)
         self.run_button.clicked.connect(self.run)
@@ -422,24 +456,206 @@ class SimulatorPanel(QWidget):
         self.detector.view.view_state_changed.connect(self.shell._mark_dirty)
         self.refresh()
 
+    @property
+    def active_draft(self):
+        return self.native.draft if self.draft_kind.currentData() == "native" else self.draft
+
+    def _kind_changed(self):
+        self.form_stack.setCurrentIndex(self.draft_kind.currentIndex())
+        self._supersede()
+        self.figures.setVisible(self.draft_kind.currentData() == "configured")
+        self.save_configuration_button.setText(
+            "Export native draft JSON"
+            if self.draft_kind.currentData() == "native"
+            else "Export configuration YAML"
+        )
+        self.shell._mark_dirty()
+        self.refresh()
+
     def refresh(self) -> None:
-        available = self.draft is not None
+        native = self.draft_kind.currentData() == "native"
+        draft = self.active_draft
+        validated = self.native.validated if native else self.validated
+        history = self.native.history if native else self.history
+        available = draft is not None
+        self.load_button.setText("Load native physics" if native else "Load configuration")
         busy = self.shell._active_kind == "simulation" or self.shell._pending_simulation is not None
         self.validate_button.setEnabled(available)
-        self.run_button.setEnabled(available and self.validated == self.draft)
+        self.run_button.setEnabled(available and validated == draft)
         self.cancel_button.setEnabled(busy)
         self.inspect_button.setEnabled(busy or self.frame is not None)
         self.resume_button.setEnabled(self.hold)
-        self.save_configuration_button.setEnabled(available and self.validated == self.draft)
+        self.save_configuration_button.setEnabled(available and validated == draft)
         self.export_button.setEnabled(
             self.frame is not None
             and self.frame.quantitative
             and not busy
             and not self.detector._profile_pending
         )
-        self.reopen_button.setEnabled(self.result_reference is not None)
-        self.undo_button.setEnabled(bool(self.history.undo_actions))
-        self.redo_button.setEnabled(bool(self.history.redo_actions))
+        self.reopen_button.setEnabled(
+            (self.native.result_reference if native else self.result_reference) is not None
+        )
+        self.undo_button.setEnabled(bool(history.undo_actions))
+        self.redo_button.setEnabled(bool(history.redo_actions))
+
+    def _transfer_source_context(self):
+        return (
+            self.shell.project.project_id,
+            self.shell.selected_acquisition_id,
+            self.shell._numeric_draft,
+            self.shell._numeric_acquisition(),
+        )
+
+    def transfer_context_current(self, token):
+        if self._transfer_context is None or self._transfer_request is None:
+            return False
+        source, target, destination, epoch = self._transfer_context
+        actual = self.draft if target == "configured" else self.native.draft
+        return (
+            token == self._transfer_request["token"]
+            and source == self._transfer_source_context()
+            and actual == destination
+            and epoch == self.epoch
+        )
+
+    def review_transfer(self):
+        from simulation_transfer import numeric_snapshot_document
+
+        try:
+            acquisition = self.shell._numeric_validated_acquisition()
+            source = self.shell._numeric_draft
+            if source is None or not self.shell._numeric_identity_matches(acquisition):
+                raise ProjectFormatError("load a compatible experiment numeric snapshot first")
+            selected = self.transfer_target.currentData()
+            target = "configured" if selected == "configured" else "native"
+            destination = self.draft if target == "configured" else self.native.draft
+            if target == "native" and (destination is None or destination.recipe != selected):
+                raise ProjectFormatError(
+                    "load the explicitly selected native recipe before reviewing this transfer"
+                )
+            self._supersede()
+            token = str(uuid4())
+            self._transfer_context = (
+                self._transfer_source_context(),
+                target,
+                destination,
+                self.epoch,
+            )
+            request = {
+                "token": token,
+                "source": numeric_snapshot_document(source),
+                "target_kind": target,
+                "recipe": selected,
+                "destination": simulation_draft_document(destination)
+                if target == "configured"
+                else native_draft_document(destination),
+            }
+            self._transfer_request = request
+            self._transfer_review = None
+            self.shell._request_simulation("transfer_review", json.dumps(request).encode())
+        except (ValueError, ProjectFormatError) as exc:
+            self.status.setText(f"Transfer unavailable: {exc}")
+
+    def present_transfer(self, review):
+        if not self.transfer_context_current(review.token):
+            self.status.setText("Stale transfer review rejected; source or destination changed")
+            return
+        self._transfer_review = review
+        if self._transfer_dialog is not None:
+            self._transfer_dialog.close()
+        dialog = QDialog(self)
+        self._transfer_dialog = dialog
+        dialog.setWindowTitle("Review immutable experiment transfer")
+        dialog.resize(1050, 650)
+        layout = QVBoxLayout(dialog)
+        note = QLabel(
+            f"Destination: {review.target_kind}; source snapshot SHA256 {review.source_sha256}. Apply copies the included values into an independent draft. Target-retained and incompatible fields are explicit below."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        table = QTableWidget(len(review.rows), 5)
+        table.setHorizontalHeaderLabels(
+            ["Mapping", "Field", "Value", "Units / frame", "Provenance / reason"]
+        )
+        for row, values in enumerate(review.rows):
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setToolTip(value)
+                table.setItem(row, column, item)
+        table.setColumnWidth(0, 160)
+        table.setColumnWidth(1, 240)
+        table.setColumnWidth(2, 260)
+        table.setColumnWidth(3, 220)
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(
+            lambda: self.confirm_transfer(review, dialog)
+        )
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.show()
+
+    def confirm_transfer(self, review, dialog=None):
+        if review is not self._transfer_review or not self.transfer_context_current(review.token):
+            self.status.setText(
+                "Stale transfer confirmation rejected before mutation; review again"
+            )
+            return False
+        request = {
+            **self._transfer_request,
+            "confirmed_candidate": (
+                simulation_draft_document(review.candidate)
+                if review.target_kind == "configured"
+                else native_draft_document(review.candidate)
+            ),
+        }
+        self.shell._request_simulation("transfer_apply", json.dumps(request).encode())
+        if dialog is not None:
+            dialog.accept()
+        return True
+
+    def apply_transfer(self, review):
+        if not self.transfer_context_current(review.token):
+            self.status.setText("Deferred transfer confirmation became stale; prior state retained")
+            return False
+        if review.target_kind == "native":
+            accepted = self.native.adopt(
+                review.candidate, "Apply reviewed experiment transfer", validated=True
+            )
+        else:
+            if not self._can_persist(review.candidate, self.result_reference):
+                return False
+            if self.draft is not None:
+                self.history.push(
+                    _action(
+                        "Apply reviewed experiment transfer",
+                        [
+                            FieldChange(
+                                review.candidate.draft_id,
+                                "simulation_draft",
+                                self.draft,
+                                review.candidate,
+                            )
+                        ],
+                    )
+                )
+            self.draft = self.validated = review.candidate
+            self._populate(review.candidate)
+            self._supersede()
+            self.shell._mark_dirty()
+            accepted = True
+        if accepted:
+            self.draft_kind.setCurrentIndex(self.draft_kind.findData(review.target_kind))
+            self.status.setText(
+                "Reviewed immutable experiment transfer applied; source unchanged. Run is explicit."
+            )
+            self._transfer_review = self._transfer_request = self._transfer_context = None
+            self.refresh()
+        return accepted
 
     def _settings(self) -> dict:
         return {
@@ -619,11 +835,19 @@ class SimulatorPanel(QWidget):
         self.epoch += 1
         self.shell._supersede_simulation()
         if self.frame is not None:
+            progress = (
+                "completed batches"
+                if isinstance(self.frame.draft, NativeSimulationDraft)
+                else "draw prefix"
+            )
             self.identity.setText(
-                f"Historical snapshot: draft {self.frame.draft.draft_id} revision {self.frame.draft.revision}, prefix {self.frame.draw_prefix}. Current draft changed; no current quantitative values."
+                f"Historical snapshot: draft {self.frame.draft.draft_id} revision {self.frame.draft.revision}, {progress} {self.frame.draw_prefix}. Current draft changed; no current quantitative values."
             )
 
     def history_step(self, undo: bool) -> None:
+        if self.draft_kind.currentData() == "native":
+            self.native.history_step(undo)
+            return
         source = self.history.undo_actions if undo else self.history.redo_actions
         if not source or self.draft is None:
             return
@@ -649,6 +873,9 @@ class SimulatorPanel(QWidget):
         self.refresh()
 
     def load(self) -> None:
+        if self.draft_kind.currentData() == "native":
+            self.native.load()
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Load independent configured simulation", "", "Simulation YAML (*.yaml *.yml)"
         )
@@ -659,6 +886,9 @@ class SimulatorPanel(QWidget):
             )
 
     def validate(self) -> None:
+        if self.draft_kind.currentData() == "native":
+            self.native.validate()
+            return
         if self.draft is None:
             return
         if not self.propose():
@@ -681,7 +911,10 @@ class SimulatorPanel(QWidget):
         )
 
     def run(self) -> None:
-        if self.draft is None or self.validated != self.draft:
+        native = self.draft_kind.currentData() == "native"
+        draft = self.active_draft
+        validated = self.native.validated if native else self.validated
+        if draft is None or validated != draft:
             self.status.setText("Validate the complete current draft before Run")
             return
         self.hold = False
@@ -692,13 +925,15 @@ class SimulatorPanel(QWidget):
             "Awaiting quantitative snapshot; any retained values are historical"
         )
         self.identity.setText(
-            f"Starting current draft revision {self.draft.revision}; Awaiting quantitative snapshot"
+            f"Starting current draft revision {draft.revision}; Awaiting quantitative snapshot"
         )
         self.shell._request_simulation(
-            "run",
+            "native_run" if native else "run",
             json.dumps(
                 {
-                    "draft": simulation_draft_document(self.draft),
+                    "draft": native_draft_document(draft)
+                    if native
+                    else simulation_draft_document(draft),
                     **self.shell._simulation_resource_charge(),
                 }
             ).encode(),
@@ -711,12 +946,15 @@ class SimulatorPanel(QWidget):
             self.status.setText(
                 "Holding this exact snapshot image/profiles; later publications remain historical until selected"
             )
-        elif self.shell._active_kind == "simulation" and self.shell._simulation_operation == "run":
+        elif self.shell._active_kind == "simulation" and self.shell._simulation_operation in (
+            "run",
+            "native_run",
+        ):
             self.shell.jobs.inspect_active(self.shell._active_generation)
             self._inspection_pending = True
             self.hold = False
             self.status.setText(
-                "Inspection requested at the next canonical prefix boundary; Awaiting quantitative snapshot"
+                "Inspection requested at the next canonical batch boundary; Awaiting quantitative snapshot"
             )
         self.refresh()
 
@@ -727,6 +965,27 @@ class SimulatorPanel(QWidget):
         self.refresh()
 
     def save_configuration(self) -> None:
+        if self.draft_kind.currentData() == "native":
+            if self.native.draft is None or self.native.validated != self.native.draft:
+                return
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export independent native draft",
+                "native-draft.json",
+                "Native draft (*.json)",
+            )
+            if path:
+                self.shell._request_simulation(
+                    "native_save",
+                    json.dumps(
+                        {
+                            "operation": "native_save",
+                            "draft": native_draft_document(self.native.draft),
+                            "path": path,
+                        }
+                    ).encode(),
+                )
+            return
         if self.draft is None:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -758,7 +1017,9 @@ class SimulatorPanel(QWidget):
         query = self.detector.profile_query()
         profiles = self.detector._current_profiles
         manifest = json.loads(frame.manifest)
-        manifest["write_configured_figures"] = self.figures.isChecked()
+        manifest["write_configured_figures"] = (
+            isinstance(frame.draft, SimulationDraft) and self.figures.isChecked()
+        )
         config_outputs = self._mapping["outputs"] if self._mapping is not None else {}
         directory = str(config_outputs.get("output_directory", ""))
         path, _ = QFileDialog.getSaveFileName(
@@ -797,6 +1058,13 @@ class SimulatorPanel(QWidget):
         self.shell._request_simulation("export", work)
 
     def reopen(self) -> None:
+        if self.draft_kind.currentData() == "native":
+            if self.native.result_reference is not None:
+                self.shell._request_simulation(
+                    "reopen",
+                    json.dumps(native_reference_document(self.native.result_reference)).encode(),
+                )
+            return
         if self.result_reference is not None:
             from simulation_state import simulation_reference_document
 
@@ -810,13 +1078,18 @@ class SimulatorPanel(QWidget):
             or not self.frame.quantitative
             or self.frame.image is None
             or (
-                self.shell._simulation_operation == "run"
+                self.shell._simulation_operation in ("run", "native_run")
                 and self.shell._active_kind == "simulation"
             )
         ):
             return
         shape = self.frame.image.shape
-        mask = NativeMask(self.frame.draft.configuration_sha256, shape)
+        mask = NativeMask(
+            self.frame.draft.configuration_sha256
+            if isinstance(self.frame.draft, SimulationDraft)
+            else self.frame.draft.physics_sha256,
+            shape,
+        )
         work = MaskWork(self.frame.image, mask, (), self.detector.profile_query())
         self.shell._request_simulation("profiles", work)
 
@@ -830,8 +1103,13 @@ class SimulatorPanel(QWidget):
             self.hold = True
             force = True
         if self.hold and not force and self.frame is not None and self.frame.quantitative:
+            progress = (
+                "completed batches"
+                if isinstance(frame.draft, NativeSimulationDraft)
+                else "draw prefix"
+            )
             self.identity.setText(
-                f"Held snapshot draft {self.frame.draft.revision} prefix {self.frame.draw_prefix}; latest prefix {frame.draw_prefix}. Image and profiles remain held together."
+                f"Held snapshot draft {self.frame.draft.revision} {progress} {self.frame.draw_prefix}; latest {progress} {frame.draw_prefix}. Image and profiles remain held together."
             )
             return True
         self.frame = frame
@@ -841,24 +1119,50 @@ class SimulatorPanel(QWidget):
             self.detector.setEnabled(True)
             previous = panel_view_state(self.detector)
             self.detector.view.column_axis_label = (
-                "macrobin column index" if frame.draft.route == "macrobins" else "column_px"
+                "macrobin column index"
+                if (
+                    (isinstance(frame.draft, NativeSimulationDraft) and frame.draft.bin_size_px > 1)
+                    or (
+                        isinstance(frame.draft, SimulationDraft)
+                        and frame.draft.route == "macrobins"
+                    )
+                )
+                else "column_px"
             )
             self.detector.view.row_axis_label = (
-                "macrobin row index" if frame.draft.route == "macrobins" else "row_px"
+                "macrobin row index"
+                if (
+                    (isinstance(frame.draft, NativeSimulationDraft) and frame.draft.bin_size_px > 1)
+                    or (
+                        isinstance(frame.draft, SimulationDraft)
+                        and frame.draft.route == "macrobins"
+                    )
+                )
+                else "row_px"
             )
             self.detector.column_coordinate_label.setText(self.detector.view.column_axis_label)
             self.detector.row_coordinate_label.setText(self.detector.view.row_axis_label)
             self.detector.profile_measure_control.setItemText(
                 1,
-                "Mean / valid macrobin" if frame.draft.route == "macrobins" else "Mean / valid px",
+                "Mean / valid macrobin"
+                if (
+                    (isinstance(frame.draft, NativeSimulationDraft) and frame.draft.bin_size_px > 1)
+                    or (
+                        isinstance(frame.draft, SimulationDraft)
+                        and frame.draft.route == "macrobins"
+                    )
+                )
+                else "Mean / valid px",
             )
             self.detector.quantitative_ready = frame.quantitative
             self.detector.observable_unit = (
                 "angstrom^2/pixel^2 (display density)"
-                if frame.draft.route == "pixel_centers"
+                if isinstance(frame.draft, SimulationDraft) and frame.draft.route == "pixel_centers"
                 else "angstrom^2 (simulation mass)"
             )
-            if frame.draft.route == "macrobins":
+            if (isinstance(frame.draft, NativeSimulationDraft) and frame.draft.bin_size_px > 1) or (
+                isinstance(frame.draft, SimulationDraft) and frame.draft.route == "macrobins"
+            ):
                 self.detector.observable_unit = (
                     "angstrom^2/macrobin (display quadrature; cursor uses macrobin indices)"
                 )
@@ -927,19 +1231,34 @@ class SimulatorPanel(QWidget):
                 arrays["ewald_density_A2_rad2_inv"],
                 "Canonical detector-visible nominal Ewald coating; angstrom^2 rad^-2",
             )
+        current_draft = self.active_draft
+        validated = (
+            self.native.validated
+            if isinstance(current_draft, NativeSimulationDraft)
+            else self.validated
+        )
         current = (
-            self.draft is not None and frame.draft == self.draft and self.validated == self.draft
+            current_draft is not None
+            and frame.draft == current_draft
+            and validated == current_draft
         )
         label = "Current" if current else "Historical"
+        progress = (
+            f"completed event batches {frame.draw_prefix}; integral complete={json.loads(frame.manifest).get('integration_complete')}"
+            if isinstance(frame.draft, NativeSimulationDraft)
+            else f"draw prefix {frame.draw_prefix}; detector seed {frame.draft.detector_seed}"
+        )
         self.identity.setText(
-            f"{label} draft {frame.draft.draft_id} revision {frame.draft.revision}; run {frame.run_id}; {frame.measure}; backend {frame.backend}; draw prefix {frame.draw_prefix}; detector seed {frame.draft.detector_seed}. "
+            f"{label} draft {frame.draft.draft_id} revision {frame.draft.revision}; run {frame.run_id}; {frame.measure}; backend {frame.backend}; {progress}. "
             + (
                 "Immutable float64; nominal, not converged or fit qualified."
                 if frame.quantitative
                 else "Float32 presentation only; Awaiting quantitative snapshot."
             )
         )
-        if frame.draft.route == "macrobins":
+        if (isinstance(frame.draft, NativeSimulationDraft) and frame.draft.bin_size_px > 1) or (
+            isinstance(frame.draft, SimulationDraft) and frame.draft.route == "macrobins"
+        ):
             self.identity.setText(
                 self.identity.text()
                 + " Display coordinates are macrobin column/row indices; exported center arrays provide native pixel coordinates."
@@ -948,7 +1267,31 @@ class SimulatorPanel(QWidget):
         return True
 
     def ready(self, operation: str, value) -> None:
-        if isinstance(value, SimulationDraft):
+        if operation == "transfer_review":
+            self.present_transfer(value)
+        elif operation == "transfer_apply":
+            self.apply_transfer(value)
+        elif isinstance(value, NativeSimulationDraft):
+            if operation == "native_load":
+                if not self.native.can_persist(value, None):
+                    return
+                self.native.result_reference = None
+                self.native.history = SessionHistory()
+            self.native.adopt(
+                value,
+                "Load native draft" if operation == "native_load" else "Validate native draft",
+                validated=True,
+                record_history=operation != "native_load",
+            )
+        elif isinstance(value, NativeSimulationReference):
+            if not self.native.can_persist(self.native.draft, value):
+                return
+            self.native.result_reference = value
+            self.status.setText(
+                f"Exact native snapshot exported/read back: {value.path}; SHA256 {value.sha256}"
+            )
+            self.shell._mark_dirty()
+        elif isinstance(value, SimulationDraft):
             reference = None if operation in ("load", "load_limited") else self.result_reference
             if not self._can_persist(value, reference):
                 return
@@ -1004,7 +1347,7 @@ class SimulatorPanel(QWidget):
                 self.detector._profile_pending = (
                     self.frame is not None and self.frame.image is not None
                 )
-        elif operation == "save_configuration":
+        elif operation in ("save_configuration", "native_save"):
             self.status.setText(f"Canonical YAML exported and read back: {value}")
         self.refresh()
 
@@ -1033,6 +1376,17 @@ class SimulatorPanel(QWidget):
 
     def restore(self, view, detail: str = "") -> None:
         self.epoch += 1
+        self.native.draft = view.native_simulation_draft
+        self.native.result_reference = view.native_simulation_result
+        self.native.validated = None
+        self.native.history = SessionHistory()
+        if self.native.draft is not None:
+            self.native.populate(self.native.draft)
+        self.draft_kind.blockSignals(True)
+        self.draft_kind.setCurrentIndex(self.draft_kind.findData(view.simulator_kind))
+        self.form_stack.setCurrentIndex(self.draft_kind.currentIndex())
+        self.figures.setVisible(view.simulator_kind == "configured")
+        self.draft_kind.blockSignals(False)
         self.draft = view.simulation_draft
         self.result_reference = view.simulation_result
         self.validated = None

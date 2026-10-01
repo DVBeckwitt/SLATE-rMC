@@ -243,8 +243,8 @@ choose a new output directory before retrying. Missing Matplotlib disables confi
 with a reason; exact numeric export remains available.
 
 **Export configuration YAML** writes a validated derived configuration with absolute CIF binding
-and verifies its physics revision on readback. Schema 9 projects save the independent draft,
-result reference and detector inspection settings; schemas 1-8 remain readable. Reopening keeps
+and verifies its physics revision on readback. Schema 10 projects save both independent drafts,
+result references, transfer provenance and detector inspection settings; schemas 1-9 remain readable. Reopening keeps
 saved results historical and requires explicit canonical validation before execution. Input
 changes cannot mutate launched drafts, held snapshots or exported results.
 
@@ -264,6 +264,49 @@ reference admission preflight the complete prospective project through the exist
 boundary and view reserve. Rejected size changes keep the prior draft, history, result reference
 and selection savable; declared input is never trimmed. Ordinary close waits asynchronously for
 ownership to drain.
+
+### Independent native simulator and reviewed experiment transfer
+
+In **Simulator**, choose **Independent native recipe**, then **Load native physics**. Load an
+expanded `rasim-native-fit-physics-v1` JSON for Bi2Se3, Bi2Te3, GD1, SiD1, Clean1 or B4, or a
+previously exported `slate.native-draft.v1` envelope. No experiment, observation pack or fit is
+required. The configured draft stays separate. Search the grouped native fields by name, unit or
+owner; scalar, vector and matrix controls edit the declared input. Specimen coordinates come
+from the selected canonical model and override its baseline sites/lattice. Unsupported native
+Bi disorder and Pb reflectivity fail with a reason.
+
+Set positive integer coherent repeats (Bi conventional cells / Pb c-axis layers), integrated
+rectangle width (1 is full native resolution) and optional numerical proposal mosaic. Physical
+thickness is `N*c + extra` angstroms. Explicit closed surface/phase fractions preserve tiny
+probabilities, must agree with canonical shares and are cleared when their shares change.
+**Validate complete draft** checks physical domains and the complete source/rod/panel declaration;
+**Run selected outputs** starts CPU deterministic detector integration on the shared numerical
+worker with one nested BLAS thread. Existing memory/panel/source/rod caps reject unsupported work
+without pruning it. Setup and individual batches are noninterruptible; Cancel acknowledges the
+request and safe drain follows asynchronously. Native CUDA and auxiliary routes are unavailable.
+
+**Inspect this snapshot** holds an immutable whole-panel float64 sum of completed additive event
+batches. Every rectangle has been evaluated for those batches; the integral remains incomplete
+until all independent parts finish. **Follow progression** resumes presentation. Macrobin display
+indices differ from exported native-pixel centers/edges. Exact profiles/export use float64 arrays;
+completion remains nominal and does not establish convergence or a qualified fit. **Export native
+draft JSON** saves the complete independent declaration. **Export exact snapshot** and **Reopen
+saved snapshot** use the shared identity-checked numeric writer/reader. Reopened project drafts
+require explicit validation before a new run.
+
+For transfer, prepare the selected experiment's numeric state, choose **Experiment -> configured
+draft** or one of the explicit **Experiment -> native recipe** targets, then **Review experiment
+transfer**. Load the matching native recipe first. Review included values and units, destination
+values that are retained, omitted acquisition/fit state and incompatible mappings. A configured
+Gaussian spectrum retains the native line spectrum explicitly. **Apply** rechecks the same source
+and destination snapshot plus fresh configuration/CIF hashes, then creates an independent draft;
+the experiment stays unchanged and Run remains explicit. Changes while a review or confirmation
+is queued reject that stale transfer. Undo/redo and ordinary project save/reopen preserve draft
+values, provenance and result references.
+
+Implementation checks follow the user's [nominal-proof policy](../docs/VALIDATION.md#desktop-implementation-verification).
+Task07 implements both workflows; root acceptance, full sustained timing and locked-environment
+compatibility remain separate. Existing fitting validation and qualification machinery is preserved.
 
 ### Native exclusion editing
 
