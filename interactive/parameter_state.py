@@ -64,7 +64,7 @@ def _source_mapping(draft: NumericDraft) -> dict[str, Any]:
     return mapping
 
 
-def configured_draft(draft: NumericDraft) -> SimulationConfiguration:
+def configured_draft(draft: NumericDraft, storage=()) -> SimulationConfiguration:
     """Validate the complete edited input with the authoritative configured reader."""
     from rasim_next.pipeline.configured_simulation import load_simulation_config
 
@@ -83,8 +83,14 @@ def configured_draft(draft: NumericDraft) -> SimulationConfiguration:
         draft.configuration_path,
         source_bytes=encoded,
         max_referenced_cif_bytes=1024 * 1024,
+        stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
     )
-    if config.material.cif_path != draft.cif_path or config.cif_sha256 != draft.cif_sha256:
+    from archive_storage import stored_path
+
+    if (
+        config.material.cif_path != stored_path(draft.cif_path, storage, draft.cif_sha256)
+        or config.cif_sha256 != draft.cif_sha256
+    ):
         raise ProjectFormatError("configuration-dependent CIF identity changed")
     return config
 

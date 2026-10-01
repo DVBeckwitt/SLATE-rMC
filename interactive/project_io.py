@@ -167,6 +167,9 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
     path, axis_limit = decode_bounded_path(argument)
     control.report(f"Opening {path.name}")
     document = read_project_document(path)
+    from archive_storage import storage_files
+
+    storage = storage_files(document.view.archive_storage_json)
     seen: dict[Path, tuple[str, str, tuple[int, int] | None]] = {}
     checks: list[SourceCheck] = []
     reference_checks: list[ReferenceCheck] = []
@@ -295,7 +298,7 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
             from parameter_state import configured_draft
 
             try:
-                configured_draft(draft)
+                configured_draft(draft, storage)
             except (OSError, ValueError) as exc:
                 raise ProjectFormatError(f"saved numeric draft is invalid: {exc}") from exc
             numeric_validated = True
@@ -304,7 +307,7 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
         from simulation_io import canonical_configuration
 
         try:
-            canonical_configuration(document.view.simulation_draft)
+            canonical_configuration(document.view.simulation_draft, storage)
         except (OSError, ValueError) as exc:
             simulation_detail = f"Saved independent draft requires input review: {exc}"
     if document.view.native_simulation_draft is not None:
@@ -323,12 +326,30 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                     raise RuntimeError("hBN project opening canceled")
                 validate_hbn_result(json.loads(text), session)
     sample_checks = ()
-    if document.view.sample_session is not None:
+    if document.view.sample_session is not None and not storage:
         from sample_io import sample_input_checks
         from threadpoolctl import threadpool_limits
 
         with threadpool_limits(limits=1):
             sample_checks = sample_input_checks(document.view.sample_session, control)
+    if document.view.sample_session is not None and storage:
+        from sample_io import _validate_input_bindings, validate_sample_record
+        from sample_state import payload_hash
+
+        session = document.view.sample_session
+        _validate_input_bindings(json.loads(session.inputs_json))
+        for text in session.results_json:
+            validate_sample_record(json.loads(text), session)
+        inputs = [json.loads(session.inputs_json)] + [
+            json.loads(v)["launch"]["inputs"] for v in session.results_json
+        ]
+        sample_checks = tuple(
+            (
+                payload_hash(v),
+                "Archived exact bytes/history; live canonical geometry revalidation is unavailable until explicitly requested through existing owners",
+            )
+            for v in inputs
+        )
     loaded = LoadedProject(
         document,
         path,
@@ -424,6 +445,11 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         from native_fit_io import prepared_paths
 
         protected.extend(prepared_paths(document.view.native_fit_session))
+    from archive_storage import storage_files
+
+    protected.extend(
+        Path(row["stored"]) for row in storage_files(document.view.archive_storage_json)
+    )
     for source in protected:
         if destination.resolve(strict=False) == source.resolve(strict=False) or (
             destination.exists() and source.exists() and os.path.samefile(destination, source)

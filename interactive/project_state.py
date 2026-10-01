@@ -38,7 +38,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 15
+PROJECT_SCHEMA_VERSION = 16
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -651,8 +651,12 @@ class ProjectViewState:
     joint_session: JointSession | None = None
     physical_settings_json: str = "{}"
     native_fit_session: NativeFitSession | None = None
+    archive_storage_json: str = "{}"
 
     def __post_init__(self):
+        from archive_storage import storage_files
+
+        storage_files(self.archive_storage_json)
         _physical_settings(self.physical_settings_json)
         if self.native_fit_session is not None and not isinstance(
             self.native_fit_session, NativeFitSession
@@ -1249,6 +1253,7 @@ def project_to_document(
         "sample_session": sample_session_document(state.view.sample_session),
         "joint_session": joint_session_document(state.view.joint_session),
         "native_fit_session": native_fit_session_document(state.view.native_fit_session),
+        "archive_storage_json": state.view.archive_storage_json,
         "physical_settings_json": _physical_settings(state.view.physical_settings_json),
         "detector": _detector_document(detector),
         "scene": (
@@ -1360,6 +1365,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         12,
         13,
         14,
+        15,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1430,7 +1436,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         | ({"sample_session"} if top["schema_version"] >= 12 else set())
         | ({"joint_session"} if top["schema_version"] >= 13 else set())
         | ({"physical_settings_json"} if top["schema_version"] >= 14 else set())
-        | ({"native_fit_session"} if top["schema_version"] >= 15 else set()),
+        | ({"native_fit_session"} if top["schema_version"] >= 15 else set())
+        | ({"archive_storage_json"} if top["schema_version"] >= 16 else set()),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1503,6 +1510,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             joint_session_from_document(view_data.get("joint_session")),
             _physical_settings(view_data.get("physical_settings_json", "{}")),
             native_fit_session_from_document(view_data.get("native_fit_session")),
+            view_data.get("archive_storage_json", "{}"),
         ),
         draft,
     )

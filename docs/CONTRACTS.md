@@ -1253,3 +1253,37 @@ fixed values and final stage order. Physical bounds and active/fixed scopes cann
 released. Unavailable parameter/method metadata remains inert. This is structural draft checking,
 not full scientific domain/gauge/qualification or full engine launch admission. Run and indexed
 adoption remain unavailable pending R4; no equivalent route around the parked script patch exists.
+
+
+## Portable archives and exact exports (schema 16)
+
+Schemas 1-15 remain readable with empty storage. A versioned storage object is bounded to 128 KiB
+and 256 absolute original/stored path pairs with raw SHA256/size and archive identity. Expected
+predecessor hashes must agree; relocated bytes still pass existing owner checks. Original
+scientific bytes are never rewritten or assigned a derived document's digest. Compressed OSC
+archive members retain `.osc.gz` for the authoritative reader.
+
+Review displays selection, file identities/sizes/total, unavailable references and selected versus
+historical qualification. Export binds current document/selection/epoch across the file chooser
+and deferred dispatch. Sources are rehashed before copying, compared while streaming and rechecked
+before publication. Missing selected dependencies block self-contained export. Future unavailable
+R4-R6 products are separately labeled. Retained result input closure is distinct from current draft.
+
+Limits: 256 files,512 MiB per file, 2 GiB expanded data, 1 MiB project, 512 KiB manifest and shared 4 MiB
+requests. Existing CPU/resident-state admission and one worker bound file work. Disk admission
+adds bounded documents and 16 MiB margin. Import rejects unsafe/colliding Windows names, links,
+encryption, incomplete inventory, size/hash mismatch, unsupported version, contradictory
+qualification and inconsistent selection. Existing numeric/JSON formats never execute checkpoints.
+
+Archive publication uses a flushed/fsynced owned sibling temporary file and atomic no-overwrite
+hard link where supported. Import verifies an owned staging directory before Windows rename to
+a new destination. Unsupported filesystems can reject publication. There is no filesystem-wide
+lock or multi-file crash-recovery guarantee. Failure/cancel cleans only owned new staging paths.
+A completed directory may remain when later GUI context rejects its reference; it is neither
+silently adopted nor removed. Open separately applies ordinary dirty/pending-state handling.
+
+Prepared exact measured NPZ export contains raw/background/signed corrected counts, validity,
+frozen row IDs, marginal errors, full covariance and provenance without normalization/prediction.
+Reference undo/redo retains pending text. Existing figure exports retain paired numeric values.
+Configured figures still require reviewed new filenames in an existing external output directory
+through their owner; archive relocation does not rewrite the output declaration.

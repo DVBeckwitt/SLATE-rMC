@@ -212,3 +212,43 @@ The r3 index records final sources, exact disposable methods, budgets, capabilit
 protection hashes. No fit, fresh observation preparation, scientific prediction/Jacobian, full
 scientific image, sweep or performance campaign ran. Full coupled model/gauge/stage launch
 admission remains R4. Draft support does not imply numerical qualification or original acceptance.
+
+
+## R7a portable archive checks (2026-10-01)
+
+An actual desktop/shared-worker review/export/import/Open uses copied real prepared inputs and
+a genuine retained joint report/handoff. Only new disposable source copies are removed before
+reopening elsewhere. 1322 frozen rows, 242 negative corrected values, exact count/sigma/valid arrays,
+full covariance, definitions/history/pending edits and joint qualification remain unchanged.
+Measured-data NPZ export and reference undo/redo pass. Older R3 definitions missing later metadata
+require explicit current review; equality checks remain intact. The screenshot after undo shows
+unavailable arrays and does not prove rendered profiles; exact array receipts supply the proof.
+
+Genuine configured/native snapshots reload through existing owners with all arrays equal; archive
+NPZ bytes/manifests remain exact. Reexport explicitly disables historical configured figure
+destinations, changing only that option. Typed backward defaults may add empty transfer provenance
+to a loaded frame's metadata, distinct from retained original bytes. Result input closure is
+checked with current paths differing from historical snapshot paths. No nominal output is promoted.
+
+Retained hBN/sample/comparison projects pass import and structural Open with compressed OSC, masks,
+initial values, view state and original qualification/history unchanged. Archived sample live
+geometry revalidation is explicitly unavailable until its existing active owner performs that
+separate gate. Repeated archives preserve acquisition ancestor provenance and raw/decoded hashes.
+
+Actual shared-worker checks cover queued/active cancel, stale destination-dialog review, mutation
+after copy/before publication, completed-but-stale import rejection and ordinary active Close/drain.
+Sentinels survive. One malformed set rejects traversal/absolute/drive/device/empty-component names,
+duplicate/case aliases, links, unsupported version, incomplete closure, qualification contradictions,
+hash tampering, truncation and oversized header. Positive import and selection checks accompany it.
+
+Failed receipts remain external. Production repairs preserve `.osc.gz`, pass storage into configured
+figure export, include historical snapshot inputs and preserve ancestor provenance. Evaluator
+failures include a Python environment lacking Qt, wrong configuration attribute, legacy metadata
+default expectation,2048-pixel cap on 3000-pixel sources, an old sample routing fixture with incomplete
+image/file bindings and copying relative-path JSON to a different directory without rebasing.
+Corrected copies/expectations preserve validators and old evidence; no failed receipt is replaced.
+
+Formatting/lint/import/build establish software compatibility only. No fit, prediction/Jacobian,
+observation preparation, new full scientific image, sweep or performance campaign runs. The external
+R7a index records methods, sources/artifacts, protected evidence, failures and whole-command budgets.
+Main/Task12 remain untouched; root owns original U14 acceptance. R4 Run/adoption and R7b are separate.

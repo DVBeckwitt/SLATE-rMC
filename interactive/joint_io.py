@@ -370,8 +370,14 @@ def joint_work(argument, control):
                 else "Qualified hash-bound geometry handoff saved; no experiment adoption"
             )
         elif operation == "reload_handoff":
-            path = Path(request["path"]).resolve(strict=True)
-            handoff = load_joint_geometry_handoff(path)
+            from archive_storage import storage_files, stored_path
+
+            storage = storage_files(request.get("storage_json", "{}"))
+            path = stored_path(request["path"], storage).resolve(strict=True)
+            handoff = load_joint_geometry_handoff(
+                path,
+                stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
+            )
             if not any(p == str(path) for p, _ in session.exports):
                 if len(session.exports) >= 16:
                     raise ValueError("joint export reference history is full")

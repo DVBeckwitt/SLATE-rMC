@@ -15,6 +15,8 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import numpy as np
+from archive_io import ArchiveWorkResult, archive_work
+from archive_panel import ArchivePanel
 from comparison_panel import ComparisonPanel, panel_view_state
 from comparison_state import LineSamples, LineWork, detector_frame_key, prepare_line
 from detector_panel import DetectorPanel
@@ -360,6 +362,7 @@ class ShellWindow(QMainWindow):
                 "sample",
                 "joint",
                 "prepared",
+                "archive",
                 "physical",
             ]
             | None
@@ -367,6 +370,10 @@ class ShellWindow(QMainWindow):
         self._pending_hbn = None
         self._hbn_context = None
         self._pending_prepared = None
+        self._pending_archive = None
+        self._archive_context = None
+        self.archive = None
+        self.archive_storage_json = "{}"
         self._pending_joint = None
         self._prepared_context = None
         self._joint_context = None
@@ -713,6 +720,9 @@ class ShellWindow(QMainWindow):
         self.physical_button = QPushButton("Physical geometry / centers / sensitivity")
         self.physical_button.clicked.connect(self._show_physical)
         inspector_layout.addWidget(self.physical_button)
+        self.archive_button = QPushButton("Portable archive / exact exports")
+        self.archive_button.clicked.connect(self._show_archive)
+        inspector_layout.addWidget(self.archive_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -937,6 +947,8 @@ class ShellWindow(QMainWindow):
             + (0 if self.prepared.session is None else 3 * self.prepared.session.nbytes)
             + (0 if self.prepared.profiles is None else self.prepared.profiles.nbytes)
             + self.prepared.history.bytes_used
+            + len(self.archive_storage_json.encode())
+            + (0 if self.archive is None else len((self.archive.review or "").encode()))
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
@@ -995,6 +1007,69 @@ class ShellWindow(QMainWindow):
         return (
             identity.generation == self._active_generation == self.jobs.latest_generation
             and self._physical_context == self.physical.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
+
+    def _show_archive(self):
+        if self.archive is None:
+            self.archive = ArchivePanel(self)
+        self.archive.refresh()
+        self.archive.show()
+
+    def _supersede_archive(self):
+        self._pending_archive = None
+        if self._active_kind == "archive":
+            self.jobs.invalidate()
+
+    def _request_archive(self, operation, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 4 * 1024**2:
+            raise ValueError("Archive request exceeds shared 4 MiB admission")
+        if operation == "export":
+            review = json.loads(json.loads(argument)["review_json"])
+            if review["snapshot_sha256"] != context[2] or tuple(review["selection"]) != context[3]:
+                raise ValueError(
+                    "Project/selection changed after review; review again before export"
+                )
+        self._pending_archive = (operation, argument, context)
+        if self._active_kind == "archive":
+            self.jobs.invalidate()
+        self.archive.status.setText(operation.title() + " queued on the shared worker")
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_archive(self, operation, argument, context):
+        if self.archive is None or context != self.archive.context():
+            if self.archive is not None:
+                self.archive.status.setText("Stale archive request rejected before file work")
+            return
+        self._active_kind = "archive"
+        self._archive_context = context
+        try:
+            prepared_budget(**self._simulation_resource_charge())
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.archive.epoch),
+                    argument,
+                    len(argument),
+                    2 * 1024**2,
+                    archive_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._archive_context = None
+            self.archive.status.setText("Archive could not start: " + str(exc))
+        else:
+            self._active_generation = identity.generation
+
+    def _archive_current(self, identity):
+        return (
+            self.archive is not None
+            and identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._archive_context == self.archive.context()
             and not self._close_intent
             and self._pending_open is None
         )
@@ -1082,6 +1157,7 @@ class ShellWindow(QMainWindow):
         self._joint_context = context
         try:
             request = json.loads(argument)
+            request["storage_json"] = self.archive_storage_json
             request["resources"] = joint_work_budget(**self._simulation_resource_charge())
             argument = json.dumps(request, allow_nan=False).encode()
             identity = self.jobs.submit(
@@ -1204,6 +1280,7 @@ class ShellWindow(QMainWindow):
         self._hbn_context = context
         try:
             request = json.loads(argument)
+            request["storage_json"] = self.archive_storage_json
             shape = (
                 tuple(self.detector_panel.view.image.shape)
                 if operation == "load"
@@ -1287,6 +1364,12 @@ class ShellWindow(QMainWindow):
             run, budget = reopen_simulation_result, 160 * 1024**2
         else:
             raise ValueError("unknown simulation operation")
+        if operation in ("load", "validate", "save_configuration", "run", "reopen"):
+            request = json.loads(argument)
+            request["storage_json"] = self.archive_storage_json
+            argument = json.dumps(request, allow_nan=False).encode()
+        elif operation == "export":
+            argument = replace(argument, storage_json=self.archive_storage_json)
         self._simulation_operation, self._simulation_context = operation, context
         self._active_kind = "simulation"
         try:
@@ -1389,6 +1472,7 @@ class ShellWindow(QMainWindow):
             self.joint.session,
             self.physical.settings_json,
             self.prepared.session,
+            self.archive_storage_json,
         )
 
     def _validate_project_admission(
@@ -1455,6 +1539,8 @@ class ShellWindow(QMainWindow):
         self.setWindowTitle(f"SLATE · {self.project.name}{' *' if dirty else ''}")
 
     def _mark_dirty(self, _value: object = None) -> None:
+        if self.archive is not None:
+            self.archive.invalidate()
         if self._restoring_view:
             return
         if self._numeric_draft is not None and not any(
@@ -1712,6 +1798,11 @@ class ShellWindow(QMainWindow):
             self._pending_physical = None
             self._submit_physical(argument, context)
             return
+        if self._pending_archive is not None:
+            operation, argument, context = self._pending_archive
+            self._pending_archive = None
+            self._submit_archive(operation, argument, context)
+            return
         if self._pending_prepared is not None:
             operation, argument, context = self._pending_prepared
             self._pending_prepared = None
@@ -1908,6 +1999,7 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_hbn = None
+        self._pending_archive = None
         self._pending_prepared = None
         self._pending_joint = None
         self._pending_sample = None
@@ -1925,9 +2017,11 @@ class ShellWindow(QMainWindow):
             "hbn",
             "joint",
             "prepared",
+            "archive",
             "sample",
         ):
             self._pending_hbn = None
+            self._pending_archive = None
             self._pending_prepared = None
             self._pending_joint = None
             self._pending_sample = None
@@ -4580,6 +4674,12 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        archive_requested = self._active_kind == "archive" or self._pending_archive is not None
+        self._pending_archive = None
+        if archive_requested and self.archive is not None:
+            self.archive.status.setText(
+                "Cancel acknowledged; prior project retained while draining"
+            )
         if self._active_kind == "prepared" or self._pending_prepared is not None:
             self._pending_prepared = None
             self.prepared.status.setText("Cancel acknowledged; prior prepared state retained")
@@ -5170,6 +5270,12 @@ class ShellWindow(QMainWindow):
                 self._active_kind = self._active_generation = self._physical_context = None
                 QTimer.singleShot(0, self._dispatch_pending)
             return
+        if kind == "archive":
+            self.archive.status.setText(f"Archive {state.value}: {summary.detail or 'working'}")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._archive_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "prepared":
             self.prepared.status.setText(f"Prepared {state.value}: {summary.detail or 'working'}")
             if state in (JobState.FAILED, JobState.CANCELED):
@@ -5460,6 +5566,13 @@ class ShellWindow(QMainWindow):
                     self.physical.status.setText(
                         "Late/stale physical completion rejected; initial values unchanged"
                     )
+            elif kind == "archive":
+                if self._archive_current(identity) and isinstance(value, ArchiveWorkResult):
+                    self.archive.guard(lambda: self.archive.ready(value))
+                else:
+                    self.archive.status.setText(
+                        "Stale archive completion rejected; prior project retained"
+                    )
             elif kind == "prepared":
                 if self._prepared_current(identity) and isinstance(value, PreparedWorkResult):
                     self.prepared.guard(lambda: self.prepared.ready(value))
@@ -5519,6 +5632,8 @@ class ShellWindow(QMainWindow):
             self._active_kind = None
             if kind == "physical":
                 self._physical_context = None
+            if kind == "archive":
+                self._archive_context = None
             if kind == "prepared":
                 self._prepared_context = None
             if kind == "joint":
@@ -5637,6 +5752,9 @@ class ShellWindow(QMainWindow):
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
             self.physical.restore(value.document.view.physical_settings_json)
+            self.archive_storage_json = value.document.view.archive_storage_json
+            if self.archive is not None:
+                QTimer.singleShot(0, self.archive.refresh)
             self.prepared.restore(value.document.view.native_fit_session)
             self._pending_prepared = self._prepared_context = None
             self.joint.restore(value.document.view.joint_session)
@@ -5763,6 +5881,7 @@ class ShellWindow(QMainWindow):
             self.physical.cancel(clear=True)
             self._close_intent = True
             self._pending_open = None
+            self._pending_archive = None
             self._pending_hbn = None
             self._pending_prepared = None
             self._pending_joint = None
@@ -5793,6 +5912,7 @@ class ShellWindow(QMainWindow):
                 "hbn",
                 "joint",
                 "prepared",
+                "archive",
                 "sample",
             ):
                 self.jobs.cancel()

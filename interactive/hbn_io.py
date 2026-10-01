@@ -98,14 +98,16 @@ def _osc(path, control, expected=None):
     return image, raw_sha
 
 
-def _inputs_current(inputs, control):
+def _inputs_current(inputs, control, storage=()):
+    from archive_storage import stored_path
+
     for key, sha in (
         ("source_path", "source_file_sha256"),
         ("dark_path", "dark_file_sha256"),
         ("configuration_path", "configuration_sha256"),
         ("cif_path", "cif_sha256"),
     ):
-        if _hash_file(inputs[key], control) != inputs[sha]:
+        if _hash_file(stored_path(inputs[key], storage, inputs[sha]), control) != inputs[sha]:
             raise ValueError("hBN input changed since admission: " + key)
 
 
@@ -398,6 +400,9 @@ def hbn_work(argument, control):
     from threadpoolctl import threadpool_limits
 
     request = json.loads(argument)
+    from archive_storage import storage_files, stored_path
+
+    storage = storage_files(request.get("storage_json", "{}"))
     operation = request["operation"]
     _stop(control)
     if "resources" in request:
@@ -429,7 +434,11 @@ def hbn_work(argument, control):
                 raise ValueError("hBN and dark must have the same native shape")
             path = Path(request["configuration_path"]).resolve(strict=True)
             raw, _identity = bounded_reference_snapshot(path)
-            config = load_simulation_config(path, source_bytes=raw)
+            config = load_simulation_config(
+                path,
+                source_bytes=raw,
+                stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
+            )
             instrument = _compile_instrument(config.instrument)
             if instrument.detector_shape_rc != image.detector_native_counts.shape:
                 raise ValueError("hBN native shape differs from the base detector configuration")
@@ -481,10 +490,18 @@ def hbn_work(argument, control):
         else:
             session = hbn_session_from_document(request["session"])
             inputs = json.loads(session.inputs_json)
-            _inputs_current(inputs, control)
+            _inputs_current(inputs, control, storage)
             if operation in ("prepare", "spot"):
-                image, _ = _osc(inputs["source_path"], control, inputs["source_sha256"])
-                dark, _ = _osc(inputs["dark_path"], control, inputs["dark_sha256"])
+                image, _ = _osc(
+                    stored_path(inputs["source_path"], storage, inputs["source_file_sha256"]),
+                    control,
+                    inputs["source_sha256"],
+                )
+                dark, _ = _osc(
+                    stored_path(inputs["dark_path"], storage, inputs["dark_file_sha256"]),
+                    control,
+                    inputs["dark_sha256"],
+                )
                 mask = _inclusion(inputs)
                 counts = image.detector_native_counts.astype(np.float64)
                 dark_counts = dark.detector_native_counts
@@ -722,6 +739,6 @@ def hbn_work(argument, control):
                 )
             else:
                 raise ValueError("unknown hBN operation")
-        _inputs_current(json.loads(result.session.inputs_json), control)
+        _inputs_current(json.loads(result.session.inputs_json), control, storage)
         _stop(control)
         return JobResult(result, result.nbytes)

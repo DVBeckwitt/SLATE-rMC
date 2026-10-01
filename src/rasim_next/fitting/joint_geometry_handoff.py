@@ -369,12 +369,15 @@ def _file_identity(path: Path, *, source_bytes: bytes | None = None) -> dict[str
     return {"path": str(resolved), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def _load_identity(value: object, name: str) -> Path:
+def _load_identity(value: object, name: str, stored_paths=None) -> Path:
     identity = _mapping(value, name)
     if set(identity) != {"path", "sha256"}:
         raise ValueError(f"{name} identity is incomplete")
-    path = Path(str(identity["path"])).resolve(strict=True)
-    if _file_identity(path) != dict(identity):
+    from rasim_next.io.storage import resolve_storage_path
+
+    path = Path(str(identity["path"])).resolve(strict=stored_paths is None)
+    actual = resolve_storage_path(path, stored_paths)
+    if _file_identity(path, source_bytes=actual.read_bytes()) != dict(identity):
         raise ValueError(f"{name} bytes changed")
     return path
 
@@ -531,8 +534,18 @@ def save_joint_geometry_handoff(
     return publish_json_document(destination, document)
 
 
-def load_joint_geometry_handoff(path: Path) -> JointGeometryFixedExperimentHandoff:
+def load_joint_geometry_handoff(
+    path: Path, *, stored_paths: Mapping[Path, Path] | None = None
+) -> JointGeometryFixedExperimentHandoff:
     """Verify predecessor bytes and reconstruct the full detector and source state."""
+
+    from rasim_next.io.storage import resolve_storage_path
+
+    def location(original):
+        return resolve_storage_path(original, stored_paths)
+
+    def identity(original):
+        return _file_identity(original, source_bytes=location(original).read_bytes())
 
     document = _mapping(json.loads(path.read_text(encoding="utf-8")), "handoff")
     if (
@@ -541,28 +554,37 @@ def load_joint_geometry_handoff(path: Path) -> JointGeometryFixedExperimentHando
         or document.get("mosaic_qualified") is not False
     ):
         raise ValueError("unsupported joint geometry handoff")
-    report = _load_identity(document.get("report"), "joint report")
-    manifest = _load_identity(document.get("geometry_manifest"), "geometry manifest")
-    specimen = _load_identity(document.get("specimen_config"), "specimen config")
-    detector = _load_identity(document.get("detector_base_config"), "detector base config")
-    specimen_cif = _load_identity(document.get("specimen_cif"), "specimen CIF")
-    detector_cif = _load_identity(document.get("detector_base_cif"), "detector base CIF")
-    report_id = _file_identity(report)
-    manifest_id = _file_identity(manifest)
-    specimen_file_id = _file_identity(specimen)
-    detector_id = _file_identity(detector)
-    specimen_cif_id = _file_identity(specimen_cif)
-    detector_cif_id = _file_identity(detector_cif)
-    specimen_config = load_simulation_config(specimen)
-    detector_config = load_simulation_config(detector)
-    if (
-        specimen_config.material.cif_path != specimen_cif
-        or detector_config.material.cif_path != detector_cif
-    ):
+    report = _load_identity(document.get("report"), "joint report", stored_paths)
+    manifest = _load_identity(document.get("geometry_manifest"), "geometry manifest", stored_paths)
+    specimen = _load_identity(document.get("specimen_config"), "specimen config", stored_paths)
+    detector = _load_identity(
+        document.get("detector_base_config"), "detector base config", stored_paths
+    )
+    specimen_cif = _load_identity(document.get("specimen_cif"), "specimen CIF", stored_paths)
+    detector_cif = _load_identity(
+        document.get("detector_base_cif"), "detector base CIF", stored_paths
+    )
+    report_id = identity(report)
+    manifest_id = identity(manifest)
+    specimen_file_id = identity(specimen)
+    detector_id = identity(detector)
+    specimen_cif_id = identity(specimen_cif)
+    detector_cif_id = identity(detector_cif)
+    specimen_config = load_simulation_config(
+        specimen, source_bytes=location(specimen).read_bytes(), stored_paths=stored_paths
+    )
+    detector_config = load_simulation_config(
+        detector, source_bytes=location(detector).read_bytes(), stored_paths=stored_paths
+    )
+    if specimen_config.material.cif_path != location(
+        specimen_cif
+    ) or detector_config.material.cif_path != location(detector_cif):
         raise ValueError("joint geometry handoff CIF references changed")
-    series = load_osc_geometry_series(manifest)
-    osc_ids = tuple(_file_identity(image.osc_path) for image in series.images)
-    report_record = _mapping(json.loads(report.read_text(encoding="utf-8")), "joint report")
+    series = load_osc_geometry_series(manifest, source_bytes=location(manifest).read_bytes())
+    osc_ids = tuple(identity(image.osc_path) for image in series.images)
+    report_record = _mapping(
+        json.loads(location(report).read_text(encoding="utf-8")), "joint report"
+    )
     _require_report_image_roster(
         report_record,
         str(document["specimen_id"]),

@@ -130,6 +130,7 @@ class NativeFitPanel(QDialog):
         self.button(row, "Reuse compatible historical starts", self.reuse)
         self.button(row, "Remove displayed historical description", self.remove_history)
         self.button(row, "Export committed plan", self.export)
+        self.button(row, "Export exact measured data", self.export_profiles)
         run = QPushButton("Run unavailable - pending R4 engine integration")
         run.setEnabled(False)
         run.setToolTip(
@@ -169,6 +170,7 @@ class NativeFitPanel(QDialog):
                 {
                     "operation": operation,
                     "session": native_fit_session_document(self.session),
+                    "storage_json": self.shell.archive_storage_json,
                     **extra,
                 }
             ).encode(),
@@ -186,7 +188,13 @@ class NativeFitPanel(QDialog):
         )
         action = None
         if record_history:
-            before = None if self.session is None else replace(self.session, draft_json=None)
+            before = (
+                None
+                if self.session is None
+                else replace(self.session, draft_json=None)
+                if session is not None and session.current_json != self.session.current_json
+                else self.session
+            )
             old_strings = set() if before is None else {before.current_json, *before.history_json}
             new_strings = (
                 set() if session is None else {session.current_json, *session.history_json}
@@ -516,6 +524,15 @@ class NativeFitPanel(QDialog):
         )
         if path:
             self.request("export", path=path)
+
+    def export_profiles(self):
+        if self.session is None:
+            raise ValueError("Load a prepared set first")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export exact measured counts and full covariance", "", "Numeric NPZ (*.npz)"
+        )
+        if path:
+            self.request("export_profiles", path=path)
 
     def inspect_row(self, *_):
         self.covariance.setRowCount(0)

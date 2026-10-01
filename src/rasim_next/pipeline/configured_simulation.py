@@ -716,6 +716,7 @@ def load_simulation_config(
     repository_root: str | Path | None = None,
     source_bytes: bytes | None = None,
     max_referenced_cif_bytes: int | None = None,
+    stored_paths: dict[Path, Path] | None = None,
 ) -> SimulationConfiguration:
     """Load one strict, config-relative ``rasim-simulation-v2`` document."""
 
@@ -750,9 +751,20 @@ def load_simulation_config(
         "material",
         required={"cif_path", "phase_id"},
     )
+    reference_base = next(
+        (
+            original
+            for original, stored in (stored_paths or {}).items()
+            if Path(stored).resolve() == config_path
+        ),
+        config_path,
+    )
     cif_path = (
-        config_path.parent / _string(material_data["cif_path"], "material.cif_path")
+        reference_base.parent / _string(material_data["cif_path"], "material.cif_path")
     ).resolve()
+    from rasim_next.io.storage import resolve_storage_path
+
+    cif_path = resolve_storage_path(cif_path, stored_paths)
     if not cif_path.is_file():
         raise ValueError(f"material.cif_path does not exist: {cif_path}")
     material = MaterialConfiguration(

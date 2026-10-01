@@ -491,3 +491,26 @@ Save/Open remain the shell's responsibility. The existing SessionHistory holds i
 and charges changed descriptions; unchanged historical strings are reused. Compatible historical
 starts transfer only through explicit review by owner/name identity. Incompatible definitions stay
 readable and require an authoritative new plan; no migration/default/parameter registry is added.
+
+
+### Portable desktop archives (R7a)
+
+`archive_panel.py` reviews explicit delivered-product selections. `archive_io.py` inventories
+current/historical dependencies, streams exact files and imports a new external directory on
+the shared worker. Retained simulation metadata supplies original result inputs independently
+of the current draft. Project state owns masks, calibration, ROI, comparison, physical settings,
+parameter definitions/history and pending edits; large arrays remain external.
+
+The v1 manifest records original paths, safe relative names, sizes, SHA256 and original
+qualification. `project-original.slate.json` contains the exact serialized logical snapshot
+reviewed for the selection, rather than claiming the digest of an earlier Save file. Import
+retains it and writes distinct `reopened.slate.json` bytes with schema 16's bounded explicit
+`archive_storage_json`. Acquisition paths and result locations move; immutable scientific
+descriptions retain original paths/hashes. Narrow mappings at existing configured, prepared
+and joint typed I/O owners resolve config-relative CIF and observations-relative NPZ.
+Repeated acquisition archiving preserves ancestor provenance when raw hashes agree.
+
+Archive access grants portable inspection, never scientific execution/adoption/qualification.
+Archived sample Open runs unchanged retained structural/identity validators and reports live
+geometry revalidation unavailable. The existing active-use/export prediction validator remains
+unchanged. No solver, new controller, plugin registry or protected-script hook is added.

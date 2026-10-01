@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 import numpy as np
 import yaml
+from archive_storage import storage_files, stored_path
 from detector_panel import BandProfiles, exact_band_profiles
 from job_lifecycle import MAX_RESULT_BYTES, JobControl, JobResult
 from metadata_review import MAX_REFERENCE_BYTES, bounded_reference_snapshot
@@ -45,15 +46,21 @@ def _stop(control: JobControl) -> None:
         raise RuntimeError("simulation canceled; obsolete publications discarded")
 
 
-def canonical_configuration(draft: SimulationDraft):
+def canonical_configuration(draft: SimulationDraft, storage=()):
     from rasim_next.pipeline.configured_simulation import load_simulation_config
 
     config = load_simulation_config(
         draft.configuration_path,
         source_bytes=draft.yaml_text.encode(),
         max_referenced_cif_bytes=MAX_REFERENCE_BYTES,
+        stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
     )
-    if config.material.cif_path != draft.cif_path or config.cif_sha256 != draft.cif_sha256:
+    from archive_storage import stored_path
+
+    if (
+        config.material.cif_path != stored_path(draft.cif_path, storage, draft.cif_sha256)
+        or config.cif_sha256 != draft.cif_sha256
+    ):
         raise ValueError(
             "simulation CIF differs from the immutable draft; load or validate the new input explicitly"
         )
@@ -68,11 +75,12 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
     )
 
     request = json.loads(argument)
+    storage = storage_files(request.get("storage_json", "{}"))
     operation = request["operation"]
     old = simulation_draft_from_document(request.get("draft"))
     _stop(control)
     if operation == "load":
-        path = Path(request["path"]).resolve(strict=True)
+        path = stored_path(request["path"], storage).resolve(strict=True)
         raw, _identity = bounded_reference_snapshot(path)
         if len(raw) > MAX_SIMULATION_YAML_BYTES:
             raise ValueError("simulation configuration exceeds 64 KiB")
@@ -87,7 +95,7 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
     elif operation == "save_configuration":
         if old is None:
             raise ValueError("no independent configuration to export")
-        config = canonical_configuration(old)
+        config = canonical_configuration(old, storage)
         path = Path(request["path"]).resolve(strict=False)
         _external(path, (old.configuration_path, old.cif_path))
         mapping = load_strict_yaml_mapping(
@@ -114,7 +122,10 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
         raise ValueError("unsupported independent draft operation")
     control.report("Validating complete configuration and canonical geometry/source")
     config = load_simulation_config(
-        path, source_bytes=text.encode(), max_referenced_cif_bytes=MAX_REFERENCE_BYTES
+        path,
+        source_bytes=text.encode(),
+        max_referenced_cif_bytes=MAX_REFERENCE_BYTES,
+        stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
     )
     if config.source.sample_count > MAX_SIMULATION_SOURCES:
         if operation == "validate":
@@ -351,11 +362,12 @@ def run_simulation(argument: bytes, control: JobControl) -> JobResult:
     )
 
     request = json.loads(argument)
+    storage = storage_files(request.get("storage_json", "{}"))
     draft = simulation_draft_from_document(request["draft"])
     if draft is None:
         raise ValueError("no independent simulation draft")
     start = perf_counter()
-    config = canonical_configuration(draft)
+    config = canonical_configuration(draft, storage)
     ledger = simulation_budget(
         config, draft, request.get("other_cpu_bytes", 0), request.get("other_gpu_bytes", 0)
     )
@@ -651,13 +663,15 @@ def _publish_bytes(path: Path, encoded: bytes, control: JobControl) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _write_configured_figures(draft: SimulationDraft, arrays: dict, control: JobControl) -> None:
+def _write_configured_figures(
+    draft: SimulationDraft, arrays: dict, control: JobControl, storage=()
+) -> None:
     from io import BytesIO
 
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
-    config = canonical_configuration(draft)
+    config = canonical_configuration(draft, storage)
     directory = config.output_directory
     if not directory.is_dir():
         raise ValueError("create the configured external output directory before exporting figures")
@@ -750,7 +764,12 @@ def export_simulation(work: SimulationExportWork, control: JobControl) -> JobRes
     protected = (draft.physics_path,) if native else (draft.configuration_path, draft.cif_path)
     _external(work.destination, protected)
     if not native and manifest.get("write_configured_figures", False):
-        _write_configured_figures(draft, arrays=dict(work.arrays), control=control)
+        _write_configured_figures(
+            draft,
+            arrays=dict(work.arrays),
+            control=control,
+            storage=storage_files(work.storage_json),
+        )
     temporary = work.destination.with_name(work.destination.name + "." + uuid4().hex + ".part")
     arrays = dict(work.arrays)
     try:
@@ -819,6 +838,7 @@ def _file_hash(path: Path, control: JobControl) -> str:
 
 def reopen_simulation_result(argument: bytes, control: JobControl) -> JobResult:
     document = json.loads(argument)
+    storage_files(document.pop("storage_json", "{}"))
     native = "recipe" in document
     reference = (
         native_reference_from_document(document)

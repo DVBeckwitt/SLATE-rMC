@@ -190,12 +190,21 @@ class SimulationExportWork:
     destination: Path
     manifest: bytes
     arrays: tuple[tuple[str, np.ndarray], ...]
+    storage_json: str = "{}"
 
     @property
     def argument_bytes(self) -> int:
-        return len(self.manifest) + len(str(self.destination).encode()) + 512 * len(self.arrays)
+        return (
+            len(self.manifest)
+            + len(self.storage_json.encode())
+            + len(str(self.destination).encode())
+            + 512 * len(self.arrays)
+        )
 
     def validate(self) -> None:
+        from archive_storage import storage_files
+
+        storage_files(self.storage_json)
         _path(self.destination)
         if (
             type(self.manifest) is not bytes

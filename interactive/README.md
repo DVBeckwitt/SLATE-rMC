@@ -548,3 +548,27 @@ descriptions; reload original sources to restore arrays. Historical definitions 
 Load an authoritative current plan to review new/removed definitions; unknown fields stay inert.
 **Export committed plan** writes the exact committed plan outside the repository.
 Run and indexed adoption are unavailable pending R4. Structural draft checks do not qualify a fit.
+
+
+### Portable archive / exact exports
+
+Open **Portable archive / exact exports**, select acquisitions/products, then **Review selection**.
+Inspect exact identities, sizes, unavailable references and original qualification. Missing
+selected predecessors block self-contained export; resolve them or explicitly change the selection
+and review again. **Export reviewed archive** writes a new external `.slatezip`. State, selection
+or source changes require a new review.
+
+**Import archive elsewhere** creates a new `<archive>-reopened` directory under a chosen external
+parent. Existing destinations are protected. Review its inventory, then **Open imported project**
+through ordinary pending/dirty-state handling. Original snapshot/dependency bytes remain beside
+a distinct project with explicit storage provenance. Keep that directory together or move it
+through another archive. Windows relocation is established; cross-OS path interpretation is not.
+Cancel and Close use the shared worker and clean unfinished owned staging. A completed directory
+can remain after late GUI cancellation or stale admission.
+
+Product export buttons expose existing owners. Prepared **Export exact measured data** writes
+signed counts, frozen rows, marginal errors and full covariance to a new numeric NPZ. Configured
+figure declarations still name their original explicit output directory; review new destinations
+with that owner before figure export. Archiving computes no image or fit. Sample history stays
+inspectable with live geometry revalidation marked unavailable; original qualification is retained.
+Native fit Run/adoption remains disabled.

@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
+from archive_storage import storage_files, stored_path
 from hbn_io import _hash_file
 from job_lifecycle import JobResult
 from native_fit_profiles import NativeProfiles
@@ -53,17 +54,18 @@ def prepared_paths(session):
     ] + [Path(p) for p, _ in session.exports]
 
 
-def _identities(paths, control):
+def _identities(paths, control, storage=()):
     rows = []
     for kind, path in paths:
         _stop(control)
-        path = Path(path).resolve(strict=True)
+        original = Path(path).resolve()
+        path = stored_path(original, storage).resolve(strict=True)
         if path.stat().st_size > 512 * 1024**2:
             raise ValueError("Prepared file exceeds 512 MiB")
         rows.append(
             dict(
                 kind=kind,
-                path=str(path),
+                path=str(original),
                 sha256=_hash_file(path, control),
                 size=path.stat().st_size,
             )
@@ -71,13 +73,11 @@ def _identities(paths, control):
     return rows
 
 
-def _check_files(inputs, control):
+def _check_files(inputs, control, storage=()):
     for row in inputs["files"]:
         _stop(control)
-        if (
-            Path(row["path"]).stat().st_size != row["size"]
-            or _hash_file(row["path"], control) != row["sha256"]
-        ):
+        path = stored_path(row["path"], storage, row["sha256"])
+        if path.stat().st_size != row["size"] or _hash_file(path, control) != row["sha256"]:
             raise ValueError("Prepared predecessor changed: " + row["path"])
 
 
@@ -209,15 +209,19 @@ def _validate_plan(plan, observations, definition):
     return "Draft search fields structurally checked; full engine launch admission unavailable (R4)"
 
 
-def _load(physics_path, observation_path, plan, plan_path, control):
+def _load(physics_path, observation_path, plan, plan_path, control, storage=()):
     from rasim_next.fitting.native_input import load_native_fit_physics
     from rasim_next.fitting.native_observations import load_native_fit_observations
 
-    paths = [Path(p).resolve(strict=True) for p in (physics_path, observation_path, plan_path)]
+    originals = [Path(p).resolve() for p in (physics_path, observation_path, plan_path)]
+    paths = [stored_path(p, storage).resolve(strict=True) for p in originals]
     if paths[0].stat().st_size > 2 * 1024**2 or paths[1].stat().st_size > 2 * 1024**2:
         raise ValueError("Prepared JSON exceeds 2 MiB")
     receipt = json.loads(paths[1].read_bytes())
-    array_path = (paths[1].parent / receipt["arrays"]["path"]).resolve(strict=True)
+    original_array = (originals[1].parent / receipt["arrays"]["path"]).resolve()
+    array_path = stored_path(original_array, storage, receipt["arrays"]["sha256"]).resolve(
+        strict=True
+    )
     count = receipt["signal_projection"]["observation_count"]
     if type(count) is not int or not 0 < count <= 4096:
         raise ValueError("Prepared profile row count exceeds 4096")
@@ -252,14 +256,15 @@ def _load(physics_path, observation_path, plan, plan_path, control):
                     raise ValueError("Prepared numeric array shape/dtype/payload binding differs")
     raw_path = Path(receipt["raw_acquisition"]["path"])
     if not raw_path.is_absolute():
-        raw_path = paths[1].parent / raw_path
+        raw_path = originals[1].parent / raw_path
     files = _identities(
         zip(
             ("physics", "observations", "plan", "arrays", "raw_acquisition"),
-            (*paths, array_path, raw_path),
+            (*originals, original_array, raw_path),
             strict=True,
         ),
         control,
+        storage,
     )
     if (
         files[3]["sha256"] != receipt["arrays"]["sha256"]
@@ -268,7 +273,7 @@ def _load(physics_path, observation_path, plan, plan_path, control):
         raise ValueError("Prepared arrays/raw acquisition binding differs")
     control.report("Reading typed prepared inputs; no preparation or prediction")
     physics = load_native_fit_physics(paths[0])
-    observations = load_native_fit_observations(paths[1])
+    observations = load_native_fit_observations(paths[1], arrays_path=array_path)
     if (
         physics.input_revision != receipt["physical_input"]["sha256"]
         or observations.input_revision != files[1]["sha256"]
@@ -314,7 +319,7 @@ def _load(physics_path, observation_path, plan, plan_path, control):
         },
         "row_count": count,
     }
-    _check_files(inputs, control)
+    _check_files(inputs, control, storage)
     profiles = NativeProfiles(
         raw,
         background,
@@ -349,14 +354,69 @@ def prepared_work(argument, control):
     ):
         raise ValueError("Prepared worker requires shared resource admission")
     session = native_fit_session_from_document(request.get("session"))
+    storage = storage_files(request.get("storage_json", "{}"))
     operation = request["operation"]
     with threadpool_limits(limits=1):
         _stop(control)
-        if operation == "export":
+        if operation == "export_profiles":
+            from io import BytesIO
+
             current = json.loads(session.current_json)
-            _check_files(current["inputs"], control)
+            _check_files(current["inputs"], control, storage)
+            paths = {v["kind"]: v["path"] for v in current["inputs"]["files"]}
+            inputs, definition, profiles, detail = _load(
+                paths["physics"],
+                paths["observations"],
+                current["plan"],
+                paths["plan"],
+                control,
+                storage,
+            )
+            if description(inputs, current["plan"], definition) != session.current_json:
+                raise ValueError("Prepared definitions changed; review before export")
             path = Path(request["path"]).resolve()
-            _external(path, protected=prepared_paths(session))
+            if path.suffix.lower() != ".npz" or len(session.exports) >= 16:
+                raise ValueError("Choose a new NPZ within the bounded export history")
+            _external(
+                path, protected=prepared_paths(session) + [Path(r["stored"]) for r in storage]
+            )
+            buffer = BytesIO()
+            manifest = dict(
+                schema="slate.prepared-count-export.v1",
+                description_sha256=current["sha256"],
+                inputs=current["inputs"],
+                covariance_policy=inputs["covariance_policy"],
+                unit="counts; covariance counts^2",
+                row_order="frozen observation order",
+            )
+            np.savez(
+                buffer,
+                raw_count=profiles.raw_count,
+                background_count=profiles.background_count,
+                signed_corrected_count=profiles.corrected_count,
+                marginal_standard_error_count=profiles.standard_error_count,
+                valid=profiles.valid,
+                covariance_count2=profiles.covariance_count2,
+                row_ids=np.asarray(profiles.row_ids),
+                manifest_utf8=np.frombuffer(encoded(manifest).encode(), dtype=np.uint8),
+            )
+            _stop(control)
+            raw = buffer.getvalue()
+            _publish_bytes(path, raw, control)
+            session = replace(
+                session, exports=(*session.exports, (str(path), hashlib.sha256(raw).hexdigest()))
+            )
+            profiles, detail = (
+                None,
+                "Exact measured vectors/row IDs/full covariance exported as numeric NPZ; no prediction or normalization",
+            )
+        elif operation == "export":
+            current = json.loads(session.current_json)
+            _check_files(current["inputs"], control, storage)
+            path = Path(request["path"]).resolve()
+            _external(
+                path, protected=prepared_paths(session) + [Path(r["stored"]) for r in storage]
+            )
             if len(session.exports) >= 16:
                 raise ValueError("Prepared export history is full")
             raw = encoded(current["plan"]).encode()
@@ -370,7 +430,8 @@ def prepared_work(argument, control):
             )
         else:
             if operation == "load":
-                plan_path = Path(request["plan_path"]).resolve(strict=True)
+                original_plan = Path(request["plan_path"]).resolve()
+                plan_path = stored_path(original_plan, storage).resolve(strict=True)
                 if plan_path.stat().st_size > 96 * 1024:
                     raise ValueError("Prepared plan exceeds 96 KiB")
                 plan_bytes = plan_path.read_bytes()
@@ -383,7 +444,7 @@ def prepared_work(argument, control):
                 if operation not in ("reload", "commit") or session is None:
                     raise ValueError("Unsupported prepared operation")
                 old = json.loads(session.current_json)
-                _check_files(old["inputs"], control)
+                _check_files(old["inputs"], control, storage)
                 paths = {v["kind"]: v["path"] for v in old["inputs"]["files"]}
                 physics_path, observation_path, plan_path = (
                     paths["physics"],
@@ -398,7 +459,12 @@ def prepared_work(argument, control):
             if plan.get("schema") != "rasim-native-refinement-plan-v1":
                 raise ValueError("Unsupported prepared plan schema")
             inputs, definition, profiles, detail = _load(
-                physics_path, observation_path, plan, plan_path, control
+                physics_path,
+                observation_path,
+                plan,
+                original_plan if operation == "load" else plan_path,
+                control,
+                storage,
             )
             if operation == "load" and hashlib.sha256(plan_bytes).hexdigest() != next(
                 v["sha256"] for v in inputs["files"] if v["kind"] == "plan"
