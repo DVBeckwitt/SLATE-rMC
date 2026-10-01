@@ -338,10 +338,16 @@ class PreparedWorkResult:
     session: NativeFitSession
     profiles: NativeProfiles | None
     detail: str
+    inspection_json: str | None = None
 
     @property
     def nbytes(self):
-        return self.session.nbytes + (self.profiles.nbytes if self.profiles else 0) + 4096
+        return (
+            self.session.nbytes
+            + (self.profiles.nbytes if self.profiles else 0)
+            + len((self.inspection_json or "").encode())
+            + 4096
+        )
 
 
 def prepared_work(argument, control):
@@ -358,7 +364,63 @@ def prepared_work(argument, control):
     operation = request["operation"]
     with threadpool_limits(limits=1):
         _stop(control)
-        if operation == "export_profiles":
+        if operation == "inspect":
+            if session is None:
+                raise ValueError("Choose a retained prepared description")
+            old = next(
+                (
+                    json.loads(text)
+                    for text in (session.current_json, *session.history_json)
+                    if json.loads(text)["sha256"] == request.get("description_sha256")
+                ),
+                None,
+            )
+            if old is None:
+                raise ValueError("Selected immutable prepared description is not retained")
+            _check_files(old["inputs"], control, storage)
+            paths = {v["kind"]: v["path"] for v in old["inputs"]["files"]}
+            inputs, definition, profiles, detail = _load(
+                paths["physics"],
+                paths["observations"],
+                old["plan"],
+                paths["plan"],
+                control,
+                storage,
+            )
+            observation_path = stored_path(paths["observations"], storage)
+            if observation_path.stat().st_size > 2 * 1024**2:
+                raise ValueError("Observation metadata exceeds 2 MiB")
+            with observation_path.open("rb") as stream:
+                observation_bytes = stream.read(2 * 1024**2 + 1)
+            expected = next(
+                v["sha256"] for v in old["inputs"]["files"] if v["kind"] == "observations"
+            )
+            if (
+                len(observation_bytes) > 2 * 1024**2
+                or hashlib.sha256(observation_bytes).hexdigest() != expected
+            ):
+                raise ValueError("Observation metadata bytes differ from immutable input identity")
+            observation_document = json.loads(observation_bytes)
+            _check_files(old["inputs"], control, storage)
+            _stop(control)
+            inspection = encoded(
+                dict(
+                    description_sha256=old["sha256"],
+                    original_definition=old["definition"],
+                    inspected_definition=definition,
+                    observation_document=observation_document,
+                    qualification="Frozen measured input inspection only; no new preparation or fit qualification",
+                    current_geometry_binding="Original frozen inputs retained; current project geometry is not adopted or reprojected",
+                )
+            )
+            value = PreparedWorkResult(
+                session,
+                profiles,
+                detail + "; historical inspection preserves original definitions and pending edits",
+                inspection,
+            )
+            return JobResult(value, value.nbytes)
+        elif operation == "export_profiles":
             from io import BytesIO
 
             current = json.loads(session.current_json)

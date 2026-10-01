@@ -32,6 +32,7 @@ class NativeFitPanel(QDialog):
         super().__init__(shell)
         self.shell, self.session, self.profiles = shell, None, None
         self.epoch, self._rendering = 0, False
+        self.profile_description_sha256 = None
         self.history = SessionHistory()
         self.setWindowTitle("Prepared native inputs / draft plan")
         self.resize(1150, 800)
@@ -59,6 +60,11 @@ class NativeFitPanel(QDialog):
             form.addRow(label, row)
         self.button(form, "Load prepared set", self.load)
         self.button(form, "Reload original sources / definitions", lambda: self.request("reload"))
+        self.button(
+            form,
+            "Inspect displayed frozen output",
+            lambda: self.request("inspect", description_sha256=self.displayed()["sha256"]),
+        )
         self.summary = QTextBrowser()
         form.addRow(self.summary)
         self.tabs.addTab(page, "Inputs / provenance")
@@ -77,6 +83,8 @@ class NativeFitPanel(QDialog):
             ["Other frozen row ID", "Full covariance, counts²"]
         )
         body.addWidget(self.covariance)
+        self.observation_metadata = QTextBrowser()
+        body.addWidget(self.observation_metadata)
         self.tabs.addTab(page, "Measured profiles / covariance")
         page = QWidget()
         body = QVBoxLayout(page)
@@ -154,7 +162,8 @@ class NativeFitPanel(QDialog):
             self.status.setText(str(exc))
 
     def context(self):
-        return self.shell.project.project_id, self.epoch
+        value = self.displayed()
+        return self.shell.project.project_id, self.epoch, None if value is None else value["sha256"]
 
     def browse(self, key):
         path, _ = QFileDialog.getOpenFileName(self, key.replace("_", " "), "", "JSON (*.json)")
@@ -222,9 +231,17 @@ class NativeFitPanel(QDialog):
             self.render()
 
     def ready(self, value):
-        self.store(value.session, record_history=value.session != self.session, supersede=False)
+        if value.inspection_json is None:
+            self.store(value.session, record_history=value.session != self.session, supersede=False)
+        elif value.session != self.session:
+            raise ValueError("Inspection session changed; stale completion rejected")
         if value.profiles is not None:
             self.profiles = value.profiles
+            self.profile_description_sha256 = self.displayed()["sha256"]
+        self.observation_metadata.setPlainText(
+            value.inspection_json
+            or "Original observation JSON remains in the exact source inventory; inspect displayed output to review all declared metadata."
+        )
         self.profile_view.set_profiles(self.profiles)
         self.row.setRange(0, 0 if self.profiles is None else len(self.profiles.row_ids) - 1)
         self.inspect_row()
@@ -232,6 +249,8 @@ class NativeFitPanel(QDialog):
 
     def restore(self, session):
         self.session, self.profiles = session, None
+        self.profile_description_sha256 = None
+        self.observation_metadata.clear()
         self.epoch += 1
         self.history = SessionHistory()
         self.profile_view.set_profiles(None)
@@ -288,6 +307,12 @@ class NativeFitPanel(QDialog):
             self.parameters.setRowCount(0)
             self.stages.setRowCount(0)
             value = self.displayed()
+            if value is None or value["sha256"] != self.profile_description_sha256:
+                self.profiles = None
+                self.profile_description_sha256 = None
+                self.profile_view.set_profiles(None)
+                self.observation_metadata.clear()
+                self.inspect_row()
             if value is None:
                 self.summary.clear()
                 return
