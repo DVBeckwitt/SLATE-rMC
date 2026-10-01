@@ -424,7 +424,7 @@ class SimulatorPanel(QWidget):
 
     def refresh(self) -> None:
         available = self.draft is not None
-        busy = self.shell._active_kind == "simulation"
+        busy = self.shell._active_kind == "simulation" or self.shell._pending_simulation is not None
         self.validate_button.setEnabled(available)
         self.run_button.setEnabled(available and self.validated == self.draft)
         self.cancel_button.setEnabled(busy)
@@ -538,9 +538,22 @@ class SimulatorPanel(QWidget):
         for index, group in enumerate(self._group_order):
             self.groups.setTabVisible(index, group in visible_groups)
 
-    def propose(self, *_) -> None:
+    def _can_persist(
+        self, draft: SimulationDraft | None, reference: SimulationReference | None
+    ) -> bool:
+        view = replace(
+            self.shell._capture_view(), simulation_draft=draft, simulation_result=reference
+        )
+        try:
+            self.shell._validate_project_admission(self.shell.project, view=view)
+        except ProjectFormatError as exc:
+            self.status.setText(f"Simulation change rejected; prior savable state retained: {exc}")
+            return False
+        return True
+
+    def propose(self, *_) -> bool:
         if self._restoring or self.draft is None:
-            return
+            return False
         mapping = json.loads(json.dumps(self._mapping))
         for path, (_field, _label, editor) in self.editors.items():
             if editor is None:
@@ -568,7 +581,7 @@ class SimulatorPanel(QWidget):
             if mapping == self._mapping and all(
                 getattr(self.draft, key) == value for key, value in settings.items()
             ):
-                return
+                return True
             updated = replace(
                 self.draft,
                 yaml_text=yaml.safe_dump(mapping, sort_keys=False),
@@ -585,9 +598,11 @@ class SimulatorPanel(QWidget):
                 f"Invalid run control: {exc}; correct it before validating or saving"
             )
             self._supersede()
-            return
+            return False
         if replace(updated, revision=self.draft.revision) == self.draft:
-            return
+            return True
+        if not self._can_persist(updated, self.result_reference):
+            return False
         self.history.push(action)
         self.draft = updated
         self._mapping = mapping
@@ -598,6 +613,7 @@ class SimulatorPanel(QWidget):
         self._supersede()
         self.shell._mark_dirty()
         self.refresh()
+        return True
 
     def _supersede(self) -> None:
         self.epoch += 1
@@ -619,7 +635,10 @@ class SimulatorPanel(QWidget):
         if replace(self.draft, revision=expected.revision) != expected:
             self.status.setText("Draft history conflicts with current values")
             return
-        self.draft = replace(restored, revision=self.draft.revision + 1)
+        updated = replace(restored, revision=self.draft.revision + 1)
+        if not self._can_persist(updated, self.result_reference):
+            return
+        self.draft = updated
         source.pop()
         (self.history.redo_actions if undo else self.history.undo_actions).append(action)
         self.validated = None
@@ -642,7 +661,8 @@ class SimulatorPanel(QWidget):
     def validate(self) -> None:
         if self.draft is None:
             return
-        self.propose()
+        if not self.propose():
+            return
         try:
             settings = self._settings()
         except ValueError as exc:
@@ -800,7 +820,9 @@ class SimulatorPanel(QWidget):
         work = MaskWork(self.frame.image, mask, (), self.detector.profile_query())
         self.shell._request_simulation("profiles", work)
 
-    def admit(self, frame: SimulationFrame, *, force: bool = False) -> None:
+    def admit(self, frame: SimulationFrame, *, force: bool = False) -> bool:
+        if not self._can_persist(self.draft, self.result_reference):
+            return False
         previous_run = self.frame.run_id if self.frame is not None else None
         self.latest_frame = frame
         if self._inspection_pending and frame.quantitative:
@@ -811,9 +833,12 @@ class SimulatorPanel(QWidget):
             self.identity.setText(
                 f"Held snapshot draft {self.frame.draft.revision} prefix {self.frame.draw_prefix}; latest prefix {frame.draw_prefix}. Image and profiles remain held together."
             )
-            return
+            return True
         self.frame = frame
-        if frame.image is not None:
+        if frame.image is None:
+            self._clear_detector()
+        else:
+            self.detector.setEnabled(True)
             previous = panel_view_state(self.detector)
             self.detector.view.column_axis_label = (
                 "macrobin column index" if frame.draft.route == "macrobins" else "column_px"
@@ -920,9 +945,13 @@ class SimulatorPanel(QWidget):
                 + " Display coordinates are macrobin column/row indices; exported center arrays provide native pixel coordinates."
             )
         self.refresh()
+        return True
 
     def ready(self, operation: str, value) -> None:
         if isinstance(value, SimulationDraft):
+            reference = None if operation in ("load", "load_limited") else self.result_reference
+            if not self._can_persist(value, reference):
+                return
             previous_yaml = self.draft.yaml_text if self.draft is not None else None
             if operation in ("load", "load_limited"):
                 self.history = SessionHistory()
@@ -944,11 +973,14 @@ class SimulatorPanel(QWidget):
                 )
             self.shell._mark_dirty()
         elif isinstance(value, SimulationFrame):
-            self.admit(value)
+            if not self.admit(value):
+                return
             self.status.setText(
                 "Requested outputs ready; quantitative snapshots remain nominal and unqualified"
             )
         elif isinstance(value, SimulationReference):
+            if not self._can_persist(self.draft, value):
+                return
             self.result_reference = value
             self.status.setText(
                 f"Exact snapshot written and reopened successfully: {value.path}; SHA-256 {value.sha256}"
@@ -958,6 +990,8 @@ class SimulatorPanel(QWidget):
             image_identity, query, profiles = value
             if (
                 self.frame is not None
+                and self.frame.quantitative
+                and self.frame.image is not None
                 and id(self.frame.image) == image_identity
                 and self.detector.profile_query() == query
             ):
@@ -967,17 +1001,14 @@ class SimulatorPanel(QWidget):
                     "Exact float64 profiles match the inspected snapshot and current query"
                 )
             else:
-                self.detector._profile_pending = True
+                self.detector._profile_pending = (
+                    self.frame is not None and self.frame.image is not None
+                )
         elif operation == "save_configuration":
             self.status.setText(f"Canonical YAML exported and read back: {value}")
         self.refresh()
 
-    def restore(self, view, detail: str = "") -> None:
-        self.epoch += 1
-        self.draft = view.simulation_draft
-        self.result_reference = view.simulation_result
-        self.validated = None
-        self.frame = self.latest_frame = None
+    def _clear_detector(self) -> None:
         if self.detector.view.image is not None:
             self.detector._reset_profile_state(None)
         self.detector.view.image = self.detector.view._display = None
@@ -989,6 +1020,24 @@ class SimulatorPanel(QWidget):
         self.detector._current_profiles = self.detector._full_profiles = None
         self.detector._profile_key = None
         self.detector._profile_pending = False
+        self.detector.setEnabled(False)
+        self.detector.export_button.setEnabled(False)
+        self.detector.cursor_label.setText("No detector output in this snapshot")
+        self.detector.profile_status.setText(
+            "No detector output; exact detector profiles unavailable"
+        )
+        self._pending_detector_state = None
+        pending = self.shell._pending_simulation
+        if pending is not None and pending[0] == "profiles":
+            self.shell._pending_simulation = None
+
+    def restore(self, view, detail: str = "") -> None:
+        self.epoch += 1
+        self.draft = view.simulation_draft
+        self.result_reference = view.simulation_result
+        self.validated = None
+        self.frame = self.latest_frame = None
+        self._clear_detector()
         self.identity.setText("Awaiting quantitative snapshot")
         for display in (self.reciprocal, self.ewald):
             display.set_data(np.empty((0, 3)), np.empty(0), "Awaiting selected output snapshot")

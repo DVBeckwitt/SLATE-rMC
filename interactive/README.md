@@ -228,7 +228,9 @@ snapshot**. **Inspect this snapshot** holds matching image/profiles at the next 
 active MC drains. Pixel-center density and macrobin quadrature remain display approximations;
 macrobin indices are labeled, with native center arrays retained in exports. Reciprocal/Ewald
 panels draw at most 512 sampled Qx/Qz points with linear canonical-density colors, while full
-numeric arrays remain retained. No convergence or fit qualification is implied by completion.
+numeric arrays remain retained. No convergence or fit qualification is implied by completion. Auxiliary-only snapshots clear and
+disable the detector and exact detector profiles; their exact exports contain only selected
+auxiliary arrays. Reopening a detector snapshot restores that snapshot's own values and identity.
 
 **Export exact snapshot** writes a new external NPZ with arrays and a UTF-8 numeric manifest,
 including draft/run identities, configuration/CIF hashes, seeds, prefix, route, measure, units,
@@ -256,7 +258,12 @@ and `threadpoolctl` bounds nested BLAS to one thread while the sole worker runs.
 extra avoids process-wide environment configuration and leaves core dependencies unchanged.
 Canonical setup/JIT, auxiliary sampling, snapshot reductions and file publication have declared
 noninterruptible phases. Cancel rejects obsolete publication immediately; safe stop and full drain
-can take longer. Ordinary close waits asynchronously for ownership to drain.
+can take longer. Explicit Cancel discards queued simulation replacements and pending profile requests as well as
+canceling active work. A later Run remains an explicit action. Draft load/edit, undo/redo and result
+reference admission preflight the complete prospective project through the existing 1 MiB writer
+boundary and view reserve. Rejected size changes keep the prior draft, history, result reference
+and selection savable; declared input is never trimmed. Ordinary close waits asynchronously for
+ownership to drain.
 
 ### Native exclusion editing
 

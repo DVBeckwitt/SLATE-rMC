@@ -871,6 +871,7 @@ class ShellWindow(QMainWindow):
         self.simulator.status.setText(
             f"{operation.replace('_', ' ').title()} requested; waiting for the global worker"
         )
+        self.simulator.refresh()
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _submit_simulation(self, operation: str, argument, context) -> None:
@@ -981,9 +982,14 @@ class ShellWindow(QMainWindow):
         )
 
     def _validate_project_admission(
-        self, candidate: Project, *, selected_id: UUID | None = None
+        self,
+        candidate: Project,
+        *,
+        selected_id: UUID | None = None,
+        view: ProjectViewState | None = None,
     ) -> None:
-        view = self._capture_view()
+        if view is None:
+            view = self._capture_view()
         if selected_id is not None:
             view = replace(view, selected_acquisition_id=selected_id, detector=None, scene=None)
         project_to_document(
@@ -4117,9 +4123,22 @@ class ShellWindow(QMainWindow):
                     candidate.detail = "Batch canceled"
             self._candidate_queue.clear()
             self._refresh_review_table()
+        simulation_requested = (
+            self._active_kind == "simulation" or self._pending_simulation is not None
+        )
+        self._pending_simulation = None
         self._pending_setup_request = None
         self._pending_setup_copy = None
+        if simulation_requested:
+            self.simulator.detector._profile_pending = False
         self.jobs.cancel()
+        if simulation_requested:
+            self.simulator.status.setText(
+                "Simulation cancellation requested; queued requests discarded. Waiting for active safe stop and drain."
+                if self.jobs.busy
+                else "Simulation requests canceled; no queued work remains"
+            )
+            self.simulator.refresh()
 
     def _submit_import(
         self, source: Path, acquisition_id: UUID, *, mode: Literal["import", "relink"] = "import"

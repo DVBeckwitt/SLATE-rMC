@@ -3884,3 +3884,43 @@ contains exact command charges, hashes, protected-evidence verification, archive
 cleanup and the [Task06 bug delta](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12_bugs.md).
 Lint/format/AST/import and build establish software compatibility only. Runtime pause resolution
 and complete paint-ack/performance qualification remain open; no task acceptance is claimed.
+
+### Task06 prerequisite correction / B011-B013 (2026-09-30)
+
+**Corrected; pending root review.** Broader U12/U12a/U12b acceptance remains open for B008-B010.
+Main, original ledgers, completion indexes, archived checkers and all surviving prior evidence
+are unchanged. The correction does not start Task07 or reopen earlier campaigns.
+
+- B011 reproduced a current auxiliary frame label over the surviving old detector. Auxiliary-only
+  adoption now clears/disables native/display/profile state, removes obsolete pending profile
+  work and rejects old-image completions. Exact auxiliary export/reopen retains its own identity
+  without an image or detector profile. A later detector snapshot restores its exact values.
+- B012 reproduced a shell-owned pending replacement after Cancel. Explicit Cancel now discards
+  that request, clears pending profile status and refreshes controls. Pending-only requests expose
+  Cancel before dispatch. Active cancellation/safe stop still use the existing sole worker owner.
+- B013 reproduced a 55,285-byte valid long-comment draft admitted into a near-cap project that
+  then failed serialization. Load/validate/edit, undo/redo and result-reference admission now
+  preflight the prospective view through the existing full project serializer and unchanged
+  1 MiB cap/16 KiB reserve before changing persistent state or history. Frame adoption checks
+  retained-view capacity. Size rejection keeps the previous savable identities and dirty revision.
+
+Final-source evidence: 31 visible-Qt actual-method checks passed, covering detector -> auxiliary ->
+detector, stale profiles, exact auxiliary export/readback, persistence/reopen, near-cap rejection,
+fitting positive load/edit/history, ordinary autosave, explicit Save and actual Open. The near-cap
+fixture serialized to 1,032,143 bytes and uses bounded native mask metadata with two short missing
+OSC declarations; no observation or numerical simulation was created. A separate production-main
+journey passed 13 checks for active A -> queued B -> Cancel -> drain, zero B submissions/results,
+pending-only cancel, a later explicit Run and ordinary active close. It used an explicitly external
+controlled gate with saved immutable arrays, so its 21.551/24.842 ms safe stops establish lifecycle
+plumbing only, not new canonical numerical safe-point or responsiveness qualification.
+
+The first focused observer reached the admission/identity checks but timed out waiting 12 seconds
+for Autosave and 8 seconds for drain with 64 extremely long source/reference paths. Its runtime
+phase and cause remain unlocalized; the failure is retained, not classified as a pass. The distinct
+mask-size fixture exercises the same project-size boundary without that unrelated path workload.
+No source I/O correction or long-path latency acceptance is claimed.
+
+The [supplementary completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u12_prereq_completion_index.json)
+records the original plus supplementary native charges, source/evidence identities, exact checker
+archive/cleanup and preserved failures. Software checks establish compatibility only. B008-B010,
+the original command-10 limit violation and earlier root bugs remain open.
