@@ -321,6 +321,13 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                 if control.canceled:
                     raise RuntimeError("hBN project opening canceled")
                 validate_hbn_result(json.loads(text), session)
+    if document.view.sample_session is not None:
+        from sample_io import validate_sample_result
+        from threadpoolctl import threadpool_limits
+
+        with threadpool_limits(limits=1):
+            for text in document.view.sample_session.results_json:
+                validate_sample_result(json.loads(text), document.view.sample_session, control)
     loaded = LoadedProject(
         document, path, tuple(checks), tuple(reference_checks), numeric_validated, simulation_detail
     )
@@ -396,12 +403,16 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
             Path(inputs[k]) for k in ("source_path", "dark_path", "configuration_path", "cif_path")
         )
         protected.extend(Path(p) for p, _sha in session.exports)
+    if document.view.sample_session is not None:
+        from sample_io import sample_protected_paths
+
+        protected.extend(sample_protected_paths(document.view.sample_session))
     for source in protected:
         if destination.resolve(strict=False) == source.resolve(strict=False) or (
             destination.exists() and source.exists() and os.path.samefile(destination, source)
         ):
             raise ProjectFormatError(
-                "project destination would overwrite a native simulation or hBN input/result"
+                "project destination would overwrite a native simulation, hBN or sample input/result"
             )
     if recovery:
         if destination.name != f"{document.project.project_id}.slate.json":

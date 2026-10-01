@@ -363,3 +363,26 @@ preparation, Gaussian proposals, frozen fitting, canonical result validation and
 through the existing single latest-only worker. No widget implements scattering/geometry equations.
 The optional narrow `fitting.spot` owner fits only the declared local elliptical Gaussian; it does
 not qualify a geometric beam intercept. Selected hBN distance remains calibrant-private.
+
+
+### Desktop sample-series owner boundary
+
+`selection.osc_series.index_osc_geometry_series` remains the sole OSC discovery/indexing owner.
+Optional complete-roster native counts/masks/revisions and cooperative checkpoints let the desktop
+bind already admitted data. Explicit masks intersect the existing all-zero edge validity. Absent
+optional arguments, canonical automatic inputs/defaults are retained. The existing confident-track
+owner admits reviewed decisions; original candidate coordinates and covariance remain immutable.
+
+`fitting.indexed_series.fit_indexed_geometry_series` consumes exact frozen `IndexedGeometryImage`
+blocks and existing corrections/bounds/scopes/gauges. Its optional checkpoints add progress/stop
+boundaries without changing equations/defaults or qualification. No desktop Fit calls the broader
+CLI indexing/multistart/audit orchestration.
+
+`interactive/sample_state.py` owns bounded immutable inputs, controls, review, frozen observations
+and result history. `sample_io.py` binds canonical geometry/material, owner calls, record validation
+and external exports on the global worker; `sample_panel.py` owns explicit draft/selection and
+result-ID presentation. Schema 12 persists exact losslessly packed JSON; expanded bytes participate
+in memory admission. Project Open verifies records against canonical owners without solving. All
+current/historical inputs and exported paths participate in project destination protection. The
+widgets contain no physical equations, and sample-only operation needs no hBN state. Selection
+never changes experiment geometry or supplies absent downstream qualification.

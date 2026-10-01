@@ -87,6 +87,40 @@ Mask state is persisted in desktop schema 6 through the existing bounded atomic 
 [interactive/README.md](../interactive/README.md#native-exclusion-editing); these desktop contracts
 do not change the numerical package API version or qualify a physical fit.
 
+## Desktop reviewed sample geometry (U05c/U08c/U10a)
+
+A bounded sample session admits the complete 2-8-image manifest with hash-bound configuration/CIF,
+raw OSC and decoded source identities, native shapes, commanded angles and per-image fitting masks.
+Canonical discovery/indexing intersects user masks with its existing all-zero edge validity. Review
+may exclude discovered observations with reasons; it cannot invent positions/reflections or relax
+confident-track admission. A frozen pack retains exact native coordinates, covariance, wavelength,
+rod/branch/track/image identities, ordering, source/mask revisions and review/hash provenance.
+
+Fit calls the existing indexed-series owner with those frozen observations and no reindexing. The
+launch snapshot contains actual shared/calibration correction seeds/bounds/fixed scopes, common delta,
+complete zero-sum Helmert contrasts/prior and fixed solver defaults. Degrees convert once to radians;
+metres and native pixels retain their named units. The existing delta/sample-normal-x gauge and
+owner constraints apply. Pending visible edits block work until committed; input/mask/review edits
+invalidate readiness. One global worker owns execution; cancellation clears obsolete pending work,
+checks phase/residual boundaries and rejects late/stale publication. No GUI-thread solver join or
+forced termination is introduced.
+
+All point/table/inspection/plot bindings refer to one immutable result ID. Solver termination remains
+separate from rank, conditioning, bound contacts and scientific qualification. Sample-only candidates
+retain dataset/precision/downstream flags false when root/outer/heldout audits are absent. Existing
+scaled singular/weak-direction diagnostics are retained; calibrated covariance/standard errors remain
+unavailable. Explicit selection grants inspection, with no experiment-geometry mutation or downstream
+admission. Import/Open reconstruct the existing result dataclass predicate and canonical coordinates,
+residuals/metrics without fitting; a self-consistent hash alone is insufficient.
+
+Desktop schema 12 adds the session while retaining schemas 1-11. Four results, 16 export references,
+512 reasoned exclusions and per-document expansion caps supplement the unchanged prospective 1 MiB
+project cap. Prepared/frozen/result JSON is losslessly packed with bounded strict expansion; logical
+memory reservations include expanded data. Exact result/observation JSON and PNG/value exports require
+new external destinations. Project writes protect all retained current/historical input and export
+paths. Missing/changed historical sources cause explicit validation failure; general recovery and
+scientific/performance acceptance are separate work.
+
 ## Stable core data contracts
 
 | Contract | Owner | Essential payload |

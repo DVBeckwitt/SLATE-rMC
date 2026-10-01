@@ -2,8 +2,9 @@
 
 Status: accepted feature scope; staged implementation in progress.
 Updated: 2026-09-30. Delivery breakdown incorporates the audited plan at `a80e995`.
-Current accepted checklist: 12/46; 34 items remain. U07 was independently accepted at
-`dd278b63bd2454e5cd1b17ee48733faebb7bea7b`. U08 remains in progress.
+Current accepted checklist: 14/46; 32 items remain. Root accepted Task07 after B015 closure.
+Task08 is implemented but not accepted (B016-B018 remain open). Task09 is implemented and
+awaiting root review; its three rows remain unchecked.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -3561,7 +3562,7 @@ material bindings and `pipeline/conditional_detector.py`. Keep these actual cont
 | [ ] U12: configured simulator | U02/U03/U01c/U09a | Load an existing supported configuration, run the current preview/quantitative owner and save/reopen the independent draft. Show measure, backend, prefix/progress and failure state; no experimental image, fitted observations or 3D editor is required. |
 | [ ] U12a: complete supported parameter forms | U12 | Expose all supported selected-model configuration fields in searchable grouped forms, including source, instrument, structure, mosaic, optics and execution. Compare field coverage with the capability inventory; unsupported combinations explain why. Keep configuration import/export working. |
 | [ ] U12b: quantitative inspection | U12 | Bind exact cursor/profile/export values to immutable float64 snapshots with their draw prefix or route-specific numerical settings. Preview progression cannot mutate or relabel them; check direct reductions, lease consumption and bounded snapshot/upload memory. |
-| [ ] U12c: independent native simulator | U12a/U12b | Map each admitted native model's physical/numerical parameters into an independent draft and the existing detector/integration owners. Load/edit/run/save with no observation pack or fit record; verify field coverage, canonical parameter binding and bounded like-observable output equivalence. Reuse shared views/jobs; do not wrap the fit-required render CLI, duplicate physics or invent a universal schema. |
+| [x] U12c: independent native simulator | U12a/U12b | Map each admitted native model's physical/numerical parameters into an independent draft and the existing detector/integration owners. Load/edit/run/save with no observation pack or fit record; verify field coverage, canonical parameter binding and bounded like-observable output equivalence. Reuse shared views/jobs; do not wrap the fit-required render CLI, duplicate physics or invent a universal schema. |
 
 ### M3 — geometry fitting, one route at a time
 
@@ -3594,7 +3595,7 @@ controller. These are new presentations of the same model, not new geometry impl
 | [x] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. Accepted after independent review at `dd278b6`. |
 | [ ] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
 | [ ] U09: synchronized physical handles | U07/U08/U09a | Connect callouts, numeric fields and constrained arcs/arrows to existing parameter state without requiring a fit. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. Simulator edits match canonical configuration. Enable each fit-specific mapping only after its execution boundary verifies the launched vector; handles cannot enable an unsupported scope. |
-| [ ] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
+| [x] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
 
 U08 is implemented in the isolated checkout and awaits root acceptance. Its retained scene shows
 the actual detector texture, canonical beam/sample/detector landmarks, configured axes and pivots,
@@ -4038,3 +4039,60 @@ The external [Task08 completion index](C:/Users/Kenpo/.codex/visualizations/2026
 records exact input/source/evidence hashes, resource charges, retained outcomes, final-source
 relevance, software checks, cleanup and production/documentation/retired line counts. Task09
 was not started and main was not merged or changed.
+
+
+### Task09 / U05c, U08c and U10a implementation (2026-09-30)
+
+**Implemented; awaiting root review.** Root's current accepted count is 14/46; these three
+rows remain unchecked. The latest human direction requires fitting call mechanisms and focused
+non-solving checks; no additional fitting or fit-proof campaign is required. Existing validators,
+physical constraints, gauges, rank/covariance and qualification rules remain authoritative.
+
+The sample-only dialog admits a complete supported OSC manifest and its exact configuration/CIF,
+image IDs, commanded angles, decoded native shapes and fitting masks without requiring a calibrant.
+Canonical discovery/indexing preserves every original candidate, assignment and decision. Reviewed
+exclusions require reasons; confident-track admission is reapplied before freezing exact native
+coordinates, covariance, rod/branch/track/image identities and ordering. Pending visible edits block
+Fit. Changed inputs/masks or review invalidate readiness. Fit consumes the frozen pack without
+rediscovery/reindexing through the existing indexed-series owner.
+
+Actual controls bind the nine shared corrections, three separate detector-calibration corrections,
+optional common incidence delta and complete zero-sum Helmert contrasts/prior to the owner. Angular
+fields display degrees and store radians; position offsets use metres and detector references use
+pixels. Fixed values, admitted bounds and unchanged solver defaults are recorded exactly. The
+incidence-delta/sample-normal-x gauge remains enforced. One existing global worker owns preparation,
+fitting, cancellation, import and export; stale/canceled publication is rejected. Selection is
+explicit inspection and does not mutate experiment geometry or supply downstream admission.
+
+Named immutable results present launch/current/fitted values, solver termination, scaled rank,
+conditioning, bounds, per-image metrics, native observed/predicted/residual coordinates and feature
+inspection from one result ID. Dataset/parameter-precision qualification, calibrated covariance and
+root/outer/heldout/downstream admission remain unavailable. Schema 12 persists reviewed packs,
+controls/scopes, history/selection and export references; schemas 1-11 remain readable. Exact bounded
+lossless text packing preserves original JSON bytes within the existing prospective 1 MiB project
+cap. Historical source and export paths are protected from result/project overwrite.
+
+The assigned three-image Bi2Te3 preparation froze 35 canonical sites (11/14/10). One actual fit
+completed before the later no-further-fit steering and is retained solely as call/presentation
+evidence: solver success, rank 9, condition 10222.809567756702 and site RMS 0.6123788501953364 px;
+all dataset/precision/downstream flags remain false. Saved values then supported non-solving
+presentation/selection, stale-edit guards, real dispatch/cancel, re-admission/history preservation,
+exact exports/import, contradictory qualification/rank/coordinates rejection, Save/Open/autosave,
+protected destinations and ordinary Close. No further fitter calls were made. These checks do not
+establish scientific adequacy, independent convergence or sustained interaction performance.
+
+Specific development failures remain recorded externally: prepared payload initially exceeded its
+new local size cap (repaired with bounded lossless packing and expanded memory accounting); Qt
+observers needed latched publication predicates and operation-filtered receipts; an observer used
+Python tuple versus JSON list identity; export rejection wording was overly constrained; Save
+observers omitted required keywords and then expected destination adoption from a plain write.
+The latter failures were checker errors, and completed evidence was reused. No production validator
+was weakened. No repository test/proof runner or development fixture is retained.
+
+The external [Task09 completion index](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e91c-3efa-74a3-a0fc-6a8354d0ed72/u10a_sample_task09_completion_index.json)
+records exact input/source/evidence hashes, resource charges, final-source relevance, software
+checks, disposable method archival, preservation and line counts. B001-B010/B014/B016-B018 retain
+their open dispositions; B011-B013/B015 are closed by root. Original timing thresholds and hardware
+peak measurements remain unverified. Missing/changed historical sources can explicitly prevent
+record validation on Open; general recovery is deferred to Task15. Task10 was not started; main
+remains unchanged and no merge/push is performed.

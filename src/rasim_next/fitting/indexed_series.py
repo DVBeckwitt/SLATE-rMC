@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -1218,9 +1218,12 @@ def fit_indexed_geometry_series(
     initial_incidence_angle_trim_contrast_rad: ArrayLike | None = None,
     incidence_angle_trim_contrast_half_span_rad: float | None = None,
     incidence_angle_trim_prior_sigma_rad: float | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> IndexedGeometryFitResult:
     """Fit shared geometry, optional detector calibration, incidence, and trims."""
 
+    if checkpoint is not None:
+        checkpoint("Validating frozen indexed images")
     ordered = _canonical_images(images)
     if not isinstance(initial, SharedGeometryCorrections):
         raise TypeError("initial must be SharedGeometryCorrections")
@@ -1382,6 +1385,8 @@ def fit_indexed_geometry_series(
     def data_residual(value: FloatArray) -> FloatArray:
         nonlocal model_evaluation_count
         model_evaluation_count += 1
+        if checkpoint is not None:
+            checkpoint(f"Geometry residual evaluation {model_evaluation_count}")
         corrections, calibration, incidence_delta, _, trim_by_id = unpack(value)
         return evaluate_indexed_geometry_series_residual(
             ordered,
@@ -1535,6 +1540,8 @@ def fit_indexed_geometry_series(
         | (fitted_upper - optimized.x <= bound_proximity),
         dtype=np.bool_,
     )
+    if checkpoint is not None:
+        checkpoint("Publishing geometry fit diagnostics")
     return IndexedGeometryFitResult(
         corrections=corrections,
         detector_calibration_corrections=detector_calibration_corrections,

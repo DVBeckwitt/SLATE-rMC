@@ -440,3 +440,51 @@ one CPU worker and one nested BLAS thread. Missing/changed references, insuffici
 unreliable proposals, mismatched imports and unsupported bounds remain unavailable with reasons.
 Schema 11 adds hBN state; schemas 1–10 remain readable. These nominal workflow checks do not
 establish sustained interaction timing, independent convergence or new engine qualification.
+
+
+## Sample-only geometry series
+
+Choose **Sample geometry series** in the inspector. Load a supported 2-8-image OSC manifest
+(for example `configs/bi2te3_osc_geometry_fit.yaml`). No calibrant acquisition is required.
+
+1. **Admit complete series / masks** freezes exact manifest/configuration/CIF/OSC hashes, image
+   IDs/angles, decoded shapes, fixed geometry/material/source references and current project fitting
+   masks. Duplicate acquisitions with conflicting masks require an explicit assignment resolution.
+   Without matching acquisitions the native mask starts with no user exclusions; the canonical
+   all-zero edge mask still applies. Display visibility has no fitting authority.
+2. Edit initial/lower/upper values and fitted/fixed scopes, then **Commit displayed controls / review**. The nine shared mechanical corrections, three detector-calibration corrections, common
+   incidence delta and complete Helmert contrast coordinates are actual owner arguments. Display
+   angles are degrees, storage/solver angles are radians, physical offsets are metres and detector
+   references are native pixels. Unchanged fields retain exact stored values. The configured reference
+   geometry/material and solver defaults are read-only. Common incidence delta cannot be fitted with
+   sample-normal x tilt; optional per-image trims use the owner's zero-sum basis and prior.
+3. **Prepare discovery / indexing** runs canonical discovery/indexing and replicated-track
+   admission on the entire roster. Inspect original candidates and decisions. Exclude a discovered
+   observation only with a reason, commit, then **Commit review and freeze exact fit-ready pack**. Original
+   coordinates/covariance/identities are preserved. Insufficient tracks/image admission and unsupported
+   inputs remain unavailable. Pending edits block Fit; changed inputs/masks require re-admission and
+   preparation, and changed review requires refreezing. Re-admission retains historical records.
+4. Name a candidate and explicitly **Fit exact frozen observations**. This calls the existing indexed-series
+   owner without rediscovery/reindexing. The global worker retains one active operation and the latest
+   queued request. **Cancel** clears pending sample work and requests cooperative stop at boundaries
+   and residual evaluations; terminal drain is separate. Stale/late results cannot publish.
+5. Inspect one immutable result ID: launch/current/fitted values and units, native observed/predicted
+   points and signed pixel residuals, per-image site/track metrics, scaled rank/conditioning/bounds,
+   singular values/weak direction and solver termination. Selection is explicit inspection only.
+   Dataset/precision qualification, calibrated covariance/standard errors and downstream adoption are
+   unavailable without the existing additional audits. A successful solver does not supply these.
+6. Ordinary Save/autosave/Open retains exact packs, controls/scopes, sources/masks, four named results,
+   selection and 16 export references. Schema 12 adds sample state and schemas 1-11 remain readable.
+   Exact observation/result JSON and PNG with `.png.values.json` use new external destinations; values
+   publish first. Import/Open verifies canonical coordinates/metrics and the existing result predicate
+   without fitting. Contradictory qualification/rank, changed sources and mismatched packs are rejected.
+   Exported/source paths (including retained historical sources) are protected from project overwrite.
+
+The existing prospective 1 MiB project cap applies before publication; bounded lossless packing
+preserves exact original JSON text and memory reservations charge expanded state. Preparation reserves
+one 12-Mpixel workspace plus up to eight admitted native planes against the existing combined 2 GiB
+CPU/512 MiB GPU caps. Execution uses one CPU worker and one nested BLAS thread; this route uses no GPU.
+Preparation can drain only after its current canonical phase completes. Missing historical sources
+require resolution before record validation; automatic relinking/recovery is not provided here.
+The latest implementation policy uses fitting mechanisms and saved-result checks without further
+fits. Nominal wiring/persistence checks do not qualify physics or sustained interaction timing.

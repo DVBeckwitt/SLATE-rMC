@@ -146,6 +146,8 @@ from reciprocal_preview import (
     ReciprocalPreview,
     prepare_reciprocal_preview,
 )
+from sample_io import SampleWorkResult, sample_work, sample_work_budget
+from sample_panel import SamplePanel
 from setup_io import SetupApplication, prepare_setup
 from setup_panel import SetupDialog
 from simulation_io import (
@@ -349,11 +351,14 @@ class ShellWindow(QMainWindow):
                 "setup",
                 "simulation",
                 "hbn",
+                "sample",
             ]
             | None
         ) = None
         self._pending_hbn = None
         self._hbn_context = None
+        self._pending_sample = None
+        self._sample_context = None
         self._pending_simulation = None
         self._simulation_operation = None
         self._simulation_context = None
@@ -677,6 +682,10 @@ class ShellWindow(QMainWindow):
         self.hbn_button = QPushButton("hBN calibration")
         self.hbn_button.clicked.connect(lambda: self._show_hbn(0))
         inspector_layout.addWidget(self.hbn_button)
+        self.sample = SamplePanel(self)
+        self.sample_button = QPushButton("Sample geometry series")
+        self.sample_button.clicked.connect(self._show_sample)
+        inspector_layout.addWidget(self.sample_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -881,11 +890,71 @@ class ShellWindow(QMainWindow):
             + self.hbn.history.bytes_used
             + sum(a.nbytes for a in self.hbn._spot_arrays)
             + sum(v.nbytes for v in self.hbn.sessions)
+            + (0 if self.sample.session is None else 3 * self.sample.session.nbytes)
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
             "other_gpu_bytes": gpu,
         }
+
+    def _show_sample(self):
+        self.sample.refresh()
+        self.sample.show()
+        self.sample.raise_()
+
+    def _supersede_sample(self):
+        self._pending_sample = None
+        if self._active_kind == "sample":
+            self.jobs.invalidate()
+            self.sample.status.setText("Sample request superseded; draining safely")
+
+    def _request_sample(self, operation, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 4 * 1024**2:
+            raise ValueError("sample request exceeds 4 MiB")
+        self._pending_sample = (operation, argument, context)
+        if self._active_kind == "sample":
+            self.jobs.invalidate()
+        self.sample.status.setText(operation.title() + " requested; waiting for the shared worker")
+        self.sample.refresh()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_sample(self, operation, argument, context):
+        if context != self.sample.context():
+            self.sample.status.setText("Queued sample request is stale; no work launched")
+            return
+        self._active_kind = "sample"
+        self._sample_context = context
+        try:
+            request = json.loads(argument)
+            request["resources"] = sample_work_budget(**self._simulation_resource_charge())
+            argument = json.dumps(request, allow_nan=False).encode()
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.sample.epoch),
+                    argument,
+                    len(argument),
+                    16 * 1024**2,
+                    sample_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._sample_context = None
+            self.sample.status.setText(f"Sample geometry could not start: {exc}")
+        else:
+            self._active_generation = identity.generation
+        self.sample.refresh()
+
+    def _sample_current(self, identity):
+        return (
+            identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._sample_context == self.sample.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
 
     def _show_hbn(self, tab=0):
         self.hbn.refresh()
@@ -1103,6 +1172,7 @@ class ShellWindow(QMainWindow):
                 for v in self.hbn.sessions
                 if any(a.acquisition_id == v.acquisition_id for a in self.project.acquisitions)
             ),
+            self.sample.session,
         )
 
     def _validate_project_admission(
@@ -1416,6 +1486,11 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_sample is not None:
+            operation, argument, context = self._pending_sample
+            self._pending_sample = None
+            self._submit_sample(operation, argument, context)
+            return
         if self._pending_hbn is not None:
             operation, argument, context = self._pending_hbn
             self._pending_hbn = None
@@ -1587,6 +1662,7 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_hbn = None
+        self._pending_sample = None
         self._pending_reference = None
         self._pending_setup_request = None
         self._pending_setup_copy = None
@@ -1599,8 +1675,10 @@ class ShellWindow(QMainWindow):
             "setup",
             "simulation",
             "hbn",
+            "sample",
         ):
             self._pending_hbn = None
+            self._pending_sample = None
             self._pending_simulation = None
             self.jobs.cancel()
         self._candidate_queue.clear()
@@ -1979,6 +2057,7 @@ class ShellWindow(QMainWindow):
             if any(a.acquisition_id == v.acquisition_id for a in self.project.acquisitions)
         )
         self.hbn.refresh()
+        self.sample.refresh()
         selected_id = self.selected_acquisition_id
         self.project_tree.blockSignals(True)
         self.project_tree.clear()
@@ -4248,6 +4327,12 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        sample_requested = self._active_kind == "sample" or self._pending_sample is not None
+        self._pending_sample = None
+        if sample_requested:
+            self.sample.status.setText("Cancel acknowledged; pending work cleared; draining safely")
+            self.sample.cancel_button.setEnabled(False)
+            self.sample.status.repaint()
         hbn_requested = self._active_kind == "hbn" or self._pending_hbn is not None
         self._pending_hbn = None
         if hbn_requested:
@@ -4762,6 +4847,11 @@ class ShellWindow(QMainWindow):
                         "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
                     )
                     self._setup_dialog.cancel_button.setEnabled(False)
+                if self._active_kind == "sample":
+                    self.sample.status.setText(
+                        f"Superseded sample {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
+                    )
+                    self._sample_context = None
                 if self._active_kind == "hbn":
                     self.hbn.status.setText(
                         f"Superseded hBN {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
@@ -4773,6 +4863,7 @@ class ShellWindow(QMainWindow):
                     )
                     self._simulation_operation = self._simulation_context = None
                 self._active_kind = None
+                self.sample.refresh()
                 self.hbn.refresh()
                 self.simulator.refresh()
                 self._active_generation = None
@@ -4794,6 +4885,13 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Prior operation discarded · Ready")
             return
         kind = self._active_kind
+        if kind == "sample":
+            self.sample.status.setText(f"Sample {state.value}: {summary.detail or 'working'}")
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._sample_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            self.sample.refresh()
+            return
         if kind == "hbn":
             self.hbn.status.setText(f"hBN {state.value}: {summary.detail or 'working'}")
             if state in (JobState.FAILED, JobState.CANCELED):
@@ -5050,6 +5148,13 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "sample":
+                if self._sample_current(identity) and isinstance(value, SampleWorkResult):
+                    self.sample.guard(lambda: self.sample.ready(value))
+                else:
+                    self.sample.status.setText(
+                        "Late/stale sample completion rejected; prior state retained"
+                    )
             elif kind == "hbn":
                 if self._hbn_current(identity) and isinstance(value, HbnWorkResult):
                     self.hbn.guard(lambda: self.hbn.ready(value))
@@ -5086,6 +5191,9 @@ class ShellWindow(QMainWindow):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
+            if kind == "sample":
+                self._sample_context = None
+                self.sample.refresh()
             if kind == "hbn":
                 self._hbn_context = None
                 self.hbn.refresh()
@@ -5195,6 +5303,8 @@ class ShellWindow(QMainWindow):
         try:
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
+            self.sample.restore(value.document.view.sample_session)
+            self._pending_sample = self._sample_context = None
             self.hbn.restore(value.document.view.hbn_sessions)
             self._pending_hbn = None
             self._pending_simulation = None
@@ -5281,6 +5391,8 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage(message)
         if self._active_kind == "simulation" and self._simulation_current(identity):
             self.simulator.status.setText(message)
+        if self._active_kind == "sample" and self._sample_current(identity):
+            self.sample.status.setText(message)
         if self._active_kind == "hbn" and self._hbn_current(identity):
             self.hbn.status.setText(message)
         if self._active_kind == "setup" and self._setup_dialog is not None:
@@ -5306,6 +5418,7 @@ class ShellWindow(QMainWindow):
             self._close_intent = True
             self._pending_open = None
             self._pending_hbn = None
+            self._pending_sample = None
             self._pending_simulation = None
             self._deferred_import = None
             self._pending_reference = None
@@ -5330,6 +5443,7 @@ class ShellWindow(QMainWindow):
                 "line",
                 "simulation",
                 "hbn",
+                "sample",
             ):
                 self.jobs.cancel()
             self._pending_masks.clear()

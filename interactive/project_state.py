@@ -22,6 +22,7 @@ from native_simulation_state import (
     native_reference_from_document,
 )
 from numeric_fields import validate_proposal
+from sample_state import SampleSession, sample_session_document, sample_session_from_document
 from simulation_state import (
     SimulationDraft,
     SimulationReference,
@@ -31,7 +32,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 11
+PROJECT_SCHEMA_VERSION = 12
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -610,6 +611,7 @@ class ProjectViewState:
     native_simulation_result: NativeSimulationReference | None = None
     simulator_kind: str = "configured"
     hbn_sessions: tuple[HbnSession, ...] = ()
+    sample_session: SampleSession | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -685,6 +687,10 @@ class ProjectDocument:
                 raise ProjectFormatError("invalid independent simulation state")
         if self.view.simulator_kind not in ("configured", "native"):
             raise ProjectFormatError("unsupported independent simulator draft kind")
+        if self.view.sample_session is not None and not isinstance(
+            self.view.sample_session, SampleSession
+        ):
+            raise ProjectFormatError("invalid bounded sample-series session")
         sessions = self.view.hbn_sessions
         if (
             type(sessions) is not tuple
@@ -1194,6 +1200,7 @@ def project_to_document(
         "native_simulation_result": native_reference_document(state.view.native_simulation_result),
         "simulator_kind": state.view.simulator_kind,
         "hbn_sessions": [hbn_session_document(v) for v in state.view.hbn_sessions],
+        "sample_session": sample_session_document(state.view.sample_session),
         "detector": _detector_document(detector),
         "scene": (
             None
@@ -1300,6 +1307,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         8,
         9,
         10,
+        11,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1366,7 +1374,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             if top["schema_version"] >= 10
             else set()
         )
-        | ({"hbn_sessions"} if top["schema_version"] >= 11 else set()),
+        | ({"hbn_sessions"} if top["schema_version"] >= 11 else set())
+        | ({"sample_session"} if top["schema_version"] >= 12 else set()),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1435,6 +1444,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             native_reference_from_document(view_data.get("native_simulation_result")),
             view_data.get("simulator_kind", "configured"),
             tuple(hbn_session_from_document(v) for v in view_data.get("hbn_sessions", [])),
+            sample_session_from_document(view_data.get("sample_session")),
         ),
         draft,
     )
