@@ -505,3 +505,29 @@ match the shared existing qualification predicate and exact derived residual/sup
 statistics, not just a recomputed hash or success label. Unknown uncertainty stays unavailable.
 These mechanisms are checked with saved results and no new fitting/preparation; scientific and
 sustained performance acceptance remain separate.
+
+
+## Joint geometry
+
+Open **Joint geometry** from the fit inspector. Review and freeze hBN, choose a genuine retained
+hBN calibration candidate, then capture it explicitly. Review/freeze and capture Bi2Se3 and Bi2Te3
+separately in the sample-series editor. Each capture stays retained when switching that editor.
+Missing groups block Fit; a new successful standalone fit is not required. PbI2 capture is currently
+unsupported.
+
+Edit initial values and bounds in their displayed canonical units (rad, m, native px), then commit.
+Pending visible edits are saved and block Fit until committed or explicitly reset. Fixed gauge and
+unobserved coordinates are readonly zero references; hBN distance is a private nuisance coordinate.
+Fit calls the real owner on the shared worker. Cancel clears queued work and cooperatively drains
+active work. Source/mask/metadata changes revoke dependent selection; prior records remain historical.
+
+Results show canonical parameter comparisons, qualification/rank/condition/uncertainty and hBN,
+per-image and pooled diagnostics. Select a current-launch candidate explicitly. Save/Open/autosave
+retain captures, controls, pending drafts and history. Import a previous exact result or v3 report
+for inspection; absent starting values or frozen coordinates are shown as unavailable. Historical
+inspection works without original files.
+
+Export exact named results, or save/reload a qualified hash-bound joint geometry handoff with its
+matching specimen manifest and detector base configuration. Reload verifies every predecessor.
+These operations do not adopt experiment geometry or qualify mosaic/intensity. The original project
+size and shared resource limits still apply; remove unselected history if a bounded limit is reached.

@@ -2,9 +2,9 @@
 
 Status: accepted feature scope; staged implementation in progress.
 Updated: 2026-09-30. Delivery breakdown incorporates the audited plan at `a80e995`.
-Current accepted checklist: 14/46; 32 items remain. Root accepted Task07 after B015 closure.
-Task08 is implemented but not accepted; B016-B018 corrections await root review. Task09 is
-implemented but not accepted (B019/B020 remain open); its three rows remain unchecked.
+Current accepted checklist: 19/46; 27 items remain. Root nominally accepted Task08 after B016-B018 closure on 2026-10-01.
+Task09 is implemented but not accepted (B019/B020 remain open); its three rows remain unchecked.
+Task10 joint geometry mechanisms are implemented; U08d/U10b remain unchecked pending root review.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -3573,11 +3573,11 @@ actually need it; do not copy the orchestration into widgets.
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U05a: direct/manual beam-center proposal | U03/U04/U09a | Add native click/numeric center and a worker-owned Gaussian ROI proposal with background, residuals and reliability. Check off-center/non-square coordinates, saturation/occlusion and stale rejection; adoption changes a seed only and survives save/reopen. |
-| [ ] U08b: hBN preparation/fit boundary | U08a/U01c | Expose the narrow preparation and frozen-observation fitting inputs needed for admitted hBN seeds/bounds and cooperative cancellation. Preserve existing automatic defaults; make wavelength/ring/dark assumptions explicit. Verify residual/coordinate equivalence and actual optimizer inputs before enabling new controls. |
-| [ ] U05b: hBN observation review | U04/U08b/U09a | Trace candidate rings with the canonical owner, show coverage/assignments and review only admitted edits. Persist the accepted ring pack, mask/config provenance and its revision; fitting consumes it unchanged and does not silently retrace. |
-| [ ] U05: result binding and overlays | U02/U04/U01b | Bind contract-valid result records to acquisition/observation IDs; draw predicted peaks/rings, observed points, residuals and feature inspection. Distinguish no-fit, draft, candidate, selected and stale states; reject mismatched records and retain unavailable uncertainty. |
-| [ ] U10: first hBN calibration workflow | U05a/U05b/U05/U08b/U09a | Numeric seeds -> reviewed ring pack -> explicit fit -> statistics/overlays -> named result/save/export works. Check seed/revision handoff, safe stop and late-result rejection; center/tilt and calibrant-private distance retain their meanings and actual qualification evidence. |
+| [x] U05a: direct/manual beam-center proposal | U03/U04/U09a | Add native click/numeric center and a worker-owned Gaussian ROI proposal with background, residuals and reliability. Check off-center/non-square coordinates, saturation/occlusion and stale rejection; adoption changes a seed only and survives save/reopen. |
+| [x] U08b: hBN preparation/fit boundary | U08a/U01c | Expose the narrow preparation and frozen-observation fitting inputs needed for admitted hBN seeds/bounds and cooperative cancellation. Preserve existing automatic defaults; make wavelength/ring/dark assumptions explicit. Verify residual/coordinate equivalence and actual optimizer inputs before enabling new controls. |
+| [x] U05b: hBN observation review | U04/U08b/U09a | Trace candidate rings with the canonical owner, show coverage/assignments and review only admitted edits. Persist the accepted ring pack, mask/config provenance and its revision; fitting consumes it unchanged and does not silently retrace. |
+| [x] U05: result binding and overlays | U02/U04/U01b | Bind contract-valid result records to acquisition/observation IDs; draw predicted peaks/rings, observed points, residuals and feature inspection. Distinguish no-fit, draft, candidate, selected and stale states; reject mismatched records and retain unavailable uncertainty. |
+| [x] U10: first hBN calibration workflow | U05a/U05b/U05/U08b/U09a | Numeric seeds -> reviewed ring pack -> explicit fit -> statistics/overlays -> named result/save/export works. Check seed/revision handoff, safe stop and late-result rejection; center/tilt and calibrant-private distance retain their meanings and actual qualification evidence. |
 | [ ] U05c: sample discovery and freeze | U02a/U04/U09a | Bind a supported OSC series, geometry/material and reviewed mask to canonical discovery/indexing. Add narrow explicit mask/data input boundaries where necessary. Persist candidates, admissible review decisions and one frozen fit-ready pack; the fit entry point must not reindex internally. |
 | [ ] U08c: indexed-series execution boundary | U08a/U01c/U05c | Use the existing explicit seeds/bounds and add safe cancellation/progress boundaries only where absent. Verify fixed references, incidence delta/trim gauges and unchanged frozen IDs with a small supported case. |
 | [ ] U10a: sample-only geometry workflow | U05c/U08c/U05/U09a | Fit one admitted indexed series using its exact reviewed pack; save/export per-image/shared diagnostics and seed/fitted comparison. Insufficient tracks or unsupported single-image cases remain clearly unavailable; no manufactured observations or qualification. |
@@ -4138,3 +4138,58 @@ B019 historical sample-roster comparison and B020 unavailable historical sources
 remain separate known defects for bounded history/recovery work; broader scientific/performance
 qualification and the other recorded open bugs remain deferred. Main and all earlier evidence
 remain unchanged; no merge/push, new writer, chat, schedule or numerical campaign is introduced.
+
+
+### Task10 / U08d and U10b implementation (2026-10-01)
+
+**Implemented; awaiting root review.** The accepted count remains 19/46; these two rows are not
+self-accepted. Task11 was not started. The latest human instruction excludes new fits, convergence,
+objective/Jacobian proof and scientific/performance campaigns; none were executed.
+
+The joint dialog explicitly captures independent reviewed frozen hBN, Bi2Se3 and Bi2Te3 sessions.
+Switching the single sample editor preserves other captures. A genuine retained hBN calibration
+candidate supplies the owner's existing calibration input; success is not required and a previous
+candidate may be imported. The UI does not fabricate a calibration or require a newly successful
+standalone sample fit. Unsupported PbI2 capture and missing groups remain unavailable.
+
+Canonical controls show radians, metres and native pixels directly, preserving unchanged float64
+values with round-trip formatting. Axis pitch/pivot pitch offset and unobserved PbI2 coordinates
+remain fixed zero; Bi2Se3 sample-x is the incidence reference. hBN distance stays private. Explicit
+starts/bounds and optional phase/residual checkpoints enter the existing joint owner. Equations,
+solver settings, scales/steps, covariance/rank work and qualification thresholds are unchanged.
+
+One global worker provides admission, progress, queued/active cancellation and stale-generation
+rejection. Fit binds saved native observations, rod/branch/track keys, masks and source/config/CIF
+hashes through the existing frozen loaders; it does not retrace or reindex. Schema 13 persists
+independent captures, committed controls, pending visible draft strings, selected candidate,
+immutable history and protected export references under the unchanged 1 MiB prospective cap.
+Pending controls block Fit. Source/metadata/mask changes invalidate selection and obsolete work.
+
+CLI and desktop share canonical report serialization and the existing reported-check qualification
+rule. Result inspection compares by canonical parameter name/scope and binds every site/plot to its
+record and image identity. Old reports without desktop frozen coordinates remain useful historical
+views, with unavailable starting values/coordinates stated explicitly and no live-source requirement.
+The worker exports exact records and saves/reloads the existing qualified hash-bound GEOMETRY_ONLY
+handoff. This does not adopt an indexed fit, mutate experiment geometry or qualify mosaic/intensity.
+
+Focused nominal checks used genuine prior hBN and Bi2Te3 packs and the genuine reduced-v3 joint
+report (which includes PbI2), with separate clearly labeled opaque-group dispatch fixtures stopped
+before the first numerical objective. They checked exact controls/optimizer entry, required material
+rejection, private/fixed roles, pending-edit gating, queued/active cancel, Save/Open/autosave/Close,
+historical presentation, exact result export, actual handoff save/reload and changed predecessor
+rejection. The first report check exposed an old v3 missing-empty-field compatibility case, repaired
+without editing evidence. The first handoff check exposed a pathlib argument mismatch, repaired.
+
+No new genuine Bi2Se3 desktop preparation or three-pack fitted result was generated. Its full
+scientific outcome, convergence, new site/ring predictions and sustained performance remain
+unverified. Source review checks the production binding; opaque fixtures prove call mechanisms,
+not material admission or numerical correctness. B019/B020 remain separate Task09 issues.
+
+**Prerequisite evidence clarification:** the earlier negative project-rank fixture stopped at a
+missing texture_limit/path guard before reaching the shared hBN validator. It is not a negative
+project-contract pass. Root accepted nominal genuine project import plus the shared validator call
+in source. The old immutable prerequisite index/results and dated reports have not been rewritten.
+
+The external Task10 completion index records exact disposable method bytes, results, command
+charges, source/evidence hashes and preservation checks. Main remains clean and unchanged; no
+merge/push, second writer, new chat or schedule was introduced.

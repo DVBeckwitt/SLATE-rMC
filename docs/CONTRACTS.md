@@ -1099,3 +1099,31 @@ exact-checked reference-correction warm starts. Meshes participate in detector
 revision and response-cache identity. Preparation and approximate proposals cannot
 select fits or supply exact recovery rows. Independent source/angular/axial checks
 remain mandatory. No physical measure, symmetry assumption or dependency changes.
+
+
+## Desktop joint geometry (U08d/U10b)
+
+The supported capture roster is exactly frozen hBN plus Bi2Se3 and Bi2Te3. Captures retain their
+original source/config/CIF hashes, native coordinates, mask revisions, rod/branch/track identities
+and review exclusions. Replacing a group is explicit; opening another sample editor never replaces
+an earlier capture. Missing groups or unsupported materials block Fit. A genuine retained hBN
+calibration candidate is the current owner's seed input; it need not be successful or newly fitted.
+
+Controls use the canonical 21-coordinate order and units. Unchanged displayed values retain their
+exact stored floats. Reduced-gauge references and absent PbI2 coordinates remain zero and readonly;
+adjustable starts are never silently overwritten. Bounds are strictly ordered, starts are finite
+and within bounds, and private hBN distance stays positive. The owner keeps existing solver,
+conditioning, covariance and scientific qualification work. Cancellation is cooperative at phase,
+residual, qualification and per-image boundaries; one existing worker handles all jobs.
+
+Joint report import checks recorded structure/roles, rank/condition, bound/confidence consistency,
+per-image/pooled metrics and the existing qualification verdict. Current-launch records additionally
+bind exact frozen observations, initial/bound vectors and saved site/ring diagnostics. No import
+recalculates a fit or Jacobian. Historical reports without desktop launch lineage cannot claim
+starting values, frozen coordinates or current selection, and their views do not require live files.
+
+Schema 13 persists bounded captures, controls, pending edits, four immutable results and 16 protected
+file references. Strict bounded lossless expansion supplements the unchanged 1 MiB prospective
+project limit. Expanded data participates in shared memory admission. Qualified joint handoff
+save/reload uses the existing owner, verifies actual predecessor bytes and rebases once; it remains
+GEOMETRY_ONLY. Import/export/selection never reinterpret it as an indexed fit or adopt it implicitly.

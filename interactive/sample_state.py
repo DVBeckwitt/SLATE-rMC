@@ -145,23 +145,18 @@ def _pack_text(value):
     return "zlib-base64:" + base64.b64encode(zlib.compress(value.encode(), level=6)).decode("ascii")
 
 
-def _unpack_text(value):
+def _unpack_text(value, *, limit=2 * 1024**2):
     if value is None:
         return None
     if type(value) is not str:
         raise ValueError("sample packed text must be a string")
     if not value.startswith("zlib-base64:"):
         return value
-    if len(value) > 3 * 1024**2:
+    if len(value) > 3 * limit // 2:
         raise ValueError("sample compressed text exceeds its bounded admission")
     raw = base64.b64decode(value.removeprefix("zlib-base64:"), validate=True)
     decoder = zlib.decompressobj()
-    decoded = decoder.decompress(raw, 2 * 1024**2 + 1)
-    if (
-        len(decoded) > 2 * 1024**2
-        or not decoder.eof
-        or decoder.unused_data
-        or decoder.unconsumed_tail
-    ):
+    decoded = decoder.decompress(raw, limit + 1)
+    if len(decoded) > limit or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
         raise ValueError("sample compressed text exceeds its exact bounded expansion")
     return decoded.decode("utf-8")

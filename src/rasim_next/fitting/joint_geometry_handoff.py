@@ -73,7 +73,10 @@ def _parameter_value(
 def qualified_joint_geometry_state(record: object) -> tuple[JointGeometryState, tuple[float, ...]]:
     """Read the fitted state and absolute beam origin from one qualified report."""
 
+    from rasim_next.fitting.joint_geometry_report import validate_joint_geometry_report
+
     root = _mapping(record, "joint geometry result")
+    validate_joint_geometry_report(root)
     failures = root.get("qualification_failures")
     if (
         root.get("schema_version") != JOINT_GEOMETRY_FIT_RESULT_SCHEMA_VERSION

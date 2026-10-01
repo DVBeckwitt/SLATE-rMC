@@ -407,6 +407,10 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         from sample_io import sample_protected_paths
 
         protected.extend(sample_protected_paths(document.view.sample_session))
+    if document.view.joint_session is not None:
+        from joint_io import joint_protected_paths
+
+        protected.extend(joint_protected_paths(document.view.joint_session))
     for source in protected:
         if destination.resolve(strict=False) == source.resolve(strict=False) or (
             destination.exists() and source.exists() and os.path.samefile(destination, source)

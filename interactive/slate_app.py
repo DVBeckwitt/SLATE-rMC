@@ -38,6 +38,8 @@ from job_lifecycle import (
     JobSummary,
     Revisions,
 )
+from joint_io import JointWorkResult, joint_work, joint_work_budget
+from joint_panel import JointPanel
 from mask_state import (
     MAX_ACTIONS,
     MaskGesture,
@@ -357,6 +359,8 @@ class ShellWindow(QMainWindow):
         ) = None
         self._pending_hbn = None
         self._hbn_context = None
+        self._pending_joint = None
+        self._joint_context = None
         self._pending_sample = None
         self._sample_context = None
         self._pending_simulation = None
@@ -686,6 +690,10 @@ class ShellWindow(QMainWindow):
         self.sample_button = QPushButton("Sample geometry series")
         self.sample_button.clicked.connect(self._show_sample)
         inspector_layout.addWidget(self.sample_button)
+        self.joint = JointPanel(self)
+        self.joint_button = QPushButton("Joint geometry")
+        self.joint_button.clicked.connect(self._show_joint)
+        inspector_layout.addWidget(self.joint_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -891,11 +899,71 @@ class ShellWindow(QMainWindow):
             + sum(a.nbytes for a in self.hbn._spot_arrays)
             + sum(v.nbytes for v in self.hbn.sessions)
             + (0 if self.sample.session is None else 3 * self.sample.session.nbytes)
+            + (0 if self.joint.session is None else 3 * self.joint.session.nbytes)
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
             + sum(history.storage_bytes for history in self._mask_history.values()),
             "other_gpu_bytes": gpu,
         }
+
+    def _show_joint(self):
+        self.joint.refresh()
+        self.joint.show()
+        self.joint.raise_()
+
+    def _supersede_joint(self):
+        self._pending_joint = None
+        if self._active_kind == "joint":
+            self.jobs.invalidate()
+            self.joint.status.setText("Joint request superseded; draining safely")
+
+    def _request_joint(self, operation, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 32 * 1024**2:
+            raise ValueError("joint request exceeds 32 MiB")
+        self._pending_joint = (operation, argument, context)
+        if self._active_kind == "joint":
+            self.jobs.invalidate()
+        self.joint.status.setText(operation.title() + " requested; waiting for the shared worker")
+        self.joint.refresh()
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_joint(self, operation, argument, context):
+        if context != self.joint.context():
+            self.joint.status.setText("Queued joint request is stale; no work launched")
+            return
+        self._active_kind = "joint"
+        self._joint_context = context
+        try:
+            request = json.loads(argument)
+            request["resources"] = joint_work_budget(**self._simulation_resource_charge())
+            argument = json.dumps(request, allow_nan=False).encode()
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.joint.epoch),
+                    argument,
+                    len(argument),
+                    64 * 1024**2,
+                    joint_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._joint_context = None
+            self.joint.status.setText(f"Joint geometry could not start: {exc}")
+        else:
+            self._active_generation = identity.generation
+        self.joint.refresh()
+
+    def _joint_current(self, identity):
+        return (
+            identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._joint_context == self.joint.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
 
     def _show_sample(self):
         self.sample.refresh()
@@ -1173,6 +1241,7 @@ class ShellWindow(QMainWindow):
                 if any(a.acquisition_id == v.acquisition_id for a in self.project.acquisitions)
             ),
             self.sample.session,
+            self.joint.session,
         )
 
     def _validate_project_admission(
@@ -1247,6 +1316,7 @@ class ShellWindow(QMainWindow):
             self._launch_snapshot = None
             self._numeric_history = SessionHistory()
             self._refresh_numeric_editor()
+        self.joint.invalidate_inputs()
         self._revision += 1
         self._save_failure = ""
         self._autosave_timer.start()
@@ -1486,6 +1556,11 @@ class ShellWindow(QMainWindow):
         if self._close_intent:
             self._advance_close()
             return
+        if self._pending_joint is not None:
+            operation, argument, context = self._pending_joint
+            self._pending_joint = None
+            self._submit_joint(operation, argument, context)
+            return
         if self._pending_sample is not None:
             operation, argument, context = self._pending_sample
             self._pending_sample = None
@@ -1662,6 +1737,7 @@ class ShellWindow(QMainWindow):
                 queued.status = "canceled"
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_hbn = None
+        self._pending_joint = None
         self._pending_sample = None
         self._pending_reference = None
         self._pending_setup_request = None
@@ -1675,9 +1751,11 @@ class ShellWindow(QMainWindow):
             "setup",
             "simulation",
             "hbn",
+            "joint",
             "sample",
         ):
             self._pending_hbn = None
+            self._pending_joint = None
             self._pending_sample = None
             self._pending_simulation = None
             self.jobs.cancel()
@@ -4327,6 +4405,12 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        joint_requested = self._active_kind == "joint" or self._pending_joint is not None
+        self._pending_joint = None
+        if joint_requested:
+            self.joint.status.setText("Cancel acknowledged; pending work cleared; draining safely")
+            self.joint.cancel_button.setEnabled(False)
+            self.joint.status.repaint()
         sample_requested = self._active_kind == "sample" or self._pending_sample is not None
         self._pending_sample = None
         if sample_requested:
@@ -4847,6 +4931,12 @@ class ShellWindow(QMainWindow):
                         "Setup superseded; no binding. Verified copies may remain in the reviewed data folder."
                     )
                     self._setup_dialog.cancel_button.setEnabled(False)
+                if self._active_kind == "joint":
+                    self.joint.status.setText(
+                        f"Superseded joint {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
+                    )
+                    self._joint_context = None
+                    self.joint.refresh()
                 if self._active_kind == "sample":
                     self.sample.status.setText(
                         f"Superseded sample {state.value}; safe stop {summary.safe_stop_ms} ms; no late result admitted"
@@ -4863,6 +4953,7 @@ class ShellWindow(QMainWindow):
                     )
                     self._simulation_operation = self._simulation_context = None
                 self._active_kind = None
+                self.joint.refresh()
                 self.sample.refresh()
                 self.hbn.refresh()
                 self.simulator.refresh()
@@ -4885,6 +4976,20 @@ class ShellWindow(QMainWindow):
                 self.statusBar().showMessage("Prior operation discarded · Ready")
             return
         kind = self._active_kind
+        if kind == "joint":
+            self.joint.status.setText(
+                f"Joint {state.value}: "
+                + (
+                    f"drained; safe stop {summary.safe_stop_ms} ms"
+                    if state == JobState.CANCELED
+                    else summary.detail or "working"
+                )
+            )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._joint_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            self.joint.refresh()
+            return
         if kind == "sample":
             self.sample.status.setText(f"Sample {state.value}: {summary.detail or 'working'}")
             if state in (JobState.FAILED, JobState.CANCELED):
@@ -5148,6 +5253,13 @@ class ShellWindow(QMainWindow):
                 self._mask_ready(identity, value)
             elif kind == "line":
                 self._line_ready(identity, value)
+            elif kind == "joint":
+                if self._joint_current(identity) and isinstance(value, JointWorkResult):
+                    self.joint.guard(lambda: self.joint.ready(value))
+                else:
+                    self.joint.status.setText(
+                        "Late/stale joint completion rejected; prior state retained"
+                    )
             elif kind == "sample":
                 if self._sample_current(identity) and isinstance(value, SampleWorkResult):
                     self.sample.guard(lambda: self.sample.ready(value))
@@ -5191,6 +5303,9 @@ class ShellWindow(QMainWindow):
                 self._import_ready(identity, value)
         finally:
             self._active_kind = None
+            if kind == "joint":
+                self._joint_context = None
+                self.joint.refresh()
             if kind == "sample":
                 self._sample_context = None
                 self.sample.refresh()
@@ -5303,6 +5418,8 @@ class ShellWindow(QMainWindow):
         try:
             self.project = value.document.project
             self.simulator.restore(value.document.view, value.simulation_detail)
+            self.joint.restore(value.document.view.joint_session)
+            self._pending_joint = self._joint_context = None
             self.sample.restore(value.document.view.sample_session)
             self._pending_sample = self._sample_context = None
             self.hbn.restore(value.document.view.hbn_sessions)
@@ -5391,6 +5508,9 @@ class ShellWindow(QMainWindow):
             self.statusBar().showMessage(message)
         if self._active_kind == "simulation" and self._simulation_current(identity):
             self.simulator.status.setText(message)
+        if self._active_kind == "joint" and self._joint_current(identity):
+            self.joint.status.setText(message)
+            return
         if self._active_kind == "sample" and self._sample_current(identity):
             self.sample.status.setText(message)
         if self._active_kind == "hbn" and self._hbn_current(identity):
@@ -5418,6 +5538,7 @@ class ShellWindow(QMainWindow):
             self._close_intent = True
             self._pending_open = None
             self._pending_hbn = None
+            self._pending_joint = None
             self._pending_sample = None
             self._pending_simulation = None
             self._deferred_import = None
@@ -5443,6 +5564,7 @@ class ShellWindow(QMainWindow):
                 "line",
                 "simulation",
                 "hbn",
+                "joint",
                 "sample",
             ):
                 self.jobs.cancel()

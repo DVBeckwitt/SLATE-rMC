@@ -396,3 +396,26 @@ visible review with committed decisions before launch; only explicit commit/free
 observation authority. Displayed point rows retain one result UUID and immutable record snapshot;
 choice changes clear prior curves/points before explicit worker presentation. Inspection and
 selection remain separate. No new controller, dependency or physical implementation is added.
+
+
+### Desktop joint geometry mechanisms
+
+`interactive/joint_state.py` owns immutable independent hBN/Bi2Se3/Bi2Te3 captures, canonical
+controls, bounded pending drafts and historical result snapshots. `joint_io.py` binds the existing
+frozen owners, calls `fit_joint_geometry` and publishes exact results and supported hash-bound
+handoffs on the existing global worker. `joint_panel.py` provides explicit capture/commit/selection,
+canonical-name comparison and record/image-bound native plots. No new scientific model or material
+alias is introduced; optional PbI2 capture remains unsupported in this UI.
+
+The joint fitting owner accepts optional explicit starts and phase/residual checkpoints while
+retaining defaults, reduced gauge, equations and numerical qualification. `joint_geometry_report.py`
+extracts the existing CLI report and qualification-failure rule for shared desktop use. Recorded
+admission checks canonical roles, fixed/unobserved references, metrics, conditioning and verdicts
+without fitting or computing a Jacobian. Handoff admission uses the same recorded-check validator.
+
+Schema 13 retains schemas 1-12. Independent packed captures/history and pending visible controls
+remain under the 1 MiB project cap and expanded-memory admission. Historical result presentation
+requires recorded structure; live file hashes and frozen provenance are checked only when fitting
+or verifying a handoff. A selected candidate is tied to the current committed launch; changed
+source/metadata/masks revoke that selection. Joint handoffs remain separate from indexed result
+adoption and grant GEOMETRY_ONLY, not downstream mosaic/intensity qualification.
