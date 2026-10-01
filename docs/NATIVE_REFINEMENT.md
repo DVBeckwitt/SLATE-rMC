@@ -328,6 +328,59 @@ unresolved; it cannot silently change net counts or their covariance. In
 particular, Te's exported incumbent control-background array describes an earlier
 background field and must not be treated as the selected field.
 
+## Conditional Gaussian/Lorentzian amplitudes
+
+The Python APIs opt into complete component predictions with
+`NativeJointEvaluator.predict(values, N, resolve_mosaic_components=True)`. The
+result has shape `(2, observation)`, ordered Gaussian then Lorentzian, with each
+orientation law normalized separately. Both widths must be positive, even at
+eta endpoints. The response shares strength/transfer work and retains every
+source, rod, signed local-m0 term and optical factor. Default calls still return
+the mixed raw masses. `evaluation_count` counts completed uncached point requests;
+`contraction_count` counts the completed component contractions in every disjoint
+source/rod partition. Compilation remains a separate counter.
+
+`profile_mosaic_amplitudes` solves conditional single-exposure GLS for
+`signal = u*F_G + v*F_L`, with `u,v >= 0`, exposure `a=u+v`, and
+`eta=v/a` when `a>0`. Narrower eta bounds are enforced by nonnegative coefficients
+on their two extreme rays. Zero exposure reports eta as `None`. The returned
+rank/null-direction diagnostics concern the admitted conditional amplitude cone;
+they do not establish joint physical identification. Proportional unequal
+columns can leave exposure unidentified. Equal columns can identify exposure
+while leaving eta unresolved.
+
+Pass `mixture_parameter="lorentzian_probability"` to the shared scorer/search,
+and provide the ordered raw columns from the predictor. The search removes only
+that coordinate from its nonlinear vector and reconstructs it in the complete
+physical result. At zero exposure its input coordinate remains provenance, with
+no fitted fraction claimed. Raw columns, signal, background and total predictions
+remain separate. Guards, literal exposure, multiple exposure groups and a
+calibration coupled to eta require a different inner problem and are rejected.
+CLI plans do not yet enable this option.
+
+With `NativeBackgroundProblem`, both amplitudes are re-solved at every beta. Its
+existing exponential background remains nonlinear, restarted deterministically
+from beta0, with the unchanged penalty, box and termination/failure behavior.
+The analytic beta derivative projects off the active amplitude rays. It is valid
+on a stable active face; zero-amplitude/zero-multiplier transitions require
+bound-aware directional checks. Every physical finite difference must reprofile
+amplitudes and background. Software checks do not qualify those measured
+derivatives, an integration rule, a fit or a background subtraction.
+
+`NativePredictionStore(..., resolve_mosaic_components=True)` retains the same
+ordered two columns and completed partial batches. Bind its revision to full
+inputs, source/rod support, numerical rule, implementation, parameter ordering
+and component order. Scalar and component checkpoints cannot cross-replay.
+Recovery retains raw work only; it does not prepend an incumbent or recover an
+optimizer state, fitted amplitudes or beta.
+
+A constrained linear-background candidate additionally needs a nonnegative
+basis integrated over the exact footprints, a penalty in its own coefficient
+units, and evidence-derived feature inequalities. Those data-dependent choices
+are not supplied by the component API or exponential profiler. An unavailable
+control-transfer envelope leaves background-dependent fitting inadmissible;
+archived-model sensitivity ranges are not calibrated coverage bounds.
+
 ## Numerical qualification and execution
 
 Run `scripts/refine_native.py --physics PHYSICS.json --observations OBSERVATIONS.json
@@ -745,3 +798,51 @@ The display projection does not change the fitting observations or objective.
 
 See [supported staged fitting](STAGED_FITTING.md) for Bi ordered continuation,
 Pb disorder/control recipes and the shared generic-CIF/acquisition boundary.
+
+
+## Conditional finite background hull
+
+`NativeBackgroundHull(columns_count, weights0)` profiles one exposure for a fixed
+scalar raw diffraction shape and solves an unpenalized GLS simplex problem. Each
+column contains count masses integrated over the same declared observation
+footprints. One global nonnegative weight vector sums to one; callers must use
+that same vector on any separately integrated display or control columns.
+The finite family is a conditional model assumption, not a simultaneous
+uncertainty bound. Control and overlapping feature diagnostics are not silently
+added as likelihood rows.
+
+`profile(observations, raw, callback=...)` admits one raw GLS acquisition without
+guards. It returns exposure, weights, raw-model decomposition, data objective,
+zero penalty, simplex feasibility, a convex objective-gap bound and fixed-shape
+affine rank diagnostics. Rank deficiency leaves coefficient uniqueness unresolved;
+full rank establishes uniqueness only within this fixed-shape conditional model.
+Mosaic-component and outer fitting integration are not enabled by this interface.
+
+SLSQP uses an analytic envelope gradient and deterministic `weights0`, with default
+limits of 300 iterations and 600 distinct evaluations. Objective scaling is fixed
+from the initial residual. The default tolerance `1e-8` applies to simplex feasibility
+and the objective-gap bound divided by that scale; it is a solver criterion, not a
+physical acceptance threshold. Coefficients are never clipped or normalized after
+solving. Unsuccessful convergence or failed gap checks return `success=False`;
+evaluation-budget exhaustion raises `BackgroundProfileError` with the last point.
+Callbacks receive every distinct evaluation for caller-owned accounting.
+
+
+## Bounded cone-law reuse
+
+`NativeMosaicCache` retains at most two exact Gaussian width/order entries and
+one Lorentzian entry, owned by one immutable `NativeFiberResponse`. Hits promote
+the entry; misses recompute through the same cone-density owner. This allows a
+base Gaussian width to survive a nearby finite-difference width. The Lorentzian
+law remains inexpensive and keeps one entry. Eta, thickness, atomic structure
+and attenuation do not change these normalized laws. Material, reciprocal-basis,
+source and geometry invalidations remain unchanged, as do all component factors.
+
+`maximum_extra_gaussian_bytes` defaults to 256 MiB of retained NumPy payload
+beyond the most recent Gaussian entry. An older entry exceeding this budget is
+evicted; zero retains exactly one entry, including an empty response. The byte
+budget is per response, not a process-memory ceiling. A Gaussian miss can
+transiently hold its previous two entries and the newly computed entry. Callers
+still own process memory admission. No sampling rule, physical approximation or
+qualification status follows from reuse; workload evidence must include cache
+state, preparation, current strength evaluation and transient memory.

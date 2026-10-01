@@ -52,6 +52,7 @@ class NativeJointEvaluator:
     worker_count: int = 1
     compile_count: int = field(default=0, init=False)
     evaluation_count: int = field(default=0, init=False)
+    contraction_count: int = field(default=0, init=False)
     compile_seconds: float = field(default=0, init=False)
     _responses: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
     _predictions: OrderedDict = field(default_factory=OrderedDict, init=False, repr=False)
@@ -94,7 +95,15 @@ class NativeJointEvaluator:
             physics = self.instrument_model.bind(physics, values[-18:])
         return physics, arguments, mosaic, stack
 
-    def predict(self, values, coherent_repeats):
+    def predict(self, values, coherent_repeats, *, resolve_mosaic_components: bool = False):
+        """Raw native masses, or complete (Gaussian/Lorentzian, observation) columns.
+
+        Component requests share response and strength work. Their cache identity
+        is distinct from mixed predictions; contraction_count includes each
+        component in every disjoint source/rod partition. No eta is extrapolated.
+        """
+        if type(resolve_mosaic_components) is not bool:
+            raise TypeError("resolve_mosaic_components must be boolean")
         values = np.asarray(values)
         if (
             values.shape != (len(self.parameter_names),)
@@ -107,17 +116,27 @@ class NativeJointEvaluator:
                 "native candidate requires a finite aligned vector and positive integer N"
             )
         values = np.asarray(values, dtype=float)
-        candidate_key = coherent_repeats, values.tobytes()
+        candidate_key = coherent_repeats, values.tobytes(), resolve_mosaic_components
         if candidate_key in self._predictions:
             self._predictions.move_to_end(candidate_key)
             return self._predictions[candidate_key]
         physics, arguments, mosaic, stack = self.bind(values, coherent_repeats)
         prediction = sum(
             (
-                self._predict_part(part, arguments, mosaic, stack)
+                self._predict_part(
+                    part,
+                    arguments,
+                    mosaic,
+                    stack,
+                    resolve_mosaic_components=resolve_mosaic_components,
+                )
                 for part in physics.integration_parts()
             ),
-            np.zeros(len(self.observations.net_count)),
+            np.zeros(
+                (2, len(self.observations.net_count))
+                if resolve_mosaic_components
+                else len(self.observations.net_count)
+            ),
         )
         prediction.setflags(write=False)
         self._predictions[candidate_key] = prediction
@@ -146,7 +165,16 @@ class NativeJointEvaluator:
             ),
         )
 
-    def _predict_part(self, physics, arguments, mosaic, stack, *, resolve_axial_panels=False):
+    def _predict_part(
+        self,
+        physics,
+        arguments,
+        mosaic,
+        stack,
+        *,
+        resolve_axial_panels=False,
+        resolve_mosaic_components=False,
+    ):
         """Evaluate one disjoint rod partition with its normalized source rule."""
         detector = physics.detector(mosaic=self.proposal_mosaic, **arguments)
         # Thickness changes attenuation weights, never the accepted spatial ray map.
@@ -189,7 +217,7 @@ class NativeJointEvaluator:
         matching = [k for k in self._responses if k[0] == physics.rods]
         for old_key in matching[:-2]:
             del self._responses[old_key]
-        return cache.response.evaluate(
+        prediction = cache.response.evaluate(
             detector.strength_model,
             mosaic=mosaic,
             thickness_A=arguments["film_thickness_A"],
@@ -197,7 +225,14 @@ class NativeJointEvaluator:
             mosaic_cache=cache,
             source_weights=physics.source.mean_rays.source_weight,
             resolve_axial_panels=resolve_axial_panels,
+            resolve_mosaic_components=resolve_mosaic_components,
         )
+        object.__setattr__(
+            self,
+            "contraction_count",
+            self.contraction_count + (2 if resolve_mosaic_components else 1),
+        )
+        return prediction
 
     def clear_responses(self):
         self._responses.clear()

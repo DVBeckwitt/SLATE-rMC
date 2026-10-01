@@ -257,7 +257,9 @@ def _event_mass(
                 for opening in (nodes.cone_angle_rad, np.pi - nodes.cone_angle_rad)
             ]
         )
-    mass = strength[0, index] * cone_density[0] + strength[1, index] * cone_density[1]
+    mass = (
+        strength[0, index] * cone_density[..., 0, :] + strength[1, index] * cone_density[..., 1, :]
+    )
     coefficient = (
         nodes.integrated_coefficient
         * weight
@@ -278,16 +280,32 @@ def _event_mass(
 class NativeMosaicCache:
     """Explicit bounded execution state for one immutable response's cone averages.
 
-    Retain one width/order entry per normalized component. Eta mixes the two
-    probability laws; thickness, structure and attenuation do not alter them.
+    Retain two Gaussian width/order entries and one cheap Lorentzian entry.
+    The older Gaussian uses at most maximum_extra_gaussian_bytes beyond the
+    current entry; zero preserves single-entry retention. Eta, thickness and
+    structure do not alter the laws. Entries belong to this exact response.
     """
 
     response: NativeFiberResponse
-    _gaussian: tuple | None = field(default=None, init=False, repr=False)
-    _lorentzian: tuple | None = field(default=None, init=False, repr=False)
+    maximum_extra_gaussian_bytes: int = 256 * 1024**2
+    _gaussian: tuple = field(default=(), init=False, repr=False)
+    _lorentzian: tuple = field(default=(), init=False, repr=False)
 
-    def components(self, density: SphericalMosaicDensity, order: int) -> tuple:
+    def __post_init__(self):
+        if (
+            type(self.maximum_extra_gaussian_bytes) is not int
+            or self.maximum_extra_gaussian_bytes < 0
+        ):
+            raise ValueError("extra cone-cache budget must be nonnegative integer bytes")
+
+    def components(
+        self, density: SphericalMosaicDensity, order: int, *, include_inactive: bool = False
+    ) -> tuple:
         parameters = density.parameters
+        if include_inactive and (
+            parameters.gaussian_sigma_rad <= 0 or parameters.lorentzian_half_width_rad <= 0
+        ):
+            raise ValueError("both component columns require positive mosaic widths")
         components = []
         for name, width, active, pure in (
             (
@@ -303,11 +321,13 @@ class NativeMosaicCache:
                 MosaicParameters(0.0, parameters.lorentzian_half_width_rad, 1.0),
             ),
         ):
-            if not active:
+            if not active and not include_inactive:
                 components.append(None)
                 continue
-            saved = getattr(self, name)
-            if saved is None or saved[:2] != (width, order):
+            entries = getattr(self, name)
+            key = width, order
+            saved = next((entry for entry in entries if entry[:2] == key), None)
+            if saved is None:
                 law = SphericalMosaicDensity(pure)
                 values = []
                 for node in self.response.nodes:
@@ -321,8 +341,12 @@ class NativeMosaicCache:
                     )
                     value.setflags(write=False)
                     values.append(value)
-                saved = (width, order, tuple(values))
-                object.__setattr__(self, name, saved)
+                saved = (width, order, tuple(values), sum(value.nbytes for value in values))
+            entries = (*[entry for entry in entries if entry[:2] != key][-1:], saved)
+            extra_bytes = self.maximum_extra_gaussian_bytes if name == "_gaussian" else 0
+            if extra_bytes == 0 or (len(entries) == 2 and entries[0][3] > extra_bytes):
+                entries = entries[-1:]
+            object.__setattr__(self, name, entries)
             components.append(saved[2])
         return tuple(components)
 
@@ -392,8 +416,20 @@ class NativeFiberResponse:
         cone_quadrature_order: int | None = None,
         source_weights: FloatArray | None = None,
         resolve_axial_panels: bool = False,
+        resolve_mosaic_components: bool = False,
     ) -> FloatArray:
-        """Return raw integrated A² per native observation, with one shared scale owner."""
+        """Return raw integrated A² per native observation.
+
+        resolve_mosaic_components returns (Gaussian/Lorentzian, observation)
+        columns with both normalized laws, independent of eta. Strength tables,
+        signed local-m0, optical factors and spatial probabilities are shared.
+        Both widths must be positive, even at a zero-population boundary.
+        This decomposition cannot be combined with axial-panel resolution.
+        """
+        if type(resolve_mosaic_components) is not bool or (
+            resolve_mosaic_components and resolve_axial_panels
+        ):
+            raise ValueError("choose ordinary, mosaic-component or axial-panel resolution")
         detector = self.detector
         weights = (
             detector.source.mean_rays.source_weight
@@ -430,10 +466,14 @@ class NativeFiberResponse:
         if type(order) is not int or order < 4:
             raise ValueError("cone quadrature order must be an integer of at least four")
         components = None
+        if resolve_mosaic_components and mosaic_cache is None:
+            mosaic_cache = NativeMosaicCache(self)
         if mosaic_cache is not None:
             if mosaic_cache.response is not self:
                 raise ValueError("mosaic cache belongs to another native response")
-            components = mosaic_cache.components(density, order)
+            components = mosaic_cache.components(
+                density, order, include_inactive=resolve_mosaic_components
+            )
         envelope = detector.intensity_envelope if intensity_envelope is None else intensity_envelope
         tables = [detector._strength_table(grid, model, thickness) for grid in self.grids]
         meshes = detector.integration_rule.axial_meshes
@@ -443,6 +483,8 @@ class NativeFiberResponse:
         result = np.zeros(
             (int(panel_offsets[-1]), len(self.observation_measure_px2))
             if resolve_axial_panels
+            else (2, len(self.observation_measure_px2))
+            if resolve_mosaic_components
             else len(self.observation_measure_px2)
         )
         for i, (node, probability) in enumerate(
@@ -451,12 +493,15 @@ class NativeFiberResponse:
             cone_density = None
             if components is not None:
                 gaussian, lorentzian = components
-                eta = density.parameters.lorentzian_probability
-                cone_density = np.zeros((2, len(node.axial_index)))
-                if gaussian is not None:
-                    cone_density += (1 - eta) * gaussian[i]
-                if lorentzian is not None:
-                    cone_density += eta * lorentzian[i]
+                if resolve_mosaic_components:
+                    cone_density = np.stack((gaussian[i], lorentzian[i]))
+                else:
+                    eta = density.parameters.lorentzian_probability
+                    cone_density = np.zeros((2, len(node.axial_index)))
+                    if gaussian is not None:
+                        cone_density += (1 - eta) * gaussian[i]
+                    if lorentzian is not None:
+                        cone_density += eta * lorentzian[i]
             mass = _event_mass(
                 node,
                 tables[node.grid_index],

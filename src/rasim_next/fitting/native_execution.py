@@ -12,12 +12,14 @@ class NativePredictionStore:
     The caller binds revision to input hashes, implementation, physical/numerical
     model and parameter ordering. Residuals and Jacobians are deliberately absent:
     scale, covariance, calibration and bounds are evaluated by the current search.
+    Mixed and ordered Gaussian/Lorentzian outputs use separate store identities.
     Checkpoint callbacks own external I/O. Workers never mutate this owner.
     """
 
     revision: str
     parameter_count: int
     observation_count: int
+    resolve_mosaic_components: bool = False
     _completed: dict = field(default_factory=dict, init=False, repr=False)
     pending_values: np.ndarray = field(default_factory=lambda: np.empty((0, 0)), init=False)
     pending_repeats: int | None = field(default=None, init=False)
@@ -25,11 +27,22 @@ class NativePredictionStore:
     replayed_count: int = field(default=0, init=False)
 
     def __post_init__(self):
+        if type(self.resolve_mosaic_components) is not bool:
+            raise TypeError("resolve_mosaic_components must be boolean")
         if not self.revision or any(
             type(n) is not int or n < 1 for n in (self.parameter_count, self.observation_count)
         ):
             raise ValueError("prediction store requires explicit revision and positive dimensions")
         self.pending_values = np.empty((0, self.parameter_count))
+
+    @property
+    def raw_shape(self):
+        """One fixed output identity: mixed masses or ordered Gaussian/Lorentzian columns."""
+        return (
+            (2, self.observation_count)
+            if self.resolve_mosaic_components
+            else (self.observation_count,)
+        )
 
     @property
     def values(self):
@@ -47,13 +60,14 @@ class NativePredictionStore:
         return dict(
             prediction_values=np.asarray(self.values).reshape(-1, self.parameter_count),
             prediction_repeats=np.asarray(self.repeats, dtype=np.int64),
-            prediction_raw=np.asarray(self.raw).reshape(-1, self.observation_count),
+            prediction_raw=np.asarray(self.raw).reshape(-1, *self.raw_shape),
             pending_prediction_values=self.pending_values,
         )
 
     def state(self):
         return dict(
             revision=self.revision,
+            resolve_mosaic_components=self.resolve_mosaic_components,
             pending_repeats=self.pending_repeats,
             dispatched_count=self.dispatched_count,
             completed_count=len(self._completed),
@@ -61,14 +75,18 @@ class NativePredictionStore:
         )
 
     def restore(self, arrays, state):
-        if self._completed or state["revision"] != self.revision:
+        if (
+            self._completed
+            or state["revision"] != self.revision
+            or state.get("resolve_mosaic_components", False) != self.resolve_mosaic_components
+        ):
             raise ValueError("prediction checkpoint revision differs or store is not empty")
         values, repeats, raw = (
             arrays[k] for k in ("prediction_values", "prediction_repeats", "prediction_raw")
         )
         if (
             values.shape != (len(repeats), self.parameter_count)
-            or raw.shape != (len(repeats), self.observation_count)
+            or raw.shape != (len(repeats), *self.raw_shape)
             or repeats.dtype.kind not in "iu"
             or np.any(repeats < 1)
             or any(np.iscomplexobj(a) or np.any(~np.isfinite(a)) for a in (values, raw))
@@ -127,7 +145,7 @@ class NativePredictionStore:
                         type(index) is not int
                         or not 0 <= index < len(trials)
                         or complete[index]
-                        or raw.shape != (self.observation_count,)
+                        or raw.shape != self.raw_shape
                         or np.iscomplexobj(raw)
                         or np.any(~np.isfinite(raw))
                     ):

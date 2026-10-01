@@ -115,25 +115,54 @@ def score_native_prediction(
     guarded=False,
     literal_scale=None,
     background_problem: NativeBackgroundProblem | None = None,
+    mixture_parameter: str | None = None,
 ):
-    """Score one physical vector, with literal or profiled scale and calibration once."""
-    values, raw = np.asarray(values, dtype=float), np.asarray(raw)
+    """Score a full physical vector with conditional scale/background/mixture once.
+
+    With mixture_parameter, raw has shape (2, observation), ordered Gaussian,
+    Lorentzian. The fitted fraction is reconstructed in the full result vector.
+    A zero exposure retains the supplied coordinate solely as provenance and
+    reports it unidentified; no fitted fraction is fabricated.
+    """
+    values, raw = np.array(values, dtype=float, copy=True), np.asarray(raw)
     names = tuple(p.name for p in parameters)
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
     width = upper - lower
     root_count = np.sqrt(int(observations.valid.sum()))
     if guarded and not observations.allow_guard_constraints:
         raise ValueError("historical guards may only be diagnostic on a training split")
-    background_fit = None
+    background_fit, mixture_fit = None, None
+    mixture_index, mixture_bounds = None, None
+    if mixture_parameter is not None:
+        if mixture_parameter not in names or guarded or literal_scale is not None:
+            raise ValueError(
+                "mixture profiling requires a declared fraction without guards/literal scale"
+            )
+        mixture_index = names.index(mixture_parameter)
+        mixture_bounds = lower[mixture_index], upper[mixture_index]
+        if any(mixture_index in block.indices for block in calibration):
+            raise ValueError("a calibration on the profiled fraction needs a coupled inner solve")
     if background_problem is not None:
         if guarded or literal_scale is not None:
             raise ValueError("background profiling cannot use guards or literal exposure")
-        background_fit = background_problem.profile(observations, raw)
+        background_fit = (
+            background_problem.profile(observations, raw, mixture_bounds=mixture_bounds)
+            if mixture_parameter is not None
+            else background_problem.profile(observations, raw)
+        )
         if not background_fit.success:
             from rasim_next.fitting.native_background import BackgroundProfileError
 
             raise BackgroundProfileError(background_fit)
         scale, residual = background_fit.scale, background_fit.residual
+        mixture_fit = background_fit.get("mixture_fit")
+    elif mixture_parameter is not None:
+        from rasim_next.fitting.native_background import profile_mosaic_amplitudes
+
+        mixture_fit = profile_mosaic_amplitudes(
+            observations, raw, np.zeros(len(observations.net_count)), eta_bounds=mixture_bounds
+        )
+        scale, residual = mixture_fit.scale, mixture_fit.data_residual
     elif literal_scale is None:
         scale, residual = observations.profile_scale(raw, enforce_guards=guarded)
     else:
@@ -147,8 +176,17 @@ def score_native_prediction(
         ):
             raise ValueError("literal scale must be a finite nonnegative scalar without exposures")
         scale = float(scalar)
+    component_predictions = None
+    if mixture_fit is not None:
+        component_predictions = np.array(raw, dtype=float, copy=True)
+        if mixture_fit.lorentzian_probability is not None:
+            values[mixture_index] = mixture_fit.lorentzian_probability
+        eta = values[mixture_index]
+        raw = (1 - eta) * component_predictions[0] + eta * component_predictions[1]
     prediction = (
-        observations.apply_scale(raw, scale)
+        mixture_fit.prediction_count
+        if mixture_fit is not None and background_fit is None
+        else observations.apply_scale(raw, scale)
         if background_fit is None
         else background_fit.prediction_count
     )
@@ -180,6 +218,12 @@ def score_native_prediction(
         start_index=-1,
         optimizer_converged=False,
     )
+    if mixture_fit is not None:
+        point.mixture_fit = mixture_fit
+        point.raw_component_predictions = component_predictions
+        point.profiled_mixture_parameter = mixture_parameter
+        point.profiled_mixture_identified = mixture_fit.mixture_identified
+        point.signal_prediction_count = mixture_fit.signal_prediction_count
     if background_fit is not None:
         point.background_fit = background_fit
         point.signal_prediction_count = background_fit.signal_prediction_count
@@ -289,6 +333,7 @@ def fit_native_parameters(
     enforce_historical_guards: bool = False,
     callback=None,
     background_problem: NativeBackgroundProblem | None = None,
+    mixture_parameter: str | None = None,
 ):
     """Refit every unfixed coordinate and scale from each supplied start.
 
@@ -330,7 +375,36 @@ def fit_native_parameters(
     lower, upper = np.array([(p.lower, p.upper) for p in parameters]).T
     starts = np.asarray(starts)
     fixed_values = {} if fixed_values is None else dict(fixed_values)
-    active = np.array([i for i, name in enumerate(names) if name not in fixed_values], dtype=int)
+    if mixture_parameter is not None:
+        if (
+            mixture_parameter not in names
+            or mixture_parameter in fixed_values
+            or enforce_historical_guards
+            or observations.objective_kind != "gls"
+            or observations.exposure_index is not None
+            or observations.allow_guard_constraints
+        ):
+            raise ValueError(
+                "profiled mixture requires a free GLS fraction and no historical guards"
+            )
+        i = names.index(mixture_parameter)
+        if not 0 <= lower[i] < upper[i] <= 1 or any(i in b.indices for b in calibration):
+            raise ValueError(
+                "profiled fraction needs probability bounds and no coupled calibration"
+            )
+    raw_shape = (
+        (2, len(observations.net_count))
+        if mixture_parameter is not None
+        else (len(observations.net_count),)
+    )
+    active = np.array(
+        [
+            i
+            for i, name in enumerate(names)
+            if name not in fixed_values and name != mixture_parameter
+        ],
+        dtype=int,
+    )
     width = upper - lower
     best, feasible, converged = None, None, None
     runs = []
@@ -343,7 +417,7 @@ def fit_native_parameters(
         if (
             previous_values.ndim != 2
             or previous_values.shape[1] != len(names)
-            or previous_raw.shape != (len(previous_values), len(observations.net_count))
+            or previous_raw.shape != (len(previous_values), *raw_shape)
             or any(
                 np.iscomplexobj(a) or np.any(~np.isfinite(a))
                 for a in (previous_values, previous_raw)
@@ -367,6 +441,7 @@ def fit_native_parameters(
                 calibration,
                 guarded=enforce_historical_guards,
                 background_problem=background_problem,
+                mixture_parameter=mixture_parameter,
             )
             if best is None or point.objective < best.objective:
                 best = point
@@ -438,7 +513,7 @@ def fit_native_parameters(
                 if missing:
                     computed = np.asarray(predict_many(np.array(list(missing.values()))))
                     if (
-                        computed.shape != (len(missing), len(observations.net_count))
+                        computed.shape != (len(missing), *raw_shape)
                         or np.iscomplexobj(computed)
                         or np.any(~np.isfinite(computed))
                     ):
@@ -449,7 +524,7 @@ def fit_native_parameters(
             else:
                 raw = np.asarray(predict_many(np.array(physical)))
                 if (
-                    raw.shape != (len(points), len(observations.net_count))
+                    raw.shape != (len(points), *raw_shape)
                     or np.iscomplexobj(raw)
                     or np.any(~np.isfinite(raw))
                 ):
@@ -485,6 +560,7 @@ def fit_native_parameters(
                 calibration,
                 guarded=enforce_historical_guards,
                 background_problem=background_problem,
+                mixture_parameter=mixture_parameter,
                 literal_scale=scale_reference * x[-1] if enforce_historical_guards else None,
             )
             point.start_index = start_index
@@ -548,6 +624,7 @@ def fit_native_parameters(
                 calibration,
                 guarded=False,
                 background_problem=background_problem,
+                mixture_parameter=mixture_parameter,
             )
             literal.start_index = start_index
             if best is None or literal.objective < best.objective:
@@ -618,6 +695,8 @@ def fit_native_parameters(
         identification_status="not_profiled",
         guard_conditioned=enforce_historical_guards,
         fixed_parameters=tuple(fixed_values),
+        profiled_parameters=() if mixture_parameter is None else (mixture_parameter,),
+        nonlinear_parameter_count=len(active),
         parameters=parameters,
         calibration=calibration,
         observation_revision=observations.input_revision,

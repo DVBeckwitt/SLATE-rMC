@@ -877,6 +877,15 @@ Bi evaluator/search/CLI has retired. `NativeJointEvaluator`, `fit_native_paramet
 `scripts/refine_native.py` own execution for all built-in specimen models. Output remains
 one external diagnostic with separate candidate, convergence and numerical-selection states.
 
+The opt-in component Python API returns complete normalized Gaussian/Lorentzian
+raw columns in that order. Shared single-exposure GLS can profile their two
+nonnegative amplitudes while retaining the full physical vector and explicit
+zero-exposure/nonuniqueness diagnostics. Its beta derivative is conditional on a
+stable active face; it is not a globally smooth or jointly identified result.
+Component and mixed raw replay identities remain distinct. See
+[NATIVE_REFINEMENT.md](NATIVE_REFINEMENT.md#conditional-gaussianlorentzian-amplitudes)
+for API scope and qualification limitations.
+
 Local sensitivity uses range-scaled, covariance-whitened prediction derivatives with profiled
 scale. The CLI records SVD directions and each perturbation's empirical stitch selection,
 interval and normalization; changed intervals flag a possible nonsmooth derivative. These are
