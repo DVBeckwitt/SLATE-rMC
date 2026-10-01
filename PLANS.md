@@ -24,8 +24,12 @@ fitting, new-acquisition preparation and daily use, each with dependencies and a
 Milestones group capabilities without blocking independent tasks. Simulator completion covers both
 configured and native physical-input routes; new-acquisition preparation has a separate scientific
 decision point before its implementation can be estimated.
-Implementation is in progress; the current accepted checklist is 19/46. The R8 consolidated audit
-preserves root-owned acceptance. The checklist remains in that same document. Delivery verification follows the user's nominal-proof policy in
+Implementation is in progress; root accepted 25/46 conditions after the R8 review, with 21 remaining.
+Five of 16 original assignments are accepted (01/02/07/08/09); 11 remain incomplete. U02b stays
+unaccepted because its B002 Open gate failed. Native Run/indexed adoption/stage-result import and
+new-acquisition numerical preparation remain unavailable; exact-lock, scientific and performance
+deferrals remain explicit. The checklist and reviewed scopes remain in that same document.
+Delivery verification follows the user's nominal-proof policy in
 [VALIDATION.md](docs/VALIDATION.md#desktop-implementation-verification); existing fitting validation
 and qualification states remain authoritative. Historical `tasks/plan.md`, `tasks/todo.md` and fitting roadmaps retain
 their original evidence and do not schedule additional scientific work.

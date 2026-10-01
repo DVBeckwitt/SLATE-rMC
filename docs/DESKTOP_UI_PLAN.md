@@ -2,11 +2,13 @@
 
 Status: accepted feature scope; staged implementation in progress.
 Updated: 2026-10-01. Delivery breakdown incorporates the audited plan at `a80e995`.
-Current accepted checklist: 19/46; 27 items remain. Root nominally accepted Task08 after B016-B018 closure on 2026-10-01.
-Task09 is implemented; B019/B020 are closed by the R1/R2 identity and inert-history repairs.
-Its three rows remain unchecked pending consolidated root acceptance. Task10 mechanisms are
-implemented with B021 closed; a genuine complete three-group desktop launch is still unverified.
-The R8 audit below distinguishes delivered mechanisms from integration and qualification gaps.
+Current accepted checklist: 25/46; 21 items remain after root review of `02a0af9` on 2026-10-01.
+Five of 16 original assignments are accepted: 01, 02, 07, 08 and 09; 11 remain incomplete.
+Root accepted U08/U05c/U08c/U10a/U11/U13 in addition to the standing 19 conditions.
+Task09 is accepted for the supported nominal workflow; its saved fit remains unqualified for
+dataset/precision/downstream admission. U02b remains unchecked because B002 failed its Open gate.
+Task10 mechanisms are implemented with B021 closed; a genuine complete three-group desktop launch
+is still unverified. The current R8 disposition below retains integration and qualification gaps.
 
 Build one local desktop application for inspecting detector images, understanding experimental
 geometry, performing staged fitting and running independent simulations. This document consolidates
@@ -718,7 +720,7 @@ checks only its new risk against this contract; U15 integrates the results, not 
 
 ## 11. Delivery plan and acceptance checklist
 
-This is the implementation plan and sole task checklist. Nineteen tasks are accepted; 27 remain. Existing
+This is the implementation plan and sole task checklist. Twenty-five tasks are accepted; 21 remain. Existing
 U identifiers are retained, with smaller lettered slices where the previous task was too broad.
 Dependencies govern execution; milestones group completion criteria and are not serial barriers.
 Use the delivery order below instead of waiting for every row in the preceding milestone.
@@ -3580,9 +3582,9 @@ actually need it; do not copy the orchestration into widgets.
 | [x] U05b: hBN observation review | U04/U08b/U09a | Trace candidate rings with the canonical owner, show coverage/assignments and review only admitted edits. Persist the accepted ring pack, mask/config provenance and its revision; fitting consumes it unchanged and does not silently retrace. |
 | [x] U05: result binding and overlays | U02/U04/U01b | Bind contract-valid result records to acquisition/observation IDs; draw predicted peaks/rings, observed points, residuals and feature inspection. Distinguish no-fit, draft, candidate, selected and stale states; reject mismatched records and retain unavailable uncertainty. |
 | [x] U10: first hBN calibration workflow | U05a/U05b/U05/U08b/U09a | Numeric seeds -> reviewed ring pack -> explicit fit -> statistics/overlays -> named result/save/export works. Check seed/revision handoff, safe stop and late-result rejection; center/tilt and calibrant-private distance retain their meanings and actual qualification evidence. |
-| [ ] U05c: sample discovery and freeze | U02a/U04/U09a | Bind a supported OSC series, geometry/material and reviewed mask to canonical discovery/indexing. Add narrow explicit mask/data input boundaries where necessary. Persist candidates, admissible review decisions and one frozen fit-ready pack; the fit entry point must not reindex internally. |
-| [ ] U08c: indexed-series execution boundary | U08a/U01c/U05c | Use the existing explicit seeds/bounds and add safe cancellation/progress boundaries only where absent. Verify fixed references, incidence delta/trim gauges and unchanged frozen IDs with a small supported case. |
-| [ ] U10a: sample-only geometry workflow | U05c/U08c/U05/U09a | Fit one admitted indexed series using its exact reviewed pack; save/export per-image/shared diagnostics and seed/fitted comparison. Insufficient tracks or unsupported single-image cases remain clearly unavailable; no manufactured observations or qualification. |
+| [x] U05c: sample discovery and freeze | U02a/U04/U09a | Bind a supported OSC series, geometry/material and reviewed mask to canonical discovery/indexing. Add narrow explicit mask/data input boundaries where necessary. Persist candidates, admissible review decisions and one frozen fit-ready pack; the fit entry point must not reindex internally. |
+| [x] U08c: indexed-series execution boundary | U08a/U01c/U05c | Use the existing explicit seeds/bounds and add safe cancellation/progress boundaries only where absent. Verify fixed references, incidence delta/trim gauges and unchanged frozen IDs with a small supported case. |
+| [x] U10a: sample-only geometry workflow | U05c/U08c/U05/U09a | Fit one admitted indexed series using its exact reviewed pack; save/export per-image/shared diagnostics and seed/fitted comparison. Insufficient tracks or unsupported single-image cases remain clearly unavailable; no manufactured observations or qualification. |
 | [ ] U08d: joint geometry execution boundary | U08a/U01c | Add explicit admitted starting-state and safe-stop inputs while preserving the reduced gauge and existing defaults. Verify core seed/bounds handoff and required hBN/Bi2Se3/Bi2Te3 roster; do not generalize to arbitrary material groups through GUI assumptions. |
 | [ ] U10b: joint geometry workflow | U10/U10a/U08d | Combine the admitted frozen calibrant/sample packs, review shared/local/fixed scopes and run the current joint owner. Persist result and supported hash-bound handoff; verify IDs, private calibrant distance, rank/qualification and stale downstream state. |
 | [ ] U05d: geometry-derived center proposals | U05/U09a | Offer ring or sample estimates when the matching admitted result is available, including interpretation and coupling. An hBN result need not wait for a sample fit. Applying a shared estimate lists affected acquisitions; derived evidence is not counted twice. |
@@ -3595,7 +3597,7 @@ controller. These are new presentations of the same model, not new geometry impl
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
 | [x] U07: reciprocal geometry preview | U02/U09a | Show each image's on-demand draft/saved coverage and cursor Q in the declared frame; link available features. Compare nondefault wavelength/direction and off-panel cases with canonical APIs; reject stale jobs and fixed illustrative Ewald data. Accepted after independent review at `dd278b6`. |
-| [ ] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
+| [x] U08: textured experiment scene | U02/U09a | Show canonical beam, sample, goniometer axes/pivots and detector with actual image/available overlays. Click-to-zoom, context return and camera presets work; verify texture corners, compound transforms, context recreation and no orbit-driven image upload. |
 | [ ] U09: synchronized physical handles | U07/U08/U09a | Connect callouts, numeric fields and constrained arcs/arrows to existing parameter state without requiring a fit. One gesture is one undo; fixed/derived/unsupported coordinates stay explained. Simulator edits match canonical configuration. Enable each fit-specific mapping only after its execution boundary verifies the launched vector; handles cannot enable an unsupported scope. |
 | [x] U09b: experiment/simulator transfer | U09a/U12/U12b | Copy a compatible snapshot from numeric state into an independent draft without requiring the handle editor. Show exactly what transfers; verify units, provenance and unchanged source projects. Extend to the native route after U12c through its explicit admitted mapping. |
 
@@ -3624,7 +3626,7 @@ Limit each delivery to one admitted model/stage. Existing physics and execution 
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U11: open a prepared native experiment | U01b/U01c/U05/U09a | Load one supported prepared physics/observations/plan set, verify hashes and show measured profiles, background/covariance policy and model capabilities. Save/reopen references without altering frozen arrays; do not describe this as preparation of new raw images. |
+| [x] U11: open a prepared native experiment | U01b/U01c/U05/U09a | Load one supported prepared physics/observations/plan set, verify hashes and show measured profiles, background/covariance policy and model capabilities. Save/reopen references without altering frozen arrays; do not describe this as preparation of new raw images. |
 | [ ] U11a: mosaic stage | U11 | Run the existing search with the admitted mosaic coordinates/controls; persist initial/candidate/selected values and qualification. Verify frozen observable identity and explicit numerical settings on a bounded case. |
 | [ ] U11b: ordered intensity stage | U11a | Bind a supported ordered model and declared upstream state, nuisance scale/background and active coordinates. Save/export matched-observable results; controls do not change membership or silently substitute an empirical baseline. |
 | [ ] U11c: supported disorder stage | U11b | Expose disorder only for an actual supporting material binding with the ordered control and weak-direction diagnostics. Verify identical observable/measure and preserve unsupported native Bi states. |
@@ -3654,7 +3656,7 @@ Likely ownership: existing application inspector, project I/O and runtime result
 
 | Task | Dependencies | Deliverable and focused verification |
 | --- | --- | --- |
-| [ ] U13: sensitivity and supported uncertainty | U05/U09/U10 | Request bounded canonical parameter perturbations with declared held-fixed assumptions. Show covariance-based bands only with defensible evidence; retain rank/branch/invalid states and distinguish sensitivity from posterior confidence. |
+| [x] U13: sensitivity and supported uncertainty | U05/U09/U10 | Request bounded canonical parameter perturbations with declared held-fixed assumptions. Show covariance-based bands only with defensible evidence; retain rank/branch/invalid states and distinguish sensitivity from posterior confidence. |
 | [ ] U02b: reusable import/setup | U02a/U09a | Implemented with focused/native functional checks; pending consolidated root review. Named immutable templates, reviewed atomic apply/history, bounded verified copy with YAML/CIF dependencies, and guided identity-preserving relink. Full responsiveness remains open with inherited B002; see Task05 disposition below. |
 | [ ] U14: complete exports and portable archive | U06/U10b/U11g/U12b/U14b | Extend earlier per-slice exports to selected cross-workflow products and a self-contained archive with size/identity review. Verify reopened inputs, parameters, observations/results and qualified/nominal statuses; retain exact underlying values for figures. |
 | [ ] U14a: repeat-use and recovery integration | U02b/U14 | Integrate named attempts, duplicate experiments, selected result history and bounded recovery across all delivered stages. Verify interrupted saves, missing files and independence; no executable checkpoint or false solver resume. |
@@ -4246,31 +4248,37 @@ evidence and final source hashes. The worktree receives one coherent commit; mai
 
 This checkpoint supersedes earlier current-status wording, while historical failures and receipts
 retain their original verdicts. The original 46 identifiers and dependency meanings are unchanged.
-The standing root acceptance is **19/46**; this audit does not check additional boxes.
+Root reviewed the final audit at `02a0af9` and accepted six additional conditions.
+The current acceptance is **25/46**, with **21 remaining**; the original checklist mirrors that decision.
 
 The full external audit records all 46 rows exactly once, original requirements/dependencies,
 implementation commits, current source hashes and later edits, exact receipt/check names, actual
 versus inferred coverage, and nominal/integration/scientific/performance limitations. Root owns
-acceptance. Seven rows are recommended for nominal implementation review: U08, U02b, U05c, U08c,
-U10a, U11 and U13. Accepting all seven would give 26/46, with 20 remaining; this is proposed
-arithmetic only. Their capability restrictions and remaining performance evidence stay explicit.
+acceptance. Root accepted U08, U05c, U08c, U10a, U11 and U13 under the current implementation
+verification policy: **19 + 6 = 25/46**. U02b, the seventh worker recommendation, remains unaccepted
+because its explicit B002 Open gate failed. Nominal functional/acknowledgment coverage does not
+waive that gate. Original assignments **01/02/07/08/09 are accepted (5/16)**; 11 remain incomplete.
+
+The [root 46-condition disposition](C:/Users/Kenpo/.codex/visualizations/2026/09/28/01a0e896-8754-7080-8c0d-230b3e10b46b/slate-original46-root-audit.md)
+and its JSON companion record the reviewed scopes. The old worker audit and sealed evidence retain
+their original recommendation/counts; this reconciliation supersedes their current-status wording.
 
 ### Researcher-facing disposition by original delivery step
 
 | Step | Current use and remaining boundary |
 | --- | --- |
 | 01 | Canonical reciprocal preview is accepted; saved/draft/cursor identities remain explicit. |
-| 02 | Textured scene, camera/context return and overlays have actual retained evidence; later physical rendering supplements it. Context-detach stalls remain a separate measured gap. |
+| 02 | U08 textured scene, camera/context return and overlays are accepted using actual retained evidence; later physical rendering supplements it. Context-detach stalls remain a separate measured gap. |
 | 03 | Masks/reasons/brush/native Boolean import and exact worker profile publication work. Original sustained/context qualification remains incomplete. |
 | 04 | Two-view comparison, calibrated navigation, immutable references, native cuts and paired exports work; the ordinary Open stall remains. |
-| 05 | Reusable templates, reviewed apply, verified dependent copies and identity-preserving relink work. Four missing nominal setup acknowledgments now have relevant completed paints. |
+| 05 | Reusable templates, reviewed apply, verified dependent copies and identity-preserving relink work. B007 nominal acknowledgments are closed; U02b stays unaccepted because B002 Open failed. |
 | 06 | Configured simulation/forms/immutable quantitative snapshots work for admitted CPU models. Existing nominal prefixes are not convergence; runtime/cold admission and locked-environment qualification remain open. |
 | 07 | Accepted independent native simulation and reviewed transfers retain their explicit model/measure/numerical settings. |
 | 08 | Accepted manual/Gaussian/hBN review, frozen observations, fit, result binding and export preserve genuine saved qualification. |
-| 09 | Supported indexed sample preparation/freeze and a genuine existing fit have nominal workflow evidence. Historical input loss permits inspection; live validation and downstream qualification can remain unavailable. |
+| 09 | U05c/U08c/U10a are accepted for supported indexed sample preparation/freeze and the genuine existing nominal fit. Historical input loss permits inspection; live validation and downstream qualification can remain unavailable. |
 | 10 | Joint seed/scope/private-distance mapping and genuine historical report/handoff inspection/export work. A genuine complete hBN/Bi2Se3/Bi2Te3 captured desktop launch/outcome is absent; routing fixtures do not establish ancestry. |
-| 11 | Physical editing/undo and supported hBN center/sensitivity routes work. Positive supported sample centers, complete joint live sensitivity and qualified covariance bands remain unavailable where evidence is absent. |
-| 12 | Existing prepared physics/observations/plan inspection preserves signed values/full covariance/definitions. Desktop indexed adoption and native fitting execution remain disconnected. |
+| 11 | U13 supported sensitivity is accepted; physical editing/undo and supported hBN center routes work. Positive supported sample centers, complete joint live sensitivity and qualified covariance bands remain unavailable where evidence is absent. |
+| 12 | U11 existing prepared physics/observations/plan inspection is accepted with signed values/full covariance/definitions preserved. Desktop indexed adoption and native fitting execution remain disconnected. |
 | 13 | Stage selection and structural draft validation work. U11a is mosaic, U11b ordered intensity, U11c supported disorder. No stage execution/result import; native Bi disorder is unsupported and Pb roster support is not measured qualification. |
 | 14 | Acquisition/source/mask/geometry review and frozen-output inspection work. A complete new raw-acquisition scientific recipe, numerical Prepare and end-to-end fitting-stage handoff are absent. |
 | 15 | Current-route exact exports/archives, named inspection, independent copies and reviewed recovery work. This does not extend unavailable stages or imply executable solver resume. |
@@ -4283,15 +4291,15 @@ selected-state Save acknowledged in about 6.6–19.7 ms at completed relevant Qt
 B009 has a genuine retained prefix-8 reopen with detector/H/V publication in about
 20.1/21.8/22.7 ms. A separate non-solving active-worker fixture acknowledged ordinary Close in
 2.854 ms, stopped in 219.789 ms and drained/hidden in 290.006 ms. These are distinct quantities.
-Root may close the missing nominal-receipt gaps; earlier failures and canonical runtime limits
-remain. Completed Qt paints do not establish physical monitor scanout.
+Root closed B007/B009 only for these named nominal-receipt gaps; earlier failures and canonical
+runtime limits remain. Completed Qt paints do not establish physical monitor scanout.
 
-Actual missing-Matplotlib startup previously passed its first handler then crashed in a sample
+B025 is repaired and closed. Actual missing-Matplotlib startup previously passed its first handler then crashed in a sample
 panel constructor. Desktop startup now preflights both plotting backends and reports the missing
 visualization dependency plus the installation command, returning exit status 2 before constructing
 an application. Normal startup passed. Numerical imports remain independent of optional GUI imports.
 
-The prepared editor exceeded the 1280-logical-pixel available screen at 150% scaling. Existing pages
+B026 is repaired and closed. The prepared editor exceeded the 1280-logical-pixel available screen at 150% scaling. Existing pages
 now scroll, the declaration notice wraps and existing actions use two columns. A copied genuine R5
 session remained exact and every action was accessible in a 1050×650 window; Tab traversed controls.
 Representative Ctrl+0/Ctrl+1/Ctrl+B, acquisition Alt navigation and dialog Escape checks passed at
@@ -4304,9 +4312,36 @@ unverified: frozen offline setup failed because cached threadpoolctl 3.7.0 was u
 existing global Python 3.13.13 environment uses threadpoolctl 3.5.0 and differs from other locked
 versions too. Actual entry/exit/restoration of its canonical worker thread limits passed at a
 non-solving boundary, but cannot qualify the locked environment. No dependency/lock upgrade ran.
-B003–B006/B011–B013/B015–B024 are closed by root; repairs do not automatically accept parent rows.
+Open defects are **B001/B002/B008/B010/B014**. B003–B007/B009/B011–B013/B015–B026 are closed
+by root; repairs do not automatically accept parent rows. The old image 121.093 ms receipt, missing
+H/V acknowledgments, canonical stop 2184.142 ms/drain 2192.044 ms and Task06 command10
+90.0596028-second limit violation remain failed or incomplete evidence under runtime/release review.
 
 No new simulations, fits, numerical prediction/Jacobian, raw observation preparation, scientific
 full images, sweeps or numerical/performance campaigns ran in R8. Runtime validators and frozen
 tolerances remain authoritative. Exact native engine integration and scientific preparation
 require their own identified scope; this audit adds neither.
+
+### Accepted scopes and remaining dependencies
+
+- U08 acceptance reuses actual scene series14–16 and later applicable rendering evidence, without
+  declaring a new final whole-shell performance campaign or closing B001 context-detach stalls.
+- U05c/U08c/U10a acceptance covers supported indexed discovery/review/freeze, exact seeds/bounds/IDs,
+  the genuine saved nominal fit and persistence/export. The saved sample result remains unqualified;
+  dataset/precision/root/outer/heldout and downstream qualification remain unavailable; missing-source history is inspectable with live
+  validation unavailable. No additional fit or scientific qualification was inferred.
+- U11 acceptance is prepared-input inspection, signed profiles/full covariance and immutable
+  definitions/pending Save/Open. It excludes new raw preparation, native fitting Run, indexed adoption
+  and stage-result import. Pb roster inventory remains source evidence rather than measured qualification.
+- U13 acceptance covers supported bounded sensitivity with explicit held-fixed assumptions and invalid
+  states. Covariance confidence bands, full genuine joint sensitivity and positive supported sample
+  center evidence remain unavailable where their owners provide no evidence.
+
+The exact Task12 integration patch remains unapproved; no alternative hook or transport is provided.
+Native Run/indexed adoption/stage-result import are disconnected. Native Bi disorder is unsupported;
+Pb disorder has no new measured stage qualification. New-acquisition numerical preparation requires
+an admitted signal/control/background/full-covariance recipe and independent comparison; review-only
+controls do not satisfy U11e/U11f/U11g. Full joint launch, exact locked environment and integrated
+20-image/inspection/3D/job, latency distributions and CPU/GPU/scanout qualification remain deferred.
+No dependency-ready implementation is currently recorded. The documentation reconciliation uses only
+prose/diff/count checks; prior native/scientific budgets remain closed.

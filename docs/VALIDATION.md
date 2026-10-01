@@ -355,8 +355,11 @@ closure and the original-condition count remains 19/46.
 
 ## R8 final bounded implementation audit (2026-10-01)
 
-The external 46-row audit preserves all original identifiers/dependencies and the standing root
-acceptance of 19/46. It links exact existing receipts/current owner hashes and distinguishes actual
+The external 46-row audit preserves all original identifiers/dependencies. Root accepted six
+additional conditions after review of `02a0af9`: U08/U05c/U08c/U10a/U11/U13, giving **25/46**,
+with **21 remaining** and **5/16 original assignments accepted (01/02/07/08/09)**. U02b remains
+unaccepted because its explicit B002 Open gate failed. The original sealed worker evidence retains
+its earlier standing count and seven-candidate recommendation; the root disposition supersedes it. It links exact existing receipts/current owner hashes and distinguishes actual
 workflows, source review, metadata/routing fixtures, unqualified scientific results, disconnected
 integration and deferred release evidence. Historical failures and method archives remain intact.
 
@@ -387,3 +390,19 @@ remain unchanged. Relevant Ruff format/lint, syntax/import and diff checks are r
 the unchanged numerical wheel reuses the prior offline build evidence. No type checker is configured.
 New temporary methods are archived exactly outside the repository and removed after use. No new
 fits/simulations/predictors/Jacobians/observation preparation or scientific/performance campaigns ran.
+
+
+Root closed B007/B009 for their named nominal receipt gaps and B025/B026 for the actual startup/DPI
+product repairs. Open B001/B002/B008/B010/B014 retain original failed values and requirements. The
+old image121.093ms/missing H/V receipt, canonical stop2184.142ms/drain2192.044ms and command10
+90.0596028s limit violation remain evidence; nominal closure does not qualify canonical worst-case
+runtime, scanout or full release. Accepted sample results stay unqualified for dataset/precision/
+downstream use; prepared inspection excludes new preparation/Run/adoption/result import. Supported
+sensitivity does not establish unavailable covariance confidence bands or full joint qualification.
+
+The follow-up reconciliation changes documentation only: exact25/46 checkbox/count agreement with
+root's 46-row disposition, unchanged original requirements/dependencies, original step5/16 counts,
+docs-only diff and whitespace review. No production/native/GUI/decode/scientific execution, tests,
+build, environment installation or observer work runs. Previously passed software checks are reused;
+all native/scientific allowances are zero for this finish. Immutable receipts/indexes/seals remain
+untouched; one new docs-only completion index/handoff records this current decision.
