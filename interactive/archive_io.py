@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from archive_storage import storage_files, stored_path
+from attempt_state import history_text, read_history, retain_results, selected_history
 from hbn_io import _hash_file
 from job_lifecycle import JobResult
 from project_state import (
@@ -48,16 +49,17 @@ def product_choices(state):
         for a in state.project.acquisitions
     ]
     view = state.view
+    history = read_history(view.attempts_json)
     for key, label, present in (
         (
             "configured",
             "Configured simulation draft / retained output",
-            view.simulation_draft or view.simulation_result,
+            view.simulation_draft or view.simulation_result or history.configured,
         ),
         (
             "native",
             "Native simulation draft / retained output",
-            view.native_simulation_draft or view.native_simulation_result,
+            view.native_simulation_draft or view.native_simulation_result or history.native,
         ),
         ("hbn", "hBN current inputs / retained result history", view.hbn_sessions),
         ("sample", "Sample current inputs / retained result history", view.sample_session),
@@ -107,6 +109,7 @@ def _selected(state, selection):
         sample_session=view.sample_session if "sample" in selection else None,
         joint_session=view.joint_session if "joint" in selection else None,
         native_fit_session=view.native_fit_session if "prepared" in selection else None,
+        attempts_json=selected_history(view.attempts_json, selection),
     )
     numeric = (
         state.numeric_draft
@@ -217,9 +220,12 @@ def _references(state, storage=()):
             v.native_simulation_draft.physics_path,
             v.native_simulation_draft.imported_sha256,
         )
+    history = read_history(
+        retain_results(v.attempts_json, v.simulation_result, v.native_simulation_result)
+    )
     for product, ref in (
-        ("configured", v.simulation_result),
-        ("native", v.native_simulation_result),
+        *(("configured", ref) for ref in history.configured),
+        *(("native", ref) for ref in history.native),
     ):
         if ref is not None:
             add(product, ref.path, ref.sha256)
@@ -703,6 +709,19 @@ def _relocate(state, storage):
             native_simulation_draft=nd,
             native_simulation_result=nr,
             archive_storage_json=storage,
+            attempts_json=history_text(
+                replace(
+                    read_history(v.attempts_json),
+                    configured=tuple(
+                        replace(ref, path=local(ref.path, ref.sha256))
+                        for ref in read_history(v.attempts_json).configured
+                    ),
+                    native=tuple(
+                        replace(ref, path=local(ref.path, ref.sha256))
+                        for ref in read_history(v.attempts_json).native
+                    ),
+                )
+            ),
         ),
         numeric,
     )

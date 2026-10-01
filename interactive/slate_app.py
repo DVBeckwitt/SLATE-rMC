@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import numpy as np
 from archive_io import ArchiveWorkResult, archive_work
 from archive_panel import ArchivePanel
+from attempt_state import retain_results
 from comparison_panel import ComparisonPanel, panel_view_state
 from comparison_state import LineSamples, LineWork, detector_frame_key, prepare_line
 from detector_panel import DetectorPanel
@@ -104,6 +105,8 @@ from project_state import (
     SceneViewState,
     project_to_document,
 )
+from project_tools_io import ProjectToolsResult, project_tools_work
+from project_tools_panel import ProjectToolsPanel
 from PySide6.QtCore import QBuffer, QIODevice, QItemSelectionModel, QPointF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QCloseEvent,
@@ -363,6 +366,7 @@ class ShellWindow(QMainWindow):
                 "joint",
                 "prepared",
                 "archive",
+                "project-tools",
                 "physical",
             ]
             | None
@@ -374,6 +378,12 @@ class ShellWindow(QMainWindow):
         self._archive_context = None
         self.archive = None
         self.archive_storage_json = "{}"
+        self.attempts_json = "{}"
+        self.project_tools = None
+        self._pending_project_tools = None
+        self._project_tools_context = None
+        self._pending_open_sha = None
+        self._owned_recovery_sha = None
         self._pending_joint = None
         self._prepared_context = None
         self._joint_context = None
@@ -723,6 +733,9 @@ class ShellWindow(QMainWindow):
         self.archive_button = QPushButton("Portable archive / exact exports")
         self.archive_button.clicked.connect(self._show_archive)
         inspector_layout.addWidget(self.archive_button)
+        self.project_tools_button = QPushButton("Attempts / independent copy / recovery")
+        self.project_tools_button.clicked.connect(self._show_project_tools)
+        inspector_layout.addWidget(self.project_tools_button)
         self.selection_label = QLabel("No acquisition selected")
         self.selection_label.setObjectName("mutedText")
         self.selection_label.setWordWrap(True)
@@ -948,6 +961,8 @@ class ShellWindow(QMainWindow):
             + (0 if self.prepared.profiles is None else self.prepared.profiles.nbytes)
             + self.prepared.history.bytes_used
             + len(self.archive_storage_json.encode())
+            + len(self.attempts_json.encode())
+            + (0 if self.project_tools is None else self.project_tools.resident_bytes())
             + (0 if self.archive is None else len((self.archive.review or "").encode()))
             + self.simulator.history.bytes_used
             + self.simulator.native.history.bytes_used
@@ -1016,6 +1031,65 @@ class ShellWindow(QMainWindow):
             self.archive = ArchivePanel(self)
         self.archive.refresh()
         self.archive.show()
+
+    def _show_project_tools(self):
+        if self.project_tools is None:
+            self.project_tools = ProjectToolsPanel(self)
+        self.project_tools.refresh()
+        self.project_tools.show()
+
+    def _supersede_project_tools(self):
+        self._pending_project_tools = None
+        if self._active_kind == "project-tools":
+            self.jobs.invalidate()
+
+    def _request_project_tools(self, argument, context):
+        if self._close_intent or self._pending_open is not None:
+            return
+        if type(argument) is not bytes or len(argument) > 4 * 1024**2:
+            raise ValueError("Project tools request exceeds shared 4 MiB admission")
+        self._pending_project_tools = (argument, context)
+        if self._active_kind == "project-tools":
+            self.jobs.invalidate()
+        self.project_tools.status.setText("Project tools queued on the shared worker")
+        QTimer.singleShot(0, self._dispatch_pending)
+
+    def _submit_project_tools(self, argument, context):
+        if self.project_tools is None or context != self.project_tools.context():
+            if self.project_tools is not None:
+                self.project_tools.status.setText(
+                    "Stale project tools request rejected before file work"
+                )
+            return
+        self._active_kind = "project-tools"
+        self._project_tools_context = context
+        try:
+            prepared_budget(**self._simulation_resource_charge())
+            identity = self.jobs.submit(
+                JobRequest(
+                    self.project.project_id,
+                    None,
+                    Revisions(calibration=self.project_tools.epoch),
+                    argument,
+                    len(argument),
+                    2 * 1024**2,
+                    project_tools_work,
+                )
+            )
+        except (ValueError, TypeError, RuntimeError) as exc:
+            self._active_kind = self._project_tools_context = None
+            self.project_tools.status.setText("Project tools could not start: " + str(exc))
+        else:
+            self._active_generation = identity.generation
+
+    def _project_tools_current(self, identity):
+        return (
+            self.project_tools is not None
+            and identity.generation == self._active_generation == self.jobs.latest_generation
+            and self._project_tools_context == self.project_tools.context()
+            and not self._close_intent
+            and self._pending_open is None
+        )
 
     def _supersede_archive(self):
         self._pending_archive = None
@@ -1473,6 +1547,11 @@ class ShellWindow(QMainWindow):
             self.physical.settings_json,
             self.prepared.session,
             self.archive_storage_json,
+            retain_results(
+                self.attempts_json,
+                self.simulator.result_reference,
+                self.simulator.native.result_reference,
+            ),
         )
 
     def _validate_project_admission(
@@ -1543,6 +1622,13 @@ class ShellWindow(QMainWindow):
             self.archive.invalidate()
         if self._restoring_view:
             return
+        self.attempts_json = retain_results(
+            self.attempts_json,
+            self.simulator.result_reference,
+            self.simulator.native.result_reference,
+        )
+        if self.project_tools is not None:
+            self.project_tools.invalidate()
         if self._numeric_draft is not None and not any(
             item.acquisition_id == self._numeric_draft.acquisition_id
             for item in self.project.acquisitions
@@ -1590,7 +1676,9 @@ class ShellWindow(QMainWindow):
             )
             retire = (
                 str(self._recovery_path())
-                if not recovery and (adopt_destination or self._project_path is None)
+                if not recovery
+                and self._owned_recovery_sha is not None
+                and (adopt_destination or self._project_path is None)
                 else None
             )
             argument = json.dumps(
@@ -1599,6 +1687,8 @@ class ShellWindow(QMainWindow):
                     "document": document,
                     "recovery": recovery,
                     "retire_draft": retire,
+                    "retire_sha256": self._owned_recovery_sha if retire else None,
+                    "recovery_sha256": self._owned_recovery_sha if recovery else None,
                 },
                 allow_nan=False,
             ).encode("utf-8")
@@ -1764,6 +1854,17 @@ class ShellWindow(QMainWindow):
             self._queue_write(path, recovery=recovery, explicit=explicit, adopt_destination=adopt)
         if self._write_queue:
             task = self._write_queue.popleft()
+            if not task.discard and task.project_id == self.project.project_id:
+                request_document = json.loads(task.argument)
+                if task.recovery:
+                    # A preceding queued save may have published a newer owned draft.
+                    request_document["recovery_sha256"] = self._owned_recovery_sha
+                elif task.adopt_destination and self._owned_recovery_sha is not None:
+                    request_document["retire_draft"] = str(self._recovery_path())
+                    request_document["retire_sha256"] = self._owned_recovery_sha
+                task = replace(
+                    task, argument=json.dumps(request_document, allow_nan=False).encode()
+                )
             self._active_write = task
             self._active_kind = "discard" if task.discard else "save"
             run = discard_recovery if task.discard else write_project
@@ -1773,7 +1874,7 @@ class ShellWindow(QMainWindow):
                 Revisions(data=task.revision),
                 task.argument,
                 _request_size(task.argument),
-                16 * 1024,
+                32 * 1024,
                 run,
             )
             try:
@@ -1797,6 +1898,11 @@ class ShellWindow(QMainWindow):
             argument, context = self._pending_physical
             self._pending_physical = None
             self._submit_physical(argument, context)
+            return
+        if self._pending_project_tools is not None:
+            argument, context = self._pending_project_tools
+            self._pending_project_tools = None
+            self._submit_project_tools(argument, context)
             return
         if self._pending_archive is not None:
             operation, argument, context = self._pending_archive
@@ -1972,16 +2078,12 @@ class ShellWindow(QMainWindow):
             self.open_project(Path(filename))
 
     def _choose_recovery(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
-            self,
-            f"Recover a draft from {self.recovery_root}",
-            str(self.recovery_root),
-            "SLATE drafts (*.slate.json)",
-        )
-        if filename:
-            self.open_project(Path(filename), recovery=True)
+        self._show_project_tools()
+        self.project_tools.guard(self.project_tools.review_recovery)
 
-    def open_project(self, path: Path, *, recovery: bool = False) -> None:
+    def open_project(
+        self, path: Path, *, recovery: bool = False, expected_sha: str | None = None
+    ) -> None:
         candidate = Path(path).absolute()
         if recovery and candidate.parent != self.recovery_root:
             self._show_state(
@@ -1992,6 +2094,7 @@ class ShellWindow(QMainWindow):
             return
         self.physical.cancel(clear=True)
         self._pending_open = (candidate, recovery)
+        self._pending_open_sha = expected_sha
         self._discard_confirmed = False
         for candidate_id in self._candidate_queue:
             queued = self._candidates.get(candidate_id)
@@ -2000,6 +2103,7 @@ class ShellWindow(QMainWindow):
                 queued.detail = "Interrupted by project open; retry if this project remains"
         self._pending_hbn = None
         self._pending_archive = None
+        self._pending_project_tools = None
         self._pending_prepared = None
         self._pending_joint = None
         self._pending_sample = None
@@ -2018,10 +2122,12 @@ class ShellWindow(QMainWindow):
             "joint",
             "prepared",
             "archive",
+            "project-tools",
             "sample",
         ):
             self._pending_hbn = None
             self._pending_archive = None
+            self._pending_project_tools = None
             self._pending_prepared = None
             self._pending_joint = None
             self._pending_sample = None
@@ -2049,7 +2155,17 @@ class ShellWindow(QMainWindow):
         self._pending_open = None
         self._discard_confirmed = False
         self._active_kind = "open"
-        argument = encode_bounded_path(path, self._max_import_axis or AXIS_LIMIT)
+        axis_limit = self._max_import_axis or AXIS_LIMIT
+        argument = encode_bounded_path(path, axis_limit)
+        if self._pending_open_sha is not None:
+            argument = json.dumps(
+                {
+                    "reviewed_path": str(path),
+                    "axis_limit": axis_limit,
+                    "sha256": self._pending_open_sha,
+                }
+            ).encode()
+        self._pending_open_sha = None
         try:
             identity = self.jobs.submit(
                 JobRequest(
@@ -2386,7 +2502,7 @@ class ShellWindow(QMainWindow):
                     self.project.project_id,
                     self._revision,
                     path,
-                    path,
+                    json.dumps({"path": str(path), "sha256": self._owned_recovery_sha}).encode(),
                     True,
                     True,
                     discard=True,
@@ -4674,8 +4790,14 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        if self._active_kind == "project-tools" or self._pending_project_tools is not None:
+            self._pending_project_tools = None
+            self.project_tools.status.setText(
+                "Cancel acknowledged; prior project retained while draining"
+            )
         archive_requested = self._active_kind == "archive" or self._pending_archive is not None
         self._pending_archive = None
+        self._pending_project_tools = None
         if archive_requested and self.archive is not None:
             self.archive.status.setText(
                 "Cancel acknowledged; prior project retained while draining"
@@ -5270,6 +5392,14 @@ class ShellWindow(QMainWindow):
                 self._active_kind = self._active_generation = self._physical_context = None
                 QTimer.singleShot(0, self._dispatch_pending)
             return
+        if kind == "project-tools":
+            self.project_tools.status.setText(
+                f"Project tools {state.value}: {summary.detail or 'working'}"
+            )
+            if state in (JobState.FAILED, JobState.CANCELED):
+                self._active_kind = self._active_generation = self._project_tools_context = None
+                QTimer.singleShot(0, self._dispatch_pending)
+            return
         if kind == "archive":
             self.archive.status.setText(f"Archive {state.value}: {summary.detail or 'working'}")
             if state in (JobState.FAILED, JobState.CANCELED):
@@ -5566,6 +5696,13 @@ class ShellWindow(QMainWindow):
                     self.physical.status.setText(
                         "Late/stale physical completion rejected; initial values unchanged"
                     )
+            elif kind == "project-tools":
+                if self._project_tools_current(identity) and isinstance(value, ProjectToolsResult):
+                    self.project_tools.guard(lambda: self.project_tools.ready(value))
+                else:
+                    self.project_tools.status.setText(
+                        "Stale project tools completion rejected; current project retained"
+                    )
             elif kind == "archive":
                 if self._archive_current(identity) and isinstance(value, ArchiveWorkResult):
                     self.archive.guard(lambda: self.archive.ready(value))
@@ -5632,6 +5769,8 @@ class ShellWindow(QMainWindow):
             self._active_kind = None
             if kind == "physical":
                 self._physical_context = None
+            if kind == "project-tools":
+                self._project_tools_context = None
             if kind == "archive":
                 self._archive_context = None
             if kind == "prepared":
@@ -5701,15 +5840,20 @@ class ShellWindow(QMainWindow):
             self._update_save_status()
             return
         if task.discard:
-            self._draft_revision = -1
-            self.statusBar().showMessage("Recovery draft discarded")
+            if not value.cleanup_warning:
+                self._draft_revision = -1
+                self._owned_recovery_sha = None
+            self.statusBar().showMessage(value.cleanup_warning or "Recovery draft discarded")
         elif task.project_id == self.project.project_id:
             if task.adopt_destination:
                 self._project_path = task.destination
                 self._saved_revision = task.revision
                 self._draft_revision = -1
+                if not value.cleanup_warning:
+                    self._owned_recovery_sha = None
             elif task.recovery:
                 self._draft_revision = max(self._draft_revision, task.revision)
+                self._owned_recovery_sha = value.sha256
             elif self._project_path == task.destination:
                 self._saved_revision = max(self._saved_revision, task.revision)
             self.statusBar().showMessage(value.cleanup_warning or f"Saved {task.destination.name}")
@@ -5753,6 +5897,17 @@ class ShellWindow(QMainWindow):
             self.simulator.restore(value.document.view, value.simulation_detail)
             self.physical.restore(value.document.view.physical_settings_json)
             self.archive_storage_json = value.document.view.archive_storage_json
+            self.attempts_json = retain_results(
+                value.document.view.attempts_json,
+                value.document.view.simulation_result,
+                value.document.view.native_simulation_result,
+            )
+            self._owned_recovery_sha = value.document_sha256 if self._opening_recovery else None
+            if self.project_tools is not None:
+                self.project_tools.history = SessionHistory()
+                self.project_tools.copy_path = self.project_tools.copy_sha = None
+                self.project_tools.invalidate()
+                QTimer.singleShot(0, self.project_tools.refresh)
             if self.archive is not None:
                 QTimer.singleShot(0, self.archive.refresh)
             self.prepared.restore(value.document.view.native_fit_session)
@@ -5882,6 +6037,7 @@ class ShellWindow(QMainWindow):
             self._close_intent = True
             self._pending_open = None
             self._pending_archive = None
+            self._pending_project_tools = None
             self._pending_hbn = None
             self._pending_prepared = None
             self._pending_joint = None
@@ -5913,6 +6069,7 @@ class ShellWindow(QMainWindow):
                 "joint",
                 "prepared",
                 "archive",
+                "project-tools",
                 "sample",
             ):
                 self.jobs.cancel()

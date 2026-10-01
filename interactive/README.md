@@ -572,3 +572,53 @@ figure declarations still name their original explicit output directory; review 
 with that owner before figure export. Archiving computes no image or fit. Sample history stays
 inspectable with live geometry revalidation marked unavailable; original qualification is retained.
 Native fit Run/adoption remains disabled.
+
+
+## Named attempts, independent copies and recovery (R7b)
+
+Open **Attempts / independent copy / recovery** in the experiment inspector. Each row
+is bound to its immutable owner and result/description identity. **Rename display** and
+**Select for inspection** save separate metadata; scientific names, launch records, units,
+definitions, hashes and qualification remain exact. Undo/Redo covers these metadata edits.
+Inspection selection is separate from the current owner's scientific candidate selection.
+**Open existing owner** locates the stable identity in the current route: prepared starts
+use the existing explicit compatibility review; hBN requires its acquisition to be selected;
+sample/joint retain their existing candidate-selection validators. Configured/native retained
+outputs reopen their exact saved arrays, including historical snapshots, without running a
+simulation. The current simulation draft and selected-output reference remain separate.
+
+Simulation output history retains at most eight exact references per route. At the limit,
+remove an old reference explicitly before admitting another output. Current selected references
+cannot be removed from this catalog. Removal changes project references, not external files.
+Names are limited to 128 entries of 256 characters; all attempt metadata is limited to 128 KiB
+within the existing 1 MiB project admission. Removed owner history may leave a name with no
+current row; it does not manufacture an attempt or restore a deleted scientific record.
+
+**Review independent copy** shows a fresh project UUID, inherited owner/history identities,
+the exact source snapshot identity and complete pending/current state. **Publish reviewed copy**
+requires a new external destination and uses no-overwrite publication. **Open published copy**
+uses ordinary dirty-state handling and rechecks the exact published bytes. Edits, selections,
+pending text, masks, configurations and Undo after Open belong to the new project; recovery
+uses its new UUID. Original scientific owners and result identities remain inherited inspection.
+Active reuse must pass the existing route's checks. Exact referenced files remain explicitly
+shared; use the portable archive when independent file storage is required.
+
+**Recover Draft** opens bounded recovery review. Choose a valid candidate by project UUID,
+name, source identities and age, then **Open reviewed recovery**. Invalid/partial candidates
+are listed with reasons. Changed bytes require another review. Source checks and exact Relink
+remain explicit; restoring a project never resumes a solver. Pending text, selected inspection
+and original result qualification are retained.
+
+Recovery is limited to 32 drafts of at most 1 MiB each. Autosave remains enabled. Existing
+recovery bytes can be replaced/retired only when their exact owned or reviewed SHA256 matches;
+unknown/changed drafts remain for explicit review. Saves flush a unique sibling temporary file
+before one atomic publication, with cooperative cancellation before publication. A failure
+before publication preserves prior saved bytes; cancellation after publication may leave a
+complete external copy which is not adopted by stale work. Cleanup is limited to owned paths.
+This is not a filesystem-wide transaction, concurrent-writer lock or power-loss guarantee.
+
+R7b's focused desktop and publication checks establish implementation behavior only. No new
+fit, prediction, observation preparation or scientific/performance campaign was run. R4 Run/
+adoption, R5 execution and R6 preparation remain unavailable. B014's equivalent 64-source
+long-reference trigger met the original 12-second autosave and 8-second drain limits; the
+original timeout remains unexplained and root-owned, rather than a claimed deadlock/data-loss fix.

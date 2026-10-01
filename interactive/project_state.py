@@ -38,7 +38,7 @@ from simulation_state import (
     simulation_reference_from_document,
 )
 
-PROJECT_SCHEMA_VERSION = 16
+PROJECT_SCHEMA_VERSION = 17
 SOURCE_HASH_KIND = "sha256:decoded-osc-header-and-payload"
 MAX_PROJECT_BYTES = 1024 * 1024
 MAX_ACQUISITIONS = 128
@@ -652,11 +652,14 @@ class ProjectViewState:
     physical_settings_json: str = "{}"
     native_fit_session: NativeFitSession | None = None
     archive_storage_json: str = "{}"
+    attempts_json: str = "{}"
 
     def __post_init__(self):
         from archive_storage import storage_files
+        from attempt_state import retain_results
 
         storage_files(self.archive_storage_json)
+        retain_results(self.attempts_json, self.simulation_result, self.native_simulation_result)
         _physical_settings(self.physical_settings_json)
         if self.native_fit_session is not None and not isinstance(
             self.native_fit_session, NativeFitSession
@@ -1254,6 +1257,7 @@ def project_to_document(
         "joint_session": joint_session_document(state.view.joint_session),
         "native_fit_session": native_fit_session_document(state.view.native_fit_session),
         "archive_storage_json": state.view.archive_storage_json,
+        "attempts_json": state.view.attempts_json,
         "physical_settings_json": _physical_settings(state.view.physical_settings_json),
         "detector": _detector_document(detector),
         "scene": (
@@ -1366,6 +1370,7 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         13,
         14,
         15,
+        16,
         PROJECT_SCHEMA_VERSION,
     ):
         raise ProjectFormatError(f"unsupported project schema version {top['schema_version']!r}")
@@ -1437,7 +1442,8 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
         | ({"joint_session"} if top["schema_version"] >= 13 else set())
         | ({"physical_settings_json"} if top["schema_version"] >= 14 else set())
         | ({"native_fit_session"} if top["schema_version"] >= 15 else set())
-        | ({"archive_storage_json"} if top["schema_version"] >= 16 else set()),
+        | ({"archive_storage_json"} if top["schema_version"] >= 16 else set())
+        | ({"attempts_json"} if top["schema_version"] >= 17 else set()),
         "view",
     )
     selected = view_data["selected_acquisition_id"]
@@ -1511,15 +1517,19 @@ def project_from_document(value: Any, document_path: Path) -> ProjectDocument:
             _physical_settings(view_data.get("physical_settings_json", "{}")),
             native_fit_session_from_document(view_data.get("native_fit_session")),
             view_data.get("archive_storage_json", "{}"),
+            view_data.get("attempts_json", "{}"),
         ),
         draft,
     )
 
 
-def read_project_document(path: Path) -> ProjectDocument:
+def read_project_document(path: Path, *, source_bytes: bytes | None = None) -> ProjectDocument:
     """Read at most one bounded JSON document; reject nonstandard constants."""
-    with path.open("rb") as stream:
-        encoded = stream.read(MAX_PROJECT_BYTES + 1)
+    if source_bytes is None:
+        with path.open("rb") as stream:
+            encoded = stream.read(MAX_PROJECT_BYTES + 1)
+    else:
+        encoded = source_bytes
     if len(encoded) > MAX_PROJECT_BYTES:
         raise ProjectFormatError(f"project document exceeds {MAX_PROJECT_BYTES} bytes")
 

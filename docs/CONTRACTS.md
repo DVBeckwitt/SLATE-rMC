@@ -1287,3 +1287,35 @@ frozen row IDs, marginal errors, full covariance and provenance without normaliz
 Reference undo/redo retains pending text. Existing figure exports retain paired numeric values.
 Configured figures still require reviewed new filenames in an existing external output directory
 through their owner; archive relocation does not rewrite the output declaration.
+
+
+## Desktop named attempts and independent recovery (schema 17)
+
+- `attempts_json` is `slate.attempts.v1`, at most 128 KiB inside the 1 MiB project. It holds
+  at most 128 display names, one optional stable inspection key, at most eight configured and
+  eight native result references, and an optional inherited source-project UUID.
+- Keys are `(route, owner UUID/definition SHA256, exact result UUID/description identity)`.
+  Simulation draft identities exclude only top-level storage paths; scientific declaration,
+  hashes, units, revision and provenance remain bound. Result identities use the NPZ SHA256.
+  A name/inspection change never rewrites the original record or grants qualification.
+- Prospective project admission checks catalog bounds before adopting an output. Historical
+  reference removal is explicit and never deletes external evidence. Archive selection filters
+  route catalogs; inventory includes retained snapshot input closure independently of current
+  drafts; relocation updates storage paths while preserving stable keys and scientific records.
+- A duplicate has a fresh project/recovery UUID and a reviewed new destination. Its historical
+  sessions, observation/result identities and parameter definitions retain original provenance
+  as inherited inspection. Current reuse/selection uses the existing owner validators. Exact
+  files can be explicitly shared; portable archive provides copied file storage.
+- Duplicate publication never overwrites a destination. Reviewed duplicate/recovery Open binds
+  raw SHA256 and parses those same bytes before replacing current state. Recovery candidates
+  must have matching UUID filenames in the configured root, with at most 32 drafts/32 MiB total.
+  Partial/malformed candidates cannot replace valid state. Missing/changed sources remain
+  explicit; only existing exact-identity Relink can establish a restored binding.
+- Recovery overwrite/retirement requires the exact owned/reviewed prior SHA256. A preceding
+  queued publication updates ownership before the next dispatch. Unknown/changed bytes are
+  preserved. Atomic publication checks cancellation before commit; after commit a complete
+  copy may remain, but obsolete work cannot adopt it. No solver resumes, and no filesystem-wide
+  transaction, concurrent-writer lock or power-loss guarantee is provided.
+- Inherited sample Open performs structural original-record validation and labels live
+  revalidation unavailable, as archived Open already does. Active selection/export keeps the
+  existing canonical geometry, physical, covariance/rank and qualification checks.

@@ -514,3 +514,35 @@ Archive access grants portable inspection, never scientific execution/adoption/q
 Archived sample Open runs unchanged retained structural/identity validators and reports live
 geometry revalidation unavailable. The existing active-use/export prediction validator remains
 unchanged. No solver, new controller, plugin registry or protected-script hook is added.
+
+
+### Desktop attempts, duplication and recovery (R7b)
+
+`attempt_state.py` is bounded display/inspection metadata alongside existing immutable owners.
+Schema 17 adds `attempts_json`; schemas 1-16 read with empty metadata. Prepared rows retain the
+exact description and definition SHA256, session identity and pending text; result rows retain
+the original session UUID/result UUID and complete record. Simulation rows use draft UUID and
+semantic draft identity or exact result NPZ SHA256. Top-level storage paths are excluded from
+draft attempt identity, so explicit storage relocation preserves names; all scientific values,
+units, imported hashes, revision and provenance remain in that identity. Exact paths remain
+visible in the complete stored description. There is no new scientific history owner.
+
+`project_tools_panel.py` presents stable rows and uses the existing bounded `SessionHistory`
+for reversible metadata edits. Duplicate review creates a new project UUID and records the
+source project UUID as inherited inspection. Scientific owner/result IDs are retained, not
+rebased. Persistence/reopen materializes independent immutable project values; mutable GUI
+history, pending actions and recovery ownership are reset. Exact predecessor files can be
+shared through the existing explicit storage map. Simulation catalogs are bounded to eight
+references per route and participate in project admission, resource charges, protected-path
+checks and archive inventory/relocation. No hidden eviction changes history.
+
+`project_tools_io.py` performs bounded recovery review and exclusive duplicate publication
+through the existing global worker, generation/context checks, queue, cancellation and drain.
+Reviewed Open hashes and parses the same bounded bytes. Recovery review admits at most 32
+UUID-named 1 MiB documents and reports UUID/source identity, observed age and malformed choices.
+The existing atomic JSON publisher accepts an optional no-overwrite mode and prepublication
+cancel check. Recovery replacement/cleanup uses exact owned receipt hashes; queued saves bind
+to the newest preceding owned receipt at dispatch. Unknown/changed recovery files are retained.
+These checks preserve a previous valid file before commit, without claiming cross-process
+locking, filesystem-wide atomicity or power-loss durability. Existing physical/qualification
+validators and explicit definition-compatibility gates remain authoritative.

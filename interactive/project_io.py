@@ -152,21 +152,51 @@ class LoadedProject:
     numeric_validated: bool
     simulation_detail: str = ""
     sample_input_checks: tuple[tuple[str, str], ...] = ()
+    document_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class PublishedProject:
     path: Path
     cleanup_warning: str = ""
+    sha256: str = ""
+
+    @property
+    def nbytes(self):
+        return (
+            len(str(self.path).encode())
+            + len(self.cleanup_warning.encode())
+            + len(self.sha256)
+            + 128
+        )
 
 
 def load_project(argument: bytes, control: JobControl) -> JobResult:
     """Validate JSON and source hashes one at a time without retaining image planes."""
     from rasim_next.io.osc import OscReadLimits, read_osc
 
-    path, axis_limit = decode_bounded_path(argument)
+    expected = None
+    if argument.startswith(b'{"reviewed_path":'):
+        request = json.loads(argument)
+        if set(request) != {"reviewed_path", "axis_limit", "sha256"}:
+            raise ProjectFormatError("Malformed reviewed project request")
+        from osc_import import encode_bounded_path
+
+        path, axis_limit = decode_bounded_path(
+            encode_bounded_path(Path(request["reviewed_path"]), request["axis_limit"])
+        )
+        expected = request["sha256"]
+        if type(expected) is not str or len(expected) != 64:
+            raise ProjectFormatError("Reviewed project requires its exact SHA256")
+    else:
+        path, axis_limit = decode_bounded_path(argument)
     control.report(f"Opening {path.name}")
-    document = read_project_document(path)
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_PROJECT_BYTES + 1)
+    digest = hashlib.sha256(raw).hexdigest()
+    if expected is not None and digest != expected:
+        raise ProjectFormatError("Reviewed project changed; review again before opening")
+    document = read_project_document(path, source_bytes=raw)
     from archive_storage import storage_files
 
     storage = storage_files(document.view.archive_storage_json)
@@ -326,13 +356,16 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
                     raise RuntimeError("hBN project opening canceled")
                 validate_hbn_result(json.loads(text), session)
     sample_checks = ()
-    if document.view.sample_session is not None and not storage:
+    from attempt_state import read_history
+
+    inherited = read_history(document.view.attempts_json).inherited_from is not None
+    if document.view.sample_session is not None and not storage and not inherited:
         from sample_io import sample_input_checks
         from threadpoolctl import threadpool_limits
 
         with threadpool_limits(limits=1):
             sample_checks = sample_input_checks(document.view.sample_session, control)
-    if document.view.sample_session is not None and storage:
+    if document.view.sample_session is not None and (storage or inherited):
         from sample_io import _validate_input_bindings, validate_sample_record
         from sample_state import payload_hash
 
@@ -358,9 +391,10 @@ def load_project(argument: bytes, control: JobControl) -> JobResult:
         numeric_validated,
         simulation_detail,
         sample_checks,
+        digest,
     )
     resident = (
-        path.stat().st_size
+        len(raw)
         + sum(len(item.detail.encode("utf-8")) + 128 for item in (*checks, *reference_checks))
         + sum(len(identity) + len(detail.encode()) + 128 for identity, detail in sample_checks)
     )
@@ -378,12 +412,12 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         request = json.loads(argument.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise ProjectFormatError(f"invalid project save request: {exc}") from exc
-    if type(request) is not dict or set(request) != {
-        "destination",
-        "document",
-        "recovery",
-        "retire_draft",
-    }:
+    required = {"destination", "document", "recovery", "retire_draft"}
+    if (
+        type(request) is not dict
+        or not required <= set(request)
+        or set(request) - required - {"exclusive", "retire_sha256", "recovery_sha256"}
+    ):
         raise ProjectFormatError("project save request has unexpected fields")
     destination_text = request["destination"]
     recovery = request["recovery"]
@@ -394,7 +428,14 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         raise ProjectFormatError("recovery flag is invalid")
     if retire_text is not None and (type(retire_text) is not str or not retire_text):
         raise ProjectFormatError("draft cleanup path is invalid")
+    exclusive = request.get("exclusive", False)
+    if type(exclusive) is not bool:
+        raise ProjectFormatError("Exclusive publication flag is invalid")
     destination = Path(destination_text).absolute()
+    if exclusive:
+        from simulation_io import _external
+
+        _external(destination)
     document = project_from_document(request["document"], destination)
     encoded = (
         json.dumps(request["document"], indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -422,7 +463,11 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         strict=False
     ) == document.view.simulation_result.path.resolve(strict=False):
         raise ProjectFormatError("project destination would overwrite a simulation result")
-    protected = []
+    from attempt_state import read_history
+
+    history = read_history(document.view.attempts_json)
+    protected = [ref.path for ref in (*history.configured, *history.native)]
+    protected.extend(path for _, _, path, _ in reference_bindings(document.project))
     if document.view.native_simulation_draft is not None:
         protected.append(document.view.native_simulation_draft.physics_path)
     if document.view.native_simulation_result is not None:
@@ -461,6 +506,19 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         if destination.name != f"{document.project.project_id}.slate.json":
             raise ProjectFormatError("recovery destination must use the project UUID")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            with destination.open("rb") as stream:
+                previous = stream.read(MAX_PROJECT_BYTES + 1)
+            if (
+                destination.is_symlink()
+                or len(previous) > MAX_PROJECT_BYTES
+                or hashlib.sha256(previous).hexdigest() != request.get("recovery_sha256")
+            ):
+                raise ProjectFormatError(
+                    "Existing recovery draft is not the exact owned snapshot; review it explicitly"
+                )
+        else:
+            exclusive = True
         drafts = tuple(islice(destination.parent.glob("*.slate.json"), MAX_RECOVERY_DRAFTS + 1))
         if len(drafts) > MAX_RECOVERY_DRAFTS or (
             len(drafts) == MAX_RECOVERY_DRAFTS and not destination.exists()
@@ -484,23 +542,50 @@ def write_project(argument: bytes, control: JobControl) -> JobResult:
         if retire.name != f"{document.project.project_id}.slate.json" or aliases_destination:
             raise ProjectFormatError("draft cleanup target is invalid")
     control.report(f"Saving {destination.name}")
-    publish_json_document(destination, request["document"], allow_nan=False)
+    publish_json_document(
+        destination,
+        request["document"],
+        allow_nan=False,
+        overwrite=not exclusive,
+        canceled=lambda: control.canceled,
+    )
     warning = ""
     if retire is not None:
         try:
-            retire.unlink(missing_ok=True)
+            warning = retire_recovery(retire, request.get("retire_sha256"))
         except OSError as exc:
-            warning = f"Saved, but could not remove old recovery draft: {exc}"
-    receipt = PublishedProject(destination, warning)
-    return JobResult(receipt, len(str(destination).encode("utf-8")) + 128)
+            warning = "Saved, but could not remove old recovery draft: " + str(exc)[:512]
+    receipt = PublishedProject(destination, warning, hashlib.sha256(encoded).hexdigest())
+    return JobResult(receipt, receipt.nbytes)
 
 
-def discard_recovery(argument: Path, control: JobControl) -> JobResult:
-    """Remove only the current project's explicitly selected recovery file."""
-    path = Path(argument)
-    if not path.name.endswith(".slate.json"):
-        raise ProjectFormatError("invalid recovery draft path")
+def retire_recovery(path: Path, expected: str | None) -> str:
+    """Retire only an exact owned/reviewed draft; preserve unknown or changed bytes."""
+    if not path.exists():
+        return ""
+    if path.is_symlink() or expected is None:
+        return "Recovery draft retained: no exact owned identity available"
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_PROJECT_BYTES + 1)
+    if len(raw) > MAX_PROJECT_BYTES or hashlib.sha256(raw).hexdigest() != expected:
+        return "Recovery draft retained: bytes changed after ownership/review"
+    document = read_project_document(path, source_bytes=raw)
+    if path.name != f"{document.project.project_id}.slate.json":
+        return "Recovery draft retained: UUID differs"
+    path.unlink()
+    return ""
+
+
+def discard_recovery(argument: bytes, control: JobControl) -> JobResult:
+    """Remove only an exact owned recovery snapshot; no filesystem transaction is claimed."""
+    request = json.loads(argument)
+    if type(request) is not dict or set(request) != {"path", "sha256"}:
+        raise ProjectFormatError("Invalid recovery discard request")
+    path = Path(request["path"])
     UUID(path.name.removesuffix(".slate.json"))
-    control.report("Discarding recoverable draft")
-    path.unlink(missing_ok=True)
-    return JobResult(PublishedProject(path), len(str(path).encode("utf-8")) + 128)
+    if control.canceled:
+        raise RuntimeError("Draft discard canceled")
+    control.report("Discarding owned recovery draft")
+    warning = retire_recovery(path, request["sha256"])
+    receipt = PublishedProject(path, warning)
+    return JobResult(receipt, receipt.nbytes)
