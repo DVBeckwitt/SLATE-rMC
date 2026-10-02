@@ -33,13 +33,15 @@ class SimulatorScene(ExperimentScenePanel):
         self.escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.escape.activated.connect(self.cancel)
         self.view.selection_mode = True
+        self.view.setMinimumHeight(140)
         self.view.object_picked.connect(self.pick)
         self.view.physical_started.connect(self.begin)
         self.view.physical_preview.connect(self.preview)
         self.view.physical_committed.connect(self.finish)
         self.view.physical_canceled.connect(self.cancel)
         self.view.camera_changed.connect(self.update_handle)
-        self.hint.setText(
+        self.hint.setMinimumHeight(2 * self.hint.fontMetrics().lineSpacing())
+        self.hint.setToolTip(
             "Click a device or arrow to edit. Empty left drag: orbit; right drag: pan; wheel: zoom. Esc cancels a handle; Undo reverses one gesture."
         )
         self.devices = QComboBox()
@@ -330,6 +332,15 @@ class SimulatorScene(ExperimentScenePanel):
         self.control.setVisible(available)
         self.step.setEnabled(available)
         device = self.devices.currentText()
+        self.view.selected_object = device
+        legend = "Left drag: orbit; right: pan; wheel: zoom."
+        if device in ("Sample", "Mount"):
+            legend = "Sample normal +n: blue."
+        elif device == "Detector":
+            legend = "+column: cyan; +row: pink; crosshair: pixel reference."
+        elif device.startswith("Axis "):
+            legend = f"{device}: declared LAB axis/pivot; angle in degrees."
+        self.hint.setText("Holder/axes schematic; positions in metres.\n" + legend)
         note = "Declared rigid orientations, axes/pivots and coupled beam direction/basis: Menu > Advanced parameters."
         if (
             device in ("Mount", "Goniometer base", "Sample")

@@ -60,3 +60,16 @@ actual Qt picking and gestures, shared values and history, Save/Open, canceled
 Live dispatch, stale-worker rejection, native controls, and 150% scaling.
 These geometry and software checks do not qualify physical intensity, fitting
 accuracy, or frame rate. No new physical prediction was run for this integration.
+
+## Compact layout
+
+**Profile controls** expands the detector position/width, follow/pin, measure and
+ROI controls in a scrolling panel. Fit, contrast and exposure remain in the main
+detector toolbar. Profile buttons keep their full caption height at desktop
+scaling; the detector image and geometry scene remain the primary workspace.
+
+The LAB triad uses a fixed screen size and separate colored +X/+Y/+Z legend.
+Sample normal and detector reference/row/column meanings appear in the caption
+below the scene when their device is selected. Only relevant spatial arrows are
+prominent; their true canonical positions are unchanged. Schematic annotations
+use a short complete caption, rather than a truncated scene footer.

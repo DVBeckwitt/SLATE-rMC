@@ -618,7 +618,7 @@ class ExperimentSceneView(QOpenGLWidget):
                 "Select an image and map verified geometry to view the experiment",
             )
         else:
-            if self._image is None:
+            if self._image is None and not self.selection_mode:
                 painter.setPen(QColor("#b7c5cf"))
                 painter.drawText(
                     10, 20, "Configured geometry; matching detector texture unavailable"
@@ -703,6 +703,10 @@ class ExperimentSceneView(QOpenGLWidget):
                 ("x", "y", "z"),
                 strict=True,
             ):
+                if self.selection_mode and (
+                    label != "z" or self.selected_object not in ("Sample", "Mount")
+                ):
+                    continue
                 tip = _point(np.asarray(geometry.sample_lab_m) + np.asarray(axis) * radius)
                 painter.setPen(QPen(QColor(color), 2))
                 painter.drawLine(sample, self._project(tip))
@@ -713,6 +717,11 @@ class ExperimentSceneView(QOpenGLWidget):
                 painter, "sample", geometry.sample_lab_m, geometry.sample_lab_m, QPointF(7, -7)
             )
             for index, (pivot, axis, angle_rad) in enumerate(geometry.goniometer_axes_lab):
+                if self.selection_mode and f"Axis {index + 1}" not in (
+                    self.selected_object,
+                    self.hover_object,
+                ):
+                    continue
                 start = self._project(_point(np.asarray(pivot) - np.asarray(axis) * radius))
                 tip = _point(np.asarray(pivot) + np.asarray(axis) * radius)
                 end = self._project(tip)
@@ -733,16 +742,22 @@ class ExperimentSceneView(QOpenGLWidget):
             for point in self.overlay_points_lab_m:
                 center = self._project(point)
                 painter.drawEllipse(center, 3, 3)
-            painter.drawText(
-                10,
-                self.height() - 10,
-                painter.fontMetrics().elidedText(
-                    "Schematic holder/axes; detector and configured sample positions are in metres",
-                    Qt.TextElideMode.ElideRight,
-                    self.width() - 20,
-                ),
-            )
-            if self.focus_name is not None:
+            if self.selection_mode:
+                if self._image is None:
+                    painter.drawText(
+                        10, self.height() - 10, "Schematic detector: no matching intensity"
+                    )
+            else:
+                painter.drawText(
+                    10,
+                    self.height() - 10,
+                    painter.fontMetrics().elidedText(
+                        "Schematic holder/axes; detector and configured sample positions are in metres",
+                        Qt.TextElideMode.ElideRight,
+                        self.width() - 20,
+                    ),
+                )
+            if self.focus_name is not None and not self.selection_mode:
                 painter.drawText(10, 20, f"Focused: {self.focus_name} · Back to experiment")
         if self.selection_mode and geometry is not None:
             self._draw_device_callouts(painter)
@@ -761,25 +776,31 @@ class ExperimentSceneView(QOpenGLWidget):
         visible = tuple(
             item
             for item in self.callouts
-            if not item[0].startswith("Axis ")
-            or int(item[0].split()[1]) <= axis_limit
-            or item[0] == self.selected_object
+            if (
+                item[0] not in ("Crystal / material", "Mosaic", "External path")
+                or item[0] == self.selected_object
+            )
+            and (
+                not item[0].startswith("Axis ")
+                or int(item[0].split()[1]) <= axis_limit
+                or item[0] == self.selected_object
+            )
         )
         for name, point in visible:
             anchor = self._project(point)
             height = self.height()
             metrics = painter.fontMetrics()
             label_width = metrics.horizontalAdvance(name)
-            middle = (80 + height - 35) / 2
+            middle = (55 + height - 35) / 2
             positions = {
-                "Beam": (10, 80),
+                "Beam": (10, 55),
                 "Crystal / material": (10, middle),
                 "Goniometer base": ((width - label_width) / 2, height - 35),
                 "Mount": (width - label_width - 4, height - 35),
-                "Sample": ((width - label_width) / 2, 80),
-                "Detector": (width - label_width - 4, 80),
+                "Sample": ((width - label_width) / 2, 55),
+                "Detector": (width - label_width - 4, 55),
                 "Mosaic": (width - label_width - 4, middle),
-                "External path": ((width - label_width) / 2, middle),
+                "External path": (10, middle),
             }
             axes = [item[0] for item in visible if item[0].startswith("Axis ")]
             axis_index = axes.index(name) if name in axes else 0
@@ -812,42 +833,37 @@ class ExperimentSceneView(QOpenGLWidget):
             point = self._project(landmarks[name])
             painter.setPen(QPen(QColor("#b3afc5"), 2))
             painter.drawEllipse(point, radius, radius / 2)
+        # Selected spatial details use colored arrows; their meanings are in the
+        # inline caption, rather than stacked text at nearly coincident LAB points.
+        if self.selected_object == "Detector" or self.hover_object == "Detector":
+            reference = self._project(landmarks["Detector"])
+            painter.setPen(QColor("#d9e4eb"))
+            painter.drawLine(reference - QPointF(5, 0), reference + QPointF(5, 0))
+            painter.drawLine(reference - QPointF(0, 5), reference + QPointF(0, 5))
+            corners = self.geometry.detector_corners_lab_m
+            for index, color in ((1, "#75d9dd"), (2, "#df9aca")):
+                direction = np.asarray(corners[index]) - corners[0]
+                direction /= np.linalg.norm(direction)
+                endpoint = self._project(
+                    _point(np.asarray(landmarks["Detector"]) + direction * self._radius() * 0.14)
+                )
+                painter.setPen(QPen(QColor(color), 2))
+                painter.drawLine(reference, endpoint)
+        # This camera-oriented LAB triad has fixed screen size. Its colored legend
+        # keeps separate text positions even when axes project onto the same ray.
+        origin = QPointF(self.width() - 35, 24)
+        right, up, _forward = self._basis()
         painter.setPen(QColor("#d9e4eb"))
-        tip = self._project(
-            _point(
-                np.asarray(self.geometry.sample_lab_m)
-                + np.asarray(self.geometry.sample_axes_lab[2]) * self._radius() * 0.14
-            )
-        )
-        painter.drawText(tip, "sample +n")
-        reference = self._project(landmarks["Detector"])
-        painter.drawLine(reference - QPointF(5, 0), reference + QPointF(5, 0))
-        painter.drawLine(reference - QPointF(0, 5), reference + QPointF(0, 5))
-        painter.drawText(reference + QPointF(7, 0), "reference")
-        corners = self.geometry.detector_corners_lab_m
-        for index, name in ((1, "column"), (2, "row")):
-            direction = np.asarray(corners[index]) - corners[0]
-            direction /= np.linalg.norm(direction)
-            endpoint = self._project(
-                _point(np.asarray(landmarks["Detector"]) + direction * self._radius() * 0.14)
-            )
-            painter.drawLine(reference, endpoint)
-            painter.drawText(endpoint + (QPointF(4, -5) if index == 1 else QPointF(4, 10)), name)
-        # Fixed LAB triad follows the camera basis; sample axes are a different frame.
-        origin = QPointF(self.width() / 2, 52)
-        base = np.asarray(self.geometry.sample_lab_m)
-        projected = self._project(tuple(base))
+        painter.drawText(10, 25, "LAB")
+        x = 45
         for axis, color, name in zip(
-            np.eye(3),
-            ("#ef8880", "#9cd6ae", "#92c6fa"),
-            ("LAB +X", "LAB +Y", "LAB +Z"),
-            strict=True,
+            np.eye(3), ("#ef8880", "#9cd6ae", "#92c6fa"), ("+X", "+Y", "+Z"), strict=True
         ):
-            delta = self._project(_point(base + axis * self._radius() * 0.2)) - projected
-            end = origin + delta
+            end = origin + QPointF(float(axis @ right) * 14, -float(axis @ up) * 14)
             painter.setPen(QPen(QColor(color), 2))
             painter.drawLine(origin, end)
-            painter.drawText(end, name)
+            painter.drawText(x, 25, name)
+            x += painter.fontMetrics().horizontalAdvance(name) + 18
 
     def set_physical_handle(self, handle: PhysicalHandle | None) -> None:
         if handle is not None:

@@ -450,6 +450,32 @@ class SimulatorPanel(QWidget):
         self.detector.observable_unit = "angstrom^2 (simulation mass, not experimental counts)"
         self.detector.quantitative_ready = False
         self.display_contrast = SimulationContrast(self.detector)
+        # Secondary profile controls can scroll instead of compressing button text
+        # when detector and scene share a short window at desktop scaling.
+        profile_controls = self.detector.pin_center_button.parentWidget()
+        self.detector.layout().removeWidget(profile_controls)
+        for button in (self.detector.pin_center_button, self.detector.draw_roi_button):
+            button.setMinimumHeight(button.sizeHint().height())
+        profile_controls.setMinimumHeight(profile_controls.minimumSizeHint().height())
+        self.profile_controls_scroll = QScrollArea(self.detector)
+        self.profile_controls_scroll.setWidgetResizable(True)
+        self.profile_controls_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.profile_controls_scroll.setWidget(profile_controls)
+        self.profile_controls_scroll.setMinimumHeight(70)
+        self.profile_controls_scroll.setMaximumHeight(
+            profile_controls.minimumSizeHint().height() + 6
+        )
+        self.detector.layout().addWidget(self.profile_controls_scroll, 3, 0, 1, 2)
+        self.profile_controls_scroll.hide()
+        self.profile_controls_button = QPushButton("Profile controls")
+        self.profile_controls_button.setCheckable(True)
+        self.profile_controls_button.setToolTip(
+            "Show exact profile position, widths, measure, follow/pin and ROI controls."
+        )
+        self.profile_controls_button.toggled.connect(self.profile_controls_scroll.setVisible)
+        self.detector.fit_button.parentWidget().layout().addWidget(self.profile_controls_button)
         self.detector.profile_work_required = True
         self.detector.coalesce_profile_updates = True
         for widget in (
