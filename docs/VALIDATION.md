@@ -406,3 +406,33 @@ docs-only diff and whitespace review. No production/native/GUI/decode/scientific
 build, environment installation or observer work runs. Previously passed software checks are reused;
 all native/scientific allowances are zero for this finish. Immutable receipts/indexes/seals remain
 untouched; one new docs-only completion index/handoff records this current decision.
+
+
+## Compact Live dashboard implementation checks (2026-10-02)
+
+Focused external Qt checks exercised configured/native quick and Advanced editors,
+precise keyboard text, vector preservation, single-action slider release, Undo/Redo,
+300 ms latest-edit coalescing, explicit Run/update, Stop preserving pending text,
+canonical invalid-domain rejection without clamping/retry, saved export preference,
+route/tab changes, actual Save/Open and ordinary active Close/drain. Canonical admission
+was real and non-solving. Every forward Run was intercepted with cancellation set at
+the real public worker entry; controlled held-validation fixtures proved late rejection
+and one newest pending request. These checks do not prove actual live compute latency.
+
+Analytic non-solving checks establish the +X/+Y incidence sign, rigid-pivot invariance
+and ordered two-axis mean-ray incidence. General axes/pivots remain exact in actual
+configured admission. A genuine existing native saved output supports 1280x800/150%
+layout inspection with a scrollable sidebar, units and keyboard focus. At 150% the
+available desktop work area reduced the requested logical height from 800 to 707;
+290-pixel sidebar and 963-pixel output widths remained usable with scrolling. It is reused
+scientific evidence, not a new generated image. Existing exact profile/export owners
+remain in use; source review confirms no automatic figure-export route.
+
+Retained failures include a toolbar layout constructor error and a native quick-value
+refresh before metadata update, both repaired. External-method failures involved focus
+after hiding an inactive dialog, an insufficient same-path Open settling predicate and
+a misnamed row-add method; corrected methods retain the original failed receipts.
+The dashboard_* external index archives exact temporary methods, sources, budgets and
+protection inventory. No fits, physical prediction, full-image simulation, sweep,
+benchmark, new dependencies or repository harnesses ran. Original 25/46 and 5/16 counts
+are unchanged; B001/B002/B008/B010/B014 stay open and root owns B029 closure.

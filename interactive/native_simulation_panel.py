@@ -149,6 +149,7 @@ class NativeDraftPanel(QWidget):
             self.phase_fractions,
         ):
             control.editingFinished.connect(self.propose)
+            control.textEdited.connect(lambda _text: self.simulator.input_pending())
         layout.addLayout(form)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search native names, units or owners")
@@ -220,6 +221,8 @@ class NativeDraftPanel(QWidget):
                     continue
                 editor = NativeValueEditor(value, lambda *_: self.propose(), self)
                 editor.control.setObjectName("native_" + ".".join(map(str, path)))
+                if isinstance(editor.control, QLineEdit):
+                    editor.control.textEdited.connect(lambda _text: self.simulator.input_pending())
                 label = QLabel(
                     ".".join(map(str, path[1:] or path))
                     + "\n"
@@ -310,6 +313,7 @@ class NativeDraftPanel(QWidget):
             )
         except (ValueError, TypeError, ProjectFormatError) as exc:
             self.validated = None
+            self.simulator.input_pending(schedule=False)
             self.simulator.status.setText(f"Invalid native value: {exc}")
             self.simulator.refresh()
             return False
@@ -341,7 +345,6 @@ class NativeDraftPanel(QWidget):
         changed = self.draft != draft
         self.draft = draft
         self.validated = draft if validated else None
-        self.simulator._supersede()
         if repopulate and changed:
             self.populate(draft)
         elif changed:
@@ -369,6 +372,7 @@ class NativeDraftPanel(QWidget):
                 self.phase_fractions.setText(json.dumps(draft.phase_fractions))
             finally:
                 self._restoring = False
+        self.simulator._supersede()
         self.simulator.shell._mark_dirty()
         self.simulator.refresh()
         self.simulator.status.setText(
@@ -376,6 +380,8 @@ class NativeDraftPanel(QWidget):
             if not validated
             else f"Canonical native draft admitted: {draft.recipe} revision {draft.revision}; SHA256 {draft.physics_sha256}. Run is explicit."
         )
+        if changed and not validated:
+            self.simulator.draft_changed()
         return True
 
     def history_step(self, undo):
@@ -400,13 +406,14 @@ class NativeDraftPanel(QWidget):
         self.simulator._supersede()
         self.simulator.shell._mark_dirty()
         self.simulator.refresh()
+        self.simulator.draft_changed()
 
     def load(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Load independent native physics", "", "Native physics (*.json)"
         )
         if path:
-            self.simulator._supersede()
+            self.simulator.stop_live()
             self.simulator.shell._request_simulation(
                 "native_load", json.dumps({"operation": "native_load", "path": path}).encode()
             )

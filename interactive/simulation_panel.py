@@ -19,7 +19,7 @@ from native_simulation_state import (
 )
 from parameter_state import FieldChange, SessionHistory, _action
 from project_state import ProjectFormatError
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from simulation_dashboard import SimulationDashboard
 from simulation_fields import SIMULATION_FIELDS
 from simulation_io import SimulationFrame
 from simulation_state import (
@@ -300,26 +301,49 @@ class SimulatorPanel(QWidget):
         self._transfer_request = None
         self._transfer_review = None
         self._transfer_dialog = None
+        self._update_request = None
+        self._last_requested = None
+        self._pending_quick = None
+        self._fresh_live_pending = False
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.setInterval(300)
+        self._live_timer.timeout.connect(self.request_update)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         controls = QHBoxLayout()
+        self.live = QCheckBox("&Live")
+        self.live.setToolTip(
+            "Validate and run the latest complete draft after a 300 ms pause; nominal results."
+        )
+        self.advanced_button = QPushButton("&Advanced/actions")
+        controls.addWidget(self.live)
+        self.advanced = QDialog(self)
+        self.advanced.setWindowTitle("Simulator — complete editor and actions")
+        self.advanced.resize(760, 640)
+        advanced_layout = QVBoxLayout(self.advanced)
+        action_scroll = QScrollArea()
+        action_scroll.setWidgetResizable(True)
+        action_content = QWidget()
+        action_layout = QVBoxLayout(action_content)
+        action_scroll.setWidget(action_content)
+        advanced_layout.addWidget(action_scroll, 1)
+        secondary = QFormLayout()
+        action_layout.addLayout(secondary)
         self.load_button = QPushButton("Load configuration")
         self.validate_button = QPushButton("Validate complete draft")
-        self.run_button = QPushButton("Run selected outputs")
+        self.run_button = QPushButton("&Run/update")
         self.inspect_button = QPushButton("Inspect this snapshot")
         self.resume_button = QPushButton("Follow progression")
-        self.cancel_button = QPushButton("Cancel simulation")
-        for button in (
-            self.load_button,
-            self.validate_button,
-            self.run_button,
-            self.inspect_button,
-            self.resume_button,
-            self.cancel_button,
-        ):
-            controls.addWidget(button)
+        self.cancel_button = QPushButton("&Stop")
+        controls.addWidget(self.run_button)
+        controls.addWidget(self.cancel_button)
+        controls.addStretch()
+        controls.addWidget(self.advanced_button)
+        secondary.addRow(self.load_button, self.validate_button)
+        secondary.addRow(self.inspect_button, self.resume_button)
         layout.addLayout(controls)
-        actions = QHBoxLayout()
+        actions = QFormLayout()
         self.undo_button = QPushButton("Undo draft")
         self.redo_button = QPushButton("Redo draft")
         self.save_configuration_button = QPushButton("Export configuration YAML")
@@ -332,8 +356,8 @@ class SimulatorPanel(QWidget):
             self.export_button,
             self.reopen_button,
         ):
-            actions.addWidget(button)
-        layout.addLayout(actions)
+            actions.addRow(button)
+        action_layout.addLayout(actions)
         transfer_actions = QHBoxLayout()
         self.transfer_target = QComboBox()
         self.transfer_target.addItem("Experiment -> configured draft", "configured")
@@ -343,7 +367,7 @@ class SimulatorPanel(QWidget):
         self.transfer_button.clicked.connect(self.review_transfer)
         transfer_actions.addWidget(self.transfer_target)
         transfer_actions.addWidget(self.transfer_button)
-        layout.addLayout(transfer_actions)
+        action_layout.addLayout(transfer_actions)
         self.status = QLabel(
             "Load a supported rasim-simulation-v2 configuration. No acquisition or fit is required."
         )
@@ -353,7 +377,7 @@ class SimulatorPanel(QWidget):
         self.draft_kind = QComboBox()
         self.draft_kind.addItem("Independent configured YAML", "configured")
         self.draft_kind.addItem("Independent native recipe", "native")
-        layout.addWidget(self.draft_kind)
+        action_layout.addWidget(self.draft_kind)
         splitter = QSplitter()
         forms = QWidget()
         forms_layout = QVBoxLayout(forms)
@@ -393,7 +417,13 @@ class SimulatorPanel(QWidget):
         self.form_stack.addWidget(forms)
         self.native = NativeDraftPanel(self)
         self.form_stack.addWidget(self.native)
-        splitter.addWidget(self.form_stack)
+        action_layout.addWidget(self.form_stack, 1)
+        self.form_stack.setMinimumHeight(380)
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self.advanced.hide)
+        advanced_layout.addWidget(close)
+        self.dashboard = SimulationDashboard(self)
+        splitter.addWidget(self.dashboard)
         self.outputs = QTabWidget()
         self.detector = DetectorPanel(compact=True)
         for control in (
@@ -424,13 +454,16 @@ class SimulatorPanel(QWidget):
         self.outputs.addTab(self.reciprocal, "Reciprocal output")
         self.outputs.addTab(self.ewald, "Ewald output")
         splitter.addWidget(self.outputs)
+        splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([290, 850])
+        self.dashboard_splitter = splitter
         layout.addWidget(splitter, 1)
         self.figures = QCheckBox(
             "Export configured figures using selected output names and directory"
         )
         self.figures.setChecked(True)
-        layout.addWidget(self.figures)
+        action_layout.addWidget(self.figures)
         self.identity = QLabel("Awaiting quantitative snapshot")
         self.identity.setWordWrap(True)
         self.identity.setMinimumHeight(46)
@@ -438,17 +471,19 @@ class SimulatorPanel(QWidget):
         self.draft_kind.currentIndexChanged.connect(self._kind_changed)
         self.load_button.clicked.connect(self.load)
         self.validate_button.clicked.connect(self.validate)
-        self.run_button.clicked.connect(self.run)
+        self.run_button.clicked.connect(lambda: self.request_update(force=True))
+        self.live.toggled.connect(self._live_changed)
+        self.advanced_button.clicked.connect(self.advanced.show)
         self.inspect_button.clicked.connect(self.inspect)
         self.resume_button.clicked.connect(self.follow)
-        self.cancel_button.clicked.connect(shell._cancel_current)
+        self.cancel_button.clicked.connect(self.stop_live)
         self.save_configuration_button.clicked.connect(self.save_configuration)
         self.export_button.clicked.connect(self.export)
         self.reopen_button.clicked.connect(self.reopen)
         self.undo_button.clicked.connect(lambda: self.history_step(True))
         self.redo_button.clicked.connect(lambda: self.history_step(False))
         self.search.textChanged.connect(self.filter_fields)
-        self.route.currentIndexChanged.connect(self.propose)
+        self.route.currentIndexChanged.connect(self._route_changed)
         self.position.currentIndexChanged.connect(self.propose)
         self.draw_count.editingFinished.connect(self.propose)
         self.detector_seed.editingFinished.connect(self.propose)
@@ -459,11 +494,345 @@ class SimulatorPanel(QWidget):
         self.detector.view.view_state_changed.connect(self.shell._mark_dirty)
         self.refresh()
 
+    def update_context(self):
+        return (
+            self.shell.project.project_id,
+            self.epoch,
+            self.draft_kind.currentData(),
+            self.active_draft,
+        )
+
+    def _live_changed(self, enabled):
+        if enabled:
+            self.request_update(force=True)
+        else:
+            self.stop_live()
+
+    def stop_live(self):
+        self._live_timer.stop()
+        self._fresh_live_pending = False
+        self.live.blockSignals(True)
+        self.live.setChecked(False)
+        self.live.blockSignals(False)
+        self.flush_quick_edit()
+        self._supersede()
+        self.refresh()
+
+    def update_failed(self, context):
+        if self._update_request is not None and self._update_request[:2] == context:
+            self._update_request = None
+
+    def _route_changed(self):
+        if not self._restoring:
+            self.stop_live()
+            self.propose()
+
+    def input_pending(self, schedule=True):
+        if self._restoring or self.native._restoring:
+            return
+        self._live_timer.stop()
+        self._supersede()
+        if schedule and self.live.isChecked():
+            self._live_timer.start()
+
+    def quick_pending(self, key, text, schedule):
+        self._pending_quick = (self.draft_kind.currentData(), key, text) if schedule else None
+        self.input_pending(schedule)
+
+    def draft_changed(self):
+        if self.live.isChecked():
+            self._live_timer.start()
+
+    def request_update(self, *, force=False):
+        self._live_timer.stop()
+        if (
+            self.shell._close_intent
+            or self.shell._pending_open is not None
+            or self.shell.workspaces.currentIndex() != 1
+        ):
+            return
+        if not self.flush_quick_edit():
+            return
+        native = self.draft_kind.currentData() == "native"
+        if not (self.native.propose() if native else self.propose()):
+            self._live_timer.stop()
+            self._update_request = None
+            return
+        self._live_timer.stop()
+        draft = self.active_draft
+        if draft is None:
+            self.status.setText("Load a complete draft in Advanced/actions before enabling Live.")
+            return
+        if not force and self._last_requested == (self.draft_kind.currentData(), draft):
+            return
+        self._last_requested = (self.draft_kind.currentData(), draft)
+        validated = self.native.validated if native else self.validated
+        if validated == draft:
+            self.run()
+        else:
+            self._update_request = self.update_context()
+            self.validate()
+
+    def flush_quick_edit(self):
+        pending, self._pending_quick = self._pending_quick, None
+        if pending is None or pending[0] != self.draft_kind.currentData():
+            return True
+        return self.quick_edit(pending[1], pending[2])
+
+    def quick_edit(self, key, text):
+        self._pending_quick = None
+        path, indices = key
+        native = self.draft_kind.currentData() == "native"
+        if path[0] == "run":
+            control = getattr(self.native if native else self, path[1])
+            control.setText(text)
+        else:
+            if native:
+                self.native._show_group(self.native._group_order.index(str(path[0])))
+                editor = self.native.editors[path][3]
+            else:
+                field_path = ".".join(path)
+                self._show_group(self._group_order.index(str(path[0])))
+                editor = self.editors[field_path][2]
+            control = editor.control
+            if indices:
+                table = control if native else control.table
+                row, column = (
+                    indices
+                    if len(indices) == 2
+                    else ((indices[0], 0) if native else (0, indices[0]))
+                )
+                table.blockSignals(True)
+                table.item(row, column).setText(text)
+                table.blockSignals(False)
+            else:
+                control.setText(text)
+        accepted = self.native.propose() if native else self.propose()
+        if not accepted:
+            self.input_pending(schedule=False)
+        return accepted
+
+    def quick_fields(self):
+        native = self.draft_kind.currentData() == "native"
+        if self.active_draft is None:
+            return []
+        entries = []
+
+        def add(path, group, label, unit, value, indices=(), integer=False, probability=False):
+            if value is None or type(value) is bool or not isinstance(value, (float, int, str)):
+                return
+            entries.append(
+                ((tuple(path), tuple(indices)), group, label, unit, value, integer, probability)
+            )
+
+        def components(path, group, label, unit, value, names):
+            if isinstance(value, (list, tuple)) and len(value) == len(names):
+                for index, (name, item) in enumerate(zip(names, value, strict=True)):
+                    add(path, group, f"{label} {name}", unit, item, (index,))
+
+        geometry, mosaic, detector, beam, sample, sampling = (
+            "Incident angle / Geometry",
+            "Mosaic Broadening",
+            "Detector",
+            "Beam Controls",
+            "Sample / Structure",
+            "Sampling / Optics",
+        )
+        if native:
+            for path, (value, unit, _label, _editor) in self.native.editors.items():
+                name = str(path[-1])
+                if path[0] == "specimen":
+                    group = (
+                        mosaic
+                        if name
+                        in (
+                            "gaussian_sigma_rad",
+                            "lorentzian_half_width_rad",
+                            "lorentzian_probability",
+                        )
+                        else sample
+                    )
+                    add(
+                        path,
+                        group,
+                        name.replace("_", " "),
+                        unit,
+                        value,
+                        probability=name == "lorentzian_probability",
+                    )
+                elif path[0] == "source":
+                    if name in ("mean_origin_lab_m", "divergence_sigma_rad", "spatial_sigma_m"):
+                        components(
+                            path,
+                            beam,
+                            name.replace("_", " "),
+                            unit,
+                            value,
+                            ("X", "Y", "Z")
+                            if name == "mean_origin_lab_m"
+                            else ("axis 1", "axis 2"),
+                        )
+                    elif name in ("mean_wavelength_A", "common_wavelength_sigma_A"):
+                        add(path, beam, name.replace("_", " "), unit, value)
+                elif path[0] == "instrument":
+                    if name == "translation_m" and path[1] in (
+                        "lab_from_sample",
+                        "lab_from_detector",
+                    ):
+                        components(
+                            path,
+                            geometry if path[1] == "lab_from_sample" else detector,
+                            path[1].replace("_", " "),
+                            "m LAB",
+                            value,
+                            ("X", "Y", "Z"),
+                        )
+                    elif name == "detector_reference_coordinate_px":
+                        components(
+                            path, detector, "Reference coordinate", "px", value, ("column", "row")
+                        )
+                    elif name in ("detector_row_pitch_m", "detector_column_pitch_m"):
+                        add(path, detector, name.replace("_", " "), unit, value)
+                elif path[0] in ("source_rule", "integration_rule") and type(value) in (float, int):
+                    add(
+                        path,
+                        sampling,
+                        ".".join(map(str, path[1:])),
+                        unit,
+                        value,
+                        integer=type(value) is int,
+                    )
+            add(
+                ("run", "repeats"),
+                sample,
+                "Coherent repeats",
+                "cells",
+                self.native.draft.coherent_repeats,
+                integer=True,
+            )
+            add(
+                ("run", "bin_size"),
+                sampling,
+                "Integrated rectangle width",
+                "native px",
+                self.native.draft.bin_size_px,
+                integer=True,
+            )
+            return entries
+        mapping = self._mapping
+        if mapping is None:
+            return []
+        instrument = mapping["instrument"]
+        rotations = instrument.get("axis_rotations", [])
+        identity = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        for index, rotation in enumerate(rotations):
+            if not isinstance(rotation, dict):
+                continue
+            angle = rotation.get("angle_deg")
+            incidence = (
+                len(rotations) == 1
+                and rotation.get("axis_lab") == [1, 0, 0]
+                and mapping["source"].get("mean_direction_lab") == [0, 1, 0]
+                and instrument["lab_from_goniometer_zero"]["rotation"] == identity
+                and instrument["goniometer_from_sample"]["rotation"] == identity
+                and isinstance(angle, (int, float))
+                and -90 <= angle <= 90
+            )
+            label = (
+                "Incident angle (+X rotation, +Y beam)"
+                if incidence
+                else f"Axis {index + 1} rotation, LAB {rotation.get('axis_lab')}"
+            )
+            add(("instrument", "axis_rotations"), geometry, label, "deg", angle, (index, 3))
+        for field in SIMULATION_FIELDS:
+            path = tuple(field.path.split("."))
+            value = mapping
+            for name in path:
+                if not isinstance(value, dict) or name not in value:
+                    value = None
+                    break
+                value = value[name]
+            if path[0] == "mosaic" and field.kind == "float":
+                add(
+                    path,
+                    mosaic,
+                    field.label,
+                    field.unit,
+                    value,
+                    probability=path[-1] == "lorentzian_probability",
+                )
+            elif path[-1] == "translation_m" and path[1] in (
+                "goniometer_from_sample",
+                "lab_from_detector",
+            ):
+                components(
+                    path,
+                    geometry if path[1] == "goniometer_from_sample" else detector,
+                    "Sample offset" if path[1] == "goniometer_from_sample" else "Detector position",
+                    "m GONIOMETER" if path[1] == "goniometer_from_sample" else "m LAB",
+                    value,
+                    ("X", "Y", "Z"),
+                )
+            elif path[-1] == "detector_reference_coordinate_px":
+                components(path, detector, "Reference coordinate", "px", value, ("column", "row"))
+            elif path[0] == "instrument" and (
+                "detector_tilt" in path
+                or path[-1] in ("detector_row_pitch_m", "detector_column_pitch_m")
+            ):
+                add(path, detector, field.label, field.unit, value)
+            elif path[0] == "source" and path[-1] in (
+                "spatial_sigma_m",
+                "divergence_sigma_rad",
+                "mean_origin_lab_m",
+            ):
+                components(
+                    path,
+                    beam,
+                    field.label,
+                    field.unit,
+                    value,
+                    ("X", "Y", "Z") if path[-1] == "mean_origin_lab_m" else ("axis 1", "axis 2"),
+                )
+            elif path[0] == "source" and field.kind == "float":
+                add(path, beam, field.label, field.unit, value)
+            elif path[0] == "structure_factor" and field.kind in ("int", "float"):
+                add(path, sample, field.label, field.unit, value, integer=field.kind == "int")
+            elif (path[0] == "numerics" and field.kind == "int") or (
+                field.path
+                in (
+                    "source.sample_count",
+                    "source.seed",
+                    "mosaic.alpha_panel_count",
+                    "mosaic.alpha_gauss_order",
+                    "mosaic.azimuth_count",
+                    "instrument.film_thickness_A",
+                )
+            ):
+                add(path, sampling, field.label, field.unit, value, integer=field.kind == "int")
+        add(
+            ("run", "draw_count"),
+            sampling,
+            "MC draws per source",
+            "draws",
+            self.draft.draw_count,
+            integer=True,
+        )
+        add(
+            ("run", "detector_seed"),
+            sampling,
+            "Detector seed",
+            "integer",
+            self.draft.detector_seed,
+            integer=True,
+        )
+        return entries
+
     @property
     def active_draft(self):
         return self.native.draft if self.draft_kind.currentData() == "native" else self.draft
 
     def _kind_changed(self):
+        self.stop_live()
         self.form_stack.setCurrentIndex(self.draft_kind.currentIndex())
         self._supersede()
         self.figures.setVisible(self.draft_kind.currentData() == "configured")
@@ -484,8 +853,8 @@ class SimulatorPanel(QWidget):
         self.load_button.setText("Load native physics" if native else "Load configuration")
         busy = self.shell._active_kind == "simulation" or self.shell._pending_simulation is not None
         self.validate_button.setEnabled(available)
-        self.run_button.setEnabled(available and validated == draft)
-        self.cancel_button.setEnabled(busy)
+        self.run_button.setEnabled(available)
+        self.cancel_button.setEnabled(busy or self.live.isChecked() or self._live_timer.isActive())
         self.inspect_button.setEnabled(busy or self.frame is not None)
         self.resume_button.setEnabled(self.hold)
         self.save_configuration_button.setEnabled(available and validated == draft)
@@ -500,6 +869,7 @@ class SimulatorPanel(QWidget):
         )
         self.undo_button.setEnabled(bool(history.undo_actions))
         self.redo_button.setEnabled(bool(history.redo_actions))
+        self.dashboard.sync()
 
     def _transfer_source_context(self):
         return (
@@ -726,6 +1096,8 @@ class SimulatorPanel(QWidget):
                     value = value[key]
                 editor = FieldEditor(field, value, present, self)
                 editor.changed.connect(self.propose)
+                for line in editor.findChildren(QLineEdit):
+                    line.textEdited.connect(self._pending_control_edited)
                 label = QLabel(field.label)
                 label.setWordWrap(True)
                 self._group_layouts[group].addRow(label, editor)
@@ -773,8 +1145,7 @@ class SimulatorPanel(QWidget):
         return True
 
     def _pending_control_edited(self, _text: str) -> None:
-        if self.draft is None:
-            self._supersede()
+        self.input_pending()
 
     def propose(self, *_) -> bool:
         if self._restoring:
@@ -841,9 +1212,12 @@ class SimulatorPanel(QWidget):
         self._supersede()
         self.shell._mark_dirty()
         self.refresh()
+        self.draft_changed()
         return True
 
     def _supersede(self) -> None:
+        self._update_request = None
+        self.dashboard.incidence.setText("Mean-ray incidence: validate the current geometry")
         self.epoch += 1
         self.shell._supersede_simulation()
         if self.frame is not None:
@@ -883,6 +1257,7 @@ class SimulatorPanel(QWidget):
         self.shell._mark_dirty()
         self.status.setText("Independent draft restored; validate again before execution")
         self.refresh()
+        self.draft_changed()
 
     def load(self) -> None:
         if self.draft_kind.currentData() == "native":
@@ -892,7 +1267,7 @@ class SimulatorPanel(QWidget):
             self, "Load independent configured simulation", "", "Simulation YAML (*.yaml *.yml)"
         )
         if path:
-            self._supersede()
+            self.stop_live()
             self.shell._request_simulation(
                 "load", json.dumps({"operation": "load", "path": path}).encode()
             )
@@ -937,7 +1312,10 @@ class SimulatorPanel(QWidget):
             "Awaiting quantitative snapshot; any retained values are historical"
         )
         self.identity.setText(
-            f"Starting current draft revision {draft.revision}; Awaiting quantitative snapshot"
+            f"Updating current draft revision {draft.revision}; displayed historical snapshot "
+            f"{self.frame.run_id}, revision {self.frame.draft.revision}, prefix {self.frame.draw_prefix}"
+            if self.frame is not None
+            else f"Starting current draft revision {draft.revision}; Awaiting quantitative snapshot"
         )
         self.shell._request_simulation(
             "native_run" if native else "run",
@@ -1089,8 +1467,15 @@ class SimulatorPanel(QWidget):
             self.frame is None
             or not self.frame.quantitative
             or self.frame.image is None
+            or self._update_request is not None
+            or self._live_timer.isActive()
             or (
-                self.shell._simulation_operation in ("run", "native_run")
+                self.shell._pending_simulation is not None
+                and self.shell._pending_simulation[0] != "profiles"
+            )
+            or (
+                self.shell._simulation_operation
+                in ("run", "native_run", "validate", "native_validate")
                 and self.shell._active_kind == "simulation"
             )
         ):
@@ -1278,7 +1663,12 @@ class SimulatorPanel(QWidget):
         self.refresh()
         return True
 
-    def ready(self, operation: str, value) -> None:
+    def ready(self, operation: str, value, incidence_deg=None) -> None:
+        continue_update = (
+            operation in ("validate", "native_validate")
+            and self._update_request == self.update_context()
+        )
+        self._update_request = None
         if operation == "transfer_review":
             self.present_transfer(value)
         elif operation == "transfer_apply":
@@ -1289,12 +1679,13 @@ class SimulatorPanel(QWidget):
                     return
                 self.native.result_reference = None
                 self.native.history = SessionHistory()
-            self.native.adopt(
+            if not self.native.adopt(
                 value,
                 "Load native draft" if operation == "native_load" else "Validate native draft",
                 validated=True,
                 record_history=operation != "native_load",
-            )
+            ):
+                return
         elif isinstance(value, NativeSimulationReference):
             if not self.native.can_persist(self.native.draft, value):
                 self.status.setText(
@@ -1381,6 +1772,17 @@ class SimulatorPanel(QWidget):
         elif operation in ("save_configuration", "native_save"):
             self.status.setText(f"Canonical YAML exported and read back: {value}")
         self.refresh()
+        if incidence_deg is not None:
+            self.dashboard.incidence.setText(
+                f"Mean-ray glancing incidence: {incidence_deg:.12g} deg\n"
+                "Signed toward the sample; derived from the canonical LAB → SAMPLE transform."
+            )
+        if operation == "load_default" and self._fresh_live_pending:
+            self._fresh_live_pending = False
+            self.live.setChecked(True)
+        elif continue_update:
+            self._last_requested = (self.draft_kind.currentData(), self.active_draft)
+            self.run()
 
     def _clear_detector(self) -> None:
         if self.detector.view.image is not None:
@@ -1406,6 +1808,8 @@ class SimulatorPanel(QWidget):
             self.shell._pending_simulation = None
 
     def restore(self, view, detail: str = "") -> None:
+        self.stop_live()
+        self._last_requested = None
         self.epoch += 1
         self.native.draft = view.native_simulation_draft
         self.native.result_reference = view.native_simulation_result
@@ -1435,6 +1839,10 @@ class SimulatorPanel(QWidget):
             self.status.setText(
                 detail
                 or "Independent draft restored; validate current canonical inputs before execution. Saved results reopen by exact hash and may be historical."
+            )
+        elif self.native.draft is not None:
+            self.status.setText(
+                "Native draft restored; Live is off. Run/update validates the current complete inputs."
             )
         else:
             self.status.setText("No independent simulation draft in this project")

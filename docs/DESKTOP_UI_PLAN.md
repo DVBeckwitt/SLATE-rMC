@@ -4345,3 +4345,25 @@ controls do not satisfy U11e/U11f/U11g. Full joint launch, exact locked environm
 20-image/inspection/3D/job, latency distributions and CPU/GPU/scanout qualification remain deferred.
 No dependency-ready implementation is currently recorded. The documentation reconciliation uses only
 prose/diff/count checks; prior native/scientific budgets remain closed.
+
+
+### Compact Live Simulator dashboard follow-up (B029, 2026-10-02)
+
+The approved follow-up replaces the bulky Simulator action rows with Live, Run/update,
+Stop and Advanced/actions. Geometry and Mosaic start expanded; Detector, Beam,
+Sample/Structure and Sampling/Optics collapse in a resizable scrolling sidebar beside
+the retained detector/reciprocal/Ewald views. Exact text, step buttons and adjustable
+slider navigation feed the existing immutable draft/history owners. Advanced retains
+full schema, routing, exports, transfers, inspection and history.
+
+Live validates then runs the canonical configured/native Simulator after a 300 ms pause,
+using the existing one-worker latest-request lifecycle. Fresh default visits visibly
+start an initial preview; ordinary saved/imported/recovered Open leaves Live off.
+Stop and project/workspace/route changes reject late work. Genuine displayed frames and
+exact profiles retain their historical identity during updates. See CONTRACTS.md and
+VALIDATION.md for incidence applicability, scalar navigation and evidence limits.
+
+Implementation receipts use canceled-entry Run and controlled lifecycle fixtures, real
+non-solving admission and genuine saved display outputs. No fresh forward science or
+live completion-time qualification is claimed. Root decides B029 closure; the original
+25/46 detailed conditions and 5/16 assignments and existing open defects are unchanged.

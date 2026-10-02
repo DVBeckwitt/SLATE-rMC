@@ -24,6 +24,7 @@ from simulation_io import (
     MAX_SIMULATION_SOURCES,
     _prepared_frame,
     _stop,
+    mean_incidence_deg,
 )
 
 
@@ -204,9 +205,14 @@ def prepare_native_draft(argument, control):
             if set(record) != {"schema", "draft"}:
                 raise ValueError("invalid native draft envelope")
             draft = native_draft_from_document(record["draft"])
-            canonical_native(draft)
+            bound = canonical_native(draft)[0]
+            incidence = mean_incidence_deg(
+                bound.source_definition.mean_direction_lab, bound.instrument
+            )
             _stop(control)
-            return JobResult(("native_load", draft), len(draft.physics_json.encode()) + 16384)
+            return JobResult(
+                ("native_load", draft, incidence), len(draft.physics_json.encode()) + 16384
+            )
         if len(raw) > MAX_NATIVE_PHYSICS_BYTES:
             raise ValueError("native physical input exceeds 128 KiB")
         _source_admission(record)
@@ -253,9 +259,12 @@ def prepare_native_draft(argument, control):
     else:
         draft = native_draft_from_document(request["draft"])
     control.report("Validating canonical native model, source, structure and complete geometry")
-    canonical_native(draft)
+    bound = canonical_native(draft)[0]
+    incidence = mean_incidence_deg(bound.source_definition.mean_direction_lab, bound.instrument)
     _stop(control)
-    return JobResult((request["operation"], draft), len(draft.physics_json.encode()) + 16384)
+    return JobResult(
+        (request["operation"], draft, incidence), len(draft.physics_json.encode()) + 16384
+    )
 
 
 def native_budget(draft, bound, other_cpu_bytes=0, other_gpu_bytes=0):

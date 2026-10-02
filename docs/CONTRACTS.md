@@ -1328,3 +1328,40 @@ through their owner; archive relocation does not rewrite the output declaration.
 - Inherited sample Open performs structural original-record validation and labels live
   revalidation unavailable, as archived Open already does. Active selection/export keeps the
   existing canonical geometry, physical, covariance/rank and qualification checks.
+
+
+## Compact Live Simulator dashboard
+
+The desktop Simulator offers one primary Live/Run-update/Stop/Advanced toolbar and a
+scrollable, resizable parameter sidebar. Quick controls write through the existing
+configured/native schema editors to the same immutable draft and bounded undo history.
+A slider drag commits on release; numeric text pauses coalesce after 300 ms. Exact
+numeric text is authoritative. Slider span and step are user navigation settings,
+not physical bounds; canonical constructors determine validity. Lorentzian probability
+retains its actual [0,1] domain. Other vector coordinates, axes/pivots and optional
+fields remain intact. Advanced retains complete schemas, routes and file/history/
+inspection/export/transfer actions.
+
+Incident-angle convenience applies only to a single +X active rotation with a +Y
+beam, identity zero/sample rotations and an angle in [-90,90] degrees. Otherwise the
+sidebar exposes declared axis angles. Worker admission derives signed mean-air-ray
+glancing incidence from the canonical LAB-to-SAMPLE vector transform; positive means
+toward the sample. This readout is neither a source-ensemble mean nor an internal-film
+angle. Native geometry uses its declared transforms; full rotations remain in Advanced.
+
+Live requests complete canonical validation then the existing Simulator Run. The
+existing global worker and one newest pending snapshot remain authoritative; project,
+epoch and generation reject obsolete publications. Stop, Live off, workspace exit,
+route changes, Open and Close cancel timers/requests and invalidate late continuation.
+Fresh first visits may visibly enable Live after default admission. Saved/imported/
+recovered projects restore with Live off. Validation failure does not retry unchanged
+input. The last genuine image stays historical while updating; profiles/export metadata
+remain bound to that displayed frame. Live performs no automatic configured figure
+export and preserves the explicit export preference. Defaults remain nominal 64 source
+samples, 4 workers, 8 draws/source and detector seed 1729; no convergence/time claim.
+
+Legacy Geometry/Mosaic/Detector/Beam grouping informs presentation only. Native model
+specimen coordinates provide supported lattice/site-displacement controls; configured
+CIF input does not invent independent lattice/Debye sliders. Legacy pruning, old optical
+equations and unsupported features remain absent. Native Simulator execution is separate
+from the still disconnected fitting Run/adoption/stage-result hooks.

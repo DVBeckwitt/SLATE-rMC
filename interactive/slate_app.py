@@ -901,7 +901,7 @@ class ShellWindow(QMainWindow):
 
     def _simulation_workspace_changed(self, index: int) -> None:
         if index != 1:
-            self._supersede_simulation()
+            self.simulator.stop_live()
         elif self._simulator_default_available:
             self._simulator_default_available = False
             panel = self.simulator
@@ -914,6 +914,7 @@ class ShellWindow(QMainWindow):
                 and self._pending_open is None
                 and self._active_kind != "open"
             ):
+                panel._fresh_live_pending = True
                 self._request_simulation(
                     "load_default",
                     json.dumps(
@@ -1831,6 +1832,8 @@ class ShellWindow(QMainWindow):
         return True
 
     def save_project(self) -> bool:
+        if not self.simulator.flush_quick_edit():
+            return False
         if self._project_path is None:
             return self.save_project_as()
         return self._queue_write(self._project_path, recovery=False, explicit=True)
@@ -1845,6 +1848,8 @@ class ShellWindow(QMainWindow):
         return self.save_as(Path(filename)) if filename else False
 
     def save_as(self, path: Path) -> bool:
+        if not self.simulator.flush_quick_edit():
+            return False
         destination = Path(path).absolute()
         if not destination.name.lower().endswith(".slate.json"):
             destination = destination.with_name(destination.name + ".slate.json")
@@ -2199,6 +2204,7 @@ class ShellWindow(QMainWindow):
             )
             return
         self._simulator_default_available = False
+        self.simulator.stop_live()
         self.physical.cancel(clear=True)
         self._pending_simulation = None
         self._pending_open = (candidate, recovery)
@@ -4910,6 +4916,7 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _cancel_current(self) -> None:
+        self.simulator.stop_live()
         if self._active_kind == "preparation" or self._pending_preparation is not None:
             self._pending_preparation = None
             self.preparation.status.setText(
@@ -5580,6 +5587,7 @@ class ShellWindow(QMainWindow):
                 f"Simulation {state.value}: {summary.detail or 'working on its owning worker'}"
             )
             if state in (JobState.FAILED, JobState.CANCELED):
+                self.simulator.update_failed(self._simulation_context)
                 if state == JobState.CANCELED and self._simulation_operation == "export":
                     self.simulator.status.setText(
                         "Export canceled safely. Completed configured figures may remain; existing files are never overwritten. Choose a new output directory before retrying figures."
@@ -6165,6 +6173,7 @@ class ShellWindow(QMainWindow):
             self._setup_dialog.message.setText(message)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.simulator.stop_live()
         if self._allow_close:
             if not self.jobs.request_close():
                 event.ignore()

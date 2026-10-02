@@ -67,6 +67,15 @@ def canonical_configuration(draft: SimulationDraft, storage=()):
     return config
 
 
+def mean_incidence_deg(direction_lab, instrument):
+    """Signed glancing angle of the declared mean air ray; presentation metadata only."""
+    direction_sample = instrument.sample_from_lab.apply_vector(
+        np.asarray(direction_lab, dtype=float)
+    )
+    cosine = -direction_sample[2] / np.linalg.norm(direction_sample)
+    return float(np.rad2deg(np.arcsin(np.clip(cosine, -1.0, 1.0))))
+
+
 def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
     from rasim_next.pipeline.configured_simulation import (
         build_configured_simulation_inputs,
@@ -136,6 +145,7 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
         max_referenced_cif_bytes=MAX_REFERENCE_BYTES,
         stored_paths={Path(r["original"]).resolve(): Path(r["stored"]) for r in storage},
     )
+    incidence = None
     if config.source.sample_count > MAX_SIMULATION_SOURCES:
         if operation == "validate":
             raise ValueError(
@@ -143,7 +153,8 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
             )
         operation = "load_limited"
     else:
-        build_configured_simulation_inputs(config)
+        inputs = build_configured_simulation_inputs(config)
+        incidence = mean_incidence_deg(config.source.mean_direction_lab, inputs.instrument)
     _stop(control)
     settings = request.get("settings", {})
     result = SimulationDraft(
@@ -163,7 +174,7 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
             "export_figures", old.export_figures if old else operation != "load_default"
         ),
     )
-    return JobResult((operation, result), len(text.encode()) + 8192)
+    return JobResult((operation, result, incidence), len(text.encode()) + 8192)
 
 
 def simulation_budget(
