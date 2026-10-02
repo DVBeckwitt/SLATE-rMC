@@ -210,7 +210,21 @@ was plain or gzip compressed.
 collection pause produced a 112.397 ms heartbeat gap against the 100 ms limit. Three passing
 30-second windows have not been established. See the Task06 disposition in `docs/DESKTOP_UI_PLAN.md`.
 
-Open **Simulator**, then **Load configuration** with a supported `rasim-simulation-v2` YAML.
+In a fresh, unsaved project, opening **Simulator** for the first time loads an editable
+**Bi2Se3 starting preview** on the shared worker. It derives from
+`configs/bi2se3_simulation.yaml`, preserving material/CIF, geometry, wavelength, mosaic and
+structure declarations. Preview execution uses 64 source samples, four CPU workers,
+**Native pixel MC mass**, sampled source position, eight MC draws per source and detector
+seed 1729. Detector output is enabled; reciprocal/Ewald outputs and configured figure export
+are off. These are practical starting values, not converged or qualified settings.
+
+Loading performs canonical non-solving validation. Run remains disabled while loading or after
+failure; successful admission enables **Run selected outputs**, which must be clicked explicitly.
+No simulation, fit or output export starts automatically. Existing or recovered projects retain
+their drafts, selected native/configured workflow and saved results; saved empty projects stay
+empty. Manual loading, typing run controls or opening another project supersedes a pending default.
+
+Use **Load configuration** to load another supported `rasim-simulation-v2` YAML.
 No acquisition, observation pack, fit or scene edit is required. Search and grouped forms expose
 all strict-loader fields, including optional values, with units, domains, defaults and applicability.
 Values are preserved across unopened groups. Edit a field, then **Validate complete draft**;
@@ -252,7 +266,9 @@ with a reason; exact numeric export remains available.
 **Export configuration YAML** writes a validated derived configuration with absolute CIF binding
 and verifies its physics revision on readback. Schema 10 projects save both independent drafts,
 result references, transfer provenance and detector inspection settings; schemas 1-9 remain readable. Reopening keeps
-saved results historical and requires explicit canonical validation before execution. Input
+saved results historical and requires explicit canonical validation before execution. The configured
+figure-export checkbox is now part of the independent draft and survives Save/Open and undo/redo;
+older drafts without that setting retain their previous checked default. Input
 changes cannot mutate launched drafts, held snapshots or exported results.
 
 Desktop execution caps are 12 million detector pixels, 16,384 per axis, 256 source states, 2,048

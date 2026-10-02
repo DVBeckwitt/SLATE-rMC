@@ -299,6 +299,7 @@ class ShellWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.project = project if project is not None else Project.create()
+        self._simulator_default_available = project is None
         local_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
         self.recovery_root = (
             Path(recovery_root).absolute()
@@ -415,6 +416,7 @@ class ShellWindow(QMainWindow):
         self._resident_planes: OrderedDict[UUID, PreparedOsc] = OrderedDict()
         self._thumbnails: dict[UUID, tuple[bytes, int, int]] = {}
         self._pending_open: tuple[Path, bool] | None = None
+        self._open_prompt_active = False
         self._opening_recovery = False
         self._opening_path: Path | None = None
         self._close_intent = False
@@ -898,6 +900,27 @@ class ShellWindow(QMainWindow):
     def _simulation_workspace_changed(self, index: int) -> None:
         if index != 1:
             self._supersede_simulation()
+        elif self._simulator_default_available:
+            self._simulator_default_available = False
+            panel = self.simulator
+            if (
+                panel.draft is None
+                and panel.native.draft is None
+                and panel.draft_kind.currentData() == "configured"
+                and panel.epoch == 0
+                and self._pending_simulation is None
+                and self._pending_open is None
+                and self._active_kind != "open"
+            ):
+                self._request_simulation(
+                    "load_default",
+                    json.dumps(
+                        {
+                            "operation": "load_default",
+                            "path": str(ROOT / "configs" / "bi2se3_simulation.yaml"),
+                        }
+                    ).encode(),
+                )
 
     def _simulation_resource_charge(self) -> dict:
         arrays = {}
@@ -1499,7 +1522,7 @@ class ShellWindow(QMainWindow):
             run, budget = prepare_native_draft, 192 * 1024
         elif operation == "native_run":
             run, budget = run_native_simulation, 160 * 1024**2
-        elif operation in ("load", "validate", "save_configuration"):
+        elif operation in ("load", "load_default", "validate", "save_configuration"):
             run, budget = prepare_simulation_draft, 96 * 1024
         elif operation == "run":
             run, budget = run_simulation, 160 * 1024**2
@@ -1511,7 +1534,7 @@ class ShellWindow(QMainWindow):
             run, budget = reopen_simulation_result, 160 * 1024**2
         else:
             raise ValueError("unknown simulation operation")
-        if operation in ("load", "validate", "save_configuration", "run", "reopen"):
+        if operation in ("load", "load_default", "validate", "save_configuration", "run", "reopen"):
             request = json.loads(argument)
             request["storage_json"] = self.archive_storage_json
             argument = json.dumps(request, allow_nan=False).encode()
@@ -2173,7 +2196,9 @@ class ShellWindow(QMainWindow):
                 "Choose a draft in the configured recovery location.",
             )
             return
+        self._simulator_default_available = False
         self.physical.cancel(clear=True)
+        self._pending_simulation = None
         self._pending_open = (candidate, recovery)
         self._pending_open_sha = expected_sha
         self._discard_confirmed = False
@@ -2222,9 +2247,18 @@ class ShellWindow(QMainWindow):
         QTimer.singleShot(0, self._dispatch_pending)
 
     def _advance_open(self) -> None:
+        if self._open_prompt_active:
+            return
         assert self._pending_open is not None
         if self._has_unsaved_edits() and not self._discard_confirmed:
-            choice = self._ask_unsaved("opening another project")
+            self._open_prompt_active = True
+            try:
+                choice = self._ask_unsaved("opening another project")
+            finally:
+                self._open_prompt_active = False
+            if self._pending_open is None:
+                QTimer.singleShot(0, self._dispatch_pending)
+                return
             if choice == QMessageBox.StandardButton.Cancel:
                 self._pending_open = None
                 self._autosave_timer.start()
@@ -5848,6 +5882,7 @@ class ShellWindow(QMainWindow):
                 if self._simulation_current(identity):
                     if self._simulation_operation in (
                         "load",
+                        "load_default",
                         "validate",
                         "save_configuration",
                         "native_load",

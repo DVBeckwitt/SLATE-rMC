@@ -452,6 +452,9 @@ class SimulatorPanel(QWidget):
         self.position.currentIndexChanged.connect(self.propose)
         self.draw_count.editingFinished.connect(self.propose)
         self.detector_seed.editingFinished.connect(self.propose)
+        self.draw_count.textEdited.connect(self._pending_control_edited)
+        self.detector_seed.textEdited.connect(self._pending_control_edited)
+        self.figures.toggled.connect(self.propose)
         self.detector.profile_requested.connect(self.request_profiles)
         self.detector.view.view_state_changed.connect(self.shell._mark_dirty)
         self.refresh()
@@ -663,6 +666,7 @@ class SimulatorPanel(QWidget):
             "position_mode": self.position.currentData(),
             "draw_count": int(self.draw_count.text()),
             "detector_seed": int(self.detector_seed.text()),
+            "export_figures": self.figures.isChecked(),
         }
 
     def _populate(self, draft: SimulationDraft) -> None:
@@ -697,6 +701,7 @@ class SimulatorPanel(QWidget):
             self.position.setCurrentIndex(self.position.findData(draft.position_mode))
             self.draw_count.setText(str(draft.draw_count))
             self.detector_seed.setText(str(draft.detector_seed))
+            self.figures.setChecked(draft.export_figures)
         finally:
             self.groups.blockSignals(False)
             self._restoring = False
@@ -767,8 +772,15 @@ class SimulatorPanel(QWidget):
             return False
         return True
 
+    def _pending_control_edited(self, _text: str) -> None:
+        if self.draft is None:
+            self._supersede()
+
     def propose(self, *_) -> bool:
-        if self._restoring or self.draft is None:
+        if self._restoring:
+            return False
+        if self.draft is None:
+            self._supersede()
             return False
         mapping = json.loads(json.dumps(self._mapping))
         for path, (_field, _label, editor) in self.editors.items():
@@ -1296,17 +1308,21 @@ class SimulatorPanel(QWidget):
             )
             self.shell._mark_dirty()
         elif isinstance(value, SimulationDraft):
-            reference = None if operation in ("load", "load_limited") else self.result_reference
+            reference = (
+                None
+                if operation in ("load", "load_default", "load_limited")
+                else self.result_reference
+            )
             if not self._can_persist(value, reference):
                 return
             previous_yaml = self.draft.yaml_text if self.draft is not None else None
-            if operation in ("load", "load_limited"):
+            if operation in ("load", "load_default", "load_limited"):
                 self.history = SessionHistory()
                 self.result_reference = None
             self.draft = value
             self.validated = None if operation == "load_limited" else value
             if (
-                operation in ("load", "load_limited")
+                operation in ("load", "load_default", "load_limited")
                 or self._mapping is None
                 or previous_yaml != value.yaml_text
             ):
@@ -1314,6 +1330,13 @@ class SimulatorPanel(QWidget):
             self.status.setText(
                 f"Complete canonical configuration admitted: revision {value.revision}, config SHA-256 {value.configuration_sha256}; CIF SHA-256 {value.cif_sha256}. Run is explicit; detector routes require supported finite-stack strength."
             )
+            if operation == "load_default":
+                self.status.setText(
+                    "Bi2Se3 starting preview: editable, nominal, not converged or qualified. "
+                    "Canonical inputs validated; Run selected outputs is explicit. "
+                    "64 source samples, 4 CPU workers, 8 draws/source, detector seed 1729; "
+                    "detector only, configured figure export off."
+                )
             if operation == "load_limited":
                 self.status.setText(
                     "Imported declaration retained completely. Its source count exceeds the desktop 256-row cap; edit explicitly and Validate before execution. No source support was reduced."

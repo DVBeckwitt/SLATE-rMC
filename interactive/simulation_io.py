@@ -79,13 +79,22 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
     operation = request["operation"]
     old = simulation_draft_from_document(request.get("draft"))
     _stop(control)
-    if operation == "load":
+    if operation in ("load", "load_default"):
         path = stored_path(request["path"], storage).resolve(strict=True)
         raw, _identity = bounded_reference_snapshot(path)
         if len(raw) > MAX_SIMULATION_YAML_BYTES:
             raise ValueError("simulation configuration exceeds 64 KiB")
         text = raw.decode("utf-8")
         imported = hashlib.sha256(raw).hexdigest()
+        if operation == "load_default":
+            mapping = load_strict_yaml_mapping(path, source_bytes=raw)
+            mapping["source"]["sample_count"] = 64
+            mapping["numerics"]["worker_count"] = 4
+            mapping["numerics"]["detector_execution_backend"] = "cpu"
+            mapping["outputs"]["detector"]["enabled"] = True
+            mapping["outputs"]["reciprocal_space"]["enabled"] = False
+            mapping["outputs"]["ewald_surface"]["enabled"] = False
+            text = yaml.safe_dump(mapping, sort_keys=False)
     elif operation == "validate":
         if old is None:
             raise ValueError("load an independent configuration first")
@@ -150,6 +159,9 @@ def prepare_simulation_draft(argument: bytes, control: JobControl) -> JobResult:
         settings.get("draw_count", old.draw_count if old else 8),
         settings.get("detector_seed", old.detector_seed if old else 1729),
         transfer_provenance=old.transfer_provenance if old else "",
+        export_figures=settings.get(
+            "export_figures", old.export_figures if old else operation != "load_default"
+        ),
     )
     return JobResult((operation, result), len(text.encode()) + 8192)
 

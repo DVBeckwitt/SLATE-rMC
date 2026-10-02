@@ -45,6 +45,7 @@ class SimulationDraft:
     draw_count: int = 8
     detector_seed: int = 1729
     transfer_provenance: str = ""
+    export_figures: bool = True
 
     def __post_init__(self) -> None:
         if (
@@ -71,6 +72,8 @@ class SimulationDraft:
             raise ValueError("detector draws must be an integer in [1, 1000000]")
         if type(self.detector_seed) is not int or not 0 <= self.detector_seed < 2**64:
             raise ValueError("detector seed must be an unsigned 64-bit integer")
+        if type(self.export_figures) is not bool:
+            raise ValueError("configured figure export must be boolean")
 
         if (
             type(self.transfer_provenance) is not str
@@ -110,7 +113,8 @@ def simulation_draft_from_document(value: object) -> SimulationDraft | None:
         "draw_count",
         "detector_seed",
     }
-    if type(value) is not dict or set(value) not in (fields, fields | {"transfer_provenance"}):
+    optional = {"transfer_provenance", "export_figures"}
+    if type(value) is not dict or not fields <= set(value) <= fields | optional:
         raise ValueError("invalid simulation draft document")
     row = value.copy()
     row["draft_id"] = UUID(row["draft_id"])
