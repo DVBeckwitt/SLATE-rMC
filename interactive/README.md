@@ -12,7 +12,24 @@ uv sync --frozen --group dev --extra visualization
 
 ## Monte Carlo detector viewer
 
-Render the complete native detector while changing source, mosaic, sample, and detector parameters:
+On Windows, run `uv sync --frozen --extra visualization` once from the repository root,
+then double-click `Launch Bi2Se3.cmd` there. You can create a desktop shortcut to that file;
+the launcher finds the repository regardless of the shortcut's working directory.
+It uses the repository's `.venv\Scripts\python.exe` and explicitly selects CPU/Matplotlib,
+which avoids requiring CUDA or Qt for this launch. Errors remain visible until a key is pressed;
+a normal close exits immediately. The launcher does not install dependencies.
+
+Arguments pass through to the viewer and override the launcher's backend choices:
+
+```powershell
+& '.\Launch Bi2Se3.cmd' --help
+& '.\Launch Bi2Se3.cmd' --execution-backend cpu --presentation-backend matplotlib
+& '.\Launch Bi2Se3.cmd' --execution-backend cuda --presentation-backend opengl
+```
+
+You can append the same arguments after the quoted launcher path in a shortcut's Target field.
+The viewer's own defaults remain CUDA/OpenGL. To invoke them directly, render the complete
+native detector while changing source, mosaic, sample, and detector parameters:
 
 ```powershell
 uv run --extra visualization python interactive/detector_viewer.py `
