@@ -204,6 +204,7 @@ def simulation_budget(
         pixels * (8 * (4 + 4) + 4 * 4 + 9)
         + 512 * 1024**2
         + MAX_AUXILIARY_BYTES
+        + pixels * 12  # summed display levels, finite-sum scratch and percentile preparation
         + 8 * draft.draw_count
     )
     gpu = (
@@ -248,11 +249,15 @@ class SimulationFrame:
     min_positive: float | None
     arrays: tuple[tuple[str, np.ndarray], ...]
     manifest: bytes
+    display_levels: tuple = ()
 
     @property
     def nbytes(self) -> int:
         arrays = [v for v in (self.image, self.display) if v is not None]
         arrays.extend(v for _, v in self.arrays)
+        arrays.extend(
+            a for level in self.display_levels for a in (level.values, level.positive_quantiles)
+        )
         for profiles in (self.profiles, self.full_profiles):
             if profiles is not None:
                 arrays.extend(
@@ -283,6 +288,7 @@ def _prepared_frame(
 ) -> SimulationFrame:
     profiles = full = None
     display = None
+    display_levels = ()
     low, high, maximum, minimum_positive = 0.0, 1.0, 0.0, None
     if image is not None:
         if quantitative:
@@ -313,6 +319,9 @@ def _prepared_frame(
             minimum, maximum = 0.0, 1.0
         minimum_positive = positive if np.isfinite(positive) else None
         low, high = linear_display_limits(minimum, maximum)
+        from simulation_display import prepare_display_levels
+
+        display_levels = prepare_display_levels(image, display)
     metadata = {
         **metadata,
         "schema": "slate.configured-snapshot.v1"
@@ -354,6 +363,7 @@ def _prepared_frame(
         minimum_positive,
         tuple(arrays),
         manifest,
+        display_levels,
     )
     if result.nbytes > MAX_RESULT_BYTES:
         raise ValueError("snapshot and auxiliary arrays exceed the 160 MiB publication cap")

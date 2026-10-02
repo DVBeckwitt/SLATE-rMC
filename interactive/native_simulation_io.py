@@ -286,7 +286,8 @@ def native_budget(draft, bound, other_cpu_bytes=0, other_gpu_bytes=0):
         else 2**rule.angular_power
     )
     event_reserve = rule.batch_size * 2048 + angular_nodes * 64
-    cpu = model_reserve + event_reserve + pixels * 105 + len(draft.physics_json.encode()) * 4
+    cpu = model_reserve + event_reserve + pixels * 117 + len(draft.physics_json.encode()) * 4
+    # The additional 12 bytes/pixel reserve covers summed display preparation.
     gpu = pixels * 4
     if (
         type(other_cpu_bytes) is not int

@@ -237,8 +237,15 @@ uniform float high_value;
 uniform int contrast_mode;
 uniform sampler2D exclusion;
 uniform int show_exclusion;
+uniform float display_bin;
+uniform vec2 native_shape;
 void detector_color() {
-    float value = texture(detector, uv).r;
+    vec2 display_uv = uv;
+    if (display_bin > 1.0) {
+        vec2 cell = floor(uv * native_shape / display_bin);
+        display_uv = (cell + vec2(0.5)) / vec2(textureSize(detector, 0));
+    }
+    float value = texture(detector, display_uv).r;
     if (isnan(value) || isinf(value) || (contrast_mode == 2 && value <= 0.0)) {
         float check = mod(floor(gl_FragCoord.x / 6.0) + floor(gl_FragCoord.y / 6.0), 2.0);
         color = vec4(vec3(0.10 + 0.06 * check), 1.0);
@@ -280,6 +287,8 @@ _GL_MAX_TEXTURE_SIZE = 0x0D33
 
 class DetectorTextureView(QOpenGLWidget):
     """One persistent detector texture with native coordinate overlays."""
+
+    display_bin_changed = Signal(int)
 
     painted = Signal(int, float)
     crosshair_changed = Signal()
@@ -327,6 +336,9 @@ class DetectorTextureView(QOpenGLWidget):
         self._program: QOpenGLShaderProgram | None = None
         self._vao: QOpenGLVertexArrayObject | None = None
         self._uploaded_revision = -1
+        self._uploaded_display_bin = 0
+        self._sum_levels = ()
+        self.active_display_level = None
         self.max_texture_axis: int | None = None
         self.data_revision = 0
         self.request_generation = 0
@@ -793,12 +805,42 @@ class DetectorTextureView(QOpenGLWidget):
             self.max_texture_axis = None
             self.doneCurrent()
 
+    def set_display_levels(self, levels=()):
+        self._sum_levels = levels
+        self.active_display_level = None
+        self._uploaded_display_bin = 0
+        self._select_sum_level()
+        self._request_paint()
+
+    def _select_sum_level(self):
+        if not self._sum_levels or self.image is None:
+            self.active_display_level = None
+            return
+        from simulation_display import select_display_level
+
+        rect = self._rect()
+        level = select_display_level(
+            self._sum_levels,
+            self.image.shape,
+            rect.width() * self.devicePixelRatioF(),
+            rect.height() * self.devicePixelRatioF(),
+        )
+        if level is not self.active_display_level:
+            self.active_display_level = level
+            self.display_bin_changed.emit(level.bin_size)
+
     def _upload_if_needed(self) -> None:
-        if self._display is None or self._uploaded_revision == self.data_revision:
+        self._select_sum_level()
+        level = self.active_display_level
+        display = self._display if level is None else level.values
+        bin_size = 1 if level is None else level.bin_size
+        if display is None or (
+            self._uploaded_revision == self.data_revision and self._uploaded_display_bin == bin_size
+        ):
             return
         if self._texture is not None:
             self._texture.destroy()
-        rows, columns = self._display.shape
+        rows, columns = display.shape
         texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
         texture.setFormat(QOpenGLTexture.TextureFormat.R32F)
         texture.setSize(columns, rows)
@@ -807,10 +849,11 @@ class DetectorTextureView(QOpenGLWidget):
         texture.setData(
             QOpenGLTexture.PixelFormat.Red,
             QOpenGLTexture.PixelType.Float32,
-            VoidPtr(self._display.ctypes.data, self._display.nbytes, False),
+            VoidPtr(display.ctypes.data, display.nbytes, False),
         )
         self._texture = texture
         self._uploaded_revision = self.data_revision
+        self._uploaded_display_bin = bin_size
         self.upload_count += 1
 
     def _upload_mask_if_needed(self) -> None:
@@ -898,6 +941,14 @@ class DetectorTextureView(QOpenGLWidget):
                 int(self.show_mask and self._mask_texture is not None),
             )
             functions.glUniform1i(self._program.uniformLocation("detector"), 0)
+            functions.glUniform1f(
+                self._program.uniformLocation("display_bin"), float(self._uploaded_display_bin)
+            )
+            functions.glUniform2f(
+                self._program.uniformLocation("native_shape"),
+                float(self.image.shape[1]),
+                float(self.image.shape[0]),
+            )
             functions.glUniform4f(
                 self._program.uniformLocation("rect"),
                 float(rect.x() / self.width()),

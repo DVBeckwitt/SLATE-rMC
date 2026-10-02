@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from simulation_contrast import SimulationContrast
 from simulation_dashboard import SimulationDashboard
 from simulation_fields import SIMULATION_FIELDS
 from simulation_io import SimulationFrame
@@ -434,6 +435,7 @@ class SimulatorPanel(QWidget):
             control.parentWidget().show()
         self.detector.observable_unit = "angstrom^2 (simulation mass, not experimental counts)"
         self.detector.quantitative_ready = False
+        self.display_contrast = SimulationContrast(self.detector)
         self.detector.profile_work_required = True
         self.detector.coalesce_profile_updates = True
         for widget in (
@@ -1606,6 +1608,8 @@ class SimulatorPanel(QWidget):
                 view.set_levels(state.low_value, state.high_value, mode=state.contrast_mode)
                 self.detector.restore_profile_state(state)
                 self.detector._sync_controls()
+        if frame.image is not None:
+            self.display_contrast.admit(frame)
         arrays = dict(frame.arrays)
         if previous_run != frame.run_id:
             for display, key in (
@@ -1785,6 +1789,8 @@ class SimulatorPanel(QWidget):
             self.run()
 
     def _clear_detector(self) -> None:
+        self.detector.view.set_display_levels(())
+        self.display_contrast.frame = None
         if self.detector.view.image is not None:
             self.detector._reset_profile_state(None)
         self.detector.view.image = self.detector.view._display = None
@@ -1834,6 +1840,7 @@ class SimulatorPanel(QWidget):
         self._inspection_pending = False
         self.history = SessionHistory()
         self._pending_detector_state = view.simulation_detector
+        self.display_contrast.restore(view.simulation_detector)
         if self.draft is not None:
             self._populate(self.draft)
             self.status.setText(

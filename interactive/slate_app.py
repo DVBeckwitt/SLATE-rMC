@@ -952,6 +952,9 @@ class ShellWindow(QMainWindow):
             for value in (frame.image, frame.display, *[a for _, a in frame.arrays]):
                 if isinstance(value, np.ndarray):
                     arrays[id(value)] = value
+            for level in frame.display_levels:
+                for value in (level.values, level.positive_quantiles):
+                    arrays[id(value)] = value
             for profile in (frame.profiles, frame.full_profiles):
                 if profile is not None:
                     for value in (
