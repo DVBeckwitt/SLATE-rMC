@@ -5,6 +5,69 @@ optical transport, spherical mosaic and native-pixel integration used by the
 renderer. A fit predicts the frozen native observations; moving geometry or a
 lattice never moves measured pixels into another fitting region.
 
+## Optional positive background profiling
+
+`NativeBackgroundProblem` is an explicit opt-in to `score_native_prediction` and
+`fit_native_parameters`. Supply raw measured counts in `NativeFitObservations.net_count`,
+one acquisition, GLS, no historical guards, and the declared native count covariance.
+Any discrepancy covariance needs a separately justified measurement model; it is not
+required by the profiler.
+The problem binds actual pixel design X, sparse ownership W, immutable beta0 and absolute
+quadratic penalty R. Background mass is W exp(X beta); the 44-column broad empirical design
+in `native_background_design` preserves the existing 3000-pixel acquisition conventions.
+It is not an instrument-independent background calibration.
+
+Each physical prediction profiles one nonnegative exposure and runs bounded linear-loss
+TRF from beta0. The physical optimizer consumes the same data-plus-R-beta residual,
+divided throughout by the square root of the fixed valid data-row count, so its squared
+norm is divided by that count. Results retain unscaled physical
+prediction, exposure-scaled signal, background, total, coefficients, residual blocks,
+objective components and inner termination/work. An unsuccessful inner solve raises
+`BackgroundProfileError` with its result; it cannot become an outer optimization point.
+The default `None` path preserves the frozen-background behavior.
+
+The caller owns geometric support, count covariance including overlaps, discrepancy-mode
+projection and held-out diagnostics. Fitting beta explicitly excludes its old jackknife
+modes; a shared residual-discrepancy field must enter the joint covariance only once.
+Controls must use current physical predictions whenever physical parameters change.
+Conditional background improvement does not qualify the physical integration or identify
+signal/background contributions under protected peaks. The expanded-support Bi2Se3
+procedure and comparison limits are recorded in
+[STAGED_FITTING.md](STAGED_FITTING.md#expanded-support-bi2se3-background-fit).
+
+## Declared spatial count discrepancy
+
+`SpatialCountDiscrepancy` is an opt-in zero-mean Gaussian residual field. The caller
+freezes native `(column,row)` centers, `basis_width_px` and `sigma_count_per_pixel`.
+For native pixel p and center c_j, define g_j(p) = exp(-||p-c_j||^2/(2w^2)) and
+Phi_j(p) = sigma g_j(p)/sqrt(sum_k g_k(p)^2). Thus each pixel has variance sigma^2;
+the induced covariance is Phi(p) dot Phi(q). The finite normalized grid gives a
+nonstationary cosine kernel. The basis width is not its correlation length.
+
+`project_modes` returns U = W Phi through the literal fractional or signed native
+pixel memberships. Shared pixels share one field; no footprint-area normalization
+is applied. Form C = C_working_count + U U^T once and use the existing full SPD
+`NativeFitObservations` Cholesky and quadratic GLS. No diagonal jitter, extra
+whitening path, residual variance rescaling or robust loss is introduced.
+
+For joint exponential-background profiling, supply raw counts and the working count
+covariance. Do not use the historical loader's background-subtracted counts or add
+its beta jackknife modes: beta is already profiled in the mean. Bind raw counts,
+validity/order, working covariance, mode arrays, construction and scenario to
+`input_revision`. Keep C fixed during physical optimization. Its Gaussian log determinant
+is constant within that scenario; record it, and never compare unlike scenario
+quadratic scores as a physical improvement. Estimating C jointly would require the
+Gaussian determinant and conditioning terms as well as independent identification.
+
+Use the same field to propagate covariance into protected signed contrasts and
+continuous profiles through their actual overlaps. They remain diagnostics rather
+than duplicate likelihood rows. Control-derived amplitudes can contain diffraction
+and counting fluctuations; explicit assumptions support conditional sensitivity,
+not calibrated coverage or identification of detector noise. A second scenario with
+larger amplitude and identical modes/basis width has a positive-semidefinite covariance
+increment. Qualification must still bound absolute count/feature numerical error and
+the error under the scenario covariance; a larger C cannot qualify unchanged quadrature.
+
 ## Shared material boundary
 
 `NativeRefinementModel` supplies ordered parameter names/units, `bind(values, N)`
@@ -297,6 +360,59 @@ the result is diagnostic only. A failed budget leaves fixed-background validity
 unresolved; it cannot silently change net counts or their covariance. In
 particular, Te's exported incumbent control-background array describes an earlier
 background field and must not be treated as the selected field.
+
+## Conditional Gaussian/Lorentzian amplitudes
+
+The Python APIs opt into complete component predictions with
+`NativeJointEvaluator.predict(values, N, resolve_mosaic_components=True)`. The
+result has shape `(2, observation)`, ordered Gaussian then Lorentzian, with each
+orientation law normalized separately. Both widths must be positive, even at
+eta endpoints. The response shares strength/transfer work and retains every
+source, rod, signed local-m0 term and optical factor. Default calls still return
+the mixed raw masses. `evaluation_count` counts completed uncached point requests;
+`contraction_count` counts the completed component contractions in every disjoint
+source/rod partition. Compilation remains a separate counter.
+
+`profile_mosaic_amplitudes` solves conditional single-exposure GLS for
+`signal = u*F_G + v*F_L`, with `u,v >= 0`, exposure `a=u+v`, and
+`eta=v/a` when `a>0`. Narrower eta bounds are enforced by nonnegative coefficients
+on their two extreme rays. Zero exposure reports eta as `None`. The returned
+rank/null-direction diagnostics concern the admitted conditional amplitude cone;
+they do not establish joint physical identification. Proportional unequal
+columns can leave exposure unidentified. Equal columns can identify exposure
+while leaving eta unresolved.
+
+Pass `mixture_parameter="lorentzian_probability"` to the shared scorer/search,
+and provide the ordered raw columns from the predictor. The search removes only
+that coordinate from its nonlinear vector and reconstructs it in the complete
+physical result. At zero exposure its input coordinate remains provenance, with
+no fitted fraction claimed. Raw columns, signal, background and total predictions
+remain separate. Guards, literal exposure, multiple exposure groups and a
+calibration coupled to eta require a different inner problem and are rejected.
+CLI plans do not yet enable this option.
+
+With `NativeBackgroundProblem`, both amplitudes are re-solved at every beta. Its
+existing exponential background remains nonlinear, restarted deterministically
+from beta0, with the unchanged penalty, box and termination/failure behavior.
+The analytic beta derivative projects off the active amplitude rays. It is valid
+on a stable active face; zero-amplitude/zero-multiplier transitions require
+bound-aware directional checks. Every physical finite difference must reprofile
+amplitudes and background. Software checks do not qualify those measured
+derivatives, an integration rule, a fit or a background subtraction.
+
+`NativePredictionStore(..., resolve_mosaic_components=True)` retains the same
+ordered two columns and completed partial batches. Bind its revision to full
+inputs, source/rod support, numerical rule, implementation, parameter ordering
+and component order. Scalar and component checkpoints cannot cross-replay.
+Recovery retains raw work only; it does not prepend an incumbent or recover an
+optimizer state, fitted amplitudes or beta.
+
+A constrained linear-background candidate additionally needs a nonnegative
+basis integrated over the exact footprints, a penalty in its own coefficient
+units, and evidence-derived feature inequalities. Those data-dependent choices
+are not supplied by the component API or exponential profiler. An unavailable
+control-transfer envelope leaves background-dependent fitting inadmissible;
+archived-model sensitivity ranges are not calibrated coverage bounds.
 
 ## Numerical qualification and execution
 
@@ -740,3 +856,55 @@ Desktop delivery uses the user's representative nominal-proof policy in
 [VALIDATION.md](VALIDATION.md#desktop-implementation-verification). Existing numerical validation,
 rank/covariance checks and truthful fitting qualification states remain authoritative; this UI
 binding adds no fit qualification or new observation-preparation recipe.
+
+
+## Conditional finite background hull
+
+`NativeBackgroundHull(columns_count, weights0)` profiles one exposure for a fixed
+scalar raw diffraction shape and solves an unpenalized GLS simplex problem. Each
+column contains count masses integrated over the same declared observation
+footprints. One global nonnegative weight vector sums to one; callers must use
+that same vector on any separately integrated display or control columns.
+The finite family is a conditional model assumption, not a simultaneous
+uncertainty bound. Control and overlapping feature diagnostics are not silently
+added as likelihood rows.
+
+`profile(observations, raw, callback=...)` admits one raw GLS acquisition without
+guards. It returns exposure, weights, raw-model decomposition, data objective,
+zero penalty, simplex feasibility, a convex objective-gap bound and fixed-shape
+affine rank diagnostics. Rank deficiency leaves coefficient uniqueness unresolved;
+full rank establishes uniqueness only within this fixed-shape conditional model.
+Mosaic-component and outer fitting integration are not enabled by this interface.
+
+SLSQP uses an analytic envelope gradient and deterministic `weights0`, with default
+limits of 300 iterations and 600 distinct evaluations. Objective scaling is fixed
+from the initial residual. The default tolerance `1e-8` applies to simplex feasibility
+and the objective-gap bound divided by that scale; it is a solver criterion, not a
+physical acceptance threshold. Coefficients are never clipped or normalized after
+solving. A feasible accepted SLSQP iterate can terminate on the unchanged gap
+certificate with `termination_kind="convex_certificate"`; its optimizer success/status
+are `None`, because SLSQP did not return. Otherwise success requires optimizer
+convergence and the same feasibility/gap gates. Failed checks return `success=False`;
+evaluation-budget exhaustion raises `BackgroundProfileError` with the last point.
+Callbacks receive every distinct evaluation for caller-owned accounting. Objective,
+gradient and accepted-iteration counts remain separate from distinct evaluations.
+
+
+## Bounded cone-law reuse
+
+`NativeMosaicCache` retains at most two exact Gaussian width/order entries and
+one Lorentzian entry, owned by one immutable `NativeFiberResponse`. Hits promote
+the entry; misses recompute through the same cone-density owner. This allows a
+base Gaussian width to survive a nearby finite-difference width. The Lorentzian
+law remains inexpensive and keeps one entry. Eta, thickness, atomic structure
+and attenuation do not change these normalized laws. Material, reciprocal-basis,
+source and geometry invalidations remain unchanged, as do all component factors.
+
+`maximum_extra_gaussian_bytes` defaults to 256 MiB of retained NumPy payload
+beyond the most recent Gaussian entry. An older entry exceeding this budget is
+evicted; zero retains exactly one entry, including an empty response. The byte
+budget is per response, not a process-memory ceiling. A Gaussian miss can
+transiently hold its previous two entries and the newly computed entry. Callers
+still own process memory admission. No sampling rule, physical approximation or
+qualification status follows from reuse; workload evidence must include cache
+state, preparation, current strength evaluation and transient memory.

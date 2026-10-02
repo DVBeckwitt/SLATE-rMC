@@ -96,6 +96,10 @@ at Git revision `349524d24f960198d75df8def104adbca204944a`.
 
 ## Interactive tools
 
+On Windows, double-click [`Launch Bi2Se3.cmd`](Launch%20Bi2Se3.cmd) to open the detector viewer
+in CPU/Matplotlib mode. See the [launcher instructions](interactive/README.md#monte-carlo-detector-viewer)
+for initial setup, desktop shortcuts, and backend overrides.
+
 All supported live viewers are collected in [`interactive/`](interactive/README.md):
 
 ```powershell

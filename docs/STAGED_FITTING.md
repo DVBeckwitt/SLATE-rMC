@@ -5,6 +5,82 @@ Geometry is adopted from a hash-bound experiment. Changed calibration requires a
 prepared experiment and recipe binding; it is never a historical replay. The reduced
 joint hBN/crystal geometry calibrator remains the geometric owner.
 
+## Expanded-support Bi2Se3 background fit
+
+The September 30 / October 1 experiment composes the existing Python APIs:
+`NativeFitObservations`, `NativeBackgroundProblem`, `score_native_prediction` and
+`fit_native_parameters`. It introduces no second optimizer or physics implementation.
+The CLI recipes below use their own frozen observations; they do not automatically
+construct this expanded target or enable this opt-in background problem.
+
+### Frozen observation support
+
+- Preserve original signal ownership. Add every native pixel with positive membership
+  in any of the seven manuscript profile ROIs, as a whole pixel with unit weight.
+- Assign shared boundaries to the largest fractional membership, then the lowest bin
+  index on ties. Group by display bin and original observation index.
+- Remove newly owned signal pixels from controls, preserving the remaining control
+  blocks and split labels. Reassigned held-out portions become training data; remaining
+  controls are development checks, not independent validation.
+- Freeze memberships before optimization and verify unique ownership and count/area/
+  variance conservation. Keep fractional ROI profiles for display separately.
+
+This target contains 4,451,748 unique pixels, 2,820 observations and all 671 manuscript
+bins. Its working covariance is diagonal, with each row variance equal to the sum of
+`max(raw_pixel_count, 1)` over owned pixels. It is a working Gaussian objective,
+not a calibrated Poisson likelihood. The old empirical discrepancy and background
+jackknife modes are excluded from this experiment.
+
+### Conditional background and staged search
+
+Predict signal and control diffraction together at every physical candidate. Use
+`a * F(theta) + W @ exp(X @ beta)`, with nonnegative exposure `a` profiled analytically.
+Keep the 44-column pixel design, its normalization and absolute penalty matrix fixed.
+Each inner solve starts from the same sealed `beta0`, uses bounds [-15, 15], at most
+150 function evaluations and tolerance 1e-8. Preserve unsuccessful inner results and
+abort scoring; never substitute a previous background solution.
+
+At fixed N=13, geometry, source and integration rule, first release only the three
+Gaussian-width/Lorentzian-width/mixture coordinates (Bi indices 13:16), using TRF
+with `maximum_function_evaluations=8`. Then release all 21 physical coordinates
+with `maximum_function_evaluations=5`. Start the second stage from the first stage's
+actual `result.runs[0].parameter_values`. Keep the same background start and objective.
+`best_evaluated` can be a finite-difference probe and is not the solver's returned point.
+The function budget excludes derivative probes: count physical attempts separately.
+
+The external driver owns admission, durable raw recovery and resource limits. The
+completed run admitted at most 143 new predictions, 31 response compilations, 16 hours
+and 12 GiB actual-child peak memory. Exact replay used N and all 21 float bytes before
+new-work admission. Its one-live-response eviction policy was local to that driver;
+the production evaluator's cache policy is unchanged. Keep process supervision,
+checkpoint writers and acquisition-specific preparation outside the numerical core.
+
+### Comparison and retained evidence
+
+Profile the background at the old returned physics on the *new* target to establish a
+matched baseline. Compare returned endpoints on that same partition and objective.
+For original-support comparisons, aggregate measured, physical and background masses
+and variances by original observation index **before** applying the original quadratic
+objective and training mask. Conservation alone does not preserve a split-row objective.
+
+The final returned objective fell 85.78% from this matched baseline and 2.64% from the
+mosaic stage. Both stages reached their evaluation limits; the minimum remains unresolved.
+All seven native-family raw MAE/RMS improved, but original-support and held-control
+tradeoffs remain. Fresh continuous ROI curves improved MAE in six of seven families;
+r1-minus worsened. Native partition scores are not continuous-profile scores.
+
+Exact inputs, settings, source and results remain in external, immutable diagnostics:
+`bi2se3_5deg_expanded_native_target.ra_diag.npz`,
+`bi2se3_5deg_expanded_staged_fit.ra_diag.npz`,
+`bi2se3_5deg_expanded_staged_closeout.ra_diag.npz` and
+`bi2se3_5deg_expanded_returned_render.ra_diag.npz`.
+The fit artifact SHA256 is
+`e1acc0dd004b73acbf3658d9ca1d61ddd9d1c691dcabc0d6d167bd1b2022e244`.
+Their manifests retain the temporary sources; those scripts and generated figures
+are not package dependencies. Preserve evaluation-limit and nominal-integration labels
+when reusing these results. A fresh figure uses the returned physics, beta and exposure,
+with separate pixel-image and continuous-ROI integrations through shared physics.
+
 ## Historical Bi2Te3 starting recipe
 
 `configs/bi2te3_historical_native.json` binds the delivered September 11 result,

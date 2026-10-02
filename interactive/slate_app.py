@@ -175,8 +175,10 @@ from simulation_panel import SimulatorPanel
 from simulation_transfer import prepare_simulation_transfer
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(ROOT / "src"))
+# Keep this checkout ahead of ambient and editable installations.
+if str(ROOT / "src") in sys.path:
+    sys.path.remove(str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "src"))
 
 MAX_PENDING_WRITES = 8
 MAX_PENDING_WRITE_BYTES = 3 * 1024 * 1024

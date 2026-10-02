@@ -44,6 +44,32 @@ int32 counts with exact linked profiles. No image is loaded or calculation start
 The `interactive/` directory is not part of the installed numerical wheel, so run this entry
 point from the checkout.
 
+### Merged engine and simulation routes
+
+The desktop entry point prioritizes this checkout's `src` ahead of ambient and editable
+installations. The merged engine snapshot is `4cf84de`; the SLATE desktop launcher still targets
+this UI checkout. `Launch Bi2Se3.cmd` remains a separate CPU/Matplotlib Monte Carlo viewer launcher
+and does not launch SLATE or run on desktop startup.
+
+| Path | Canonical owner and scope of the merged work |
+| --- | --- |
+| Configured Simulator, including the Bi2Se3 starting preview | `configured_simulation` and `source_averaged_detector`; existing native MC pixel-mass rendering and explicit Run are preserved. The native fitting cache is not used to claim a renderer speedup. |
+| Independent native Simulator | The bound material model's `integration_parts`, each part's `ConditionalDetector`, and `iter_native_pixel_batches`; complete-panel deterministic rectangle integration is preserved. It does not use the fitting evaluator's observation-response cache. |
+| Native fitting Python APIs | `NativeJointEvaluator` and `NativePredictionStore` optionally resolve complete, separately normalized Gaussian/Lorentzian columns. Scalar mixed output remains the default; checkpoint identities are distinct. `NativeMosaicCache` reuses exact Gaussian width/order entries per immutable response, with at most two Gaussian entries and one Lorentzian entry. |
+
+The extra retained Gaussian payload is bounded to 256 MiB per response; it is not a process-memory
+ceiling, and transient memory can be larger. Saved paired evidence showed byte-equal outputs and
+18.01% cold-inclusive savings for one native fitting trace (42.53% warm). This does not establish
+full-image GUI performance or general fit improvement. See
+[the component and cache contracts](../docs/NATIVE_REFINEMENT.md#conditional-gaussianlorentzian-amplitudes).
+
+Positive shared-exposure background profiling, a conditional finite background hull and optional
+footprint-integrated spatial discrepancy covariance are fitting inference choices. They do not
+become automatic simulation settings or calibrated uncertainty claims. The desktop's existing
+unsupported fitting Run/adoption states remain unavailable; merging core APIs does not enable
+those interfaces. The starting preview, saved drafts/results, export preference, resource caps
+and cancellation/stale-result ownership are preserved.
+
 ### Comparison and display cuts
 
 Open **Compare images** and choose acquisitions A and B. Each keeps its source identity,
@@ -368,7 +394,24 @@ preparation, fit result or calibration qualification.
 
 ## Monte Carlo detector viewer
 
-Render the complete native detector while changing source, mosaic, sample, and detector parameters:
+On Windows, run `uv sync --frozen --extra visualization` once from the repository root,
+then double-click `Launch Bi2Se3.cmd` there. You can create a desktop shortcut to that file;
+the launcher finds the repository regardless of the shortcut's working directory.
+It uses the repository's `.venv\Scripts\python.exe` and explicitly selects CPU/Matplotlib,
+which avoids requiring CUDA or Qt for this launch. Errors remain visible until a key is pressed;
+a normal close exits immediately. The launcher does not install dependencies.
+
+Arguments pass through to the viewer and override the launcher's backend choices:
+
+```powershell
+& '.\Launch Bi2Se3.cmd' --help
+& '.\Launch Bi2Se3.cmd' --execution-backend cpu --presentation-backend matplotlib
+& '.\Launch Bi2Se3.cmd' --execution-backend cuda --presentation-backend opengl
+```
+
+You can append the same arguments after the quoted launcher path in a shortcut's Target field.
+The viewer's own defaults remain CUDA/OpenGL. To invoke them directly, render the complete
+native detector while changing source, mosaic, sample, and detector parameters:
 
 ```powershell
 uv run --extra visualization python interactive/detector_viewer.py `
