@@ -900,6 +900,7 @@ class ShellWindow(QMainWindow):
         return self.simulator
 
     def _simulation_workspace_changed(self, index: int) -> None:
+        self.simulator.scene.workspace_changed(index)
         if index != 1:
             self.simulator.stop_live()
         elif self._simulator_default_available:
@@ -964,6 +965,9 @@ class ShellWindow(QMainWindow):
                         profile.vertical_support,
                     ):
                         arrays[id(value)] = value
+        simulator_scene = self.simulator.scene.view
+        if simulator_scene._image is not None:
+            arrays[id(simulator_scene._image)] = simulator_scene._image
         scene = self.scene_panel.view
         if scene._image is not None:
             arrays[id(scene._image)] = scene._image
@@ -973,6 +977,7 @@ class ShellWindow(QMainWindow):
             gpu += self.simulator.detector.view._display.nbytes
         # The scene's retained owner admits at most two native R32F detector textures.
         gpu += len(scene._textures) * 12_000_000 * 4
+        gpu += max(2, len(simulator_scene._textures)) * 12_000_000 * 4
         if hasattr(self, "physical"):
             physical_scene = self.physical.scene.view
             gpu += (
@@ -1526,6 +1531,10 @@ class ShellWindow(QMainWindow):
             run, budget = prepare_simulation_transfer, 256 * 1024
         elif operation in ("native_load", "native_validate", "native_save"):
             run, budget = prepare_native_draft, 192 * 1024
+        elif operation == "scene_geometry":
+            from simulation_scene_io import prepare_simulator_geometry
+
+            run, budget = prepare_simulator_geometry, 65536
         elif operation == "native_run":
             run, budget = run_native_simulation, 160 * 1024**2
         elif operation in ("load", "load_default", "validate", "save_configuration"):
@@ -1540,7 +1549,15 @@ class ShellWindow(QMainWindow):
             run, budget = reopen_simulation_result, 160 * 1024**2
         else:
             raise ValueError("unknown simulation operation")
-        if operation in ("load", "load_default", "validate", "save_configuration", "run", "reopen"):
+        if operation in (
+            "load",
+            "load_default",
+            "validate",
+            "save_configuration",
+            "run",
+            "reopen",
+            "scene_geometry",
+        ):
             request = json.loads(argument)
             request["storage_json"] = self.archive_storage_json
             argument = json.dumps(request, allow_nan=False).encode()
@@ -6188,6 +6205,7 @@ class ShellWindow(QMainWindow):
                 return
             self.physical.cancel(clear=True)
             self.physical.scene.view.release_resources()
+            self.simulator.scene.view.release_resources()
             self.scene_panel.view.release_resources()
             self.comparison_panel.release_resources()
             self.simulator.detector.view.release_resources()

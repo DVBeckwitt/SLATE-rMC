@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 class ScalarControl(QWidget):
     edited = Signal(str)
     pending = Signal(bool)
+    drag_started = Signal()
+    dragged = Signal(str)
+    drag_finished = Signal(str)
 
     def __init__(self, label, unit, value, *, integer=False, probability=False):
         super().__init__()
@@ -35,7 +38,7 @@ class ScalarControl(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        title = QLabel(f"{label} ({unit})")
+        title = self.title = QLabel(f"{label} ({unit})")
         title.setWordWrap(True)
         layout.addWidget(title)
         row = QHBoxLayout()
@@ -64,7 +67,7 @@ class ScalarControl(QWidget):
         )
         self.slider.setAccessibleName(f"{label}, slider navigation in {unit}")
         self.slider.setToolTip(
-            "Navigation span only; release commits one undo action. Use exact value for any valid number."
+            "Held drag dispatches latest values every 200 ms when Live is on. One undo gesture; exact final value on release."
         )
         self.slider.sliderPressed.connect(self.begin_drag)
         self.slider.sliderReleased.connect(self.finish_drag)
@@ -92,7 +95,7 @@ class ScalarControl(QWidget):
 
     def begin_drag(self):
         self.drag_origin = self.center
-        self.pending.emit(False)
+        self.drag_started.emit()
 
     def slide(self, position):
         value = (
@@ -101,11 +104,13 @@ class ScalarControl(QWidget):
         if self.integer:
             value = round(value)
         self.text.setText(repr(value))
-        if not self.slider.isSliderDown():
+        if self.slider.isSliderDown():
+            self.dragged.emit(self.text.text())
+        else:
             self.edited.emit(self.text.text())
 
     def finish_drag(self):
-        self.edited.emit(self.text.text())
+        self.drag_finished.emit(self.text.text())
 
     def nudge(self, direction):
         try:
@@ -215,7 +220,7 @@ class SimulationDashboard(QScrollArea):
         self.draft = draft
         entries = self.simulator.quick_fields()
         structure = tuple(
-            (key, group, label, unit, integer, probability)
+            (key, group, unit, integer, probability)
             for key, group, label, unit, _value, integer, probability in entries
         )
         if structure != self.structure:
@@ -236,6 +241,11 @@ class SimulationDashboard(QScrollArea):
                         k, c.text.text(), schedule
                     )
                 )
+                control.drag_started.connect(lambda k=key: self.simulator.begin_slider_drag(k))
+                control.dragged.connect(lambda text, k=key: self.simulator.drag_slider(k, text))
+                control.drag_finished.connect(
+                    lambda text, k=key: self.simulator.end_slider_drag(k, text)
+                )
                 self.sections[group].addWidget(control)
                 self.controls[key] = control
             note = QLabel(
@@ -253,5 +263,6 @@ class SimulationDashboard(QScrollArea):
                 note = QLabel("Load a configuration or native recipe in Advanced/actions.")
                 note.setWordWrap(True)
                 self.sections["Incident angle / Geometry"].addWidget(note)
-        for key, _group, _label, _unit, value, _integer, _probability in entries:
+        for key, _group, label, unit, value, _integer, _probability in entries:
+            self.controls[key].title.setText(f"{label} ({unit})")
             self.controls[key].set_value(value)

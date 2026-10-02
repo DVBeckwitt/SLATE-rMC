@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -45,6 +47,8 @@ from simulation_contrast import SimulationContrast
 from simulation_dashboard import SimulationDashboard
 from simulation_fields import SIMULATION_FIELDS
 from simulation_io import SimulationFrame
+from simulation_scene import SimulatorScene
+from simulation_scene_io import SimulatorGeometry
 from simulation_state import (
     SimulationDraft,
     SimulationExportWork,
@@ -305,6 +309,10 @@ class SimulatorPanel(QWidget):
         self._update_request = None
         self._last_requested = None
         self._pending_quick = None
+        self._drag = self._drag_action = None
+        self._drag_timer = QTimer(self)
+        self._drag_timer.setInterval(200)
+        self._drag_timer.timeout.connect(self._drag_tick)
         self._fresh_live_pending = False
         self._live_timer = QTimer(self)
         self._live_timer.setSingleShot(True)
@@ -317,7 +325,12 @@ class SimulatorPanel(QWidget):
         self.live.setToolTip(
             "Validate and run the latest complete draft after a 300 ms pause; nominal results."
         )
-        self.advanced_button = QPushButton("&Advanced/actions")
+        self.advanced_button = QToolButton()
+        self.advanced_button.setText("&Menu")
+        self.advanced_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self.advanced_button)
+        menu.addAction("Advanced parameters", lambda: self.advanced.show())
+        self.advanced_button.setMenu(menu)
         controls.addWidget(self.live)
         self.advanced = QDialog(self)
         self.advanced.setWindowTitle("Simulator — complete editor and actions")
@@ -424,7 +437,8 @@ class SimulatorPanel(QWidget):
         close.rejected.connect(self.advanced.hide)
         advanced_layout.addWidget(close)
         self.dashboard = SimulationDashboard(self)
-        splitter.addWidget(self.dashboard)
+        action_layout.addWidget(self.dashboard)
+        self.scene = SimulatorScene(self)
         self.outputs = QTabWidget()
         self.detector = DetectorPanel(compact=True)
         for control in (
@@ -456,9 +470,10 @@ class SimulatorPanel(QWidget):
         self.outputs.addTab(self.reciprocal, "Reciprocal output")
         self.outputs.addTab(self.ewald, "Ewald output")
         splitter.addWidget(self.outputs)
-        splitter.setStretchFactor(0, 0)
+        splitter.addWidget(self.scene)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([290, 850])
+        splitter.setSizes([650, 530])
         self.dashboard_splitter = splitter
         layout.addWidget(splitter, 1)
         self.figures = QCheckBox(
@@ -475,7 +490,6 @@ class SimulatorPanel(QWidget):
         self.validate_button.clicked.connect(self.validate)
         self.run_button.clicked.connect(lambda: self.request_update(force=True))
         self.live.toggled.connect(self._live_changed)
-        self.advanced_button.clicked.connect(self.advanced.show)
         self.inspect_button.clicked.connect(self.inspect)
         self.resume_button.clicked.connect(self.follow)
         self.cancel_button.clicked.connect(self.stop_live)
@@ -494,7 +508,65 @@ class SimulatorPanel(QWidget):
         self.figures.toggled.connect(self.propose)
         self.detector.profile_requested.connect(self.request_profiles)
         self.detector.view.view_state_changed.connect(self.shell._mark_dirty)
+        self.detector.view.view_state_changed.connect(self.scene.texture)
+        self.detector.view.display_bin_changed.connect(lambda _bin: self.scene.texture())
         self.refresh()
+
+    def begin_slider_drag(self, key):
+        self.finish_slider_drag()
+        self._drag = (
+            self.shell.project.project_id,
+            self.draft_kind.currentData(),
+            self.active_draft,
+            key,
+        )
+        self._drag_action = None
+        self._live_timer.stop()
+        self._supersede()
+        self._drag_timer.start()
+
+    def drag_slider(self, key, text):
+        # Late held events after Stop retain the exact field value, without restarting Live.
+        self._pending_quick = (self.draft_kind.currentData(), key, text)
+
+    def _drag_tick(self):
+        if self._drag is None:
+            return
+        if self._drag[:2] != (self.shell.project.project_id, self.draft_kind.currentData()):
+            self.finish_slider_drag()
+            return
+        if self.flush_quick_edit() and self.live.isChecked():
+            self.request_update()
+
+    def end_slider_drag(self, key, text):
+        self.drag_slider(key, text)
+        accepted = self.flush_quick_edit()
+        self.finish_slider_drag()
+        if accepted and self.live.isChecked():
+            self.request_update(force=True)
+
+    def finish_slider_drag(self):
+        self._drag_timer.stop()
+        self.flush_quick_edit()
+        self._drag = self._drag_action = None
+
+    def push_draft_action(self, history, action):
+        if action is not None and self._drag is not None and len(action.changes) == 1:
+            project, kind, before, _key = self._drag
+            change = action.changes[0]
+            if (
+                project == self.shell.project.project_id
+                and kind == self.draft_kind.currentData()
+                and before.draft_id == change.before.draft_id
+            ):
+                if history.undo_actions and history.undo_actions[-1] is self._drag_action:
+                    history.bytes_used -= history.undo_actions.pop().bytes_used
+                action = _action(
+                    "Drag simulator parameter",
+                    [FieldChange(before.draft_id, change.field, before, change.after)],
+                )
+                self._drag_action = action
+        history.push(action)
 
     def update_context(self):
         return (
@@ -511,16 +583,23 @@ class SimulatorPanel(QWidget):
             self.stop_live()
 
     def stop_live(self):
+        self.scene.stop()
+        self._drag_timer.stop()
         self._live_timer.stop()
         self._fresh_live_pending = False
         self.live.blockSignals(True)
         self.live.setChecked(False)
         self.live.blockSignals(False)
+        self.finish_slider_drag()
         self.flush_quick_edit()
         self._supersede()
         self.refresh()
 
     def update_failed(self, context):
+        if self.shell._simulation_operation == "scene_geometry":
+            self.scene._requested = None
+            self.scene._continue = False
+            self.scene.note.setText("Current geometry unavailable: " + self.status.text())
         if self._update_request is not None and self._update_request[:2] == context:
             self._update_request = None
 
@@ -542,6 +621,8 @@ class SimulatorPanel(QWidget):
         self.input_pending(schedule)
 
     def draft_changed(self):
+        if self._drag is not None:
+            return
         if self.live.isChecked():
             self._live_timer.start()
 
@@ -564,6 +645,9 @@ class SimulatorPanel(QWidget):
         draft = self.active_draft
         if draft is None:
             self.status.setText("Load a complete draft in Advanced/actions before enabling Live.")
+            return
+        if self.scene.current_draft != draft:
+            self.scene.request(continue_update=True)
             return
         if not force and self._last_requested == (self.draft_kind.currentData(), draft):
             return
@@ -872,6 +956,7 @@ class SimulatorPanel(QWidget):
         self.undo_button.setEnabled(bool(history.undo_actions))
         self.redo_button.setEnabled(bool(history.redo_actions))
         self.dashboard.sync()
+        self.scene.sync()
 
     def _transfer_source_context(self):
         return (
@@ -1204,7 +1289,7 @@ class SimulatorPanel(QWidget):
             return True
         if not self._can_persist(updated, self.result_reference):
             return False
-        self.history.push(action)
+        self.push_draft_action(self.history, action)
         self.draft = updated
         self._mapping = mapping
         self.validated = None
@@ -1233,6 +1318,7 @@ class SimulatorPanel(QWidget):
             )
 
     def history_step(self, undo: bool) -> None:
+        self.finish_slider_drag()
         if self.draft_kind.currentData() == "native":
             self.native.history_step(undo)
             return
@@ -1668,6 +1754,9 @@ class SimulatorPanel(QWidget):
         return True
 
     def ready(self, operation: str, value, incidence_deg=None) -> None:
+        if isinstance(value, SimulatorGeometry):
+            self.scene.ready(value)
+            return
         continue_update = (
             operation in ("validate", "native_validate")
             and self._update_request == self.update_context()

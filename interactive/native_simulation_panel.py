@@ -339,8 +339,9 @@ class NativeDraftPanel(QWidget):
         if not self.can_persist(draft, self.result_reference):
             return False
         if record_history and self.draft is not None and self.draft != draft:
-            self.history.push(
-                _action(label, [FieldChange(draft.draft_id, "native_draft", self.draft, draft)])
+            self.simulator.push_draft_action(
+                self.history,
+                _action(label, [FieldChange(draft.draft_id, "native_draft", self.draft, draft)]),
             )
         changed = self.draft != draft
         self.draft = draft

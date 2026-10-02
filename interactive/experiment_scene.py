@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import sys
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -79,49 +79,60 @@ class SceneGeometry:
     @classmethod
     def from_mapping(cls, mapping: ReciprocalMapping) -> SceneGeometry:
         instrument = mapping.instrument
+        beam = instrument.lab_from_sample.rotation @ mapping.incident.states.k_air_sample_Ainv[0]
+        rotations = tuple(
+            (r.pivot_lab_m, r.axis_lab, math.radians(r.angle_deg)) for r in mapping.axis_rotations
+        )
+        sample = instrument.lab_from_sample.translation_m
+        origin = mapping.source_origin_lab_m
+        geometry = cls.from_instrument(
+            instrument, sample if origin is None else origin, beam, rotations
+        )
+        if origin is None:
+            extent = max(
+                np.linalg.norm(np.asarray(corner) - sample)
+                for corner in geometry.detector_corners_lab_m
+            )
+            geometry = replace(
+                geometry,
+                beam_source_lab_m=_point(sample - np.asarray(geometry.beam_direction_lab) * extent),
+            )
+        return geometry
+
+    @classmethod
+    def from_instrument(cls, instrument, origin_lab_m, direction_lab, rotations=()):
+        """Use the compiled rigid instrument; no optics or intensity evaluation."""
         rows, columns = instrument.detector_shape_rc
         reference_column, reference_row = instrument.detector_reference_coordinate_px
-        corners = []
-        for column, row in (
-            (-0.5, -0.5),
-            (columns - 0.5, -0.5),
-            (-0.5, rows - 0.5),
-            (columns - 0.5, rows - 0.5),
-        ):
-            detector_local = np.array(
-                (
-                    (column - reference_column) * instrument.detector_column_pitch_m,
-                    (row - reference_row) * instrument.detector_row_pitch_m,
-                    0.0,
+        corners = tuple(
+            _point(
+                instrument.lab_from_detector.apply_point(
+                    np.array(
+                        (
+                            (c - reference_column) * instrument.detector_column_pitch_m,
+                            (r - reference_row) * instrument.detector_row_pitch_m,
+                            0.0,
+                        )
+                    )
                 )
             )
-            corners.append(_point(instrument.lab_from_detector.apply_point(detector_local)))
-        sample = instrument.lab_from_sample.translation_m
-        beam = np.array(mapping.incident.states.k_air_sample_Ainv[0], dtype=np.float64, copy=True)
-        beam = instrument.lab_from_sample.rotation @ beam
-        beam /= np.linalg.norm(beam)
-        extent = max(np.linalg.norm(np.asarray(corner) - sample) for corner in corners)
-        axes = tuple(_point(instrument.lab_from_sample.rotation[:, index]) for index in range(3))
-        rotations = tuple(
-            (
-                _point(rotation.pivot_lab_m),
-                _point(rotation.axis_lab),
-                math.radians(rotation.angle_deg),
+            for c, r in (
+                (-0.5, -0.5),
+                (columns - 0.5, -0.5),
+                (-0.5, rows - 0.5),
+                (columns - 0.5, rows - 0.5),
             )
-            for rotation in mapping.axis_rotations
         )
+        beam = np.asarray(direction_lab, dtype=np.float64)
+        beam = beam / np.linalg.norm(beam)
         return cls(
-            tuple(corners),
-            _point(sample),
-            _point(
-                mapping.source_origin_lab_m
-                if mapping.source_origin_lab_m is not None
-                else sample - beam * extent
-            ),
+            corners,
+            _point(instrument.lab_from_sample.translation_m),
+            _point(origin_lab_m),
             _point(beam),
             _point(instrument.lab_from_detector.rotation[:, 2]),
-            axes,
-            rotations,
+            tuple(_point(instrument.lab_from_sample.rotation[:, i]) for i in range(3)),
+            tuple((_point(p), _point(a), float(v)) for p, a, v in rotations),
             instrument.sample_width_m,
             instrument.sample_length_m,
         )
@@ -144,6 +155,7 @@ class ExperimentSceneView(QOpenGLWidget):
 
     painted = Signal(int, float, object)
     camera_changed = Signal()
+    object_picked = Signal(str)
     physical_started = Signal()
     physical_preview = Signal(float)
     physical_committed = Signal(float)
@@ -152,6 +164,11 @@ class ExperimentSceneView(QOpenGLWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.geometry: SceneGeometry | None = None
+        self.selection_mode = False
+        self.selected_object = ""
+        self.hover_object = ""
+        self.callouts = ()
+        self.keyboard_step = 0.0001
         self.physical_handle: PhysicalHandle | None = None
         self._handle_path: list[QPointF] = []
         self._physical_drag = False
@@ -162,6 +179,8 @@ class ExperimentSceneView(QOpenGLWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.overlay_points_lab_m: tuple[tuple[float, float, float], ...] = ()
         self._image: NDArray[np.float32] | None = None
+        self._display_bin = 1
+        self._native_image_shape = (1, 1)
         self._image_identity: tuple[UUID, str, int] | None = None
         self._geometry_identity: tuple[object, ...] | None = None
         self._scene_radius_m = 1.0
@@ -239,6 +258,35 @@ class ExperimentSceneView(QOpenGLWidget):
                 self._scene_radius_m = 1.0
             if self.geometry is not None and (image_changed or first_geometry):
                 self.target_lab_m = self.geometry.sample_lab_m
+        self.request_generation += 1
+        self.update()
+
+    def set_geometry(self, geometry, identity):
+        if identity == self._geometry_identity and geometry is self.geometry:
+            return
+        first = self.geometry is None
+        self.geometry, self._geometry_identity = geometry, identity
+        self._scene_radius_m = (
+            1.0
+            if geometry is None
+            else max(
+                0.001,
+                max(
+                    np.linalg.norm(np.asarray(p) - geometry.sample_lab_m)
+                    for p in (*geometry.detector_corners_lab_m, geometry.beam_source_lab_m)
+                ),
+            )
+        )
+        if first and geometry is not None:
+            self.target_lab_m = geometry.sample_lab_m
+        self.request_generation += 1
+        self.update()
+
+    def set_detector_image(self, display, identity, *, display_bin=1, native_shape=(1, 1)):
+        if identity == self._image_identity:
+            return
+        self._image, self._image_identity = display, identity
+        self._display_bin, self._native_image_shape = display_bin, native_shape
         self.request_generation += 1
         self.update()
 
@@ -409,6 +457,8 @@ class ExperimentSceneView(QOpenGLWidget):
         target_lab_m: tuple[float, float, float],
         offset: QPointF,
     ) -> None:
+        if self.selection_mode:
+            return
         anchor = self._project(anchor_lab_m)
         baseline = anchor + offset
         painter.drawText(baseline, name)
@@ -539,6 +589,12 @@ class ExperimentSceneView(QOpenGLWidget):
                 program.uniformLocation("aspect"), self.width() / max(self.height(), 1)
             )
             functions.glUniform1i(program.uniformLocation("detector"), 0)
+            functions.glUniform1f(program.uniformLocation("display_bin"), float(self._display_bin))
+            functions.glUniform2f(
+                program.uniformLocation("native_shape"),
+                float(self._native_image_shape[1]),
+                float(self._native_image_shape[0]),
+            )
             functions.glUniform1f(program.uniformLocation("low_value"), self._low)
             functions.glUniform1f(program.uniformLocation("high_value"), self._high)
             functions.glUniform1i(
@@ -582,8 +638,31 @@ class ExperimentSceneView(QOpenGLWidget):
             sample = self._project(geometry.sample_lab_m)
             source = self._project(geometry.beam_source_lab_m)
             painter.setPen(QPen(QColor("#e1a34d"), 2))
-            painter.drawLine(source, sample)
-            self._pick_lines.append(("incident beam", geometry.sample_lab_m, source, sample))
+            normal = np.asarray(geometry.sample_axes_lab[2])
+            direction = np.asarray(geometry.beam_direction_lab)
+            denominator = float(normal @ direction)
+            distance = (
+                float(normal @ (np.asarray(geometry.sample_lab_m) - geometry.beam_source_lab_m))
+                / denominator
+                if abs(denominator) > 1e-14
+                else self._radius()
+            )
+            beam_end = self._project(
+                _point(
+                    np.asarray(geometry.beam_source_lab_m)
+                    + direction * (distance if distance > 0 else self._radius())
+                )
+            )
+            painter.drawLine(source, beam_end)
+            if self.selection_mode:
+                delta = beam_end - source
+                length = math.hypot(delta.x(), delta.y())
+                if length > 1e-8:
+                    direction_2d = delta / length
+                    perpendicular = QPointF(-direction_2d.y(), direction_2d.x())
+                    painter.drawLine(beam_end, beam_end - direction_2d * 10 + perpendicular * 5)
+                    painter.drawLine(beam_end, beam_end - direction_2d * 10 - perpendicular * 5)
+            self._pick_lines.append(("incident beam", geometry.beam_source_lab_m, source, beam_end))
             self._draw_pick_label(
                 painter,
                 "incident beam",
@@ -657,13 +736,118 @@ class ExperimentSceneView(QOpenGLWidget):
             painter.drawText(
                 10,
                 self.height() - 10,
-                "Schematic holder/axes; detector and configured sample positions are in metres",
+                painter.fontMetrics().elidedText(
+                    "Schematic holder/axes; detector and configured sample positions are in metres",
+                    Qt.TextElideMode.ElideRight,
+                    self.width() - 20,
+                ),
             )
             if self.focus_name is not None:
                 painter.drawText(10, 20, f"Focused: {self.focus_name} · Back to experiment")
+        if self.selection_mode and geometry is not None:
+            self._draw_device_callouts(painter)
         self._draw_physical_handle(painter)
         painter.end()
         self.painted.emit(self.request_generation, perf_counter(), self._image_identity)
+
+    def _draw_device_callouts(self, painter):
+        # Leaders are selectors, separate from the selected physical arrow/arc.
+        width = max(self.width() - 20, 1)
+        axis_limit = (
+            0
+            if self.height() < 260 and self.selected_object.startswith("Axis ")
+            else (1 if self.height() < 260 else 3)
+        )
+        visible = tuple(
+            item
+            for item in self.callouts
+            if not item[0].startswith("Axis ")
+            or int(item[0].split()[1]) <= axis_limit
+            or item[0] == self.selected_object
+        )
+        for name, point in visible:
+            anchor = self._project(point)
+            height = self.height()
+            metrics = painter.fontMetrics()
+            label_width = metrics.horizontalAdvance(name)
+            middle = (80 + height - 35) / 2
+            positions = {
+                "Beam": (10, 80),
+                "Crystal / material": (10, middle),
+                "Goniometer base": ((width - label_width) / 2, height - 35),
+                "Mount": (width - label_width - 4, height - 35),
+                "Sample": ((width - label_width) / 2, 80),
+                "Detector": (width - label_width - 4, 80),
+                "Mosaic": (width - label_width - 4, middle),
+                "External path": ((width - label_width) / 2, middle),
+            }
+            axes = [item[0] for item in visible if item[0].startswith("Axis ")]
+            axis_index = axes.index(name) if name in axes else 0
+            spacing = metrics.height() + 8
+            x, y = positions.get(name, (10, height - 35 - (len(axes) - 1 - axis_index) * spacing))
+            position = QPointF(x, y)
+            metrics = painter.fontMetrics()
+            region = QRectF(
+                position.x() - 3,
+                position.y() - metrics.ascent() - 3,
+                metrics.horizontalAdvance(name) + 8,
+                metrics.height() + 6,
+            )
+            color = QColor(
+                "#ffcd70" if name in (self.selected_object, self.hover_object) else "#d9e4eb"
+            )
+            painter.setPen(QPen(color, 1, Qt.PenStyle.DashLine))
+            painter.drawLine(anchor, region.center())
+            self._pick_lines.append((name, point, anchor, region.center()))
+            painter.fillRect(region, QColor("#15232c"))
+            painter.setPen(color)
+            painter.drawText(position, name)
+            self._picks.append((name, point, anchor, region))
+            painter.drawEllipse(anchor, 4, 4)
+        # Separate schematic base/mount glyphs share their actual declared anchors.
+        landmarks = dict(self.callouts)
+        for name, radius in (("Goniometer base", 12), ("Mount", 7)):
+            if name not in landmarks:
+                continue
+            point = self._project(landmarks[name])
+            painter.setPen(QPen(QColor("#b3afc5"), 2))
+            painter.drawEllipse(point, radius, radius / 2)
+        painter.setPen(QColor("#d9e4eb"))
+        tip = self._project(
+            _point(
+                np.asarray(self.geometry.sample_lab_m)
+                + np.asarray(self.geometry.sample_axes_lab[2]) * self._radius() * 0.14
+            )
+        )
+        painter.drawText(tip, "sample +n")
+        reference = self._project(landmarks["Detector"])
+        painter.drawLine(reference - QPointF(5, 0), reference + QPointF(5, 0))
+        painter.drawLine(reference - QPointF(0, 5), reference + QPointF(0, 5))
+        painter.drawText(reference + QPointF(7, 0), "reference")
+        corners = self.geometry.detector_corners_lab_m
+        for index, name in ((1, "column"), (2, "row")):
+            direction = np.asarray(corners[index]) - corners[0]
+            direction /= np.linalg.norm(direction)
+            endpoint = self._project(
+                _point(np.asarray(landmarks["Detector"]) + direction * self._radius() * 0.14)
+            )
+            painter.drawLine(reference, endpoint)
+            painter.drawText(endpoint + (QPointF(4, -5) if index == 1 else QPointF(4, 10)), name)
+        # Fixed LAB triad follows the camera basis; sample axes are a different frame.
+        origin = QPointF(self.width() / 2, 52)
+        base = np.asarray(self.geometry.sample_lab_m)
+        projected = self._project(tuple(base))
+        for axis, color, name in zip(
+            np.eye(3),
+            ("#ef8880", "#9cd6ae", "#92c6fa"),
+            ("LAB +X", "LAB +Y", "LAB +Z"),
+            strict=True,
+        ):
+            delta = self._project(_point(base + axis * self._radius() * 0.2)) - projected
+            end = origin + delta
+            painter.setPen(QPen(QColor(color), 2))
+            painter.drawLine(origin, end)
+            painter.drawText(end, name)
 
     def set_physical_handle(self, handle: PhysicalHandle | None) -> None:
         if handle is not None:
@@ -709,6 +893,8 @@ class ExperimentSceneView(QOpenGLWidget):
             painter.drawLine(end, end - tangent * 12 + normal * 6)
             painter.drawLine(end, end - tangent * 12 - normal * 6)
         painter.setPen(QColor("#ffcd70"))
+        if self.selection_mode:
+            return  # The exact selected parameter and units are already visible inline.
         painter.drawText(
             QRectF(10, 30, max(1, self.width() - 20), 80),
             Qt.TextFlag.TextWordWrap,
@@ -717,9 +903,23 @@ class ExperimentSceneView(QOpenGLWidget):
         )
 
     def _handle_hit(self, position) -> bool:
-        return any(
-            math.hypot(p.x() - position.x(), p.y() - position.y()) <= 12 for p in self._handle_path
-        )
+        for start, end in zip(self._handle_path[:-1], self._handle_path[1:], strict=True):
+            delta = end - start
+            norm2 = delta.x() ** 2 + delta.y() ** 2
+            t = min(
+                1,
+                max(
+                    0,
+                    ((position - start).x() * delta.x() + (position - start).y() * delta.y())
+                    / max(norm2, 1e-12),
+                ),
+            )
+            if (
+                math.hypot((position - start - delta * t).x(), (position - start - delta * t).y())
+                <= 12
+            ):
+                return True
+        return False
 
     def cancel_physical_gesture(self) -> None:
         if self._physical_drag:
@@ -731,6 +931,18 @@ class ExperimentSceneView(QOpenGLWidget):
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape and self._physical_drag:
             self.cancel_physical_gesture()
+            event.accept()
+        elif (
+            self.selection_mode
+            and self.physical_handle is not None
+            and event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+        ):
+            value = self.physical_handle.value + self.keyboard_step * (
+                -1 if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Down) else 1
+            )
+            self.physical_started.emit()
+            self.physical_preview.emit(value)
+            self.physical_committed.emit(value)
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -766,7 +978,18 @@ class ExperimentSceneView(QOpenGLWidget):
             self.physical_started.emit()
 
     def mouseMoveEvent(self, event) -> None:
-        if self._last is None or not event.buttons():
+        if not event.buttons():
+            if self.selection_mode:
+                hit = self._pick_at(event.position())
+                name = "" if hit is None else hit[0]
+                if name != self.hover_object:
+                    self.hover_object = name
+                    self.setToolTip(
+                        "Select " + name if name else "Empty drag orbits; right drag pans"
+                    )
+                    self.update()
+            return
+        if self._last is None:
             return
         if self._physical_drag:
             handle = self._gesture_handle
@@ -814,6 +1037,60 @@ class ExperimentSceneView(QOpenGLWidget):
         self._last = event.position()
         self._request_camera()
 
+    def _pick_at(self, position):
+        hit = next(
+            (
+                (name, target)
+                for name, target, _anchor, region in reversed(self._picks)
+                if region.contains(position)
+            ),
+            None,
+        )
+        if hit is None and self.selection_mode:
+            hit = next(
+                (
+                    (name, target)
+                    for name, target, polygon in reversed(self._pick_polygons)
+                    if polygon.containsPoint(position, Qt.FillRule.OddEvenFill)
+                ),
+                None,
+            )
+        if hit is None:
+            near = sorted(
+                (math.hypot(anchor.x() - position.x(), anchor.y() - position.y()), name, target)
+                for name, target, anchor, _region in self._picks
+            )
+            if near and near[0][0] <= 16:
+                hit = near[0][1:]
+        if hit is None:
+            for name, target, start, end in self._pick_lines:
+                dx, dy = end.x() - start.x(), end.y() - start.y()
+                fraction = min(
+                    max(
+                        ((position.x() - start.x()) * dx + (position.y() - start.y()) * dy)
+                        / max(dx * dx + dy * dy, 1e-12),
+                        0,
+                    ),
+                    1,
+                )
+                distance = math.hypot(
+                    position.x() - start.x() - fraction * dx,
+                    position.y() - start.y() - fraction * dy,
+                )
+                if distance <= 8:
+                    hit = name, target
+                    break
+        if hit is None:
+            hit = next(
+                (
+                    (name, target)
+                    for name, target, polygon in reversed(self._pick_polygons)
+                    if polygon.containsPoint(position, Qt.FillRule.OddEvenFill)
+                ),
+                None,
+            )
+        return hit
+
     def mouseReleaseEvent(self, event) -> None:
         if self._physical_drag:
             if event.button() != Qt.MouseButton.LeftButton:
@@ -828,51 +1105,12 @@ class ExperimentSceneView(QOpenGLWidget):
             and self.geometry is not None
             and event.button() == Qt.MouseButton.LeftButton
         ):
-            position = event.position()
-            hit = next(
-                (
-                    (name, target)
-                    for name, target, _anchor, region in reversed(self._picks)
-                    if region.contains(position)
-                ),
-                None,
-            )
-            if hit is None:
-                near = sorted(
-                    (math.hypot(anchor.x() - position.x(), anchor.y() - position.y()), name, target)
-                    for name, target, anchor, _region in self._picks
-                )
-                if near and near[0][0] <= 16:
-                    hit = near[0][1:]
-            if hit is None:
-                for name, target, start, end in self._pick_lines:
-                    dx, dy = end.x() - start.x(), end.y() - start.y()
-                    fraction = min(
-                        max(
-                            ((position.x() - start.x()) * dx + (position.y() - start.y()) * dy)
-                            / max(dx * dx + dy * dy, 1e-12),
-                            0,
-                        ),
-                        1,
-                    )
-                    distance = math.hypot(
-                        position.x() - start.x() - fraction * dx,
-                        position.y() - start.y() - fraction * dy,
-                    )
-                    if distance <= 8:
-                        hit = name, target
-                        break
-            if hit is None:
-                hit = next(
-                    (
-                        (name, target)
-                        for name, target, polygon in reversed(self._pick_polygons)
-                        if polygon.containsPoint(position, Qt.FillRule.OddEvenFill)
-                    ),
-                    None,
-                )
+            hit = self._pick_at(event.position())
             if hit is not None:
-                self.focus(*hit)
+                if self.selection_mode:
+                    self.object_picked.emit(hit[0])
+                else:
+                    self.focus(*hit)
         self._press = self._last = None
 
     def wheelEvent(self, event) -> None:
@@ -900,12 +1138,12 @@ class ExperimentScenePanel(QWidget):
             button = QPushButton(title)
             button.clicked.connect(lambda _checked=False, name=preset: self.view.preset(name))
             index = len(self.preset_buttons)
-            controls.addWidget(button, 0, index)
+            controls.addWidget(button, index // 3, index % 3)
             self.preset_buttons[preset] = button
         layout.addLayout(controls)
         self.view = ExperimentSceneView()
         layout.addWidget(self.view, 1)
-        hint = QLabel(
+        hint = self.hint = QLabel(
             "Drag to orbit · right drag to pan · wheel to zoom · click a landmark to inspect"
         )
         hint.setWordWrap(True)
