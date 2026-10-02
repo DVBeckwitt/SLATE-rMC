@@ -777,7 +777,8 @@ class ExperimentSceneView(QOpenGLWidget):
             item
             for item in self.callouts
             if (
-                item[0] not in ("Crystal / material", "Mosaic", "External path")
+                item[0] in ("Beam", "Sample", "Detector")
+                or item[0] == self.hover_object
                 or item[0] == self.selected_object
             )
             and (
@@ -1137,26 +1138,27 @@ class ExperimentSceneView(QOpenGLWidget):
 
 
 class ExperimentScenePanel(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, camera_controls: bool = True) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        controls = QGridLayout()
         self.preset_buttons: dict[str, QPushButton] = {}
-        for title, preset in (
-            ("Back to experiment", "context"),
-            ("Front", "front"),
-            ("Side", "side"),
-            ("Along beam", "beam"),
-            ("Detector normal", "detector"),
-            ("Sample", "sample"),
-        ):
-            button = QPushButton(title)
-            button.clicked.connect(lambda _checked=False, name=preset: self.view.preset(name))
-            index = len(self.preset_buttons)
-            controls.addWidget(button, index // 3, index % 3)
-            self.preset_buttons[preset] = button
-        layout.addLayout(controls)
+        if camera_controls:
+            controls = QGridLayout()
+            for title, preset in (
+                ("Back to experiment", "context"),
+                ("Front", "front"),
+                ("Side", "side"),
+                ("Along beam", "beam"),
+                ("Detector normal", "detector"),
+                ("Sample", "sample"),
+            ):
+                button = QPushButton(title)
+                button.clicked.connect(lambda _checked=False, name=preset: self.view.preset(name))
+                index = len(self.preset_buttons)
+                controls.addWidget(button, index // 3, index % 3)
+                self.preset_buttons[preset] = button
+            layout.addLayout(controls)
         self.view = ExperimentSceneView()
         layout.addWidget(self.view, 1)
         hint = self.hint = QLabel(

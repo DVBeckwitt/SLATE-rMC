@@ -915,7 +915,7 @@ class ShellWindow(QMainWindow):
                 and self._pending_open is None
                 and self._active_kind != "open"
             ):
-                panel._fresh_live_pending = True
+                panel._fresh_live_pending = False
                 self._request_simulation(
                     "load_default",
                     json.dumps(

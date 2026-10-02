@@ -1353,8 +1353,8 @@ Live requests complete canonical validation then the existing Simulator Run. The
 existing global worker and one newest pending snapshot remain authoritative; project,
 epoch and generation reject obsolete publications. Stop, Live off, workspace exit,
 route changes, Open and Close cancel timers/requests and invalidate late continuation.
-Fresh first visits may visibly enable Live after default admission. Saved/imported/
-recovered projects restore with Live off. Validation failure does not retry unchanged
+First visits admit default geometry with Live off; Run/update or explicit Live
+starts intensity execution. Saved/imported/recovered projects restore with Live off. Validation failure does not retry unchanged
 input. The last genuine image stays historical while updating; profiles/export metadata
 remain bound to that displayed frame. Live performs no automatic configured figure
 export and preserves the explicit export preference. Defaults remain nominal 64 source

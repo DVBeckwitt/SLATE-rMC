@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -55,6 +56,7 @@ from simulation_state import (
     SimulationReference,
     simulation_draft_document,
 )
+from simulation_widgets import StatusLabel
 
 
 class ArrayEditor(QWidget):
@@ -318,8 +320,17 @@ class SimulatorPanel(QWidget):
         self._live_timer.setSingleShot(True)
         self._live_timer.setInterval(300)
         self._live_timer.timeout.connect(self.request_update)
+        self.setStyleSheet(
+            "QPushButton, QToolButton { padding: 4px 8px; }"
+            "QTabBar::tab { padding: 5px 10px; }"
+            "QLineEdit:focus, QComboBox:focus, QPushButton:focus { border: 1px solid #63b9c9; }"
+            "QPushButton:checked { background-color: #235562; }"
+        )
+        self._maximized_view = None
+        self._split_sizes = [650, 530]
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
         controls = QHBoxLayout()
         self.live = QCheckBox("&Live")
         self.live.setToolTip(
@@ -352,7 +363,12 @@ class SimulatorPanel(QWidget):
         self.cancel_button = QPushButton("&Stop")
         controls.addWidget(self.run_button)
         controls.addWidget(self.cancel_button)
-        controls.addStretch()
+        self.summary = QLabel("Open a configuration to begin")
+        controls.addWidget(self.summary, 1)
+        details = QPushButton("Details")
+        details.setToolTip("Full operation messages, output identity and inspection details")
+        details.clicked.connect(self.show_details)
+        controls.addWidget(details)
         controls.addWidget(self.advanced_button)
         secondary.addRow(self.load_button, self.validate_button)
         secondary.addRow(self.inspect_button, self.resume_button)
@@ -382,12 +398,13 @@ class SimulatorPanel(QWidget):
         transfer_actions.addWidget(self.transfer_target)
         transfer_actions.addWidget(self.transfer_button)
         action_layout.addLayout(transfer_actions)
-        self.status = QLabel(
-            "Load a supported rasim-simulation-v2 configuration. No acquisition or fit is required."
+        self.status = StatusLabel(
+            "Load a supported rasim-simulation-v2 configuration. No acquisition or fit is required.",
+            self,
         )
         self.status.setWordWrap(True)
         self.status.setMinimumHeight(42)
-        layout.addWidget(self.status)
+        self.status.hide()
         self.draft_kind = QComboBox()
         self.draft_kind.addItem("Independent configured YAML", "configured")
         self.draft_kind.addItem("Independent native recipe", "native")
@@ -469,13 +486,18 @@ class SimulatorPanel(QWidget):
         )
         self.detector.layout().addWidget(self.profile_controls_scroll, 3, 0, 1, 2)
         self.profile_controls_scroll.hide()
-        self.profile_controls_button = QPushButton("Profile controls")
+        self.profile_controls_button = QPushButton("Profiles")
         self.profile_controls_button.setCheckable(True)
         self.profile_controls_button.setToolTip(
             "Show exact profile position, widths, measure, follow/pin and ROI controls."
         )
         self.profile_controls_button.toggled.connect(self.profile_controls_scroll.setVisible)
         self.detector.fit_button.parentWidget().layout().addWidget(self.profile_controls_button)
+        for label in self.detector.fit_button.parentWidget().findChildren(QLabel):
+            label.hide()
+        self.detector.fit_button.setText("Fit image")
+        self.detector.native_button.setText("1:1")
+        self.detector.box_button.setText("Zoom box")
         self.detector.profile_work_required = True
         self.detector.coalesce_profile_updates = True
         for widget in (
@@ -507,10 +529,34 @@ class SimulatorPanel(QWidget):
         )
         self.figures.setChecked(True)
         action_layout.addWidget(self.figures)
-        self.identity = QLabel("Awaiting quantitative snapshot")
+        self.identity = StatusLabel("Awaiting quantitative snapshot", self)
         self.identity.setWordWrap(True)
         self.identity.setMinimumHeight(46)
-        layout.addWidget(self.identity)
+        self.identity.hide()
+        self.status.changed.connect(self.update_summary)
+        self.identity.changed.connect(self.update_summary)
+        self.details_dialog = QDialog(self)
+        self.details_dialog.setWindowTitle("Simulator details")
+        self.details_dialog.resize(720, 480)
+        details_layout = QVBoxLayout(self.details_dialog)
+        self.details_text = QPlainTextEdit()
+        self.details_text.setReadOnly(True)
+        self.details_text.setAccessibleName("Full Simulator status, provenance and display details")
+        details_layout.addWidget(self.details_text)
+        self.error_banner = QLabel()
+        self.error_banner.setWordWrap(True)
+        self.error_banner.hide()
+        layout.insertWidget(1, self.error_banner)
+        self.scene.maximize_button.clicked.connect(lambda: self.maximize_view("scene"))
+        self.detector_maximize = QPushButton("Maximize")
+        self.detector_maximize.clicked.connect(lambda: self.maximize_view("detector"))
+        self.detector.fit_button.parentWidget().layout().addWidget(self.detector_maximize)
+        for widget in (self.detector.profile_status, self.detector.cursor_label):
+            self.detector.layout().removeWidget(widget)
+            self.profile_controls_scroll.widget().layout().addWidget(
+                widget, self.profile_controls_scroll.widget().layout().rowCount(), 0, 1, 6
+            )
+        self.profile_controls_scroll.setMaximumHeight(240)
         self.draft_kind.currentIndexChanged.connect(self._kind_changed)
         self.load_button.clicked.connect(self.load)
         self.validate_button.clicked.connect(self.validate)
@@ -537,6 +583,78 @@ class SimulatorPanel(QWidget):
         self.detector.view.view_state_changed.connect(self.scene.texture)
         self.detector.view.display_bin_changed.connect(lambda _bin: self.scene.texture())
         self.refresh()
+
+    def maximize_view(self, name):
+        if self._maximized_view == name:
+            self.outputs.show()
+            self.scene.show()
+            self.dashboard_splitter.setSizes(self._split_sizes)
+            self._maximized_view = None
+        else:
+            if self._maximized_view is None:
+                self._split_sizes = self.dashboard_splitter.sizes()
+            self.outputs.setVisible(name == "detector")
+            self.scene.setVisible(name == "scene")
+            self._maximized_view = name
+        self.scene.maximize_button.setText(
+            "Restore" if self._maximized_view == "scene" else "Maximize"
+        )
+        self.detector_maximize.setText(
+            "Restore" if self._maximized_view == "detector" else "Maximize"
+        )
+
+    def show_details(self):
+        self.update_summary()
+        self.details_dialog.show()
+        self.details_dialog.raise_()
+
+    def update_summary(self):
+        if not hasattr(self, "details_text"):
+            return
+        status = self.status.text()
+        lowered = status.lower()
+        error = any(
+            word in lowered
+            for word in ("failed", "error", "rejected", "invalid", "could not", "cannot")
+        )
+        busy = self.shell._active_kind == "simulation" or self.shell._pending_simulation is not None
+        if error:
+            operation = "Error — see details"
+        elif busy and ("stop" in lowered or "cancel" in lowered):
+            operation = "Stopping"
+        elif busy:
+            operation = (
+                "Updating geometry"
+                if self.shell._simulation_operation == "scene_geometry"
+                else "Updating"
+            )
+        elif "stop" in lowered or "cancel" in lowered:
+            operation = "Stopped"
+        else:
+            operation = "Ready" if self.active_draft is not None else "No draft"
+        image = "No intensity image"
+        if self.frame is not None:
+            image = "Current image" if self.frame.draft == self.active_draft else "Historical image"
+            image += " · nominal"
+        self.summary.setText(operation + " · " + image)
+        self.summary.setToolTip(status + "\n" + self.identity.text())
+        self.error_banner.setText(status if error else "")
+        self.error_banner.setVisible(error)
+        self.details_text.setPlainText(
+            "\n\n".join(
+                (
+                    status,
+                    self.identity.text(),
+                    self.scene.note.toolTip(),
+                    self.detector.contrast_note.toolTip(),
+                    self.detector.profile_status.text(),
+                    self.detector.cursor_label.text(),
+                    "No output manifest"
+                    if self.frame is None
+                    else json.dumps(json.loads(self.frame.manifest), indent=2),
+                )
+            )
+        )
 
     def begin_slider_drag(self, key):
         self.finish_slider_drag()
@@ -618,7 +736,11 @@ class SimulatorPanel(QWidget):
         self.live.blockSignals(False)
         self.finish_slider_drag()
         self.flush_quick_edit()
+        self.scene.select_parameter()
         self._supersede()
+        self.status.setText(
+            "Stopped; latest draft retained. Pending work is canceled cooperatively."
+        )
         self.refresh()
 
     def update_failed(self, context):
@@ -983,6 +1105,7 @@ class SimulatorPanel(QWidget):
         self.redo_button.setEnabled(bool(history.redo_actions))
         self.dashboard.sync()
         self.scene.sync()
+        self.update_summary()
 
     def _transfer_source_context(self):
         return (
@@ -1539,6 +1662,14 @@ class SimulatorPanel(QWidget):
             return
         arrays = list(frame.arrays)
         if frame.image is not None:
+            # Reopened exports retain inspection arrays; replace them with this query.
+            inspection_names = {
+                "horizontal_profile",
+                "vertical_profile",
+                "horizontal_support",
+                "vertical_support",
+            }
+            arrays = [(name, array) for name, array in arrays if name not in inspection_names]
             arrays.append(("image", frame.image))
             manifest["inspection_query"] = query
             manifest["inspection_identity"] = [

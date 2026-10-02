@@ -4357,8 +4357,8 @@ slider navigation feed the existing immutable draft/history owners. Advanced ret
 full schema, routing, exports, transfers, inspection and history.
 
 Live validates then runs the canonical configured/native Simulator after a 300 ms pause,
-using the existing one-worker latest-request lifecycle. Fresh default visits visibly
-start an initial preview; ordinary saved/imported/recovered Open leaves Live off.
+using the existing one-worker latest-request lifecycle. Default visits load geometry with Live off; explicit Live or Run/update starts
+intensity work. Ordinary saved/imported/recovered Open leaves Live off.
 Stop and project/workspace/route changes reject late work. Genuine displayed frames and
 exact profiles retain their historical identity during updates. See CONTRACTS.md and
 VALIDATION.md for incidence applicability, scalar navigation and evidence limits.
@@ -4367,3 +4367,30 @@ Implementation receipts use canceled-entry Run and controlled lifecycle fixtures
 non-solving admission and genuine saved display outputs. No fresh forward science or
 live completion-time qualification is claimed. Root decides B029 closure; the original
 25/46 detailed conditions and 5/16 assignments and existing open defects are unchanged.
+
+
+### Simulator usability follow-up (2026-10-02)
+
+The scene and detector share a resizable workspace with independent Maximize/Restore.
+Camera presets, Reset and selected-device Focus change presentation only. Beam,
+Sample, Angle, Detector and Mosaic select direct common fields with declared units
+and frames; Fine adjust / more retains the existing exact slider and keyboard step.
+Angle denotes the declared first axis. It is an incidence convenience only under
+the canonical +X-axis/+Y-beam applicability conditions; native LAB poses declare no
+motor chain. Selection survives a draft refresh. One gesture still owns one Undo;
+Escape restores it and Stop retains the latest declaration.
+
+The primary row shows operation and current/historical nominal-image state. Details
+retains complete errors, draft/output provenance and the immutable output manifest.
+Range and Profiles disclose secondary controls. Compact numbers retain their full
+input string on focus and in tooltips; focus alone never commits a rounded value.
+Auto 99%, exposure and display binning retain their existing measure and raw arrays.
+Re-export of a reopened result replaces saved inspection vectors with the current
+exact profile query, preventing duplicate export-array names.
+
+Opening Simulator loads the default geometry with Live off. Explicit Run/update or
+Live starts intensity work; view actions do not. Save/Open retains declarations and
+Live off; Reopen saved snapshot performs the existing exact-hash result admission.
+Focused external Qt checks reuse genuine saved images, direct raw-pixel sums and
+controlled callbacks stopped before forward execution. Layout/action counts and
+software checks add no scientific convergence, fit or release qualification.

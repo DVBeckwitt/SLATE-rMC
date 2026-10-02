@@ -7,14 +7,25 @@ import numpy as np
 from experiment_scene import ExperimentScenePanel, PhysicalHandle
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShortcut
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 from simulation_dashboard import ScalarControl
 from simulation_state import simulation_draft_document
+from simulation_widgets import NumberEdit
 
 
 class SimulatorScene(ExperimentScenePanel):
     def __init__(self, simulator):
-        super().__init__(simulator)
+        super().__init__(simulator, camera_controls=False)
         self.simulator = simulator
         self.current_draft = None
         self.state = None
@@ -40,10 +51,52 @@ class SimulatorScene(ExperimentScenePanel):
         self.view.physical_committed.connect(self.finish)
         self.view.physical_canceled.connect(self.cancel)
         self.view.camera_changed.connect(self.update_handle)
-        self.hint.setMinimumHeight(2 * self.hint.fontMetrics().lineSpacing())
+        # Keep the shared physical editor's camera controls unchanged.
+        camera = QHBoxLayout()
+        self.camera = QComboBox()
+        self.camera.setAccessibleName("Scene camera preset; view only")
+        for label, name in (
+            ("Experiment", "context"),
+            ("Front", "front"),
+            ("Side", "side"),
+            ("Along beam", "beam"),
+            ("Detector normal", "detector"),
+            ("Sample", "sample"),
+        ):
+            self.camera.addItem(label, name)
+        self.camera.activated.connect(lambda: self.view.preset(self.camera.currentData()))
+        camera.addWidget(self.camera, 1)
+        reset = QPushButton("Reset")
+        reset.setToolTip("Restore the experiment camera; view only")
+        reset.clicked.connect(lambda: self.view.preset("context"))
+        camera.addWidget(reset)
+        self.focus_button = QPushButton("Focus")
+        self.focus_button.setToolTip("Frame the selected device; view only")
+        self.focus_button.clicked.connect(self.focus_device)
+        camera.addWidget(self.focus_button)
+        self.maximize_button = QPushButton("Maximize")
+        camera.addWidget(self.maximize_button)
+        self.layout().insertLayout(0, camera)
+        self.hint.hide()
         self.hint.setToolTip(
             "Click a device or arrow to edit. Empty left drag: orbit; right drag: pan; wheel: zoom. Esc cancels a handle; Undo reverses one gesture."
         )
+        self.device_buttons = {}
+        device_row = QHBoxLayout()
+        for label, device in (
+            ("Beam", "Beam"),
+            ("Sample", "Sample"),
+            ("Angle", "Axis 1"),
+            ("Detector", "Detector"),
+            ("Mosaic", "Mosaic"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip("Select " + device + "; edit the declared values below")
+            button.clicked.connect(lambda _checked=False, name=device: self.pick(name))
+            device_row.addWidget(button)
+            self.device_buttons[device] = button
+        self.layout().addLayout(device_row)
         self.devices = QComboBox()
         self.devices.setAccessibleName("Scene device selection; same targets as figure labels")
         self.devices.addItems(
@@ -61,12 +114,40 @@ class SimulatorScene(ExperimentScenePanel):
                 "Identity",
             ]
         )
+        self.devices.setToolTip("All devices and secondary declarations")
         self.layout().addWidget(self.devices)
         self.parameter = QComboBox()
         self.parameter.setAccessibleName("Selected device parameter")
-        self.layout().addWidget(self.parameter)
+        self.parameter.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.parameter.setMinimumContentsLength(15)
+        self.fields = QWidget()
+        self.fields_layout = QGridLayout(self.fields)
+        self.fields_layout.setContentsMargins(0, 0, 0, 0)
+        self.common_controls = {}
+        self._common_keys = ()
+        self.fields_scroll = QScrollArea()
+        self.fields_scroll.setWidgetResizable(True)
+        self.fields_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.fields_scroll.setWidget(self.fields)
+        self.layout().addWidget(self.fields_scroll)
+        fine_row = QHBoxLayout()
+        self.fine_button = QPushButton("Fine adjust / more")
+        self.fine_button.setCheckable(True)
+        fine_row.addWidget(self.fine_button)
+        undo, redo = QPushButton("Undo"), QPushButton("Redo")
+        undo.clicked.connect(lambda: simulator.history_step(True))
+        redo.clicked.connect(lambda: simulator.history_step(False))
+        fine_row.addWidget(undo)
+        fine_row.addWidget(redo)
+        self.layout().addLayout(fine_row)
+        self.fine = QWidget()
+        fine_layout = QVBoxLayout(self.fine)
+        fine_layout.setContentsMargins(0, 0, 0, 0)
+        fine_layout.addWidget(self.parameter)
         self.control = ScalarControl("Select a parameter", "declared units", 0.0)
-        self.layout().addWidget(self.control)
+        fine_layout.addWidget(self.control)
         row = QHBoxLayout()
         self.step = QLineEdit("0.0001")
         self.step.setMaximumWidth(100)
@@ -75,12 +156,10 @@ class SimulatorScene(ExperimentScenePanel):
         label.setBuddy(self.step)
         row.addWidget(label)
         row.addWidget(self.step)
-        undo, redo = QPushButton("Undo"), QPushButton("Redo")
-        undo.clicked.connect(lambda: simulator.history_step(True))
-        redo.clicked.connect(lambda: simulator.history_step(False))
-        row.addWidget(undo)
-        row.addWidget(redo)
-        self.layout().addLayout(row)
+        fine_layout.addLayout(row)
+        self.layout().addWidget(self.fine)
+        self.fine.hide()
+        self.fine_button.toggled.connect(self.fine.setVisible)
         self.note = QLabel("Load a draft through Menu > Advanced parameters.")
         self.note.setWordWrap(True)
         self.layout().addWidget(self.note)
@@ -318,21 +397,26 @@ class SimulatorScene(ExperimentScenePanel):
         self.parameter.clear()
         for key, _group, label, unit, _value, _integer, _probability in self._entries:
             self.parameter.addItem(f"{label} [{unit}]", key)
-        index = self.parameter.findData(old)
+        index = next((i for i, entry in enumerate(self._entries) if entry[0] == old), 0)
         self.parameter.setCurrentIndex(max(0, index))
         self._syncing = False
         self.select_parameter()
+        self.sync_common()
 
     def select_parameter(self, *_):
         if self._syncing:
             return
         index = self.parameter.currentIndex()
-        self._key = self.parameter.currentData()
+        self._key = self._entries[index][0] if 0 <= index < len(self._entries) else None
         available = 0 <= index < len(self._entries)
         self.control.setVisible(available)
         self.step.setEnabled(available)
         device = self.devices.currentText()
         self.view.selected_object = device
+        for name, button in self.device_buttons.items():
+            button.setChecked(name == device)
+            button.setEnabled(self.devices.findText(name) >= 0 and self.simulator._drag is None)
+        self.focus_button.setEnabled(self.state is not None)
         legend = "Left drag: orbit; right: pan; wheel: zoom."
         if device in ("Sample", "Mount"):
             legend = "Sample normal +n: blue."
@@ -362,9 +446,9 @@ class SimulatorScene(ExperimentScenePanel):
             note = "Physical distribution parameters; no unqualified probability cone. Angular integration controls belong to Sampling."
         if self.state is not None:
             note += f" Mean-ray glancing incidence (derived): {self.state.incidence_deg:.6g} deg. Geometry revision {self.state.draft.revision}; sample patch/holder schematic where support is unbounded."
-        self.note.setToolTip(note)
+        self.note.setToolTip(note + "\n" + self.hint.text())
         if self.state is not None and available:
-            note = f"Geometry r{self.state.draft.revision}; incidence {self.state.incidence_deg:.6g} deg (derived). Full transforms: Advanced parameters."
+            note = f"Incidence {self.state.incidence_deg:.6g} deg (derived) · " + legend
         elif (
             self.state is not None
             and device in ("Mount", "Goniometer base")
@@ -372,6 +456,7 @@ class SimulatorScene(ExperimentScenePanel):
         ):
             note = "Native LAB sample pose; no separately declared mount or motor chain. See Advanced parameters."
         self.note.setText(note)
+
         if available:
             _key, _group, label, unit, value, integer, probability = self._entries[index]
             self.control.integer, self.control.probability = integer, probability
@@ -392,6 +477,86 @@ class SimulatorScene(ExperimentScenePanel):
             self.step.setText(repr(self.control.step))
             self.view.keyboard_step = self.control.step
         self.update_handle()
+
+    def focus_device(self):
+        target = next(
+            (point for name, point in self.view.callouts if name == self.devices.currentText()),
+            None,
+        )
+        if target is not None:
+            self.view.focus(self.devices.currentText().lower(), target)
+
+    def activate_field(self, key):
+        index = next((i for i, entry in enumerate(self._entries) if entry[0] == key), -1)
+        if index >= 0:
+            self.parameter.setCurrentIndex(index)
+
+    def edit_field(self, key, text):
+        self.activate_field(key)
+        self.edit(text)
+
+    def sync_common(self):
+        device = self.devices.currentText()
+        entries = self._entries
+        if device == "Beam":
+            entries = [
+                e for e in entries if e[0][0][-1] in ("mean_origin_lab_m", "mean_wavelength_A")
+            ]
+        elif device == "Detector":
+            entries = [
+                e
+                for e in entries
+                if e[0][0][-1] in ("translation_m", "about_row_axis_deg", "about_column_axis_deg")
+            ]
+        elif device not in (
+            "Sample",
+            "Mount",
+            "Goniometer base",
+            "Mosaic",
+        ) and not device.startswith("Axis "):
+            entries = []
+        keys = tuple(e[0] for e in entries)
+        if keys != self._common_keys:
+            while self.fields_layout.count():
+                item = self.fields_layout.takeAt(0)
+                item.widget().hide()
+                item.widget().deleteLater()
+            self.common_controls.clear()
+            self._common_keys = keys
+            for i, (key, _group, label, unit, _value, _integer, _probability) in enumerate(entries):
+                field = NumberEdit()
+                field.setAccessibleName(f"{device}: {label}, exact {unit}")
+                short = (
+                    label.removeprefix("Sample offset ")
+                    .removeprefix("Detector ")
+                    .removeprefix("Beam origin ")
+                )
+                if device.startswith("Axis "):
+                    short = (
+                        "Incident angle"
+                        if label.startswith("Incident angle")
+                        else "Declared axis angle"
+                    )
+                caption = QLabel(f"{short} ({unit})")
+                caption.setWordWrap(False)
+                caption.setBuddy(field)
+                caption.setToolTip(field.accessibleName())
+                row, col = i, 0
+                self.fields_layout.addWidget(caption, row, col)
+                self.fields_layout.addWidget(field, row, col + 1)
+                field.activated.connect(lambda k=key: self.activate_field(k))
+                field.committed.connect(lambda value, k=key: self.edit_field(k, value))
+                self.common_controls[key] = field
+        for key, _group, _label, _unit, value, integer, _probability in entries:
+            self.common_controls[key].setText(str(value) if integer else repr(float(value)))
+        self.fields_scroll.setVisible(bool(entries))
+        if entries:
+            rows = len(entries)
+            row_height = max(field.sizeHint().height() for field in self.common_controls.values())
+            height = min(
+                180, rows * row_height + (rows - 1) * self.fields_layout.verticalSpacing() + 8
+            )
+            self.fields_scroll.setFixedHeight(height)
 
     def update_handle(self):
         if (
@@ -487,6 +652,9 @@ class SimulatorScene(ExperimentScenePanel):
         if self._key is not None:
             self.devices.setEnabled(False)
             self.parameter.setEnabled(False)
+            self.fields.setEnabled(False)
+            for button in self.device_buttons.values():
+                button.setEnabled(False)
             self.simulator.begin_slider_drag(self._key)
 
     def preview(self, value):
@@ -501,6 +669,8 @@ class SimulatorScene(ExperimentScenePanel):
             self.simulator.end_slider_drag(self._key, format(value, ".17g"))
             self.devices.setEnabled(True)
             self.parameter.setEnabled(True)
+            self.fields.setEnabled(True)
+            self.select_parameter()
 
     def cancel(self):
         if self.view._physical_drag:
@@ -509,6 +679,7 @@ class SimulatorScene(ExperimentScenePanel):
         s = self.simulator
         self.devices.setEnabled(True)
         self.parameter.setEnabled(True)
+        self.fields.setEnabled(True)
         s._pending_quick = None
         action = s._drag_action
         s._drag_timer.stop()
@@ -519,10 +690,13 @@ class SimulatorScene(ExperimentScenePanel):
             if history.redo_actions and history.redo_actions[-1] is action:
                 history.redo_actions.pop()
                 history.bytes_used -= action.bytes_used
+        self.select_parameter()
 
     def stop(self):
         self.devices.setEnabled(True)
         self.parameter.setEnabled(True)
+        self.fields.setEnabled(True)
+        self.select_parameter()
         # Stop retains the latest draft while ending pointer ownership.
         self.view._physical_drag = False
         self.view._press = self.view._last = None
