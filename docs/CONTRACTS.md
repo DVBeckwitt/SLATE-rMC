@@ -23,6 +23,16 @@ optimizer state, residuals and Jacobians are not replayed.
 
 Contract API version: **17**. Trace schema version: **4**. Reference pack version: **1**.
 
+T44 adds native rectangular-window storage to `DetectorSpatialKernels.integrate_native_pixels`.
+`row_offset` and `column_offset` locate the window without changing pixel coordinates or Gaussian
+probability arithmetic. Optional `out` explicitly adds mass to caller-owned writable contiguous
+float64 storage and returns that same array. Invalid inputs fail before deposition; a numerical
+failure during deposition can leave partial contents, which the caller must discard.
+`native_pixel_bounds` encloses the existing column-conditioned traversal and returns half-open
+row/column bounds, or `None` when no pixel is visited. It uses no intensity threshold and retains
+off-panel centers. These are storage controls, not angular error bounds or new physical measures.
+The research and full-image qualification gates are in `tasks/44_ewald_integration_research.md`.
+
 T35 adds explicit fixed-parameter control declarations and an optional local-m0
 axial panel cap. Controls retain the complete physical vector and fixed-value
 provenance; ordinary fits still release every admitted coordinate. The local cap

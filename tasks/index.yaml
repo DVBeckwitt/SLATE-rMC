@@ -208,3 +208,8 @@ tasks:
     branch: codex/bi2te3-mosaic-handoff-repair
     status: GEOMETRY_VALIDATED_NUMERICAL_BOUNDARY_MEASURED_MOSAIC_UNQUALIFIED
     depends_on: [T42]
+  - id: T44
+    file: tasks/44_ewald_integration_research.md
+    branch: codex/ewald-integration-research
+    status: RESEARCH_WINDOWS_VERIFIED_FIRST_CAMPAIGN_CLOSED_FULL_IMAGES_UNQUALIFIED
+    depends_on: [T40]

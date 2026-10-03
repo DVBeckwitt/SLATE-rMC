@@ -534,27 +534,67 @@ class NativeSpatialRegionProjection:
         )
 
 
+@numba.njit(nogil=True, inline="always")
+def _pixel_kernel_parameters(f):
+    sx = math.sqrt(f[0, 0] ** 2 + f[0, 1] ** 2)
+    beta = (f[0, 0] * f[1, 0] + f[0, 1] * f[1, 1]) / (sx * sx)
+    conditional_y = abs(f[0, 0] * f[1, 1] - f[0, 1] * f[1, 0]) / sx
+    return sx, beta, conditional_y
+
+
 @numba.njit(nogil=True)
-def _deposit_gaussian_pixels(
-    mean, factor, mass, shape, nodes, weights, angle_nodes, angle_weights, radius, row_offset
-):
-    image = np.zeros(shape)
+def _gaussian_pixel_bounds(mean, factor, mass, shape, radius):
+    """Enclose the canonical column-conditioned traversal, including off-panel centers."""
+    first_row, stop_row, first_column, stop_column = shape[0], 0, shape[1], 0
     for i in range(len(mean)):
         if mass[i] == 0:
             continue
         mx, my = mean[i]
-        f = factor[i]
-        sx = math.sqrt(f[0, 0] ** 2 + f[0, 1] ** 2)
-        beta = (f[0, 0] * f[1, 0] + f[0, 1] * f[1, 1]) / (sx * sx)
-        conditional_y = abs(f[0, 0] * f[1, 1] - f[0, 1] * f[1, 0]) / sx
+        sx, beta, conditional_y = _pixel_kernel_parameters(factor[i])
+        low = max(0, math.ceil(mx - radius * sx - 0.5))
+        high = min(shape[1] - 1, math.floor(mx + radius * sx + 0.5))
+        if low > high:
+            continue
+        y0, y1 = my + beta * (low - mx), my + beta * (high - mx)
+        yr = 0.5 * abs(beta) + radius * conditional_y
+        bottom = max(0, math.ceil(min(y0, y1) - yr - 0.5))
+        top = min(shape[0] - 1, math.floor(max(y0, y1) + yr + 0.5))
+        if bottom <= top:
+            first_row, stop_row = min(first_row, bottom), max(stop_row, top + 1)
+            first_column, stop_column = min(first_column, low), max(stop_column, high + 1)
+    return first_row, stop_row, first_column, stop_column
+
+
+@numba.njit(nogil=True)
+def _deposit_gaussian_pixels(
+    mean,
+    factor,
+    mass,
+    shape,
+    nodes,
+    weights,
+    angle_nodes,
+    angle_weights,
+    radius,
+    row_offset,
+    column_offset=0,
+    image=None,
+):
+    if image is None:
+        image = np.zeros(shape)
+    for i in range(len(mean)):
+        if mass[i] == 0:
+            continue
+        mx, my = mean[i]
+        sx, beta, conditional_y = _pixel_kernel_parameters(factor[i])
         angle_coefficients = _correlation_angle_coefficients(
             beta * sx, conditional_y, angle_nodes, angle_weights
         )
         corner_xy = np.full((4, 2), np.nan)
         corner_exp = np.empty((angle_coefficients.shape[1], 4))
         for c in range(
-            max(0, math.ceil(mx - radius * sx - 0.5)),
-            min(shape[1] - 1, math.floor(mx + radius * sx + 0.5)) + 1,
+            max(column_offset, math.ceil(mx - radius * sx - 0.5)),
+            min(column_offset + shape[1] - 1, math.floor(mx + radius * sx + 0.5)) + 1,
         ):
             ym = my + beta * (c - mx)
             yr = 0.5 * abs(beta) + radius * conditional_y
@@ -562,7 +602,9 @@ def _deposit_gaussian_pixels(
                 max(row_offset, math.ceil(ym - yr - 0.5)),
                 min(row_offset + shape[0] - 1, math.floor(ym + yr + 0.5)) + 1,
             ):
-                image[r - row_offset, c] += mass[i] * _correlated_rectangle_probability(
+                image[r - row_offset, c - column_offset] += mass[
+                    i
+                ] * _correlated_rectangle_probability(
                     mx,
                     my,
                     sx,
@@ -580,6 +622,20 @@ def _deposit_gaussian_pixels(
                     corner_exp,
                 )
     return image
+
+
+def _pixel_window(shape, row_offset, column_offset):
+    shape = tuple(shape)
+    if len(shape) != 2 or any(type(n) is not int or n <= 0 for n in shape):
+        raise ValueError("detector_shape_rc requires two positive integers")
+    if any(type(n) is not int or n < 0 for n in (row_offset, column_offset)):
+        raise ValueError("pixel offsets must be nonnegative native indices")
+    if any(
+        offset + count > np.iinfo(np.int64).max
+        for offset, count in zip((row_offset, column_offset), shape, strict=True)
+    ):
+        raise ValueError("native window end indices must fit signed 64-bit indexing")
+    return shape
 
 
 @dataclass(frozen=True, slots=True)
@@ -702,6 +758,8 @@ class DetectorSpatialKernels:
         quadrature_order: int,
         gaussian_tail_radius: float,
         row_offset: int = 0,
+        column_offset: int = 0,
+        out: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Integrate the same continuous kernels into [row,column] pixel masses.
 
@@ -710,17 +768,33 @@ class DetectorSpatialKernels:
         backward-flight, outgoing-quadrature and rectangle-quadrature errors.
         Increase quadrature_order to check the last error separately. No image blur, new SF
         evaluation, pixel-center approximation or survivor renormalization occurs.
+
+        Offsets locate a rectangular window in the native panel. If supplied, ``out``
+        is a writable contiguous float64 array of that window's shape: contributions
+        are added to its existing nonnegative mass and the same array is returned.
+        It must not alias kernel inputs or masses. A numerical failure can leave it
+        partially updated; discard that buffer after an exception. Default calls
+        allocate a new array. Neither windowing nor accumulation changes quadrature.
         """
-        shape = tuple(detector_shape_rc)
-        if type(row_offset) is not int or row_offset < 0:
-            raise ValueError("row_offset must be a nonnegative native row index")
-        if len(shape) != 2 or any(type(n) is not int or n <= 0 for n in shape):
-            raise ValueError("detector_shape_rc requires two positive integers")
+        shape = _pixel_window(detector_shape_rc, row_offset, column_offset)
         mass = np.asarray(integrated_mass, dtype=np.float64)
         if mass.shape != (len(self.mean_px),) or np.any(~np.isfinite(mass)) or np.any(mass < 0):
             raise ValueError("integrated_mass must be a finite nonnegative value per kernel")
         nodes, weights = _integration_rule(quadrature_order, gaussian_tail_radius)
         angle_nodes, angle_weights = nodes, weights
+        if out is not None and (
+            not isinstance(out, np.ndarray)
+            or out.dtype != np.float64
+            or out.shape != shape
+            or not out.flags.c_contiguous
+            or not out.flags.writeable
+            or np.any(~np.isfinite(out))
+            or np.any(out < 0)
+            or any(np.shares_memory(out, a) for a in (mass, self.mean_px, self.factor_px))
+        ):
+            raise ValueError(
+                "out must be an independent writable finite nonnegative float64 window"
+            )
         result = _deposit_gaussian_pixels(
             self.mean_px,
             self.factor_px,
@@ -732,10 +806,39 @@ class DetectorSpatialKernels:
             angle_weights,
             float(gaussian_tail_radius),
             row_offset,
+            column_offset,
+            out,
         )
         if np.any(~np.isfinite(result)):
             raise FloatingPointError("integrated spatial mass is nonfinite")
         return result
+
+    def native_pixel_bounds(
+        self,
+        detector_shape_rc: tuple[int, int],
+        *,
+        integrated_mass: ArrayLike,
+        gaussian_tail_radius: float,
+    ) -> tuple[int, int, int, int] | None:
+        """Enclose all visited native pixels as (row start, stop, column start, stop).
+
+        Bounds include the existing Gaussian-tail approximation and retain every
+        positive supplied mass; they apply no intensity cutoff. They enclose the
+        column-conditioned support, which can exceed a marginal-y tail interval.
+        ``None`` means no visited pixel. An enclosing rectangle may contain zeros.
+        Use its offsets with ``integrate_native_pixels`` for an identical cropped
+        contribution. This is a storage bound, never an angular error estimate.
+        """
+        shape = _pixel_window(detector_shape_rc, 0, 0)
+        mass = np.asarray(integrated_mass, dtype=np.float64)
+        if mass.shape != (len(self.mean_px),) or np.any(~np.isfinite(mass)) or np.any(mass < 0):
+            raise ValueError("integrated_mass must be a finite nonnegative value per kernel")
+        if not np.isfinite(gaussian_tail_radius) or gaussian_tail_radius <= 0:
+            raise ValueError("gaussian_tail_radius must be finite and positive")
+        bounds = _gaussian_pixel_bounds(
+            self.mean_px, self.factor_px, mass, shape, float(gaussian_tail_radius)
+        )
+        return None if bounds[0] >= bounds[1] or bounds[2] >= bounds[3] else bounds
 
     def sample_native_pixel_mass(
         self,
