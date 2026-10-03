@@ -140,6 +140,42 @@ def _correlation_corner(a, sine, x, y):
 
 
 @numba.njit(nogil=True)
+def _complementary_correlation_corner(x, y, a, nodes, weights):
+    """Short residual from positive unit correlation, with Genz's Taylor subtraction.
+
+    a is sqrt(1-rho**2), evaluated from the conditional standard deviation.
+    Integrating the first three even powers analytically resolves the endpoint
+    transition. The supplied order controls the remaining smooth quadrature.
+    See Genz (2004), doi:10.1023/B:STCO.0000035304.20635.31.
+    """
+    product = x * y
+    distance = abs(x - y)
+    square = distance * distance
+    a2 = a * a
+    c, d = (4.0 - product) / 8.0, (12.0 - product) / 16.0
+    value = (
+        a
+        * math.exp(-0.5 * (square / a2 + product))
+        * (1.0 - c * (square - a2) * (1.0 - d * square / 5.0) / 3.0 + c * d * a2 * a2 / 5.0)
+    )
+    value -= (
+        math.exp(-0.5 * product)
+        * math.sqrt(2.0 * math.pi)
+        * 0.5
+        * math.erfc(distance / (a * math.sqrt(2.0)))
+        * distance
+        * (1.0 - c * square * (1.0 - d * square / 5.0) / 3.0)
+    )
+    for i in range(len(nodes)):
+        t2 = (0.5 * a * (1.0 + nodes[i])) ** 2
+        root = math.sqrt(1.0 - t2)
+        logarithm = -product * t2 / (2.0 * (1.0 + root) ** 2) - 0.5 * math.log1p(-t2)
+        remainder = math.expm1(logarithm) - c * t2 * (1.0 + d * t2)
+        value += 0.5 * a * weights[i] * math.exp(-0.5 * (square / t2 + product)) * remainder
+    return value / (2.0 * math.pi)
+
+
+@numba.njit(nogil=True)
 def _correlated_rectangle_probability(
     mx,
     my,
@@ -161,12 +197,13 @@ def _correlated_rectangle_probability(
     corner_stamp=None,
     stamp=0,
 ):
-    """Plackett angle integral, with conditional-CDF quadrature near degeneracy.
+    """Gaussian rectangles from Plackett angles or complementary corner residuals.
 
-    The rho derivative of the bivariate normal CDF becomes a smooth integral
-    under rho=sin(theta). Composite panels resolve its endpoint near unit
-    correlation. Rectangle differencing retains the clipped X interval of the
-    conditional integral; cancellation uses the independently conditioned form.
+    The rho derivative becomes a smooth integral under rho=sin(theta).
+    Near unit correlation, cached corners instead retain the short residual
+    from the signed unit-correlation limit. One kernel keeps one representation;
+    guarded endpoints, degeneracy and cancellation use conditional-CDF quadrature.
+    Every form retains the same clipped X interval and requested integration order.
     """
     if angle_coefficients.shape[1] == 0:
         return _rectangle_probability(
@@ -195,6 +232,58 @@ def _correlated_rectangle_probability(
         return _normal_interval_probability(lo, hi)
     sy = math.hypot(slope, conditional_y)
     yl, yh = (ylow - my) / sy, (yhigh - my) / sy
+    rho = slope / sy
+    if corner_index is not None and abs(rho) >= 0.925 and conditional_y / sy > 1e-12:
+        # One kernel uses one cached corner representation. Guarded rectangles
+        # take the conditional integral without reading or filling that cache.
+        if max(abs(yl), abs(yh), abs(lo), abs(hi)) > 12.0:
+            return _rectangle_probability(
+                mx,
+                my,
+                sx,
+                beta,
+                conditional_y,
+                xlow,
+                xhigh,
+                ylow,
+                yhigh,
+                nodes,
+                weights,
+                radius,
+            )
+        sign = 1.0 if rho > 0.0 else -1.0
+        lower, upper = (yl, yh) if sign > 0.0 else (-yh, -yl)
+        left, right = max(lo, lower), min(hi, upper)
+        base = _normal_interval_probability(left, right) if right > left else 0.0
+        x, y = (hi, lo, hi, lo), (yh, yh, yl, yl)
+        values = np.empty(4)
+        scale = base
+        for j in range(4):
+            corner = corner_index[j]
+            if corner_stamp[corner] != stamp:
+                corner_integral[corner] = _complementary_correlation_corner(
+                    x[j], sign * y[j], conditional_y / sy, nodes, weights
+                )
+                corner_stamp[corner] = stamp
+            values[j] = corner_integral[corner]
+            scale += abs(values[j])
+        value = base - sign * (values[0] - values[1] - values[2] + values[3])
+        if np.isfinite(value) and value >= 0.0 and value >= 1e-12 * scale:
+            return value
+        return _rectangle_probability(
+            mx,
+            my,
+            sx,
+            beta,
+            conditional_y,
+            xlow,
+            xhigh,
+            ylow,
+            yhigh,
+            nodes,
+            weights,
+            radius,
+        )
     if corner_index is None:
         base = _normal_interval_probability(lo, hi) * _normal_interval_probability(yl, yh)
     else:
@@ -590,18 +679,36 @@ def _deposit_gaussian_pixels(
         angle_coefficients = _correlation_angle_coefficients(
             beta * sx, conditional_y, angle_nodes, angle_weights
         )
-        corner_xy = np.full((4, 2), np.nan)
-        corner_exp = np.empty((angle_coefficients.shape[1], 4))
+        # Each physical corner belongs to four adjacent pixels. Retain its
+        # integrated value on two rolling column edges, plus the marginal tails.
+        # The shared rectangle owner still handles cancellation and degeneracy.
+        stride = shape[0] + 1
+        corner_integral = np.empty(3 * stride + 2)
+        corner_stamp = np.zeros(3 * stride + 2, np.int64)
+        corner_index = np.empty(8, np.int64)
+        corner_xy = np.empty((0, 2))
+        corner_exp = np.empty((0, 4))
         for c in range(
             max(column_offset, math.ceil(mx - radius * sx - 0.5)),
             min(column_offset + shape[1] - 1, math.floor(mx + radius * sx + 0.5)) + 1,
         ):
+            left = (c % 2) * stride
+            right = ((c + 1) % 2) * stride
+            corner_stamp[right : right + stride] = 0
+            corner_stamp[2 * stride + (c + 1) % 2] = 0
+            corner_index[4] = 2 * stride + c % 2
+            corner_index[5] = 2 * stride + (c + 1) % 2
             ym = my + beta * (c - mx)
             yr = 0.5 * abs(beta) + radius * conditional_y
             for r in range(
                 max(row_offset, math.ceil(ym - yr - 0.5)),
                 min(row_offset + shape[0] - 1, math.floor(ym + yr + 0.5)) + 1,
             ):
+                low = r - row_offset
+                high = low + 1
+                corner_index[0], corner_index[1] = right + high, left + high
+                corner_index[2], corner_index[3] = right + low, left + low
+                corner_index[6], corner_index[7] = 2 * stride + 2 + low, 2 * stride + 2 + high
                 image[r - row_offset, c - column_offset] += mass[
                     i
                 ] * _correlated_rectangle_probability(
@@ -620,6 +727,10 @@ def _deposit_gaussian_pixels(
                     angle_coefficients,
                     corner_xy,
                     corner_exp,
+                    corner_index,
+                    corner_integral,
+                    corner_stamp,
+                    1,
                 )
     return image
 

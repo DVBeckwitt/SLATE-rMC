@@ -33,6 +33,14 @@ row/column bounds, or `None` when no pixel is visited. It uses no intensity thre
 off-panel centers. These are storage controls, not angular error bounds or new physical measures.
 The research and full-image qualification gates are in `tasks/44_ewald_integration_research.md`.
 
+Near-unit-correlation Gaussian corners use complementary residuals from the signed
+unit-correlation limit, following Genz (2004). Cache representation is fixed per
+Gaussian; rectangles outside the standardized-endpoint guard use direct conditional
+integration without accessing that cache. Native pixels retain two rolling corner
+edges and marginal tails. Native region rectangles use the same arithmetic and
+preserve their frozen membership weights. Requested order, tail clipping and
+cancellation fallback remain explicit; the spatial default stays 16.
+
 T35 adds explicit fixed-parameter control declarations and an optional local-m0
 axial panel cap. Controls retain the complete physical vector and fixed-value
 provenance; ordinary fits still release every admitted coordinate. The local cap

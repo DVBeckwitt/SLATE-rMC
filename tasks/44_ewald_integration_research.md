@@ -181,3 +181,135 @@ Then require complete images and the coupled refinement ladder before selecting 
 The detector-coordinate feasibility work remains open and gets comparable optimization after local
 physics parity. No method wins the full-image or quantitative-fitting comparison yet. The first
 campaign is closed; its completed checks do not mark the remaining work packages complete.
+
+## Second campaign in progress
+
+The user authorized continuation toward the full target, with a stated 7200-second numerical
+work budget including failed attempts. After the initial checks, the user requested a separate
+GPT-6.1 Sol task at extra-high reasoning for implementation and diagnostics, with this chat
+providing scientific oversight and milestone review. That execution task is the sole writer
+from handoff onward; main remains unchanged. Conservatively reserve 360 seconds already used.
+
+Initial mechanism results:
+- Rolling integrated-corner and marginal-tail reuse passed frozen-kernel comparisons with
+  relative L1 about 1.06e-14. Five single-call 57-kernel timings gave a 1.17x median improvement.
+- A direct conditional-CDF-only alternative was slower on those kernels and is not selected.
+- Complete accepted-node replays for channels 0 and 32 compared spatial orders 8, 16 and 32.
+  Order8 versus32 relative L1 was 1.66e-10 and 4.54e-8; order16 versus32 was 3.99e-17 and
+  4.14e-15. Total run256.411s. These use eight fixed axial nodes and qualify only that conditional
+  spatial comparison. The run imported the rolling-only source preserved externally as
+  `source_spatial_rolling.py`, before the complementary candidate was added on disk.
+- A complementary near-unit-correlation candidate is currently uncommitted and experimental.
+  Its first frozen-kernel comparison gave relative L1 8.41e-15. Timings overlapped the channel
+  replay and require a controlled rerun. It has not received full independent corner/region
+  qualification or code review. In particular, audit cache representation when a rectangle
+  switches between complementary and Plackett formulas at the endpoint guard.
+
+Temporary sources/results remain in the external task root for the execution handoff. They
+must be archived in one diagnostic and removed before final handoff. The next milestone is
+independent numerical review and measurement of the spatial candidate, followed by axial/angular
+convergence work; no new accuracy or whole-image speed claim is established.
+
+## First delegated spatial milestone (complete, awaiting review)
+
+Retain complementary residuals plus rolling integrated-corner/tail reuse on this research
+branch. The endpoint guard now returns direct conditional integration inside the
+kernel-stable complementary branch, before any cache access. It therefore cannot mix a
+Plackett correction with a complementary residual at a shared corner. No new adaptive
+production API is added; spatial default 16 and every physical/qualification gate remain.
+
+The independent oracle integrates the conditional normal CDF with physical transition
+panels and GL128/GL256, without production interior-CDF shortcuts. Across 159 difficult
+rectangles, its maximum refinement difference and candidate16 absolute error are both
+3.3306690738754696e-16. Cases include both correlation signs, the 0.925 transition, exact
+and crossed endpoint 12 guards, near-degenerate conditional ratios down to 1e-13,
+X-tail clipping and far Y endpoints. Orders 4/8/16/32 have maximum absolute errors
+8.54e-6/4.20e-10/3.33e-16/3.33e-16; requested-order refinement remains effective.
+
+Shared-corner guard regressions were evaluated in both visitation orders and signs.
+The unrepaired implementation erred by up to 0.1083122747 probability; the repair's
+maximum error was 1.11e-16. A decisive native-region case sharing central corner (1,0)
+showed unrepaired joint/isolated discrepancies 0.079327627/0.079279821 for negative/positive
+correlation. Repaired joint and isolated region projections agree exactly and differ from
+the independent reference by at most 5.55e-17. Weighted overlapping regions, native
+clipping and off-panel means were separately checked. Tiled native pixels are bitwise
+equal to the repaired complete panel; cropped probabilities and accumulation agree
+within the recorded float64 roundoff. No probabilities were clipped or normalized.
+
+| Same-work spatial measurement | Parent | Rolling alone | Complementary + rolling |
+| --- | --- | --- | --- |
+| Frozen 57 kernels, one call, six warmed alternating repeats, median seconds | 0.128566 | 0.109284 | 0.096565 |
+| Frozen 57 kernels, batches 8, six warmed alternating repeats, median seconds | 0.277035 | 0.257480 | 0.246986 |
+| Complete local-m0/source0 accepted nodes, spatial deposition seconds | -- | 8.057012 | 6.184646 |
+| Complete first regular/source0 accepted nodes, spatial deposition seconds | -- | 65.069488 | 49.465508 |
+
+The frozen single-call speedup is 1.331x over parent and 1.132x over rolling alone.
+Complete-channel values are spatial deposition on identical accepted nodes, one matched
+replay, not angular preparation or full simulation. Local-m0 includes fresh-process
+compilation; the regular channel uses warmed kernels. The shared generation plus both
+projections took 16.617659 s and 115.065981 s. Kernel byte digests are identical per channel
+between methods. Accepted-node counts are 16112/62384, with maximum streamed
+mean/factor/mass storage 114688 bytes per batch.
+
+Complementary order16 versus saved rolling order32 channel images differs by relative
+L1=5.769253061153425e-17 (local m0) and 3.87465635406183e-15 (regular). Paired complementary
+versus rolling order16 differences are 2.1236271664609792e-17/2.9124943509325627e-15.
+Frozen 57 versus parent relative L1 is 6.158976919843851e-15; flux error is 1.24e-16.
+These are conditional spatial checks at the original eight axial nodes and archived
+accepted angular meshes. They do not establish the 1% full-image gate or reference
+allowance <=0.2%, axial/angular/source/cone convergence, or fitting qualification.
+
+The new evidence is external ewald_spatial_milestone_20261003.ra_diag.npz, containing
+numeric arrays and one JSON manifest with exact temporary/evaluated/final sources,
+input/evidence hashes, versions, failed-candidate probabilities, timing repeats,
+independent references and software checks. Prior immutable diagnostics are unchanged.
+The overwritten rolling-only corner-check output was unavailable at handoff; no
+reconstruction of it is claimed. Its earlier facts remain historical plan evidence.
+Temporary sources/results were sealed and removed, including obsolete restored sources.
+No test/benchmark harness or generated output is retained in the repository.
+
+Finite image/temporary-array allocation is bounded by fixed 3000x3000 buffers and streamed
+kernel batches; a conservative owned-array bound is 768 MiB, excluding Python/JIT and
+loaded libraries. The phase driver's generic 'three images' description was too narrow
+because completed channel arrays remain retained for sealing; the manifest records this
+correction. No process peak measurement is claimed. Evidence sealing streams 8 MiB chunks.
+
+Measured additional numerical phase work is 173.438874 s. Charge 300 s conservatively
+for this entire milestone including imports, historical replay, software checks and
+sealing, plus the prior 360 s reserve: campaign total 660/7200 s, remaining 6540 s.
+This is below the delegated 900 s additional allowance. All launched numerical processes
+finished, and a process inventory found no research Python/evaluator process remaining.
+
+Dream-rsi history was consulted. In-place bounded comparison evaluated parent, rolling
+and complementary+rolling on the frozen evaluator with correctness gates before timing.
+Historical completed-world replay and policy selection retained the incumbent; scheduling
+reward is not numerical-method quality. A fresh runner cycle would create additional
+detached checkouts, contrary to this assignment's sole-checkout instruction, so no new
+runner cycle or candidate was fabricated. The old two read-only worker timeouts remain
+recorded failures, not scientific rejections. Root remains the sole coding writer.
+
+Ruff lint/format, import/default checks, code-AST parity after formatting/docstring edits,
+whitespace checks and an offline wheel build passed. The wheel contains the exact final
+production spatial source. These are software checks, not physical adequacy evidence.
+No type-check command is configured. Main stays clean at 4cf84de; no merge or push.
+
+### Next experiment proposed for scientific review
+
+Reduce costly native-response evaluations along physical axial panels before another
+Gaussian micro-optimization. Screen response-hat product integration
+I_p=sum_sign integral S_sign(u) A_sign,p(u)du: interpolate only costly native A with
+nonnegative hats and integrate sharp cheap canonical S accurately into effective weights.
+Compare against independently refined physical-panel quadrature, include midpoint/native
+image checks and both signed strength sheets, then run the coupled axial/angular ladder.
+GL8 physical panels and configured Sobol 2^12 are numerical choices, not convergence
+certificates; geometry may still require dense u. Do not start this experiment until
+the originating chat reviews this milestone. No full image, fit or later campaign ran.
+
+Milestone evidence SHA256: d1904a56b4b639351a3e6b5ae438be1b8fa81100b96db415d6a8ace8d823f9f0 (247712585 bytes).
+
+The direct-environment build first failed because hatchling was absent. The configured
+uv isolated offline build succeeded with cached dependencies and exact wheel/source
+parity; main's environment was unchanged. The initial failure/source is in the manifest.
+After sealing, cleanup encountered uv's output-directory .gitignore; that verified
+metadata file and the formatting cache were removed. Final read-only review found no
+remaining adoption-blocking spatial code issue. All temporary sources/results are gone.

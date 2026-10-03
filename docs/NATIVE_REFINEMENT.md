@@ -635,9 +635,12 @@ rule. It must enclose each candidate's conservative source/region support; other
 evaluation raises. Default adaptive proposals remain available but may miss this
 cache when geometry changes. Domain coverage does not establish quadrature accuracy.
 There is no permanent finite response valid for arbitrary materials or parameters.
-Gaussian corner reuse is restricted to adjacent native pixels; fitting rectangles
-retain the direct probability loop. Stable cancellation handling and independent
-conditional-CDF fallback remain shared.
+Native pixels reuse integrated corners on two rolling column edges. Native region
+rectangles share physical corner identities within one Gaussian. Near unit
+correlation those caches use complementary residuals; large standardized endpoints
+use direct conditional integration without changing the cached representation.
+Requested-order refinement, cancellation handling and conditional-CDF fallback
+remain shared, with no probability clipping or normalization.
 
 ## Unresolved physical freedoms
 
