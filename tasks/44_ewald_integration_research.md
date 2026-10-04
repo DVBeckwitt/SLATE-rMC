@@ -462,7 +462,7 @@ checks are software checks; no production build change or numerical acceptance i
 Temporary external scripts/results are sealed and removed at handoff. Main remains clean at
 4cf84defb0fd1326dd98714544dcfda44049976d; no merge, push, full image or fit ran.
 
-## Third delegated milestone: positive product integration (complete, awaiting review)
+## Third delegated milestone: positive product integration (complete, accepted by originating chat)
 
 The originating chat accepted the coupled diagnosis and authorized at most 1800 additional
 numerical/evaluator seconds for a positive strength/response prototype. Its review then requested
@@ -631,3 +631,145 @@ Only this plan changes in the repository: production +0/-0, retired development 
 change and evidence integrity. Software checks do not establish scientific adequacy. Temporary
 external sources/results are sealed and removed. Main remains clean at 4cf84defb0fd1326dd98714544dcfda44049976d;
 research receives one coherent documentation checkpoint, with no merge or push.
+
+## Fourth delegated milestone: positive strength-weighted Gauss rule (complete, accepted by originating chat)
+
+The originating chat accepted the interval comparison and allocated at most 900 further
+numerical/evaluator seconds, including discovery, failures and closure, with >=3240 s campaign
+remainder. This is a short discriminating screen on the same regular interval/source0/group32.
+The full 85-rod/32-source detector target remains open. Main, defaults, physical factors, cone
+and spatial rules, qualification states and earlier immutable evidence remain unchanged.
+
+### Positive measure, stable recurrence and source support
+
+Use W(u)=S_positive(u)+S_negative(u) and F_p(u)=sum_sign [S_sign(u)/W(u)] A_unit_sign,p(u).
+Then I_p=integral W F_p du. Evaluate both ratios explicitly from canonical signed strengths;
+obtain A through the existing unit-strength event path and combine the signed weighted masses
+before one native projection. A zero/nonfinite W or unsafe generated-node ratio fails; no floor,
+silent mass removal or division of an existing image by strength is permitted. The original
+source/group iterator, six individual rods, native pixels and all optical/source/envelope factors
+are preserved. At all completed batches the explicit unit-path contraction agrees with the
+canonical ratio-table event mass within 4.32e-16 relative.
+
+The construction follows [Gautschi's discretized Stieltjes procedure, section 2.2](https://www.cs.purdue.edu/homes/wxg/selected_works/section_04/081.pdf)
+and the [NIST DLMF Jacobi eigenvalue/weight construction](https://dlmf.nist.gov/3.5#vi).
+These sources support positive-measure quadrature and stable recurrence construction; the
+following detector results are independent measured evidence for this interval.
+
+Scale the finite interval to [-1,1]. The cheap canonical discretization already includes
+physical du, so scaling adds no second Jacobian. Lanczos multiplication by the scaled
+coordinate uses two explicit reorthogonalization passes. A symmetric tridiagonal eigensolve
+returns nodes and first-eigenvector-component squares. The recurrence alone uses mass-normalized
+discrete weights for conditioning; final Gaussian weights multiply the exact canonical physical
+mass back. The native observable receives no normalization.
+
+Fringe/cap-seeded cheap scalar base/p/h rules use 43 panels GL16 (688 nodes), the same panels
+GL32 (1376), and half-cap 81 panels GL16 (1296). The base cap is pi/(4*13c)
+=0.002109765446929224 A^-1. Total physical mass is 0.005087096187815536, signed masses
+[0.002543836828335796,0.0025432593594797385]. Genuine zero discrete masses can remain;
+no positive mass is discarded. Generated rules at n=4/8/12/16 all have finite positive weights,
+interior nodes, correct total mass and Legendre-basis exactness through degree2n-1 within
+1.20e-15 normalized to physical mass (frozen gate 5e-13). Basis orthogonality errors remain
+below 6.4e-16. Across independently p/h-refined scalar measures, maximum physical node shift
+is 4.44e-16 A^-1 and relative weight L1 is below 2.50e-14. Minimum generated W for n4/n8
+is 0.000310988491/0.001266417892; both signed ratios remain finite and in [0,1].
+
+### Native screen and separate scalar contribution
+
+Reuse the reviewed direct P/H reference after archive, source, input and exact runtime checks:
+Python 3.13.13, NumPy 2.4.6, SciPy 1.18.0, Numba 0.66.0, main's requested interpreter with research
+src first. Every new native image is complete 3000x3000 for interval
+[1.0415258990138507,1.12164327586107]. Its physical quadrature weights enter the angular nodes' integrated mass once;
+canonical signed ratios combine unit masses before spatial16 deposition. Angular preparation
+uses current-weight whole-interval empirical 5e-5 relative and 1e-15 absolute ledgers.
+
+| Image against reviewed R | Relative L1 | Relative flux delta | Max absolute pixel | Max64tile absolute sum |
+| --- | ---: | ---: | ---: | ---: |
+| Gauss4 prepared | 5.0502971e-5 | -1.6283172e-8 | 1.9674430e-11 | 4.7309282e-9 |
+| Gauss8 prepared order screen | 1.4482586e-7 | 2.3436847e-8 | 7.8279330e-13 | 1.4073224e-11 |
+| Gauss4 angularh | 5.0514326e-5 | -7.4285809e-9 | 1.9674693e-11 | 4.7309308e-9 |
+| Gauss4 scalar-p, fresh preparation | 5.0502971e-5 | -1.6283157e-8 | 1.9674430e-11 | 4.7309282e-9 |
+
+The prepared4->8 order difference is 5.0583481e-5 relative L1, normalized to R. Independent
+angularh subdivides the four-node accepted physical/Cauchy-CDF panels at unchanged u. Its
+full-native L1 difference from preparation is 2.8143746e-8, flux delta 8.8545914e-9, max pixel
+1.1138930e-13 and max tile 2.1073710e-12. The four-node physical preparation ledger is
+4.9987702e-5 normalized to R. Eight is an order screen only; it receives no separate final
+angularh acceptance. Twelve/sixteen pass scalar construction only and have no native images.
+
+Scalar-p generated nodes differ by at most one physical ulp; fresh angular preparation and
+projection measure scalar-p versus base image sensitivity at 1.5661718e-14 relative L1,
+max pixel 5.4527746e-21 and max tile 1.3601740e-18. Keep this observed sensitivity separate
+from any uncertainty allowance. Scalar-h at n4 has exactly identical physical nodes, canonical
+signed strengths and ratios. For the same fixed angularh response, positive intensities imply
+||I_hscalar-I_base||1 <= eta*flux_base, where eta=max_i abs(delta_w_i/w_i)
+=7.8907725e-15. This supplies a normalized native perturbation bound 7.8907724e-15. Exact
+identity and maximum relative weight perturbation are checked; tiny node shifts or relative
+weight L1 alone would not justify this bound.
+
+Use a conservative separate scalar allowance: U_scalar=max(observed scalar-p native L1 plus
+both base/p empirical angular ledgers, identical-node scalar-h weight bound) plus the observed
+candidate angularh difference. This is 1.0000354802099959e-4, normalized to R. It is an
+empirical continuous-measure allowance; only the fixed-response weight perturbation bound
+above is analytic. The reviewed reference U_R remains 1.0014372734663848e-4, below 0.002.
+It is not inflated to hide scalar construction error.
+
+For chosen I=Gauss4 angularh, E1=5.05143257232967e-5 and
+(E1+U_R+U_scalar)/(1-U_R)=0.00025068670579204906 (0.0250687%), passing the empirical 1% interval
+gate. Four is the first tested passing common response count. Direct16 already passed the
+same reviewed reference, so this demonstrates a fourfold reduction in expensive axial response
+count relative to the tested direct16 baseline on this interval. The smallest adequate ordinary
+rule count is not established. No runtime ratio or full-image error bound follows.
+Fixed 47x47 tile arrays and all signed strengths/ratios/weights/meshes are retained. Largest
+Gauss4/reference error tile remains [21,28]; no observable is cropped to a selected tile.
+
+### Work, audit, evidence and decision
+
+| Stage | Common response nodes | Incoming angular nodes | Accepted nodes | Seconds | Strength/event/spatial seconds |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Scalar construction, all rules | cheap only | none | none | 0.3122 | not a native evaluation |
+| Gauss4 preparation | 4 | 53312 | 27424 | 34.5676 | 0.1750 / 2.9991 / 22.4277 |
+| Gauss8 preparation | 8 | 107360 | 55216 | 61.7517 | 0.3036 / 5.9719 / 41.7621 |
+| Gauss4 angularh replay | 4, same nodes | 54848 | 54848 | 26.4202 | 0.0557 / 0.2422 / 23.4837 |
+| Gauss4 scalar-p preparation | 4 | 53312 | 27424 | 34.2375 | 0.1719 / 2.9728 / 22.1633 |
+
+Construction, preparation and replay are separated; stages include first-call setup/JIT.
+Both cold Gauss and reviewed direct rules use the existing batching/spatial16 and combine
+signed weighted masses before deposition. Different u locations lead to different accepted
+angular work. No repeated matched timing benchmark ran, so these times are observations,
+not a method speed ranking. No process peak-memory claim or whole-support count extrapolation
+is made. The physical measure is parameter-dependent; fixed-geometry strength sweeps remain
+unqualified.
+
+The single <=60 s read-only dream-rsi cycle uses frozen scalar feasibility, with no detector
+quality score. Baseline passes in 0.20877 s; the narrowed worker still times out at 35.46243 s.
+Replay/policy improvement retains the incumbent with no quality signal or changed candidate.
+This executor failure does not reject the measured rule. Initialization itself succeeded, but
+a consumer interpreted structured JSON output as a plain path. Parse the recorded experiment
+field and recover that same experiment; no duplicate initialization or new worker retry ran.
+Exact failed caller, recovery source, structured result and cycle logs are archived.
+
+New immutable evidence: ewald_strength_gauss_20261003.ra_diag.npz, 9558108 bytes, 130 numeric
+arrays plus one JSON manifest, SHA256 f65ab765a94d9dc9c6c0d78ef3a32dc333d854a94fda801e44b32864438f0124.
+It includes exact sources, all scalar rules and canonical sheets, four completed native images,
+three unchanged reviewed direct images, angular meshes, tile measures, independent sensitivities,
+inputs/source/runtime identities, frozen declaration, failures and budget. Earlier archives
+retain their hashes. Sealing and integrity checks took 4.0536 s.
+
+Measured launcher phases total 207.8071 s; discovery initialization/recovery/cycle total 40.1693 s,
+within 60. Charge 450 s conservatively for this milestone, including full 60 s discovery allowance,
+failed parsing, imports and 150 s closure reserve. Campaign cumulative 3510/7200 s, remaining 3690 s,
+within the 900 s milestone ceiling and required >=3240 s remainder. This charge is an allocation,
+not actual wall time.
+
+Decision: GO for a next bounded optimization experiment using the positive common-measure rule,
+based on verified 4-versus-16 response count. The next review must choose where reuse and matched
+cold work justify implementation. This milestone promotes no production rule and starts no
+full-support, local endpoint, full-image or fitting campaign. Conditional agreement fixes
+cone/spatial/source rules; the original 85-rod/32-source scientific target remains open.
+
+Only this plan changes: production +0/-0 and retired development infrastructure +0/-0. Relevant
+formatting/lint/whitespace and evidence-integrity checks pass; they do not establish scientific
+adequacy. Temporary external files are sealed and removed before handoff. Main remains clean
+at 4cf84defb0fd1326dd98714544dcfda44049976d; research receives one coherent documentation checkpoint,
+with no merge or push.
