@@ -1025,3 +1025,9 @@ The optional reference-correction warm start remains specified in
 `NATIVE_REFINEMENT.md`. Low/high rules both use the sole current engine.
 Approximate proposals cannot select fits or supply exact recovery rows. Existing
 physical acceptance and independent source/angular/axial checks remain binding.
+
+The conditional stream may omit the local composite with explicit
+`include_local_m0=False`. It still groups all original rods and uses the
+original combined group/source count for the regular per-panel absolute
+error allowance. Default full-detector behavior and physical populations
+remain unchanged; a rod-subset detector has its own subset allowance.

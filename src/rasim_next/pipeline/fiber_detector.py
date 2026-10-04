@@ -1602,6 +1602,7 @@ def iter_conditional_fiber_transfers(
     scattering_cache: FiberScatteringCache | None = None,
     include_source_mass: bool = True,
     regular_integrator: Callable[..., Iterator[ConditionalFiberBatch]] | None = None,
+    include_local_m0: bool = True,
 ) -> Iterator[ConditionalFiberBatch]:
     """Stream the same continuous transfers for native fits and full-panel images.
 
@@ -1610,11 +1611,15 @@ def iter_conditional_fiber_transfers(
     the same positive interior-node regular engine and planar kinematic optics. The local air-Ewald
     chart is reserved for the explicitly requested local-lamella composite.
     Source masses are kept intact when rows or directions have no valid support.
+    Excluding the local composite retains original rod groups, group indices and
+    the combined channel count used for the regular absolute error allowance.
     """
     if regular_integrator is None:
         raise ValueError("the strength-weighted regular integrator must be supplied explicitly")
     if not isinstance(rule, FiberIntegrationRule) or type(local_stitched_m0) is not bool:
         raise TypeError("an explicit integration rule and local-composite selection are required")
+    if type(include_local_m0) is not bool:
+        raise TypeError("include_local_m0 must be bool")
     validate_conditional_spatial_support(source, instrument)
     if (
         incident.states.source_revision != source.mean_rays.source_revision
@@ -1657,6 +1662,8 @@ def iter_conditional_fiber_transfers(
     channel_bounds = {}
     angular_regions = {}
     for local in {radius == 0 and local_stitched_m0 for radius, _ in groups}:
+        if local and not include_local_m0:
+            continue
         channel_bounds[local] = {}
         for si in valid_sources:
             if cancel_requested is not None and cancel_requested():
@@ -1709,6 +1716,8 @@ def iter_conditional_fiber_transfers(
         if cancel_requested is not None and cancel_requested():
             raise CancelledError
         local = radius == 0 and local_stitched_m0
+        if local and not include_local_m0:
+            continue
         bounds = channel_bounds[local]
         all_bounds = np.concatenate(tuple(bounds.values()))
         if not len(all_bounds) or all_bounds[:, 1].max() <= radius:

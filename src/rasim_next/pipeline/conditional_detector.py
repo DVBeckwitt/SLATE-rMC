@@ -479,6 +479,7 @@ class ConditionalStructureDetector:
         scattering_cache: FiberScatteringCache | None = None,
         include_source_mass: bool = True,
         source_state_indices: tuple[int, ...] | None = None,
+        include_local_m0: bool = True,
     ) -> Iterator[ConditionalFiberBatch]:
         return iter_conditional_fiber_transfers(
             rods=self.rods,
@@ -497,6 +498,7 @@ class ConditionalStructureDetector:
             include_source_mass=include_source_mass,
             source_state_indices=source_state_indices,
             regular_integrator=self._regular_product_batches,
+            include_local_m0=include_local_m0,
         )
 
     def _regular_strength_at(self, axial, *, rods, wavelength):
