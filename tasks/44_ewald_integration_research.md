@@ -210,7 +210,7 @@ must be archived in one diagnostic and removed before final handoff. The next mi
 independent numerical review and measurement of the spatial candidate, followed by axial/angular
 convergence work; no new accuracy or whole-image speed claim is established.
 
-## First delegated spatial milestone (complete, awaiting review)
+## First delegated spatial milestone (complete, accepted by originating chat)
 
 Retain complementary residuals plus rolling integrated-corner/tail reuse on this research
 branch. The endpoint guard now returns direct conditional integration inside the
@@ -313,3 +313,151 @@ parity; main's environment was unchanged. The initial failure/source is in the m
 After sealing, cleanup encountered uv's output-directory .gitignore; that verified
 metadata file and the formatting cache were removed. Final read-only review found no
 remaining adoption-blocking spatial code issue. All temporary sources/results are gone.
+
+## Second delegated milestone: coupled integration diagnosis (complete, awaiting review)
+
+The originating chat accepted the spatial milestone and authorized up to 1800 additional
+numerical/evaluator seconds to identify the remaining integration error before choosing a new
+axial algorithm. Product changes remain limited to the existing research checkout. Normal
+external detached read-only dream-rsi checkouts were explicitly permitted for this milestone.
+Main, fitting qualification, spatial default 16 and the adaptive production API are unchanged.
+
+### Frozen conditional ladder and provenance
+
+Evaluate source 0/channel 0 local lamella m0 and source 0/channel 32, the first regular radius
+1.7511941725650184 A^-1, separately. The regular group retains (-1,0), (-1,1), (0,-1),
+(0,1), (1,-1), (1,0), each population 1, and both signed strength sheets. The original roster
+of 85 rods and 32 source rows remains in the iterator, preserving group index and original
+Sobol seeds 1009/66546. Pooled axial support from all source rows is unchanged:
+[0,5.419055674241323] external q for local m0 and [0,5.127512118222034] phase axial u
+for the regular group. These are two conditional contributions, not the full 192-channel image.
+
+Exact input bytes, current production source hashes, runtime, original 8 axial coordinates,
+PDFs and half weights were checked. Runtime is the requested main environment: Python 3.13.13,
+NumPy 2.4.6, SciPy 1.18.0, Numba 0.66.0, with research src first. Signed strength prefixes agree
+exactly for both groups. The accepted 8 angular meshes come from the immutable branch archive;
+their current-runtime spatial 16 images come from the accepted spatial milestone archive.
+The prior angular h images used an older runtime and were not reused.
+
+The four complete 3000x3000 native images per group are I8,accepted, I8,h, I16,accepted and
+I16,h. Each h mesh independently subdivides every accepted physical angle/Cauchy-CDF panel
+into two children and retains GL8. This is a further h indicator of the same formulation,
+not an independently converged reference. No old mesh is moved to a new axial coordinate.
+The appended eight Sobol positions receive fresh angular preparation. With unchanged g,
+I16 = 0.5 I8 + sum_new J(u)/(16g(u)); each old node/PDF/weight prefix is checked exactly.
+The appended angular preparation uses half the old channel absolute budget, retaining its
+empirical 0.001 relative ledger. No intensity normalization or solid-angle correction is applied.
+
+### Native observables and empirical differences
+
+L1 is sum(abs(fine-coarse))/sum(fine); flux delta is sum(fine-coarse)/sum(fine).
+For the mixed difference, D=I16,h-I16,accepted-I8,h+I8,accepted and the denominator is I16,h.
+All absolute values below use the unchanged raw native observable. Neither two-level Sobol
+differences nor angular coarse/fine indicators are rigorous error bounds or replicate uncertainty.
+
+| Conditional group / difference | Relative L1 | Relative flux delta | Maximum absolute pixel difference | Maximum 64x64 tile absolute sum |
+| --- | ---: | ---: | ---: | ---: |
+| Local m0: angular at 8 | 3.643869e-4 | -2.979777e-4 | 1.543768e-8 | 1.755862e-7 |
+| Local m0: angular at 16 | 5.308798e-4 | -2.947058e-4 | 7.718842e-9 | 8.779308e-8 |
+| Local m0: axial at accepted | 0.999999973 | -0.977851028 | 2.426074e-5 | 3.623147e-4 |
+| Local m0: axial at h | 0.999999970 | -0.977844558 | 2.426074e-5 | 3.623147e-4 |
+| Local m0: mixed D | 5.308798e-4 | 2.946477e-4 | 7.718842e-9 | 8.779308e-8 |
+| Regular: angular at 8 | 1.217991e-5 | -1.667868e-8 | 7.822690e-11 | 3.955986e-9 |
+| Regular: angular at 16 | 4.537363e-5 | -1.266355e-8 | 6.829472e-11 | 1.345912e-8 |
+| Regular: axial at accepted | 0.999805906 | -0.666558260 | 9.848973e-7 | 2.428017e-4 |
+| Regular: axial at h | 0.999805897 | -0.666558254 | 9.848973e-7 | 2.428017e-4 |
+| Regular: mixed D | 4.537469e-5 | 1.513245e-8 | 6.829472e-11 | 1.345912e-8 |
+
+All fixed tile absolute-error sums are retained as 47x47 arrays with edges 0,64,...,2944,3000.
+Their sums reproduce the corresponding full-panel absolute L1 numerators. Largest axial
+tiles have zero-based [tile_row,tile_column]=[22,22] for local m0 and [21,28] for regular;
+largest local angular/mixed tiles are [24,22], regular angular 8 is [21,17] and angular 16/mixed
+is [11,28]. No observable is cropped to these tiles.
+
+The h-refined fluxes are 0.0011760737319706659 ->0.0005946239440219335 for local m0
+and 0.0019084585545165915 ->0.0011451496221475909 for regular. Relative to the old 8 estimate,
+flux drops about 49.44%/40.00%; this differs from the fine-denominator flux-delta column above.
+The appended 8 accepted contributions are 6.5870952957658884e-6/1.9092034347566005e-4.
+Read-only review found no missing 1/N factor or duplicated physical contraction. Both conditional
+images therefore fail axial stability decisively despite small angular indicators. Neither
+group qualifies the 1% full-image target or <=0.2% reference allowance.
+
+### Cheap strength and response inspection
+
+Canonical signed group strengths were sampled over each full support on 4097 points, preserving
+the individual raw per-rod sheets. Their grids identify 317/288 local maxima per sign, with
+spacing 0.00132301/0.00125183 A^-1. This coarse peak finder can miss narrow features and removes
+no support. Independent physical uniform 256-panel scalar GL8/GL16 strength integration is a
+diagnostic, not an image oracle: the regular positive-sheet integrals are 0.007507893452724/
+0.007507893452757 (relative difference about 4.4e-12); local m0 gives 0.005891990284875/
+0.005883211598509 (about 0.15%). The negative sheets remain separately recorded.
+
+Positive-sheet strength-only Sobol 8/16/32 estimates are 0.00310137/0.00227589/0.00129196 for
+local m0 and 0.02842027/0.01647853/0.01324790 for regular. This supports severe undersampling
+of structured strengths at these sparse levels. It does not determine the detector integral:
+unit response, visibility, mosaic density and spatial transport also vary strongly with u.
+
+Interior unit-strength signed response probes retain canonical source, optics, phase population,
+polarization, envelope and mosaic factors. At one declared angular proposal center, 159/160
+local and 119/129 regular coordinates survive physical transport. Maximum adjacent mean-hit
+motion is 771.14/698.66 pixels. Requested/retained indices and full means/covariance factors are saved.
+These sparse motion probes seed refinement; they give no interpolation or image-error bound.
+
+Canonical local stitch compilation gives qc=0.05065406047700051/0.05065545795587627 A^-1
+at wavelengths 1.540592925/1.544427 A. Blend endpoints are 3qc and 6qc, about 0.151962/0.303924
+and 0.151966/0.303933 A^-1, for each of the three incoherent structure components.
+No direct q=0 unit response was evaluated. Local geometry contains exactly 1/q, while low-q
+stitched strength behaves as q^2 R(q). A product rule must establish a one-sided limit for
+B=qA and integrate S/q, or use separately resolved interior low-q quadrature. Assigning an
+arbitrary finite or zero A(0) would be invalid.
+
+### Work, discovery, evidence and next decision
+
+Local h8/new 16 preparation/new 16 h replay evaluated 32224/129504/135264 incoming angular
+quadrature nodes in 14.0866/68.9024/62.1469 s. Regular evaluated 124768/97488/100480 nodes in
+105.7270/101.3492/90.2776 s. These include rejected preparation nodes; transported kernels
+are a subset. Complete processes including saving took 152.8666/305.3656 s; the support
+probe including imports/saving took 4.6910 s. No same-work speedup is inferred from these
+different meshes. Spatial deposition dominates recorded stages. Pending patch storage keeps
+the inherited 256 MiB cap; no process peak-memory measurement is claimed.
+
+The new bounded dream-rsi direction narrowed the prior timeout-prone read-only investigation
+to two named code sections. Its worker completed in 71.5129 s and returned no_change; baseline
+feasibility evaluation took 5.2528 s. Online replay/policy improvement retained the incumbent
+with feasibility_only_no_quality_signal. No changed candidate or numerical-method improvement
+was accepted. The worker's hypothetical quarter-weight statement does not apply to physical
+angular h subdivisions here; its possible phase-peak seeding hazard remains unverified.
+
+The new immutable external evidence is ewald_coupled_ladder_20261003.ra_diag.npz, 343847792 bytes,
+SHA256 6603bd44995d7557392c806de7b077fcd8b1010bc6c632857025d475339f3c14. It contains 100 numeric
+arrays and one JSON manifest: all four images per group, appended contributions, meshes,
+prefix strengths/PDFs, tile differences, support/response probes, exact runnable source bytes
+and raw/canonical-text hashes, immutable input/archive hashes, versions, failures and budgets.
+Previous archives retain their recorded hashes.
+
+Initial helper restoration failed before writes because the old manifest normalized source
+newlines but hashed raw bytes. Uniform CRLF restoration matched each original helper hash;
+the next manifest stores raw decoded UTF8 and separately records canonical-LF hashes.
+The first sealing attempt failed on an unavailable private NumPy header reader, before any
+array was copied. Its verified empty 22-byte ZIP was removed; public header readers succeeded.
+Exact failed source and the repair explanation are retained. No scientific data changed.
+The probe's initial inventory exception path was protected before execution.
+
+Charge 900 s conservatively for this entire milestone, including the full 150 s discovery
+allowance, failed attempts, imports, checks and sealing. Campaign total 1560/7200 s, remaining
+5640 s, within the delegated 1800 s additional ceiling and required >=4740 s remainder.
+All scientific phases completed; neither channel has an unfinished partial result.
+
+Recommend a bounded physically seeded axial-panel/product-integration prototype next, after
+originating-chat review. Keep separate S_sign(u) and costly native A_sign,p(u), nonnegative
+effective weights, every rod/source/sign and all declared support. Seed endpoint, critical,
+stitch, elastic/source-region and actual finite-stack fringe coordinates in their own frames;
+resolve both signed strengths accurately. Then use complete native midpoint response images
+and coupled physical-panel refinement to control interpolation, including tile/flux checks.
+Mean/covariance motion alone is insufficient. First test local endpoint factoring and regular
+panel geometry in small conditional cases; do not launch a large product campaign yet.
+
+Only this current plan changes in the repository. Formatting/lint/whitespace and clean-state
+checks are software checks; no production build change or numerical acceptance is claimed.
+Temporary external scripts/results are sealed and removed at handoff. Main remains clean at
+4cf84defb0fd1326dd98714544dcfda44049976d; no merge, push, full image or fit ran.
