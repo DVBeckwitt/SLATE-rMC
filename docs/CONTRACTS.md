@@ -55,6 +55,18 @@ source parameters first, then resolve disjoint `NativeFitPhysics.integration_par
 Regular and local intensities sum before one scale; each partition retains its own
 source/response identity and cache. Equal orders preserve the unsplit path.
 
+The explicitly selected `FiberIntegrationRule.local_m0_angular_rule=
+"cdf_stratified_importance.v1"` is a nominal local-lamella endpoint estimator.
+It uses one scrambled two-dimensional Sobol net of 4096 axial nodes and 32
+conditional angular strata per node; `local_m0_seed` is the direct scramble seed
+and `local_m0_replica` is explicit response identity. Original source rows share
+that net within a replica. Disjoint physical arcs retain their original proposal
+mass Z and weight `Z/(4096*32*pq*pphi)`, including the original attempted divisor.
+Nonempty unresolved CDF arcs fail; empty support contributes zero without
+resampling. It reuses canonical signed strengths, transfer and native Gaussian
+probabilities. It does not qualify accuracy, shared regular error or a fit.
+The default remains `resolved_cdf_gl8.v1`; regular quadrature is unchanged.
+
 Production contracts are frozen dataclasses or immutable model objects. Numeric arrays are copied to
 contiguous, read-only storage at public boundaries. Shapes, units, frames, measure IDs, validity,
 and ordering are validated eagerly.

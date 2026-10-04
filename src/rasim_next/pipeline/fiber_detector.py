@@ -1225,6 +1225,68 @@ class FiberQuadratureNodes:
             raise ValueError("canonical signed fractions must align and sum to one")
 
 
+@numba.njit(nogil=True, fastmath=False, cache=False)
+def _local_m0_importance_block(axial, pdf, unit, first, last, bounds, centers, widths):
+    """Conditional disjoint-arc importance measure; no physical factors or pruning."""
+    strata = 32
+    index = np.empty((last - first) * strata, dtype=np.int64)
+    azimuth = np.empty(len(index))
+    mass = np.empty(len(index))
+    count = 0
+    for i in range(first, last):
+        left, right = _angular_intervals(axial[i], bounds)
+        if not len(left):
+            continue
+        offsets = np.array(
+            [_wrapped_cauchy_cdf(-centers[i, n], widths[i, n]) for n in range(centers.shape[1])]
+        )
+        cdf_left = np.empty(len(left))
+        arc_mass = np.empty(len(left))
+        for k in range(len(left)):
+            cdf_left[k] = _angular_cdf_density(left[k], centers[i], widths[i], offsets, 0.2)[0]
+            cdf_right = _angular_cdf_density(right[k], centers[i], widths[i], offsets, 0.2)[0]
+            arc_mass[k] = cdf_right - cdf_left[k]
+            # Two endpoint evaluations must resolve mass above the inverse-CDF tolerance.
+            if not np.isfinite(arc_mass[k]) or arc_mass[k] <= 4e-15:
+                raise ValueError("nonempty local-m0 arc has unresolved proposal CDF mass")
+        total = arc_mass.sum()
+        if not np.isfinite(total) or total <= 0 or not np.isfinite(pdf[i]) or pdf[i] <= 0:
+            raise ValueError("local-m0 importance proposal requires finite positive densities")
+        for j in range(strata):
+            target = (j + unit[i, 1]) * total / strata
+            k, cumulative = 0, 0.0
+            while k < len(arc_mass) and target >= cumulative + arc_mass[k]:
+                cumulative += arc_mass[k]
+                k += 1
+            if k == len(arc_mass):
+                raise ValueError("local-m0 restricted CDF target rounded outside its arcs")
+            remainder = target - cumulative
+            cdf_target = cdf_left[k] + remainder
+            if (
+                remainder < 0
+                or cdf_target >= cdf_left[k] + arc_mass[k]
+                or (remainder > 0 and cdf_target <= cdf_left[k])
+            ):
+                raise ValueError("local-m0 restricted CDF target is unresolved")
+            phi, density = _angular_inverse_cdf(
+                cdf_target,
+                left[k],
+                right[k],
+                centers[i],
+                widths[i],
+                offsets,
+                0.2,
+                remainder / arc_mass[k],
+            )
+            error = _angular_cdf_density(phi, centers[i], widths[i], offsets, 0.2)[0] - cdf_target
+            if not left[k] <= phi < right[k] or abs(error) > 2e-15:
+                raise ValueError("local-m0 inverse CDF failed its original arc bracket")
+            index[count], azimuth[count] = i, phi
+            mass[count] = total / (len(axial) * strata * pdf[i] * density)
+            count += 1
+    return index[:count], azimuth[:count], mass[:count]
+
+
 def iter_local_m0_coordinates(
     *,
     axial_bounds_Ainv,
@@ -1241,15 +1303,28 @@ def iter_local_m0_coordinates(
     angular_resolution_regions,
     maximum_angular_panel_nodes,
     batch_size,
+    angular_rule="resolved_cdf_gl8.v1",
 ):
     """Existing local-lamella endpoint measure, confined to the zero rod.
 
     This channel integrates external Q, with no fabricated q=0 response. Its
-    full-support Sobol axial proposal and native-resolution GL8 angular panels
-    remain independent of the regular strength-weighted internal phase chart.
+    default uses full-support Sobol axial nodes and native-resolution GL8 angular
+    panels. Explicit nominal importance uses 32 conditional CDF strata instead;
+    both remain independent of the regular strength-weighted internal phase chart.
     """
     if radial_Ainv != 0:
         raise ValueError("the local-m0 endpoint integrator requires radius zero")
+    if angular_rule not in {"resolved_cdf_gl8.v1", "cdf_stratified_importance.v1"}:
+        raise ValueError("unknown local-m0 angular rule")
+    importance = angular_rule == "cdf_stratified_importance.v1"
+    if importance and (
+        axial_power != 12
+        or angular_power != 5
+        or batch_size < 32
+        or batch_size > 16384
+        or batch_size % 32
+    ):
+        raise ValueError("nominal local-m0 importance requires 4096 axial nodes and 32 strata")
     lower, upper = axial_bounds_Ainv
     unit = qmc.Sobol(2, scramble=True, seed=axial_seed).random_base2(axial_power)
     axial, pdf = _axial_mixture_quantiles(
@@ -1269,6 +1344,21 @@ def iter_local_m0_coordinates(
         reference_mosaic.gaussian_sigma_rad,
         reference_mosaic.lorentzian_half_width_rad,
     )
+    if importance:
+        for first in range(0, len(axial), batch_size // 32):
+            index, phi, weight = _local_m0_importance_block(
+                axial,
+                pdf,
+                unit,
+                first,
+                min(first + batch_size // 32, len(axial)),
+                np.asarray(source_region_bounds),
+                centers,
+                widths,
+            )
+            if len(index):
+                yield FiberQuadratureNodes(axial, index, phi, weight)
+        return
     panels = _resolved_angular_cdf_panels(
         axial,
         np.asarray(source_region_bounds),
@@ -1323,8 +1413,29 @@ class FiberIntegrationRule:
     regular_q_bounds_Ainv: tuple[float, float] | None = None
     local_m0_q_bounds_Ainv: tuple[float, float] | None = None
     frozen_ewald_bounds_Ainv_rad: tuple[float, float, float, float] | None = None
+    local_m0_angular_rule: str = "resolved_cdf_gl8.v1"
+    local_m0_replica: int = 0
 
     def __post_init__(self):
+        if self.local_m0_angular_rule not in {
+            "resolved_cdf_gl8.v1",
+            "cdf_stratified_importance.v1",
+        }:
+            raise ValueError("unknown local-m0 angular rule")
+        if type(self.local_m0_replica) is not int or self.local_m0_replica < 0:
+            raise ValueError("local-m0 replica identity must be a nonnegative integer")
+        if self.local_m0_angular_rule == "cdf_stratified_importance.v1" and (
+            self.local_m0_axial_power != 12
+            or self.local_m0_angular_power != 5
+            or self.batch_size < 32
+            or self.batch_size > 16384
+            or self.batch_size % 32
+            or type(self.local_m0_seed) is not int
+            or not 0 <= self.local_m0_seed < 2**32
+        ):
+            raise ValueError(
+                "nominal local-m0 importance requires 4096 by 32 and bounded whole strata"
+            )
         for name in (
             "strength_gauss_order",
             "strength_scalar_order",
@@ -1577,7 +1688,12 @@ def iter_conditional_fiber_transfers(
                     )
                 source_bounds = np.asarray([frozen])
             channel_bounds[local][si] = source_bounds
-            if len(source_bounds) and si in active_sources and local:
+            if (
+                len(source_bounds)
+                and si in active_sources
+                and local
+                and rule.local_m0_angular_rule == "resolved_cdf_gl8.v1"
+            ):
                 angular_regions[local, si] = native_angular_resolution_regions(
                     native_bounds_px=native_bounds_px,
                     source_state_index=si,
@@ -1659,7 +1775,11 @@ def iter_conditional_fiber_transfers(
                 angular_power=(
                     rule.local_m0_angular_power if local else rule.angular_initial_power
                 ),
-                axial_seed=7919 * rule.local_m0_seed + 65537 * gi + 1009,
+                axial_seed=(
+                    rule.local_m0_seed
+                    if local and rule.local_m0_angular_rule == "cdf_stratified_importance.v1"
+                    else 7919 * rule.local_m0_seed + 65537 * gi + 1009
+                ),
                 angular_resolution_regions=angular_regions.get((local, si)),
                 maximum_angular_panel_nodes=rule.maximum_angular_panel_nodes,
                 batch_size=rule.batch_size,
@@ -1684,7 +1804,9 @@ def iter_conditional_fiber_transfers(
                     channel_count=len(groups) * len(valid_sources),
                 )
                 continue
-            for nodes in iter_local_m0_coordinates(**coordinate_parameters):
+            for nodes in iter_local_m0_coordinates(
+                **coordinate_parameters, angular_rule=rule.local_m0_angular_rule
+            ):
                 if cancel_requested is not None and cancel_requested():
                     raise CancelledError
                 batch = compile_conditional_fiber_batch(nodes, **batch_parameters)
