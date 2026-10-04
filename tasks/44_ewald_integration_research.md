@@ -314,7 +314,7 @@ After sealing, cleanup encountered uv's output-directory .gitignore; that verifi
 metadata file and the formatting cache were removed. Final read-only review found no
 remaining adoption-blocking spatial code issue. All temporary sources/results are gone.
 
-## Second delegated milestone: coupled integration diagnosis (complete, awaiting review)
+## Second delegated milestone: coupled integration diagnosis (complete, accepted by originating chat)
 
 The originating chat accepted the spatial milestone and authorized up to 1800 additional
 numerical/evaluator seconds to identify the remaining integration error before choosing a new
@@ -461,3 +461,173 @@ Only this current plan changes in the repository. Formatting/lint/whitespace and
 checks are software checks; no production build change or numerical acceptance is claimed.
 Temporary external scripts/results are sealed and removed at handoff. Main remains clean at
 4cf84defb0fd1326dd98714544dcfda44049976d; no merge, push, full image or fit ran.
+
+## Third delegated milestone: positive product integration (complete, awaiting review)
+
+The originating chat accepted the coupled diagnosis and authorized at most 1800 additional
+numerical/evaluator seconds for a positive strength/response prototype. Its review then requested
+an independent direct reference on the same selected interval, capped at 1000 additional seconds
+inside that allocation. This extension is included below. No new production implementation,
+full-support native image, full-source campaign or fit was authorized or launched.
+
+### Canonical separation and cheap positive weights
+
+For source 0/group 32 retain the same six individual rods, populations, both signed sheets,
+original 85-rod/32-source iterator and complete 3000x3000 native pixels. Write the conditional
+intensity as sum_sign integral S_sign(u) A_sign,p(u) du. S is the canonical strength table,
+including rod populations and incoherent structure probabilities once. A uses unit strength for
+one sign and zero for the other, axial weight 1, physical angular weights, original optical/source/
+polarization/envelope coefficients and spatial order 16. No division by a small S, Sobol PDF,
+1/N factor, image normalization or detector solid angle enters this product rule.
+
+The actual three incoherent components are CifFiniteStackStrength with 13 full-cell repeats.
+The normal cell length is c=28.636 A, highest repeat extent bound 13c=372.268 A. Physical fringe
+coordinates follow L and signed u=+/-[b3 L + rod normal offset], with repeat-factor zeros at
+L=m+k/13. A cheap strength-panel cap pi/(2*13c)=0.004219530893858448 A^-1, both signed fringe
+knots, response-hat breakpoints and support endpoints resolve full support [0,5.127512118222034].
+Expensive response grids and cheap strength grids are separate.
+
+For response grids of 65/129 nodes, W_i,sign=integral S_sign H_i du is nonnegative and preserves
+partition mass and first moment without renormalization. GL8 base, same-panel GL16 and half-cap
+GL8 weights agree within 8.1e-15 in signed relative weight L1. Base/p/h cheap node counts are
+11160/22320/20880 for 65 responses and 11672/23344/21392 for 129. Signed full-support masses
+are [0.0075078934527568,0.0075070106468658]. These are scalar strength results; neither whole
+response grid has a native image accuracy result.
+
+The native pilot interval is [1.0415258990138507,1.12164327586107], width
+0.0801173768472192 A^-1. A physically resolved strength peak times the earlier explicitly
+limited single-center response proxy selected it. This choice is a useful mechanism pilot,
+not evidence that the interval represents all support. Interval hats use GL16 on half-cap
+cheap panels and preserve both signed mass/first moments.
+
+Fresh angular preparation at each of nine response coordinates uses a sign-weight envelope
+covering the 2/3/5/9-node hats, relative empirical indicator 1e-4 and absolute budget 1e-14.
+Independent angular h subdivision follows preparation at each unchanged u. Actual product
+weights revalidate the signed preparation and h triangle ledgers. Canonical event mass equals
+S_positive*A_positive+S_negative*A_negative at every evaluated batch within 4.4e-16 relative.
+One same-node native angular panel per evaluation agrees within 1.5e-16 relative L1; that
+bounded check is not an independent full-point native parity proof.
+
+The h-phase 2->3, 3->5 and 5->9 image differences are 45.7675%, 16.0744% and 2.8940% L1,
+while their flux changes are only 5.11e-5,1.35e-5,2.55e-6 relative. Corresponding angular L1
+differences are 2.45e-7,2.30e-7,4.01e-7,3.14e-7 for 2/3/5/9 nodes; mixed axial/angular
+L1 differences are 2.07e-7,3.40e-7,1.87e-7. These are differences between estimates.
+They reject the coarse response grids, but do not establish the true error or excessive cost
+of a refined product method. The originating review required the direct comparison below.
+
+### Independent physical-panel interval reference
+
+Before evaluation, freeze four equal physical u panels, GL4 base (16 nodes), same-panel GL8
+p refinement (32 nodes), and eight-panel GL4 h refinement (32 nodes). Each base panel spans
+at most about 1.19 highest-repeat intensity fringes and two nine-node response spacings.
+This resolves physical strength and moving pixel response together, without assigning GL8
+to every cheap scalar panel. Both signed canonical strengths enter direct event masses;
+the signed masses combine before projection, as in current production. Stream patches into
+complete native images; no panel by nine-million-pixel array is materialized.
+
+Each direct image has a whole-interval physical angular ledger: relative empirical indicator
+5e-5, absolute budget 1e-15. Empty or failed paths cannot qualify a reference. Saved direct
+nodes, physical weights, both canonical strengths and accepted angular meshes permit replay.
+The reference R is the p-refined image. All L1 denominators below are sum(R), except the
+separately stored base->h refinement, whose denominator is sum(H).
+
+| Direct comparison | Relative L1 | Relative flux delta | Max absolute pixel | Max 64x64 tile absolute sum |
+| --- | ---: | ---: | ---: | ---: |
+| Base16 -> P32 | 1.9857515e-4 | -5.0717314e-5 | 6.1044656e-11 | 1.6860411e-8 |
+| Base16 -> H32 | 1.9864601e-4 | -5.0819197e-5 | 6.1082516e-11 | 1.6867380e-8 |
+| H32 -> P32 | 1.4400368e-7 | 1.0187807e-7 | 2.5042383e-13 | 8.9593504e-12 |
+
+Reference flux is 0.00018445193163813144. The frozen maximum empirical allowance is
+4.9999956e-5. Use the stricter additive allowance U_R=(||P-H||1+Eang_P+Eang_H)/sum(P)
+=1.0014372734663848e-4 (0.0100144%), below the 0.2% ceiling. Report the observed p/h
+difference separately from this allowance. Neither the difference nor the preparation
+indicators rigorously bound true error. Direct quadrature is independent of response-hat
+interpolation; both paths share accepted physical kernels and spatial 16.
+
+### Product error against the direct reference and response count
+
+Eight additional midpoint responses complete 17 nodes. Their old-node hats are componentwise
+bounded by the previously used envelope and old coordinates agree exactly. The actual 17-weight
+preparation ledger is 9.9477183e-5 relative; angular h L1 is 2.2326610e-7 and its signed triangle
+indicator is 3.0297259e-7. Preserve accepted/h signed images separately. The 9->17 h difference
+is 0.00753956943 relative L1, with flux delta 5.9457703e-7, maximum absolute pixel
+2.7000765e-9 and maximum tile absolute sum 6.6727166e-7.
+
+E1=sum(abs(product_h-R))/sum(R). Combined=(E1+U_R)/(1-U_R), using the additive allowance.
+
+| Product nodes | E1 | Relative flux delta | Max absolute pixel | Max tile absolute sum | Combined | Empirical interval gate |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 2 | 0.603524336 | -6.7972532e-5 | 1.8211994e-7 | 5.2823054e-5 | 0.603684935 | FAIL |
+| 3 | 0.197617598 | -1.6916323e-5 | 6.8631818e-8 | 1.7452196e-5 | 0.197737544 | FAIL |
+| 5 | 0.038899584 | -3.4181244e-6 | 1.3768459e-8 | 3.4374647e-6 | 0.039003634 | FAIL |
+| 9 | 0.010072676 | -8.6719500e-7 | 3.6118197e-9 | 8.9151302e-7 | 0.010173839 | FAIL |
+| 17 | 0.002533143 | -2.7261813e-7 | 9.1174323e-10 | 2.2424245e-7 | 0.002633551 | PASS |
+
+Seventeen is the first tested passing product count on this interval, not the minimum possible
+count. Nine narrowly fails the combined 1% gate; seventeen passes at 0.263355%. Direct Base16
+also passes against R, combined 0.000298748798 (0.0298749%). Thus this interval demonstrates
+no cold expensive-response-count reduction for product integration versus the 16-node direct
+rule. Flux agreement alone would have missed the product shape errors. All fixed tile arrays
+are retained; the largest direct/product error tile is [21,28] (native rows 1344:1408,
+columns 1792:1856), with no crop of any observable.
+
+### Work, endpoint restriction, discovery and handoff
+
+| Evaluation | Axial coordinates | Incoming angular nodes | Accepted angular nodes | Preparation seconds | Strength/event/spatial seconds |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Direct Base | 16 | 202976 | 104560 | 108.4483 | 0.1003 / 9.8258 / 76.2074 |
+| Direct P | 32 | 425056 | 218672 | 209.2398 | 0.1137 / 20.4844 / 151.4077 |
+| Direct H | 32 | 428768 | 220528 | 211.7715 | 0.1154 / 20.6171 / 153.4694 |
+| Unit-response old9 prepare | 9 | 108896 | saved by point | 102.4088 | saved by point |
+| Unit-response new8 prepare | 8 | 97920 | saved by point | 91.4053 | 0.1300 / 5.4876 / 72.1944 |
+| Unit-response new8 angular h | 8 | 100992 | 100992 | 74.4458 | 0.0996 / 0.4279 / 72.5531 |
+
+Old9 angular h adds 112352 nodes/84.1753 s. Direct evaluation combines the current signed
+physical masses before deposition. This reusable unit-response experiment renders two signs
+separately, then renders them again for angular h. Different angular tolerances, accepted meshes,
+work and setup are included above; their timings are not a method speed ranking. Highest retained
+live direct panel-array count is 430072 bytes under the inherited 256 MiB cap. Full native buffers
+are separate from that cap; no process peak-memory measurement is claimed.
+
+A cheap local scalar endpoint audit, completed before the interval extension, checks strictly
+interior q at both actual wavelengths. S/q^2 approaches about 107.6956101/108.2819576 and
+S/q vanishes linearly. Positive GL16/32/64 integration of S/q over [0,qc] refines to
+0.112803645284293/0.113350854878139 per sign. This does not establish the native B=qA limit.
+The future local route is separately resolved interior low-q physical quadrature; no arbitrary
+A(0), native endpoint response or local image was evaluated in this milestone.
+
+The bounded dream-rsi audit uses the actual frozen scalar-weight evaluator and feasibility-only
+score. Its baseline passes in 0.25755 s; the sole read-only worker times out at 45.47312 s.
+Replay/policy improvement retains the incumbent with no quality signal or changed candidate.
+The executor timeout is not scientific rejection. Initial configuration used an unsupported
+key; correcting evaluator_timeout_s and the constraints type enabled the sole retry. Preserve
+both exact configs and logs. Prototype empty-support/partial-failure bookkeeping was repaired
+in the new midpoint helper before reuse; original completed nine-point evidence is unchanged.
+A wholly empty direct interval would be marked incomplete by its writer's missing strength cache;
+this nonempty completed interval is unaffected. These temporary APIs are not promoted.
+
+Immutable evidence: ewald_product_pilot_20261003.ra_diag.npz, 112131639 bytes, 235 numeric arrays
+and one JSON manifest, SHA256 51385ca2564b14a44da5c7bd85aa6e61ac449e19a1d7d165497d43a0a1a3c0c3.
+It preserves signed native levels, direct images, physical/scalar/angular meshes, tile measures,
+exact runnable evaluator versions including the initial comparison, inputs, production hashes,
+failed configuration, read-only discovery records and the frozen reference declaration. Prior
+immutable archive hashes are unchanged. Sealing and integrity checks took 31.2656 s.
+
+Measured launcher phases total 984.7668 s, including imports, saving and the cycle; the requested
+interval extension uses 719.0495 s, below its 1000 s cap. Charge this complete milestone 1500 s
+conservatively, including the full 90 s discovery allowance, failed attempts and closure reserve.
+Campaign charge is 3060/7200 s, with 4140 s remaining; the 1800 s milestone ceiling and required
+>=3840 s campaign remainder are preserved. Allocated charge is not measured wall time.
+
+Next decision for originating review: keep the physically resolved direct rule as the cold
+interval baseline. Positive hats are viable at 17 responses here but have no demonstrated cold
+count advantage. Any further product optimization needs a concrete reuse benefit and an equal-work
+comparison, potentially combining weighted signs before deposition while preserving reusable
+geometry. Neither interval result selects a whole-support grid or qualifies a full detector-source
+image or fit. No additional campaign is started at handoff.
+
+Only this plan changes in the repository: production +0/-0, retired development infrastructure
++0/-0. Formatting/lint/whitespace, source/input hash and clean-checkout checks are scoped to this
+change and evidence integrity. Software checks do not establish scientific adequacy. Temporary
+external sources/results are sealed and removed. Main remains clean at 4cf84defb0fd1326dd98714544dcfda44049976d;
+research receives one coherent documentation checkpoint, with no merge or push.
